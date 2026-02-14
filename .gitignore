@@ -1,0 +1,38 @@
+# Rust/Cargo
+/target/
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Build artifacts
+/dist/
+*.app
+*.dmg
+*.zip
+
+# Server data (player saves, etc)
+server_data/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Local cargo config (machine-specific linker paths)
+.cargo/
+
+# Windows cross-compilation (WSL-specific)
+windows_build/
+BUILD_WINDOWS.md

@@ -1,0 +1,13 @@
+[package]
+name = "terrain_ktx_builder"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+ktx2-native = ["dep:ktx2-rw"]
+
+[dependencies]
+anyhow = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+ktx2-rw = { version = "0.2.4", optional = true }

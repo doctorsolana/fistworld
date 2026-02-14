@@ -1,0 +1,193 @@
+(
+  version: 1,
+  entries: [
+    // =========================================================================
+    // environment/rocks - collidable rocks
+    // =========================================================================
+    (
+      kind: "rock_1",
+      gltf_path: "game_assets/environment/rocks/Rock_1.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: XZRadiusPercentile(percentile: 0.90),
+      collidable: true,
+    ),
+    (
+      kind: "rock_2",
+      gltf_path: "game_assets/environment/rocks/Rock_2.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: XZRadiusPercentile(percentile: 0.90),
+      collidable: true,
+    ),
+    (
+      kind: "rock_3",
+      gltf_path: "game_assets/environment/rocks/Rock_3.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: XZRadiusPercentile(percentile: 0.90),
+      collidable: true,
+    ),
+    (
+      kind: "rock_4",
+      gltf_path: "game_assets/environment/rocks/Rock_4.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: XZRadiusPercentile(percentile: 0.90),
+      collidable: true,
+    ),
+    (
+      kind: "rock_5",
+      gltf_path: "game_assets/environment/rocks/Rock_5.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: XZRadiusPercentile(percentile: 0.90),
+      collidable: true,
+    ),
+
+    // =========================================================================
+    // environment/trees (trunk core: lower Y + XZ percentile to exclude twigs)
+    // =========================================================================
+    (
+      kind: "tree_01",
+      gltf_path: "game_assets/environment/trees/Tree_01.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "tree_02",
+      gltf_path: "game_assets/environment/trees/Tree_02.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "tree_08",
+      gltf_path: "game_assets/environment/trees/Tree_08.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "tree_09",
+      gltf_path: "game_assets/environment/trees/Tree_09.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "tree_10",
+      gltf_path: "game_assets/environment/trees/Tree_10.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "tree_18",
+      gltf_path: "game_assets/environment/trees/Tree_18.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "tree_29",
+      gltf_path: "game_assets/environment/trees/Tree_29.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+
+    // =========================================================================
+    // environment/trees_dead (trunk core)
+    // =========================================================================
+    (
+      kind: "dead_tree_1",
+      gltf_path: "game_assets/environment/trees_dead/Dead_tree_1.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "dead_tree_2",
+      gltf_path: "game_assets/environment/trees_dead/Dead_tree_2.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "dead_tree_3",
+      gltf_path: "game_assets/environment/trees_dead/Dead_tree_3.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+
+    // =========================================================================
+    // environment/trees_pine (trunk core)
+    // =========================================================================
+    (
+      kind: "pine_tree_1",
+      gltf_path: "game_assets/environment/trees_pine/Pine_Tree_1.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "pine_tree_2",
+      gltf_path: "game_assets/environment/trees_pine/Pine_Tree_2.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "pine_tree_3",
+      gltf_path: "game_assets/environment/trees_pine/Pine_Tree_3.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "pine_tree_4",
+      gltf_path: "game_assets/environment/trees_pine/Pine_Tree_4.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+
+    // =========================================================================
+    // buildings/village
+    // =========================================================================
+    (
+      kind: "building_windmill",
+      gltf_path: "game_assets/buildings/village/Bld_Windmill_01.glb#Scene0",
+      mode: ConvexDecomposition,
+      vertex_filter: All,
+      collidable: true,
+    ),
+    (
+      kind: "building_church",
+      gltf_path: "game_assets/buildings/village/Church.glb#Scene0",
+      mode: ConvexDecomposition,
+      vertex_filter: All,
+      collidable: true,
+    ),
+    (
+      kind: "building_house_05",
+      gltf_path: "game_assets/buildings/village/House_05.glb#Scene0",
+      mode: ConvexDecomposition,
+      vertex_filter: All,
+      collidable: true,
+    ),
+    (
+      kind: "building_house_06",
+      gltf_path: "game_assets/buildings/village/House_06.glb#Scene0",
+      mode: ConvexDecomposition,
+      vertex_filter: All,
+      collidable: true,
+    ),
+    (
+      kind: "building_house_07",
+      gltf_path: "game_assets/buildings/village/House_07.glb#Scene0",
+      mode: ConvexDecomposition,
+      vertex_filter: All,
+      collidable: true,
+    ),
+
+  ],
+)

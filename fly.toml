@@ -1,0 +1,20 @@
+app = 'fistforce'
+primary_region = 'ams'
+
+[build]
+
+# UDP service for game traffic (not HTTP!)
+[[services]]
+  protocol = "udp"
+  internal_port = 5000
+
+  [[services.ports]]
+    port = 5000
+
+[env]
+  RUST_LOG = "info,server=debug"
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

@@ -1,0 +1,43 @@
+(
+  map_id: "city_alpha",
+  bounds: (
+    min: (-700.0, -700.0),
+    max: (700.0, 700.0),
+  ),
+  terrain: (
+    heightmap: "height.png",
+    minimap: Some("minimap.png"),
+    water_level: Some(0.0),
+    height_min: -2.0,
+    height_max: 18.0,
+  ),
+  objects: [],
+  npc_groups: [
+    (
+      archetype: Oilman,
+      count: 40,
+      zone_center: (0.0, 0.0),
+      zone_half_extents: (640.0, 640.0),
+      preset: IdleWanderZone,
+      route: [],
+    ),
+  ],
+  blockers: [
+    (
+      min: (-710.0, -710.0),
+      max: (710.0, -700.0),
+    ),
+    (
+      min: (-710.0, 700.0),
+      max: (710.0, 710.0),
+    ),
+    (
+      min: (-710.0, -700.0),
+      max: (-700.0, 700.0),
+    ),
+    (
+      min: (700.0, -700.0),
+      max: (710.0, 700.0),
+    ),
+  ],
+)

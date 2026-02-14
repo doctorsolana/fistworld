@@ -1,0 +1,10 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = { workspace = true }
+lightyear = { workspace = true }
+shared = { path = "../shared" }
+bincode = "1.3"

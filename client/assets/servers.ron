@@ -1,0 +1,7 @@
+(
+    servers: [
+        ( name: "Local", ip: "127.0.0.1" ),
+        ( name: "Fly.io", ip: "169.155.62.108" ),
+    ],
+    default_index: 0,
+)

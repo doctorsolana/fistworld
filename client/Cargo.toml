@@ -1,0 +1,22 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = { workspace = true }
+lightyear = { workspace = true }
+noise = { workspace = true }
+shared = { path = "../shared" }
+rand = "0.8"
+ron = "0.8"
+serde = { workspace = true }
+arboard = "3"
+image = { workspace = true }
+
+[package.metadata.bundle]
+name = "3DGame"
+identifier = "com.terninator.3dgame"
+category = "Game"
+short_description = "A 3D multiplayer game"
+resources = ["assets"]
