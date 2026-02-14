@@ -37,13 +37,41 @@ Assets live in `client/assets/` (models, audio, `colliders.bin`).
   - `client`: feature domains (`weapons`, `audio`, `ui`, `terrain`, `systems`, etc.)
   - `server`: runtime domains (`net`, `player`, `vehicle`, `inventory`, `world`, `combat`, `collision`, `ai`, `persistence`, `telemetry`)
   - `shared`: protocol/data/physics domains with namespaced modules as the default import style
-- Temporary compatibility aliases in client/server are one-cycle bridges for renamed internals; avoid introducing new aliases.
+- Compatibility aliases are intentionally avoided; call canonical names directly.
 
 ### Post-Rewrite Status
 
 - Shared flat compatibility bridge has been removed.
 - Namespaced shared imports are standard across runtime and tools.
 - Lean `mod.rs` policy is enforced for high-impact domains and remains the default for new modules.
+
+### Post-Rewrite Performance Baseline (Validated February 14, 2026)
+
+This repository includes a full pass of behavior-preserving performance work across `client`, `server`, and `shared`.
+
+- Client:
+  - Added frame-time instrumentation and periodic perf logs (`FISTFORCE_CLIENT_PERF`, `FISTFORCE_CLIENT_PERF_INTERVAL_SECS`).
+  - Reduced projectile and remote-weapon hot-path overhead with cached indices and incremental reconciliation.
+  - Batched remote audio event handling and moved emitter admission to cached-membership + squared-distance checks.
+  - Added send-on-change `PlayerInput` transport with burst resend and heartbeat to reduce idle traffic while keeping controls responsive on unreliable channels.
+- Server:
+  - Added broadphase indices for bullet/entity checks and reduced message fanout overhead with batched dispatch paths.
+  - Moved profile persistence off fixed tick via async save queue; added roster cache for lower IO pressure.
+  - Switched building spatial index rebuild gating to ECS change/removal signals (no no-op full scans each tick).
+  - Incrementalized collider streaming with cached build-zone chunk lookup and loaded-chunk refresh when building zones change.
+  - Improved AI/pathfinding cadence and scratch reuse in hot loops.
+- Shared:
+  - Optimized terrain mesh generation by caching stencil samples and deriving biome/material data from cached authored values.
+  - Optimized `sample_height` via cached sampling scalars in `HeightmapData`.
+  - Added map object pre-resolution and per-chunk indexing at map load; prop rotations are precomputed quaternions.
+  - Added shared build-zone precompute + chunk indexing helpers used by both client prop filtering and server collider filtering.
+  - Packed `PlayerInput` wire format (bitfield + quantized controls/yaw) and protocol update.
+  - Removed dead reserve-ammo compatibility path (`EquippedWeapon`) in favor of inventory-driven reload flow only.
+
+Current baseline checks:
+- `cargo check --workspace`
+- `cargo test -p shared`
+- Targeted server collision/index tests for streaming + building index invalidation
 
 ---
 
@@ -98,6 +126,9 @@ cargo run -p client --release
 Useful env flags:
 - `CITYSIM_MAX_NPCS=<n>`: cap total spawned NPCs (`0` = none).
 - `FISTFORCE_SERVER_PERF=0`: disable server phase timing logs.
+- `CITYSIM_SERVER_HOTLOG=1`: enable extra hot-loop debug logs on server.
+- `FISTFORCE_CLIENT_PERF=1`: enable client frame/perf rolling logs.
+- `FISTFORCE_CLIENT_PERF_INTERVAL_SECS=<n>`: client perf log cadence in seconds.
 - `FISTFORCE_HIERARCHY_AUDIT=1`: log which scene nodes are triggering parent hierarchy warnings.
 
 ---
