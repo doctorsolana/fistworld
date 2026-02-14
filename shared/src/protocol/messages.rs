@@ -281,6 +281,12 @@ pub struct SetPlayerCharacter {
     pub character: PlayerCharacter,
 }
 
+/// Client -> Server: debug request to spawn Oilman NPCs near the requesting player.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct SpawnOilmanDebug {
+    pub count: u16,
+}
+
 /// What the bullet impacted (used for visuals/debug).
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 pub enum BulletImpactSurface {

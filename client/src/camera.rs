@@ -12,6 +12,7 @@ use shared::vehicle::{Vehicle, VehicleDriver};
 
 /// Camera offset from player position (eye level) for first person
 const CAMERA_HEIGHT_OFFSET: f32 = PLAYER_HEIGHT * 0.4;
+pub(crate) const CAMERA_NEAR_CLIP: f32 = 0.001;
 const VEHICLE_FP_SEAT_HEIGHT: f32 = 0.75;
 const HOVERBIKE_FP_SEAT_HEIGHT: f32 = 0.95;
 const VEHICLE_FP_SEAT_FORWARD: f32 = 0.15;
@@ -236,6 +237,9 @@ pub fn update_camera_fov(
     let Projection::Perspective(ref mut persp) = *projection else {
         return;
     };
+
+    // Keep a small near plane so point-blank NPCs/props don't clip out aggressively.
+    persp.near = CAMERA_NEAR_CLIP;
 
     // Determine target FOV
     let target_fov = if input_state.aiming && input_state.camera_mode == CameraMode::FirstPerson {

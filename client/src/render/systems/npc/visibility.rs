@@ -106,6 +106,29 @@ pub fn apply_npc_shadow_state_to_new_meshes(
     }
 }
 
+/// Disable frustum culling on NPC mesh descendants.
+/// This prevents close-range pop-out on animated scene meshes when camera proximity is extreme.
+pub fn apply_npc_no_frustum_culling_to_new_meshes(
+    new_meshes: Query<Entity, Added<Mesh3d>>,
+    parents: Query<&ChildOf>,
+    roots: Query<(), With<Npc>>,
+    mut commands: Commands,
+) {
+    for mesh_entity in new_meshes.iter() {
+        let mut current = mesh_entity;
+        loop {
+            if roots.get(current).is_ok() {
+                commands.entity(mesh_entity).insert(NoFrustumCulling);
+                break;
+            }
+            let Ok(parent) = parents.get(current) else {
+                break;
+            };
+            current = parent.parent();
+        }
+    }
+}
+
 /// Force double-sided materials for custom NPC models (Oilman).
 pub fn apply_double_sided_npc_materials(
     mut commands: Commands,

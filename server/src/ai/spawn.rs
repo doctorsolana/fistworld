@@ -1,15 +1,19 @@
 //! NPC spawn systems.
 
 use bevy::prelude::*;
-use lightyear::prelude::server::Started;
+use lightyear::prelude::server::{ClientOf, Started};
 use lightyear::prelude::*;
-use shared::components::{Health, Npc, NpcArchetype, NpcIdentity, NpcPosition, NpcRotation};
+use shared::components::{
+    Health, Npc, NpcArchetype, NpcIdentity, NpcPosition, NpcRotation, Player, PlayerPosition,
+};
 use shared::map::MapBehaviorPreset;
 use shared::npc::{npc_max_health, npc_name_for_id};
 use shared::physics::ground_clearance_center;
+use shared::protocol::SpawnOilmanDebug;
 use shared::terrain::{WorldTerrain, WORLD_SEED};
 
 use crate::ai::state::{NpcWander, XorShift64};
+use crate::player::index::PlayerEntityIndex;
 
 fn configured_npc_cap() -> u32 {
     match std::env::var("CITYSIM_MAX_NPCS") {
@@ -18,13 +22,13 @@ fn configured_npc_cap() -> u32 {
             Ok(value) => value,
             Err(_) => {
                 warn!(
-                    "Invalid CITYSIM_MAX_NPCS='{}'; using map-authored counts",
+                    "Invalid CITYSIM_MAX_NPCS='{}'; defaulting to 0 startup NPCs",
                     raw
                 );
-                u32::MAX
+                0
             }
         },
-        Err(_) => u32::MAX,
+        Err(_) => 0,
     }
 }
 
@@ -221,4 +225,83 @@ pub fn spawn_npcs_once(
         "Spawned {} NPCs from authored map {}",
         total_spawned, loaded_map.definition.map_id
     );
+}
+
+/// Handle debug requests to spawn Oilman NPCs near the requesting player.
+pub fn handle_spawn_oilman_debug(
+    mut commands: Commands,
+    terrain: Res<WorldTerrain>,
+    player_index: Res<PlayerEntityIndex>,
+    mut client_links: Query<(&RemoteId, &mut MessageReceiver<SpawnOilmanDebug>), With<ClientOf>>,
+    player_positions: Query<&PlayerPosition, With<Player>>,
+    npcs: Query<&Npc>,
+) {
+    let mut next_npc_id: Option<u64> = None;
+
+    for (remote_id, mut receiver) in client_links.iter_mut() {
+        let peer_id = remote_id.0;
+        let mut total_spawned_for_peer = 0usize;
+        let mut requests_for_peer = 0usize;
+        for msg in receiver.receive() {
+            requests_for_peer = requests_for_peer.saturating_add(1);
+            let count = msg.count.clamp(1, 200) as usize;
+            if count != msg.count as usize {
+                warn!(
+                    "Debug NPC spawn count clamped for {:?}: requested {}, using {}",
+                    peer_id, msg.count, count
+                );
+            }
+
+            let Some(player_entity) = player_index.entity_for_peer(peer_id) else {
+                continue;
+            };
+            let Ok(player_pos) = player_positions.get(player_entity) else {
+                continue;
+            };
+
+            let cursor = next_npc_id.get_or_insert_with(|| {
+                npcs.iter()
+                    .map(|npc| npc.id)
+                    .max()
+                    .unwrap_or(9_999)
+                    .saturating_add(1)
+            });
+
+            for i in 0..count {
+                let angle = (i as f32 / count as f32) * std::f32::consts::TAU;
+                let ring = 3.0 + (i / 12) as f32 * 2.0;
+                let x = player_pos.0.x + angle.cos() * ring;
+                let z = player_pos.0.z + angle.sin() * ring;
+                let y = terrain.get_height(x, z) + ground_clearance_center();
+                let pos = Vec3::new(x, y, z);
+
+                let npc_id = *cursor;
+                *cursor = cursor.saturating_add(1);
+
+                commands.spawn((
+                    Npc {
+                        id: npc_id,
+                        archetype: NpcArchetype::Oilman,
+                    },
+                    NpcIdentity {
+                        name: npc_name_for_id(WORLD_SEED, npc_id),
+                        occupation: "Debug Spawn".to_string(),
+                        faction: None,
+                    },
+                    NpcPosition(pos),
+                    NpcRotation(0.0),
+                    Health::new(npc_max_health(NpcArchetype::Oilman)),
+                    NpcWander::new(pos, 14.0, npc_id),
+                    Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
+                ));
+            }
+            total_spawned_for_peer = total_spawned_for_peer.saturating_add(count);
+        }
+        if total_spawned_for_peer > 0 {
+            debug!(
+                "Debug spawned {} Oilman NPCs for {:?} ({} request(s) this tick)",
+                total_spawned_for_peer, peer_id, requests_for_peer
+            );
+        }
+    }
 }

@@ -84,6 +84,10 @@ pub fn setup_rendering(
         // SpatialListener defines where the "ears" are relative to the entity
         SpatialListener::new(0.1), // ~10cm between ears
     ));
+    camera.insert(Projection::Perspective(PerspectiveProjection {
+        near: crate::camera::CAMERA_NEAR_CLIP,
+        ..default()
+    }));
     // Keep this out of the large tuple to avoid tuple-size bundle limits.
     camera.insert(crate::render::sniper_fisheye::SniperFisheye::default());
 

@@ -163,6 +163,7 @@ pub fn setup_systems(app: &mut App) {
         (
             game_systems::setup_npc_rig,
             game_systems::update_npc_visibility,
+            game_systems::apply_npc_no_frustum_culling_to_new_meshes,
             game_systems::apply_npc_shadow_state_to_new_meshes,
             game_systems::apply_double_sided_npc_materials,
             game_systems::update_npc_animation,

@@ -12,7 +12,7 @@ pub(super) fn spawn_debug_time_menu(
     }
 
     let layout = ModalLayout {
-        panel_size: Vec2::new(420.0, 520.0),
+        panel_size: Vec2::new(420.0, 580.0),
         panel_padding: 18.0,
     };
 
@@ -136,6 +136,21 @@ pub(super) fn spawn_debug_time_menu(
                     TextColor(TEXT_COLOR),
                 ));
             });
+
+        panel.spawn((
+            Text::new("NPC debug"),
+            TextFont {
+                font_size: 12.0,
+                ..default()
+            },
+            TextColor(TEXT_MUTED),
+            Node {
+                margin: UiRect::top(Val::Px(12.0)),
+                ..default()
+            },
+        ));
+
+        spawn_oilman_npc_button(panel);
 
         panel
             .spawn((
@@ -272,6 +287,26 @@ pub(super) fn spawn_render_diag_button(parent: &mut ChildSpawnerCommands<'_>) {
             btn.spawn((
                 PerfRenderDiagLabel,
                 Text::new("RENDER DIAG LOGGING: OFF"),
+                button_text_style(),
+                TextColor(TEXT_COLOR),
+            ));
+        });
+}
+
+pub(super) fn spawn_oilman_npc_button(parent: &mut ChildSpawnerCommands<'_>) {
+    parent
+        .spawn((
+            Button,
+            SpawnOilmanNpcButton,
+            Node {
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..button_style()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                Text::new("SPAWN 10 OILMAN NPCS"),
                 button_text_style(),
                 TextColor(TEXT_COLOR),
             ));

@@ -8,6 +8,7 @@
 //! - Should not mutate gameplay authority/state transitions.
 
 pub mod perf;
+pub mod network;
 
 use std::sync::OnceLock;
 

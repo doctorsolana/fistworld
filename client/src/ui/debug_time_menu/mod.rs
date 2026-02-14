@@ -19,7 +19,9 @@ use bevy::window::{CursorOptions, PrimaryWindow};
 use lightyear::prelude::*;
 
 use shared::components::{LocalPlayer, PlayerCharacter};
-use shared::protocol::{ReliableChannel, SetPlayerCharacter, SetTimeOfDay, TimeOfDayPreset};
+use shared::protocol::{
+    ReliableChannel, SetPlayerCharacter, SetTimeOfDay, SpawnOilmanDebug, TimeOfDayPreset,
+};
 
 use crate::input::InputState;
 use crate::render::systems::{CloudCover, CloudCoverMode, CloudCoverOverride};
@@ -149,3 +151,6 @@ struct PerfRenderDiagToggleButton;
 
 #[derive(Component)]
 struct PerfRenderDiagLabel;
+
+#[derive(Component)]
+struct SpawnOilmanNpcButton;

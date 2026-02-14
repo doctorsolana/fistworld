@@ -25,6 +25,9 @@ A multiplayer 3D sandbox shooter built with **Rust** and **Bevy 0.18**.
 
 Assets live in `client/assets/` (models, audio, `colliders.bin`).
 
+Contributor workflow and architecture guardrails:
+- See `CONTRIBUTING.md`.
+
 ## Module Rules
 
 - `mod.rs` files are orchestration surfaces only:

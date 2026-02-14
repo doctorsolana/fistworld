@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
+use std::time::Duration;
 
 use shared::components::{
     EquippedWeapon, Health, Player, PlayerPosition, PlayerProgression, PlayerRotation,
@@ -14,9 +15,9 @@ use shared::items::{
 };
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 use shared::protocol::{
-    tick_duration, BulletImpact, DamageReceived, HitConfirm, NameSubmissionResult, PlayerInput,
-    PlayerKilled, PlayerRoster, ReloadRequest, RequestPlayerRoster, SetPlayerCharacter,
-    SetTimeOfDay, ShootRequest, SubmitPlayerName, SwitchWeapon,
+    BulletImpact, DamageReceived, HitConfirm, NameSubmissionResult, PlayerInput, PlayerKilled,
+    PlayerRoster, ReloadRequest, RequestPlayerRoster, SetPlayerCharacter, SetTimeOfDay,
+    ShootRequest, SpawnOilmanDebug, SubmitPlayerName, SwitchWeapon,
 };
 use shared::vehicle::{InVehicle, Vehicle, VehicleDriver, VehicleState};
 
@@ -26,6 +27,27 @@ use crate::persistence::io_queue::{ProfileIoQueue, SavePriority};
 use crate::persistence::profiles::PlayerProfiles;
 use crate::player::lifecycle::RespawnTimer;
 use crate::player::roster_cache::PlayerRosterCache;
+
+fn configured_replication_send_interval() -> Duration {
+    const DEFAULT_MS: u64 = 33;
+    let ms = std::env::var("CITYSIM_REPLICATION_SEND_INTERVAL_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_MS)
+        .clamp(5, 250);
+    Duration::from_millis(ms)
+}
+
+fn configured_replication_send_mode() -> SendUpdatesMode {
+    match std::env::var("CITYSIM_REPLICATION_SEND_MODE") {
+        Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "ack" | "since_last_ack" => SendUpdatesMode::SinceLastAck,
+            "send" | "since_last_send" => SendUpdatesMode::SinceLastSend,
+            _ => SendUpdatesMode::SinceLastSend,
+        },
+        Err(_) => SendUpdatesMode::SinceLastSend,
+    }
+}
 
 /// Handle new client connections - setup message channels.
 /// Player spawning happens in `handle_player_name_submission` after name validation.
@@ -45,14 +67,24 @@ pub fn handle_connections(
             peer_id
         );
 
+        let replication_interval = configured_replication_send_interval();
+        let replication_mode = configured_replication_send_mode();
+        info!(
+            "Replication sender config for {:?}: interval={}ms mode={:?}",
+            peer_id,
+            replication_interval.as_millis(),
+            replication_mode
+        );
+
         commands.entity(client_entity).insert((
-            ReplicationSender::new(tick_duration(), SendUpdatesMode::SinceLastAck, false),
+            ReplicationSender::new(replication_interval, replication_mode, false),
             MessageReceiver::<PlayerInput>::default(),
             MessageReceiver::<ShootRequest>::default(),
             MessageReceiver::<SwitchWeapon>::default(),
             MessageReceiver::<ReloadRequest>::default(),
             MessageReceiver::<SetTimeOfDay>::default(),
             MessageReceiver::<SetPlayerCharacter>::default(),
+            MessageReceiver::<SpawnOilmanDebug>::default(),
             MessageReceiver::<SubmitPlayerName>::default(),
             MessageReceiver::<RequestPlayerRoster>::default(),
         ));

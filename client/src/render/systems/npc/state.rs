@@ -39,6 +39,34 @@ pub(crate) struct NpcVisibilityState {
     pub(crate) visible: bool,
 }
 
+/// Per-NPC network smoothing state for sparse replication samples.
+#[derive(Component, Clone, Debug)]
+pub struct NpcNetSmoothing {
+    pub last_net_pos: Vec3,
+    pub target_pos: Vec3,
+    pub velocity: Vec3,
+    pub last_net_yaw: f32,
+    pub target_yaw: f32,
+    pub yaw_rate: f32,
+    pub last_sample_time: f32,
+    pub initialized: bool,
+}
+
+impl NpcNetSmoothing {
+    pub fn from_sample(pos: Vec3, yaw: f32, now: f32) -> Self {
+        Self {
+            last_net_pos: pos,
+            target_pos: pos,
+            velocity: Vec3::ZERO,
+            last_net_yaw: yaw,
+            target_yaw: yaw,
+            yaw_rate: 0.0,
+            last_sample_time: now,
+            initialized: true,
+        }
+    }
+}
+
 /// The NPC entity that owns this rig (cached to avoid per-frame hierarchy walks).
 #[derive(Component, Clone, Copy)]
 pub struct NpcRigOwner(pub Entity);
@@ -66,6 +94,7 @@ pub(crate) const NPC_SPEED_SMOOTHING: f32 = 12.0;
 pub(crate) const INSTANT_STOP_THRESHOLD: f32 = 0.05;
 pub(crate) const NPC_SHADOW_RANGE: f32 = 140.0;
 pub(crate) const NPC_SHADOW_RANGE_SQ: f32 = NPC_SHADOW_RANGE * NPC_SHADOW_RANGE;
+pub(crate) const NPC_NET_EXTRAPOLATE_MAX_SECS: f32 = 0.35;
 
 /// Tracks NPC animation state with blending support.
 #[derive(Component, Default)]

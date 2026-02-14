@@ -38,4 +38,5 @@ pub(crate) fn setup_resources(app: &mut App) {
         profile_storage_dir,
     ));
     app.init_resource::<telemetry::perf::ServerPerfMonitor>();
+    app.init_resource::<telemetry::network::ServerNetDebugWindow>();
 }

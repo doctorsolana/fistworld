@@ -5,12 +5,15 @@ use super::*;
 /// Add render components and spawn the visual model when an NPC replicates in.
 pub fn handle_npc_spawned(
     mut commands: Commands,
+    time: Res<Time>,
     assets: Option<Res<NpcAssets>>,
-    new_npcs: Query<(Entity, &Npc, &NpcPosition), Added<Npc>>,
+    new_npcs: Query<(Entity, &Npc, &NpcPosition, Option<&NpcRotation>), Added<Npc>>,
 ) {
     let Some(assets) = assets else { return };
+    let now = time.elapsed_secs();
 
-    for (entity, _npc, pos) in new_npcs.iter() {
+    for (entity, _npc, pos, rot) in new_npcs.iter() {
+        let yaw = rot.map(|r| r.0).unwrap_or(0.0);
         // Ensure NPC entity has full spatial components for hierarchy propagation.
         // Without GlobalTransform, children with GlobalTransform trigger B0004 warnings.
         commands.entity(entity).insert((
@@ -19,6 +22,8 @@ pub fn handle_npc_spawned(
             Visibility::Inherited,
             InheritedVisibility::default(),
             NpcVisibilityState { visible: true },
+            NpcNetSmoothing::from_sample(pos.0, yaw, now),
+            NoFrustumCulling,
         ));
 
         let scene = assets.scene.clone();
@@ -35,6 +40,7 @@ pub fn handle_npc_spawned(
                 GlobalTransform::default(),
                 Visibility::Inherited,
                 InheritedVisibility::default(),
+                NoFrustumCulling,
             ));
             model.insert(NeedsDoubleSidedMaterials);
         });

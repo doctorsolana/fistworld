@@ -2,6 +2,8 @@
 
 use bevy::ecs::schedule::SystemSet;
 use bevy::prelude::*;
+use lightyear::connection::ConnectionSystems;
+use lightyear::link::LinkSystems;
 
 use crate::ai;
 use crate::collision;
@@ -67,6 +69,7 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
             net::connection::handle_connections,
             player::spawn::handle_player_name_submission,
             player::spawn::handle_set_player_character,
+            ai::spawn::handle_spawn_oilman_debug,
             player::roster::handle_player_roster_requests,
             net::input::handle_client_input_messages,
         )
@@ -201,7 +204,17 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
                 .after(inventory::death_drop::handle_inventory_drop_on_death),
             telemetry::perf::update_server_perf_log
                 .after(inventory::death_drop::handle_inventory_drop_on_death),
+            telemetry::network::sample_replication_change_pressure
+                .after(inventory::death_drop::handle_inventory_drop_on_death),
         )
+            .run_if(server_is_started),
+    );
+
+    app.add_systems(
+        PostUpdate,
+        telemetry::network::sample_link_flow_post_send
+            .after(ConnectionSystems::Send)
+            .before(LinkSystems::Send)
             .run_if(server_is_started),
     );
 }

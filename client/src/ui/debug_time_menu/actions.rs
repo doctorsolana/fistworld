@@ -63,6 +63,10 @@ pub(super) fn handle_debug_menu_interactions(
         &mut MessageSender<SetPlayerCharacter>,
         (With<crate::GameClient>, With<Connected>),
     >,
+    mut npc_spawn_sender: Query<
+        &mut MessageSender<SpawnOilmanDebug>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
     mut buttons: Query<
         (
             &Interaction,
@@ -73,6 +77,7 @@ pub(super) fn handle_debug_menu_interactions(
             Option<&CharacterToggleButton>,
             Option<&PerfWeightmapToggleButton>,
             Option<&PerfRenderDiagToggleButton>,
+            Option<&SpawnOilmanNpcButton>,
             &mut BackgroundColor,
         ),
         Changed<Interaction>,
@@ -87,6 +92,7 @@ pub(super) fn handle_debug_menu_interactions(
         char_button,
         weightmap_button,
         render_diag_button,
+        oilman_spawn_button,
         mut bg,
     ) in buttons.iter_mut()
     {
@@ -141,6 +147,13 @@ pub(super) fn handle_debug_menu_interactions(
 
                 if render_diag_button.is_some() {
                     perf_settings.render_diag_logging = !perf_settings.render_diag_logging;
+                    continue;
+                }
+
+                if oilman_spawn_button.is_some() {
+                    if let Ok(mut sender) = npc_spawn_sender.single_mut() {
+                        sender.send::<ReliableChannel>(SpawnOilmanDebug { count: 10 });
+                    }
                     continue;
                 }
 

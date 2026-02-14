@@ -92,6 +92,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SetPlayerCharacter>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<SpawnOilmanDebug>()
+            .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<PickupRequest>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<DropRequest>()
