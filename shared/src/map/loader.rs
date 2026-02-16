@@ -6,9 +6,12 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::props::PropKind;
-use crate::terrain::CHUNK_SIZE;
+use crate::terrain::{ChunkCoord, TerrainDeltaData, CHUNK_SIZE};
 
-use super::{HeightmapData, MapBounds, MapDefinition, MapObjectSpawn, DEFAULT_MAP_ID};
+use super::{
+    load_map_edits_optional, map_edits_path, HeightmapData, MapBounds, MapDefinition,
+    MapEditsDefinition, MapObjectSpawn, DEFAULT_MAP_ID,
+};
 
 const ASSET_ROOT_CANDIDATES: [&str; 2] = ["assets", "client/assets"];
 
@@ -16,14 +19,17 @@ const ASSET_ROOT_CANDIDATES: [&str; 2] = ["assets", "client/assets"];
 pub struct LoadedMap {
     pub definition: MapDefinition,
     pub heightmap: HeightmapData,
+    pub edits: MapEditsDefinition,
+    pub terrain_deltas_by_chunk: HashMap<ChunkCoord, TerrainDeltaData>,
     pub objects_by_chunk: HashMap<(i32, i32), Vec<ResolvedMapObject>>,
     pub content_hash: u64,
     pub map_dir: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ResolvedMapObject {
-    pub kind: PropKind,
+    pub kind: Option<PropKind>,
+    pub scene_path: String,
     pub position: [f32; 3],
     pub rotation: Quat,
     pub scale: f32,
@@ -51,6 +57,8 @@ pub fn load_map(map_id: &str) -> Result<LoadedMap, String> {
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| format!("Map path has no parent: {}", map_path.display()))?;
+
+    validate_object_scene_assets(&map_dir, map_id, &definition.objects)?;
 
     let heightmap_path = resolve_map_relative_file(&map_dir, map_id, &definition.terrain.heightmap)
         .ok_or_else(|| {
@@ -82,17 +90,38 @@ pub fn load_map(map_id: &str) -> Result<LoadedMap, String> {
         })?;
     }
 
+    let edits = load_map_edits_optional(&map_dir)?.unwrap_or_default();
+    let terrain_deltas_by_chunk = edits
+        .terrain_deltas_by_chunk()
+        .map_err(|err| format!("Invalid map edits for '{}': {err}", map_id))?;
+
+    let edits_bytes = match fs::read(map_edits_path(&map_dir)) {
+        Ok(bytes) => Some(bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(format!(
+                "Failed to read {}: {err}",
+                map_edits_path(&map_dir).display()
+            ));
+        }
+    };
+
     let objects_by_chunk = build_objects_by_chunk(&definition.objects);
 
     let mut hasher = DefaultHasher::new();
     definition.map_id.hash(&mut hasher);
     map_bytes.hash(&mut hasher);
     heightmap_bytes.hash(&mut hasher);
+    if let Some(bytes) = edits_bytes {
+        bytes.hash(&mut hasher);
+    }
     let content_hash = hasher.finish();
 
     Ok(LoadedMap {
         definition,
         heightmap,
+        edits,
+        terrain_deltas_by_chunk,
         objects_by_chunk,
         content_hash,
         map_dir,
@@ -155,26 +184,36 @@ fn load_map_ron_bytes(map_id: &str) -> Result<(PathBuf, Vec<u8>), String> {
 }
 
 fn asset_roots() -> Vec<PathBuf> {
-    let mut out = Vec::with_capacity(ASSET_ROOT_CANDIDATES.len() + 1);
+    let mut out = Vec::with_capacity(ASSET_ROOT_CANDIDATES.len() + 4);
+    let mut push_unique = |path: PathBuf| {
+        if !out.iter().any(|existing| existing == &path) {
+            out.push(path);
+        }
+    };
+
+    if let Ok(configured) = std::env::var("FISTFORCE_ASSET_PATH") {
+        let configured = configured.trim();
+        if !configured.is_empty() {
+            push_unique(PathBuf::from(configured));
+        }
+    }
 
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
-            out.push(exe_dir.join("assets"));
+            push_unique(exe_dir.join("assets"));
         }
     }
 
     for root in ASSET_ROOT_CANDIDATES {
-        out.push(PathBuf::from(root));
+        push_unique(PathBuf::from(root));
     }
 
-    #[cfg(test)]
-    {
-        // During `cargo test -p shared`, cwd is typically `shared/`.
-        let shared_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        if let Some(workspace_dir) = shared_dir.parent() {
-            out.push(workspace_dir.join("assets"));
-            out.push(workspace_dir.join("client/assets"));
-        }
+    // Support running binaries from subdirectories (e.g. `editor/`) where cwd-based
+    // `assets` or `client/assets` roots may not resolve.
+    let shared_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(workspace_dir) = shared_dir.parent() {
+        push_unique(workspace_dir.join("assets"));
+        push_unique(workspace_dir.join("client/assets"));
     }
 
     out
@@ -193,15 +232,17 @@ fn build_objects_by_chunk(
     let mut by_chunk: HashMap<(i32, i32), Vec<ResolvedMapObject>> = HashMap::new();
 
     for object in objects {
-        let Some(kind) = object.prop_kind() else {
+        let Some(scene_path) = object.resolved_scene_path() else {
             continue;
         };
+        let kind = object.prop_kind();
 
         by_chunk
             .entry(object_chunk_key(object.position))
             .or_default()
             .push(ResolvedMapObject {
                 kind,
+                scene_path,
                 position: object.position,
                 rotation: Quat::from_rotation_y(object.rotation_degrees.to_radians()),
                 scale: object.scale,
@@ -209,6 +250,26 @@ fn build_objects_by_chunk(
     }
 
     by_chunk
+}
+
+fn validate_object_scene_assets(
+    map_dir: &Path,
+    map_id: &str,
+    objects: &[MapObjectSpawn],
+) -> Result<(), String> {
+    for (index, object) in objects.iter().enumerate() {
+        let Some(scene_path) = object.resolved_scene_path() else {
+            continue;
+        };
+        let scene_file = scene_path.split('#').next().unwrap_or(scene_path.as_str());
+        if resolve_map_relative_file(map_dir, map_id, scene_file).is_none() {
+            return Err(format!(
+                "objects[{index}] scene '{}' was not found in asset roots",
+                scene_file
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn decode_heightmap(
@@ -286,9 +347,13 @@ mod tests {
         let item = indexed
             .get(&(0, 0))
             .and_then(|v| v.first())
-            .copied()
+            .cloned()
             .unwrap();
-        assert_eq!(item.kind.id(), "rock_1");
+        assert_eq!(item.kind.map(|kind| kind.id()), Some("rock_1"));
+        assert_eq!(
+            item.scene_path.as_str(),
+            "game_assets/environment/rocks/Rock_1.glb#Scene0"
+        );
         let rotated_forward = item.rotation * bevy::prelude::Vec3::Z;
         assert!((rotated_forward.x - 1.0).abs() < 1e-6);
         assert!(rotated_forward.z.abs() < 1e-6);

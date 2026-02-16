@@ -2,6 +2,24 @@
 
 use super::*;
 
+fn ragdoll_parent(
+    body: shared::protocol::RagdollBodyId,
+) -> Option<shared::protocol::RagdollBodyId> {
+    use shared::protocol::RagdollBodyId as B;
+    match body {
+        B::Pelvis => None,
+        B::SpineLower => Some(B::Pelvis),
+        B::SpineUpper => Some(B::SpineLower),
+        B::Head => Some(B::SpineUpper),
+        B::UpperArmL | B::UpperArmR => Some(B::SpineUpper),
+        B::ForearmL => Some(B::UpperArmL),
+        B::ForearmR => Some(B::UpperArmR),
+        B::ThighL | B::ThighR => Some(B::Pelvis),
+        B::CalfL => Some(B::ThighL),
+        B::CalfR => Some(B::ThighR),
+    }
+}
+
 pub fn update_npc_hitbox_debug_gizmos(
     mut gizmos: Gizmos,
     debug_mode: Res<WeaponDebugMode>,
@@ -41,5 +59,114 @@ pub fn update_npc_hitbox_debug_gizmos(
             NPC_HEAD_RADIUS,
             head_color,
         );
+    }
+}
+
+/// Draw mapped animation-bone skeleton and authoritative ragdoll body links.
+/// This runs under the same F4 debug toggle to help diagnose bad bone mapping
+/// vs bad server ragdoll constraints.
+pub fn update_npc_ragdoll_debug_gizmos(
+    mut gizmos: Gizmos,
+    debug_mode: Res<WeaponDebugMode>,
+    npcs: Query<
+        (
+            Entity,
+            Option<&NpcRagdollActive>,
+            Option<&NpcRagdollNetState>,
+        ),
+        With<Npc>,
+    >,
+    anim_roots: Query<(&NpcRigOwner, &NpcBoneMap), With<NpcAnimationRoot>>,
+    bone_globals: Query<&GlobalTransform>,
+) {
+    use shared::protocol::RagdollBodyId as B;
+
+    if !debug_mode.0 {
+        return;
+    }
+
+    let rig_by_owner = anim_roots
+        .iter()
+        .map(|(owner, map)| (owner.0, map))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    for (npc_entity, ragdoll_active, ragdoll_net) in npcs.iter() {
+        let Some(bone_map) = rig_by_owner.get(&npc_entity).copied() else {
+            continue;
+        };
+
+        // 1) Bone skeleton from mapped rig entities (cyan).
+        let mut bone_pos_by_body = std::collections::HashMap::new();
+        for (body, bone_entity) in &bone_map.bones {
+            let Ok(global) = bone_globals.get(*bone_entity) else {
+                continue;
+            };
+            let pos = global.translation();
+            bone_pos_by_body.insert(*body, pos);
+            gizmos.sphere(
+                Isometry3d::from_translation(pos),
+                0.035,
+                Color::srgba(0.1, 0.9, 1.0, 0.95),
+            );
+        }
+        for (body, pos) in bone_pos_by_body.iter() {
+            if let Some(parent) = ragdoll_parent(*body) {
+                if let Some(parent_pos) = bone_pos_by_body.get(&parent) {
+                    gizmos.line(*parent_pos, *pos, Color::srgba(0.1, 0.9, 1.0, 0.75));
+                }
+            }
+        }
+
+        // 2) Authoritative ragdoll sample skeleton (orange/red), if active.
+        let Some(_active) = ragdoll_active else {
+            continue;
+        };
+        let Some(net_state) = ragdoll_net else {
+            continue;
+        };
+        let Some(frame) = net_state.curr.as_ref() else {
+            continue;
+        };
+
+        let mut body_pos_by_body = std::collections::HashMap::new();
+        for pose in &frame.bodies {
+            body_pos_by_body.insert(pose.body, pose.position);
+            gizmos.sphere(
+                Isometry3d::from_translation(pose.position),
+                0.04,
+                Color::srgba(1.0, 0.55, 0.1, 0.95),
+            );
+        }
+        for (body, pos) in body_pos_by_body.iter() {
+            if let Some(parent) = ragdoll_parent(*body) {
+                if let Some(parent_pos) = body_pos_by_body.get(&parent) {
+                    gizmos.line(*parent_pos, *pos, Color::srgba(1.0, 0.35, 0.15, 0.85));
+                }
+            }
+        }
+
+        // 3) Drift between authoritative ragdoll bodies and mapped animated bones (yellow).
+        for body in [
+            B::Pelvis,
+            B::SpineLower,
+            B::SpineUpper,
+            B::Head,
+            B::UpperArmL,
+            B::ForearmL,
+            B::UpperArmR,
+            B::ForearmR,
+            B::ThighL,
+            B::CalfL,
+            B::ThighR,
+            B::CalfR,
+        ] {
+            let Some(body_pos) = body_pos_by_body.get(&body).copied() else {
+                continue;
+            };
+            let Some(bone_pos) = bone_pos_by_body.get(&body).copied() else {
+                continue;
+            };
+            gizmos.line(body_pos, bone_pos, Color::srgba(1.0, 0.95, 0.2, 0.75));
+        }
     }
 }

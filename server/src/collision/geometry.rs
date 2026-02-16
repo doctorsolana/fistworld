@@ -4,6 +4,7 @@ use bevy::prelude::*;
 
 use shared::physics::WALKABLE_THRESHOLD;
 
+use crate::ai::ragdoll::{CorpseBodyPoint, CorpseCollisionIndex};
 use crate::collision::library::{DerivedColliderLibrary, DerivedHull, HullFace, StaticColliders};
 
 const COLLIDER_CELL_SIZE: f32 = 16.0;
@@ -265,6 +266,98 @@ pub fn handle_capsule_vs_static(
     }
 
     support
+}
+
+pub fn handle_capsule_vs_corpse_spheres(
+    corpse_index: &CorpseCollisionIndex,
+    pos: &mut Vec3,
+    mut velocity: Option<&mut Vec3>,
+    radius: f32,
+    height: f32,
+    candidates: &mut Vec<CorpseBodyPoint>,
+) {
+    let half_h = height * 0.5;
+    let sphere_offset = (half_h - radius).max(0.0);
+    let search_radius = radius + half_h + 2.0;
+    corpse_index.collect_nearby(*pos, search_radius, candidates);
+
+    for _ in 0..2 {
+        let mut moved = false;
+        for corpse in candidates.iter().copied() {
+            let sphere_positions = [
+                *pos - Vec3::Y * sphere_offset,
+                *pos,
+                *pos + Vec3::Y * sphere_offset,
+            ];
+            let mut best_pen = 0.0f32;
+            let mut best_normal = Vec3::ZERO;
+            for sphere_pos in sphere_positions {
+                let delta = sphere_pos - corpse.position;
+                let dist_sq = delta.length_squared();
+                let min_dist = radius + corpse.radius;
+                if dist_sq >= min_dist * min_dist || dist_sq <= 1.0e-8 {
+                    continue;
+                }
+                let dist = dist_sq.sqrt();
+                let pen = min_dist - dist;
+                if pen > best_pen {
+                    best_pen = pen;
+                    best_normal = delta / dist;
+                }
+            }
+
+            if best_pen <= 0.0 {
+                continue;
+            }
+
+            pos.x += best_normal.x * best_pen;
+            pos.y += (best_normal.y * best_pen).max(0.0);
+            pos.z += best_normal.z * best_pen;
+
+            if let Some(v) = velocity.as_deref_mut() {
+                let vn = v.dot(best_normal);
+                if vn < 0.0 {
+                    *v -= best_normal * vn;
+                }
+            }
+            moved = true;
+        }
+        if !moved {
+            break;
+        }
+        corpse_index.collect_nearby(*pos, search_radius, candidates);
+    }
+}
+
+pub fn handle_vehicle_proxy_vs_corpse_spheres(
+    corpse_index: &CorpseCollisionIndex,
+    pos: &mut Vec3,
+    mut velocity: Option<&mut Vec3>,
+    proxy_radius: f32,
+    candidates: &mut Vec<CorpseBodyPoint>,
+) {
+    let search_radius = proxy_radius + 2.5;
+    corpse_index.collect_nearby(*pos, search_radius, candidates);
+    for corpse in candidates.iter().copied() {
+        let delta = *pos - corpse.position;
+        let dist_sq = delta.length_squared();
+        let min_dist = proxy_radius + corpse.radius;
+        if dist_sq >= min_dist * min_dist || dist_sq <= 1.0e-8 {
+            continue;
+        }
+        let dist = dist_sq.sqrt();
+        let pen = min_dist - dist;
+        let normal = delta / dist;
+        pos.x += normal.x * pen;
+        pos.y += (normal.y * pen).max(0.0);
+        pos.z += normal.z * pen;
+        if let Some(v) = velocity.as_deref_mut() {
+            let vn = v.dot(normal);
+            if vn < 0.0 {
+                *v -= normal * vn;
+            }
+        }
+    }
 }
 
 fn sphere_vs_convex_hull_3d(

@@ -100,6 +100,7 @@ pub fn handle_start_connection(
         MessageSender::<shared::protocol::ReloadRequest>::default(),
         MessageSender::<shared::protocol::SetTimeOfDay>::default(),
         MessageSender::<shared::protocol::SpawnOilmanDebug>::default(),
+        MessageSender::<shared::protocol::SpawnPhysicsBoxDebug>::default(),
         MessageSender::<shared::items::PickupRequest>::default(),
         MessageSender::<shared::items::DropRequest>::default(),
         MessageSender::<shared::items::SelectHotbarSlot>::default(),
@@ -122,6 +123,8 @@ pub fn handle_start_connection(
         MessageReceiver::<shared::protocol::BulletImpact>::default(),
         MessageReceiver::<shared::protocol::DamageReceived>::default(),
         MessageReceiver::<shared::protocol::PlayerKilled>::default(),
+        MessageReceiver::<shared::protocol::NpcRagdollStarted>::default(),
+        MessageReceiver::<shared::protocol::NpcRagdollPoseBatch>::default(),
         // Name submission response
         MessageReceiver::<shared::protocol::NameSubmissionResult>::default(),
         MessageReceiver::<shared::protocol::PlayerRoster>::default(),

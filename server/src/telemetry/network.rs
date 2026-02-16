@@ -9,6 +9,8 @@ use lightyear::prelude::*;
 use shared::components::{Npc, NpcPosition, NpcRotation, Player, PlayerPosition, PlayerRotation};
 use std::collections::HashMap;
 
+use crate::ai::ragdoll::RagdollTelemetry;
+
 #[derive(Default)]
 struct PerClientFlow {
     samples: u64,
@@ -43,6 +45,8 @@ pub struct ServerNetDebugWindow {
     changed_npc_rot_sum: u64,
     changed_player_pos_sum: u64,
     changed_player_rot_sum: u64,
+    last_ragdoll_pose_msgs_total: u64,
+    last_ragdoll_pose_bytes_total: u64,
 }
 
 impl ServerNetDebugWindow {
@@ -152,6 +156,7 @@ pub fn sample_replication_change_pressure(
 pub fn sample_link_flow_post_send(
     time: Res<Time>,
     mut debug: ResMut<ServerNetDebugWindow>,
+    ragdoll_telemetry: Res<RagdollTelemetry>,
     mut client_links: Query<(&RemoteId, &mut Link), (With<ClientOf>, With<Connected>)>,
 ) {
     let now = time.elapsed_secs();
@@ -214,6 +219,14 @@ pub fn sample_link_flow_post_send(
     } else {
         0.0
     };
+    let ragdoll_msgs_delta = ragdoll_telemetry
+        .total_pose_msgs
+        .saturating_sub(debug.last_ragdoll_pose_msgs_total);
+    let ragdoll_bytes_delta = ragdoll_telemetry
+        .total_pose_bytes
+        .saturating_sub(debug.last_ragdoll_pose_bytes_total);
+    let ragdoll_msgs_per_sec = ragdoll_msgs_delta as f32 / window_secs;
+    let ragdoll_kib_per_sec = ragdoll_bytes_delta as f32 / 1024.0 / window_secs;
 
     let mut per_client: Vec<(PeerId, &PerClientFlow)> = debug
         .per_client
@@ -256,7 +269,7 @@ pub fn sample_link_flow_post_send(
     let peak_recv_queue = debug.recv_queue_peak;
 
     info!(
-        "Server net debug: clients={} send={:.1} pkt/s {:.1} KiB/s peak_frame={} pkt/{:.1} KiB recv_q_avg={:.2} peak={} | changed/tick npc_pos={:.1} npc_rot={:.1} player_pos={:.1} player_rot={:.1} | per_client=[{}]",
+        "Server net debug: clients={} send={:.1} pkt/s {:.1} KiB/s peak_frame={} pkt/{:.1} KiB recv_q_avg={:.2} peak={} | changed/tick npc_pos={:.1} npc_rot={:.1} player_pos={:.1} player_rot={:.1} | ragdoll active={} evicted={} pose={:.1} msg/s {:.1} KiB/s | per_client=[{}]",
         client_count,
         send_packets_per_sec,
         send_kib_per_sec,
@@ -268,8 +281,14 @@ pub fn sample_link_flow_post_send(
         avg_changed_npc_rot,
         avg_changed_player_pos,
         avg_changed_player_rot,
+        ragdoll_telemetry.active_corpses,
+        ragdoll_telemetry.total_evicted,
+        ragdoll_msgs_per_sec,
+        ragdoll_kib_per_sec,
         per_client_summary
     );
 
+    debug.last_ragdoll_pose_msgs_total = ragdoll_telemetry.total_pose_msgs;
+    debug.last_ragdoll_pose_bytes_total = ragdoll_telemetry.total_pose_bytes;
     debug.reset_window(now);
 }

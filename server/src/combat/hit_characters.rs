@@ -1,12 +1,13 @@
 //! Bullet-vs-character hit detection.
 
 use bevy::prelude::*;
+use bevy_rapier3d::prelude::ExternalImpulse;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
 use shared::components::{
-    Bullet, BulletPrevPosition, BulletVelocity, Health, Npc, NpcDamageEvent, NpcPosition, Player,
-    PlayerPosition,
+    Bullet, BulletPrevPosition, BulletVelocity, DebugPhysicsBox, DebugPhysicsBoxPosition,
+    DebugPhysicsBoxRotation, Health, Npc, NpcDamageEvent, NpcPosition, Player, PlayerPosition,
 };
 use shared::npc::{
     npc_capsule_endpoints, npc_head_center, NPC_HEAD_RADIUS, NPC_HEIGHT, NPC_RADIUS,
@@ -19,8 +20,11 @@ use shared::weapons::damage;
 use std::collections::HashMap;
 use std::time::Instant;
 
+use crate::ai::ragdoll::{CorpseCollisionIndex, NpcDeathImpact};
 use crate::combat::bullet_sim::BulletPendingDespawn;
-use crate::combat::geometry::{ray_capsule_intersection, ray_sphere_intersection};
+use crate::combat::geometry::{
+    ray_capsule_intersection, ray_obb_intersection, ray_sphere_intersection,
+};
 use crate::combat::target_index::HittableSpatialIndex;
 use crate::net::peer::peer_id_to_u64;
 
@@ -29,6 +33,7 @@ pub fn handle_bullet_character_hits(
     mut commands: Commands,
     time: Res<Time>,
     hittable_index: Res<HittableSpatialIndex>,
+    corpse_index: Res<CorpseCollisionIndex>,
     mut perf_monitor: Option<ResMut<crate::telemetry::perf::ServerPerfMonitor>>,
     bullets: Query<
         (
@@ -48,6 +53,14 @@ pub fn handle_bullet_character_hits(
         Query<(Entity, &Npc, &NpcPosition, &Health), (With<Npc>, Without<Player>)>,
         Query<(Entity, &Npc, &NpcPosition, &mut Health), (With<Npc>, Without<Player>)>,
     )>,
+    mut corpse_body_impulses: Query<&mut ExternalImpulse, Without<DebugPhysicsBox>>,
+    debug_boxes: Query<(
+        Entity,
+        &DebugPhysicsBoxPosition,
+        &DebugPhysicsBoxRotation,
+        &DebugPhysicsBox,
+    )>,
+    mut debug_box_impulses: Query<&mut ExternalImpulse, With<DebugPhysicsBox>>,
     mut client_links: Query<
         (
             &RemoteId,
@@ -81,12 +94,45 @@ pub fn handle_bullet_character_hits(
         bullet_initial_velocity: Vec3,
     }
 
+    #[derive(Clone, Copy, Debug)]
+    struct CorpseHitRecord {
+        bullet_entity: Entity,
+        shooter_id: u64,
+        corpse_npc_entity: Entity,
+        corpse_body: shared::protocol::RagdollBodyId,
+        body_entity: Entity,
+        body_center: Vec3,
+        hit_point: Vec3,
+        hit_normal: Vec3,
+        impulse: Vec3,
+        weapon_type: shared::weapons::WeaponType,
+        bullet_spawn_position: Vec3,
+        bullet_initial_velocity: Vec3,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct DebugBoxHitRecord {
+        bullet_entity: Entity,
+        shooter_id: u64,
+        box_entity: Entity,
+        box_center: Vec3,
+        hit_point: Vec3,
+        hit_normal: Vec3,
+        impulse: Vec3,
+        weapon_type: shared::weapons::WeaponType,
+        bullet_spawn_position: Vec3,
+        bullet_initial_velocity: Vec3,
+    }
+
     let now = time.elapsed_secs();
     let despawn_delay = 0.05;
     let mut hits: Vec<HitRecord> = Vec::new();
+    let mut corpse_hits: Vec<CorpseHitRecord> = Vec::new();
+    let mut debug_box_hits: Vec<DebugBoxHitRecord> = Vec::new();
     let mut candidate_cells = Vec::new();
     let mut npc_candidates = Vec::new();
     let mut player_candidates = Vec::new();
+    let mut corpse_candidates = Vec::new();
 
     {
         let npcs_ro = npcs.p0();
@@ -258,8 +304,109 @@ pub fn handle_bullet_character_hits(
                         bullet_spawn_position: bullet.spawn_position,
                         bullet_initial_velocity: bullet.initial_velocity,
                     });
+                    hit_recorded = true;
                     break;
                 }
+            }
+
+            if hit_recorded {
+                continue;
+            }
+
+            let mut best_box_hit: Option<(Entity, Vec3, Vec3, f32)> = None;
+            for (box_entity, box_pos, box_rot, box_data) in debug_boxes.iter() {
+                if let Some((hit_point, hit_normal)) = ray_obb_intersection(
+                    ray_start,
+                    ray_dir_norm,
+                    ray_length,
+                    box_pos.0,
+                    box_rot.0,
+                    box_data.half_extents,
+                ) {
+                    let ray_t = (hit_point - ray_start).length_squared();
+                    match best_box_hit {
+                        Some((_prev_entity, _prev_point, _prev_normal, prev_t))
+                            if prev_t <= ray_t => {}
+                        _ => best_box_hit = Some((box_entity, hit_point, hit_normal, ray_t)),
+                    }
+                }
+            }
+            if let Some((box_entity, hit_point, hit_normal, _)) = best_box_hit {
+                let impulse_dir = Vec3::new(
+                    bullet.initial_velocity.x,
+                    bullet.initial_velocity.y * 0.2,
+                    bullet.initial_velocity.z,
+                )
+                .normalize_or_zero();
+                let impulse_mag = (bullet.weapon_type.stats().damage * 0.18).clamp(1.5, 7.5);
+                let box_center = debug_boxes
+                    .get(box_entity)
+                    .map(|(_, pos, _, _)| pos.0)
+                    .unwrap_or(hit_point);
+                debug_box_hits.push(DebugBoxHitRecord {
+                    bullet_entity,
+                    shooter_id: bullet.owner_id,
+                    box_entity,
+                    box_center,
+                    hit_point,
+                    hit_normal,
+                    impulse: impulse_dir * impulse_mag,
+                    weapon_type: bullet.weapon_type,
+                    bullet_spawn_position: bullet.spawn_position,
+                    bullet_initial_velocity: bullet.initial_velocity,
+                });
+                continue;
+            }
+
+            corpse_index.collect_segment_candidates(
+                ray_start,
+                ray_end,
+                NPC_RADIUS + NPC_HEAD_RADIUS,
+                &mut corpse_candidates,
+            );
+            let mut best_corpse_hit: Option<(crate::ai::ragdoll::CorpseBodyPoint, Vec3, f32)> =
+                None;
+            for corpse_point in corpse_candidates.iter().copied() {
+                if let Some(hit_point) = ray_sphere_intersection(
+                    ray_start,
+                    ray_dir_norm,
+                    ray_length,
+                    corpse_point.position,
+                    corpse_point.radius,
+                ) {
+                    let ray_t = (hit_point - ray_start).length_squared();
+                    match best_corpse_hit {
+                        Some((_prev, _point, prev_t)) if prev_t <= ray_t => {}
+                        _ => {
+                            best_corpse_hit = Some((corpse_point, hit_point, ray_t));
+                        }
+                    }
+                }
+            }
+
+            if let Some((corpse_point, hit_point, _)) = best_corpse_hit {
+                let hit_normal = (hit_point - corpse_point.position).normalize_or_zero();
+                let impulse_dir = Vec3::new(
+                    bullet.initial_velocity.x,
+                    bullet.initial_velocity.y * 0.2,
+                    bullet.initial_velocity.z,
+                )
+                .normalize_or_zero();
+                let impulse_mag = (bullet.weapon_type.stats().damage * 0.0012).clamp(0.003, 0.014);
+                corpse_hits.push(CorpseHitRecord {
+                    bullet_entity,
+                    shooter_id: bullet.owner_id,
+                    corpse_npc_entity: corpse_point.npc_entity,
+                    corpse_body: corpse_point.body,
+                    body_entity: corpse_point.body_entity,
+                    body_center: corpse_point.position,
+                    hit_point,
+                    hit_normal,
+                    impulse: impulse_dir * impulse_mag,
+                    weapon_type: bullet.weapon_type,
+                    bullet_spawn_position: bullet.spawn_position,
+                    bullet_initial_velocity: bullet.initial_velocity,
+                });
             }
         }
     }
@@ -368,12 +515,26 @@ pub fn handle_bullet_character_hits(
                 if let Ok((_e, _npc, _pos, mut health)) = npcs.p1().get_mut(npc_entity) {
                     let is_kill = health.take_damage(hit.damage_amount);
                     let is_headshot = hit.hit_zone == damage::HitZone::Head;
+                    let death_impulse_mag = (hit.damage_amount * 0.0025).clamp(0.005, 0.03);
+                    let death_impulse = Vec3::new(
+                        hit.bullet_initial_velocity.x,
+                        hit.bullet_initial_velocity.y * 0.2,
+                        hit.bullet_initial_velocity.z,
+                    )
+                    .normalize_or_zero()
+                        * death_impulse_mag;
 
                     commands.entity(npc_entity).insert(NpcDamageEvent {
                         damage_source_position: hit.bullet_spawn_position,
                         damage_amount: hit.damage_amount,
                         attacker_player_id: Some(hit.shooter_id),
                     });
+                    if is_kill {
+                        commands.entity(npc_entity).insert(NpcDeathImpact {
+                            hit_point: hit.hit_point,
+                            impulse: death_impulse,
+                        });
+                    }
 
                     if crate::telemetry::hotlog_enabled() {
                         info!(
@@ -422,6 +583,59 @@ pub fn handle_bullet_character_hits(
 
         // Delay despawn to avoid replication races on short-lived bullets.
         despawn_updates.push((hit.bullet_entity, hit.hit_point));
+    }
+
+    for corpse_hit in corpse_hits {
+        if crate::telemetry::hotlog_enabled() {
+            trace!(
+                "Corpse hit: npc_entity={:?} body={:?} shooter={}",
+                corpse_hit.corpse_npc_entity,
+                corpse_hit.corpse_body,
+                corpse_hit.shooter_id
+            );
+        }
+        if let Ok(mut impulse) = corpse_body_impulses.get_mut(corpse_hit.body_entity) {
+            *impulse += ExternalImpulse::at_point(
+                corpse_hit.impulse,
+                corpse_hit.hit_point,
+                corpse_hit.body_center,
+            );
+        }
+
+        impacts_to_broadcast.push(BulletImpact {
+            owner_id: corpse_hit.shooter_id,
+            weapon_type: corpse_hit.weapon_type,
+            spawn_position: corpse_hit.bullet_spawn_position,
+            initial_velocity: corpse_hit.bullet_initial_velocity,
+            impact_position: corpse_hit.hit_point,
+            impact_normal: corpse_hit.hit_normal,
+            surface: BulletImpactSurface::Npc,
+        });
+        despawn_updates.push((corpse_hit.bullet_entity, corpse_hit.hit_point));
+    }
+
+    for box_hit in debug_box_hits {
+        if crate::telemetry::hotlog_enabled() {
+            trace!(
+                "Debug box hit: box_entity={:?} shooter={}",
+                box_hit.box_entity,
+                box_hit.shooter_id
+            );
+        }
+        if let Ok(mut impulse) = debug_box_impulses.get_mut(box_hit.box_entity) {
+            *impulse +=
+                ExternalImpulse::at_point(box_hit.impulse, box_hit.hit_point, box_hit.box_center);
+        }
+        impacts_to_broadcast.push(BulletImpact {
+            owner_id: box_hit.shooter_id,
+            weapon_type: box_hit.weapon_type,
+            spawn_position: box_hit.bullet_spawn_position,
+            initial_velocity: box_hit.bullet_initial_velocity,
+            impact_position: box_hit.hit_point,
+            impact_normal: box_hit.hit_normal,
+            surface: BulletImpactSurface::PracticeWall,
+        });
+        despawn_updates.push((box_hit.bullet_entity, box_hit.hit_point));
     }
 
     if !impacts_to_broadcast.is_empty()

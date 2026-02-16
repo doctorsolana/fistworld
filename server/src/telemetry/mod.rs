@@ -7,8 +7,8 @@
 //! - May read cross-domain state for observability.
 //! - Should not mutate gameplay authority/state transitions.
 
-pub mod perf;
 pub mod network;
+pub mod perf;
 
 use std::sync::OnceLock;
 

@@ -17,9 +17,10 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let radius_sq = dot(centered, centered);
     let radius = sqrt(radius_sq);
 
-    // Ease distortion in near the edges so the center reticle stays stable.
-    let edge_weight = smoothstep(settings.edge_start, 1.1, radius);
-    let warp = 1.0 + settings.strength * edge_weight * radius_sq;
+    // Ramp distortion within scope space (not just near full-screen edges),
+    // while keeping the very center reticle area mostly stable.
+    let edge_weight = smoothstep(settings.edge_start, settings.edge_start + 0.22, radius);
+    let warp = 1.0 + settings.strength * edge_weight * (0.35 + radius * 1.4);
     let sample_uv = centered * warp * 0.5 + vec2<f32>(0.5, 0.5);
     let clamped_uv = clamp(sample_uv, vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0));
 

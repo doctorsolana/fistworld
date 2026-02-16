@@ -199,6 +199,9 @@ fn load_chunk(
 
     let mut ids = Vec::new();
     for spawn in spawns {
+        let Some(kind) = spawn.kind else {
+            continue;
+        };
         if let Some(zones) = chunk_zones {
             let point_xz = Vec2::new(spawn.position.x, spawn.position.z);
             if point_in_any_build_zone_entries(point_xz, zones) {
@@ -206,7 +209,7 @@ fn load_chunk(
             }
         }
 
-        if !library.by_kind.contains_key(&spawn.kind) {
+        if !library.by_kind.contains_key(&kind) {
             continue;
         }
 
@@ -215,7 +218,7 @@ fn load_chunk(
 
         let cell = cell_key(spawn.position.x, spawn.position.z);
         let inst = StaticColliderInstance {
-            kind: spawn.kind,
+            kind,
             position: spawn.position,
             rotation: spawn.rotation,
             scale: spawn.scale,

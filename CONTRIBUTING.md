@@ -57,6 +57,8 @@ This project is designed to be expanded without another rewrite. Use this guide 
 - Keep gameplay-facing API ergonomic even if transport is packed/quantized.
 - Add roundtrip tests for packed network types and edge values.
 - Keep map-load preprocessing deterministic and reusable by both client and server.
+- For physics-reactive replicated entities (ragdolls/corpses), server simulation is the source of truth; clients render streamed poses and must not infer independent outcomes.
+- Runtime collision/contacts must come from the server Rapier world; do not re-introduce terrain-proxy clamps or custom pushout loops in gameplay systems.
 
 ## Testing and Verification
 

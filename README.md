@@ -21,6 +21,7 @@ A multiplayer 3D sandbox shooter built with **Rust** and **Bevy 0.18**.
 | `client/` | Bevy app with rendering, input, UI, terrain/prop streaming |
 | `server/` | Headless authoritative server (physics, AI, hit detection) |
 | `shared/` | Deterministic terrain/props, protocol, components, ballistics |
+| `editor/` | Offline map editor app (terrain sculpt, prop placement, spawn authoring) |
 | `tools/collider_baker/` | Offline tool to bake convex-hull colliders from GLTF meshes |
 
 Assets live in `client/assets/` (models, audio, `colliders.bin`).
@@ -63,6 +64,7 @@ This repository includes a full pass of behavior-preserving performance work acr
   - Switched building spatial index rebuild gating to ECS change/removal signals (no no-op full scans each tick).
   - Incrementalized collider streaming with cached build-zone chunk lookup and loaded-chunk refresh when building zones change.
   - Improved AI/pathfinding cadence and scratch reuse in hot loops.
+  - Added server-authoritative Oilman ragdoll pipeline with lethal-shot impulse capture, 15 Hz pose streaming, corpse budget eviction, and corpse gameplay collision.
 - Shared:
   - Optimized terrain mesh generation by caching stencil samples and deriving biome/material data from cached authored values.
   - Optimized `sample_height` via cached sampling scalars in `HeightmapData`.
@@ -95,9 +97,10 @@ Current baseline checks:
 
 ### Collisions
 
-- **Ground**: Heightfield lookup via `WorldTerrain::get_height(x, z)` — automatically includes terrain modifications (building flattening).
-- **Static props**: Baked convex-hull colliders loaded at server startup; spatial-hash streaming around players.
-- **Entities**: Capsule (player/NPC) and OBB (vehicle) vs convex-hull resolution.
+- **Single authority**: Server runs one Rapier world for terrain, static world, players, NPCs, vehicles, ragdolls, and debug bodies.
+- **Terrain**: Chunk-streamed heightfield colliders generated from `WorldTerrain`.
+- **Static world**: Baked prop/building colliders materialized as fixed Rapier colliders.
+- **Dynamics**: Players/NPCs/vehicles/debug bodies are dynamic rigid bodies driven by server control systems.
 
 ### Weapons & Combat
 
@@ -128,11 +131,44 @@ cargo run -p client --release
 
 Useful env flags:
 - `CITYSIM_MAX_NPCS=<n>`: cap total spawned NPCs (`0` = none).
+- `CITYSIM_MAP_ID=<id>`: select authored map at startup (client/server/editor).
+- `CITYSIM_CORPSE_CAP=<n>`: maximum live ragdoll corpses before oldest-evict.
+- `CITYSIM_RAGDOLL_POSE_HZ=<hz>`: authoritative ragdoll pose stream rate (server->client).
+- `CITYSIM_TERRAIN_COLLIDER_RADIUS_CHUNKS=<n>`: radius (in chunks) kept loaded around active physics centers.
+- `CITYSIM_TERRAIN_COLLIDER_MAX_LOAD_PER_TICK=<n>`: max terrain collider chunks spawned per fixed tick.
+- `CITYSIM_TERRAIN_COLLIDER_RESOLUTION=<n>`: per-chunk heightfield resolution for terrain colliders.
 - `FISTFORCE_SERVER_PERF=0`: disable server phase timing logs.
 - `CITYSIM_SERVER_HOTLOG=1`: enable extra hot-loop debug logs on server.
 - `FISTFORCE_CLIENT_PERF=1`: enable client frame/perf rolling logs.
 - `FISTFORCE_CLIENT_PERF_INTERVAL_SECS=<n>`: client perf log cadence in seconds.
 - `FISTFORCE_HIERARCHY_AUDIT=1`: log which scene nodes are triggering parent hierarchy warnings.
+
+### Map Editor (MVP)
+
+```bash
+# Open editor on default map (city_alpha)
+./run.sh editor
+
+# Open editor on another map id
+./run.sh editor --map city_alpha
+```
+
+Editor save behavior:
+- `map.ron`: map definition (`objects`, `player_spawn`, etc.)
+- `edits.ron`: terrain delta chunks + spawn markers + future road/plot data
+
+Current editor tools:
+- Terrain: raise / lower / flatten brush
+- Props: place / erase authored props
+- Spawns: set player spawn and add spawn markers
+
+Core editor controls:
+- `RMB`: look
+- `WASD`: move
+- `Q/E`: vertical move
+- `LMB`: apply selected tool
+- `Ctrl+S`: save
+- `Ctrl+Z` / `Ctrl+Y`: undo / redo
 
 ---
 

@@ -1,0 +1,1407 @@
+use std::collections::HashSet;
+
+use bevy::asset::RenderAssetUsages;
+use bevy::math::primitives::{Cuboid, Cylinder};
+use bevy::mesh::{Indices, VertexAttributeValues};
+use bevy::prelude::*;
+use bevy::render::render_resource::PrimitiveTopology;
+
+use shared::map::{
+    load_map, map_definition_path, save_map_definition_atomic, save_map_edits_atomic,
+    MapObjectSpawn, SpawnMarkerKind, DEFAULT_MAP_ID,
+};
+use shared::terrain::{
+    ChunkCoord, ChunkMeshData, WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, VERTEX_SPACING,
+};
+
+use crate::session::{
+    CursorTerrainHit, EditorCursorVisual, EditorEnvironmentState, EditorPropPreviewVisual,
+    EditorPropVisual, EditorSession, EditorSnapshot, EditorSpawnVisual, EditorUiState,
+    EditorWaterChunk, EditorWaterVisual, PropPreviewState, TerrainBrushMode, TerrainChunkEntry,
+    TerrainChunkRegistry, TerrainChunkVisual, ToolMode, UiActionRequests, WaterChunkRegistry,
+};
+
+#[derive(Resource, Default)]
+pub struct VisualRefreshFlags {
+    pub terrain_all: bool,
+    pub terrain_chunks: HashSet<ChunkCoord>,
+    pub water_all: bool,
+    pub water_chunks: HashSet<ChunkCoord>,
+    pub props: bool,
+    pub markers: bool,
+}
+
+pub fn setup_editor_scene(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut terrain_registry: ResMut<TerrainChunkRegistry>,
+    mut water_registry: ResMut<WaterChunkRegistry>,
+    mut ui_state: ResMut<EditorUiState>,
+    mut env_state: ResMut<EditorEnvironmentState>,
+) {
+    let map_id = std::env::var("CITYSIM_MAP_ID")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_MAP_ID.to_string());
+
+    let loaded_map = load_map(&map_id).unwrap_or_else(|err| {
+        panic!("Failed to load map '{}': {err}", map_id);
+    });
+    let map_path = map_definition_path(&loaded_map.map_dir);
+
+    let world = WorldTerrain::default();
+    if world.generator.active_map_id() != loaded_map.definition.map_id {
+        warn!(
+            "Editor map mismatch: world loaded '{}' while session map is '{}'",
+            world.generator.active_map_id(),
+            loaded_map.definition.map_id
+        );
+    }
+
+    let session = EditorSession::new(
+        map_id.clone(),
+        loaded_map.map_dir.clone(),
+        map_path,
+        loaded_map.definition.clone(),
+        loaded_map.edits.clone(),
+    );
+    *env_state = EditorEnvironmentState::from_map(&loaded_map.definition);
+
+    commands.insert_resource(GlobalAmbientLight {
+        color: Color::WHITE,
+        brightness: 900.0,
+        ..default()
+    });
+    commands.spawn((
+        Name::new("EditorSun"),
+        DirectionalLight {
+            illuminance: 38_000.0,
+            shadows_enabled: true,
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.1, 0.8, 0.0)),
+    ));
+
+    let terrain_material = materials.add(StandardMaterial {
+        base_color: Color::WHITE,
+        perceptual_roughness: 1.0,
+        metallic: 0.0,
+        ..default()
+    });
+    let water_material = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.12, 0.46, 0.58, 0.36),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        cull_mode: None,
+        ..default()
+    });
+    water_registry.material = Some(water_material);
+
+    spawn_all_terrain_chunks(
+        &mut commands,
+        &world,
+        &mut meshes,
+        terrain_material,
+        &mut terrain_registry,
+    );
+    spawn_all_water_chunks(
+        &mut commands,
+        &world,
+        &env_state,
+        &mut meshes,
+        &mut water_registry,
+    );
+
+    spawn_prop_visuals(
+        &mut commands,
+        &asset_server,
+        &mut meshes,
+        &mut materials,
+        &world,
+        &loaded_map.definition.objects,
+    );
+    spawn_spawn_visuals(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        &world,
+        &loaded_map.definition.player_spawn,
+        &loaded_map.edits.spawn_markers,
+    );
+
+    let cursor_mesh = meshes.add(Cylinder::new(1.0, 0.05));
+    let cursor_material = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.15, 0.9, 0.4, 0.35),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        ..default()
+    });
+    commands.spawn((
+        Name::new("BrushCursor"),
+        Mesh3d(cursor_mesh),
+        MeshMaterial3d(cursor_material),
+        Transform::from_translation(Vec3::new(0.0, 0.1, 0.0)),
+        Visibility::Hidden,
+        EditorCursorVisual,
+    ));
+
+    ui_state.status = format!(
+        "Loaded map '{}' ({} objects, {} edit markers)",
+        map_id,
+        loaded_map.definition.objects.len(),
+        loaded_map.edits.spawn_markers.len()
+    );
+
+    commands.insert_resource(world);
+    commands.insert_resource(session);
+}
+
+pub fn handle_editor_shortcuts(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut actions: ResMut<UiActionRequests>,
+    mut session: ResMut<EditorSession>,
+    mut world: ResMut<WorldTerrain>,
+    mut flags: ResMut<VisualRefreshFlags>,
+    mut ui_state: ResMut<EditorUiState>,
+) {
+    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    if ctrl && keys.just_pressed(KeyCode::KeyS) {
+        actions.save = true;
+    }
+    if ctrl && keys.just_pressed(KeyCode::KeyZ) {
+        actions.undo = true;
+    }
+    if ctrl && keys.just_pressed(KeyCode::KeyY) {
+        actions.redo = true;
+    }
+
+    if actions.save {
+        session
+            .map_edits
+            .set_terrain_deltas_from_world(world.delta_chunks());
+        match save_all(&mut session) {
+            Ok(()) => {
+                ui_state.status = "Saved map.ron + edits.ron".to_string();
+            }
+            Err(err) => {
+                ui_state.status = format!("Save failed: {err}");
+            }
+        }
+        actions.save = false;
+    }
+
+    if actions.undo {
+        if let Some(snapshot) = session.undo.pop() {
+            let current = session.capture_snapshot(&world);
+            session.redo.push(current);
+            match apply_snapshot(snapshot, &mut session, &mut world, &mut flags) {
+                Ok(()) => {
+                    ui_state.status = "Undo".to_string();
+                }
+                Err(err) => {
+                    ui_state.status = format!("Undo failed: {err}");
+                }
+            }
+        }
+        actions.undo = false;
+    }
+
+    if actions.redo {
+        if let Some(snapshot) = session.redo.pop() {
+            let current = session.capture_snapshot(&world);
+            session.undo.push(current);
+            match apply_snapshot(snapshot, &mut session, &mut world, &mut flags) {
+                Ok(()) => {
+                    ui_state.status = "Redo".to_string();
+                }
+                Err(err) => {
+                    ui_state.status = format!("Redo failed: {err}");
+                }
+            }
+        }
+        actions.redo = false;
+    }
+}
+
+pub fn handle_tool_input(
+    time: Res<Time>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    cursor_hit: Res<CursorTerrainHit>,
+    env_state: Res<EditorEnvironmentState>,
+    ui_state: Res<EditorUiState>,
+    mut world: ResMut<WorldTerrain>,
+    mut session: ResMut<EditorSession>,
+    mut flags: ResMut<VisualRefreshFlags>,
+) {
+    if ui_state.pointer_over_ui {
+        return;
+    }
+
+    let Some(hit) = cursor_hit.0 else {
+        return;
+    };
+    if !mouse_buttons.pressed(MouseButton::Left) {
+        return;
+    }
+
+    let just_pressed = mouse_buttons.just_pressed(MouseButton::Left);
+
+    match ui_state.tool {
+        ToolMode::Terrain => {
+            if just_pressed {
+                session.push_undo_snapshot(&world);
+            }
+
+            let player_spawn_offset = session
+                .map_definition
+                .player_spawn
+                .map(|spawn| spawn[1] - world.get_height(spawn[0], spawn[2]));
+            let marker_offsets: Vec<f32> = session
+                .map_edits
+                .spawn_markers
+                .iter()
+                .map(|marker| {
+                    marker.position[1] - world.get_height(marker.position[0], marker.position[2])
+                })
+                .collect();
+
+            let affected = match ui_state.terrain_mode {
+                TerrainBrushMode::Raise => world.apply_additive_circle(
+                    Vec2::new(hit.x, hit.z),
+                    ui_state.brush_radius,
+                    ui_state.brush_strength * time.delta_secs(),
+                ),
+                TerrainBrushMode::Lower => world.apply_additive_circle(
+                    Vec2::new(hit.x, hit.z),
+                    ui_state.brush_radius,
+                    -ui_state.brush_strength * time.delta_secs(),
+                ),
+                TerrainBrushMode::Flatten => {
+                    if !just_pressed {
+                        Vec::new()
+                    } else {
+                        world.apply_flatten_rect(
+                            hit,
+                            Vec2::splat(ui_state.brush_radius),
+                            0.0,
+                            ui_state.flatten_blend,
+                        )
+                    }
+                }
+            };
+
+            if !affected.is_empty() {
+                session
+                    .map_edits
+                    .set_terrain_deltas_from_world(world.delta_chunks());
+                session.mark_edits_dirty();
+                if let (Some(spawn), Some(offset)) = (
+                    session.map_definition.player_spawn.as_mut(),
+                    player_spawn_offset,
+                ) {
+                    spawn[1] = world.get_height(spawn[0], spawn[2]) + offset;
+                    session.mark_map_dirty();
+                }
+                for (marker, offset) in session
+                    .map_edits
+                    .spawn_markers
+                    .iter_mut()
+                    .zip(marker_offsets.into_iter())
+                {
+                    marker.position[1] =
+                        world.get_height(marker.position[0], marker.position[2]) + offset;
+                }
+                if !session.map_edits.spawn_markers.is_empty() {
+                    session.mark_edits_dirty();
+                }
+                flags.terrain_chunks.extend(affected.iter().copied());
+                if env_state.show_water {
+                    flags.water_chunks.extend(affected.iter().copied());
+                }
+                flags.props = true;
+                flags.markers = true;
+                flags.water_all = env_state.show_water;
+            }
+        }
+        ToolMode::PlaceProp => {
+            if !just_pressed {
+                return;
+            }
+            session.push_undo_snapshot(&world);
+            let kind_or_path = ui_state
+                .selected_prop_kind()
+                .map(|kind| kind.id().to_string())
+                .unwrap_or_else(|| ui_state.selected_scene_path());
+
+            let object = MapObjectSpawn {
+                kind: kind_or_path,
+                position: [hit.x, 0.0, hit.z],
+                rotation_degrees: ui_state.prop_rotation_degrees,
+                scale: ui_state.prop_scale,
+            };
+            session.map_definition.objects.push(object);
+            session.mark_map_dirty();
+            flags.props = true;
+        }
+        ToolMode::EraseProp => {
+            if !just_pressed {
+                return;
+            }
+
+            let mut best_idx = None;
+            let mut best_dist_sq = ui_state.brush_radius * ui_state.brush_radius;
+            for (idx, object) in session.map_definition.objects.iter().enumerate() {
+                let dx = object.position[0] - hit.x;
+                let dz = object.position[2] - hit.z;
+                let dist_sq = dx * dx + dz * dz;
+                if dist_sq <= best_dist_sq {
+                    best_dist_sq = dist_sq;
+                    best_idx = Some(idx);
+                }
+            }
+
+            if let Some(idx) = best_idx {
+                session.push_undo_snapshot(&world);
+                session.map_definition.objects.remove(idx);
+                session.mark_map_dirty();
+                flags.props = true;
+            }
+        }
+        ToolMode::SetPlayerSpawn => {
+            if !just_pressed {
+                return;
+            }
+            session.push_undo_snapshot(&world);
+            session.map_definition.player_spawn = Some([hit.x, hit.y, hit.z]);
+            session.mark_map_dirty();
+            flags.markers = true;
+        }
+        ToolMode::PlaceSpawnMarker => {
+            if !just_pressed {
+                return;
+            }
+            session.push_undo_snapshot(&world);
+            let mut marker =
+                session.next_spawn_marker(ui_state.selected_spawn_kind, [hit.x, hit.y, hit.z]);
+            marker.radius = ui_state.spawn_marker_radius;
+            session.map_edits.spawn_markers.push(marker);
+            session.mark_edits_dirty();
+            flags.markers = true;
+        }
+    }
+}
+
+pub fn apply_visual_refresh(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    world: Res<WorldTerrain>,
+    session: Res<EditorSession>,
+    terrain_registry: Res<TerrainChunkRegistry>,
+    env_state: Res<EditorEnvironmentState>,
+    mut water_registry: ResMut<WaterChunkRegistry>,
+    mut flags: ResMut<VisualRefreshFlags>,
+    prop_visuals: Query<Entity, With<EditorPropVisual>>,
+    marker_visuals: Query<Entity, With<EditorSpawnVisual>>,
+    water_visuals: Query<Entity, With<EditorWaterVisual>>,
+) {
+    let mut terrain_coords = Vec::new();
+    if flags.terrain_all {
+        terrain_coords = terrain_registry.entries.keys().copied().collect();
+        for coord in &terrain_coords {
+            regenerate_chunk_mesh(*coord, &world, &terrain_registry, &mut meshes);
+        }
+        flags.terrain_all = false;
+        flags.terrain_chunks.clear();
+        flags.water_all = true;
+    } else if !flags.terrain_chunks.is_empty() {
+        terrain_coords = flags.terrain_chunks.drain().collect();
+        for coord in &terrain_coords {
+            regenerate_chunk_mesh(*coord, &world, &terrain_registry, &mut meshes);
+        }
+        flags.water_chunks.extend(terrain_coords.iter().copied());
+    }
+    if !terrain_coords.is_empty() {
+        flags.water_chunks.extend(terrain_coords);
+    }
+
+    if flags.water_all {
+        let water_coords: Vec<ChunkCoord> = terrain_registry.entries.keys().copied().collect();
+        refresh_water_chunks(
+            &mut commands,
+            &world,
+            &env_state,
+            &mut meshes,
+            &mut water_registry,
+            &water_coords,
+        );
+        flags.water_all = false;
+        flags.water_chunks.clear();
+    } else if !flags.water_chunks.is_empty() {
+        let water_coords: Vec<ChunkCoord> = flags.water_chunks.drain().collect();
+        refresh_water_chunks(
+            &mut commands,
+            &world,
+            &env_state,
+            &mut meshes,
+            &mut water_registry,
+            &water_coords,
+        );
+    }
+
+    let has_no_water = !env_state.show_water;
+    if has_no_water && !water_registry.chunks.is_empty() {
+        for entity in water_visuals.iter() {
+            commands.entity(entity).despawn();
+        }
+        water_registry.chunks.clear();
+    }
+
+    if flags.props {
+        for entity in prop_visuals.iter() {
+            commands.entity(entity).despawn();
+        }
+        spawn_prop_visuals(
+            &mut commands,
+            &asset_server,
+            &mut meshes,
+            &mut materials,
+            &world,
+            &session.map_definition.objects,
+        );
+        flags.props = false;
+    }
+
+    if flags.markers {
+        for entity in marker_visuals.iter() {
+            commands.entity(entity).despawn();
+        }
+        spawn_spawn_visuals(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &world,
+            &session.map_definition.player_spawn,
+            &session.map_edits.spawn_markers,
+        );
+        flags.markers = false;
+    }
+}
+
+pub fn refresh_cursor_indicator(
+    cursor_hit: Res<CursorTerrainHit>,
+    ui_state: Res<EditorUiState>,
+    mut query: Query<(&mut Transform, &mut Visibility), With<EditorCursorVisual>>,
+) {
+    let Ok((mut transform, mut visibility)) = query.single_mut() else {
+        return;
+    };
+
+    let Some(hit) = cursor_hit.0 else {
+        *visibility = Visibility::Hidden;
+        return;
+    };
+
+    let radius = match ui_state.tool {
+        ToolMode::Terrain | ToolMode::EraseProp => ui_state.brush_radius.max(0.5),
+        ToolMode::PlaceSpawnMarker => ui_state.spawn_marker_radius.max(0.5),
+        _ => 1.0,
+    };
+
+    transform.translation = Vec3::new(hit.x, hit.y + 0.04, hit.z);
+    transform.scale = Vec3::new(radius, 1.0, radius);
+    *visibility = Visibility::Visible;
+}
+
+pub fn update_prop_preview_visual(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    cursor_hit: Res<CursorTerrainHit>,
+    ui_state: Res<EditorUiState>,
+    mut preview_state: ResMut<PropPreviewState>,
+    mut preview_query: Query<&mut Transform, With<EditorPropPreviewVisual>>,
+) {
+    let should_preview = ui_state.tool == ToolMode::PlaceProp && cursor_hit.0.is_some();
+    if !should_preview {
+        if let Some(entity) = preview_state.entity.take() {
+            commands.entity(entity).despawn();
+        }
+        preview_state.kind_id = None;
+        return;
+    }
+
+    let Some(hit) = cursor_hit.0 else {
+        return;
+    };
+    let scene_path = ui_state.selected_scene_path();
+    let preview_transform = Transform::from_xyz(hit.x, hit.y, hit.z)
+        .with_rotation(Quat::from_rotation_y(
+            ui_state.prop_rotation_degrees.to_radians(),
+        ))
+        .with_scale(Vec3::splat(ui_state.prop_scale));
+
+    let kind_changed = preview_state.kind_id.as_deref() != Some(scene_path.as_str());
+    if kind_changed || preview_state.entity.is_none() {
+        if let Some(entity) = preview_state.entity.take() {
+            commands.entity(entity).despawn();
+        }
+        let entity = commands
+            .spawn((
+                Name::new(format!("PropPreview({})", ui_state.selected_asset_label())),
+                SceneRoot(asset_server.load(scene_path.clone())),
+                preview_transform,
+                EditorPropPreviewVisual,
+            ))
+            .id();
+        preview_state.entity = Some(entity);
+        preview_state.kind_id = Some(scene_path);
+        return;
+    }
+
+    if let Some(entity) = preview_state.entity {
+        if let Ok(mut transform) = preview_query.get_mut(entity) {
+            *transform = preview_transform;
+        }
+    }
+}
+
+fn save_all(session: &mut EditorSession) -> Result<(), String> {
+    session.map_definition.validate()?;
+    session.map_edits.validate()?;
+
+    save_map_definition_atomic(&session.map_path, &session.map_definition)?;
+    save_map_edits_atomic(&session.map_dir, &session.map_edits)?;
+    session.dirty_map = false;
+    session.dirty_edits = false;
+    Ok(())
+}
+
+fn apply_snapshot(
+    snapshot: EditorSnapshot,
+    session: &mut EditorSession,
+    world: &mut WorldTerrain,
+    flags: &mut VisualRefreshFlags,
+) -> Result<(), String> {
+    let deltas = snapshot.map_edits.terrain_deltas_by_chunk()?;
+    session.map_definition = snapshot.map_definition;
+    session.map_edits = snapshot.map_edits;
+    world.replace_delta_chunks(deltas);
+    session.mark_map_dirty();
+    session.mark_edits_dirty();
+    flags.terrain_all = true;
+    flags.water_all = true;
+    flags.props = true;
+    flags.markers = true;
+    Ok(())
+}
+
+fn spawn_all_terrain_chunks(
+    commands: &mut Commands,
+    world: &WorldTerrain,
+    meshes: &mut Assets<Mesh>,
+    material: Handle<StandardMaterial>,
+    registry: &mut TerrainChunkRegistry,
+) {
+    let bounds = world.generator.active_map_bounds();
+    let min_chunk_x = (bounds.min[0] / CHUNK_SIZE).floor() as i32;
+    let max_chunk_x = (bounds.max[0] / CHUNK_SIZE).floor() as i32;
+    let min_chunk_z = (bounds.min[1] / CHUNK_SIZE).floor() as i32;
+    let max_chunk_z = (bounds.max[1] / CHUNK_SIZE).floor() as i32;
+
+    for chunk_x in min_chunk_x..=max_chunk_x {
+        for chunk_z in min_chunk_z..=max_chunk_z {
+            let coord = ChunkCoord::new(chunk_x, chunk_z);
+            if !coord.in_world_bounds() {
+                continue;
+            }
+            let mesh_data = world.generate_chunk(coord);
+            let mesh = meshes.add(build_chunk_mesh(&mesh_data));
+            commands.spawn((
+                Name::new(format!("TerrainChunk({}, {})", coord.x, coord.z)),
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::from_translation(coord.world_pos()),
+                TerrainChunkVisual,
+            ));
+            registry.entries.insert(coord, TerrainChunkEntry { mesh });
+        }
+    }
+}
+
+fn spawn_all_water_chunks(
+    commands: &mut Commands,
+    world: &WorldTerrain,
+    env_state: &EditorEnvironmentState,
+    meshes: &mut Assets<Mesh>,
+    registry: &mut WaterChunkRegistry,
+) {
+    if !env_state.show_water {
+        return;
+    }
+    let Some(material) = registry.material.clone() else {
+        return;
+    };
+
+    for coord in world_chunks_for_map(world) {
+        refresh_single_water_chunk(
+            commands, world, env_state, coord, meshes, &material, registry,
+        );
+    }
+}
+
+fn refresh_water_chunks(
+    commands: &mut Commands,
+    world: &WorldTerrain,
+    env_state: &EditorEnvironmentState,
+    meshes: &mut Assets<Mesh>,
+    registry: &mut WaterChunkRegistry,
+    coords: &[ChunkCoord],
+) {
+    let Some(material) = registry.material.clone() else {
+        return;
+    };
+    for coord in coords {
+        if let Some(chunk) = registry.chunks.remove(coord) {
+            if let Some(entity) = chunk.entity {
+                commands.entity(entity).despawn();
+            }
+        }
+
+        if !env_state.show_water {
+            continue;
+        }
+
+        let Some(water_mesh) = build_editor_water_mesh(world, *coord, env_state.water_level) else {
+            continue;
+        };
+        let mesh = meshes.add(water_mesh);
+        let entity = commands
+            .spawn((
+                Name::new(format!("WaterChunk({}, {})", coord.x, coord.z)),
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::from_translation(coord.world_pos()),
+                EditorWaterVisual,
+            ))
+            .id();
+        registry.chunks.insert(
+            *coord,
+            EditorWaterChunk {
+                entity: Some(entity),
+            },
+        );
+    }
+}
+
+fn refresh_single_water_chunk(
+    commands: &mut Commands,
+    world: &WorldTerrain,
+    env_state: &EditorEnvironmentState,
+    coord: ChunkCoord,
+    meshes: &mut Assets<Mesh>,
+    material: &Handle<StandardMaterial>,
+    registry: &mut WaterChunkRegistry,
+) {
+    if let Some(chunk) = registry.chunks.remove(&coord) {
+        if let Some(entity) = chunk.entity {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    if !env_state.show_water {
+        return;
+    }
+
+    let Some(water_mesh) = build_editor_water_mesh(world, coord, env_state.water_level) else {
+        return;
+    };
+    let mesh = meshes.add(water_mesh);
+    let entity = commands
+        .spawn((
+            Name::new(format!("WaterChunk({}, {})", coord.x, coord.z)),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_translation(coord.world_pos()),
+            EditorWaterVisual,
+        ))
+        .id();
+    registry.chunks.insert(
+        coord,
+        EditorWaterChunk {
+            entity: Some(entity),
+        },
+    );
+}
+
+fn world_chunks_for_map(world: &WorldTerrain) -> Vec<ChunkCoord> {
+    let bounds = world.generator.active_map_bounds();
+    let min_chunk_x = (bounds.min[0] / CHUNK_SIZE).floor() as i32;
+    let max_chunk_x = (bounds.max[0] / CHUNK_SIZE).floor() as i32;
+    let min_chunk_z = (bounds.min[1] / CHUNK_SIZE).floor() as i32;
+    let max_chunk_z = (bounds.max[1] / CHUNK_SIZE).floor() as i32;
+
+    let mut coords = Vec::new();
+    for chunk_x in min_chunk_x..=max_chunk_x {
+        for chunk_z in min_chunk_z..=max_chunk_z {
+            let coord = ChunkCoord::new(chunk_x, chunk_z);
+            if coord.in_world_bounds() {
+                coords.push(coord);
+            }
+        }
+    }
+    coords
+}
+
+fn regenerate_chunk_mesh(
+    coord: ChunkCoord,
+    world: &WorldTerrain,
+    registry: &TerrainChunkRegistry,
+    meshes: &mut Assets<Mesh>,
+) {
+    let Some(entry) = registry.entries.get(&coord) else {
+        return;
+    };
+    let Some(mesh) = meshes.get_mut(&entry.mesh) else {
+        return;
+    };
+
+    let mesh_data = world.generate_chunk(coord);
+    *mesh = build_chunk_mesh(&mesh_data);
+}
+
+fn spawn_prop_visuals(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    world: &WorldTerrain,
+    objects: &[MapObjectSpawn],
+) {
+    let fallback_mesh = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
+    let fallback_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.9, 0.2, 0.2),
+        unlit: true,
+        ..default()
+    });
+
+    for object in objects {
+        let x = object.position[0];
+        let z = object.position[2];
+        let y = world.get_height(x, z) + object.position[1];
+        let transform = Transform::from_xyz(x, y, z)
+            .with_rotation(Quat::from_rotation_y(object.rotation_degrees.to_radians()))
+            .with_scale(Vec3::splat(object.scale));
+
+        if let Some(scene_path) = object.resolved_scene_path() {
+            commands.spawn((
+                Name::new(format!("Prop({})", object.kind)),
+                SceneRoot(asset_server.load(scene_path)),
+                transform,
+                EditorPropVisual,
+            ));
+        } else {
+            commands.spawn((
+                Name::new("Prop(unknown)"),
+                Mesh3d(fallback_mesh.clone()),
+                MeshMaterial3d(fallback_material.clone()),
+                transform,
+                EditorPropVisual,
+            ));
+        }
+    }
+}
+
+fn spawn_spawn_visuals(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    world: &WorldTerrain,
+    player_spawn: &Option<[f32; 3]>,
+    markers: &[shared::map::MapSpawnMarker],
+) {
+    let ring_mesh = meshes.add(Cylinder::new(1.0, 0.08));
+    let player_material = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.2, 0.6, 1.0, 0.6),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        ..default()
+    });
+    let npc_material = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.3, 1.0, 0.35, 0.45),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        ..default()
+    });
+    let poi_material = materials.add(StandardMaterial {
+        base_color: Color::srgba(1.0, 0.82, 0.25, 0.45),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        ..default()
+    });
+
+    if let Some(spawn) = player_spawn {
+        let ground = world.get_height(spawn[0], spawn[2]);
+        commands.spawn((
+            Name::new("PlayerSpawn"),
+            Mesh3d(ring_mesh.clone()),
+            MeshMaterial3d(player_material.clone()),
+            Transform::from_translation(Vec3::new(spawn[0], ground + 0.05, spawn[2]))
+                .with_scale(Vec3::new(2.5, 1.0, 2.5)),
+            EditorSpawnVisual,
+        ));
+    }
+
+    for marker in markers {
+        let mat = match marker.kind {
+            SpawnMarkerKind::Player => player_material.clone(),
+            SpawnMarkerKind::NpcGroup => npc_material.clone(),
+            SpawnMarkerKind::Poi => poi_material.clone(),
+        };
+        let radius = marker.radius.max(0.5);
+        let ground = world.get_height(marker.position[0], marker.position[2]);
+        commands.spawn((
+            Name::new(format!("SpawnMarker({:?})", marker.kind)),
+            Mesh3d(ring_mesh.clone()),
+            MeshMaterial3d(mat),
+            Transform::from_translation(Vec3::new(
+                marker.position[0],
+                ground + 0.05,
+                marker.position[2],
+            ))
+            .with_scale(Vec3::new(radius, 1.0, radius))
+            .with_rotation(Quat::from_rotation_y(marker.rotation_degrees.to_radians())),
+            EditorSpawnVisual,
+        ));
+    }
+}
+
+const EDITOR_WATER_SURFACE_OFFSET: f32 = 0.02;
+const EDITOR_WATER_SHORE_OVERLAP: f32 = 0.12;
+const EDITOR_WATER_DEPTH_MAX: f32 = 2.5;
+
+#[derive(Clone, Copy)]
+struct EditorWaterCorner {
+    local_x: f32,
+    local_z: f32,
+    height: f32,
+}
+
+#[derive(Clone, Copy)]
+struct EditorWaterVertex {
+    pos: [f32; 3],
+    uv: [f32; 2],
+    depth_norm: f32,
+}
+
+fn build_editor_water_mesh(
+    terrain: &WorldTerrain,
+    coord: ChunkCoord,
+    water_level: f32,
+) -> Option<Mesh> {
+    let origin = coord.world_pos();
+    let origin_x = origin.x;
+    let origin_z = origin.z;
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut colors = Vec::new();
+    let mut indices = Vec::new();
+    let waterline = water_level + EDITOR_WATER_SHORE_OVERLAP;
+    let water_y = water_level + EDITOR_WATER_SURFACE_OFFSET;
+    let depth_norm =
+        |height: f32| ((water_level - height).max(0.0) / EDITOR_WATER_DEPTH_MAX).clamp(0.0, 1.0);
+    let add_triangle = |positions: &mut Vec<[f32; 3]>,
+                        normals: &mut Vec<[f32; 3]>,
+                        uvs: &mut Vec<[f32; 2]>,
+                        colors: &mut Vec<[f32; 4]>,
+                        indices: &mut Vec<u32>,
+                        a: EditorWaterVertex,
+                        b: EditorWaterVertex,
+                        c: EditorWaterVertex| {
+        let base = positions.len() as u32;
+        positions.push(a.pos);
+        positions.push(b.pos);
+        positions.push(c.pos);
+        normals.push([0.0, 1.0, 0.0]);
+        normals.push([0.0, 1.0, 0.0]);
+        normals.push([0.0, 1.0, 0.0]);
+        uvs.push(a.uv);
+        uvs.push(b.uv);
+        uvs.push(c.uv);
+        colors.push([1.0, 1.0, 1.0, a.depth_norm]);
+        colors.push([1.0, 1.0, 1.0, b.depth_norm]);
+        colors.push([1.0, 1.0, 1.0, c.depth_norm]);
+        indices.extend_from_slice(&[base, base + 1, base + 2]);
+    };
+
+    let make_vertex = |local_x: f32, local_z: f32, depth: f32| {
+        let world_x = origin_x + local_x;
+        let world_z = origin_z + local_z;
+        EditorWaterVertex {
+            pos: [local_x, water_y, local_z],
+            uv: [world_x / CHUNK_SIZE, world_z / CHUNK_SIZE],
+            depth_norm: depth,
+        }
+    };
+
+    let edge_vertex = |a: EditorWaterCorner, b: EditorWaterCorner| {
+        let denom = b.height - a.height;
+        let mut t = if denom.abs() < 1e-6 {
+            0.5
+        } else {
+            (waterline - a.height) / denom
+        };
+        t = t.clamp(0.0, 1.0);
+        let local_x = a.local_x + (b.local_x - a.local_x) * t;
+        let local_z = a.local_z + (b.local_z - a.local_z) * t;
+        make_vertex(local_x, local_z, 0.0)
+    };
+
+    for zi in 0..(CHUNK_RESOLUTION - 1) {
+        for xi in 0..(CHUNK_RESOLUTION - 1) {
+            let x0 = xi as f32 * VERTEX_SPACING;
+            let z0 = zi as f32 * VERTEX_SPACING;
+            let x1 = (xi + 1) as f32 * VERTEX_SPACING;
+            let z1 = (zi + 1) as f32 * VERTEX_SPACING;
+
+            let h0 = terrain.get_height(origin.x + x0, origin.z + z0);
+            let h1 = terrain.get_height(origin.x + x1, origin.z + z0);
+            let h2 = terrain.get_height(origin.x + x1, origin.z + z1);
+            let h3 = terrain.get_height(origin.x + x0, origin.z + z1);
+
+            let c0 = EditorWaterCorner {
+                local_x: x0,
+                local_z: z0,
+                height: h0,
+            };
+            let c1 = EditorWaterCorner {
+                local_x: x1,
+                local_z: z0,
+                height: h1,
+            };
+            let c2 = EditorWaterCorner {
+                local_x: x1,
+                local_z: z1,
+                height: h2,
+            };
+            let c3 = EditorWaterCorner {
+                local_x: x0,
+                local_z: z1,
+                height: h3,
+            };
+
+            let w0 = h0 < waterline;
+            let w1 = h1 < waterline;
+            let w2 = h2 < waterline;
+            let w3 = h3 < waterline;
+            let mask = (w0 as u8) | ((w1 as u8) << 1) | ((w2 as u8) << 2) | ((w3 as u8) << 3);
+            if mask == 0 {
+                continue;
+            }
+
+            let v0 = make_vertex(c0.local_x, c0.local_z, depth_norm(c0.height));
+            let v1 = make_vertex(c1.local_x, c1.local_z, depth_norm(c1.height));
+            let v2 = make_vertex(c2.local_x, c2.local_z, depth_norm(c2.height));
+            let v3 = make_vertex(c3.local_x, c3.local_z, depth_norm(c3.height));
+
+            let e0 = if w0 != w1 {
+                Some(edge_vertex(c0, c1))
+            } else {
+                None
+            };
+            let e1 = if w1 != w2 {
+                Some(edge_vertex(c1, c2))
+            } else {
+                None
+            };
+            let e2 = if w2 != w3 {
+                Some(edge_vertex(c2, c3))
+            } else {
+                None
+            };
+            let e3 = if w3 != w0 {
+                Some(edge_vertex(c3, c0))
+            } else {
+                None
+            };
+
+            match mask {
+                1 => add_triangle(
+                    &mut positions,
+                    &mut normals,
+                    &mut uvs,
+                    &mut colors,
+                    &mut indices,
+                    v0,
+                    e0.unwrap(),
+                    e3.unwrap(),
+                ),
+                2 => add_triangle(
+                    &mut positions,
+                    &mut normals,
+                    &mut uvs,
+                    &mut colors,
+                    &mut indices,
+                    v1,
+                    e1.unwrap(),
+                    e0.unwrap(),
+                ),
+                3 => {
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        v1,
+                        e1.unwrap(),
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        e1.unwrap(),
+                        e3.unwrap(),
+                    );
+                }
+                4 => add_triangle(
+                    &mut positions,
+                    &mut normals,
+                    &mut uvs,
+                    &mut colors,
+                    &mut indices,
+                    v2,
+                    e2.unwrap(),
+                    e1.unwrap(),
+                ),
+                5 => {
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        e0.unwrap(),
+                        e3.unwrap(),
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v2,
+                        e2.unwrap(),
+                        e1.unwrap(),
+                    );
+                }
+                6 => {
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v1,
+                        v2,
+                        e2.unwrap(),
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v1,
+                        e2.unwrap(),
+                        e0.unwrap(),
+                    );
+                }
+                7 => {
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        v1,
+                        v2,
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        v2,
+                        e2.unwrap(),
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        e2.unwrap(),
+                        e3.unwrap(),
+                    );
+                }
+                8 => add_triangle(
+                    &mut positions,
+                    &mut normals,
+                    &mut uvs,
+                    &mut colors,
+                    &mut indices,
+                    v3,
+                    e3.unwrap(),
+                    e2.unwrap(),
+                ),
+                9 => {
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        e0.unwrap(),
+                        e2.unwrap(),
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        e2.unwrap(),
+                        v3,
+                    );
+                }
+                10 => {
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v1,
+                        e1.unwrap(),
+                        e0.unwrap(),
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v3,
+                        e3.unwrap(),
+                        e2.unwrap(),
+                    );
+                }
+                11 => {
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        v1,
+                        e1.unwrap(),
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        e1.unwrap(),
+                        e2.unwrap(),
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        e2.unwrap(),
+                        v3,
+                    );
+                }
+                12 => {
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v2,
+                        v3,
+                        e3.unwrap(),
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v2,
+                        e3.unwrap(),
+                        e1.unwrap(),
+                    );
+                }
+                13 => {
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        e0.unwrap(),
+                        e1.unwrap(),
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        e1.unwrap(),
+                        v2,
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        v2,
+                        v3,
+                    );
+                }
+                14 => {
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v1,
+                        v2,
+                        v3,
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v1,
+                        v3,
+                        e3.unwrap(),
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v1,
+                        e3.unwrap(),
+                        e0.unwrap(),
+                    );
+                }
+                15 => {
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        v1,
+                        v2,
+                    );
+                    add_triangle(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        v0,
+                        v2,
+                        v3,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if indices.is_empty() {
+        return None;
+    }
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        VertexAttributeValues::Float32x3(positions),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_NORMAL,
+        VertexAttributeValues::Float32x3(normals),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, VertexAttributeValues::Float32x2(uvs));
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_COLOR,
+        VertexAttributeValues::Float32x4(colors),
+    );
+    mesh.insert_indices(Indices::U32(indices));
+    Some(mesh)
+}
+
+fn build_chunk_mesh(mesh_data: &ChunkMeshData) -> Mesh {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        VertexAttributeValues::Float32x3(mesh_data.positions.clone()),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_NORMAL,
+        VertexAttributeValues::Float32x3(mesh_data.normals.clone()),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        VertexAttributeValues::Float32x2(mesh_data.uvs.clone()),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_COLOR,
+        VertexAttributeValues::Float32x4(mesh_data.colors.clone()),
+    );
+    mesh.insert_indices(Indices::U32(mesh_data.indices.clone()));
+    mesh
+}

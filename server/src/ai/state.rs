@@ -11,6 +11,7 @@ pub const NPC_AI_FAR_RADIUS: f32 = 900.0;
 pub const NPC_AI_MID_CADENCE: u64 = 2;
 pub const NPC_AI_FAR_CADENCE: u64 = 4;
 pub const NPC_AI_BACKGROUND_CADENCE: u64 = 10;
+pub const NPC_AI_MAX_UPDATES_PER_TICK_DEFAULT: u64 = 90;
 pub const NPC_AI_PERF_LOG_SECS: f32 = 5.0;
 
 /// NPC runtime state.

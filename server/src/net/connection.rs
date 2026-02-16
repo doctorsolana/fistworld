@@ -15,9 +15,10 @@ use shared::items::{
 };
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 use shared::protocol::{
-    BulletImpact, DamageReceived, HitConfirm, NameSubmissionResult, PlayerInput, PlayerKilled,
-    PlayerRoster, ReloadRequest, RequestPlayerRoster, SetPlayerCharacter, SetTimeOfDay,
-    ShootRequest, SpawnOilmanDebug, SubmitPlayerName, SwitchWeapon,
+    BulletImpact, DamageReceived, HitConfirm, NameSubmissionResult, NpcRagdollPoseBatch,
+    NpcRagdollStarted, PlayerInput, PlayerKilled, PlayerRoster, ReloadRequest, RequestPlayerRoster,
+    SetPlayerCharacter, SetTimeOfDay, ShootRequest, SpawnOilmanDebug, SpawnPhysicsBoxDebug,
+    SubmitPlayerName, SwitchWeapon,
 };
 use shared::vehicle::{InVehicle, Vehicle, VehicleDriver, VehicleState};
 
@@ -43,9 +44,9 @@ fn configured_replication_send_mode() -> SendUpdatesMode {
         Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
             "ack" | "since_last_ack" => SendUpdatesMode::SinceLastAck,
             "send" | "since_last_send" => SendUpdatesMode::SinceLastSend,
-            _ => SendUpdatesMode::SinceLastSend,
+            _ => SendUpdatesMode::SinceLastAck,
         },
-        Err(_) => SendUpdatesMode::SinceLastSend,
+        Err(_) => SendUpdatesMode::SinceLastAck,
     }
 }
 
@@ -85,6 +86,7 @@ pub fn handle_connections(
             MessageReceiver::<SetTimeOfDay>::default(),
             MessageReceiver::<SetPlayerCharacter>::default(),
             MessageReceiver::<SpawnOilmanDebug>::default(),
+            MessageReceiver::<SpawnPhysicsBoxDebug>::default(),
             MessageReceiver::<SubmitPlayerName>::default(),
             MessageReceiver::<RequestPlayerRoster>::default(),
         ));
@@ -104,6 +106,8 @@ pub fn handle_connections(
             MessageSender::<DamageReceived>::default(),
             MessageSender::<PlayerKilled>::default(),
             MessageSender::<BulletImpact>::default(),
+            MessageSender::<NpcRagdollStarted>::default(),
+            MessageSender::<NpcRagdollPoseBatch>::default(),
             MessageSender::<NameSubmissionResult>::default(),
             MessageSender::<PlayerRoster>::default(),
         ));

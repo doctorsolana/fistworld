@@ -20,7 +20,8 @@ use lightyear::prelude::*;
 
 use shared::components::{LocalPlayer, PlayerCharacter};
 use shared::protocol::{
-    ReliableChannel, SetPlayerCharacter, SetTimeOfDay, SpawnOilmanDebug, TimeOfDayPreset,
+    ReliableChannel, SetPlayerCharacter, SetTimeOfDay, SpawnOilmanDebug, SpawnPhysicsBoxDebug,
+    TimeOfDayPreset,
 };
 
 use crate::input::InputState;
@@ -154,3 +155,6 @@ struct PerfRenderDiagLabel;
 
 #[derive(Component)]
 struct SpawnOilmanNpcButton;
+
+#[derive(Component)]
+struct SpawnPhysicsBoxButton;

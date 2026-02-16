@@ -4,7 +4,8 @@ mod state_steps;
 
 use bevy::prelude::*;
 use shared::components::{
-    Health, Npc, NpcDamageEvent, NpcFleeing, NpcPosition, NpcRotation, Player,
+    Health, Npc, NpcActivity, NpcActivityKind, NpcDamageEvent, NpcFleeing, NpcPosition,
+    NpcRotation, Player,
 };
 use shared::npc::{
     NPC_IDLE_TIME_MAX, NPC_IDLE_TIME_MIN, NPC_MIN_TARGET_DIST, NPC_MOVE_SPEED, NPC_TURN_SPEED,
@@ -19,18 +20,45 @@ use std::time::Instant;
 use crate::ai::pathfinding::PathfindingScratch;
 use crate::ai::state::{
     NpcAiPerfAccumulator, NpcState, NpcWander, NPC_AI_BACKGROUND_CADENCE, NPC_AI_FAR_CADENCE,
-    NPC_AI_FAR_RADIUS, NPC_AI_MID_CADENCE, NPC_AI_MID_RADIUS, NPC_AI_NEAR_RADIUS,
-    NPC_AI_PERF_LOG_SECS, OILMAN_WALK_SPEED_SCALE,
+    NPC_AI_FAR_RADIUS, NPC_AI_MAX_UPDATES_PER_TICK_DEFAULT, NPC_AI_MID_CADENCE, NPC_AI_MID_RADIUS,
+    NPC_AI_NEAR_RADIUS, NPC_AI_PERF_LOG_SECS, OILMAN_WALK_SPEED_SCALE,
 };
 use crate::player::spatial::PlayerSpatialIndex;
 use state_steps::{tick_fleeing_state, tick_idle_state, tick_walking_state};
 
+fn configured_npc_max_updates_per_tick() -> u64 {
+    std::env::var("CITYSIM_NPC_MAX_UPDATES_PER_TICK")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .unwrap_or(NPC_AI_MAX_UPDATES_PER_TICK_DEFAULT)
+        .clamp(32, 5000)
+}
+
+fn activity_from_state(state: &NpcState) -> NpcActivityKind {
+    match state {
+        NpcState::Idle => NpcActivityKind::Idle,
+        NpcState::Walking => NpcActivityKind::Walk,
+        NpcState::Fleeing { .. } => NpcActivityKind::Flee,
+    }
+}
+
 /// Damage events currently push NPCs into a flee loop.
 pub fn handle_npc_damage_events(
     mut commands: Commands,
-    mut npcs: Query<(Entity, &Npc, &mut NpcWander, &NpcDamageEvent)>,
+    mut npcs: Query<(
+        Entity,
+        &Npc,
+        &Health,
+        &mut NpcWander,
+        &mut NpcActivity,
+        &NpcDamageEvent,
+    )>,
 ) {
-    for (entity, _npc, mut wander, damage_event) in npcs.iter_mut() {
+    for (entity, _npc, health, mut wander, mut activity, damage_event) in npcs.iter_mut() {
+        if health.is_dead() {
+            commands.entity(entity).remove::<NpcDamageEvent>();
+            continue;
+        }
         // Randomize flee parameters.
         let flee_duration = 5.0 + wander.rng.next_f32() * 3.0; // 5-8 seconds
         let panic_boost = 1.5 + wander.rng.next_f32() * 0.3; // 1.5-1.8x speed
@@ -44,6 +72,7 @@ pub fn handle_npc_damage_events(
         // Clear current path so flee logic takes over immediately.
         wander.path.clear();
         wander.waypoint = 0;
+        activity.0 = NpcActivityKind::Flee;
 
         let mut entity_cmd = commands.entity(entity);
         entity_cmd.insert(NpcFleeing);
@@ -62,6 +91,7 @@ pub fn update_npc_ai(
     mut ai_tick: Local<u64>,
     mut perf: Local<NpcAiPerfAccumulator>,
     mut pathfinding_scratch: Local<PathfindingScratch>,
+    npc_healths: Query<&Health, With<Npc>>,
     mut npcs: Query<
         (
             Entity,
@@ -70,6 +100,7 @@ pub fn update_npc_ai(
             &mut NpcRotation,
             &Health,
             &mut NpcWander,
+            &mut NpcActivity,
             Option<&NpcFleeing>,
         ),
         Without<Player>,
@@ -83,6 +114,13 @@ pub fn update_npc_ai(
     let mid_sq = NPC_AI_MID_RADIUS * NPC_AI_MID_RADIUS;
     let far_sq = NPC_AI_FAR_RADIUS * NPC_AI_FAR_RADIUS;
     let alive_players = player_spatial.alive_count();
+    let alive_npcs = npc_healths
+        .iter()
+        .filter(|health| !health.is_dead())
+        .count() as u64;
+    let target_updates_per_tick = configured_npc_max_updates_per_tick().max(1);
+    let crowd_cadence =
+        ((alive_npcs.max(1) + target_updates_per_tick - 1) / target_updates_per_tick).max(1);
 
     let mut total_npcs = 0u64;
     let mut updated_npcs = 0u64;
@@ -90,19 +128,22 @@ pub fn update_npc_ai(
     let mut cadence_eval_ms = 0.0f32;
     let mut pathfinding_ms = 0.0f32;
 
-    for (entity, npc, mut pos, mut rot, health, mut wander, has_fleeing) in npcs.iter_mut() {
+    for (entity, npc, mut pos, mut rot, health, mut wander, mut activity, has_fleeing) in
+        npcs.iter_mut()
+    {
         total_npcs = total_npcs.saturating_add(1);
 
         if health.is_dead() {
             wander.path.clear();
             wander.waypoint = 0;
+            activity.0 = NpcActivityKind::Dead;
             if has_fleeing.is_some() {
                 commands.entity(entity).remove::<NpcFleeing>();
             }
             continue;
         }
 
-        let cadence = if alive_players == 0 {
+        let base_cadence = if alive_players == 0 {
             NPC_AI_BACKGROUND_CADENCE
         } else {
             let cadence_eval_start = Instant::now();
@@ -121,6 +162,7 @@ pub fn update_npc_ai(
                 NPC_AI_BACKGROUND_CADENCE
             }
         };
+        let cadence = base_cadence.max(crowd_cadence);
 
         if cadence > 1 {
             let phase = npc.id % cadence;
@@ -193,6 +235,8 @@ pub fn update_npc_ai(
             }
             _ => {}
         }
+
+        activity.0 = activity_from_state(&wander.state);
     }
 
     let frame_ms = frame_start.elapsed().as_secs_f64() as f32 * 1000.0;
@@ -220,8 +264,11 @@ pub fn update_npc_ai(
         let avg_cadence_eval_ms = perf.total_cadence_eval_ms / samples;
         let avg_pathfinding_ms = perf.total_pathfinding_ms / samples;
         info!(
-            "NPC AI perf: alive_players={}, avg_npcs={:.1}, avg_updated={:.1}, avg_throttled={:.1}, avg_tick_ms={:.2}, avg_cadence_eval_ms={:.3}, avg_pathfinding_ms={:.3}, peak_tick_ms={:.2}",
+            "NPC AI perf: alive_players={}, alive_npcs={}, crowd_cadence={} (target_updates/tick={}), avg_npcs={:.1}, avg_updated={:.1}, avg_throttled={:.1}, avg_tick_ms={:.2}, avg_cadence_eval_ms={:.3}, avg_pathfinding_ms={:.3}, peak_tick_ms={:.2}",
             alive_players,
+            alive_npcs,
+            crowd_cadence,
+            target_updates_per_tick,
             avg_npcs,
             avg_updated,
             avg_throttled,

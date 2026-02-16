@@ -1,44 +1,43 @@
 //! Bullet-vs-world hit detection.
 
 use bevy::prelude::*;
+use bevy_rapier3d::prelude::ReadRapierContext;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
-use shared::building::{BuildingPosition, PlacedBuilding};
-use shared::components::{Bullet, BulletPrevPosition, Player, PlayerPosition};
+use shared::components::{Bullet, BulletPrevPosition, DebugPhysicsBox, Player, PlayerPosition};
 use shared::protocol::{BulletImpact, BulletImpactSurface, ReliableChannel};
-use shared::terrain::WorldTerrain;
-use std::time::Instant;
 
-use crate::collision::library::{
-    DerivedBuildingColliderLibrary, DerivedColliderLibrary, StaticColliders,
-};
 use crate::combat::bullet_sim::BulletPendingDespawn;
-use crate::combat::geometry::{
-    segment_buildings_intersection, segment_props_intersection, segment_terrain_intersection,
-};
+use crate::physics::queries;
+use crate::physics::static_world_colliders::{StaticBuildingCollider, StaticPropCollider};
+use crate::physics::terrain_colliders::TerrainColliderChunk;
 
 /// Detect bullet hits against world geometry (terrain, props, buildings).
 pub fn handle_bullet_world_hits(
     mut commands: Commands,
     time: Res<Time>,
+    rapier: ReadRapierContext,
     mut perf_monitor: Option<ResMut<crate::telemetry::perf::ServerPerfMonitor>>,
     bullets: Query<
         (Entity, &Bullet, &BulletPrevPosition, &Transform),
         Without<BulletPendingDespawn>,
     >,
-    terrain: Res<WorldTerrain>,
+    terrain_hits: Query<(), With<TerrainColliderChunk>>,
+    prop_hits: Query<(), With<StaticPropCollider>>,
+    building_hits: Query<(), With<StaticBuildingCollider>>,
+    debug_box_hits: Query<(), With<DebugPhysicsBox>>,
     _players: Query<&Player>,
-    derived_colliders: Option<Res<DerivedColliderLibrary>>,
-    static_colliders: Res<StaticColliders>,
-    building_colliders: Option<Res<DerivedBuildingColliderLibrary>>,
-    buildings: Query<(&PlacedBuilding, &BuildingPosition)>,
     mut client_links: Query<
         (&RemoteId, &mut MessageSender<BulletImpact>),
         (With<ClientOf>, With<Connected>),
     >,
 ) {
-    let phase_start = Instant::now();
+    let phase_start = std::time::Instant::now();
+    let Ok(context) = rapier.single() else {
+        return;
+    };
+
     let now = time.elapsed_secs();
     let despawn_delay = 0.05;
     let mut impacts: Vec<BulletImpact> = Vec::new();
@@ -47,59 +46,41 @@ pub fn handle_bullet_world_hits(
     for (bullet_entity, bullet, prev_pos, transform) in bullets.iter() {
         let start = prev_pos.0;
         let end = transform.translation;
-        let dir = end - start;
-
-        if dir.length_squared() < 1e-6 {
+        let delta = end - start;
+        let length = delta.length();
+        if length <= 1e-5 {
             continue;
         }
+        let dir = delta / length;
 
-        let mut best_hit: Option<(f32, Vec3, Vec3, BulletImpactSurface)> = None;
+        let Some((hit_entity, hit)) = queries::cast_world_impact(&context, start, dir, length)
+        else {
+            continue;
+        };
 
-        if let Some((t, hit_point, hit_normal)) = segment_terrain_intersection(&terrain, start, end)
-        {
-            match best_hit {
-                Some((best_t, _, _, _)) if best_t <= t => {}
-                _ => best_hit = Some((t, hit_point, hit_normal, BulletImpactSurface::Terrain)),
-            }
-        }
+        let hit_point = start + dir * hit.time_of_impact;
+        let hit_normal = Vec3::new(hit.normal.x, hit.normal.y, hit.normal.z).normalize_or_zero();
 
-        if let Some(ref derived) = derived_colliders {
-            if let Some((t, hit_point, hit_normal)) =
-                segment_props_intersection(start, end, &static_colliders, derived)
-            {
-                match best_hit {
-                    Some((best_t, _, _, _)) if best_t <= t => {}
-                    _ => {
-                        // Keep terrain-ish surface classification for static props.
-                        best_hit = Some((t, hit_point, hit_normal, BulletImpactSurface::Terrain));
-                    }
-                }
-            }
-        }
+        let surface = if terrain_hits.get(hit_entity).is_ok() || prop_hits.get(hit_entity).is_ok() {
+            BulletImpactSurface::Terrain
+        } else if building_hits.get(hit_entity).is_ok() {
+            BulletImpactSurface::PracticeWall
+        } else if debug_box_hits.get(hit_entity).is_ok() {
+            BulletImpactSurface::PracticeWall
+        } else {
+            BulletImpactSurface::Terrain
+        };
 
-        if let Some((t, hit_point, hit_normal)) =
-            segment_buildings_intersection(start, end, &buildings, building_colliders.as_deref())
-        {
-            match best_hit {
-                Some((best_t, _, _, _)) if best_t <= t => {}
-                _ => {
-                    best_hit = Some((t, hit_point, hit_normal, BulletImpactSurface::PracticeWall));
-                }
-            }
-        }
-
-        if let Some((_t, hit_point, hit_normal, surface)) = best_hit {
-            impacts.push(BulletImpact {
-                owner_id: bullet.owner_id,
-                weapon_type: bullet.weapon_type,
-                spawn_position: bullet.spawn_position,
-                initial_velocity: bullet.initial_velocity,
-                impact_position: hit_point,
-                impact_normal: hit_normal,
-                surface,
-            });
-            despawn_updates.push((bullet_entity, hit_point));
-        }
+        impacts.push(BulletImpact {
+            owner_id: bullet.owner_id,
+            weapon_type: bullet.weapon_type,
+            spawn_position: bullet.spawn_position,
+            initial_velocity: bullet.initial_velocity,
+            impact_position: hit_point,
+            impact_normal: hit_normal,
+            surface,
+        });
+        despawn_updates.push((bullet_entity, hit_point));
     }
 
     if impacts.is_empty() {

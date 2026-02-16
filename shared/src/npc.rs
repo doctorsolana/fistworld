@@ -60,8 +60,8 @@ pub const NPC_IDLE_TIME_MAX: f32 = 4.0;
 /// Minimum distance for selecting a new wander target.
 pub const NPC_MIN_TARGET_DIST: f32 = 15.0;
 
-/// Time in seconds before a dead NPC despawns (5 minutes).
-pub const DEAD_NPC_DESPAWN_TIME: f32 = 5.0 * 60.0;
+/// Time in seconds before a dead NPC despawns.
+pub const DEAD_NPC_DESPAWN_TIME: f32 = 60.0;
 
 // =============================================================================
 // NPC HEALTH

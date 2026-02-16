@@ -101,6 +101,7 @@ pub(super) fn sync_build_zone_chunk_index(
 /// Spawn props for newly loaded terrain chunks.
 pub(super) fn spawn_chunk_props(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     terrain: Res<WorldTerrain>,
     prop_assets: Option<Res<PropAssets>>,
     loaded_chunks: Res<LoadedChunks>,
@@ -159,7 +160,6 @@ pub(super) fn spawn_chunk_props(
             let prop = commands
                 .spawn((
                     EnvironmentProp { chunk: spawn.chunk },
-                    PropKindTag(spawn.kind),
                     spawn.render_tuning,
                     PendingPropVisibility,
                     Transform::from_translation(adjusted_position)
@@ -171,48 +171,58 @@ pub(super) fn spawn_chunk_props(
                 ))
                 .id();
 
-            if let Some(tree_meshes) = assets.tree_meshes.get(&spawn.kind) {
-                // Explicitly spawn LOD meshes for trees to ensure instancing across identical meshes.
-                commands.entity(prop).insert(TreeLodRoot);
-                let mut tree_lods = TreeLodEntities::default();
-                commands.entity(prop).with_children(|parent| {
-                    let lod0 = parent
-                        .spawn((
-                            Name::new("LOD0"),
-                            Mesh3d(tree_meshes.lod0.clone()),
-                            MeshMaterial3d(tree_meshes.material.clone()),
-                            Transform::IDENTITY,
-                            Visibility::Inherited,
-                            InheritedVisibility::default(),
-                        ))
-                        .id();
-                    tree_lods.lod0 = Some(lod0);
-                    if let Some(lod1_mesh) = tree_meshes.lod1.as_ref() {
-                        let lod1 = parent
+            if let Some(kind) = spawn.kind {
+                commands.entity(prop).insert(PropKindTag(kind));
+                if let Some(tree_meshes) = assets.tree_meshes.get(&kind) {
+                    // Explicitly spawn LOD meshes for trees to ensure instancing across identical meshes.
+                    commands.entity(prop).insert(TreeLodRoot);
+                    let mut tree_lods = TreeLodEntities::default();
+                    commands.entity(prop).with_children(|parent| {
+                        let lod0 = parent
                             .spawn((
-                                Name::new("LOD1"),
-                                Mesh3d(lod1_mesh.clone()),
+                                Name::new("LOD0"),
+                                Mesh3d(tree_meshes.lod0.clone()),
                                 MeshMaterial3d(tree_meshes.material.clone()),
                                 Transform::IDENTITY,
                                 Visibility::Inherited,
                                 InheritedVisibility::default(),
                             ))
                             .id();
-                        tree_lods.lod1 = Some(lod1);
-                    }
-                });
-                commands.entity(prop).insert((
-                    tree_lods,
-                    TreeLodRuntimeState {
-                        active_lod: TreeActiveLod::Hidden,
-                        casts_shadows: spawn.render_tuning.casts_shadows,
-                    },
-                ));
+                        tree_lods.lod0 = Some(lod0);
+                        if let Some(lod1_mesh) = tree_meshes.lod1.as_ref() {
+                            let lod1 = parent
+                                .spawn((
+                                    Name::new("LOD1"),
+                                    Mesh3d(lod1_mesh.clone()),
+                                    MeshMaterial3d(tree_meshes.material.clone()),
+                                    Transform::IDENTITY,
+                                    Visibility::Inherited,
+                                    InheritedVisibility::default(),
+                                ))
+                                .id();
+                            tree_lods.lod1 = Some(lod1);
+                        }
+                    });
+                    commands.entity(prop).insert((
+                        tree_lods,
+                        TreeLodRuntimeState {
+                            active_lod: TreeActiveLod::Hidden,
+                            casts_shadows: spawn.render_tuning.casts_shadows,
+                        },
+                    ));
+                } else {
+                    let scene = assets
+                        .scenes
+                        .get(&kind)
+                        .cloned()
+                        .unwrap_or_else(|| asset_server.load(spawn.scene_path.clone()));
+                    commands.entity(prop).insert(SceneRoot(scene));
+                }
+                if needs_foliage_materials(kind) {
+                    commands.entity(prop).insert(NeedsFoliageMaterials);
+                }
             } else {
-                let Some(scene) = assets.scenes.get(&spawn.kind).cloned() else {
-                    commands.entity(prop).despawn();
-                    continue;
-                };
+                let scene = asset_server.load(spawn.scene_path.clone());
                 commands.entity(prop).insert(SceneRoot(scene));
             }
             prop_chunk_index
@@ -220,9 +230,6 @@ pub(super) fn spawn_chunk_props(
                 .entry(spawn.chunk)
                 .or_default()
                 .push(prop);
-            if needs_foliage_materials(spawn.kind) {
-                commands.entity(prop).insert(NeedsFoliageMaterials);
-            }
             commands.entity(world_root).add_child(prop);
             spawned_instances += 1;
         }

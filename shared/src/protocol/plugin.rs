@@ -2,9 +2,10 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::components::{
-    ActiveMapState, Bullet, BulletVelocity, CloudSeed, EquippedWeapon, Health, Npc, NpcFleeing,
-    NpcIdentity, NpcPosition, NpcRotation, Player, PlayerCharacter, PlayerJumpState,
-    PlayerPosition, PlayerProgression, PlayerRotation, PlayerWaterState, WorldTime,
+    ActiveMapState, Bullet, BulletVelocity, CloudSeed, DebugPhysicsBox, DebugPhysicsBoxPosition,
+    DebugPhysicsBoxRotation, EquippedWeapon, Health, Npc, NpcActivity, NpcFleeing, NpcIdentity,
+    NpcPosition, NpcRotation, NpcVelocity, Player, PlayerCharacter, PlayerJumpState,
+    PlayerPosition, PlayerProgression, PlayerRotation, PlayerVelocity, PlayerWaterState, WorldTime,
 };
 use crate::items::{
     ChestPosition, ChestStorage, ChestTransferRequest, CloseChestRequest, DropRequest, GroundItem,
@@ -24,6 +25,7 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<Player>().add_prediction();
         app.register_component::<PlayerPosition>().add_prediction();
         app.register_component::<PlayerRotation>().add_prediction();
+        app.register_component::<PlayerVelocity>().add_prediction();
         app.register_component::<PlayerJumpState>().add_prediction();
         app.register_component::<PlayerWaterState>()
             .add_prediction();
@@ -35,7 +37,14 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<Npc>().add_prediction();
         app.register_component::<NpcPosition>().add_prediction();
         app.register_component::<NpcRotation>().add_prediction();
+        app.register_component::<NpcVelocity>().add_prediction();
+        app.register_component::<NpcActivity>().add_prediction();
         app.register_component::<NpcFleeing>().add_prediction();
+        app.register_component::<DebugPhysicsBox>().add_prediction();
+        app.register_component::<DebugPhysicsBoxPosition>()
+            .add_prediction();
+        app.register_component::<DebugPhysicsBoxRotation>()
+            .add_prediction();
 
         // === VEHICLE COMPONENTS ===
         app.register_component::<Vehicle>().add_prediction();
@@ -94,6 +103,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SpawnOilmanDebug>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<SpawnPhysicsBoxDebug>()
+            .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<PickupRequest>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<DropRequest>()
@@ -128,6 +139,10 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<PlayerRoster>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<NpcRagdollStarted>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<NpcRagdollPoseBatch>()
+            .add_direction(NetworkDirection::ServerToClient);
 
         // === CHANNELS ===
         app.add_channel::<ReliableChannel>(ChannelSettings {
@@ -143,5 +158,11 @@ impl Plugin for ProtocolPlugin {
         })
         // High-frequency input: client -> server only
         .add_direction(NetworkDirection::ClientToServer);
+
+        app.add_channel::<RagdollPoseChannel>(ChannelSettings {
+            mode: ChannelMode::UnorderedUnreliable,
+            ..default()
+        })
+        .add_direction(NetworkDirection::ServerToClient);
     }
 }

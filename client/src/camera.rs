@@ -26,8 +26,9 @@ const THIRD_PERSON_DEFAULT_PITCH: f32 = 0.25; // Default orbit angle (slightly a
 const FOV_DEFAULT: f32 = 70.0_f32.to_radians(); // Normal FOV in radians
 const FOV_ADS: f32 = 45.0_f32.to_radians(); // Zoomed FOV when ADS
 const FOV_SNIPER_ADS: f32 = 20.0_f32.to_radians(); // Extra zoom for sniper
-const SNIPER_FISHEYE_STRENGTH: f32 = 0.026;
-const SNIPER_FISHEYE_EDGE_START: f32 = 0.54;
+                                                   // Tuned to make distortion visible within the centered sniper scope viewport.
+const SNIPER_FISHEYE_STRENGTH: f32 = 0.12;
+const SNIPER_FISHEYE_EDGE_START: f32 = 0.09;
 const SNIPER_FISHEYE_BLEND_SPEED: f32 = 14.0;
 
 /// Helper to convert PeerId to u64 for driver tracking

@@ -1,19 +1,28 @@
 //! NPC spawn systems.
 
 use bevy::prelude::*;
+use bevy_rapier3d::prelude::{
+    AdditionalMassProperties, Ccd, Collider, Damping, ExternalImpulse, RigidBody, Velocity,
+};
 use lightyear::prelude::server::{ClientOf, Started};
 use lightyear::prelude::*;
 use shared::components::{
-    Health, Npc, NpcArchetype, NpcIdentity, NpcPosition, NpcRotation, Player, PlayerPosition,
+    DebugPhysicsBox, DebugPhysicsBoxPosition, DebugPhysicsBoxRotation, Health, Npc, NpcActivity,
+    NpcActivityKind, NpcArchetype, NpcIdentity, NpcPosition, NpcRotation, NpcVelocity, Player,
+    PlayerPosition,
 };
 use shared::map::MapBehaviorPreset;
 use shared::npc::{npc_max_health, npc_name_for_id};
 use shared::physics::ground_clearance_center;
-use shared::protocol::SpawnOilmanDebug;
+use shared::protocol::{SpawnOilmanDebug, SpawnPhysicsBoxDebug};
 use shared::terrain::{WorldTerrain, WORLD_SEED};
 
 use crate::ai::state::{NpcWander, XorShift64};
+use crate::physics::layers;
 use crate::player::index::PlayerEntityIndex;
+
+const NPC_REPLICATION_PRIORITY: f32 = 0.35;
+const DEBUG_BOX_REPLICATION_PRIORITY: f32 = 0.30;
 
 fn configured_npc_cap() -> u32 {
     match std::env::var("CITYSIM_MAX_NPCS") {
@@ -136,8 +145,11 @@ pub fn spawn_npcs_once(
                 },
                 NpcPosition(pos),
                 NpcRotation(0.0),
+                NpcVelocity(Vec3::ZERO),
+                NpcActivity(NpcActivityKind::Idle),
                 Health::new(npc_max_health(group.archetype)),
                 wander,
+                ReplicationGroup::new_from_entity().set_priority(NPC_REPLICATION_PRIORITY),
                 Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
             ));
 
@@ -173,8 +185,11 @@ pub fn spawn_npcs_once(
             },
             NpcPosition(pos),
             NpcRotation(0.0),
+            NpcVelocity(Vec3::ZERO),
+            NpcActivity(NpcActivityKind::Idle),
             Health::new(npc_max_health(NpcArchetype::Oilman)),
             NpcWander::new(pos, 12.0, npc_id),
+            ReplicationGroup::new_from_entity().set_priority(NPC_REPLICATION_PRIORITY),
             Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
         ));
         total_spawned = 1;
@@ -211,8 +226,11 @@ pub fn spawn_npcs_once(
                 },
                 NpcPosition(pos),
                 NpcRotation(0.0),
+                NpcVelocity(Vec3::ZERO),
+                NpcActivity(NpcActivityKind::Idle),
                 Health::new(npc_max_health(archetype)),
                 NpcWander::new(pos, 20.0, npc_id),
+                ReplicationGroup::new_from_entity().set_priority(NPC_REPLICATION_PRIORITY),
                 Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
             ));
 
@@ -290,8 +308,11 @@ pub fn handle_spawn_oilman_debug(
                     },
                     NpcPosition(pos),
                     NpcRotation(0.0),
+                    NpcVelocity(Vec3::ZERO),
+                    NpcActivity(NpcActivityKind::Idle),
                     Health::new(npc_max_health(NpcArchetype::Oilman)),
                     NpcWander::new(pos, 14.0, npc_id),
+                    ReplicationGroup::new_from_entity().set_priority(NPC_REPLICATION_PRIORITY),
                     Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
                 ));
             }
@@ -303,5 +324,134 @@ pub fn handle_spawn_oilman_debug(
                 total_spawned_for_peer, peer_id, requests_for_peer
             );
         }
+    }
+}
+
+/// Handle debug requests to spawn dynamic physics test boxes near the requesting player.
+pub fn handle_spawn_physics_box_debug(
+    mut commands: Commands,
+    terrain: Res<WorldTerrain>,
+    player_index: Res<PlayerEntityIndex>,
+    mut client_links: Query<
+        (&RemoteId, &mut MessageReceiver<SpawnPhysicsBoxDebug>),
+        With<ClientOf>,
+    >,
+    player_positions: Query<&PlayerPosition, With<Player>>,
+    existing_boxes: Query<&DebugPhysicsBox>,
+) {
+    let mut next_box_id: Option<u64> = None;
+
+    for (remote_id, mut receiver) in client_links.iter_mut() {
+        let peer_id = remote_id.0;
+        for msg in receiver.receive() {
+            let count = msg.count.clamp(1, 32) as usize;
+            let Some(player_entity) = player_index.entity_for_peer(peer_id) else {
+                warn!(
+                    "SpawnPhysicsBoxDebug ignored for {:?}: no player entity indexed yet",
+                    peer_id
+                );
+                continue;
+            };
+            let Ok(player_pos) = player_positions.get(player_entity) else {
+                warn!(
+                    "SpawnPhysicsBoxDebug ignored for {:?}: missing player state",
+                    peer_id
+                );
+                continue;
+            };
+            let mut anchor_pos = msg.anchor_position.unwrap_or(player_pos.0);
+            if !anchor_pos.is_finite() {
+                anchor_pos = player_pos.0;
+            }
+            let half_extents = Vec3::splat(0.60);
+
+            let cursor = next_box_id.get_or_insert_with(|| {
+                existing_boxes
+                    .iter()
+                    .map(|box_data| box_data.id)
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(1)
+            });
+
+            let mut first_spawn: Option<Vec3> = None;
+            for i in 0..count {
+                let (x, z) = if i == 0 {
+                    (anchor_pos.x, anchor_pos.z)
+                } else {
+                    let ring_i = i - 1;
+                    let angle = (ring_i as f32 / 8.0) * std::f32::consts::TAU;
+                    let ring = 1.8 + (ring_i / 8) as f32 * 1.4;
+                    (
+                        anchor_pos.x + angle.cos() * ring,
+                        anchor_pos.z + angle.sin() * ring,
+                    )
+                };
+                let y = terrain.get_height(x, z) + half_extents.y + 0.25;
+                let pos = Vec3::new(x, y, z);
+                let rot = Quat::IDENTITY;
+                let spawn_tf = Transform::from_translation(pos).with_rotation(rot);
+                first_spawn.get_or_insert(pos);
+
+                let box_id = *cursor;
+                *cursor = cursor.saturating_add(1);
+
+                commands
+                    .spawn((
+                        DebugPhysicsBox {
+                            id: box_id,
+                            half_extents,
+                        },
+                        DebugPhysicsBoxPosition(pos),
+                        DebugPhysicsBoxRotation(rot),
+                        spawn_tf,
+                        GlobalTransform::from(spawn_tf),
+                        Visibility::Inherited,
+                        InheritedVisibility::default(),
+                        RigidBody::Dynamic,
+                        Collider::cuboid(half_extents.x, half_extents.y, half_extents.z),
+                        layers::debug_box_groups(),
+                        AdditionalMassProperties::Mass(24.0),
+                        Damping {
+                            linear_damping: 2.4,
+                            angular_damping: 3.6,
+                        },
+                        Ccd::enabled(),
+                        Velocity::default(),
+                        ExternalImpulse::default(),
+                    ))
+                    .insert((
+                        ReplicationGroup::new_from_entity()
+                            .set_priority(DEBUG_BOX_REPLICATION_PRIORITY),
+                        Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
+                    ));
+            }
+            info!(
+                "Debug spawned {} physics box(es) for {:?} near player={:?} server_player_pos={:?} request_anchor={:?} first_spawn={:?}",
+                count, peer_id, player_entity, player_pos.0, anchor_pos, first_spawn
+            );
+        }
+    }
+}
+
+/// Sync replicated debug box position/rotation from physics transform.
+pub fn sync_debug_physics_boxes(
+    _time: Res<Time>,
+    _terrain: Res<WorldTerrain>,
+    mut boxes: Query<(
+        &DebugPhysicsBox,
+        &mut DebugPhysicsBoxPosition,
+        &mut DebugPhysicsBoxRotation,
+        &mut Transform,
+        &mut GlobalTransform,
+        Option<&mut Velocity>,
+    )>,
+) {
+    for (_box_data, mut box_pos, mut box_rot, transform, mut global_transform, _box_vel) in
+        boxes.iter_mut()
+    {
+        box_pos.0 = transform.translation;
+        box_rot.0 = transform.rotation;
+        *global_transform = GlobalTransform::from(transform.compute_affine());
     }
 }

@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{
     ControlledBy, Lifetime, MessageReceiver, MessageSender, NetworkTarget, RemoteId, Replicate,
-    ReplicationMode,
+    ReplicationGroup, ReplicationMode,
 };
 
 use shared::components::{
@@ -28,6 +28,21 @@ use crate::net::peer::peer_id_to_u64;
 use crate::persistence::profiles::PlayerProfiles;
 use crate::player::index::PlayerEntityIndex;
 use crate::player::roster_cache::PlayerRosterCache;
+
+const PLAYER_REPLICATION_PRIORITY: f32 = 20.0;
+const VEHICLE_REPLICATION_PRIORITY: f32 = 5.0;
+
+fn resolve_map_spawn_position(terrain: &WorldTerrain) -> Vec3 {
+    if let Some(spawn) = terrain.generator.loaded_map().definition.player_spawn {
+        let ground_y = terrain.get_height(spawn[0], spawn[2]);
+        return Vec3::new(spawn[0], ground_y + ground_clearance_center(), spawn[2]);
+    }
+
+    let spawn_x = SPAWN_POSITION[0];
+    let spawn_z = SPAWN_POSITION[2];
+    let ground_y = terrain.get_height(spawn_x, spawn_z);
+    Vec3::new(spawn_x, ground_y + ground_clearance_center(), spawn_z)
+}
 
 /// Handle player name submissions from clients.
 /// Validates name, loads/creates profile, spawns player entity.
@@ -108,10 +123,7 @@ pub fn handle_player_name_submission(
                     "Player '{}' was dead - spawning at spawn point with empty inventory",
                     name
                 );
-                let spawn_x = SPAWN_POSITION[0];
-                let spawn_z = SPAWN_POSITION[2];
-                let ground_y = terrain.get_height(spawn_x, spawn_z);
-                let pos = Vec3::new(spawn_x, ground_y + ground_clearance_center(), spawn_z);
+                let pos = resolve_map_spawn_position(&terrain);
 
                 (
                     pos,
@@ -122,6 +134,30 @@ pub fn handle_player_name_submission(
                     30,
                     Inventory::new(),
                     0,
+                    None,
+                )
+            } else if !profile_loaded {
+                info!("Spawning new player '{}' at map spawn", name);
+
+                let mut inventory = Inventory::new();
+                for (i, slot) in profile.inventory_slots.iter().enumerate() {
+                    if let Some(stack) = slot {
+                        let _ = inventory.set_slot(i, Some(*stack));
+                    }
+                }
+
+                (
+                    resolve_map_spawn_position(&terrain),
+                    profile.rotation,
+                    Vec3::ZERO,
+                    Health {
+                        current: profile.health_current,
+                        max: profile.health_max,
+                    },
+                    EquippedWeapon::new(profile.equipped_weapon),
+                    profile.weapon_ammo_in_mag,
+                    inventory,
+                    profile.hotbar_selection,
                     None,
                 )
             } else if profile.in_vehicle {
@@ -212,6 +248,7 @@ pub fn handle_player_name_submission(
                     PreviousHotbarSlot {
                         index: Some(hotbar_sel as usize),
                     },
+                    ReplicationGroup::new_from_entity().set_priority(PLAYER_REPLICATION_PRIORITY),
                     Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
                     ControlledBy {
                         owner: client_entity,
@@ -240,6 +277,8 @@ pub fn handle_player_name_submission(
                         VehicleDriver {
                             driver_id: Some(peer_id_to_u64(peer_id)),
                         },
+                        ReplicationGroup::new_from_entity()
+                            .set_priority(VEHICLE_REPLICATION_PRIORITY),
                         Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
                     ))
                     .id();

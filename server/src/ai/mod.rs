@@ -13,6 +13,7 @@
 pub mod death_cleanup;
 pub mod obstacles;
 pub mod pathfinding;
+pub mod ragdoll;
 pub mod spawn;
 pub mod state;
 pub mod tick;

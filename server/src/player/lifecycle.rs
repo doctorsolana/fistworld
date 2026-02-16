@@ -16,6 +16,18 @@ pub struct RespawnTimer {
     pub time_remaining: f32,
 }
 
+fn resolve_map_spawn_position(terrain: &WorldTerrain) -> Vec3 {
+    if let Some(spawn) = terrain.generator.loaded_map().definition.player_spawn {
+        let ground_y = terrain.get_height(spawn[0], spawn[2]);
+        return Vec3::new(spawn[0], ground_y + ground_clearance_center(), spawn[2]);
+    }
+
+    let spawn_x = SPAWN_POSITION[0];
+    let spawn_z = SPAWN_POSITION[2];
+    let ground_y = terrain.get_height(spawn_x, spawn_z);
+    Vec3::new(spawn_x, ground_y + ground_clearance_center(), spawn_z)
+}
+
 /// Check for dead players and add respawn timer.
 pub fn handle_player_deaths(
     mut commands: Commands,
@@ -64,10 +76,7 @@ pub fn update_respawn_timers(
 
             health.current = health.max;
 
-            let spawn_x = SPAWN_POSITION[0];
-            let spawn_z = SPAWN_POSITION[2];
-            let ground_y = terrain.get_height(spawn_x, spawn_z);
-            position.0 = Vec3::new(spawn_x, ground_y + ground_clearance_center(), spawn_z);
+            position.0 = resolve_map_spawn_position(&terrain);
 
             velocity.0 = Vec3::ZERO;
 

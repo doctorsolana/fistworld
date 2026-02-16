@@ -6,9 +6,12 @@ use shared::building::{BuildingPosition, PlacedBuilding};
 use shared::vehicle::{vehicle_def, Vehicle, VehicleState, VehicleType};
 use std::time::Instant;
 
+use crate::ai::ragdoll::{CorpseBodyPoint, CorpseCollisionIndex};
 use crate::collision::building_geometry::handle_capsule_vs_buildings;
 use crate::collision::building_index::BuildingSpatialIndex;
-use crate::collision::geometry::handle_vehicle_vs_static;
+use crate::collision::geometry::{
+    handle_vehicle_proxy_vs_corpse_spheres, handle_vehicle_vs_static,
+};
 use crate::collision::library::{
     DerivedBuildingColliderLibrary, DerivedColliderLibrary, StaticColliders,
 };
@@ -18,12 +21,14 @@ pub fn handle_vehicle_static_collisions(
     derived: Option<Res<DerivedColliderLibrary>>,
     building_derived: Option<Res<DerivedBuildingColliderLibrary>>,
     building_index: Option<Res<BuildingSpatialIndex>>,
+    corpse_index: Res<CorpseCollisionIndex>,
     colliders: Res<StaticColliders>,
     buildings: Query<(Entity, &PlacedBuilding, &BuildingPosition)>,
     mut perf_monitor: Option<ResMut<crate::telemetry::perf::ServerPerfMonitor>>,
     mut vehicles: Query<(&Vehicle, &mut VehicleState)>,
     mut static_candidates: Local<Vec<u32>>,
     mut building_candidates: Local<Vec<Entity>>,
+    mut corpse_candidates: Local<Vec<CorpseBodyPoint>>,
 ) {
     let phase_start = Instant::now();
     let Some(derived) = derived else { return };
@@ -67,6 +72,14 @@ pub fn handle_vehicle_static_collisions(
             radius,
             height,
             0.0,
+        );
+
+        handle_vehicle_proxy_vs_corpse_spheres(
+            &corpse_index,
+            &mut pos,
+            Some(&mut vel),
+            radius.max(0.25),
+            &mut corpse_candidates,
         );
 
         state.position = pos;

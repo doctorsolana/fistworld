@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run script for the sandbox game
-# Usage: ./run.sh [server|client|both|multi]
+# Usage: ./run.sh [server|client|both|multi|editor]
 
 set -euo pipefail
 
@@ -74,6 +74,10 @@ case $MODE in
         echo -e "${BLUE}Starting client...${NC}"
         cargo run -p client --release
         ;;
+    editor)
+        echo -e "${BLUE}Starting map editor...${NC}"
+        cargo run -p editor --release -- "${@:2}"
+        ;;
     both)
         cleanup_server
         echo -e "${GREEN}Starting server in background...${NC}"
@@ -139,11 +143,12 @@ case $MODE in
         echo -e "${GREEN}Client closed. Stopping server...${NC}"
         ;;
     *)
-        echo "Usage: ./run.sh [server|client|both|multi|windows]"
+        echo "Usage: ./run.sh [server|client|both|multi|editor|windows]"
         echo "  server  - Start only the server"
         echo "  client  - Start only the client"
         echo "  both    - Start server then client (default)"
         echo "  multi   - Start server + 2 clients for multiplayer testing"
+        echo "  editor  - Start map editor (pass map via --map <id>)"
         echo "  windows - Build & run Windows client with GPU (for WSL2)"
         exit 1
         ;;

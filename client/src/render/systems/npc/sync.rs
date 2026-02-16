@@ -73,7 +73,7 @@ pub fn sync_npc_transforms(
             &mut Transform,
             Option<&mut NpcNetSmoothing>,
         ),
-        With<Npc>,
+        (With<Npc>, Without<NpcRagdollActive>),
     >,
 ) {
     let now = time.elapsed_secs();

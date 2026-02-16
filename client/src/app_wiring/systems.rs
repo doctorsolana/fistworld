@@ -13,6 +13,7 @@ pub fn setup_systems(app: &mut App) {
         Startup,
         (
             game_systems::setup_rendering,
+            game_systems::setup_debug_physics_box_assets,
             game_systems::setup_particle_assets,
             game_systems::setup_vehicle_visual_assets,
             weapons::setup_weapon_visual_assets,
@@ -110,10 +111,12 @@ pub fn setup_systems(app: &mut App) {
             input::handle_mouse_input,
             input::update_death_state,
             game_systems::apply_cursor_grab,
+            game_systems::spawn_debug_physics_box_visuals,
             (
                 game_systems::sync_vehicle_transforms,
                 game_systems::sync_player_transforms,
                 game_systems::sync_npc_transforms,
+                game_systems::sync_debug_physics_box_transforms,
                 camera::update_camera,
             )
                 .chain(),
@@ -162,12 +165,19 @@ pub fn setup_systems(app: &mut App) {
         Update,
         (
             game_systems::setup_npc_rig,
+            (
+                game_systems::receive_ragdoll_started,
+                game_systems::receive_ragdoll_pose_batch,
+                game_systems::apply_ragdoll_pose,
+            )
+                .chain(),
             game_systems::update_npc_visibility,
             game_systems::apply_npc_no_frustum_culling_to_new_meshes,
             game_systems::apply_npc_shadow_state_to_new_meshes,
             game_systems::apply_double_sided_npc_materials,
             game_systems::update_npc_animation,
             game_systems::update_npc_hitbox_debug_gizmos,
+            game_systems::update_npc_ragdoll_debug_gizmos,
         )
             .run_if(in_state(GameState::Playing)),
     );

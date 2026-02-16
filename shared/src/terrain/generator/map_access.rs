@@ -1,6 +1,6 @@
 use std::sync::{Arc, OnceLock};
 
-use crate::map::{load_default_map, LoadedMap, MapBounds};
+use crate::map::{load_map, LoadedMap, MapBounds, DEFAULT_MAP_ID};
 
 use super::WORLD_RADIUS_METERS;
 
@@ -8,16 +8,19 @@ static ACTIVE_MAP_BOUNDS: OnceLock<MapBounds> = OnceLock::new();
 static ACTIVE_LOADED_MAP: OnceLock<Arc<LoadedMap>> = OnceLock::new();
 
 pub(super) fn load_active_map() -> Arc<LoadedMap> {
-    let loaded = ACTIVE_LOADED_MAP
-        .get_or_init(|| {
-            Arc::new(load_default_map().unwrap_or_else(|err| {
-                panic!(
-                    "Failed to load authored map '{}': {err}",
-                    crate::map::DEFAULT_MAP_ID
-                )
-            }))
-        })
-        .clone();
+    let loaded =
+        ACTIVE_LOADED_MAP
+            .get_or_init(|| {
+                let map_id = std::env::var("CITYSIM_MAP_ID")
+                    .ok()
+                    .filter(|id| !id.trim().is_empty())
+                    .unwrap_or_else(|| DEFAULT_MAP_ID.to_string());
+
+                Arc::new(load_map(&map_id).unwrap_or_else(|err| {
+                    panic!("Failed to load authored map '{}': {err}", map_id)
+                }))
+            })
+            .clone();
 
     let _ = ACTIVE_MAP_BOUNDS.set(loaded.definition.bounds);
     loaded

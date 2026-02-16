@@ -1,5 +1,6 @@
 use bevy::prelude::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
+use std::path::{Component, Path};
 
 use crate::components::NpcArchetype;
 use crate::props::PropKind;
@@ -11,6 +12,8 @@ pub struct MapDefinition {
     pub map_id: String,
     pub bounds: MapBounds,
     pub terrain: MapTerrain,
+    #[serde(default)]
+    pub player_spawn: Option<[f32; 3]>,
     #[serde(default)]
     pub objects: Vec<MapObjectSpawn>,
     #[serde(default)]
@@ -31,14 +34,20 @@ impl MapDefinition {
             return Err("terrain.height_max must be >= terrain.height_min".to_string());
         }
 
+        if let Some(spawn) = self.player_spawn {
+            if !self.bounds.contains_xz(spawn[0], spawn[2]) {
+                return Err("player_spawn must be inside map bounds".to_string());
+            }
+        }
+
         for (index, object) in self.objects.iter().enumerate() {
             if object.kind.trim().is_empty() {
                 return Err(format!("objects[{index}] kind must not be empty"));
             }
-            if object.prop_kind().is_none() {
+            if object.resolved_scene_path().is_none() {
                 return Err(format!(
-                    "objects[{index}] unknown kind '{}' (expected one of shared prop ids)",
-                    object.kind
+                    "objects[{index}] invalid kind '{}' (expected shared prop id or game_assets/*.glb[#SceneN])",
+                    object.kind.trim()
                 ));
             }
             if object.scale <= 0.0 {
@@ -135,6 +144,8 @@ fn default_height_max() -> f32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MapObjectSpawn {
+    /// Either a stable shared prop id (e.g. `rock_1`) or a direct scene path
+    /// (e.g. `game_assets/buildings/village/House_05.glb#Scene0`).
     pub kind: String,
     pub position: [f32; 3],
     #[serde(default)]
@@ -151,6 +162,59 @@ impl MapObjectSpawn {
     pub fn prop_kind(&self) -> Option<PropKind> {
         PropKind::from_id(self.kind.trim())
     }
+
+    pub fn resolved_scene_path(&self) -> Option<String> {
+        resolve_object_scene_path(self.kind.trim())
+    }
+}
+
+fn resolve_object_scene_path(kind_or_path: &str) -> Option<String> {
+    let token = kind_or_path.trim();
+    if token.is_empty() {
+        return None;
+    }
+
+    if let Some(kind) = PropKind::from_id(token) {
+        return Some(kind.scene_path().to_string());
+    }
+
+    // Allow direct authored scene paths so new assets are placeable without enum churn.
+    // This accepts any safe relative .glb path under the configured asset roots.
+    let normalized = token.replace('\\', "/");
+    let (path_part, scene_part) = match normalized.split_once('#') {
+        Some((path, scene)) => (path.trim(), Some(scene.trim())),
+        None => (normalized.trim(), None),
+    };
+    if !is_safe_relative_glb_path(path_part) {
+        return None;
+    }
+
+    match scene_part {
+        Some(scene) if !scene.is_empty() => Some(format!("{path_part}#{scene}")),
+        Some(_) => None,
+        None => Some(format!("{path_part}#Scene0")),
+    }
+}
+
+fn is_safe_relative_glb_path(path_part: &str) -> bool {
+    if path_part.is_empty() || !path_part.to_ascii_lowercase().ends_with(".glb") {
+        return false;
+    }
+    if path_part.contains(':') {
+        return false;
+    }
+
+    let path = Path::new(path_part);
+    if path.is_absolute() {
+        return false;
+    }
+
+    !path.components().any(|component| {
+        matches!(
+            component,
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir | Component::CurDir
+        )
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -338,5 +402,71 @@ mod tests {
         assert!((hm.sample_height(-10.0, -10.0) - 0.0).abs() < 1e-5);
         assert!((hm.sample_height(10.0, 10.0) - 30.0).abs() < 1e-5);
         assert_eq!(hm.get_water_height(-10.0, -10.0), Some(5.0));
+    }
+
+    #[test]
+    fn object_scene_path_resolves_known_kind_and_custom_path() {
+        let known = MapObjectSpawn {
+            kind: "rock_1".to_string(),
+            position: [0.0, 0.0, 0.0],
+            rotation_degrees: 0.0,
+            scale: 1.0,
+        };
+        assert_eq!(
+            known.resolved_scene_path().as_deref(),
+            Some("game_assets/environment/rocks/Rock_1.glb#Scene0")
+        );
+
+        let custom = MapObjectSpawn {
+            kind: "game_assets/buildings/village/House_05.glb".to_string(),
+            position: [0.0, 0.0, 0.0],
+            rotation_degrees: 0.0,
+            scale: 1.0,
+        };
+        assert_eq!(
+            custom.resolved_scene_path().as_deref(),
+            Some("game_assets/buildings/village/House_05.glb#Scene0")
+        );
+    }
+
+    #[test]
+    fn object_scene_path_rejects_invalid_custom_paths() {
+        let bad_parent_dir = MapObjectSpawn {
+            kind: "../assets/buildings/village/House_05.glb".to_string(),
+            position: [0.0, 0.0, 0.0],
+            rotation_degrees: 0.0,
+            scale: 1.0,
+        };
+        assert!(bad_parent_dir.resolved_scene_path().is_none());
+
+        let bad_ext = MapObjectSpawn {
+            kind: "game_assets/buildings/village/House_05.fbx".to_string(),
+            position: [0.0, 0.0, 0.0],
+            rotation_degrees: 0.0,
+            scale: 1.0,
+        };
+        assert!(bad_ext.resolved_scene_path().is_none());
+
+        let absolute = MapObjectSpawn {
+            kind: "/tmp/House_05.glb".to_string(),
+            position: [0.0, 0.0, 0.0],
+            rotation_degrees: 0.0,
+            scale: 1.0,
+        };
+        assert!(absolute.resolved_scene_path().is_none());
+    }
+
+    #[test]
+    fn object_scene_path_accepts_relative_non_game_assets_paths() {
+        let direct = MapObjectSpawn {
+            kind: "buildings/village/House_05.glb".to_string(),
+            position: [0.0, 0.0, 0.0],
+            rotation_degrees: 0.0,
+            scale: 1.0,
+        };
+        assert_eq!(
+            direct.resolved_scene_path().as_deref(),
+            Some("buildings/village/House_05.glb#Scene0")
+        );
     }
 }

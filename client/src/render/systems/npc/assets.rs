@@ -13,8 +13,6 @@ pub fn setup_npc_assets(
     // Order:
     // 0=TPose, 1=Idle, 2=Jog_Forward, 3=Jog_Backward, 4=Jog_Strafe_Right,
     // 5=Jog_Strafe_Left, 6=Running, 7=Jumping, 8=Driving, 9=Look_Behind_Run
-    let tpose_clip: Handle<AnimationClip> =
-        asset_server.load("characters/custom/oilman_animated.glb#Animation0");
     let idle_clip: Handle<AnimationClip> =
         asset_server.load("characters/custom/oilman_animated.glb#Animation1");
     let jog_forward_clip: Handle<AnimationClip> =
@@ -25,7 +23,6 @@ pub fn setup_npc_assets(
         asset_server.load("characters/custom/oilman_animated.glb#Animation9");
 
     let (graph, nodes) = AnimationGraph::from_clips([
-        tpose_clip,
         idle_clip,
         jog_forward_clip,
         running_clip,
@@ -36,12 +33,11 @@ pub fn setup_npc_assets(
     commands.insert_resource(NpcAssets {
         scene,
         animation_graph,
-        tpose_node: nodes[0],
-        idle_node: nodes[1],
-        jog_forward_node: nodes[2],
-        running_node: nodes[3],
-        look_behind_run_node: nodes[4],
+        idle_node: nodes[0],
+        jog_forward_node: nodes[1],
+        running_node: nodes[2],
+        look_behind_run_node: nodes[3],
     });
 
-    info!("Loaded Oilman NPC assets (scene + 5 animation clips)");
+    info!("Loaded Oilman NPC assets (scene + 4 animation clips)");
 }

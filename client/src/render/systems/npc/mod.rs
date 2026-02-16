@@ -3,6 +3,7 @@
 pub mod animation;
 pub mod assets;
 pub mod debug;
+pub mod ragdoll;
 pub mod spawn;
 pub mod state;
 pub mod sync;
@@ -10,7 +11,8 @@ pub mod visibility;
 
 pub use animation::update_npc_animation;
 pub use assets::setup_npc_assets;
-pub use debug::update_npc_hitbox_debug_gizmos;
+pub use debug::{update_npc_hitbox_debug_gizmos, update_npc_ragdoll_debug_gizmos};
+pub use ragdoll::{apply_ragdoll_pose, receive_ragdoll_pose_batch, receive_ragdoll_started};
 pub use spawn::{handle_npc_spawned, setup_npc_rig};
 pub use state::*;
 pub use sync::sync_npc_transforms;
@@ -25,7 +27,8 @@ use bevy::camera::visibility::NoFrustumCulling;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use shared::components::{
-    Health, LocalPlayer, Npc, NpcFleeing, NpcPosition, NpcRotation, PlayerPosition,
+    Health, LocalPlayer, Npc, NpcActivity, NpcActivityKind, NpcFleeing, NpcPosition, NpcRotation,
+    PlayerPosition,
 };
 use shared::npc::{
     npc_capsule_endpoints, npc_head_center, NPC_HEAD_RADIUS, NPC_HEIGHT, NPC_RADIUS,

@@ -37,3 +37,10 @@ pub(crate) fn default_render_tuning(kind: PropKind) -> PropRenderTuning {
         },
     }
 }
+
+pub(crate) fn default_unmapped_render_tuning() -> PropRenderTuning {
+    PropRenderTuning {
+        casts_shadows: true,
+        visible_end_distance: Some(450.0),
+    }
+}

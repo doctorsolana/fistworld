@@ -60,6 +60,117 @@ pub(super) fn ray_capsule_intersection(
     Some(closest_point)
 }
 
+/// Ray-oriented-box intersection over a finite segment.
+/// Returns hit point + outward normal for the nearest hit along `[0, ray_length]`.
+pub(super) fn ray_obb_intersection(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    ray_length: f32,
+    box_center: Vec3,
+    box_rotation: Quat,
+    half_extents: Vec3,
+) -> Option<(Vec3, Vec3)> {
+    const EPS: f32 = 1e-6;
+
+    let inv_rot = box_rotation.inverse();
+    let local_origin = inv_rot * (ray_origin - box_center);
+    let local_dir = inv_rot * ray_dir;
+
+    let mins = -half_extents;
+    let maxs = half_extents;
+    let mut t_min = 0.0f32;
+    let mut t_max = ray_length;
+
+    let axis_test = |origin_axis: f32,
+                     dir_axis: f32,
+                     min_axis: f32,
+                     max_axis: f32,
+                     t_min: &mut f32,
+                     t_max: &mut f32|
+     -> bool {
+        if dir_axis.abs() < EPS {
+            origin_axis >= min_axis && origin_axis <= max_axis
+        } else {
+            let inv = 1.0 / dir_axis;
+            let mut t1 = (min_axis - origin_axis) * inv;
+            let mut t2 = (max_axis - origin_axis) * inv;
+            if t1 > t2 {
+                std::mem::swap(&mut t1, &mut t2);
+            }
+            *t_min = (*t_min).max(t1);
+            *t_max = (*t_max).min(t2);
+            *t_min <= *t_max
+        }
+    };
+
+    if !axis_test(
+        local_origin.x,
+        local_dir.x,
+        mins.x,
+        maxs.x,
+        &mut t_min,
+        &mut t_max,
+    ) {
+        return None;
+    }
+    if !axis_test(
+        local_origin.y,
+        local_dir.y,
+        mins.y,
+        maxs.y,
+        &mut t_min,
+        &mut t_max,
+    ) {
+        return None;
+    }
+    if !axis_test(
+        local_origin.z,
+        local_dir.z,
+        mins.z,
+        maxs.z,
+        &mut t_min,
+        &mut t_max,
+    ) {
+        return None;
+    }
+
+    let hit_t = if t_min >= 0.0 { t_min } else { t_max };
+    if !(0.0..=ray_length).contains(&hit_t) {
+        return None;
+    }
+
+    let local_hit = local_origin + local_dir * hit_t;
+    let hit_world = ray_origin + ray_dir * hit_t;
+
+    // Pick dominant face at hit point.
+    let nx = if half_extents.x > EPS {
+        (local_hit.x / half_extents.x).abs()
+    } else {
+        0.0
+    };
+    let ny = if half_extents.y > EPS {
+        (local_hit.y / half_extents.y).abs()
+    } else {
+        0.0
+    };
+    let nz = if half_extents.z > EPS {
+        (local_hit.z / half_extents.z).abs()
+    } else {
+        0.0
+    };
+
+    let normal_local = if nx >= ny && nx >= nz {
+        Vec3::new(local_hit.x.signum(), 0.0, 0.0)
+    } else if ny >= nz {
+        Vec3::new(0.0, local_hit.y.signum(), 0.0)
+    } else {
+        Vec3::new(0.0, 0.0, local_hit.z.signum())
+    };
+    let normal_world = (box_rotation * normal_local).normalize_or_zero();
+
+    Some((hit_world, normal_world))
+}
+
 /// Segment vs terrain heightfield intersection.
 pub(super) fn segment_terrain_intersection(
     terrain: &WorldTerrain,
@@ -282,5 +393,37 @@ fn ray_triangle_intersection(
         Some((t, hit_point))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ray_obb_intersection_hits_axis_aligned_box() {
+        let origin = Vec3::new(0.0, 0.0, -5.0);
+        let dir = Vec3::Z;
+        let center = Vec3::ZERO;
+        let rot = Quat::IDENTITY;
+        let half = Vec3::splat(1.0);
+
+        let hit = ray_obb_intersection(origin, dir, 20.0, center, rot, half);
+        assert!(hit.is_some());
+        let (point, normal) = hit.unwrap();
+        assert!((point.z + 1.0).abs() < 1e-3);
+        assert!(normal.z <= -0.99);
+    }
+
+    #[test]
+    fn ray_obb_intersection_misses_when_parallel_outside_slab() {
+        let origin = Vec3::new(2.5, 0.0, -5.0);
+        let dir = Vec3::Z;
+        let center = Vec3::ZERO;
+        let rot = Quat::from_rotation_y(0.35);
+        let half = Vec3::splat(1.0);
+
+        let hit = ray_obb_intersection(origin, dir, 20.0, center, rot, half);
+        assert!(hit.is_none());
     }
 }

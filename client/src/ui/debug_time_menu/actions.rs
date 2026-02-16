@@ -67,6 +67,11 @@ pub(super) fn handle_debug_menu_interactions(
         &mut MessageSender<SpawnOilmanDebug>,
         (With<crate::GameClient>, With<Connected>),
     >,
+    mut physics_box_sender: Query<
+        &mut MessageSender<SpawnPhysicsBoxDebug>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+    local_player_transforms: Query<&Transform, With<LocalPlayer>>,
     mut buttons: Query<
         (
             &Interaction,
@@ -78,6 +83,7 @@ pub(super) fn handle_debug_menu_interactions(
             Option<&PerfWeightmapToggleButton>,
             Option<&PerfRenderDiagToggleButton>,
             Option<&SpawnOilmanNpcButton>,
+            Option<&SpawnPhysicsBoxButton>,
             &mut BackgroundColor,
         ),
         Changed<Interaction>,
@@ -93,6 +99,7 @@ pub(super) fn handle_debug_menu_interactions(
         weightmap_button,
         render_diag_button,
         oilman_spawn_button,
+        physics_box_button,
         mut bg,
     ) in buttons.iter_mut()
     {
@@ -153,6 +160,26 @@ pub(super) fn handle_debug_menu_interactions(
                 if oilman_spawn_button.is_some() {
                     if let Ok(mut sender) = npc_spawn_sender.single_mut() {
                         sender.send::<ReliableChannel>(SpawnOilmanDebug { count: 10 });
+                    }
+                    continue;
+                }
+
+                if physics_box_button.is_some() {
+                    let anchor_position = local_player_transforms
+                        .iter()
+                        .next()
+                        .map(|transform| transform.translation);
+                    if let Ok(mut sender) = physics_box_sender.single_mut() {
+                        sender.send::<ReliableChannel>(SpawnPhysicsBoxDebug {
+                            count: 1,
+                            anchor_position,
+                        });
+                        info!(
+                            "Requested debug physics box spawn at local anchor={:?}",
+                            anchor_position
+                        );
+                    } else {
+                        warn!("No SpawnPhysicsBoxDebug sender available on client");
                     }
                     continue;
                 }

@@ -1,0 +1,11 @@
+[package]
+name = "editor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = { workspace = true }
+shared = { path = "../shared" }
+serde = { workspace = true }
+ron = { workspace = true }
+bevy_egui = "0.39"

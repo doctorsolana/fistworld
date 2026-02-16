@@ -11,6 +11,7 @@ use crate::combat;
 use crate::inventory;
 use crate::net;
 use crate::persistence;
+use crate::physics;
 use crate::player;
 use crate::telemetry;
 use crate::vehicle;
@@ -21,13 +22,15 @@ use super::bootstrap::server_is_started;
 #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
 enum FixedServerSet {
     WorldTick,
+    PhysicsWorld,
     NetIngress,
     VehicleSim,
+    AISim,
+    PhysicsControl,
+    PhysicsPost,
     PlayerSim,
     Indices,
     Persistence,
-    AISim,
-    Collision,
     Inventory,
     Combat,
 }
@@ -37,13 +40,15 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
         FixedUpdate,
         (
             FixedServerSet::WorldTick,
+            FixedServerSet::PhysicsWorld,
             FixedServerSet::NetIngress,
             FixedServerSet::VehicleSim,
+            FixedServerSet::AISim,
+            FixedServerSet::PhysicsControl,
+            FixedServerSet::PhysicsPost,
             FixedServerSet::PlayerSim,
             FixedServerSet::Indices,
             FixedServerSet::Persistence,
-            FixedServerSet::AISim,
-            FixedServerSet::Collision,
             FixedServerSet::Inventory,
             FixedServerSet::Combat,
         )
@@ -66,10 +71,30 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
     app.add_systems(
         FixedUpdate,
         (
+            physics::terrain_colliders::sync_terrain_colliders,
+            physics::static_world_colliders::sync_static_prop_colliders,
+            physics::static_world_colliders::sync_static_building_colliders,
+            physics::dynamic_actors::ensure_player_physics_bodies,
+            physics::dynamic_actors::ensure_npc_physics_bodies,
+            physics::dynamic_actors::ensure_vehicle_physics_bodies,
+            physics::dynamic_actors::cleanup_npc_physics_when_ragdoll_activates,
+            physics::dynamic_actors::sync_player_bodies_from_authoritative_state,
+            physics::dynamic_actors::sync_npcs_from_physics_before_ai,
+        )
+            .chain()
+            .in_set(FixedServerSet::PhysicsWorld)
+            .run_if(server_is_started),
+    );
+
+    app.add_systems(
+        FixedUpdate,
+        (
             net::connection::handle_connections,
+            ai::ragdoll::replay_active_ragdolls_to_new_clients,
             player::spawn::handle_player_name_submission,
             player::spawn::handle_set_player_character,
             ai::spawn::handle_spawn_oilman_debug,
+            ai::spawn::handle_spawn_physics_box_debug,
             player::roster::handle_player_roster_requests,
             net::input::handle_client_input_messages,
         )
@@ -80,12 +105,7 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
 
     app.add_systems(
         FixedUpdate,
-        (
-            vehicle::simulation::ensure_car_suspension_state,
-            vehicle::interaction::handle_vehicle_interaction_requests,
-            vehicle::simulation::update_vehicles,
-        )
-            .chain()
+        vehicle::interaction::handle_vehicle_interaction_requests
             .in_set(FixedServerSet::VehicleSim)
             .run_if(server_is_started),
     );
@@ -93,7 +113,56 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
     app.add_systems(
         FixedUpdate,
         (
-            player::movement::update_players,
+            ai::obstacles::sync_obstacle_grid,
+            ai::tick::handle_npc_damage_events,
+            ai::tick::update_npc_ai,
+            ai::ragdoll::activate_npc_ragdolls,
+            ai::ragdoll::evict_excess_corpses,
+            ai::death_cleanup::ensure_dead_npc_despawn_timers,
+            ai::death_cleanup::update_dead_npc_despawn_timers,
+        )
+            .chain()
+            .in_set(FixedServerSet::AISim)
+            .run_if(server_is_started),
+    );
+
+    app.add_systems(
+        FixedUpdate,
+        (
+            physics::dynamic_actors::apply_vehicle_controls,
+            physics::dynamic_actors::apply_player_controls,
+            physics::dynamic_actors::apply_npc_controls_from_ai,
+        )
+            .chain()
+            .before(bevy_rapier3d::plugin::PhysicsSet::SyncBackend)
+            .in_set(FixedServerSet::PhysicsControl)
+            .run_if(server_is_started),
+    );
+
+    app.add_systems(
+        FixedUpdate,
+        (
+            physics::dynamic_actors::sync_players_from_physics,
+            physics::contacts::update_player_grounding_from_queries,
+            physics::dynamic_actors::sync_npcs_from_physics_after_writeback,
+            physics::contacts::update_vehicle_grounded_from_queries,
+            physics::dynamic_actors::sync_vehicles_from_physics,
+            physics::dynamic_actors::sync_debug_boxes_from_physics,
+            ai::ragdoll::stabilize_soft_ragdoll_bodies,
+            ai::ragdoll::sync_npc_roots_from_ragdolls,
+            ai::ragdoll::sync_corpse_collision_index,
+            ai::ragdoll::send_ragdoll_pose_snapshots,
+        )
+            .chain()
+            .after(bevy_rapier3d::plugin::PhysicsSet::Writeback)
+            .in_set(FixedServerSet::PhysicsPost)
+            .run_if(server_is_started),
+    );
+
+    app.add_systems(
+        FixedUpdate,
+        (
+            physics::dynamic_actors::tick_player_jump_timers,
             player::lifecycle::handle_player_deaths,
             player::lifecycle::update_respawn_timers,
         )
@@ -121,32 +190,6 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
         )
             .chain()
             .in_set(FixedServerSet::Persistence)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
-            ai::obstacles::sync_obstacle_grid,
-            ai::tick::handle_npc_damage_events,
-            ai::tick::update_npc_ai,
-            ai::death_cleanup::ensure_dead_npc_despawn_timers,
-            ai::death_cleanup::update_dead_npc_despawn_timers,
-        )
-            .chain()
-            .in_set(FixedServerSet::AISim)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
-            collision::resolve_vehicle::handle_vehicle_static_collisions,
-            collision::resolve_player::handle_player_static_collisions,
-            collision::resolve_npc::handle_npc_static_collisions,
-        )
-            .chain()
-            .in_set(FixedServerSet::Collision)
             .run_if(server_is_started),
     );
 
@@ -193,7 +236,7 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
             telemetry::perf::handle_perf_core_phase_begin
                 .before(world::time::handle_set_time_of_day),
             telemetry::perf::handle_perf_core_phase_end
-                .after(persistence::autosave::update_periodic_player_save),
+                .after(physics::dynamic_actors::sync_debug_boxes_from_physics),
             telemetry::perf::handle_perf_npc_inventory_build_phase_begin
                 .before(ai::obstacles::sync_obstacle_grid),
             telemetry::perf::handle_perf_npc_inventory_build_phase_end

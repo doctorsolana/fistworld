@@ -125,9 +125,12 @@ pub struct WorldTerrain {
 
 impl Default for WorldTerrain {
     fn default() -> Self {
+        let generator = TerrainGenerator::new(WORLD_SEED);
+        let delta_chunks = generator.loaded_map().terrain_deltas_by_chunk.clone();
+
         Self {
-            generator: TerrainGenerator::new(WORLD_SEED),
-            delta_chunks: HashMap::new(),
+            generator,
+            delta_chunks,
             version: 0,
         }
     }
@@ -166,6 +169,78 @@ impl WorldTerrain {
     #[inline]
     pub fn get_biome(&self, x: f32, z: f32) -> Biome {
         self.generator.get_biome(x, z)
+    }
+
+    pub fn apply_additive_circle(
+        &mut self,
+        center_xz: Vec2,
+        radius: f32,
+        amount: f32,
+    ) -> Vec<ChunkCoord> {
+        if radius <= 0.0 || amount.abs() <= f32::EPSILON {
+            return Vec::new();
+        }
+
+        let min_chunk_x = ((center_xz.x - radius) / CHUNK_SIZE).floor() as i32;
+        let max_chunk_x = ((center_xz.x + radius) / CHUNK_SIZE).floor() as i32;
+        let min_chunk_z = ((center_xz.y - radius) / CHUNK_SIZE).floor() as i32;
+        let max_chunk_z = ((center_xz.y + radius) / CHUNK_SIZE).floor() as i32;
+
+        let mut affected_chunks = Vec::new();
+        let radius_sq = radius * radius;
+
+        for chunk_x in min_chunk_x..=max_chunk_x {
+            for chunk_z in min_chunk_z..=max_chunk_z {
+                let coord = ChunkCoord::new(chunk_x, chunk_z);
+                let origin = coord.world_pos();
+                let mut modified = false;
+                let delta_data = self.delta_chunks.entry(coord).or_default();
+
+                for zi in 0..CHUNK_RESOLUTION {
+                    for xi in 0..CHUNK_RESOLUTION {
+                        let world_x = origin.x + xi as f32 * VERTEX_SPACING;
+                        let world_z = origin.z + zi as f32 * VERTEX_SPACING;
+
+                        let dx = world_x - center_xz.x;
+                        let dz = world_z - center_xz.y;
+                        let dist_sq = dx * dx + dz * dz;
+                        if dist_sq > radius_sq {
+                            continue;
+                        }
+
+                        let dist = dist_sq.sqrt();
+                        let t = (1.0 - dist / radius).clamp(0.0, 1.0);
+                        let falloff = t * t * (3.0 - 2.0 * t);
+                        delta_data.add_vertex(xi, zi, amount * falloff);
+                        modified = true;
+                    }
+                }
+
+                if modified {
+                    delta_data.version = delta_data.version.wrapping_add(1);
+                    affected_chunks.push(coord);
+                }
+            }
+        }
+
+        if affected_chunks.is_empty() {
+            return affected_chunks;
+        }
+
+        self.version = self.version.wrapping_add(1);
+
+        let mut all_affected: HashSet<ChunkCoord> = affected_chunks.iter().copied().collect();
+        for chunk in &affected_chunks {
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    all_affected.insert(ChunkCoord::new(chunk.x + dx, chunk.z + dz));
+                }
+            }
+        }
+
+        let mut all_affected: Vec<ChunkCoord> = all_affected.into_iter().collect();
+        all_affected.sort_by_key(|coord| (coord.x, coord.z));
+        all_affected
     }
 
     /// Apply a flattening rectangle by writing additive deltas over the authored base heightmap.
@@ -295,8 +370,17 @@ impl WorldTerrain {
         self.version = self.version.wrapping_add(1);
     }
 
+    pub fn replace_delta_chunks(&mut self, chunks: HashMap<ChunkCoord, TerrainDeltaData>) {
+        self.delta_chunks = chunks;
+        self.version = self.version.wrapping_add(1);
+    }
+
     pub fn get_modified_chunk_coords(&self) -> Vec<ChunkCoord> {
         self.delta_chunks.keys().copied().collect()
+    }
+
+    pub fn delta_chunks(&self) -> &HashMap<ChunkCoord, TerrainDeltaData> {
+        &self.delta_chunks
     }
 
     pub fn generate_chunk(&self, coord: ChunkCoord) -> ChunkMeshData {

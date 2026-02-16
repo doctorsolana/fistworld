@@ -8,7 +8,6 @@ fn npc_anim_set_for(assets: &NpcAssets) -> NpcAnimSet {
         walk: assets.jog_forward_node,
         run: assets.running_node,
         look_behind_run: assets.look_behind_run_node,
-        death: assets.tpose_node,
     }
 }
 
@@ -19,6 +18,28 @@ fn npc_movement_anim_to_node(anim: NpcMovementAnim, set: &NpcAnimSet) -> Animati
         NpcMovementAnim::Walk => set.walk,
         NpcMovementAnim::Run => set.run,
         NpcMovementAnim::LookBehindRun => set.look_behind_run,
+    }
+}
+
+fn target_anim_from_activity(activity: NpcActivityKind) -> Option<NpcMovementAnim> {
+    match activity {
+        NpcActivityKind::Idle
+        | NpcActivityKind::Sit
+        | NpcActivityKind::Work
+        | NpcActivityKind::Talk
+        | NpcActivityKind::Sleep
+        | NpcActivityKind::Dead => Some(NpcMovementAnim::Idle),
+        NpcActivityKind::Walk => Some(NpcMovementAnim::Walk),
+        NpcActivityKind::Run => Some(NpcMovementAnim::Run),
+        NpcActivityKind::Flee => Some(NpcMovementAnim::LookBehindRun),
+    }
+}
+
+fn min_hold_secs_for(anim: NpcMovementAnim) -> f32 {
+    match anim {
+        NpcMovementAnim::Idle => NPC_ANIM_MIN_HOLD_IDLE_SECS,
+        NpcMovementAnim::LookBehindRun => NPC_ANIM_MIN_HOLD_FLEE_SECS,
+        NpcMovementAnim::Walk | NpcMovementAnim::Run => NPC_ANIM_MIN_HOLD_MOVE_SECS,
     }
 }
 
@@ -71,14 +92,25 @@ fn determine_npc_target_anim(
     }
 }
 
-/// Drive NPC animations with motion-based directional movement and smooth blending:
-/// - Animation selected based on movement speed
+/// Drive NPC animations with semantic activity-first selection and smooth blending:
+/// - Prefer replicated `NpcActivity` from server
+/// - Fall back to motion-based inference if activity is unavailable
 /// - Crossfade blending between animation states over 0.2 seconds
-/// - Dead NPCs play death animation
+/// - Dead NPCs stop animation; ragdoll/death presentation is handled elsewhere.
 pub fn update_npc_animation(
     assets: Option<Res<NpcAssets>>,
     time: Res<Time>,
-    npc_roots: Query<(&Health, &Transform, &Visibility, Option<&NpcFleeing>), With<Npc>>,
+    npc_roots: Query<
+        (
+            &Health,
+            &Transform,
+            &Visibility,
+            Option<&NpcActivity>,
+            Option<&NpcFleeing>,
+            Option<&NpcRagdollActive>,
+        ),
+        With<Npc>,
+    >,
     mut anim_roots: Query<
         (&NpcRigOwner, &mut NpcAnimState, &mut AnimationPlayer),
         With<NpcAnimationRoot>,
@@ -89,10 +121,23 @@ pub fn update_npc_animation(
     let dt = time.delta_secs().max(1e-6);
 
     for (owner, mut state, mut player) in anim_roots.iter_mut() {
-        let Ok((health, transform, visibility, fleeing)) = npc_roots.get(owner.0) else {
+        let Ok((health, transform, visibility, activity, fleeing, ragdoll_active)) =
+            npc_roots.get(owner.0)
+        else {
             continue;
         };
         if matches!(*visibility, Visibility::Hidden) {
+            continue;
+        }
+        if ragdoll_active.is_some() {
+            // Ragdoll owns bone transforms; force-stop any locomotion clip that
+            // might have been active when death/ragdoll toggled in.
+            player.stop_all();
+            state.dead = true;
+            state.current_anim = NpcMovementAnim::Idle;
+            state.target_anim = NpcMovementAnim::Idle;
+            state.blend_progress = 1.0;
+            state.transition_lock_timer = 0.0;
             continue;
         }
         let anim_set = npc_anim_set_for(&assets);
@@ -103,12 +148,14 @@ pub fn update_npc_animation(
 
         // Handle death animation
         if is_dead && !state.dead {
+            // Do not force a bind-pose clip (t-pose) on death.
+            // Ragdoll or cleanup systems own death presentation.
             player.stop_all();
-            player.start(anim_set.death);
             state.dead = true;
             state.current_anim = NpcMovementAnim::Idle;
             state.target_anim = NpcMovementAnim::Idle;
             state.blend_progress = 1.0;
+            state.transition_lock_timer = 0.0;
             continue;
         }
 
@@ -122,9 +169,12 @@ pub fn update_npc_animation(
                 state.current_anim = NpcMovementAnim::Idle;
                 state.target_anim = NpcMovementAnim::Idle;
                 state.blend_progress = 1.0;
+                state.transition_lock_timer = 0.0;
             }
             continue;
         }
+
+        state.transition_lock_timer = (state.transition_lock_timer - dt).max(0.0);
 
         // Motion-based animation detection with speed smoothing
         let instant_speed = if state.initialized {
@@ -157,9 +207,28 @@ pub fn update_npc_animation(
                 state.smoothed_speed + (instant_speed - state.smoothed_speed) * smooth_factor;
         }
 
-        // Use smoothed speed with hysteresis for stable animation selection
-        let target_anim =
-            determine_npc_target_anim(state.smoothed_speed, state.target_anim, is_fleeing);
+        // Prefer explicit semantic activity from the server; only infer from motion as fallback.
+        let mut target_anim = activity
+            .and_then(|a| target_anim_from_activity(a.0))
+            .unwrap_or_else(|| {
+                determine_npc_target_anim(state.smoothed_speed, state.target_anim, is_fleeing)
+            });
+
+        let urgent_transition = matches!(
+            (state.target_anim, target_anim),
+            (NpcMovementAnim::LookBehindRun, _)
+                | (_, NpcMovementAnim::LookBehindRun)
+                | (NpcMovementAnim::Idle, NpcMovementAnim::Run)
+                | (NpcMovementAnim::Run, NpcMovementAnim::Idle)
+        );
+
+        // Anti-flap guard: avoid rapid animation switches under sparse/jittery updates.
+        if target_anim != state.target_anim
+            && state.transition_lock_timer > 0.0
+            && !urgent_transition
+        {
+            target_anim = state.target_anim;
+        }
 
         // Check if we need to start a new transition
         if target_anim != state.target_anim {
@@ -181,6 +250,7 @@ pub fn update_npc_animation(
             // Start new transition
             state.target_anim = target_anim;
             state.blend_progress = 0.0;
+            state.transition_lock_timer = min_hold_secs_for(target_anim);
 
             // Start target animation at weight 0
             let target_node = npc_movement_anim_to_node(target_anim, &anim_set);

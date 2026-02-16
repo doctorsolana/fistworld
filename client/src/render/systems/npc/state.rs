@@ -2,6 +2,8 @@
 
 use bevy::animation::graph::{AnimationGraph, AnimationNodeIndex};
 use bevy::prelude::*;
+use shared::protocol::RagdollBodyId;
+use std::collections::HashMap;
 
 /// Loaded NPC scene and animation graph resources.
 #[derive(Resource, Clone)]
@@ -9,7 +11,6 @@ pub struct NpcAssets {
     pub scene: Handle<Scene>,
     pub animation_graph: Handle<AnimationGraph>,
     // Oilman animation clips
-    pub tpose_node: AnimationNodeIndex,
     pub idle_node: AnimationNodeIndex,
     pub jog_forward_node: AnimationNodeIndex,
     pub running_node: AnimationNodeIndex,
@@ -28,6 +29,43 @@ pub struct NeedsDoubleSidedMaterials;
 
 #[derive(Component)]
 pub struct NpcAnimationRoot;
+
+#[derive(Component, Default, Clone)]
+pub struct NpcBoneMap {
+    pub bones: HashMap<RagdollBodyId, Entity>,
+}
+
+#[derive(Component, Default, Clone)]
+pub struct NpcBindPose {
+    pub all_bones: Vec<(Entity, Quat)>,
+    pub body_local_rotations: HashMap<RagdollBodyId, Quat>,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct NpcRagdollActive;
+
+#[derive(Clone, Copy, Debug)]
+pub struct NpcRagdollBodyPoseFrame {
+    pub body: RagdollBodyId,
+    pub position: Vec3,
+    pub rotation: Quat,
+}
+
+#[derive(Clone, Debug)]
+pub struct NpcRagdollPoseFrame {
+    pub seq: u32,
+    pub received_at: f32,
+    pub root_position: Vec3,
+    pub root_rotation: Quat,
+    pub bodies: Vec<NpcRagdollBodyPoseFrame>,
+}
+
+#[derive(Component, Default, Clone, Debug)]
+pub struct NpcRagdollNetState {
+    pub prev: Option<NpcRagdollPoseFrame>,
+    pub curr: Option<NpcRagdollPoseFrame>,
+    pub local_rotation_corrections: HashMap<RagdollBodyId, Quat>,
+}
 
 #[derive(Component, Clone, Copy)]
 pub(crate) struct NpcShadowState {
@@ -95,6 +133,9 @@ pub(crate) const INSTANT_STOP_THRESHOLD: f32 = 0.05;
 pub(crate) const NPC_SHADOW_RANGE: f32 = 140.0;
 pub(crate) const NPC_SHADOW_RANGE_SQ: f32 = NPC_SHADOW_RANGE * NPC_SHADOW_RANGE;
 pub(crate) const NPC_NET_EXTRAPOLATE_MAX_SECS: f32 = 0.35;
+pub(crate) const NPC_ANIM_MIN_HOLD_IDLE_SECS: f32 = 0.18;
+pub(crate) const NPC_ANIM_MIN_HOLD_MOVE_SECS: f32 = 0.12;
+pub(crate) const NPC_ANIM_MIN_HOLD_FLEE_SECS: f32 = 0.25;
 
 /// Tracks NPC animation state with blending support.
 #[derive(Component, Default)]
@@ -115,6 +156,8 @@ pub struct NpcAnimState {
     pub smoothed_speed: f32,
     /// True if current transition is a stop (walk/run -> idle), uses faster blend
     pub is_stopping: bool,
+    /// Remaining lockout before we can transition again (anti-flap guard).
+    pub transition_lock_timer: f32,
 }
 
 pub(super) struct NpcAnimSet {
@@ -122,5 +165,4 @@ pub(super) struct NpcAnimSet {
     pub(super) walk: AnimationNodeIndex,
     pub(super) run: AnimationNodeIndex,
     pub(super) look_behind_run: AnimationNodeIndex,
-    pub(super) death: AnimationNodeIndex,
 }

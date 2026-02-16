@@ -7,6 +7,7 @@ use shared::protocol::FIXED_TIMESTEP_HZ;
 use std::cmp::Ordering;
 use std::time::{Duration, Instant};
 
+use crate::ai::ragdoll::RagdollTelemetry;
 use crate::net::input::{ClientInputIngressStats, ClientInputs};
 
 const LOG_INTERVAL: Duration = Duration::from_secs(3);
@@ -245,6 +246,7 @@ pub fn update_server_perf_log(
     npcs: Query<(), With<Npc>>,
     bullets: Query<(), With<Bullet>>,
     ground_items: Query<(), With<GroundItem>>,
+    ragdoll_telemetry: Res<RagdollTelemetry>,
     client_inputs: Res<ClientInputs>,
     mut input_ingress: ResMut<ClientInputIngressStats>,
 ) {
@@ -326,7 +328,7 @@ pub fn update_server_perf_log(
     };
 
     info!(
-        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} npc={:.2}/{:.2} collision={:.2}/{:.2} weapons={:.2}/{:.2} ai_cadence={:.3}/{:.3} pathfinding={:.3}/{:.3} bullet_hits={:.3}/{:.3} world_hits={:.3}/{:.3} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} npcs={} bullets={} ground_items={}",
+        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} npc={:.2}/{:.2} collision={:.2}/{:.2} weapons={:.2}/{:.2} ai_cadence={:.3}/{:.3} pathfinding={:.3}/{:.3} bullet_hits={:.3}/{:.3} world_hits={:.3}/{:.3} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} npcs={} corpses={} bullets={} ground_items={} evicted_corpses={}",
         tick_avg_ms,
         tick_max_ms,
         over_budget_pct,
@@ -352,8 +354,10 @@ pub fn update_server_perf_log(
         per_client_input_summary,
         players_count,
         npcs.iter().count(),
+        ragdoll_telemetry.active_corpses,
         bullets.iter().count(),
         ground_items.iter().count(),
+        ragdoll_telemetry.total_evicted,
     );
 
     input_ingress.reset_window();
