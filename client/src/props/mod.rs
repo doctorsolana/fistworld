@@ -8,6 +8,7 @@ mod foliage;
 mod kinds;
 mod lod;
 mod plugin;
+mod simple_mesh;
 mod spawn;
 mod types;
 
@@ -16,3 +17,4 @@ pub use plugin::PropsPlugin;
 pub use types::*;
 
 pub(crate) use kinds::is_tree_kind;
+pub(crate) use simple_mesh::{try_spawn_simple_prop_mesh, SimplePropMeshCache};

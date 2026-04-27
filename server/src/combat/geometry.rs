@@ -172,6 +172,7 @@ pub(super) fn ray_obb_intersection(
 }
 
 /// Segment vs terrain heightfield intersection.
+/// Returns (distance_along_segment, hit_point, hit_normal) for the nearest hit.
 pub(super) fn segment_terrain_intersection(
     terrain: &WorldTerrain,
     start: Vec3,
@@ -182,6 +183,7 @@ pub(super) fn segment_terrain_intersection(
     if length < 1e-3 {
         return None;
     }
+    let ray_dir = dir / length;
 
     let f = |p: Vec3| -> f32 { p.y - terrain.get_height(p.x, p.z) };
 
@@ -212,8 +214,8 @@ pub(super) fn segment_terrain_intersection(
                 }
             }
 
-            let t_hit = hi;
-            let p_hit = start + dir * t_hit;
+            let t_hit = hi * length;
+            let p_hit = start + ray_dir * t_hit;
             let ground_y = terrain.get_height(p_hit.x, p_hit.z);
             let hit_pos = Vec3::new(p_hit.x, ground_y, p_hit.z);
             let normal = terrain.get_normal(hit_pos.x, hit_pos.z);
@@ -425,5 +427,22 @@ mod tests {
 
         let hit = ray_obb_intersection(origin, dir, 20.0, center, rot, half);
         assert!(hit.is_none());
+    }
+
+    #[test]
+    fn segment_terrain_intersection_returns_world_distance() {
+        let terrain = WorldTerrain::default();
+        let x = 0.0;
+        let z = 0.0;
+        let ground_y = terrain.get_height(x, z);
+        let start = Vec3::new(x, ground_y + 5.0, z);
+        let end = Vec3::new(x, ground_y - 5.0, z);
+
+        let hit = segment_terrain_intersection(&terrain, start, end).unwrap();
+        let (distance, point, normal) = hit;
+
+        assert!((distance - 5.0).abs() < 0.05);
+        assert!((point.y - ground_y).abs() < 0.05);
+        assert!(normal.y > 0.5);
     }
 }

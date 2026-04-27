@@ -6,9 +6,8 @@ use bevy_rapier3d::prelude::{QueryFilter, ReadRapierContext};
 use shared::components::{Player, PlayerGrounded};
 use shared::physics::WALKABLE_THRESHOLD;
 use shared::player::PLAYER_HEIGHT;
-use shared::vehicle::{Vehicle, VehicleState};
 
-use crate::physics::dynamic_actors::{PlayerPhysicsBody, VehiclePhysicsBody};
+use crate::physics::dynamic_actors::PlayerPhysicsBody;
 use crate::physics::static_world_colliders::{StaticBuildingCollider, StaticPropCollider};
 use crate::physics::terrain_colliders::TerrainColliderChunk;
 
@@ -56,30 +55,5 @@ pub fn update_player_grounding_from_queries(
         } else {
             grounded.time_since_grounded += dt;
         }
-    }
-}
-
-pub fn update_vehicle_grounded_from_queries(
-    rapier: ReadRapierContext,
-    mut vehicles: Query<
-        (Entity, &Transform, &mut VehicleState),
-        (With<Vehicle>, With<VehiclePhysicsBody>),
-    >,
-) {
-    let Ok(ctx) = rapier.single() else {
-        return;
-    };
-
-    for (entity, transform, mut state) in vehicles.iter_mut() {
-        state.grounded = ctx
-            .cast_ray_and_get_normal(
-                transform.translation,
-                Vec3::NEG_Y,
-                1.8,
-                true,
-                QueryFilter::new().exclude_rigid_body(entity),
-            )
-            .map(|(_, hit)| hit.normal.y > 0.25)
-            .unwrap_or(false);
     }
 }

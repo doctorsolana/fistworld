@@ -69,6 +69,16 @@ impl MapDefinition {
                     "npc_groups[{index}] PatrolRoute requires at least 2 route points"
                 ));
             }
+            if npc_group.occupation.is_some() && npc_group.authored_occupation().is_none() {
+                return Err(format!(
+                    "npc_groups[{index}] occupation must not be empty when provided"
+                ));
+            }
+            if npc_group.faction.is_some() && npc_group.authored_faction().is_none() {
+                return Err(format!(
+                    "npc_groups[{index}] faction must not be empty when provided"
+                ));
+            }
         }
 
         for (index, blocker) in self.blockers.iter().enumerate() {
@@ -226,6 +236,10 @@ pub struct MapNpcGroup {
     pub preset: MapBehaviorPreset,
     #[serde(default)]
     pub route: Vec<[f32; 2]>,
+    #[serde(default)]
+    pub occupation: Option<String>,
+    #[serde(default)]
+    pub faction: Option<String>,
 }
 
 impl MapNpcGroup {
@@ -235,6 +249,20 @@ impl MapNpcGroup {
 
     pub fn zone_half_extents_vec2(&self) -> Vec2 {
         Vec2::new(self.zone_half_extents[0], self.zone_half_extents[1])
+    }
+
+    pub fn authored_occupation(&self) -> Option<&str> {
+        self.occupation
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn authored_faction(&self) -> Option<&str> {
+        self.faction
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
     }
 }
 
@@ -468,5 +496,22 @@ mod tests {
             direct.resolved_scene_path().as_deref(),
             Some("buildings/village/House_05.glb#Scene0")
         );
+    }
+
+    #[test]
+    fn npc_group_trims_authored_metadata() {
+        let group = MapNpcGroup {
+            archetype: NpcArchetype::Oilman,
+            count: 3,
+            zone_center: [0.0, 0.0],
+            zone_half_extents: [10.0, 10.0],
+            preset: MapBehaviorPreset::IdleWanderZone,
+            route: Vec::new(),
+            occupation: Some("  Mechanic  ".to_string()),
+            faction: Some("  Dock Union ".to_string()),
+        };
+
+        assert_eq!(group.authored_occupation(), Some("Mechanic"));
+        assert_eq!(group.authored_faction(), Some("Dock Union"));
     }
 }

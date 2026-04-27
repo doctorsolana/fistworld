@@ -60,6 +60,7 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
         (
             world::time::handle_set_time_of_day,
             world::time::update_world_time,
+            crate::city::buildings::sync_authored_plot_buildings,
             collision::building_index::sync_building_spatial_index,
             collision::streaming::update_static_collider_streaming,
         )
@@ -76,7 +77,6 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
             physics::static_world_colliders::sync_static_building_colliders,
             physics::dynamic_actors::ensure_player_physics_bodies,
             physics::dynamic_actors::ensure_npc_physics_bodies,
-            physics::dynamic_actors::ensure_vehicle_physics_bodies,
             physics::dynamic_actors::cleanup_npc_physics_when_ragdoll_activates,
             physics::dynamic_actors::sync_player_bodies_from_authoritative_state,
             physics::dynamic_actors::sync_npcs_from_physics_before_ai,
@@ -105,7 +105,13 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
 
     app.add_systems(
         FixedUpdate,
-        vehicle::interaction::handle_vehicle_interaction_requests
+        (
+            vehicle::interaction::handle_vehicle_interaction_requests,
+            vehicle::simulation::ensure_car_suspension_state,
+            vehicle::simulation::update_vehicles,
+            collision::resolve_vehicle::handle_vehicle_static_collisions,
+        )
+            .chain()
             .in_set(FixedServerSet::VehicleSim)
             .run_if(server_is_started),
     );
@@ -129,7 +135,6 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
     app.add_systems(
         FixedUpdate,
         (
-            physics::dynamic_actors::apply_vehicle_controls,
             physics::dynamic_actors::apply_player_controls,
             physics::dynamic_actors::apply_npc_controls_from_ai,
         )
@@ -145,8 +150,6 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
             physics::dynamic_actors::sync_players_from_physics,
             physics::contacts::update_player_grounding_from_queries,
             physics::dynamic_actors::sync_npcs_from_physics_after_writeback,
-            physics::contacts::update_vehicle_grounded_from_queries,
-            physics::dynamic_actors::sync_vehicles_from_physics,
             physics::dynamic_actors::sync_debug_boxes_from_physics,
             ai::ragdoll::stabilize_soft_ragdoll_bodies,
             ai::ragdoll::sync_npc_roots_from_ragdolls,

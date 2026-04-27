@@ -9,9 +9,9 @@ use crate::terrain::{LoadedChunks, PerfHitchStats};
 
 use super::foliage::needs_foliage_materials;
 use super::{
-    BuildZoneChunkIndex, EnvironmentProp, LoadedPropChunks, NeedsFoliageMaterials,
-    PendingPropVisibility, PropAssets, PropChunkIndex, PropKindTag, TreeActiveLod, TreeLodEntities,
-    TreeLodRoot, TreeLodRuntimeState,
+    try_spawn_simple_prop_mesh, BuildZoneChunkIndex, EnvironmentProp, LoadedPropChunks,
+    NeedsFoliageMaterials, PendingPropVisibility, PropAssets, PropChunkIndex, PropKindTag,
+    SimplePropMeshCache, TreeActiveLod, TreeLodEntities, TreeLodRoot, TreeLodRuntimeState,
 };
 
 /// When a new building is placed, invalidate prop chunks that overlap with its build zone.
@@ -104,6 +104,10 @@ pub(super) fn spawn_chunk_props(
     asset_server: Res<AssetServer>,
     terrain: Res<WorldTerrain>,
     prop_assets: Option<Res<PropAssets>>,
+    mut simple_mesh_cache: ResMut<SimplePropMeshCache>,
+    gltfs: Option<Res<Assets<bevy::gltf::Gltf>>>,
+    gltf_nodes: Option<Res<Assets<bevy::gltf::GltfNode>>>,
+    gltf_meshes: Option<Res<Assets<bevy::gltf::GltfMesh>>>,
     loaded_chunks: Res<LoadedChunks>,
     mut loaded_prop_chunks: ResMut<LoadedPropChunks>,
     mut prop_chunk_index: ResMut<PropChunkIndex>,
@@ -211,12 +215,24 @@ pub(super) fn spawn_chunk_props(
                         },
                     ));
                 } else {
-                    let scene = assets
-                        .scenes
-                        .get(&kind)
-                        .cloned()
-                        .unwrap_or_else(|| asset_server.load(spawn.scene_path.clone()));
-                    commands.entity(prop).insert(SceneRoot(scene));
+                    let spawned_simple = try_spawn_simple_prop_mesh(
+                        &mut commands,
+                        prop,
+                        kind,
+                        &assets,
+                        &mut simple_mesh_cache,
+                        gltfs.as_deref(),
+                        gltf_nodes.as_deref(),
+                        gltf_meshes.as_deref(),
+                    );
+                    if !spawned_simple {
+                        let scene = assets
+                            .scenes
+                            .get(&kind)
+                            .cloned()
+                            .unwrap_or_else(|| asset_server.load(spawn.scene_path.clone()));
+                        commands.entity(prop).insert(SceneRoot(scene));
+                    }
                 }
                 if needs_foliage_materials(kind) {
                     commands.entity(prop).insert(NeedsFoliageMaterials);

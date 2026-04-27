@@ -76,6 +76,7 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
     // Terrain generation and rendering
     app.add_plugins(terrain::TerrainPlugin);
     app.add_plugins(water::WaterPlugin);
+    app.add_plugins(city::CityPlugin);
     app.add_plugins(render::sniper_fisheye::SniperFisheyePlugin);
 
     // Environmental props (rocks, trees, etc.)

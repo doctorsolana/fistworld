@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 
+use shared::city::AuthoredCityLayout;
 use shared::spatial::SpatialObstacleGrid;
 use shared::terrain::WorldTerrain;
 
@@ -19,6 +20,7 @@ pub(crate) fn setup_resources(app: &mut App) {
     let profile_storage_dir = std::path::PathBuf::from("server_data/players");
 
     app.init_resource::<WorldTerrain>();
+    app.init_resource::<AuthoredCityLayout>();
     app.init_resource::<net::input::ClientInputs>();
     app.init_resource::<net::input::ClientInputIngressStats>();
     app.init_resource::<player::index::PlayerEntityIndex>();

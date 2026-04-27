@@ -29,7 +29,7 @@ use shared::protocol::{tick_duration, ProtocolPlugin};
 use shared::weapons::WeaponDebugMode;
 
 use crate::{
-    audio, camera, chest, crosshair, dialogue, input, pickup, props, render,
+    audio, camera, chest, city, crosshair, dialogue, input, pickup, props, render,
     render::systems as game_systems, states::GameState, terrain, ui, water, weapon_view, weapons,
 };
 use game_systems::{GraphicsSettings, LAUNCHER_RESOLUTION};

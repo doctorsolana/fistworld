@@ -1,7 +1,7 @@
 //! Static world colliders (props + buildings) in Rapier.
 
 use bevy::prelude::*;
-use bevy_rapier3d::prelude::{Collider, CollisionGroups, RigidBody};
+use bevy_rapier3d::prelude::{Collider, RigidBody};
 use std::collections::{HashMap, HashSet};
 
 use shared::building::{BuildingPosition, PlacedBuilding};
@@ -88,7 +88,7 @@ pub fn sync_static_prop_colliders(
                 },
                 RigidBody::Fixed,
                 collider,
-                CollisionGroups::new(layers::GROUP_STATIC_WORLD, layers::dynamic_actor_mask()),
+                layers::static_world_groups(),
                 transform,
                 GlobalTransform::from(transform),
             ))
@@ -144,7 +144,7 @@ pub fn sync_static_building_colliders(
                 StaticBuildingCollider { building_entity },
                 RigidBody::Fixed,
                 Collider::cuboid(half_extents.x, half_extents.y, half_extents.z),
-                CollisionGroups::new(layers::GROUP_STATIC_WORLD, layers::dynamic_actor_mask()),
+                layers::static_world_groups(),
                 transform,
                 GlobalTransform::from(transform),
             ))

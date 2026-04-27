@@ -1,6 +1,7 @@
 //! Shared prop domain components, resources, and collider metadata types.
 
 use bevy::asset::AssetId;
+use bevy::gltf::Gltf;
 use bevy::prelude::*;
 use shared::building::BuildZoneEntry;
 use shared::props::PropKind;
@@ -94,6 +95,7 @@ impl Default for BuildZoneChunkIndex {
 #[derive(Resource)]
 pub struct PropAssets {
     pub scenes: HashMap<PropKind, Handle<Scene>>,
+    pub gltfs: HashMap<PropKind, Handle<Gltf>>,
     pub tree_meshes: HashMap<PropKind, TreeMeshSet>,
 }
 

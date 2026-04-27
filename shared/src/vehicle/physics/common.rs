@@ -13,6 +13,19 @@ pub fn surface_mu(def: &VehicleDef, biome: Biome) -> f32 {
     }
 }
 
+pub(super) fn vehicle_body_rotation(heading: f32, pitch: f32, roll: f32) -> Quat {
+    Quat::from_euler(EulerRot::YXZ, heading, pitch, -roll)
+}
+
+pub(super) fn vehicle_body_axes(heading: f32, pitch: f32, roll: f32) -> (Vec3, Vec3, Vec3) {
+    let rotation = vehicle_body_rotation(heading, pitch, roll);
+    (
+        rotation * Vec3::NEG_Z,
+        rotation * Vec3::X,
+        rotation * Vec3::Y,
+    )
+}
+
 /// Get forward and right vectors from heading.
 pub(super) fn get_basis_vectors(heading: f32) -> (Vec3, Vec3) {
     let forward = Vec3::new(-heading.sin(), 0.0, -heading.cos());

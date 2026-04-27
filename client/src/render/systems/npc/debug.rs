@@ -14,9 +14,13 @@ fn ragdoll_parent(
         B::UpperArmL | B::UpperArmR => Some(B::SpineUpper),
         B::ForearmL => Some(B::UpperArmL),
         B::ForearmR => Some(B::UpperArmR),
+        B::HandL => Some(B::ForearmL),
+        B::HandR => Some(B::ForearmR),
         B::ThighL | B::ThighR => Some(B::Pelvis),
         B::CalfL => Some(B::ThighL),
         B::CalfR => Some(B::ThighR),
+        B::FootL => Some(B::CalfL),
+        B::FootR => Some(B::CalfR),
     }
 }
 

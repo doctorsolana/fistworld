@@ -8,15 +8,17 @@ use lightyear::prelude::server::{ClientOf, Started};
 use lightyear::prelude::*;
 use shared::components::{
     DebugPhysicsBox, DebugPhysicsBoxPosition, DebugPhysicsBoxRotation, Health, Npc, NpcActivity,
-    NpcActivityKind, NpcArchetype, NpcIdentity, NpcPosition, NpcRotation, NpcVelocity, Player,
-    PlayerPosition,
+    NpcActivityKind, NpcArchetype, NpcPosition, NpcRotation, NpcVelocity, Player, PlayerPosition,
 };
 use shared::map::MapBehaviorPreset;
-use shared::npc::{npc_max_health, npc_name_for_id};
+use shared::npc::npc_max_health;
 use shared::physics::ground_clearance_center;
 use shared::protocol::{SpawnOilmanDebug, SpawnPhysicsBoxDebug};
 use shared::terrain::{WorldTerrain, WORLD_SEED};
 
+use crate::ai::identity::{
+    npc_identity_for_archetype, npc_identity_for_debug, npc_identity_for_group,
+};
 use crate::ai::state::{NpcWander, XorShift64};
 use crate::physics::layers;
 use crate::player::index::PlayerEntityIndex;
@@ -134,15 +136,7 @@ pub fn spawn_npcs_once(
                     id: npc_id,
                     archetype: group.archetype,
                 },
-                NpcIdentity {
-                    name: npc_name_for_id(WORLD_SEED, npc_id),
-                    occupation: match group.preset {
-                        MapBehaviorPreset::IdleWanderZone => "Pedestrian".to_string(),
-                        MapBehaviorPreset::PatrolRoute => "Patrol".to_string(),
-                        MapBehaviorPreset::StandAndFaceFlow => "Vendor".to_string(),
-                    },
-                    faction: None,
-                },
+                npc_identity_for_group(WORLD_SEED, npc_id, group),
                 NpcPosition(pos),
                 NpcRotation(0.0),
                 NpcVelocity(Vec3::ZERO),
@@ -178,11 +172,7 @@ pub fn spawn_npcs_once(
                 id: npc_id,
                 archetype: NpcArchetype::Oilman,
             },
-            NpcIdentity {
-                name: npc_name_for_id(WORLD_SEED, npc_id),
-                occupation: "Pedestrian".to_string(),
-                faction: None,
-            },
+            npc_identity_for_archetype(WORLD_SEED, npc_id, NpcArchetype::Oilman),
             NpcPosition(pos),
             NpcRotation(0.0),
             NpcVelocity(Vec3::ZERO),
@@ -219,11 +209,7 @@ pub fn spawn_npcs_once(
                     id: npc_id,
                     archetype,
                 },
-                NpcIdentity {
-                    name: npc_name_for_id(WORLD_SEED, npc_id),
-                    occupation: "Pedestrian".to_string(),
-                    faction: None,
-                },
+                npc_identity_for_archetype(WORLD_SEED, npc_id, archetype),
                 NpcPosition(pos),
                 NpcRotation(0.0),
                 NpcVelocity(Vec3::ZERO),
@@ -301,11 +287,7 @@ pub fn handle_spawn_oilman_debug(
                         id: npc_id,
                         archetype: NpcArchetype::Oilman,
                     },
-                    NpcIdentity {
-                        name: npc_name_for_id(WORLD_SEED, npc_id),
-                        occupation: "Debug Spawn".to_string(),
-                        faction: None,
-                    },
+                    npc_identity_for_debug(WORLD_SEED, npc_id, NpcArchetype::Oilman),
                     NpcPosition(pos),
                     NpcRotation(0.0),
                     NpcVelocity(Vec3::ZERO),

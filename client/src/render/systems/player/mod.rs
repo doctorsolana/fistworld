@@ -33,7 +33,7 @@ use shared::components::{
 use shared::physics::{ground_clearance_center, GROUND_SNAP_DISTANCE};
 use shared::player::{JUMP_ANIM_MIN_SECS, PLAYER_HEIGHT};
 use shared::terrain::WorldTerrain;
-use shared::vehicle::{Vehicle, VehicleDriver};
+use shared::vehicle::{Vehicle, VehicleDriver, VehicleType};
 use std::collections::{HashMap, HashSet};
 
 use crate::input::{CameraMode, InputState};

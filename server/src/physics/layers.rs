@@ -28,13 +28,18 @@ pub fn dynamic_actor_mask() -> Group {
 }
 
 #[inline]
+pub fn world_query_mask() -> Group {
+    dynamic_actor_mask() | GROUP_BULLET_QUERY
+}
+
+#[inline]
 pub fn terrain_groups() -> CollisionGroups {
-    CollisionGroups::new(GROUP_TERRAIN, dynamic_actor_mask())
+    CollisionGroups::new(GROUP_TERRAIN, world_query_mask())
 }
 
 #[inline]
 pub fn static_world_groups() -> CollisionGroups {
-    CollisionGroups::new(GROUP_STATIC_WORLD, dynamic_actor_mask())
+    CollisionGroups::new(GROUP_STATIC_WORLD, world_query_mask())
 }
 
 #[inline]
@@ -48,6 +53,11 @@ pub fn player_groups() -> CollisionGroups {
             | GROUP_RAGDOLL
             | GROUP_DEBUG_BOX,
     )
+}
+
+#[inline]
+pub fn player_seated_groups() -> CollisionGroups {
+    CollisionGroups::new(GROUP_PLAYER, Group::NONE)
 }
 
 #[inline]
@@ -88,7 +98,8 @@ pub fn ragdoll_groups() -> CollisionGroups {
             | GROUP_NPC
             | GROUP_VEHICLE
             | GROUP_RAGDOLL
-            | GROUP_DEBUG_BOX,
+            | GROUP_DEBUG_BOX
+            | GROUP_BULLET_QUERY,
     )
 }
 
@@ -101,7 +112,8 @@ pub fn ragdoll_no_self_groups() -> CollisionGroups {
             | GROUP_PLAYER
             | GROUP_NPC
             | GROUP_VEHICLE
-            | GROUP_DEBUG_BOX,
+            | GROUP_DEBUG_BOX
+            | GROUP_BULLET_QUERY,
     )
 }
 
@@ -115,7 +127,8 @@ pub fn debug_box_groups() -> CollisionGroups {
             | GROUP_NPC
             | GROUP_VEHICLE
             | GROUP_RAGDOLL
-            | GROUP_DEBUG_BOX,
+            | GROUP_DEBUG_BOX
+            | GROUP_BULLET_QUERY,
     )
 }
 

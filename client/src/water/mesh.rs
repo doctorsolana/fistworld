@@ -47,6 +47,7 @@ fn add_triangle(
 }
 
 pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Option<Mesh> {
+    let water_level = terrain.water_level()?;
     let origin = coord.world_pos();
     let origin_x = origin.x;
     let origin_z = origin.z;
@@ -55,11 +56,11 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
     let mut uvs = Vec::new();
     let mut colors = Vec::new();
     let mut indices = Vec::new();
-    let waterline = SEA_LEVEL + WATER_SHORE_OVERLAP;
-    let water_y = SEA_LEVEL + WATER_SURFACE_OFFSET;
+    let waterline = water_level + WATER_SHORE_OVERLAP;
+    let water_y = water_level + WATER_SURFACE_OFFSET;
 
     let depth_norm =
-        |height: f32| ((SEA_LEVEL - height).max(0.0) / WATER_DEPTH_MAX).clamp(0.0, 1.0);
+        |height: f32| ((water_level - height).max(0.0) / WATER_DEPTH_MAX).clamp(0.0, 1.0);
 
     let make_vertex = |local_x: f32, local_z: f32, depth: f32| {
         let world_x = origin_x + local_x;

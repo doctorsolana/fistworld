@@ -1,19 +1,22 @@
 use std::collections::HashSet;
 
 use bevy::asset::RenderAssetUsages;
+use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::math::primitives::{Cuboid, Cylinder};
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 
 use shared::map::{
-    load_map, map_definition_path, save_map_definition_atomic, save_map_edits_atomic,
-    MapObjectSpawn, SpawnMarkerKind, DEFAULT_MAP_ID,
+    load_map, load_map_from_parts, map_definition_path, save_map_definition_atomic,
+    save_map_edits_atomic, MapObjectSpawn, SpawnMarkerKind, DEFAULT_MAP_ID,
 };
 use shared::terrain::{
     ChunkCoord, ChunkMeshData, WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, VERTEX_SPACING,
 };
 
+use crate::city::CityEditorState;
+use crate::lighting::{EditorFillLight, EditorSunLight};
 use crate::session::{
     CursorTerrainHit, EditorCursorVisual, EditorEnvironmentState, EditorPropPreviewVisual,
     EditorPropVisual, EditorSession, EditorSnapshot, EditorSpawnVisual, EditorUiState,
@@ -29,6 +32,7 @@ pub struct VisualRefreshFlags {
     pub water_chunks: HashSet<ChunkCoord>,
     pub props: bool,
     pub markers: bool,
+    pub city_layout: bool,
 }
 
 pub fn setup_editor_scene(
@@ -69,23 +73,43 @@ pub fn setup_editor_scene(
     );
     *env_state = EditorEnvironmentState::from_map(&loaded_map.definition);
 
+    commands.insert_resource(DirectionalLightShadowMap { size: 2048 });
     commands.insert_resource(GlobalAmbientLight {
-        color: Color::WHITE,
-        brightness: 900.0,
+        color: Color::srgb(0.62, 0.72, 0.82),
+        brightness: 16.0,
         ..default()
     });
     commands.spawn((
         Name::new("EditorSun"),
+        EditorSunLight,
         DirectionalLight {
-            illuminance: 38_000.0,
+            illuminance: 24_000.0,
             shadows_enabled: true,
             ..default()
         },
+        CascadeShadowConfigBuilder {
+            num_cascades: 4,
+            maximum_distance: 360.0,
+            first_cascade_far_bound: 16.0,
+            ..default()
+        }
+        .build(),
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.1, 0.8, 0.0)),
+    ));
+    commands.spawn((
+        Name::new("EditorFill"),
+        EditorFillLight,
+        DirectionalLight {
+            illuminance: 900.0,
+            shadows_enabled: false,
+            color: Color::srgb(0.80, 0.87, 0.96),
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.6, -0.9, 0.0)),
     ));
 
     let terrain_material = materials.add(StandardMaterial {
-        base_color: Color::WHITE,
+        base_color: Color::srgb(0.82, 0.94, 0.80),
         perceptual_roughness: 1.0,
         metallic: 0.0,
         ..default()
@@ -163,6 +187,8 @@ pub fn handle_editor_shortcuts(
     mut actions: ResMut<UiActionRequests>,
     mut session: ResMut<EditorSession>,
     mut world: ResMut<WorldTerrain>,
+    mut env_state: ResMut<EditorEnvironmentState>,
+    mut city_state: ResMut<CityEditorState>,
     mut flags: ResMut<VisualRefreshFlags>,
     mut ui_state: ResMut<EditorUiState>,
 ) {
@@ -196,7 +222,13 @@ pub fn handle_editor_shortcuts(
         if let Some(snapshot) = session.undo.pop() {
             let current = session.capture_snapshot(&world);
             session.redo.push(current);
-            match apply_snapshot(snapshot, &mut session, &mut world, &mut flags) {
+            match apply_snapshot(
+                snapshot,
+                &mut session,
+                &mut world,
+                &mut env_state,
+                &mut flags,
+            ) {
                 Ok(()) => {
                     ui_state.status = "Undo".to_string();
                 }
@@ -212,7 +244,13 @@ pub fn handle_editor_shortcuts(
         if let Some(snapshot) = session.redo.pop() {
             let current = session.capture_snapshot(&world);
             session.undo.push(current);
-            match apply_snapshot(snapshot, &mut session, &mut world, &mut flags) {
+            match apply_snapshot(
+                snapshot,
+                &mut session,
+                &mut world,
+                &mut env_state,
+                &mut flags,
+            ) {
                 Ok(()) => {
                     ui_state.status = "Redo".to_string();
                 }
@@ -223,6 +261,68 @@ pub fn handle_editor_shortcuts(
         }
         actions.redo = false;
     }
+
+    if actions.reset_map_to_blank {
+        session.push_undo_snapshot(&world);
+        match reset_map_to_blank(
+            &mut session,
+            &mut world,
+            &mut env_state,
+            &mut city_state,
+            &mut flags,
+        ) {
+            Ok(()) => {
+                ui_state.status = "Reset map to blank flat state".to_string();
+            }
+            Err(err) => {
+                ui_state.status = format!("Reset failed: {err}");
+            }
+        }
+        actions.reset_map_to_blank = false;
+    }
+}
+
+fn reset_map_to_blank(
+    session: &mut EditorSession,
+    world: &mut WorldTerrain,
+    env_state: &mut EditorEnvironmentState,
+    city_state: &mut CityEditorState,
+    flags: &mut VisualRefreshFlags,
+) -> Result<(), String> {
+    session.map_definition.terrain.height_min = 0.0;
+    session.map_definition.terrain.height_max = 0.0;
+    session.map_definition.terrain.water_level = None;
+    session.map_definition.player_spawn = None;
+    session.map_definition.objects.clear();
+    session.map_definition.npc_groups.clear();
+    session.map_definition.blockers.clear();
+
+    session.map_edits.terrain_deltas.clear();
+    session.map_edits.spawn_markers.clear();
+    session.map_edits.roads.clear();
+    session.map_edits.plots.clear();
+    session.refresh_next_ids();
+
+    env_state.show_water = false;
+    env_state.water_level = 0.0;
+    city_state.draft_road_points.clear();
+
+    let loaded_map = load_map_from_parts(
+        &session.map_dir,
+        &session.map_definition,
+        &session.map_edits,
+    )?;
+    world.reload_from_loaded_map(loaded_map);
+
+    session.mark_map_dirty();
+    session.mark_edits_dirty();
+
+    flags.terrain_all = true;
+    flags.water_all = true;
+    flags.props = true;
+    flags.markers = true;
+    flags.city_layout = true;
+    Ok(())
 }
 
 pub fn handle_tool_input(
@@ -390,6 +490,7 @@ pub fn handle_tool_input(
             session.mark_edits_dirty();
             flags.markers = true;
         }
+        ToolMode::Road | ToolMode::Plot => {}
     }
 }
 
@@ -508,6 +609,7 @@ pub fn refresh_cursor_indicator(
     let radius = match ui_state.tool {
         ToolMode::Terrain | ToolMode::EraseProp => ui_state.brush_radius.max(0.5),
         ToolMode::PlaceSpawnMarker => ui_state.spawn_marker_radius.max(0.5),
+        ToolMode::Plot => ui_state.plot.half_extents.max_element().max(0.5),
         _ => 1.0,
     };
 
@@ -583,18 +685,27 @@ fn apply_snapshot(
     snapshot: EditorSnapshot,
     session: &mut EditorSession,
     world: &mut WorldTerrain,
+    env_state: &mut EditorEnvironmentState,
     flags: &mut VisualRefreshFlags,
 ) -> Result<(), String> {
-    let deltas = snapshot.map_edits.terrain_deltas_by_chunk()?;
+    let loaded_map = load_map_from_parts(
+        &session.map_dir,
+        &snapshot.map_definition,
+        &snapshot.map_edits,
+    )?;
     session.map_definition = snapshot.map_definition;
     session.map_edits = snapshot.map_edits;
-    world.replace_delta_chunks(deltas);
+    session.refresh_next_ids();
+    world.reload_from_loaded_map(loaded_map);
+    env_state.show_water = session.map_definition.terrain.water_level.is_some();
+    env_state.water_level = session.map_definition.terrain.water_level.unwrap_or(0.0);
     session.mark_map_dirty();
     session.mark_edits_dirty();
     flags.terrain_all = true;
     flags.water_all = true;
     flags.props = true;
     flags.markers = true;
+    flags.city_layout = true;
     Ok(())
 }
 

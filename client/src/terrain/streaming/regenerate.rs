@@ -197,7 +197,11 @@ pub(crate) fn process_chunk_tasks(
                 normal_array: render_assets.normal_array.clone(),
                 layer_tiling: render_assets.layer_tiling,
                 debug_mode: debug_settings.mode,
-                normal_strength: 1.0,
+                normal_strength: desired_terrain_normal_strength(
+                    result.coord,
+                    player_chunk,
+                    view_distance,
+                ),
             },
         });
 

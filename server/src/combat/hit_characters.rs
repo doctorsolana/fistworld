@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::ExternalImpulse;
+use bevy_rapier3d::prelude::ReadRapierContext;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
@@ -16,6 +17,7 @@ use shared::player::{PLAYER_HEIGHT, PLAYER_RADIUS};
 use shared::protocol::{
     BulletImpact, BulletImpactSurface, DamageReceived, HitConfirm, PlayerKilled, ReliableChannel,
 };
+use shared::terrain::WorldTerrain;
 use shared::weapons::damage;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -24,14 +26,19 @@ use crate::ai::ragdoll::{CorpseCollisionIndex, NpcDeathImpact};
 use crate::combat::bullet_sim::BulletPendingDespawn;
 use crate::combat::geometry::{
     ray_capsule_intersection, ray_obb_intersection, ray_sphere_intersection,
+    segment_terrain_intersection,
 };
 use crate::combat::target_index::HittableSpatialIndex;
 use crate::net::peer::peer_id_to_u64;
+use crate::physics::queries;
+use crate::physics::static_world_colliders::{StaticBuildingCollider, StaticPropCollider};
 
 /// Detect bullet hits against players and NPCs.
 pub fn handle_bullet_character_hits(
     mut commands: Commands,
     time: Res<Time>,
+    terrain: Res<WorldTerrain>,
+    rapier: ReadRapierContext,
     hittable_index: Res<HittableSpatialIndex>,
     corpse_index: Res<CorpseCollisionIndex>,
     mut perf_monitor: Option<ResMut<crate::telemetry::perf::ServerPerfMonitor>>,
@@ -54,6 +61,8 @@ pub fn handle_bullet_character_hits(
         Query<(Entity, &Npc, &NpcPosition, &mut Health), (With<Npc>, Without<Player>)>,
     )>,
     mut corpse_body_impulses: Query<&mut ExternalImpulse, Without<DebugPhysicsBox>>,
+    prop_hits: Query<(), With<StaticPropCollider>>,
+    building_hits: Query<(), With<StaticBuildingCollider>>,
     debug_boxes: Query<(
         Entity,
         &DebugPhysicsBoxPosition,
@@ -73,6 +82,7 @@ pub fn handle_bullet_character_hits(
     >,
 ) {
     let phase_start = Instant::now();
+    let rapier_context = rapier.single().ok();
     #[derive(Clone, Copy, Debug)]
     enum Victim {
         Player(PeerId),
@@ -149,6 +159,30 @@ pub fn handle_bullet_character_hits(
             }
 
             let ray_dir_norm = ray_dir / ray_length;
+            let mut max_hit_distance = ray_length;
+
+            if let Some((terrain_distance, _, _)) =
+                segment_terrain_intersection(&terrain, ray_start, ray_end)
+            {
+                max_hit_distance = max_hit_distance.min(terrain_distance);
+            }
+
+            if let Some(context) = rapier_context.as_ref() {
+                if let Some((hit_entity, hit)) =
+                    queries::cast_world_impact(context, ray_start, ray_dir_norm, ray_length)
+                {
+                    if prop_hits.get(hit_entity).is_ok()
+                        || building_hits.get(hit_entity).is_ok()
+                        || debug_boxes.get(hit_entity).is_ok()
+                    {
+                        max_hit_distance = max_hit_distance.min(hit.time_of_impact);
+                    }
+                }
+            }
+
+            if max_hit_distance < 0.001 {
+                continue;
+            }
 
             let mut hit_recorded = false;
 
@@ -172,7 +206,7 @@ pub fn handle_bullet_character_hits(
                 if let Some(hit_point) = ray_sphere_intersection(
                     ray_start,
                     ray_dir_norm,
-                    ray_length,
+                    max_hit_distance,
                     head_center,
                     NPC_HEAD_RADIUS,
                 ) {
@@ -200,9 +234,14 @@ pub fn handle_bullet_character_hits(
                 }
 
                 let (a, b) = npc_capsule_endpoints(npc_pos.0);
-                if let Some(hit_point) =
-                    ray_capsule_intersection(ray_start, ray_dir_norm, ray_length, a, b, NPC_RADIUS)
-                {
+                if let Some(hit_point) = ray_capsule_intersection(
+                    ray_start,
+                    ray_dir_norm,
+                    max_hit_distance,
+                    a,
+                    b,
+                    NPC_RADIUS,
+                ) {
                     let bottom_y = npc_pos.0.y - NPC_HEIGHT * 0.5;
                     let relative_height = (hit_point.y - bottom_y) / NPC_HEIGHT;
                     let hit_zone = damage::HitZone::from_relative_height(relative_height);
@@ -270,7 +309,7 @@ pub fn handle_bullet_character_hits(
                 if let Some(hit_point) = ray_capsule_intersection(
                     ray_start,
                     ray_dir_norm,
-                    ray_length,
+                    max_hit_distance,
                     capsule_bottom,
                     capsule_top,
                     PLAYER_RADIUS,
@@ -318,7 +357,7 @@ pub fn handle_bullet_character_hits(
                 if let Some((hit_point, hit_normal)) = ray_obb_intersection(
                     ray_start,
                     ray_dir_norm,
-                    ray_length,
+                    max_hit_distance,
                     box_pos.0,
                     box_rot.0,
                     box_data.half_extents,
@@ -370,7 +409,7 @@ pub fn handle_bullet_character_hits(
                 if let Some(hit_point) = ray_sphere_intersection(
                     ray_start,
                     ray_dir_norm,
-                    ray_length,
+                    max_hit_distance,
                     corpse_point.position,
                     corpse_point.radius,
                 ) {

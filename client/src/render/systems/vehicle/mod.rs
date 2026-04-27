@@ -6,12 +6,14 @@ pub mod angles;
 pub mod assets;
 pub mod hover;
 pub mod spawn;
+pub mod steam_car;
 pub mod sync;
 pub mod visibility;
 
 pub use assets::setup_vehicle_visual_assets;
 pub use hover::update_vehicle_hover;
 pub use spawn::handle_vehicle_spawned;
+pub use steam_car::{setup_steam_car_visual_rigs, update_steam_car_visuals};
 pub use sync::sync_vehicle_transforms;
 pub use visibility::{apply_vehicle_shadow_state_to_new_meshes, update_vehicle_shadow_culling};
 
@@ -88,17 +90,45 @@ impl Default for VehicleRenderSmoothing {
     }
 }
 
-/// Shared meshes/materials for the procedural car visual.
+/// Shared scene handles for vehicle visuals.
 #[derive(Resource)]
-pub struct CarVisualAssets {
-    pub body_mesh: Handle<Mesh>,
-    pub front_mesh: Handle<Mesh>,
-    pub rear_mesh: Handle<Mesh>,
-    pub wheel_mesh: Handle<Mesh>,
-    pub body_material: Handle<StandardMaterial>,
-    pub front_material: Handle<StandardMaterial>,
-    pub rear_material: Handle<StandardMaterial>,
-    pub wheel_material: Handle<StandardMaterial>,
+pub struct VehicleVisualAssets {
+    pub hoverbike_scene: Handle<Scene>,
+    pub steam_car_scene: Handle<Scene>,
+}
+
+#[derive(Component)]
+pub struct SteamCarSceneRoot;
+
+#[derive(Component)]
+pub struct NeedsSteamCarRigSetup;
+
+#[derive(Clone)]
+pub struct SteamCarNodeRef {
+    pub entity: Entity,
+    pub base: Transform,
+}
+
+#[derive(Clone)]
+pub struct SteamCarWheelRef {
+    pub mesh: SteamCarNodeRef,
+    pub pivot_local: Vec3,
+    pub spin_radius: f32,
+}
+
+#[derive(Component, Clone)]
+pub struct SteamCarVisualRig {
+    pub scene_root: SteamCarNodeRef,
+    pub ride_height_offset: f32,
+    pub front_axle: SteamCarNodeRef,
+    pub steering_wheel: Option<SteamCarNodeRef>,
+    pub front_left_wheel: SteamCarWheelRef,
+    pub front_right_wheel: SteamCarWheelRef,
+    pub rear_left_wheel: SteamCarWheelRef,
+    pub rear_right_wheel: SteamCarWheelRef,
+    pub wheel_spin_radius: f32,
+    pub wheel_spin: f32,
+    pub steer_angle: f32,
 }
 
 // =============================================================================
@@ -106,10 +136,12 @@ pub struct CarVisualAssets {
 // =============================================================================
 
 const HOVERBIKE_SCENE: &str = "game_assets/vehicles/hoverbike.glb#Scene0";
+const STEAM_CAR_SCENE: &str = "game_assets/vehicles/Veh_Steam_Car_01.glb#Scene0";
 const HOVERBIKE_VISUAL_Y_OFFSET: f32 = 0.01;
 const HOVERBIKE_HOVER_AMPLITUDE: f32 = 0.05;
 const HOVERBIKE_HOVER_FREQUENCY: f32 = 1.6;
 const HOVERBIKE_YAW_OFFSET: f32 = std::f32::consts::PI;
+const STEAM_CAR_YAW_OFFSET: f32 = std::f32::consts::PI;
 const VEHICLE_SHADOW_RANGE: f32 = 180.0;
 const VEHICLE_SHADOW_RANGE_SQ: f32 = VEHICLE_SHADOW_RANGE * VEHICLE_SHADOW_RANGE;
 

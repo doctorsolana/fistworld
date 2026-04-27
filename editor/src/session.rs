@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 
+use crate::city::{PlotToolSettings, RoadToolSettings};
 use shared::map::{MapDefinition, MapEditsDefinition, MapSpawnMarker, SpawnMarkerKind};
 use shared::props::{PropKind, ALL_PROP_KINDS};
 use shared::terrain::{ChunkCoord, WorldTerrain};
@@ -12,6 +13,8 @@ pub enum ToolMode {
     Terrain,
     PlaceProp,
     EraseProp,
+    Road,
+    Plot,
     SetPlayerSpawn,
     PlaceSpawnMarker,
 }
@@ -35,8 +38,11 @@ pub struct EditorUiState {
     pub spawn_marker_radius: f32,
     pub prop_scale: f32,
     pub prop_rotation_degrees: f32,
+    pub road: RoadToolSettings,
+    pub plot: PlotToolSettings,
     pub prop_search: String,
     pub selected_custom_scene: Option<String>,
+    pub show_reset_map_confirm: bool,
     pub pointer_over_ui: bool,
     pub status: String,
 }
@@ -54,8 +60,11 @@ impl Default for EditorUiState {
             spawn_marker_radius: 4.0,
             prop_scale: 1.0,
             prop_rotation_degrees: 0.0,
+            road: RoadToolSettings::default(),
+            plot: PlotToolSettings::default(),
             prop_search: String::new(),
             selected_custom_scene: None,
+            show_reset_map_confirm: false,
             pointer_over_ui: false,
             status: "Ready".to_string(),
         }
@@ -110,6 +119,8 @@ pub struct EditorSession {
     pub undo: Vec<EditorSnapshot>,
     pub redo: Vec<EditorSnapshot>,
     pub next_spawn_marker_id: u64,
+    pub next_road_id: u64,
+    pub next_plot_id: u64,
 }
 
 impl EditorSession {
@@ -120,15 +131,7 @@ impl EditorSession {
         map_definition: MapDefinition,
         map_edits: MapEditsDefinition,
     ) -> Self {
-        let next_spawn_marker_id = map_edits
-            .spawn_markers
-            .iter()
-            .map(|marker| marker.id)
-            .max()
-            .unwrap_or(0)
-            .saturating_add(1);
-
-        Self {
+        let mut session = Self {
             map_id,
             map_dir,
             map_path,
@@ -138,8 +141,12 @@ impl EditorSession {
             dirty_edits: false,
             undo: Vec::new(),
             redo: Vec::new(),
-            next_spawn_marker_id,
-        }
+            next_spawn_marker_id: 1,
+            next_road_id: 1,
+            next_plot_id: 1,
+        };
+        session.refresh_next_ids();
+        session
     }
 
     pub fn mark_map_dirty(&mut self) {
@@ -164,6 +171,13 @@ impl EditorSession {
         self.redo.clear();
     }
 
+    pub fn refresh_next_ids(&mut self) {
+        self.next_spawn_marker_id =
+            next_id_after(self.map_edits.spawn_markers.iter().map(|marker| marker.id));
+        self.next_road_id = next_id_after(self.map_edits.roads.iter().map(|road| road.id));
+        self.next_plot_id = next_id_after(self.map_edits.plots.iter().map(|plot| plot.id));
+    }
+
     pub fn next_spawn_marker(
         &mut self,
         kind: SpawnMarkerKind,
@@ -179,6 +193,18 @@ impl EditorSession {
         self.next_spawn_marker_id = self.next_spawn_marker_id.saturating_add(1);
         marker
     }
+
+    pub fn allocate_road_id(&mut self) -> u64 {
+        let id = self.next_road_id;
+        self.next_road_id = self.next_road_id.saturating_add(1);
+        id
+    }
+
+    pub fn allocate_plot_id(&mut self) -> u64 {
+        let id = self.next_plot_id;
+        self.next_plot_id = self.next_plot_id.saturating_add(1);
+        id
+    }
 }
 
 #[derive(Resource, Default)]
@@ -189,6 +215,11 @@ pub struct UiActionRequests {
     pub save: bool,
     pub undo: bool,
     pub redo: bool,
+    pub reset_map_to_blank: bool,
+    pub finish_road_draft: bool,
+    pub clear_road_draft: bool,
+    pub delete_nearest_road: bool,
+    pub delete_nearest_plot: bool,
 }
 
 #[derive(Resource, Default)]
@@ -211,6 +242,10 @@ pub struct TerrainChunkEntry {
 pub struct WaterChunkRegistry {
     pub chunks: HashMap<ChunkCoord, EditorWaterChunk>,
     pub material: Option<Handle<StandardMaterial>>,
+}
+
+fn next_id_after(ids: impl Iterator<Item = u64>) -> u64 {
+    ids.max().unwrap_or(0).saturating_add(1)
 }
 
 #[derive(Debug, Clone)]

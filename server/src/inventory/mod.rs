@@ -14,4 +14,3 @@ pub mod chest;
 pub mod death_drop;
 pub mod ground_items;
 pub mod hotbar;
-pub mod test_spawns;

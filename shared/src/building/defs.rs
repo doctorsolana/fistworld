@@ -12,6 +12,15 @@ pub enum BuildingType {
     House05,
     House06,
     House07,
+    Multistory01,
+    Multistory02,
+    Multistory03,
+    Multistory04,
+    Multistory05,
+    Multistory06,
+    Multistory07,
+    Multistory08,
+    Multistory09,
 }
 
 /// All building types with GLTF models (for collider baking).
@@ -21,17 +30,20 @@ pub const ALL_BUILDING_TYPES: &[BuildingType] = &[
     BuildingType::House05,
     BuildingType::House06,
     BuildingType::House07,
+    BuildingType::Multistory01,
+    BuildingType::Multistory02,
+    BuildingType::Multistory03,
+    BuildingType::Multistory04,
+    BuildingType::Multistory05,
+    BuildingType::Multistory06,
+    BuildingType::Multistory07,
+    BuildingType::Multistory08,
+    BuildingType::Multistory09,
 ];
 
 impl BuildingType {
     pub fn all() -> &'static [BuildingType] {
-        &[
-            BuildingType::Windmill,
-            BuildingType::Church,
-            BuildingType::House05,
-            BuildingType::House06,
-            BuildingType::House07,
-        ]
+        ALL_BUILDING_TYPES
     }
 
     /// Stable string id used by the collider bake manifest / database.
@@ -42,6 +54,15 @@ impl BuildingType {
             BuildingType::House05 => "building_house_05",
             BuildingType::House06 => "building_house_06",
             BuildingType::House07 => "building_house_07",
+            BuildingType::Multistory01 => "building_multistory_01",
+            BuildingType::Multistory02 => "building_multistory_02",
+            BuildingType::Multistory03 => "building_multistory_03",
+            BuildingType::Multistory04 => "building_multistory_04",
+            BuildingType::Multistory05 => "building_multistory_05",
+            BuildingType::Multistory06 => "building_multistory_06",
+            BuildingType::Multistory07 => "building_multistory_07",
+            BuildingType::Multistory08 => "building_multistory_08",
+            BuildingType::Multistory09 => "building_multistory_09",
         }
     }
 
@@ -55,6 +76,33 @@ impl BuildingType {
             BuildingType::House05 => Some("game_assets/buildings/village/House_05.glb#Scene0"),
             BuildingType::House06 => Some("game_assets/buildings/village/House_06.glb#Scene0"),
             BuildingType::House07 => Some("game_assets/buildings/village/House_07.glb#Scene0"),
+            BuildingType::Multistory01 => {
+                Some("game_assets/buildings/multistory/Multistory_01.glb#Scene0")
+            }
+            BuildingType::Multistory02 => {
+                Some("game_assets/buildings/multistory/Multistory_02.glb#Scene0")
+            }
+            BuildingType::Multistory03 => {
+                Some("game_assets/buildings/multistory/Multistory_03.glb#Scene0")
+            }
+            BuildingType::Multistory04 => {
+                Some("game_assets/buildings/multistory/Multistory_04.glb#Scene0")
+            }
+            BuildingType::Multistory05 => {
+                Some("game_assets/buildings/multistory/Multistory_05.glb#Scene0")
+            }
+            BuildingType::Multistory06 => {
+                Some("game_assets/buildings/multistory/Multistory_06.glb#Scene0")
+            }
+            BuildingType::Multistory07 => {
+                Some("game_assets/buildings/multistory/Multistory_07.glb#Scene0")
+            }
+            BuildingType::Multistory08 => {
+                Some("game_assets/buildings/multistory/Multistory_08.glb#Scene0")
+            }
+            BuildingType::Multistory09 => {
+                Some("game_assets/buildings/multistory/Multistory_09.glb#Scene0")
+            }
         }
     }
 
@@ -114,11 +162,56 @@ impl BuildingType {
                 color: Color::srgb(0.68, 0.62, 0.58),
                 model_path: Some("game_assets/buildings/village/House_07.glb#Scene0"),
             },
+            BuildingType::Multistory01 => {
+                multistory_def(*self, "Multistory 01", Vec2::new(7.1446, 6.2987), 12.3559)
+            }
+            BuildingType::Multistory02 => {
+                multistory_def(*self, "Multistory 02", Vec2::new(7.1446, 6.2987), 14.7378)
+            }
+            BuildingType::Multistory03 => {
+                multistory_def(*self, "Multistory 03", Vec2::new(14.0670, 6.2987), 14.0470)
+            }
+            BuildingType::Multistory04 => {
+                multistory_def(*self, "Multistory 04", Vec2::new(14.0670, 6.2987), 14.3836)
+            }
+            BuildingType::Multistory05 => {
+                multistory_def(*self, "Multistory 05", Vec2::new(7.1446, 6.2987), 12.3559)
+            }
+            BuildingType::Multistory06 => {
+                multistory_def(*self, "Multistory 06", Vec2::new(7.1446, 6.2987), 14.7378)
+            }
+            BuildingType::Multistory07 => {
+                multistory_def(*self, "Multistory 07", Vec2::new(14.0670, 6.2987), 14.0470)
+            }
+            BuildingType::Multistory08 => {
+                multistory_def(*self, "Multistory 08", Vec2::new(14.0670, 6.2987), 14.3836)
+            }
+            BuildingType::Multistory09 => {
+                multistory_def(*self, "Multistory 09", Vec2::new(7.1446, 6.3741), 10.4102)
+            }
         }
     }
 
     pub fn display_name(&self) -> &'static str {
         self.definition().display_name
+    }
+}
+
+fn multistory_def(
+    building_type: BuildingType,
+    display_name: &'static str,
+    footprint: Vec2,
+    height: f32,
+) -> BuildingDef {
+    BuildingDef {
+        building_type,
+        display_name,
+        cost: &[],
+        footprint,
+        height,
+        flatten_radius: 1.5,
+        color: Color::srgb(0.58, 0.56, 0.53),
+        model_path: building_type.scene_path(),
     }
 }
 

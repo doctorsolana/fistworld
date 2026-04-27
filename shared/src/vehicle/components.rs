@@ -32,6 +32,7 @@ pub struct VehicleState {
 pub struct CarSuspensionState {
     pub compression: [f32; 4],
     pub last_compression: [f32; 4],
+    pub steer_angle: f32,
 }
 
 impl Default for CarSuspensionState {
@@ -39,6 +40,7 @@ impl Default for CarSuspensionState {
         Self {
             compression: [0.0; 4],
             last_compression: [0.0; 4],
+            steer_angle: 0.0,
         }
     }
 }

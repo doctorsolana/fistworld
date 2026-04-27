@@ -28,6 +28,7 @@ Assets live in `client/assets/` (models, audio, `colliders.bin`).
 
 Contributor workflow and architecture guardrails:
 - See `CONTRIBUTING.md`.
+- See `RAGDOLL_HANDOFF.md` for the Oilman ragdoll investigation summary and redesign direction.
 
 ## Module Rules
 
@@ -160,6 +161,8 @@ Editor save behavior:
 Current editor tools:
 - Terrain: raise / lower / flatten brush
 - Props: place / erase authored props
+- Roads: polyline road authoring with derived sidewalks
+- Plots: road-aligned house/shop/warehouse plot stamping
 - Spawns: set player spawn and add spawn markers
 
 Core editor controls:
@@ -167,6 +170,8 @@ Core editor controls:
 - `WASD`: move
 - `Q/E`: vertical move
 - `LMB`: apply selected tool
+- `RMB` / `Enter`: finish road draft
+- `Backspace` / `Esc`: remove last road point / clear draft
 - `Ctrl+S`: save
 - `Ctrl+Z` / `Ctrl+Y`: undo / redo
 

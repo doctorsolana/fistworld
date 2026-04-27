@@ -112,8 +112,10 @@ pub fn setup_systems(app: &mut App) {
             input::update_death_state,
             game_systems::apply_cursor_grab,
             game_systems::spawn_debug_physics_box_visuals,
+            game_systems::setup_steam_car_visual_rigs,
             (
                 game_systems::sync_vehicle_transforms,
+                game_systems::update_steam_car_visuals,
                 game_systems::sync_player_transforms,
                 game_systems::sync_npc_transforms,
                 game_systems::sync_debug_physics_box_transforms,

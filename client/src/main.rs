@@ -4,6 +4,7 @@ mod app_wiring;
 mod audio;
 mod camera;
 mod chest;
+mod city;
 mod crosshair;
 mod dialogue;
 mod input;

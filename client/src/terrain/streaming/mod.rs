@@ -46,6 +46,10 @@ pub struct TerrainStreamingState {
     pub desired_order: Vec<ChunkCoord>,
     /// Render distance in chunks (may be lower than load distance).
     pub render_distance: i32,
+    /// Last player chunk we applied terrain material LOD against.
+    pub material_lod_center: Option<ChunkCoord>,
+    /// Last normal-strength radius applied to loaded terrain materials.
+    pub material_lod_radius: i32,
 }
 
 impl Default for TerrainStreamingState {
@@ -54,6 +58,8 @@ impl Default for TerrainStreamingState {
             center: None,
             desired_order: Vec::new(),
             render_distance: -1,
+            material_lod_center: None,
+            material_lod_radius: -1,
         }
     }
 }
@@ -100,6 +106,27 @@ const EDGE_WEST: u8 = 1 << 0;
 const EDGE_EAST: u8 = 1 << 1;
 const EDGE_SOUTH: u8 = 1 << 2;
 const EDGE_NORTH: u8 = 1 << 3;
+
+pub(super) fn splat_normal_radius(render_distance: i32) -> i32 {
+    ((render_distance as f32) * SPLAT_NORMAL_RATIO)
+        .round()
+        .max(1.0) as i32
+}
+
+pub(super) fn desired_terrain_normal_strength(
+    coord: ChunkCoord,
+    player_chunk: ChunkCoord,
+    render_distance: i32,
+) -> f32 {
+    let radius = splat_normal_radius(render_distance);
+    let dx = (coord.x - player_chunk.x).abs();
+    let dz = (coord.z - player_chunk.z).abs();
+    if dx.max(dz) <= radius {
+        1.0
+    } else {
+        0.0
+    }
+}
 
 // =============================================================================
 // FAR TERRAIN (STATIC LOW-RES MESH)

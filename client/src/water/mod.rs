@@ -25,9 +25,7 @@ use bevy::shader::ShaderRef;
 use std::collections::HashMap;
 
 use shared::components::{LocalPlayer, PlayerWaterState};
-use shared::terrain::{
-    ChunkCoord, WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, SEA_LEVEL, VERTEX_SPACING,
-};
+use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, VERTEX_SPACING};
 
 use crate::render::systems::ClientWorldRoot;
 use crate::states::GameState;

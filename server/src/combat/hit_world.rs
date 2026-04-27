@@ -7,8 +7,10 @@ use lightyear::prelude::*;
 
 use shared::components::{Bullet, BulletPrevPosition, DebugPhysicsBox, Player, PlayerPosition};
 use shared::protocol::{BulletImpact, BulletImpactSurface, ReliableChannel};
+use shared::terrain::WorldTerrain;
 
 use crate::combat::bullet_sim::BulletPendingDespawn;
+use crate::combat::geometry::segment_terrain_intersection;
 use crate::physics::queries;
 use crate::physics::static_world_colliders::{StaticBuildingCollider, StaticPropCollider};
 use crate::physics::terrain_colliders::TerrainColliderChunk;
@@ -17,6 +19,7 @@ use crate::physics::terrain_colliders::TerrainColliderChunk;
 pub fn handle_bullet_world_hits(
     mut commands: Commands,
     time: Res<Time>,
+    terrain: Res<WorldTerrain>,
     rapier: ReadRapierContext,
     mut perf_monitor: Option<ResMut<crate::telemetry::perf::ServerPerfMonitor>>,
     bullets: Query<
@@ -34,9 +37,7 @@ pub fn handle_bullet_world_hits(
     >,
 ) {
     let phase_start = std::time::Instant::now();
-    let Ok(context) = rapier.single() else {
-        return;
-    };
+    let context = rapier.single().ok();
 
     let now = time.elapsed_secs();
     let despawn_delay = 0.05;
@@ -52,23 +53,46 @@ pub fn handle_bullet_world_hits(
             continue;
         }
         let dir = delta / length;
+        let mut best_hit: Option<(f32, Vec3, Vec3, BulletImpactSurface)> =
+            segment_terrain_intersection(&terrain, start, end).map(
+                |(distance, hit_point, hit_normal)| {
+                    (
+                        distance,
+                        hit_point,
+                        hit_normal,
+                        BulletImpactSurface::Terrain,
+                    )
+                },
+            );
 
-        let Some((hit_entity, hit)) = queries::cast_world_impact(&context, start, dir, length)
-        else {
+        if let Some((hit_entity, hit)) = context
+            .as_ref()
+            .and_then(|ctx| queries::cast_world_impact(ctx, start, dir, length))
+        {
+            let hit_distance = hit.time_of_impact;
+            let hit_point = start + dir * hit_distance;
+            let hit_normal =
+                Vec3::new(hit.normal.x, hit.normal.y, hit.normal.z).normalize_or_zero();
+
+            let surface =
+                if terrain_hits.get(hit_entity).is_ok() || prop_hits.get(hit_entity).is_ok() {
+                    BulletImpactSurface::Terrain
+                } else if building_hits.get(hit_entity).is_ok() {
+                    BulletImpactSurface::PracticeWall
+                } else if debug_box_hits.get(hit_entity).is_ok() {
+                    BulletImpactSurface::PracticeWall
+                } else {
+                    BulletImpactSurface::Terrain
+                };
+
+            match best_hit {
+                Some((best_distance, _, _, _)) if best_distance <= hit_distance => {}
+                _ => best_hit = Some((hit_distance, hit_point, hit_normal, surface)),
+            }
+        }
+
+        let Some((_distance, hit_point, hit_normal, surface)) = best_hit else {
             continue;
-        };
-
-        let hit_point = start + dir * hit.time_of_impact;
-        let hit_normal = Vec3::new(hit.normal.x, hit.normal.y, hit.normal.z).normalize_or_zero();
-
-        let surface = if terrain_hits.get(hit_entity).is_ok() || prop_hits.get(hit_entity).is_ok() {
-            BulletImpactSurface::Terrain
-        } else if building_hits.get(hit_entity).is_ok() {
-            BulletImpactSurface::PracticeWall
-        } else if debug_box_hits.get(hit_entity).is_ok() {
-            BulletImpactSurface::PracticeWall
-        } else {
-            BulletImpactSurface::Terrain
         };
 
         impacts.push(BulletImpact {

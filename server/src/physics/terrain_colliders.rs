@@ -1,7 +1,7 @@
 //! Authoritative terrain colliders (chunked heightfields).
 
 use bevy::prelude::*;
-use bevy_rapier3d::prelude::{Collider, CollisionGroups, RigidBody};
+use bevy_rapier3d::prelude::{Collider, RigidBody};
 use std::collections::{HashMap, HashSet};
 
 use shared::components::{Npc, NpcPosition, Player, PlayerPosition};
@@ -96,7 +96,7 @@ fn spawn_terrain_chunk_collider(
             TerrainColliderChunk { coord },
             RigidBody::Fixed,
             collider,
-            CollisionGroups::new(layers::GROUP_TERRAIN, layers::dynamic_actor_mask()),
+            layers::terrain_groups(),
             transform,
             GlobalTransform::from(transform),
         ))

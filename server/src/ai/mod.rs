@@ -11,6 +11,7 @@
 //! - Should avoid depending on app wiring or UI-level concerns.
 
 pub mod death_cleanup;
+pub mod identity;
 pub mod obstacles;
 pub mod pathfinding;
 pub mod ragdoll;

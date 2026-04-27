@@ -1,3 +1,4 @@
+use bevy::gltf::Gltf;
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -36,19 +37,21 @@ fn tree_mesh_labels(kind: shared::props::PropKind) -> Option<TreeMeshLabels> {
 /// Load all prop GLTF assets at startup.
 pub(super) fn load_prop_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut scenes = HashMap::new();
+    let mut gltfs = HashMap::new();
     let mut tree_meshes = HashMap::new();
     for kind in shared::props::ALL_PROP_KINDS.iter().copied() {
         scenes.insert(kind, asset_server.load(kind.scene_path()));
+        let base = kind
+            .scene_path()
+            .split('#')
+            .next()
+            .unwrap_or(kind.scene_path());
+        gltfs.insert(kind, asset_server.load::<Gltf>(base));
         if is_tree_kind(kind) {
             let Some(labels) = tree_mesh_labels(kind) else {
                 warn!("Missing tree mesh labels for kind {:?}", kind);
                 continue;
             };
-            let base = kind
-                .scene_path()
-                .split('#')
-                .next()
-                .unwrap_or(kind.scene_path());
             let mesh0 = asset_server.load(format!("{base}#{}", labels.lod0_label));
             let mesh1 = labels
                 .lod1_label
@@ -67,6 +70,7 @@ pub(super) fn load_prop_assets(mut commands: Commands, asset_server: Res<AssetSe
 
     commands.insert_resource(PropAssets {
         scenes,
+        gltfs,
         tree_meshes,
     });
 

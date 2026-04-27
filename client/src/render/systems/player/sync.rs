@@ -63,7 +63,10 @@ fn wrap_yaw_delta(delta: f32) -> f32 {
 /// Sync player transforms (visibility is handled by update_local_player_visibility)
 pub fn sync_player_transforms(
     time: Res<Time>,
-    vehicles: Query<(Entity, &VehicleDriver, &Transform), (With<Vehicle>, Without<Player>)>,
+    vehicles: Query<
+        (Entity, &Vehicle, &VehicleDriver, &Transform),
+        (With<Vehicle>, Without<Player>),
+    >,
     hover_bobs: Query<(&VehicleHoverBob, &ChildOf)>,
     mut players: Query<
         (
@@ -75,7 +78,7 @@ pub fn sync_player_transforms(
         ),
         Without<Vehicle>,
     >,
-    mut driver_to_vehicle: Local<HashMap<u64, (Entity, Vec3, Quat)>>,
+    mut driver_to_vehicle: Local<HashMap<u64, (Entity, VehicleType, Vec3, Quat)>>,
     mut vehicle_bobs: Local<HashMap<Entity, f32>>,
     mut local_net_debug: Local<LocalPlayerNetDebugWindow>,
 ) {
@@ -101,11 +104,16 @@ pub fn sync_player_transforms(
 
     // Map: driver_id -> vehicle transform (already smoothed in `sync_vehicle_transforms`)
     driver_to_vehicle.clear();
-    for (entity, driver, veh_transform) in vehicles.iter() {
+    for (entity, vehicle, driver, veh_transform) in vehicles.iter() {
         if let Some(driver_id) = driver.driver_id {
             driver_to_vehicle.insert(
                 driver_id,
-                (entity, veh_transform.translation, veh_transform.rotation),
+                (
+                    entity,
+                    vehicle.vehicle_type,
+                    veh_transform.translation,
+                    veh_transform.rotation,
+                ),
             );
         }
     }
@@ -123,15 +131,18 @@ pub fn sync_player_transforms(
     for (player, position, rotation, is_local, mut transform) in players.iter_mut() {
         // If this player is driving a vehicle, attach their visual to the vehicle to eliminate
         // relative jitter between player and bike at high speed.
-        if let Some((veh_entity, veh_pos, veh_rot)) =
+        if let Some((veh_entity, vehicle_type, veh_pos, veh_rot)) =
             driver_to_vehicle.get(&peer_id_to_u64(player.client_id))
         {
             let (bob, is_hover_bike) = match vehicle_bobs.get(veh_entity) {
                 Some(bob) => (*bob, true),
                 None => (0.0, false),
             };
-            let seat_height = if is_hover_bike { 0.55 + 0.35 } else { 0.55 };
-            let seat_forward = if is_hover_bike { 0.15 + 0.30 } else { 0.15 };
+            let (seat_height, seat_forward) = match vehicle_type {
+                VehicleType::Motorbike if is_hover_bike => (0.90, 0.45),
+                VehicleType::Motorbike => (0.65, 0.20),
+                VehicleType::Car => (0.92, 0.08),
+            };
 
             // Seat offset: slightly above and forward/back on the vehicle.
             let seat_local = Vec3::new(0.0, seat_height, seat_forward) + Vec3::Y * bob;

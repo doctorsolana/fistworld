@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::city::{MapPlot, MapRoad};
 use crate::terrain::{ChunkCoord, TerrainDeltaData, CHUNK_RESOLUTION};
 
-pub const MAP_EDITS_VERSION: u32 = 1;
+pub const MAP_EDITS_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MapEditsDefinition {
@@ -49,18 +50,13 @@ impl MapEditsDefinition {
         }
 
         for (index, road) in self.roads.iter().enumerate() {
-            if road.points.len() < 2 {
-                return Err(format!("roads[{index}] requires at least 2 points"));
-            }
-            if road.width <= 0.0 {
-                return Err(format!("roads[{index}] width must be > 0"));
-            }
+            road.validate()
+                .map_err(|err| format!("roads[{index}] {err}"))?;
         }
 
         for (index, plot) in self.plots.iter().enumerate() {
-            if plot.half_extents[0] <= 0.0 || plot.half_extents[1] <= 0.0 {
-                return Err(format!("plots[{index}] half_extents must be > 0"));
-            }
+            plot.validate()
+                .map_err(|err| format!("plots[{index}] {err}"))?;
         }
 
         Ok(())
@@ -128,25 +124,6 @@ pub struct MapSpawnMarker {
     pub radius: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MapRoad {
-    pub id: u64,
-    pub points: Vec<[f32; 2]>,
-    #[serde(default = "default_road_width")]
-    pub width: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MapPlot {
-    pub id: u64,
-    pub center: [f32; 2],
-    pub half_extents: [f32; 2],
-    #[serde(default)]
-    pub rotation_degrees: f32,
-    #[serde(default)]
-    pub tags: Vec<String>,
-}
-
 #[inline]
 fn default_edits_version() -> u32 {
     MAP_EDITS_VERSION
@@ -155,9 +132,4 @@ fn default_edits_version() -> u32 {
 #[inline]
 fn default_spawn_radius() -> f32 {
     2.0
-}
-
-#[inline]
-fn default_road_width() -> f32 {
-    4.0
 }

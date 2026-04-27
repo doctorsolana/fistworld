@@ -306,12 +306,20 @@ fn apply_joint_limits(
             .limits(JointAxis::AngX, [0.0, 1.65])
             .limits(JointAxis::AngY, [-0.20, 0.20])
             .limits(JointAxis::AngZ, [-0.20, 0.20]),
+        RagdollBodyId::HandL | RagdollBodyId::HandR => joint
+            .limits(JointAxis::AngX, [-0.40, 0.40])
+            .limits(JointAxis::AngY, [-0.25, 0.25])
+            .limits(JointAxis::AngZ, [-0.25, 0.25]),
         RagdollBodyId::ThighL | RagdollBodyId::ThighR => joint
             .limits(JointAxis::AngX, [-1.10, 0.65])
             .limits(JointAxis::AngY, [-0.35, 0.35])
             .limits(JointAxis::AngZ, [-0.28, 0.28]),
         RagdollBodyId::CalfL | RagdollBodyId::CalfR => joint
             .limits(JointAxis::AngX, [0.0, 1.70])
+            .limits(JointAxis::AngY, [-0.15, 0.15])
+            .limits(JointAxis::AngZ, [-0.15, 0.15]),
+        RagdollBodyId::FootL | RagdollBodyId::FootR => joint
+            .limits(JointAxis::AngX, [-0.35, 0.35])
             .limits(JointAxis::AngY, [-0.15, 0.15])
             .limits(JointAxis::AngZ, [-0.15, 0.15]),
         RagdollBodyId::Pelvis => joint,
@@ -390,12 +398,16 @@ fn collider_for_body(def: &BodyDefinition) -> Collider {
         RagdollBodyId::ForearmL | RagdollBodyId::ForearmR => {
             Collider::capsule_y(0.13, (def.radius * 0.8).max(0.04))
         }
+        RagdollBodyId::HandL | RagdollBodyId::HandR => {
+            Collider::capsule_y(0.06, (def.radius * 0.75).max(0.03))
+        }
         RagdollBodyId::ThighL | RagdollBodyId::ThighR => {
             Collider::capsule_y(0.16, (def.radius * 0.9).max(0.05))
         }
         RagdollBodyId::CalfL | RagdollBodyId::CalfR => {
             Collider::capsule_y(0.15, (def.radius * 0.85).max(0.045))
         }
+        RagdollBodyId::FootL | RagdollBodyId::FootR => Collider::cuboid(0.05, 0.03, 0.09),
     }
 }
 

@@ -7,6 +7,8 @@ use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 use shared::map::DEFAULT_MAP_ID;
 
 use crate::camera;
+use crate::city;
+use crate::lighting;
 use crate::picking;
 use crate::session::{
     CursorTerrainHit, EditorEnvironmentState, EditorUiState, PropPreviewState,
@@ -47,6 +49,7 @@ pub fn run() {
     app.init_resource::<TerrainChunkRegistry>();
     app.init_resource::<WaterChunkRegistry>();
     app.init_resource::<VisualRefreshFlags>();
+    app.init_resource::<city::CityEditorState>();
     app.init_resource::<EditorEnvironmentState>();
     app.init_resource::<ui::EditorPropCatalog>();
 
@@ -56,6 +59,7 @@ pub fn run() {
             ui::build_prop_catalog,
             camera::spawn_editor_camera,
             tools::setup_editor_scene,
+            city::setup_city_scene,
         )
             .chain(),
     );
@@ -66,53 +70,21 @@ pub fn run() {
             camera::update_editor_camera,
             picking::update_cursor_terrain_hit,
             tools::handle_editor_shortcuts,
+            city::handle_city_shortcuts,
+            city::handle_city_tool_input,
+            city::handle_city_ui_actions,
             tools::handle_tool_input,
             tools::apply_visual_refresh,
-            apply_editor_environment,
+            city::apply_city_visual_refresh,
+            lighting::apply_editor_environment,
             tools::refresh_cursor_indicator,
             tools::update_prop_preview_visual,
+            city::update_city_preview_visuals,
         )
             .chain(),
     );
 
     app.run();
-}
-
-fn apply_editor_environment(
-    mut env_state: ResMut<EditorEnvironmentState>,
-    mut query_light: Query<(&mut DirectionalLight, &mut Transform)>,
-    mut ambient: ResMut<GlobalAmbientLight>,
-) {
-    let Ok((mut light, mut light_transform)) = query_light.single_mut() else {
-        return;
-    };
-
-    let clamped_day = env_state.day_time_hours.clamp(0.0, 24.0);
-    if (clamped_day - env_state.day_time_hours).abs() > f32::EPSILON {
-        env_state.day_time_hours = clamped_day;
-    }
-    let day_cycle = clamped_day / 24.0 * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
-    let sunlight = day_cycle.sin().clamp(-1.0, 1.0);
-    let day_scale = (sunlight + 1.0) * 0.5;
-    let night_scale = 1.0 - day_scale;
-    let tilt = std::f32::consts::PI * 0.35 + sunlight * std::f32::consts::PI * 0.27;
-
-    light.illuminance = 2_000.0 + day_scale * 48_000.0 + night_scale * 900.0;
-    light.color = if sunlight > 0.0 {
-        Color::srgb(1.0, 0.95, 0.85)
-    } else {
-        Color::srgb(0.22, 0.24, 0.33)
-    };
-    light.shadows_enabled = sunlight > -0.1;
-
-    *light_transform =
-        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.2 + tilt, 0.8, 0.0));
-    ambient.brightness = 250.0 + day_scale * 700.0;
-    ambient.color = if sunlight > 0.0 {
-        Color::srgb(0.9, 0.92, 1.0)
-    } else {
-        Color::srgb(0.35, 0.35, 0.45)
-    };
 }
 
 fn parse_map_arg() -> String {

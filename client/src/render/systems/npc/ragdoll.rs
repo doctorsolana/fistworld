@@ -61,9 +61,13 @@ fn ragdoll_parent(body: RagdollBodyId) -> Option<RagdollBodyId> {
         RagdollBodyId::UpperArmL | RagdollBodyId::UpperArmR => Some(RagdollBodyId::SpineUpper),
         RagdollBodyId::ForearmL => Some(RagdollBodyId::UpperArmL),
         RagdollBodyId::ForearmR => Some(RagdollBodyId::UpperArmR),
+        RagdollBodyId::HandL => Some(RagdollBodyId::ForearmL),
+        RagdollBodyId::HandR => Some(RagdollBodyId::ForearmR),
         RagdollBodyId::ThighL | RagdollBodyId::ThighR => Some(RagdollBodyId::Pelvis),
         RagdollBodyId::CalfL => Some(RagdollBodyId::ThighL),
         RagdollBodyId::CalfR => Some(RagdollBodyId::ThighR),
+        RagdollBodyId::FootL => Some(RagdollBodyId::CalfL),
+        RagdollBodyId::FootR => Some(RagdollBodyId::CalfR),
     }
 }
 

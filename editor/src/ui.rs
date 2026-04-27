@@ -8,6 +8,7 @@ use bevy_egui::{egui, EguiContexts};
 use shared::props::ALL_PROP_KINDS;
 
 use crate::camera::{EditorCameraController, EditorCameraMode};
+use crate::city;
 use crate::session::{
     CursorTerrainHit, EditorEnvironmentState, EditorMainCamera, EditorSession, EditorUiState,
     TerrainBrushMode, ToolMode, UiActionRequests,
@@ -108,6 +109,7 @@ pub fn editor_ui_panel(
     mut env_state: ResMut<EditorEnvironmentState>,
     mut refresh_flags: ResMut<VisualRefreshFlags>,
     cursor_hit: Res<CursorTerrainHit>,
+    city_state: Res<city::CityEditorState>,
     catalog: Option<Res<EditorPropCatalog>>,
     mut camera_query: Query<&mut EditorCameraController, With<EditorMainCamera>>,
 ) {
@@ -138,236 +140,411 @@ pub fn editor_ui_panel(
         });
     });
 
-    egui::Window::new("Tools")
-        .default_width(340.0)
+    egui::SidePanel::left("editor_tools_panel")
+        .resizable(true)
+        .min_width(320.0)
+        .default_width(380.0)
         .show(ctx, |ui| {
-            ui.heading("Tool Mode");
-            if let Ok(mut camera) = camera_query.single_mut() {
-                ui.separator();
-                ui.heading("Camera");
-                ui.radio_value(&mut camera.mode, EditorCameraMode::Rts, "Top-Down RTS");
-                ui.radio_value(&mut camera.mode, EditorCameraMode::Free, "Free Camera");
-                ui.small("WASD pan in RTS mode, wheel zoom, F5 toggles mode.");
-            }
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.heading("Editor");
 
-            ui.separator();
-            ui.heading("Environment");
-            let mut water_level_changed = false;
-            if ui.checkbox(&mut env_state.show_water, "Show Water").changed() {
-                refresh_flags.water_all = true;
-                water_level_changed = true;
-            }
-            if ui
-                .add(
-                    egui::Slider::new(&mut env_state.water_level, -20.0..=128.0)
-                        .text("Water Level"),
-                )
-                .changed()
-            {
-                water_level_changed = true;
-                refresh_flags.water_all = true;
-                env_state.show_water = true;
-            }
-            if water_level_changed {
-                session.map_definition.terrain.water_level = Some(env_state.water_level);
-                session.mark_map_dirty();
-            }
-            if ui
-                .add(egui::Slider::new(&mut env_state.day_time_hours, 0.0..=24.0).text("Time of Day"))
-                .changed()
-            {
-                ui_state.status = format!("Time set to {:.2}", env_state.day_time_hours);
-            }
+                    egui::CollapsingHeader::new("Camera & View")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            if let Ok(mut camera) = camera_query.single_mut() {
+                                ui.horizontal(|ui| {
+                                    ui.radio_value(
+                                        &mut camera.mode,
+                                        EditorCameraMode::Rts,
+                                        "Top-Down RTS",
+                                    );
+                                    ui.radio_value(
+                                        &mut camera.mode,
+                                        EditorCameraMode::Free,
+                                        "Free Camera",
+                                    );
+                                });
+                                ui.small("RTS: WASD pan + wheel zoom. Free: RMB look + WASD/QE. F5 toggles mode.");
+                            }
+                        });
 
-            ui.separator();
-            ui.radio_value(&mut ui_state.tool, ToolMode::Terrain, "Terrain");
-            ui.radio_value(&mut ui_state.tool, ToolMode::PlaceProp, "Place Prop");
-            ui.radio_value(&mut ui_state.tool, ToolMode::EraseProp, "Erase Prop");
-            ui.radio_value(
-                &mut ui_state.tool,
-                ToolMode::SetPlayerSpawn,
-                "Set Player Spawn",
-            );
-            ui.radio_value(
-                &mut ui_state.tool,
-                ToolMode::PlaceSpawnMarker,
-                "Place Spawn Marker",
-            );
+                    egui::CollapsingHeader::new("Environment")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            let mut water_level_changed = false;
+                            if ui.checkbox(&mut env_state.show_water, "Show Water").changed() {
+                                refresh_flags.water_all = true;
+                                water_level_changed = true;
+                            }
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut env_state.water_level, -20.0..=128.0)
+                                        .text("Water Level"),
+                                )
+                                .changed()
+                            {
+                                water_level_changed = true;
+                                refresh_flags.water_all = true;
+                                env_state.show_water = true;
+                            }
+                            if water_level_changed {
+                                session.map_definition.terrain.water_level =
+                                    env_state.show_water.then_some(env_state.water_level);
+                                session.mark_map_dirty();
+                            }
 
-            ui.separator();
-            match ui_state.tool {
-                ToolMode::Terrain => {
-                    ui.label("Terrain Brush");
-                    ui.radio_value(&mut ui_state.terrain_mode, TerrainBrushMode::Raise, "Raise");
-                    ui.radio_value(&mut ui_state.terrain_mode, TerrainBrushMode::Lower, "Lower");
-                    ui.radio_value(
-                        &mut ui_state.terrain_mode,
-                        TerrainBrushMode::Flatten,
-                        "Flatten",
-                    );
-                    ui.add(
-                        egui::Slider::new(&mut ui_state.brush_radius, 1.0..=64.0)
-                            .text("Radius (m)"),
-                    );
-                    ui.add(
-                        egui::Slider::new(&mut ui_state.brush_strength, 0.1..=30.0)
-                            .text("Strength"),
-                    );
-                    ui.add(
-                        egui::Slider::new(&mut ui_state.flatten_blend, 0.1..=12.0)
-                            .text("Flatten Blend"),
-                    );
-                }
-                ToolMode::PlaceProp => {
-                    ui.label("Prop Placement");
-                    ui.label(format!("Selected: {}", ui_state.selected_asset_label()));
-                    if ui_state.selected_custom_scene.is_some() {
-                        ui.small(
-                            "Unmapped asset selected: placement is enabled using direct scene path. It will render in-game but may not have baked collider/typed tuning until mapped in shared props.",
-                        );
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label("Filter");
-                        ui.text_edit_singleline(&mut ui_state.prop_search);
-                    });
-
-                    if let Some(catalog) = catalog.as_ref() {
-                        ui.small(format!(
-                            "Client GLBs: {} | Mapped: {} | Unmapped: {}",
-                            catalog.discovered_asset_count,
-                            catalog.mapped_count,
-                            catalog.unmapped_count
-                        ));
-
-                        let search = ui_state.prop_search.trim().to_ascii_lowercase();
-                        let mut any_match = false;
-
-                        egui::ScrollArea::vertical()
-                            .max_height(340.0)
-                            .show(ui, |ui| {
-                                for category in &catalog.categories {
-                                    let matching: Vec<&PropCatalogAssetEntry> = category
-                                        .assets
-                                        .iter()
-                                        .filter(|asset| {
-                                            asset_matches_search(asset, search.as_str())
-                                        })
-                                        .collect();
-                                    if matching.is_empty() {
-                                        continue;
-                                    }
-                                    any_match = true;
-
-                                    egui::CollapsingHeader::new(format!(
-                                        "{} ({})",
-                                        category.name,
-                                        matching.len()
-                                    ))
-                                    .show(ui, |ui| {
-                                        for asset in matching {
-                                            let selected = if let Some(mapped_index) =
-                                                asset.mapped_index
-                                            {
-                                                ui_state.selected_custom_scene.is_none()
-                                                    && ui_state.selected_prop_index == mapped_index
-                                            } else {
-                                                ui_state.selected_custom_scene.as_deref()
-                                                    == Some(asset.scene_path.as_str())
-                                            };
-
-                                            let label = if let Some(mapped_index) =
-                                                asset.mapped_index
-                                            {
-                                                format!(
-                                                    "{} ({})",
-                                                    asset.display_name,
-                                                    ALL_PROP_KINDS[mapped_index].id()
-                                                )
-                                            } else {
-                                                format!("{} [direct-path]", asset.display_name)
-                                            };
-
-                                            if ui.selectable_label(selected, label).clicked() {
-                                                if let Some(mapped_index) = asset.mapped_index {
-                                                    ui_state.selected_prop_index = mapped_index;
-                                                    ui_state.selected_custom_scene = None;
-                                                } else {
-                                                    ui_state.selected_custom_scene =
-                                                        Some(asset.scene_path.clone());
-                                                }
-                                            }
-                                        }
-                                    });
+                            ui.add(
+                                egui::Slider::new(&mut env_state.day_time_hours, 0.0..=24.0)
+                                    .text("Time of Day"),
+                            );
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.button("Morning").clicked() {
+                                    env_state.day_time_hours = 9.0;
+                                }
+                                if ui.button("Noon").clicked() {
+                                    env_state.day_time_hours = 12.0;
+                                }
+                                if ui.button("Afternoon").clicked() {
+                                    env_state.day_time_hours = 15.0;
+                                }
+                                if ui.button("Sunset").clicked() {
+                                    env_state.day_time_hours = 18.0;
                                 }
                             });
+                        });
 
-                        if !any_match {
-                            ui.small("No assets match this filter.");
+                    egui::CollapsingHeader::new("Authoring Mode")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.label("Terrain & Layout");
+                            ui.horizontal_wrapped(|ui| {
+                                draw_tool_button(ui, &mut ui_state.tool, ToolMode::Terrain, "Terrain");
+                                draw_tool_button(ui, &mut ui_state.tool, ToolMode::Road, "Road");
+                                draw_tool_button(ui, &mut ui_state.tool, ToolMode::Plot, "Plot");
+                            });
+                            ui.separator();
+                            ui.label("Props");
+                            ui.horizontal_wrapped(|ui| {
+                                draw_tool_button(
+                                    ui,
+                                    &mut ui_state.tool,
+                                    ToolMode::PlaceProp,
+                                    "Place Prop",
+                                );
+                                draw_tool_button(
+                                    ui,
+                                    &mut ui_state.tool,
+                                    ToolMode::EraseProp,
+                                    "Erase Prop",
+                                );
+                            });
+                            ui.separator();
+                            ui.label("Gameplay");
+                            ui.horizontal_wrapped(|ui| {
+                                draw_tool_button(
+                                    ui,
+                                    &mut ui_state.tool,
+                                    ToolMode::SetPlayerSpawn,
+                                    "Player Spawn",
+                                );
+                                draw_tool_button(
+                                    ui,
+                                    &mut ui_state.tool,
+                                    ToolMode::PlaceSpawnMarker,
+                                    "Spawn Marker",
+                                );
+                            });
+                        });
+
+                    egui::CollapsingHeader::new(format!(
+                        "{} Settings",
+                        active_tool_heading(ui_state.tool)
+                    ))
+                    .default_open(true)
+                    .show(ui, |ui| match ui_state.tool {
+                        ToolMode::Terrain => {
+                            ui.label("Terrain Brush");
+                            ui.horizontal(|ui| {
+                                ui.radio_value(
+                                    &mut ui_state.terrain_mode,
+                                    TerrainBrushMode::Raise,
+                                    "Raise",
+                                );
+                                ui.radio_value(
+                                    &mut ui_state.terrain_mode,
+                                    TerrainBrushMode::Lower,
+                                    "Lower",
+                                );
+                                ui.radio_value(
+                                    &mut ui_state.terrain_mode,
+                                    TerrainBrushMode::Flatten,
+                                    "Flatten",
+                                );
+                            });
+                            ui.add(
+                                egui::Slider::new(&mut ui_state.brush_radius, 1.0..=64.0)
+                                    .text("Brush Size (m)"),
+                            );
+                            draw_brush_size_presets(ui, &mut ui_state.brush_radius);
+                            ui.add(
+                                egui::Slider::new(&mut ui_state.brush_strength, 0.1..=30.0)
+                                    .text("Height Strength"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut ui_state.flatten_blend, 0.1..=12.0)
+                                    .text("Flatten Blend"),
+                            );
+                            ui.small("Raise/Lower paints continuously while held. Flatten applies once per click using the current brush size.");
                         }
-                    } else {
-                        ui.small("Asset catalog not ready.");
-                    }
+                        ToolMode::PlaceProp => {
+                            ui.label("Prop Placement");
+                            ui.label(format!("Selected: {}", ui_state.selected_asset_label()));
+                            if ui_state.selected_custom_scene.is_some() {
+                                ui.small(
+                                    "Unmapped asset selected: placement is enabled using direct scene path. It will render in-game but may not have baked collider or typed tuning until mapped in shared props.",
+                                );
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label("Filter");
+                                ui.text_edit_singleline(&mut ui_state.prop_search);
+                            });
 
-                    ui.add(egui::Slider::new(&mut ui_state.prop_scale, 0.1..=8.0).text("Scale"));
-                    ui.add(
-                        egui::Slider::new(&mut ui_state.prop_rotation_degrees, 0.0..=360.0)
-                            .text("Yaw (deg)"),
-                    );
-                }
-                ToolMode::EraseProp => {
-                    ui.label("Erase nearest prop within brush radius.");
-                    ui.add(
-                        egui::Slider::new(&mut ui_state.brush_radius, 1.0..=32.0)
-                            .text("Erase Radius (m)"),
-                    );
-                }
-                ToolMode::SetPlayerSpawn => {
-                    ui.label("Click terrain to set map player spawn.");
-                }
-                ToolMode::PlaceSpawnMarker => {
-                    ui.label("Spawn Marker Placement");
-                    ui.horizontal(|ui| {
-                        ui.label("Kind:");
-                        ui.selectable_value(
-                            &mut ui_state.selected_spawn_kind,
-                            shared::map::SpawnMarkerKind::NpcGroup,
-                            "NPC Group",
-                        );
-                        ui.selectable_value(
-                            &mut ui_state.selected_spawn_kind,
-                            shared::map::SpawnMarkerKind::Poi,
-                            "POI",
-                        );
-                        ui.selectable_value(
-                            &mut ui_state.selected_spawn_kind,
-                            shared::map::SpawnMarkerKind::Player,
-                            "Player",
-                        );
+                            if let Some(catalog) = catalog.as_ref() {
+                                ui.small(format!(
+                                    "Client GLBs: {} | Mapped: {} | Unmapped: {}",
+                                    catalog.discovered_asset_count,
+                                    catalog.mapped_count,
+                                    catalog.unmapped_count
+                                ));
+
+                                let search = ui_state.prop_search.trim().to_ascii_lowercase();
+                                let mut any_match = false;
+
+                                egui::ScrollArea::vertical()
+                                    .max_height(340.0)
+                                    .show(ui, |ui| {
+                                        for category in &catalog.categories {
+                                            let matching: Vec<&PropCatalogAssetEntry> = category
+                                                .assets
+                                                .iter()
+                                                .filter(|asset| {
+                                                    asset_matches_search(asset, search.as_str())
+                                                })
+                                                .collect();
+                                            if matching.is_empty() {
+                                                continue;
+                                            }
+                                            any_match = true;
+
+                                            egui::CollapsingHeader::new(format!(
+                                                "{} ({})",
+                                                category.name,
+                                                matching.len()
+                                            ))
+                                            .show(ui, |ui| {
+                                                for asset in matching {
+                                                    let selected = if let Some(mapped_index) =
+                                                        asset.mapped_index
+                                                    {
+                                                        ui_state.selected_custom_scene.is_none()
+                                                            && ui_state.selected_prop_index
+                                                                == mapped_index
+                                                    } else {
+                                                        ui_state.selected_custom_scene.as_deref()
+                                                            == Some(asset.scene_path.as_str())
+                                                    };
+
+                                                    let label = if let Some(mapped_index) =
+                                                        asset.mapped_index
+                                                    {
+                                                        format!(
+                                                            "{} ({})",
+                                                            asset.display_name,
+                                                            ALL_PROP_KINDS[mapped_index].id()
+                                                        )
+                                                    } else {
+                                                        format!(
+                                                            "{} [direct-path]",
+                                                            asset.display_name
+                                                        )
+                                                    };
+
+                                                    if ui
+                                                        .selectable_label(selected, label)
+                                                        .clicked()
+                                                    {
+                                                        if let Some(mapped_index) =
+                                                            asset.mapped_index
+                                                        {
+                                                            ui_state.selected_prop_index =
+                                                                mapped_index;
+                                                            ui_state.selected_custom_scene = None;
+                                                        } else {
+                                                            ui_state.selected_custom_scene =
+                                                                Some(asset.scene_path.clone());
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    });
+
+                                if !any_match {
+                                    ui.small("No assets match this filter.");
+                                }
+                            } else {
+                                ui.small("Asset catalog not ready.");
+                            }
+
+                            ui.add(
+                                egui::Slider::new(&mut ui_state.prop_scale, 0.1..=8.0).text("Scale"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut ui_state.prop_rotation_degrees,
+                                    0.0..=360.0,
+                                )
+                                .text("Yaw (deg)"),
+                            );
+                        }
+                        ToolMode::EraseProp => {
+                            ui.label("Erase nearest prop within brush radius.");
+                            ui.add(
+                                egui::Slider::new(&mut ui_state.brush_radius, 1.0..=32.0)
+                                    .text("Erase Radius (m)"),
+                            );
+                            draw_brush_size_presets(ui, &mut ui_state.brush_radius);
+                        }
+                        ToolMode::Road | ToolMode::Plot => {
+                            city::draw_city_tool_controls(
+                                ui,
+                                &mut ui_state,
+                                &mut actions,
+                                &city_state,
+                            );
+                        }
+                        ToolMode::SetPlayerSpawn => {
+                            ui.label("Click terrain to set the map player spawn.");
+                        }
+                        ToolMode::PlaceSpawnMarker => {
+                            ui.label("Spawn Marker Placement");
+                            ui.horizontal_wrapped(|ui| {
+                                ui.selectable_value(
+                                    &mut ui_state.selected_spawn_kind,
+                                    shared::map::SpawnMarkerKind::NpcGroup,
+                                    "NPC Group",
+                                );
+                                ui.selectable_value(
+                                    &mut ui_state.selected_spawn_kind,
+                                    shared::map::SpawnMarkerKind::Poi,
+                                    "POI",
+                                );
+                                ui.selectable_value(
+                                    &mut ui_state.selected_spawn_kind,
+                                    shared::map::SpawnMarkerKind::Player,
+                                    "Player",
+                                );
+                            });
+                            ui.add(
+                                egui::Slider::new(&mut ui_state.spawn_marker_radius, 1.0..=64.0)
+                                    .text("Marker Radius"),
+                            );
+                        }
                     });
-                    ui.add(
-                        egui::Slider::new(&mut ui_state.spawn_marker_radius, 1.0..=64.0)
-                            .text("Marker Radius"),
-                    );
-                }
-            }
 
-            ui.separator();
-            if let Some(hit) = cursor_hit.0 {
-                ui.label(format!(
-                    "Cursor: x={:.2}, y={:.2}, z={:.2}",
-                    hit.x, hit.y, hit.z
-                ));
-            } else {
-                ui.label("Cursor: (off terrain)");
-            }
-            ui.label(format!(
-                "Status: {} | Water: {:.2} | Time: {:.2}h",
-                ui_state.status, env_state.water_level, env_state.day_time_hours
-            ));
-            ui.label("RTS: WASD pan + wheel zoom | Free: RMB look + WASD/QE move");
+                    egui::CollapsingHeader::new("Status")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            if let Some(hit) = cursor_hit.0 {
+                                ui.label(format!(
+                                    "Cursor: x={:.2}, y={:.2}, z={:.2}",
+                                    hit.x, hit.y, hit.z
+                                ));
+                            } else {
+                                ui.label("Cursor: (off terrain)");
+                            }
+                            ui.label(format!(
+                                "Status: {}",
+                                ui_state.status
+                            ));
+                            ui.label(format!(
+                                "Water: {} | Time: {:.2}h",
+                                if env_state.show_water {
+                                    format!("{:.2}", env_state.water_level)
+                                } else {
+                                    "off".to_string()
+                                },
+                                env_state.day_time_hours
+                            ));
+                        });
+
+                    egui::CollapsingHeader::new("Danger Zone")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.small(
+                                "Reset the map to a blank flat 0.0 state and remove authored terrain edits, props, roads, plots, spawn markers, player spawn, NPC groups, and blockers. This can be undone, but it is still a destructive action.",
+                            );
+                            if ui.button("Reset Map To Blank...").clicked() {
+                                ui_state.show_reset_map_confirm = true;
+                            }
+                        });
+                });
         });
 
+    if ui_state.show_reset_map_confirm {
+        let mut keep_open = true;
+        egui::Window::new("Confirm Map Reset")
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("Reset the current map to a blank flat 0.0 state?");
+                ui.small(
+                    "This clears terrain edits, water, props, roads, plots, markers, player spawn, NPC groups, and blockers. You can still undo it immediately.",
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        keep_open = false;
+                    }
+                    if ui.button("Yes, Reset Map").clicked() {
+                        actions.reset_map_to_blank = true;
+                        keep_open = false;
+                    }
+                });
+            });
+        ui_state.show_reset_map_confirm = keep_open;
+    }
+
     ui_state.pointer_over_ui = ctx.wants_pointer_input() || ctx.is_pointer_over_area();
+}
+
+fn draw_tool_button(ui: &mut egui::Ui, current_tool: &mut ToolMode, tool: ToolMode, label: &str) {
+    ui.selectable_value(current_tool, tool, label);
+}
+
+fn draw_brush_size_presets(ui: &mut egui::Ui, brush_radius: &mut f32) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Quick Size");
+        for preset in [2.0, 4.0, 8.0, 16.0, 32.0] {
+            if ui.button(format!("{preset:.0}m")).clicked() {
+                *brush_radius = preset;
+            }
+        }
+    });
+}
+
+fn active_tool_heading(tool: ToolMode) -> &'static str {
+    match tool {
+        ToolMode::Terrain => "Terrain",
+        ToolMode::PlaceProp => "Prop Placement",
+        ToolMode::EraseProp => "Prop Erase",
+        ToolMode::Road => "Road",
+        ToolMode::Plot => "Plot",
+        ToolMode::SetPlayerSpawn => "Player Spawn",
+        ToolMode::PlaceSpawnMarker => "Spawn Marker",
+    }
 }
 
 fn editor_asset_root() -> PathBuf {

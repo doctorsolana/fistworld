@@ -51,50 +51,12 @@ pub fn load_map(map_id: &str) -> Result<LoadedMap, String> {
         definition.map_id = map_id.to_string();
     }
 
-    definition.validate()?;
-
     let map_dir = map_path
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| format!("Map path has no parent: {}", map_path.display()))?;
 
-    validate_object_scene_assets(&map_dir, map_id, &definition.objects)?;
-
-    let heightmap_path = resolve_map_relative_file(&map_dir, map_id, &definition.terrain.heightmap)
-        .ok_or_else(|| {
-            format!(
-                "Could not locate heightmap '{}' for map '{}'",
-                definition.terrain.heightmap, map_id
-            )
-        })?;
-
-    let heightmap_bytes = fs::read(&heightmap_path)
-        .map_err(|err| format!("Failed to read {}: {err}", heightmap_path.display()))?;
-
-    let heightmap = decode_heightmap(
-        &heightmap_path,
-        &heightmap_bytes,
-        definition.bounds,
-        definition.terrain.height_min,
-        definition.terrain.height_max,
-        definition.terrain.water_level,
-    )?;
-
-    // Optional minimap is resolved early so missing files fail fast with a clear error.
-    if let Some(minimap_rel) = definition.terrain.minimap.as_deref() {
-        let _ = resolve_map_relative_file(&map_dir, map_id, minimap_rel).ok_or_else(|| {
-            format!(
-                "Could not locate minimap '{}' for map '{}'",
-                minimap_rel, map_id
-            )
-        })?;
-    }
-
     let edits = load_map_edits_optional(&map_dir)?.unwrap_or_default();
-    let terrain_deltas_by_chunk = edits
-        .terrain_deltas_by_chunk()
-        .map_err(|err| format!("Invalid map edits for '{}': {err}", map_id))?;
-
     let edits_bytes = match fs::read(map_edits_path(&map_dir)) {
         Ok(bytes) => Some(bytes),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
@@ -106,26 +68,44 @@ pub fn load_map(map_id: &str) -> Result<LoadedMap, String> {
         }
     };
 
-    let objects_by_chunk = build_objects_by_chunk(&definition.objects);
-
-    let mut hasher = DefaultHasher::new();
-    definition.map_id.hash(&mut hasher);
-    map_bytes.hash(&mut hasher);
-    heightmap_bytes.hash(&mut hasher);
-    if let Some(bytes) = edits_bytes {
-        bytes.hash(&mut hasher);
-    }
-    let content_hash = hasher.finish();
-
-    Ok(LoadedMap {
-        definition,
-        heightmap,
-        edits,
-        terrain_deltas_by_chunk,
-        objects_by_chunk,
-        content_hash,
+    build_loaded_map(
         map_dir,
-    })
+        definition,
+        edits,
+        &map_bytes,
+        edits_bytes.as_deref(),
+    )
+}
+
+pub fn load_map_from_parts(
+    map_dir: &Path,
+    definition: &MapDefinition,
+    edits: &MapEditsDefinition,
+) -> Result<LoadedMap, String> {
+    let map_bytes = ron::ser::to_string(definition)
+        .map_err(|err| {
+            format!(
+                "Failed to serialize map definition '{}': {err}",
+                definition.map_id
+            )
+        })?
+        .into_bytes();
+    let edits_bytes = ron::ser::to_string(edits)
+        .map_err(|err| {
+            format!(
+                "Failed to serialize map edits '{}': {err}",
+                definition.map_id
+            )
+        })?
+        .into_bytes();
+
+    build_loaded_map(
+        map_dir.to_path_buf(),
+        definition.clone(),
+        edits.clone(),
+        &map_bytes,
+        Some(&edits_bytes),
+    )
 }
 
 pub fn map_rpath(map_id: &str) -> PathBuf {
@@ -181,6 +161,93 @@ fn load_map_ron_bytes(map_id: &str) -> Result<(PathBuf, Vec<u8>), String> {
         "Could not locate '{}' in assets roots (tried assets/... and client/assets/...)",
         rel.display()
     ))
+}
+
+fn build_loaded_map(
+    map_dir: PathBuf,
+    mut definition: MapDefinition,
+    edits: MapEditsDefinition,
+    map_bytes: &[u8],
+    edits_bytes: Option<&[u8]>,
+) -> Result<LoadedMap, String> {
+    if definition.map_id.trim().is_empty() {
+        definition.map_id = map_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(DEFAULT_MAP_ID)
+            .to_string();
+    }
+
+    definition.validate()?;
+    edits.validate()?;
+
+    validate_object_scene_assets(&map_dir, &definition.map_id, &definition.objects)?;
+
+    let heightmap_path =
+        resolve_map_relative_file(&map_dir, &definition.map_id, &definition.terrain.heightmap)
+            .ok_or_else(|| {
+                format!(
+                    "Could not locate heightmap '{}' for map '{}'",
+                    definition.terrain.heightmap, definition.map_id
+                )
+            })?;
+
+    let heightmap_bytes = fs::read(&heightmap_path)
+        .map_err(|err| format!("Failed to read {}: {err}", heightmap_path.display()))?;
+
+    let heightmap = decode_heightmap(
+        &heightmap_path,
+        &heightmap_bytes,
+        definition.bounds,
+        definition.terrain.height_min,
+        definition.terrain.height_max,
+        definition.terrain.water_level,
+    )?;
+
+    if let Some(minimap_rel) = definition.terrain.minimap.as_deref() {
+        let _ = resolve_map_relative_file(&map_dir, &definition.map_id, minimap_rel).ok_or_else(
+            || {
+                format!(
+                    "Could not locate minimap '{}' for map '{}'",
+                    minimap_rel, definition.map_id
+                )
+            },
+        )?;
+    }
+
+    let terrain_deltas_by_chunk = edits
+        .terrain_deltas_by_chunk()
+        .map_err(|err| format!("Invalid map edits for '{}': {err}", definition.map_id))?;
+    let objects_by_chunk = build_objects_by_chunk(&definition.objects);
+    let content_hash =
+        compute_loaded_map_hash(&definition.map_id, map_bytes, &heightmap_bytes, edits_bytes);
+
+    Ok(LoadedMap {
+        definition,
+        heightmap,
+        edits,
+        terrain_deltas_by_chunk,
+        objects_by_chunk,
+        content_hash,
+        map_dir,
+    })
+}
+
+fn compute_loaded_map_hash(
+    map_id: &str,
+    map_bytes: &[u8],
+    heightmap_bytes: &[u8],
+    edits_bytes: Option<&[u8]>,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    map_id.hash(&mut hasher);
+    map_bytes.hash(&mut hasher);
+    heightmap_bytes.hash(&mut hasher);
+    if let Some(bytes) = edits_bytes {
+        bytes.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn asset_roots() -> Vec<PathBuf> {

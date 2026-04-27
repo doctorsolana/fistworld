@@ -148,6 +148,8 @@ pub fn ensure_remote_footstep_emitters(
     npcs: Query<(Entity, &Transform), With<Npc>>,
     // Vehicles to identify which players are driving (no footsteps)
     vehicles: Query<&VehicleDriver, With<Vehicle>>,
+    mut driving_ids_cache: Local<HashSet<u64>>,
+    mut candidate_cache: Local<Vec<(Entity, Vec3, f32)>>,
 ) {
     if !audio_state.assets_ready {
         return;
@@ -158,40 +160,36 @@ pub fn ensure_remote_footstep_emitters(
     let listener_pos = cam.translation;
     let now = time.elapsed_secs();
 
-    // Gather driver IDs so we can skip footsteps for players that are driving.
-    let mut driving_ids: HashSet<u64> = HashSet::new();
-    for driver in vehicles.iter() {
-        if let Some(id) = driver.driver_id {
-            driving_ids.insert(id);
-        }
-    }
-
     let current_count = emitter_index.footstep_targets.len();
-
-    // Check if we're at the limit
     if current_count >= audio_manager.max_remote_footsteps {
         return;
     }
     let available_slots = audio_manager.max_remote_footsteps - current_count;
 
-    // Collect candidates with distances (entity, position, distance_squared)
-    let mut candidates: Vec<(Entity, Vec3, f32)> = Vec::new();
+    driving_ids_cache.clear();
+    for driver in vehicles.iter() {
+        if let Some(id) = driver.driver_id {
+            driving_ids_cache.insert(id);
+        }
+    }
+
+    candidate_cache.clear();
     let max_dist_sq = REMOTE_FOOTSTEP_MAX_SPAWN_DISTANCE * REMOTE_FOOTSTEP_MAX_SPAWN_DISTANCE;
 
-    // Remote players.
     for (entity, player, transform) in players.iter() {
         let player_id = peer_id_to_u64(player.client_id);
-        if driving_ids.contains(&player_id) || emitter_index.footstep_targets.contains(&entity) {
+        if driving_ids_cache.contains(&player_id)
+            || emitter_index.footstep_targets.contains(&entity)
+        {
             continue;
         }
 
         let dist_sq = transform.translation.distance_squared(listener_pos);
         if dist_sq <= max_dist_sq {
-            candidates.push((entity, transform.translation, dist_sq));
+            candidate_cache.push((entity, transform.translation, dist_sq));
         }
     }
 
-    // NPCs.
     for (entity, transform) in npcs.iter() {
         if emitter_index.footstep_targets.contains(&entity) {
             continue;
@@ -199,14 +197,17 @@ pub fn ensure_remote_footstep_emitters(
 
         let dist_sq = transform.translation.distance_squared(listener_pos);
         if dist_sq <= max_dist_sq {
-            candidates.push((entity, transform.translation, dist_sq));
+            candidate_cache.push((entity, transform.translation, dist_sq));
         }
     }
 
-    // Sort by distance (closest first), spawn up to available_slots
-    candidates.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+    if candidate_cache.len() > available_slots {
+        candidate_cache.select_nth_unstable_by(available_slots, |a, b| a.2.total_cmp(&b.2));
+        candidate_cache.truncate(available_slots);
+    }
+    candidate_cache.sort_by(|a, b| a.2.total_cmp(&b.2));
 
-    for (entity, pos, _dist_sq) in candidates.into_iter().take(available_slots) {
+    for (entity, pos, _dist_sq) in candidate_cache.iter().copied() {
         let emitter_entity = commands
             .spawn((
                 RemoteFootstepEmitter { target: entity },

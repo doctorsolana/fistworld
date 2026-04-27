@@ -25,6 +25,13 @@ impl TerrainGenerator {
         Self { loaded_map, seed }
     }
 
+    pub fn from_loaded_map(loaded_map: LoadedMap, seed: u32) -> Self {
+        Self {
+            loaded_map: Arc::new(loaded_map),
+            seed,
+        }
+    }
+
     #[inline]
     pub fn active_map_id(&self) -> &str {
         &self.loaded_map.definition.map_id
@@ -99,8 +106,12 @@ impl TerrainGenerator {
         }
 
         let terrain = &self.loaded_map.definition.terrain;
-        let span = (terrain.height_max - terrain.height_min).max(0.001);
-        let t = ((height - terrain.height_min) / span).clamp(0.0, 1.0);
+        let raw_span = terrain.height_max - terrain.height_min;
+        let t = if raw_span.abs() <= 0.001 {
+            0.5
+        } else {
+            ((height - terrain.height_min) / raw_span).clamp(0.0, 1.0)
+        };
         let slope = 1.0 - normal_y.clamp(0.0, 1.0);
 
         if slope > 0.35 || t > 0.85 {
@@ -137,6 +148,18 @@ impl Default for WorldTerrain {
 }
 
 impl WorldTerrain {
+    pub fn reload_from_loaded_map(&mut self, loaded_map: LoadedMap) {
+        let delta_chunks = loaded_map.terrain_deltas_by_chunk.clone();
+        self.generator = TerrainGenerator::from_loaded_map(loaded_map, WORLD_SEED);
+        self.delta_chunks = delta_chunks;
+        self.version = self.version.wrapping_add(1);
+    }
+
+    #[inline]
+    pub fn water_level(&self) -> Option<f32> {
+        self.generator.loaded_map().heightmap.water_level
+    }
+
     #[inline]
     pub fn get_height(&self, x: f32, z: f32) -> f32 {
         let authored = self.generator.get_height(x, z);

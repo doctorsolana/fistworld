@@ -4,7 +4,8 @@ use bevy::prelude::*;
 
 use shared::terrain::WorldTerrain;
 
-use crate::session::{EditorMainCamera, EditorUiState};
+use crate::city::CityEditorState;
+use crate::session::{EditorMainCamera, EditorUiState, ToolMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorCameraMode {
@@ -70,6 +71,7 @@ pub fn update_editor_camera(
     mut mouse_motion: MessageReader<MouseMotion>,
     mut mouse_wheel: MessageReader<MouseWheel>,
     ui_state: Res<EditorUiState>,
+    city_state: Option<Res<CityEditorState>>,
     terrain: Option<Res<WorldTerrain>>,
     mut query: Query<(&mut Transform, &mut EditorCameraController), With<EditorMainCamera>>,
 ) {
@@ -84,6 +86,10 @@ pub fn update_editor_camera(
 
     let mut scroll_lines = 0.0;
     let allow_camera_scroll = !ui_state.pointer_over_ui;
+    let road_tool_consumes_rmb = city_state
+        .as_deref()
+        .map(|state| ui_state.tool == ToolMode::Road && !state.draft_road_points.is_empty())
+        .unwrap_or(false);
     for event in mouse_wheel.read() {
         let factor = match event.unit {
             MouseScrollUnit::Line => 1.0,
@@ -115,6 +121,7 @@ pub fn update_editor_camera(
                 terrain_ref,
                 &keys,
                 &mouse_buttons,
+                road_tool_consumes_rmb,
                 look_delta,
                 scroll_lines,
                 time.delta_secs(),
@@ -126,6 +133,7 @@ pub fn update_editor_camera(
                 &mut controller,
                 &keys,
                 &mouse_buttons,
+                road_tool_consumes_rmb,
                 look_delta,
                 time.delta_secs(),
             );
@@ -138,10 +146,11 @@ fn update_free_camera(
     controller: &mut EditorCameraController,
     keys: &ButtonInput<KeyCode>,
     mouse_buttons: &ButtonInput<MouseButton>,
+    road_tool_consumes_rmb: bool,
     look_delta: Vec2,
     dt: f32,
 ) {
-    if mouse_buttons.pressed(MouseButton::Right) {
+    if mouse_buttons.pressed(MouseButton::Right) && !road_tool_consumes_rmb {
         controller.yaw -= look_delta.x * controller.look_sensitivity;
         controller.pitch =
             (controller.pitch - look_delta.y * controller.look_sensitivity).clamp(-1.45, 1.45);
@@ -194,11 +203,12 @@ fn update_rts_camera(
     terrain: Option<&WorldTerrain>,
     keys: &ButtonInput<KeyCode>,
     mouse_buttons: &ButtonInput<MouseButton>,
+    road_tool_consumes_rmb: bool,
     look_delta: Vec2,
     scroll_lines: f32,
     dt: f32,
 ) {
-    if mouse_buttons.pressed(MouseButton::Right) {
+    if mouse_buttons.pressed(MouseButton::Right) && !road_tool_consumes_rmb {
         controller.yaw -= look_delta.x * controller.look_sensitivity;
     }
 

@@ -98,7 +98,7 @@ pub(crate) fn update_terrain_material_lod(
     mut commands: Commands,
     player_query: Query<&PlayerPosition, With<LocalPlayer>>,
     settings: Res<GraphicsSettings>,
-    streaming: Res<TerrainStreamingState>,
+    mut streaming: ResMut<TerrainStreamingState>,
     mut terrain_materials: ResMut<Assets<TerrainSplatMaterial>>,
     chunks: Query<(Entity, &TerrainChunk, &TerrainMaterialLod)>,
 ) {
@@ -113,20 +113,19 @@ pub(crate) fn update_terrain_material_lod(
     if render_distance <= 0 {
         return;
     }
-    let splat_normal_radius = ((render_distance as f32) * SPLAT_NORMAL_RATIO)
-        .round()
-        .max(1.0) as i32;
+    let splat_normal_radius = splat_normal_radius(render_distance);
     let player_chunk = ChunkCoord::from_world_pos(player_pos.0);
+    if streaming.material_lod_center == Some(player_chunk)
+        && streaming.material_lod_radius == splat_normal_radius
+    {
+        return;
+    }
+    streaming.material_lod_center = Some(player_chunk);
+    streaming.material_lod_radius = splat_normal_radius;
 
     for (entity, chunk, lod) in chunks.iter() {
-        let dx = (chunk.coord.x - player_chunk.x).abs();
-        let dz = (chunk.coord.z - player_chunk.z).abs();
-        let dist = dx.max(dz);
-        let desired_normal_strength = if dist <= splat_normal_radius {
-            1.0
-        } else {
-            0.0
-        };
+        let desired_normal_strength =
+            desired_terrain_normal_strength(chunk.coord, player_chunk, render_distance);
         if let Some(mat) = terrain_materials.get_mut(&chunk.material) {
             if (mat.extension.normal_strength - desired_normal_strength).abs() > 0.01 {
                 mat.extension.normal_strength = desired_normal_strength;

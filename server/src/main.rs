@@ -2,6 +2,8 @@
 mod ai;
 #[path = "app/mod.rs"]
 mod app;
+#[path = "city/mod.rs"]
+mod city;
 #[path = "collision/mod.rs"]
 mod collision;
 #[path = "combat/mod.rs"]
