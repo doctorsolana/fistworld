@@ -67,7 +67,7 @@ pub(crate) fn update_terrain_chunks(
     let removed_count = to_remove.len();
     if removed_count > 0 {
         for (_, coord, _, _, _) in to_remove.iter() {
-            tasks.tasks.remove(coord);
+            tasks.remove(coord);
         }
     }
     for (entity, coord, mesh_handle, material_handle, weight_handle) in to_remove {
@@ -181,7 +181,7 @@ pub(crate) fn spawn_terrain_chunks(
             return true;
         }
 
-        if loaded_chunks.chunks.contains(&coord) || tasks.tasks.contains_key(&coord) {
+        if loaded_chunks.chunks.contains(&coord) || tasks.contains_key(&coord) {
             return true;
         }
 
@@ -225,7 +225,7 @@ pub(crate) fn spawn_terrain_chunks(
             }
         });
 
-        tasks.tasks.insert(coord, task);
+        tasks.insert(coord, task);
         chunks_spawned += 1;
         true
     };

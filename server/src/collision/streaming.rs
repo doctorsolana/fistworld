@@ -171,9 +171,12 @@ pub fn update_static_collider_streaming(
 }
 
 fn unload_chunk(colliders: &mut StaticColliders, chunk: ChunkCoord) {
-    colliders.loaded_chunks.remove(&chunk);
+    let removed = colliders.loaded_chunks.remove(&chunk);
 
     let Some(ids) = colliders.chunk_instances.remove(&chunk) else {
+        if removed {
+            colliders.version = colliders.version.wrapping_add(1);
+        }
         return;
     };
     for id in ids {
@@ -186,6 +189,7 @@ fn unload_chunk(colliders: &mut StaticColliders, chunk: ChunkCoord) {
             }
         }
     }
+    colliders.version = colliders.version.wrapping_add(1);
 }
 
 fn load_chunk(
@@ -232,6 +236,7 @@ fn load_chunk(
 
     colliders.loaded_chunks.insert(chunk);
     colliders.chunk_instances.insert(chunk, ids);
+    colliders.version = colliders.version.wrapping_add(1);
 }
 
 #[cfg(test)]

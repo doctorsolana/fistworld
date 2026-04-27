@@ -67,6 +67,33 @@ impl Default for TerrainStreamingState {
 #[derive(Resource, Default)]
 pub struct TerrainChunkTasks {
     pub tasks: HashMap<ChunkCoord, Task<ChunkBuildResult>>,
+    pub ordered_coords: Vec<ChunkCoord>,
+    pub order_center: Option<ChunkCoord>,
+    pub order_view_distance: i32,
+    pub order_dirty: bool,
+}
+
+impl TerrainChunkTasks {
+    pub fn contains_key(&self, coord: &ChunkCoord) -> bool {
+        self.tasks.contains_key(coord)
+    }
+
+    pub fn insert(&mut self, coord: ChunkCoord, task: Task<ChunkBuildResult>) {
+        self.tasks.insert(coord, task);
+        self.order_dirty = true;
+    }
+
+    pub fn remove(&mut self, coord: &ChunkCoord) {
+        if self.tasks.remove(coord).is_some() {
+            self.order_dirty = true;
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct TerrainTaskScratch {
+    pub completed: Vec<ChunkBuildResult>,
+    pub to_remove: Vec<ChunkCoord>,
 }
 
 pub struct ChunkBuildResult {

@@ -6,10 +6,13 @@ use std::collections::HashMap;
 
 use shared::protocol::PlayerInput;
 
+use crate::net::peer::peer_id_to_u64;
+
 /// Stores latest input per connected client.
 #[derive(Resource, Default)]
 pub struct ClientInputs {
     pub latest: HashMap<PeerId, PlayerInput>,
+    pub latest_by_driver_id: HashMap<u64, PlayerInput>,
 }
 
 /// Rolling input ingress counters for perf logging windows.
@@ -72,6 +75,9 @@ pub fn handle_client_input_messages(
                     .or_insert(0);
                 *entry = entry.saturating_add(1);
             }
+            inputs
+                .latest_by_driver_id
+                .insert(peer_id_to_u64(remote_id.0), input.clone());
             inputs.latest.insert(remote_id.0, input);
         }
         if any && (now - *last_debug_time) > 0.5 {

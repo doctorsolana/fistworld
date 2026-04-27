@@ -6,6 +6,7 @@
 
 use bevy::audio::{SpatialAudioSink, Volume};
 use bevy::prelude::*;
+use std::collections::HashSet;
 
 use shared::components::{Health, LocalPlayer, Npc, NpcArchetype, NpcPosition, PlayerPosition};
 
@@ -116,9 +117,16 @@ pub fn update_dialogue(
     mut commands: Commands,
     time: Res<Time>,
     player_query: Query<&PlayerPosition, With<LocalPlayer>>,
-    mut dialogue_npcs: Query<(Entity, &NpcPosition, &mut DialogueNpc, Option<&Health>)>,
+    mut dialogue_npcs: Query<(
+        Entity,
+        &NpcPosition,
+        &mut DialogueNpc,
+        Option<&Health>,
+        Option<&LookingAtPlayer>,
+    )>,
     existing_audio: Query<&DialogueAudio>,
     mut audio_manager: ResMut<AudioManager>,
+    mut active_dialogue_audio: Local<HashSet<Entity>>,
 ) {
     let Ok(player_pos) = player_query.single() else {
         return;
@@ -129,14 +137,22 @@ pub fn update_dialogue(
     // Clear the dialogue queue from previous frame
     audio_manager.dialogue_queue.clear();
 
-    for (npc_entity, npc_pos, mut dialogue, health_opt) in dialogue_npcs.iter_mut() {
+    active_dialogue_audio.clear();
+    active_dialogue_audio.extend(existing_audio.iter().map(|d| d.npc_entity));
+    let trigger_distance_sq = DIALOGUE_TRIGGER_DISTANCE * DIALOGUE_TRIGGER_DISTANCE;
+
+    for (npc_entity, npc_pos, mut dialogue, health_opt, looking_at_player) in
+        dialogue_npcs.iter_mut()
+    {
         // Dead NPCs don't talk
         if health_opt.is_some_and(|h| h.is_dead()) {
             // Clean up dialogue state if they were talking
             if dialogue.is_talking {
                 dialogue.is_talking = false;
                 dialogue.talk_timer = 0.0;
-                commands.entity(npc_entity).remove::<LookingAtPlayer>();
+                if looking_at_player.is_some() {
+                    commands.entity(npc_entity).remove::<LookingAtPlayer>();
+                }
             }
             continue;
         }
@@ -155,17 +171,13 @@ pub fn update_dialogue(
             }
         }
 
-        // Check if already has audio playing
-        let has_active_audio = existing_audio.iter().any(|d| d.npc_entity == npc_entity);
-
         // Check distance to player
         let distance_sq = npc_pos.0.distance_squared(player_pos.0);
-        let distance = distance_sq.sqrt();
 
-        if distance < DIALOGUE_TRIGGER_DISTANCE
+        if distance_sq < trigger_distance_sq
             && dialogue.cooldown_timer <= 0.0
             && !dialogue.is_talking
-            && !has_active_audio
+            && !active_dialogue_audio.contains(&npc_entity)
         {
             // Queue this NPC's dialogue request (will be processed by handle_dialogue_queue)
             audio_manager.dialogue_queue.push(DialogueRequest {
@@ -176,7 +188,7 @@ pub fn update_dialogue(
         }
 
         // Remove look-at when done talking
-        if !dialogue.is_talking {
+        if !dialogue.is_talking && looking_at_player.is_some() {
             commands.entity(npc_entity).remove::<LookingAtPlayer>();
         }
     }

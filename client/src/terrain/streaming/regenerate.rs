@@ -49,7 +49,7 @@ pub(crate) fn regenerate_dirty_chunks(
     // Canceling those can starve initial terrain appearance when large dirty queues are present.
     for (entity, chunk, mesh_handle) in chunk_query.iter() {
         if dirty.contains(&chunk.coord) {
-            tasks.tasks.remove(&chunk.coord);
+            tasks.remove(&chunk.coord);
             meshes.remove(mesh_handle.0.id());
             materials.remove(chunk.material.id());
             images.remove(chunk.weightmap.id());
@@ -77,6 +77,7 @@ pub(crate) fn process_chunk_tasks(
     mut commands: Commands,
     mut perf: ResMut<PerfHitchStats>,
     debug_perf: Res<DebugPerfSettings>,
+    mut scratch: ResMut<TerrainTaskScratch>,
 ) {
     let start = Instant::now();
     let Ok(player_pos) = player_query.single() else {
@@ -101,46 +102,79 @@ pub(crate) fn process_chunk_tasks(
     } else {
         TASK_FINALIZE_MAX_PER_FRAME
     };
-    let mut completed: Vec<ChunkBuildResult> = Vec::new();
-    let mut to_remove: Vec<ChunkCoord> = Vec::new();
+    scratch.completed.clear();
+    scratch.to_remove.clear();
 
-    let mut ordered_coords: Vec<(ChunkCoord, i32)> = Vec::new();
-    for coord in tasks.tasks.keys().copied() {
-        let dx = (coord.x - player_chunk.x).abs();
-        let dz = (coord.z - player_chunk.z).abs();
-        if dx > view_distance || dz > view_distance || !coord.in_world_bounds() {
-            to_remove.push(coord);
-            continue;
+    let should_rebuild_order = tasks.order_dirty
+        || tasks.order_center != Some(player_chunk)
+        || tasks.order_view_distance != view_distance;
+    if should_rebuild_order {
+        {
+            let TerrainChunkTasks {
+                tasks: task_map,
+                ordered_coords,
+                ..
+            } = &mut *tasks;
+            ordered_coords.clear();
+            for coord in task_map.keys().copied() {
+                let dx = (coord.x - player_chunk.x).abs();
+                let dz = (coord.z - player_chunk.z).abs();
+                if dx > view_distance || dz > view_distance || !coord.in_world_bounds() {
+                    scratch.to_remove.push(coord);
+                    continue;
+                }
+                ordered_coords.push(coord);
+            }
+            ordered_coords.sort_by_key(|coord| {
+                let dx = (coord.x - player_chunk.x).abs();
+                let dz = (coord.z - player_chunk.z).abs();
+                dx.max(dz)
+            });
         }
-        ordered_coords.push((coord, dx.max(dz)));
+
+        for coord in scratch.to_remove.drain(..) {
+            tasks.tasks.remove(&coord);
+        }
+        tasks.order_center = Some(player_chunk);
+        tasks.order_view_distance = view_distance;
+        tasks.order_dirty = false;
     }
-    ordered_coords.sort_by_key(|(_, dist)| *dist);
 
-    for (coord, _) in ordered_coords {
-        if completed.len() >= finalize_max_per_frame {
-            break;
-        }
+    {
+        let TerrainChunkTasks {
+            tasks: task_map,
+            ordered_coords,
+            ..
+        } = &mut *tasks;
+        for coord in ordered_coords.iter().copied() {
+            if scratch.completed.len() >= finalize_max_per_frame {
+                break;
+            }
 
-        if start.elapsed().as_secs_f32() * 1000.0 > finalize_budget_ms {
-            break;
-        }
+            if start.elapsed().as_secs_f32() * 1000.0 > finalize_budget_ms {
+                break;
+            }
 
-        let Some(task) = tasks.tasks.get_mut(&coord) else {
-            continue;
-        };
+            let Some(task) = task_map.get_mut(&coord) else {
+                continue;
+            };
 
-        if let Some(result) = block_on(poll_once(task)) {
-            completed.push(result);
-            to_remove.push(coord);
+            if let Some(result) = block_on(poll_once(task)) {
+                scratch.completed.push(result);
+                scratch.to_remove.push(coord);
+            }
         }
     }
 
-    for coord in to_remove {
-        tasks.tasks.remove(&coord);
+    if !scratch.to_remove.is_empty() {
+        for coord in scratch.to_remove.drain(..) {
+            tasks.tasks.remove(&coord);
+        }
+        tasks.order_dirty = true;
     }
 
     let mut finalized = 0u32;
-    for mut result in completed {
+    for mut result in scratch.completed.drain(..) {
         if loaded_chunks.chunks.contains(&result.coord) {
             continue;
         }

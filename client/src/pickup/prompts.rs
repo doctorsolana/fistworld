@@ -5,9 +5,12 @@ use super::*;
 /// Detect the nearest vehicle to the local player (for mounting)
 pub(super) fn detect_nearby_vehicles(
     mut nearby: ResMut<NearbyVehicle>,
+    time: Res<Time>,
     local_player: Query<&PlayerPosition, With<LocalPlayer>>,
     vehicles: Query<(Entity, &Vehicle, &VehicleState, &VehicleDriver)>,
     input_state: Res<InputState>,
+    mut elapsed: Local<f32>,
+    mut initialized: Local<bool>,
 ) {
     // Don't show prompt if already in vehicle or dead
     if input_state.in_vehicle || input_state.is_dead {
@@ -20,8 +23,20 @@ pub(super) fn detect_nearby_vehicles(
         return;
     };
 
+    const NEARBY_SCAN_INTERVAL_SECS: f32 = 0.1;
+    if *initialized {
+        *elapsed += time.delta_secs();
+        if *elapsed < NEARBY_SCAN_INTERVAL_SECS {
+            return;
+        }
+    } else {
+        *initialized = true;
+    }
+    *elapsed = 0.0;
+
     // Find the nearest unoccupied vehicle within range
     let mut closest: Option<(Entity, VehicleType, f32)> = None;
+    let interaction_range_sq = VEHICLE_INTERACTION_RANGE * VEHICLE_INTERACTION_RANGE;
 
     for (entity, vehicle, state, driver) in vehicles.iter() {
         // Skip if vehicle already has a driver
@@ -29,11 +44,11 @@ pub(super) fn detect_nearby_vehicles(
             continue;
         }
 
-        let distance = player_pos.0.distance(state.position);
-        if distance <= VEHICLE_INTERACTION_RANGE
-            && (closest.is_none() || distance < closest.as_ref().unwrap().2)
+        let distance_sq = player_pos.0.distance_squared(state.position);
+        if distance_sq <= interaction_range_sq
+            && (closest.is_none() || distance_sq < closest.as_ref().unwrap().2)
         {
-            closest = Some((entity, vehicle.vehicle_type, distance));
+            closest = Some((entity, vehicle.vehicle_type, distance_sq));
         }
     }
 
@@ -63,7 +78,9 @@ pub(super) fn show_vehicle_prompt(
 
         // Update existing prompt or spawn new one
         if let Ok(mut text) = text_query.single_mut() {
-            **text = prompt_text;
+            if **text != prompt_text {
+                **text = prompt_text;
+            }
         } else if existing_prompt.is_empty() {
             // Spawn new prompt (positioned above the pickup prompt location)
             commands.spawn((
@@ -94,9 +111,12 @@ pub(super) fn show_vehicle_prompt(
 /// Detect the nearest ground item to the local player
 pub(super) fn detect_nearby_items(
     mut nearby: ResMut<NearbyItem>,
+    time: Res<Time>,
     local_player: Query<&PlayerPosition, With<LocalPlayer>>,
     ground_items: Query<(Entity, &GroundItem, &GroundItemPosition)>,
     input_state: Res<InputState>,
+    mut elapsed: Local<f32>,
+    mut initialized: Local<bool>,
 ) {
     // Don't detect while in vehicle or dead
     if input_state.in_vehicle || input_state.is_dead {
@@ -109,14 +129,27 @@ pub(super) fn detect_nearby_items(
         return;
     };
 
+    const NEARBY_SCAN_INTERVAL_SECS: f32 = 0.1;
+    if *initialized {
+        *elapsed += time.delta_secs();
+        if *elapsed < NEARBY_SCAN_INTERVAL_SECS {
+            return;
+        }
+    } else {
+        *initialized = true;
+    }
+    *elapsed = 0.0;
+
     // Find the nearest item within pickup range
     let mut closest: Option<(Entity, &GroundItem, f32)> = None;
+    let pickup_range_sq = PICKUP_RANGE * PICKUP_RANGE;
 
     for (entity, item, pos) in ground_items.iter() {
-        let distance = player_pos.0.distance(pos.0);
-        if distance <= PICKUP_RANGE && (closest.is_none() || distance < closest.as_ref().unwrap().2)
+        let distance_sq = player_pos.0.distance_squared(pos.0);
+        if distance_sq <= pickup_range_sq
+            && (closest.is_none() || distance_sq < closest.as_ref().unwrap().2)
         {
-            closest = Some((entity, item, distance));
+            closest = Some((entity, item, distance_sq));
         }
     }
 
@@ -148,7 +181,9 @@ pub(super) fn show_pickup_prompt(
 
         // Update existing prompt or spawn new one
         if let Ok(mut text) = text_query.single_mut() {
-            **text = prompt_text;
+            if **text != prompt_text {
+                **text = prompt_text;
+            }
         } else if existing_prompt.is_empty() {
             // Spawn new prompt
             commands.spawn((

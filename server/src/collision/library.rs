@@ -69,6 +69,7 @@ pub struct StaticColliders {
     /// Spatial hash cell -> instance ids
     pub cells: HashMap<(i32, i32), Vec<u32>>,
     pub next_id: u32,
+    pub version: u64,
 }
 
 /// Load baked colliders at startup.

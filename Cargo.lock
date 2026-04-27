@@ -611,9 +611,9 @@ checksum = "7d809780667f4410e7c41b07f52439b94d2bdf8528eeedc287fa38d3b7f95d82"
 
 [[package]]
 name = "bevy"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec689b5a79452b6f777b889bbff22d3216b82a8d2ab7814d4a0eb571e9938d97"
+checksum = "1fd310426290cec560221f9750c2f4484be4a8eeea7de3483c423329b465c40e"
 dependencies = [
  "bevy_internal",
 ]
@@ -1365,9 +1365,9 @@ dependencies = [
 
 [[package]]
 name = "bevy_mesh"
-version = "0.18.0"
+version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aacf09d0ffd1a15baf8d201c4a34b918912a506395c2817aa55ab3d3776c09f2"
+checksum = "288f590c8173d4cca3cae5f2ba579accd5ed1a35dd3fab338f427eb39d55f05e"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -1514,8 +1514,9 @@ checksum = "4f98cbc6d34bbdb58240b72ed1731931b4991a893b3a3238bb7c42ae054aa676"
 
 [[package]]
 name = "bevy_rapier3d"
-version = "0.32.0"
-source = "git+https://github.com/dimforge/bevy_rapier?rev=4ab7e7dcc9a5772dcba0defb3625350eff2bd822#4ab7e7dcc9a5772dcba0defb3625350eff2bd822"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea1aada7322af63b68f5697c08b04bf916348e7f748ece298417fd13968215a1"
 dependencies = [
  "bevy",
  "bitflags 2.10.0",
@@ -3065,7 +3066,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3739,7 +3740,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 1.0.69",
- "windows 0.54.0",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -5544,7 +5545,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6956,7 +6957,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7627,7 +7628,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8702,7 +8703,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

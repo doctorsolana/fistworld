@@ -14,6 +14,28 @@ fn apply_shadow_caster_for_children(
     );
 }
 
+fn apply_frustum_cull_override_for_children(
+    root: Entity,
+    enabled: bool,
+    children_q: &Query<&Children>,
+    mesh_q: &Query<(), With<Mesh3d>>,
+    commands: &mut Commands,
+) {
+    let mut stack = vec![root];
+    while let Some(entity) = stack.pop() {
+        if mesh_q.get(entity).is_ok() {
+            if enabled {
+                commands.entity(entity).insert(NoFrustumCulling);
+            } else {
+                commands.entity(entity).remove::<NoFrustumCulling>();
+            }
+        }
+        if let Ok(children) = children_q.get(entity) {
+            stack.extend(children.iter());
+        }
+    }
+}
+
 /// Hide NPC visuals when far from the local player.
 pub fn update_npc_visibility(
     time: Res<Time>,
@@ -29,6 +51,7 @@ pub fn update_npc_visibility(
             &mut Visibility,
             Option<&NpcShadowState>,
             Option<&NpcVisibilityState>,
+            Option<&NpcFrustumCullOverrideState>,
         ),
         With<Npc>,
     >,
@@ -48,7 +71,8 @@ pub fn update_npc_visibility(
     let max_distance = settings.view_distance as f32 * CHUNK_SIZE;
     let max_distance_sq = max_distance * max_distance;
 
-    for (entity, transform, mut visibility, shadow_state, vis_state) in npcs.iter_mut() {
+    for (entity, transform, mut visibility, shadow_state, vis_state, cull_state) in npcs.iter_mut()
+    {
         let dist_sq = (transform.translation - player_pos.0).length_squared();
         let should_be_visible = dist_sq <= max_distance_sq;
         let current_visible = vis_state.map(|s| s.visible).unwrap_or(true);
@@ -72,6 +96,21 @@ pub fn update_npc_visibility(
             apply_shadow_caster_for_children(
                 entity,
                 should_cast,
+                &children_q,
+                &mesh_q,
+                &mut commands,
+            );
+        }
+
+        let should_disable_frustum_culling = dist_sq <= NPC_NO_FRUSTUM_CULL_RANGE_SQ;
+        let current_cull_override = cull_state.map(|s| s.enabled).unwrap_or(false);
+        if cull_state.is_none() || current_cull_override != should_disable_frustum_culling {
+            commands.entity(entity).insert(NpcFrustumCullOverrideState {
+                enabled: should_disable_frustum_culling,
+            });
+            apply_frustum_cull_override_for_children(
+                entity,
+                should_disable_frustum_culling,
                 &children_q,
                 &mesh_q,
                 &mut commands,
@@ -111,14 +150,18 @@ pub fn apply_npc_shadow_state_to_new_meshes(
 pub fn apply_npc_no_frustum_culling_to_new_meshes(
     new_meshes: Query<Entity, Added<Mesh3d>>,
     parents: Query<&ChildOf>,
-    roots: Query<(), With<Npc>>,
+    roots: Query<&NpcFrustumCullOverrideState, With<Npc>>,
     mut commands: Commands,
 ) {
     for mesh_entity in new_meshes.iter() {
         let mut current = mesh_entity;
         loop {
-            if roots.get(current).is_ok() {
-                commands.entity(mesh_entity).insert(NoFrustumCulling);
+            if let Ok(state) = roots.get(current) {
+                if state.enabled {
+                    commands.entity(mesh_entity).insert(NoFrustumCulling);
+                } else {
+                    commands.entity(mesh_entity).remove::<NoFrustumCulling>();
+                }
                 break;
             }
             let Ok(parent) = parents.get(current) else {

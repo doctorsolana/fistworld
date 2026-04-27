@@ -223,6 +223,7 @@ pub fn handle_disconnections(
         profiles.peer_to_name.remove(&peer_id);
         profiles.name_to_peer.remove(&name_lower);
         inputs.latest.remove(&peer_id);
+        inputs.latest_by_driver_id.remove(&peer_id_to_u64(peer_id));
         return;
     };
 
@@ -328,4 +329,5 @@ pub fn handle_disconnections(
     info!("Freed up name '{}' for peer {:?}", name_lower, peer_id);
 
     inputs.latest.remove(&peer_id);
+    inputs.latest_by_driver_id.remove(&peer_id_to_u64(peer_id));
 }

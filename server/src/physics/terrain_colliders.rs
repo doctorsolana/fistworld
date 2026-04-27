@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::{Collider, RigidBody};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use shared::components::{Npc, NpcPosition, Player, PlayerPosition};
 use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
@@ -55,6 +55,11 @@ impl Default for TerrainColliderSettings {
 pub struct TerrainColliderRegistry {
     pub loaded: HashMap<ChunkCoord, Entity>,
     pub terrain_version: u32,
+    pub radius_chunks: i32,
+    pub heightfield_resolution: usize,
+    pub centers: Vec<ChunkCoord>,
+    pub desired_chunks: HashSet<ChunkCoord>,
+    pub pending_load: VecDeque<ChunkCoord>,
 }
 
 fn chunk_heights(terrain: &WorldTerrain, coord: ChunkCoord, resolution: usize) -> Vec<f32> {
@@ -139,6 +144,8 @@ fn gather_centers(
         centers.push(ChunkCoord::new(0, 0));
     }
 
+    centers.sort_by_key(|coord| (coord.x, coord.z));
+    centers.dedup();
     centers
 }
 
@@ -152,40 +159,66 @@ pub fn sync_terrain_colliders(
     npcs: Query<&NpcPosition, With<Npc>>,
 ) {
     let terrain_version = terrain.modification_version();
-    if registry.terrain_version != terrain_version {
+    let centers = gather_centers(&players, &vehicles, &npcs);
+    let terrain_changed = registry.terrain_version != terrain_version;
+    let resolution_changed = registry.heightfield_resolution != settings.heightfield_resolution;
+    let desired_changed = terrain_changed
+        || resolution_changed
+        || registry.radius_chunks != settings.radius_chunks
+        || registry.centers != centers;
+
+    if terrain_changed || resolution_changed {
         let stale: Vec<Entity> = registry.loaded.values().copied().collect();
         for entity in stale {
             commands.entity(entity).despawn();
         }
         registry.loaded.clear();
         registry.terrain_version = terrain_version;
+        registry.heightfield_resolution = settings.heightfield_resolution;
     }
 
-    let centers = gather_centers(&players, &vehicles, &npcs);
-    let desired = desired_chunks_for_centers(&centers, settings.radius_chunks);
+    if desired_changed {
+        registry.centers = centers;
+        registry.radius_chunks = settings.radius_chunks;
+        registry.desired_chunks =
+            desired_chunks_for_centers(&registry.centers, settings.radius_chunks);
+        registry.pending_load.clear();
 
-    let stale_chunks: Vec<ChunkCoord> = registry
-        .loaded
-        .keys()
-        .copied()
-        .filter(|coord| !desired.contains(coord))
-        .collect();
-    for coord in stale_chunks {
-        if let Some(entity) = registry.loaded.remove(&coord) {
-            commands.entity(entity).despawn();
+        let stale_chunks: Vec<ChunkCoord> = registry
+            .loaded
+            .keys()
+            .copied()
+            .filter(|coord| !registry.desired_chunks.contains(coord))
+            .collect();
+        for coord in stale_chunks {
+            if let Some(entity) = registry.loaded.remove(&coord) {
+                commands.entity(entity).despawn();
+            }
         }
+
+        let mut missing: Vec<ChunkCoord> = registry
+            .desired_chunks
+            .iter()
+            .copied()
+            .filter(|coord| !registry.loaded.contains_key(coord))
+            .collect();
+
+        let center = registry
+            .centers
+            .first()
+            .copied()
+            .unwrap_or(ChunkCoord::new(0, 0));
+        missing.sort_by_key(|coord| (coord.x - center.x).abs().max((coord.z - center.z).abs()));
+        registry.pending_load.extend(missing);
     }
 
-    let mut missing: Vec<ChunkCoord> = desired
-        .iter()
-        .copied()
-        .filter(|coord| !registry.loaded.contains_key(coord))
-        .collect();
-
-    let center = centers.first().copied().unwrap_or(ChunkCoord::new(0, 0));
-    missing.sort_by_key(|coord| (coord.x - center.x).abs().max((coord.z - center.z).abs()));
-
-    for coord in missing.into_iter().take(settings.max_load_per_tick) {
+    for _ in 0..settings.max_load_per_tick {
+        let Some(coord) = registry.pending_load.pop_front() else {
+            break;
+        };
+        if registry.loaded.contains_key(&coord) || !registry.desired_chunks.contains(&coord) {
+            continue;
+        }
         let entity = spawn_terrain_chunk_collider(
             &mut commands,
             &terrain,

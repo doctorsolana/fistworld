@@ -276,7 +276,6 @@ pub fn handle_send_input_to_server(
         (With<crate::GameClient>, With<Connected>),
     >,
     local_player: Query<&Player, With<LocalPlayer>>,
-    vehicles: Query<&VehicleDriver>,
     time: Res<Time>,
     mut last_warn_time: Local<f32>,
     mut last_sent_input: Local<Option<PlayerInput>>,
@@ -287,7 +286,7 @@ pub fn handle_send_input_to_server(
     let now = time.elapsed_secs();
 
     // Get client entity with sender
-    let Ok((local_id, mut sender)) = client_query.single_mut() else {
+    let Ok((_local_id, mut sender)) = client_query.single_mut() else {
         // If this fires, input will *never* reach the server, so movement will be frozen.
         if now - *last_warn_time > 1.0 {
             warn!("handle_send_input_to_server: missing GameClient+Connected+LocalId+MessageSender<PlayerInput>; not sending inputs");
@@ -299,11 +298,6 @@ pub fn handle_send_input_to_server(
         *burst_ticks_remaining = 0;
         return;
     };
-
-    let our_peer_id = local_id.0;
-    let in_vehicle = vehicles
-        .iter()
-        .any(|driver| driver.driver_id == Some(peer_id_to_u64(our_peer_id)));
 
     // If we don't know which Player is ours yet, don't send inputs.
     // This prevents the server from moving a "ghost" player while the client camera is not
@@ -346,7 +340,7 @@ pub fn handle_send_input_to_server(
         input.fly_down = false;
         input.fly_fast = false;
         input.vehicle_input = None;
-    } else if in_vehicle {
+    } else if input_state.in_vehicle {
         input.vehicle_input = Some(VehicleInput {
             throttle: if input_state.forward { 1.0 } else { 0.0 },
             brake: if input_state.backward { 1.0 } else { 0.0 },

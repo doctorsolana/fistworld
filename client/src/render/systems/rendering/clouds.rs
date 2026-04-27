@@ -2,6 +2,7 @@
 
 use super::day_night::{lerp_color, lerp_f32, smoothstep, sun_yaw_from_phase};
 use super::*;
+use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
 
 const CLOUD_TEXTURE_PATH: &str = "sky_10_2k/sky_10_2k.png";
 const CLOUD_LAYER_RADII: [f32; 1] = [1900.0];
@@ -99,6 +100,12 @@ pub struct CloudCard {
 #[derive(Resource)]
 pub struct CloudCardsSpawned;
 
+#[derive(Resource)]
+pub struct PendingCloudCardTexture {
+    pub seed: u64,
+    pub task: Task<Image>,
+}
+
 /// Cached cloud tint/visibility to avoid per-frame material mutations.
 /// Only mutate GPU materials when the visual actually changes.
 #[derive(Resource, Default)]
@@ -162,6 +169,7 @@ pub fn spawn_cloud_cards(
     mut images: ResMut<Assets<Image>>,
     seed_query: Query<&shared::components::CloudSeed>,
     spawned: Option<Res<CloudCardsSpawned>>,
+    pending_texture: Option<ResMut<PendingCloudCardTexture>>,
     settings: Res<GraphicsSettings>,
 ) {
     if spawned.is_some() {
@@ -175,9 +183,16 @@ pub fn spawn_cloud_cards(
         return;
     };
 
+    let Some(card_texture_image) =
+        poll_or_start_cloud_card_texture(seed, pending_texture, &mut commands)
+    else {
+        return;
+    };
+
+    commands.remove_resource::<PendingCloudCardTexture>();
     commands.insert_resource(CloudCardsSpawned);
 
-    let cloud_texture = images.add(generate_cloud_card_texture(seed, CLOUD_CARD_TEXTURE_SIZE));
+    let cloud_texture = images.add(card_texture_image);
     let cloud_mesh = meshes.add(Plane3d::default());
 
     let mut rng = StdRng::seed_from_u64(seed);
@@ -220,6 +235,25 @@ pub fn spawn_cloud_cards(
             InheritedVisibility::default(),
         ));
     }
+}
+
+fn poll_or_start_cloud_card_texture(
+    seed: u64,
+    pending_texture: Option<ResMut<PendingCloudCardTexture>>,
+    commands: &mut Commands,
+) -> Option<Image> {
+    if let Some(mut pending_texture) = pending_texture {
+        if pending_texture.seed != seed {
+            commands.remove_resource::<PendingCloudCardTexture>();
+            return None;
+        }
+        return block_on(poll_once(&mut pending_texture.task));
+    }
+
+    let task = AsyncComputeTaskPool::get()
+        .spawn(async move { generate_cloud_card_texture(seed, CLOUD_CARD_TEXTURE_SIZE) });
+    commands.insert_resource(PendingCloudCardTexture { seed, task });
+    None
 }
 
 fn hash_to_unit(seed: u64, salt: u64) -> f32 {

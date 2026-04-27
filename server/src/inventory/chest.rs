@@ -51,12 +51,13 @@ pub fn handle_open_chest_requests(
             };
 
             let mut closest: Option<(Entity, f32)> = None;
+            let chest_range_sq = CHEST_RANGE * CHEST_RANGE;
             for (chest_entity, chest_pos) in chests.iter() {
-                let distance = player_pos.0.distance(chest_pos.0);
-                if distance <= CHEST_RANGE
-                    && (closest.is_none() || distance < closest.expect("checked").1)
+                let distance_sq = player_pos.0.distance_squared(chest_pos.0);
+                if distance_sq <= chest_range_sq
+                    && (closest.is_none() || distance_sq < closest.expect("checked").1)
                 {
-                    closest = Some((chest_entity, distance));
+                    closest = Some((chest_entity, distance_sq));
                 }
             }
 
@@ -238,7 +239,8 @@ pub fn update_distant_chest_auto_close(
             continue;
         };
 
-        if player_pos.0.distance(chest_pos.0) > CHEST_RANGE + 1.0 {
+        let close_range = CHEST_RANGE + 1.0;
+        if player_pos.0.distance_squared(chest_pos.0) > close_range * close_range {
             to_close.push(client_id);
             if crate::telemetry::hotlog_enabled() {
                 info!(

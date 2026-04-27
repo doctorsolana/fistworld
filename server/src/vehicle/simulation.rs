@@ -1,9 +1,7 @@
 //! Vehicle simulation systems.
 
 use bevy::prelude::*;
-use std::collections::HashMap;
 
-use shared::components::Player;
 use shared::protocol::FIXED_TIMESTEP_HZ;
 use shared::terrain::WorldTerrain;
 use shared::vehicle::{
@@ -12,13 +10,11 @@ use shared::vehicle::{
 };
 
 use crate::net::input::ClientInputs;
-use crate::net::peer::peer_id_to_u64;
 
 /// Simulate all vehicles.
 pub fn update_vehicles(
     terrain: Res<WorldTerrain>,
     inputs: Res<ClientInputs>,
-    players: Query<&Player>,
     mut vehicles: Query<(
         &Vehicle,
         &VehicleDriver,
@@ -27,16 +23,11 @@ pub fn update_vehicles(
     )>,
 ) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
-    let mut peer_by_driver_id = HashMap::new();
-    for player in players.iter() {
-        peer_by_driver_id.insert(peer_id_to_u64(player.client_id), player.client_id);
-    }
 
     for (vehicle, driver, mut state, suspension) in vehicles.iter_mut() {
         let vehicle_input = driver
             .driver_id
-            .and_then(|driver_id| peer_by_driver_id.get(&driver_id).copied())
-            .and_then(|peer_id| inputs.latest.get(&peer_id))
+            .and_then(|driver_id| inputs.latest_by_driver_id.get(&driver_id))
             .and_then(|input| input.vehicle_input.clone())
             .unwrap_or_default();
 

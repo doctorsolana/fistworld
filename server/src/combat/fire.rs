@@ -23,14 +23,16 @@ pub fn handle_shoot_requests(
     mut players: Query<(&PlayerPosition, &mut EquippedWeapon, Option<&WeaponReload>), With<Player>>,
     mut audio_senders: Query<&mut MessageSender<AudioEvent>, (With<ClientOf>, With<Connected>)>,
     time: Res<Time>,
+    mut shots_fired: Local<Vec<(u64, Vec3, shared::weapons::WeaponType)>>,
 ) {
     let current_time = time.elapsed_secs();
 
     // Collect shots to broadcast audio events after processing.
-    let mut shots_fired: Vec<(u64, Vec3, shared::weapons::WeaponType)> = Vec::new();
+    shots_fired.clear();
 
     for (remote_id, mut receiver) in client_links.iter_mut() {
         let peer_id = remote_id.0;
+        let shooter_id = peer_id_to_u64(peer_id);
         let Some(player_entity) = player_index.entity_for_peer(peer_id) else {
             continue;
         };
@@ -76,7 +78,7 @@ pub fn handle_shoot_requests(
 
                 commands.spawn((
                     Bullet {
-                        owner_id: peer_id_to_u64(peer_id),
+                        owner_id: shooter_id,
                         weapon_type: weapon.weapon_type,
                         spawn_position: spawn_pos,
                         initial_velocity: velocity,
@@ -90,7 +92,7 @@ pub fn handle_shoot_requests(
                 ));
             }
 
-            shots_fired.push((peer_id_to_u64(peer_id), spawn_pos, weapon.weapon_type));
+            shots_fired.push((shooter_id, spawn_pos, weapon.weapon_type));
 
             if crate::telemetry::hotlog_enabled() {
                 info!(
@@ -109,7 +111,7 @@ pub fn handle_shoot_requests(
         }
     }
 
-    for (shooter_id, position, weapon_type) in shots_fired {
+    for (shooter_id, position, weapon_type) in shots_fired.iter().copied() {
         let audio_event = AudioEvent {
             player_id: shooter_id,
             position,

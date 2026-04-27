@@ -77,6 +77,11 @@ pub(crate) struct NpcVisibilityState {
     pub(crate) visible: bool,
 }
 
+#[derive(Component, Clone, Copy)]
+pub(crate) struct NpcFrustumCullOverrideState {
+    pub(crate) enabled: bool,
+}
+
 /// Per-NPC network smoothing state for sparse replication samples.
 #[derive(Component, Clone, Debug)]
 pub struct NpcNetSmoothing {
@@ -132,6 +137,9 @@ pub(crate) const NPC_SPEED_SMOOTHING: f32 = 12.0;
 pub(crate) const INSTANT_STOP_THRESHOLD: f32 = 0.05;
 pub(crate) const NPC_SHADOW_RANGE: f32 = 140.0;
 pub(crate) const NPC_SHADOW_RANGE_SQ: f32 = NPC_SHADOW_RANGE * NPC_SHADOW_RANGE;
+pub(crate) const NPC_NO_FRUSTUM_CULL_RANGE: f32 = 40.0;
+pub(crate) const NPC_NO_FRUSTUM_CULL_RANGE_SQ: f32 =
+    NPC_NO_FRUSTUM_CULL_RANGE * NPC_NO_FRUSTUM_CULL_RANGE;
 pub(crate) const NPC_NET_EXTRAPOLATE_MAX_SECS: f32 = 0.35;
 pub(crate) const NPC_ANIM_MIN_HOLD_IDLE_SECS: f32 = 0.18;
 pub(crate) const NPC_ANIM_MIN_HOLD_MOVE_SECS: f32 = 0.12;

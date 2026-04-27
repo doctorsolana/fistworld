@@ -38,6 +38,7 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<physics::terrain_colliders::TerrainColliderRegistry>();
     app.init_resource::<physics::static_world_colliders::StaticWorldColliderRegistry>();
     app.init_resource::<combat::target_index::HittableSpatialIndex>();
+    app.init_resource::<combat::hit_world::BulletWorldHitCache>();
     app.insert_resource(persistence::profiles::PlayerProfiles::new(
         profile_storage_dir.clone(),
     ));

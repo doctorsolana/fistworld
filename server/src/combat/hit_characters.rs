@@ -2,13 +2,12 @@
 
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::ExternalImpulse;
-use bevy_rapier3d::prelude::ReadRapierContext;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
 use shared::components::{
-    Bullet, BulletPrevPosition, BulletVelocity, DebugPhysicsBox, DebugPhysicsBoxPosition,
-    DebugPhysicsBoxRotation, Health, Npc, NpcDamageEvent, NpcPosition, Player, PlayerPosition,
+    Bullet, BulletPrevPosition, DebugPhysicsBox, DebugPhysicsBoxPosition, DebugPhysicsBoxRotation,
+    Health, Npc, NpcDamageEvent, NpcPosition, Player, PlayerPosition,
 };
 use shared::npc::{
     npc_capsule_endpoints, npc_head_center, NPC_HEAD_RADIUS, NPC_HEIGHT, NPC_RADIUS,
@@ -17,7 +16,6 @@ use shared::player::{PLAYER_HEIGHT, PLAYER_RADIUS};
 use shared::protocol::{
     BulletImpact, BulletImpactSurface, DamageReceived, HitConfirm, PlayerKilled, ReliableChannel,
 };
-use shared::terrain::WorldTerrain;
 use shared::weapons::damage;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -26,30 +24,21 @@ use crate::ai::ragdoll::{CorpseCollisionIndex, NpcDeathImpact};
 use crate::combat::bullet_sim::BulletPendingDespawn;
 use crate::combat::geometry::{
     ray_capsule_intersection, ray_obb_intersection, ray_sphere_intersection,
-    segment_terrain_intersection,
 };
+use crate::combat::hit_world::BulletWorldHitCache;
 use crate::combat::target_index::HittableSpatialIndex;
 use crate::net::peer::peer_id_to_u64;
-use crate::physics::queries;
-use crate::physics::static_world_colliders::{StaticBuildingCollider, StaticPropCollider};
 
 /// Detect bullet hits against players and NPCs.
 pub fn handle_bullet_character_hits(
     mut commands: Commands,
     time: Res<Time>,
-    terrain: Res<WorldTerrain>,
-    rapier: ReadRapierContext,
+    mut world_hits: ResMut<BulletWorldHitCache>,
     hittable_index: Res<HittableSpatialIndex>,
     corpse_index: Res<CorpseCollisionIndex>,
     mut perf_monitor: Option<ResMut<crate::telemetry::perf::ServerPerfMonitor>>,
     bullets: Query<
-        (
-            Entity,
-            &Bullet,
-            &BulletVelocity,
-            &BulletPrevPosition,
-            &Transform,
-        ),
+        (Entity, &Bullet, &BulletPrevPosition, &Transform),
         Without<BulletPendingDespawn>,
     >,
     mut players: ParamSet<(
@@ -61,8 +50,6 @@ pub fn handle_bullet_character_hits(
         Query<(Entity, &Npc, &NpcPosition, &mut Health), (With<Npc>, Without<Player>)>,
     )>,
     mut corpse_body_impulses: Query<&mut ExternalImpulse, Without<DebugPhysicsBox>>,
-    prop_hits: Query<(), With<StaticPropCollider>>,
-    building_hits: Query<(), With<StaticBuildingCollider>>,
     debug_boxes: Query<(
         Entity,
         &DebugPhysicsBoxPosition,
@@ -82,7 +69,6 @@ pub fn handle_bullet_character_hits(
     >,
 ) {
     let phase_start = Instant::now();
-    let rapier_context = rapier.single().ok();
     #[derive(Clone, Copy, Debug)]
     enum Victim {
         Player(PeerId),
@@ -148,7 +134,7 @@ pub fn handle_bullet_character_hits(
         let npcs_ro = npcs.p0();
         let players_ro = players.p0();
 
-        for (bullet_entity, bullet, _velocity, prev_pos, transform) in bullets.iter() {
+        for (bullet_entity, bullet, prev_pos, transform) in bullets.iter() {
             let ray_start = prev_pos.0;
             let ray_end = transform.translation;
             let ray_dir = ray_end - ray_start;
@@ -159,26 +145,11 @@ pub fn handle_bullet_character_hits(
             }
 
             let ray_dir_norm = ray_dir / ray_length;
-            let mut max_hit_distance = ray_length;
-
-            if let Some((terrain_distance, _, _)) =
-                segment_terrain_intersection(&terrain, ray_start, ray_end)
-            {
-                max_hit_distance = max_hit_distance.min(terrain_distance);
-            }
-
-            if let Some(context) = rapier_context.as_ref() {
-                if let Some((hit_entity, hit)) =
-                    queries::cast_world_impact(context, ray_start, ray_dir_norm, ray_length)
-                {
-                    if prop_hits.get(hit_entity).is_ok()
-                        || building_hits.get(hit_entity).is_ok()
-                        || debug_boxes.get(hit_entity).is_ok()
-                    {
-                        max_hit_distance = max_hit_distance.min(hit.time_of_impact);
-                    }
-                }
-            }
+            let max_hit_distance = world_hits
+                .hits
+                .get(&bullet_entity)
+                .map(|hit| ray_length.min(hit.distance))
+                .unwrap_or(ray_length);
 
             if max_hit_distance < 0.001 {
                 continue;
@@ -229,6 +200,7 @@ pub fn handle_bullet_character_hits(
                         bullet_spawn_position: bullet.spawn_position,
                         bullet_initial_velocity: bullet.initial_velocity,
                     });
+                    world_hits.consumed.insert(bullet_entity);
                     hit_recorded = true;
                     break;
                 }
@@ -273,6 +245,7 @@ pub fn handle_bullet_character_hits(
                         bullet_spawn_position: bullet.spawn_position,
                         bullet_initial_velocity: bullet.initial_velocity,
                     });
+                    world_hits.consumed.insert(bullet_entity);
                     hit_recorded = true;
                     break;
                 }
@@ -343,6 +316,7 @@ pub fn handle_bullet_character_hits(
                         bullet_spawn_position: bullet.spawn_position,
                         bullet_initial_velocity: bullet.initial_velocity,
                     });
+                    world_hits.consumed.insert(bullet_entity);
                     hit_recorded = true;
                     break;
                 }
@@ -394,6 +368,7 @@ pub fn handle_bullet_character_hits(
                     bullet_spawn_position: bullet.spawn_position,
                     bullet_initial_velocity: bullet.initial_velocity,
                 });
+                world_hits.consumed.insert(bullet_entity);
                 continue;
             }
 
@@ -446,8 +421,16 @@ pub fn handle_bullet_character_hits(
                     bullet_spawn_position: bullet.spawn_position,
                     bullet_initial_velocity: bullet.initial_velocity,
                 });
+                world_hits.consumed.insert(bullet_entity);
             }
         }
+    }
+
+    if hits.is_empty() && corpse_hits.is_empty() && debug_box_hits.is_empty() {
+        if let Some(perf) = perf_monitor.as_deref_mut() {
+            perf.record_bullet_hits_ms(phase_start.elapsed().as_secs_f32() * 1000.0);
+        }
+        return;
     }
 
     let mut shooter_ids = HashMap::new();

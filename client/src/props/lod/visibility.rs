@@ -103,6 +103,7 @@ pub(crate) fn reveal_pending_prop_roots(
 
 /// Manual LOD switching for tree props to avoid dither flicker with instancing.
 pub(crate) fn update_tree_lod_visibility(
+    time: Res<Time>,
     mut commands: Commands,
     settings: Res<GraphicsSettings>,
     debug_mode: Res<PropLodDebugMode>,
@@ -118,15 +119,31 @@ pub(crate) fn update_tree_lod_visibility(
         ),
         (With<TreeLodRoot>, Without<PendingPropVisibility>),
     >,
+    mut elapsed: Local<f32>,
+    mut last_player_pos: Local<Option<Vec3>>,
 ) {
     let Ok(player_pos) = player.single() else {
         return;
     };
+
+    const TREE_LOD_UPDATE_INTERVAL_SECS: f32 = 0.12;
+    const TREE_LOD_PLAYER_MOVE_THRESHOLD: f32 = 4.0;
+    let player_moved = last_player_pos.is_none_or(|last| {
+        last.distance_squared(player_pos.0) >= TREE_LOD_PLAYER_MOVE_THRESHOLD.powi(2)
+    });
+    let force_update = settings.is_changed() || debug_mode.is_changed() || player_moved;
+    *elapsed += time.delta_secs();
+    if !force_update && *elapsed < TREE_LOD_UPDATE_INTERVAL_SECS {
+        return;
+    }
+    *elapsed = 0.0;
+    *last_player_pos = Some(player_pos.0);
+
     let prop_multiplier = settings.prop_render_multiplier;
     let max_prop_distance = settings.view_distance as f32 * CHUNK_SIZE;
 
     for (root, transform, tuning, lods, runtime_state, mut root_visibility) in roots.iter_mut() {
-        let distance = transform.translation().distance(player_pos.0);
+        let distance_sq = transform.translation().distance_squared(player_pos.0);
         let base_end = tuning.visible_end_distance.map(|end| end * prop_multiplier);
         let mut lod_end = base_end.unwrap_or(PROP_LOD1_END_FALLBACK * prop_multiplier);
         lod_end = lod_end.min(max_prop_distance);
@@ -141,6 +158,12 @@ pub(crate) fn update_tree_lod_visibility(
 
         let current_state = runtime_state.copied().unwrap_or_default();
         let has_lod1 = lods.lod1.is_some();
+        let lod_end_sq = lod_end * lod_end;
+        let split_sq = split * split;
+        let split_plus_hysteresis = split + TREE_LOD_HYSTERESIS;
+        let split_plus_hysteresis_sq = split_plus_hysteresis * split_plus_hysteresis;
+        let split_minus_hysteresis = (split - TREE_LOD_HYSTERESIS).max(0.0);
+        let split_minus_hysteresis_sq = split_minus_hysteresis * split_minus_hysteresis;
         let desired_active_lod = match *debug_mode {
             PropLodDebugMode::ForceLod0 => TreeActiveLod::Lod0,
             PropLodDebugMode::ForceLod1 => {
@@ -151,28 +174,28 @@ pub(crate) fn update_tree_lod_visibility(
                 }
             }
             PropLodDebugMode::Off => {
-                if distance > lod_end {
+                if distance_sq > lod_end_sq {
                     TreeActiveLod::Hidden
                 } else if !has_lod1 {
                     TreeActiveLod::Lod0
                 } else {
                     match current_state.active_lod {
                         TreeActiveLod::Lod0 => {
-                            if distance >= split + TREE_LOD_HYSTERESIS {
+                            if distance_sq >= split_plus_hysteresis_sq {
                                 TreeActiveLod::Lod1
                             } else {
                                 TreeActiveLod::Lod0
                             }
                         }
                         TreeActiveLod::Lod1 => {
-                            if distance <= split - TREE_LOD_HYSTERESIS {
+                            if distance_sq <= split_minus_hysteresis_sq {
                                 TreeActiveLod::Lod0
                             } else {
                                 TreeActiveLod::Lod1
                             }
                         }
                         TreeActiveLod::Hidden => {
-                            if distance <= split {
+                            if distance_sq <= split_sq {
                                 TreeActiveLod::Lod0
                             } else {
                                 TreeActiveLod::Lod1

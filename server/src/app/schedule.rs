@@ -222,6 +222,7 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
             combat::reload::handle_reload_request,
             combat::fire::handle_shoot_requests,
             combat::bullet_sim::update_bullets,
+            combat::hit_world::prepare_bullet_world_hits,
             combat::hit_characters::handle_bullet_character_hits,
             combat::hit_world::handle_bullet_world_hits,
             combat::cleanup::cleanup_bullets,

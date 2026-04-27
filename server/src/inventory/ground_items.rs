@@ -32,12 +32,13 @@ pub fn handle_pickup_requests(
             };
 
             let mut closest: Option<(Entity, &GroundItem, f32)> = None;
+            let pickup_range_sq = PICKUP_RANGE * PICKUP_RANGE;
             for (entity, item, pos) in ground_items.iter() {
-                let distance = player_pos.0.distance(pos.0);
-                if distance <= PICKUP_RANGE
-                    && (closest.is_none() || distance < closest.as_ref().expect("checked").2)
+                let distance_sq = player_pos.0.distance_squared(pos.0);
+                if distance_sq <= pickup_range_sq
+                    && (closest.is_none() || distance_sq < closest.as_ref().expect("checked").2)
                 {
-                    closest = Some((entity, item, distance));
+                    closest = Some((entity, item, distance_sq));
                 }
             }
 

@@ -2,11 +2,12 @@
 
 use bevy::prelude::*;
 use bevy_rapier3d::prelude::{Collider, RigidBody};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use shared::building::{BuildingPosition, PlacedBuilding};
 use shared::colliders::BakedCollider;
 
+use crate::collision::building_index::BuildingSpatialIndex;
 use crate::collision::library::{BakedColliderLibrary, StaticColliders};
 use crate::physics::layers;
 
@@ -24,6 +25,8 @@ pub struct StaticBuildingCollider {
 pub struct StaticWorldColliderRegistry {
     pub props: HashMap<u32, Entity>,
     pub buildings: HashMap<Entity, Entity>,
+    pub props_synced_version: u64,
+    pub buildings_synced_version: u64,
 }
 
 fn scaled_points(points: &[[f32; 3]], scale: f32) -> Vec<Vec3> {
@@ -64,11 +67,11 @@ pub fn sync_static_prop_colliders(
     mut registry: ResMut<StaticWorldColliderRegistry>,
 ) {
     let Some(library) = library else { return };
-
-    let mut live_ids = HashSet::with_capacity(static_colliders.instances.len());
+    if registry.props_synced_version == static_colliders.version {
+        return;
+    }
 
     for (instance_id, instance) in &static_colliders.instances {
-        live_ids.insert(*instance_id);
         if registry.props.contains_key(instance_id) {
             continue;
         }
@@ -101,24 +104,29 @@ pub fn sync_static_prop_colliders(
         .props
         .keys()
         .copied()
-        .filter(|id| !live_ids.contains(id))
+        .filter(|id| !static_colliders.instances.contains_key(id))
         .collect();
     for id in stale {
         if let Some(entity) = registry.props.remove(&id) {
             commands.entity(entity).despawn();
         }
     }
+    registry.props_synced_version = static_colliders.version;
 }
 
 pub fn sync_static_building_colliders(
     mut commands: Commands,
+    building_index: Res<BuildingSpatialIndex>,
     buildings: Query<(Entity, &PlacedBuilding, &BuildingPosition)>,
     mut registry: ResMut<StaticWorldColliderRegistry>,
 ) {
-    let mut live_buildings = HashSet::with_capacity(buildings.iter().len());
+    if registry.buildings_synced_version == building_index.version {
+        return;
+    }
+    let mut live_buildings = Vec::with_capacity(buildings.iter().len());
 
     for (building_entity, building, position) in buildings.iter() {
-        live_buildings.insert(building_entity);
+        live_buildings.push(building_entity);
 
         let def = building.building_type.definition();
         let half_extents = Vec3::new(
@@ -163,4 +171,5 @@ pub fn sync_static_building_colliders(
             commands.entity(collider_entity).despawn();
         }
     }
+    registry.buildings_synced_version = building_index.version;
 }

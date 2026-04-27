@@ -15,6 +15,7 @@ use shared::physics::ground_clearance_center;
 use shared::protocol::FIXED_TIMESTEP_HZ;
 use shared::spatial::SpatialObstacleGrid;
 use shared::terrain::WorldTerrain;
+use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::ai::pathfinding::PathfindingScratch;
@@ -89,9 +90,9 @@ pub fn update_npc_ai(
     player_spatial: Res<PlayerSpatialIndex>,
     mut server_perf: Option<ResMut<crate::telemetry::perf::ServerPerfMonitor>>,
     mut ai_tick: Local<u64>,
+    mut cadence_cache: Local<HashMap<Entity, (u64, u64)>>,
     mut perf: Local<NpcAiPerfAccumulator>,
     mut pathfinding_scratch: Local<PathfindingScratch>,
-    npc_healths: Query<&Health, With<Npc>>,
     mut npcs: Query<
         (
             Entity,
@@ -109,15 +110,15 @@ pub fn update_npc_ai(
     let frame_start = Instant::now();
     *ai_tick = ai_tick.wrapping_add(1);
     let ai_tick_value = *ai_tick;
+    if ai_tick_value % 600 == 0 {
+        cadence_cache.retain(|_, (last_tick, _)| ai_tick_value.wrapping_sub(*last_tick) < 1_200);
+    }
     let base_dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     let near_sq = NPC_AI_NEAR_RADIUS * NPC_AI_NEAR_RADIUS;
     let mid_sq = NPC_AI_MID_RADIUS * NPC_AI_MID_RADIUS;
     let far_sq = NPC_AI_FAR_RADIUS * NPC_AI_FAR_RADIUS;
     let alive_players = player_spatial.alive_count();
-    let alive_npcs = npc_healths
-        .iter()
-        .filter(|health| !health.is_dead())
-        .count() as u64;
+    let alive_npcs = npcs.iter().len() as u64;
     let target_updates_per_tick = configured_npc_max_updates_per_tick().max(1);
     let crowd_cadence =
         ((alive_npcs.max(1) + target_updates_per_tick - 1) / target_updates_per_tick).max(1);
@@ -143,23 +144,36 @@ pub fn update_npc_ai(
             continue;
         }
 
+        const NPC_CADENCE_CLASSIFY_INTERVAL_TICKS: u64 = 10;
         let base_cadence = if alive_players == 0 {
             NPC_AI_BACKGROUND_CADENCE
         } else {
-            let cadence_eval_start = Instant::now();
-            let min_dist_sq = player_spatial
-                .nearest_alive_distance_sq(pos.0, NPC_AI_FAR_RADIUS)
-                .unwrap_or(f32::INFINITY);
-            cadence_eval_ms += cadence_eval_start.elapsed().as_secs_f32() * 1000.0;
+            let cached = cadence_cache.get(&entity).copied();
+            let should_refresh =
+                cached.is_none_or(|(last_tick, _)| {
+                    ai_tick_value.wrapping_sub(last_tick) >= NPC_CADENCE_CLASSIFY_INTERVAL_TICKS
+                }) || ai_tick_value.wrapping_add(npc.id) % NPC_CADENCE_CLASSIFY_INTERVAL_TICKS == 0;
 
-            if min_dist_sq <= near_sq {
-                1
-            } else if min_dist_sq <= mid_sq {
-                NPC_AI_MID_CADENCE
-            } else if min_dist_sq <= far_sq {
-                NPC_AI_FAR_CADENCE
+            if should_refresh {
+                let cadence_eval_start = Instant::now();
+                let min_dist_sq = player_spatial
+                    .nearest_alive_distance_sq(pos.0, NPC_AI_FAR_RADIUS)
+                    .unwrap_or(f32::INFINITY);
+                cadence_eval_ms += cadence_eval_start.elapsed().as_secs_f32() * 1000.0;
+
+                let cadence = if min_dist_sq <= near_sq {
+                    1
+                } else if min_dist_sq <= mid_sq {
+                    NPC_AI_MID_CADENCE
+                } else if min_dist_sq <= far_sq {
+                    NPC_AI_FAR_CADENCE
+                } else {
+                    NPC_AI_BACKGROUND_CADENCE
+                };
+                cadence_cache.insert(entity, (ai_tick_value, cadence));
+                cadence
             } else {
-                NPC_AI_BACKGROUND_CADENCE
+                cached.map(|(_, cadence)| cadence).unwrap_or(1)
             }
         };
         let cadence = base_cadence.max(crowd_cadence);

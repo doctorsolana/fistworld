@@ -10,10 +10,10 @@ members = [
 ]
 
 [workspace.dependencies]
-bevy = { version = "0.18", features = ["vorbis", "jpeg", "ktx2"] }
+bevy = { version = "0.18.1", features = ["vorbis", "jpeg", "ktx2"] }
 lightyear = { version = "0.26", features = ["udp", "netcode"] }
 serde = { version = "1.0", features = ["derive"] }
-bevy_rapier3d = { git = "https://github.com/dimforge/bevy_rapier", rev = "4ab7e7dcc9a5772dcba0defb3625350eff2bd822", package = "bevy_rapier3d" }
+bevy_rapier3d = "0.33.0"
 noise = "0.9"
 rand = "0.8"
 ron = "0.8"
