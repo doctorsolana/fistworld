@@ -27171,7 +27171,7 @@
         -130.98557,
       ),
       rotation_degrees: 251.03516,
-      scale: 1.0879,
+      scale: 0.43515068,
     ),
     /*[2715]*/ (
       kind: "env_grass_tall_04",
@@ -27371,7 +27371,7 @@
         -120.921104,
       ),
       rotation_degrees: 323.16037,
-      scale: 1.2661,
+      scale: 0.50644916,
     ),
     /*[2735]*/ (
       kind: "flower_02",
@@ -28171,7 +28171,7 @@
         -117.1234,
       ),
       rotation_degrees: 213.10388,
-      scale: 1.0591,
+      scale: 0.42363152,
     ),
     /*[2815]*/ (
       kind: "spring_flower_08",
@@ -28641,7 +28641,7 @@
         -128.6934,
       ),
       rotation_degrees: 248.64024,
-      scale: 0.7390,
+      scale: 0.29559383,
     ),
     /*[2862]*/ (
       kind: "env_grass_tall_04",
@@ -28991,7 +28991,7 @@
         -115.688774,
       ),
       rotation_degrees: 16.50509,
-      scale: 0.8285,
+      scale: 0.33138898,
     ),
     /*[2897]*/ (
       kind: "env_grass_tall_04",
@@ -29041,7 +29041,7 @@
         -90.35873,
       ),
       rotation_degrees: 356.2811,
-      scale: 0.8342,
+      scale: 0.33366743,
     ),
     /*[2902]*/ (
       kind: "flower_05",
@@ -29821,7 +29821,7 @@
         -90.16511,
       ),
       rotation_degrees: 243.7003,
-      scale: 0.8336,
+      scale: 0.33345002,
     ),
     /*[2980]*/ (
       kind: "env_grass_tall_04",
@@ -29841,7 +29841,7 @@
         -96.115486,
       ),
       rotation_degrees: 7.00505,
-      scale: 1.1426,
+      scale: 0.4570274,
     ),
     /*[2982]*/ (
       kind: "env_leaves_02",
@@ -29921,7 +29921,7 @@
         -103.70195,
       ),
       rotation_degrees: 14.557163,
-      scale: 0.8331,
+      scale: 0.33322546,
     ),
     /*[2990]*/ (
       kind: "env_grass_tall_04",
@@ -30121,7 +30121,7 @@
         -100.07216,
       ),
       rotation_degrees: 165.79556,
-      scale: 0.9230,
+      scale: 0.3691865,
     ),
     /*[3010]*/ (
       kind: "env_grass_tall_04",
@@ -30231,7 +30231,7 @@
         -88.683556,
       ),
       rotation_degrees: 210.98386,
-      scale: 1.0823,
+      scale: 0.43291697,
     ),
     /*[3021]*/ (
       kind: "env_grass_tall_04",
@@ -30431,7 +30431,7 @@
         -114.42463,
       ),
       rotation_degrees: 212.58919,
-      scale: 1.0420,
+      scale: 0.41680226,
     ),
     /*[3041]*/ (
       kind: "tree_08",
@@ -30441,7 +30441,7 @@
         -108.035576,
       ),
       rotation_degrees: 311.32584,
-      scale: 1.2083,
+      scale: 0.48333827,
     ),
     /*[3042]*/ (
       kind: "rock_3",
@@ -30641,7 +30641,7 @@
         -92.0819,
       ),
       rotation_degrees: 121.85713,
-      scale: 1.1472,
+      scale: 0.45888552,
     ),
     /*[3062]*/ (
       kind: "bush_02",
@@ -30691,7 +30691,7 @@
         -94.20321,
       ),
       rotation_degrees: 196.9226,
-      scale: 1.2140,
+      scale: 0.48560295,
     ),
     /*[3067]*/ (
       kind: "env_grass_tall_04",
@@ -31611,7 +31611,7 @@
         -89.64418,
       ),
       rotation_degrees: 231.367,
-      scale: 1.1895,
+      scale: 0.4757913,
     ),
     /*[3159]*/ (
       kind: "flower_01",
@@ -32261,7 +32261,7 @@
         -116.12725,
       ),
       rotation_degrees: 305.88776,
-      scale: 0.7709,
+      scale: 0.30835554,
     ),
     /*[3224]*/ (
       kind: "bush_03",
@@ -32281,7 +32281,7 @@
         -125.74762,
       ),
       rotation_degrees: 322.88455,
-      scale: 1.1545,
+      scale: 0.46178624,
     ),
     /*[3226]*/ (
       kind: "env_grass_tall_04",
@@ -32351,7 +32351,7 @@
         -137.8083,
       ),
       rotation_degrees: 203.2967,
-      scale: 0.8007,
+      scale: 0.32027218,
     ),
     /*[3233]*/ (
       kind: "rock_5",
@@ -32371,7 +32371,7 @@
         -131.53677,
       ),
       rotation_degrees: 136.54126,
-      scale: 0.8639,
+      scale: 0.34557435,
     ),
     /*[3235]*/ (
       kind: "env_grass_tall_04",
@@ -33211,7 +33211,7 @@
         -131.32045,
       ),
       rotation_degrees: 215.33224,
-      scale: 0.8606,
+      scale: 0.34423897,
     ),
     /*[3319]*/ (
       kind: "bush_03",
@@ -33261,7 +33261,7 @@
         -152.97069,
       ),
       rotation_degrees: 254.48682,
-      scale: 1.0465,
+      scale: 0.4186111,
     ),
     /*[3324]*/ (
       kind: "flower_04",
@@ -33461,7 +33461,7 @@
         -129.4287,
       ),
       rotation_degrees: 351.10596,
-      scale: 1.1664,
+      scale: 0.46654797,
     ),
     /*[3344]*/ (
       kind: "env_grass_tall_04",
@@ -34191,7 +34191,7 @@
         -163.8509,
       ),
       rotation_degrees: 78.6464,
-      scale: 1.0268,
+      scale: 0.41071793,
     ),
     /*[3417]*/ (
       kind: "flower_02",
@@ -34461,7 +34461,7 @@
         -124.58383,
       ),
       rotation_degrees: 294.66223,
-      scale: 0.8449,
+      scale: 0.33797285,
     ),
     /*[3444]*/ (
       kind: "env_grass_tall_04",
@@ -34671,7 +34671,7 @@
         -153.8084,
       ),
       rotation_degrees: 47.93423,
-      scale: 1.2057,
+      scale: 0.48228097,
     ),
     /*[3465]*/ (
       kind: "env_grass_tall_04",
@@ -34881,7 +34881,7 @@
         -170.89072,
       ),
       rotation_degrees: 227.18591,
-      scale: 1.0000,
+      scale: 0.39998928,
     ),
     /*[3486]*/ (
       kind: "env_grass_tall_04",
@@ -34951,7 +34951,7 @@
         -161.10466,
       ),
       rotation_degrees: 43.268238,
-      scale: 0.8120,
+      scale: 0.32478356,
     ),
     /*[3493]*/ (
       kind: "env_leaves_02",
@@ -35331,7 +35331,7 @@
         -175.55617,
       ),
       rotation_degrees: 342.59256,
-      scale: 1.2302,
+      scale: 0.49206305,
     ),
     /*[3531]*/ (
       kind: "env_grass_tall_04",
@@ -35421,7 +35421,7 @@
         -148.0661,
       ),
       rotation_degrees: 287.50668,
-      scale: 0.9138,
+      scale: 0.36551794,
     ),
     /*[3540]*/ (
       kind: "env_grass_tall_04",
@@ -35461,7 +35461,7 @@
         -151.44926,
       ),
       rotation_degrees: 176.14063,
-      scale: 1.2636,
+      scale: 0.5054579,
     ),
     /*[3544]*/ (
       kind: "env_grass_tall_04",
@@ -36571,7 +36571,7 @@
         -194.39908,
       ),
       rotation_degrees: 157.67294,
-      scale: 0.7736,
+      scale: 0.3094546,
     ),
     /*[3655]*/ (
       kind: "spring_flower_08",
@@ -36691,7 +36691,7 @@
         -183.22656,
       ),
       rotation_degrees: 329.26007,
-      scale: 0.7491,
+      scale: 0.29963842,
     ),
     /*[3667]*/ (
       kind: "env_grass_tall_04",
@@ -37531,7 +37531,7 @@
         -190.9961,
       ),
       rotation_degrees: 55.568504,
-      scale: 1.2713,
+      scale: 0.5085384,
     ),
     /*[3751]*/ (
       kind: "spring_flower_06",
@@ -37881,7 +37881,7 @@
         -189.26817,
       ),
       rotation_degrees: 352.8093,
-      scale: 0.9041,
+      scale: 0.36163434,
     ),
     /*[3786]*/ (
       kind: "env_grass_tall_04",
@@ -37941,7 +37941,7 @@
         -192.57462,
       ),
       rotation_degrees: 29.875582,
-      scale: 0.8950,
+      scale: 0.35799155,
     ),
     /*[3792]*/ (
       kind: "flower_05",
@@ -37961,7 +37961,7 @@
         -200.17458,
       ),
       rotation_degrees: 125.06065,
-      scale: 1.1514,
+      scale: 0.46057907,
     ),
     /*[3794]*/ (
       kind: "bush_04",
@@ -38061,7 +38061,7 @@
         -192.91544,
       ),
       rotation_degrees: 351.16638,
-      scale: 1.1392,
+      scale: 0.45566508,
     ),
     /*[3804]*/ (
       kind: "env_grass_tall_04",
@@ -38341,7 +38341,7 @@
         -192.03665,
       ),
       rotation_degrees: 106.576675,
-      scale: 0.8288,
+      scale: 0.3315141,
     ),
     /*[3832]*/ (
       kind: "env_leaves_03",
@@ -38621,7 +38621,7 @@
         -186.17838,
       ),
       rotation_degrees: 94.11861,
-      scale: 0.8772,
+      scale: 0.350872,
     ),
     /*[3860]*/ (
       kind: "env_grass_tall_04",
@@ -39081,7 +39081,7 @@
         -192.19884,
       ),
       rotation_degrees: 126.562096,
-      scale: 1.1508,
+      scale: 0.46032682,
     ),
     /*[3906]*/ (
       kind: "flower_02",
@@ -39211,7 +39211,7 @@
         -211.97527,
       ),
       rotation_degrees: 116.56584,
-      scale: 0.8315,
+      scale: 0.3325916,
     ),
     /*[3919]*/ (
       kind: "env_grass_tall_04",
@@ -39451,7 +39451,7 @@
         -225.36969,
       ),
       rotation_degrees: 276.33786,
-      scale: 0.7240,
+      scale: 0.28960678,
     ),
     /*[3943]*/ (
       kind: "bush_04",
@@ -39661,7 +39661,7 @@
         -207.68886,
       ),
       rotation_degrees: 208.985,
-      scale: 1.2648,
+      scale: 0.5059165,
     ),
     /*[3964]*/ (
       kind: "env_grass_tall_04",
@@ -39901,7 +39901,7 @@
         -231.87074,
       ),
       rotation_degrees: 153.85683,
-      scale: 1.0832,
+      scale: 0.43328866,
     ),
     /*[3988]*/ (
       kind: "env_grass_tall_04",
@@ -40021,7 +40021,7 @@
         -231.85948,
       ),
       rotation_degrees: 96.79803,
-      scale: 0.8422,
+      scale: 0.33686522,
     ),
     /*[4000]*/ (
       kind: "env_grass_tall_04",
@@ -40131,7 +40131,7 @@
         -210.5884,
       ),
       rotation_degrees: 158.37762,
-      scale: 1.1764,
+      scale: 0.4705794,
     ),
     /*[4011]*/ (
       kind: "env_leaves_03",
@@ -40371,7 +40371,7 @@
         -204.1709,
       ),
       rotation_degrees: 124.221535,
-      scale: 0.7973,
+      scale: 0.31892267,
     ),
     /*[4035]*/ (
       kind: "env_grass_tall_04",
@@ -40451,7 +40451,7 @@
         -221.67888,
       ),
       rotation_degrees: 174.46574,
-      scale: 0.7761,
+      scale: 0.3104375,
     ),
     /*[4043]*/ (
       kind: "env_grass_tall_04",
@@ -40631,7 +40631,7 @@
         -211.69711,
       ),
       rotation_degrees: 28.457766,
-      scale: 1.2274,
+      scale: 0.49097487,
     ),
     /*[4061]*/ (
       kind: "env_grass_tall_04",
@@ -40651,7 +40651,7 @@
         -197.11057,
       ),
       rotation_degrees: 21.948452,
-      scale: 1.2422,
+      scale: 0.49689326,
     ),
     /*[4063]*/ (
       kind: "env_grass_tall_04",
@@ -40681,7 +40681,7 @@
         -230.30107,
       ),
       rotation_degrees: 131.97443,
-      scale: 0.9839,
+      scale: 0.39354643,
     ),
     /*[4066]*/ (
       kind: "env_grass_tall_04",
@@ -41111,7 +41111,7 @@
         -227.92764,
       ),
       rotation_degrees: 233.00359,
-      scale: 1.2446,
+      scale: 0.49784023,
     ),
     /*[4109]*/ (
       kind: "env_grass_tall_04",
@@ -41361,7 +41361,7 @@
         -230.35857,
       ),
       rotation_degrees: 134.70288,
-      scale: 0.7417,
+      scale: 0.29667306,
     ),
     /*[4134]*/ (
       kind: "env_grass_tall_04",
@@ -41401,7 +41401,7 @@
         -216.73347,
       ),
       rotation_degrees: 51.996468,
-      scale: 0.8600,
+      scale: 0.34399158,
     ),
     /*[4138]*/ (
       kind: "tree_02",
@@ -41411,7 +41411,7 @@
         -231.33942,
       ),
       rotation_degrees: 133.23465,
-      scale: 1.0155,
+      scale: 0.40618762,
     ),
     /*[4139]*/ (
       kind: "env_grass_tall_04",
@@ -41471,7 +41471,7 @@
         -210.55074,
       ),
       rotation_degrees: 291.921,
-      scale: 1.0562,
+      scale: 0.42247614,
     ),
     /*[4145]*/ (
       kind: "env_leaves_02",
@@ -41501,7 +41501,7 @@
         -227.56563,
       ),
       rotation_degrees: 80.06512,
-      scale: 1.2107,
+      scale: 0.4842828,
     ),
     /*[4148]*/ (
       kind: "flower_04",
@@ -42021,7 +42021,7 @@
         -198.19116,
       ),
       rotation_degrees: 208.62357,
-      scale: 0.7262,
+      scale: 0.2904917,
     ),
     /*[4200]*/ (
       kind: "env_grass_tall_04",
@@ -42071,7 +42071,7 @@
         -205.76349,
       ),
       rotation_degrees: 356.81503,
-      scale: 0.7774,
+      scale: 0.31096518,
     ),
     /*[4205]*/ (
       kind: "env_grass_tall_04",
@@ -42111,7 +42111,7 @@
         -226.74362,
       ),
       rotation_degrees: 125.75691,
-      scale: 1.2505,
+      scale: 0.5001931,
     ),
     /*[4209]*/ (
       kind: "env_grass_tall_04",
@@ -42141,7 +42141,7 @@
         -234.63573,
       ),
       rotation_degrees: 229.9917,
-      scale: 0.9502,
+      scale: 0.38009527,
     ),
     /*[4212]*/ (
       kind: "env_grass_tall_04",
@@ -42501,7 +42501,7 @@
         -211.83583,
       ),
       rotation_degrees: 302.4838,
-      scale: 1.0757,
+      scale: 0.43028817,
     ),
     /*[4248]*/ (
       kind: "flower_04",
@@ -42661,7 +42661,7 @@
         -201.18881,
       ),
       rotation_degrees: 187.02863,
-      scale: 1.0494,
+      scale: 0.41974875,
     ),
     /*[4264]*/ (
       kind: "env_grass_tall_04",
@@ -43141,7 +43141,7 @@
         -195.71118,
       ),
       rotation_degrees: 358.06754,
-      scale: 0.8039,
+      scale: 0.3215717,
     ),
     /*[4312]*/ (
       kind: "env_grass_tall_04",
@@ -43361,7 +43361,7 @@
         -193.63118,
       ),
       rotation_degrees: 175.10066,
-      scale: 0.9612,
+      scale: 0.38449928,
     ),
     /*[4334]*/ (
       kind: "env_grass_tall_04",
@@ -43391,7 +43391,7 @@
         -197.94182,
       ),
       rotation_degrees: 324.885,
-      scale: 0.9532,
+      scale: 0.38129133,
     ),
     /*[4337]*/ (
       kind: "rock_2",
@@ -43461,7 +43461,7 @@
         -211.86191,
       ),
       rotation_degrees: 239.5018,
-      scale: 0.8384,
+      scale: 0.33534575,
     ),
     /*[4344]*/ (
       kind: "env_grass_tall_04",
@@ -43531,7 +43531,7 @@
         -201.94365,
       ),
       rotation_degrees: 267.02228,
-      scale: 0.9089,
+      scale: 0.363551,
     ),
     /*[4351]*/ (
       kind: "env_grass_tall_04",
@@ -43571,7 +43571,7 @@
         -205.38823,
       ),
       rotation_degrees: 166.8081,
-      scale: 1.1435,
+      scale: 0.4574146,
     ),
     /*[4355]*/ (
       kind: "env_leaves_03",
@@ -43731,7 +43731,7 @@
         -196.61705,
       ),
       rotation_degrees: 354.27997,
-      scale: 1.1621,
+      scale: 0.46484548,
     ),
     /*[4371]*/ (
       kind: "env_leaves_02",
@@ -44661,7 +44661,7 @@
         -179.58635,
       ),
       rotation_degrees: 324.40564,
-      scale: 1.2429,
+      scale: 0.4971574,
     ),
     /*[4464]*/ (
       kind: "env_grass_tall_04",
@@ -45261,7 +45261,7 @@
         -172.65686,
       ),
       rotation_degrees: 171.25894,
-      scale: 1.2389,
+      scale: 0.4955618,
     ),
     /*[4524]*/ (
       kind: "pine_tree_4",
@@ -45271,7 +45271,7 @@
         -175.15321,
       ),
       rotation_degrees: 290.20685,
-      scale: 0.7662,
+      scale: 0.3064665,
     ),
     /*[4525]*/ (
       kind: "env_grass_tall_04",
@@ -45381,7 +45381,7 @@
         -188.30997,
       ),
       rotation_degrees: 204.0334,
-      scale: 0.8041,
+      scale: 0.3216394,
     ),
     /*[4536]*/ (
       kind: "env_grass_tall_04",
@@ -45501,7 +45501,7 @@
         -175.32582,
       ),
       rotation_degrees: 76.95041,
-      scale: 0.8973,
+      scale: 0.3589006,
     ),
     /*[4548]*/ (
       kind: "env_grass_tall_04",
@@ -46221,7 +46221,7 @@
         -152.82999,
       ),
       rotation_degrees: 237.61427,
-      scale: 1.0299,
+      scale: 0.41195932,
     ),
     /*[4620]*/ (
       kind: "bush_02",
@@ -46281,7 +46281,7 @@
         -171.82106,
       ),
       rotation_degrees: 262.29016,
-      scale: 1.1519,
+      scale: 0.46076304,
     ),
     /*[4626]*/ (
       kind: "env_grass_tall_04",
@@ -46411,7 +46411,7 @@
         -147.89569,
       ),
       rotation_degrees: 250.28285,
-      scale: 1.0674,
+      scale: 0.4269765,
     ),
     /*[4639]*/ (
       kind: "bush_03",
@@ -46691,7 +46691,7 @@
         -168.6392,
       ),
       rotation_degrees: 118.39464,
-      scale: 0.7615,
+      scale: 0.3045888,
     ),
     /*[4667]*/ (
       kind: "env_grass_tall_04",
@@ -46791,7 +46791,7 @@
         -136.93857,
       ),
       rotation_degrees: 114.39302,
-      scale: 1.2762,
+      scale: 0.5104724,
     ),
     /*[4677]*/ (
       kind: "pine_tree_3",
@@ -46801,7 +46801,7 @@
         -143.18373,
       ),
       rotation_degrees: 290.56876,
-      scale: 1.2462,
+      scale: 0.4984768,
     ),
     /*[4678]*/ (
       kind: "env_grass_tall_04",
@@ -47131,7 +47131,7 @@
         -136.10951,
       ),
       rotation_degrees: 235.39615,
-      scale: 0.7620,
+      scale: 0.30479738,
     ),
     /*[4711]*/ (
       kind: "env_grass_tall_04",
@@ -47571,7 +47571,7 @@
         -148.98059,
       ),
       rotation_degrees: 85.19412,
-      scale: 0.7330,
+      scale: 0.29321447,
     ),
     /*[4755]*/ (
       kind: "env_grass_tall_04",
@@ -47671,7 +47671,7 @@
         -147.4439,
       ),
       rotation_degrees: 287.02573,
-      scale: 0.8372,
+      scale: 0.33488354,
     ),
     /*[4765]*/ (
       kind: "env_leaves_02",
@@ -48081,7 +48081,7 @@
         -144.70428,
       ),
       rotation_degrees: 125.0589,
-      scale: 1.2209,
+      scale: 0.48836145,
     ),
     /*[4806]*/ (
       kind: "env_grass_tall_04",
@@ -48171,7 +48171,7 @@
         -127.04176,
       ),
       rotation_degrees: 179.60191,
-      scale: 1.1034,
+      scale: 0.44137952,
     ),
     /*[4815]*/ (
       kind: "env_grass_tall_04",
@@ -48481,7 +48481,7 @@
         -128.21863,
       ),
       rotation_degrees: 322.90765,
-      scale: 1.0969,
+      scale: 0.43874055,
     ),
     /*[4846]*/ (
       kind: "spring_flower_09",
@@ -48571,7 +48571,7 @@
         -118.85015,
       ),
       rotation_degrees: 138.19571,
-      scale: 0.8970,
+      scale: 0.35879678,
     ),
     /*[4855]*/ (
       kind: "env_grass_tall_04",
@@ -48751,7 +48751,7 @@
         -133.95692,
       ),
       rotation_degrees: 297.6599,
-      scale: 0.8570,
+      scale: 0.34278288,
     ),
     /*[4873]*/ (
       kind: "env_leaves_02",
@@ -49481,7 +49481,7 @@
         -142.09358,
       ),
       rotation_degrees: 26.3603,
-      scale: 1.1850,
+      scale: 0.47401926,
     ),
     /*[4946]*/ (
       kind: "env_grass_tall_04",
@@ -49501,7 +49501,7 @@
         -134.08018,
       ),
       rotation_degrees: 65.78843,
-      scale: 1.2000,
+      scale: 0.48000064,
     ),
     /*[4948]*/ (
       kind: "env_grass_tall_04",
@@ -50311,7 +50311,7 @@
         -140.22261,
       ),
       rotation_degrees: 275.67453,
-      scale: 1.0703,
+      scale: 0.4281101,
     ),
     /*[5029]*/ (
       kind: "spring_flower_08",
@@ -50381,7 +50381,7 @@
         -152.5185,
       ),
       rotation_degrees: 288.1532,
-      scale: 1.0640,
+      scale: 0.4256086,
     ),
     /*[5036]*/ (
       kind: "env_grass_tall_04",
@@ -50751,7 +50751,7 @@
         -152.3333,
       ),
       rotation_degrees: 349.75638,
-      scale: 1.0333,
+      scale: 0.41333172,
     ),
     /*[5073]*/ (
       kind: "env_grass_tall_04",
@@ -51451,7 +51451,7 @@
         -153.69933,
       ),
       rotation_degrees: 255.53047,
-      scale: 0.8078,
+      scale: 0.32312405,
     ),
     /*[5143]*/ (
       kind: "env_grass_tall_04",
@@ -51831,7 +51831,7 @@
         -197.74838,
       ),
       rotation_degrees: 96.16423,
-      scale: 1.0309,
+      scale: 0.4123753,
     ),
     /*[5181]*/ (
       kind: "env_grass_tall_04",
@@ -51851,7 +51851,7 @@
         -179.05896,
       ),
       rotation_degrees: 135.77,
-      scale: 0.7307,
+      scale: 0.2922635,
     ),
     /*[5183]*/ (
       kind: "env_grass_tall_04",
@@ -51941,7 +51941,7 @@
         -183.99004,
       ),
       rotation_degrees: 249.39282,
-      scale: 0.9657,
+      scale: 0.38627115,
     ),
     /*[5192]*/ (
       kind: "tree_10",
@@ -51951,7 +51951,7 @@
         -197.62363,
       ),
       rotation_degrees: 151.82576,
-      scale: 0.8187,
+      scale: 0.32748422,
     ),
     /*[5193]*/ (
       kind: "tree_18",
@@ -51961,7 +51961,7 @@
         -157.88568,
       ),
       rotation_degrees: 63.221832,
-      scale: 1.1168,
+      scale: 0.44673282,
     ),
     /*[5194]*/ (
       kind: "env_grass_tall_04",
@@ -52141,7 +52141,7 @@
         -194.68797,
       ),
       rotation_degrees: 352.35745,
-      scale: 1.1976,
+      scale: 0.47903404,
     ),
     /*[5212]*/ (
       kind: "env_grass_tall_04",
@@ -52671,7 +52671,7 @@
         -203.36034,
       ),
       rotation_degrees: 295.7374,
-      scale: 1.0005,
+      scale: 0.40021935,
     ),
     /*[5265]*/ (
       kind: "env_grass_tall_04",
@@ -52751,7 +52751,7 @@
         -215.9036,
       ),
       rotation_degrees: 324.69925,
-      scale: 0.9407,
+      scale: 0.37628517,
     ),
     /*[5273]*/ (
       kind: "bush_02",
@@ -53091,7 +53091,7 @@
         -234.02702,
       ),
       rotation_degrees: 268.02496,
-      scale: 1.0017,
+      scale: 0.40069786,
     ),
     /*[5307]*/ (
       kind: "flower_03",
@@ -53621,7 +53621,7 @@
         -233.84734,
       ),
       rotation_degrees: 20.475533,
-      scale: 1.1801,
+      scale: 0.47202522,
     ),
     /*[5360]*/ (
       kind: "env_grass_tall_04",
@@ -54821,7 +54821,7 @@
         -247.79823,
       ),
       rotation_degrees: 210.65465,
-      scale: 0.7652,
+      scale: 0.30606115,
     ),
     /*[5480]*/ (
       kind: "env_grass_tall_04",
@@ -54841,7 +54841,7 @@
         -245.87195,
       ),
       rotation_degrees: 227.97424,
-      scale: 1.2707,
+      scale: 0.50827163,
     ),
     /*[5482]*/ (
       kind: "env_grass_tall_04",
@@ -54871,7 +54871,7 @@
         -248.54971,
       ),
       rotation_degrees: 229.39449,
-      scale: 0.8565,
+      scale: 0.34261164,
     ),
     /*[5485]*/ (
       kind: "bush_03",
@@ -55131,7 +55131,7 @@
         -227.86273,
       ),
       rotation_degrees: 120.63982,
-      scale: 1.2634,
+      scale: 0.505375,
     ),
     /*[5511]*/ (
       kind: "env_grass_tall_04",
@@ -55261,7 +55261,7 @@
         -254.57741,
       ),
       rotation_degrees: 127.819405,
-      scale: 1.2243,
+      scale: 0.4897023,
     ),
     /*[5524]*/ (
       kind: "env_grass_tall_04",
@@ -55391,7 +55391,7 @@
         -241.99731,
       ),
       rotation_degrees: 45.084435,
-      scale: 0.9120,
+      scale: 0.3647843,
     ),
     /*[5537]*/ (
       kind: "env_grass_tall_04",
@@ -55621,7 +55621,7 @@
         -239.50958,
       ),
       rotation_degrees: 70.72363,
-      scale: 0.9367,
+      scale: 0.37469396,
     ),
     /*[5560]*/ (
       kind: "env_grass_tall_04",
@@ -55661,7 +55661,7 @@
         -253.17978,
       ),
       rotation_degrees: 319.75113,
-      scale: 0.9523,
+      scale: 0.3809387,
     ),
     /*[5564]*/ (
       kind: "env_grass_tall_04",
@@ -55771,7 +55771,7 @@
         -266.30206,
       ),
       rotation_degrees: 91.06467,
-      scale: 1.2499,
+      scale: 0.49994966,
     ),
     /*[5575]*/ (
       kind: "env_grass_tall_04",
@@ -55911,7 +55911,7 @@
         -253.95757,
       ),
       rotation_degrees: 199.69055,
-      scale: 0.9662,
+      scale: 0.38647333,
     ),
     /*[5589]*/ (
       kind: "env_leaves_02",
@@ -56061,7 +56061,7 @@
         -262.96793,
       ),
       rotation_degrees: 65.35509,
-      scale: 0.9613,
+      scale: 0.38451007,
     ),
     /*[5604]*/ (
       kind: "spring_flower_07",
@@ -56081,7 +56081,7 @@
         -235.09404,
       ),
       rotation_degrees: 105.778404,
-      scale: 1.1902,
+      scale: 0.4760673,
     ),
     /*[5606]*/ (
       kind: "env_grass_tall_04",
@@ -56211,7 +56211,7 @@
         -232.59122,
       ),
       rotation_degrees: 44.24392,
-      scale: 0.9237,
+      scale: 0.3694614,
     ),
     /*[5619]*/ (
       kind: "pine_tree_3",
@@ -56221,7 +56221,7 @@
         -239.77792,
       ),
       rotation_degrees: 218.85176,
-      scale: 1.2277,
+      scale: 0.49107432,
     ),
     /*[5620]*/ (
       kind: "env_grass_tall_04",
@@ -56321,7 +56321,7 @@
         -244.87103,
       ),
       rotation_degrees: 301.7847,
-      scale: 0.8410,
+      scale: 0.33640143,
     ),
     /*[5630]*/ (
       kind: "env_grass_tall_04",
@@ -56721,7 +56721,7 @@
         -245.13353,
       ),
       rotation_degrees: 223.57637,
-      scale: 0.9620,
+      scale: 0.38478857,
     ),
     /*[5670]*/ (
       kind: "tree_10",
@@ -56731,7 +56731,7 @@
         -265.2019,
       ),
       rotation_degrees: 167.48938,
-      scale: 0.9645,
+      scale: 0.38580912,
     ),
     /*[5671]*/ (
       kind: "env_grass_tall_04",
@@ -56841,7 +56841,7 @@
         -254.37112,
       ),
       rotation_degrees: 149.30128,
-      scale: 1.2376,
+      scale: 0.4950389,
     ),
     /*[5682]*/ (
       kind: "env_grass_tall_04",
@@ -57131,7 +57131,7 @@
         -241.66354,
       ),
       rotation_degrees: 26.17894,
-      scale: 1.2579,
+      scale: 0.5031754,
     ),
     /*[5711]*/ (
       kind: "bush_01",
@@ -57261,7 +57261,7 @@
         -262.18484,
       ),
       rotation_degrees: 284.22705,
-      scale: 1.2270,
+      scale: 0.49079275,
     ),
     /*[5724]*/ (
       kind: "env_leaves_02",
@@ -58081,7 +58081,7 @@
         -245.20027,
       ),
       rotation_degrees: 67.5441,
-      scale: 1.2722,
+      scale: 0.508869,
     ),
     /*[5806]*/ (
       kind: "env_grass_tall_04",
@@ -58311,7 +58311,7 @@
         -250.38666,
       ),
       rotation_degrees: 39.485634,
-      scale: 0.7653,
+      scale: 0.3061019,
     ),
     /*[5829]*/ (
       kind: "env_grass_tall_04",
@@ -58681,7 +58681,7 @@
         -236.92662,
       ),
       rotation_degrees: 125.24871,
-      scale: 0.7321,
+      scale: 0.29284695,
     ),
     /*[5866]*/ (
       kind: "bush_04",
@@ -59161,7 +59161,7 @@
         -216.50346,
       ),
       rotation_degrees: 238.96231,
-      scale: 0.7213,
+      scale: 0.28853568,
     ),
     /*[5914]*/ (
       kind: "env_grass_tall_04",
@@ -59211,7 +59211,7 @@
         -231.12508,
       ),
       rotation_degrees: 219.76743,
-      scale: 1.2244,
+      scale: 0.48974547,
     ),
     /*[5919]*/ (
       kind: "env_grass_tall_04",
@@ -59331,7 +59331,7 @@
         -169.62425,
       ),
       rotation_degrees: 149.08102,
-      scale: 1.1843,
+      scale: 0.4737141,
     ),
     /*[5931]*/ (
       kind: "flower_01",
@@ -59781,7 +59781,7 @@
         -170.55127,
       ),
       rotation_degrees: 245.32239,
-      scale: 0.8510,
+      scale: 0.34040603,
     ),
     /*[5976]*/ (
       kind: "bush_01",
@@ -59961,7 +59961,7 @@
         -153.45963,
       ),
       rotation_degrees: 24.334116,
-      scale: 1.0691,
+      scale: 0.42763,
     ),
     /*[5994]*/ (
       kind: "env_grass_tall_04",
@@ -60421,7 +60421,7 @@
         -138.62804,
       ),
       rotation_degrees: 64.21174,
-      scale: 0.9998,
+      scale: 0.39991316,
     ),
     /*[6040]*/ (
       kind: "env_grass_tall_04",
@@ -61141,7 +61141,7 @@
         -179.95992,
       ),
       rotation_degrees: 163.624,
-      scale: 1.0376,
+      scale: 0.41504535,
     ),
     /*[6112]*/ (
       kind: "env_grass_tall_04",
@@ -62111,7 +62111,7 @@
         -201.653,
       ),
       rotation_degrees: 26.364698,
-      scale: 1.0289,
+      scale: 0.41155463,
     ),
     /*[6209]*/ (
       kind: "env_grass_tall_04",
@@ -62741,7 +62741,7 @@
         -188.84033,
       ),
       rotation_degrees: 28.378801,
-      scale: 0.9803,
+      scale: 0.3921251,
     ),
     /*[6272]*/ (
       kind: "env_grass_tall_04",
@@ -63191,7 +63191,7 @@
         -209.85812,
       ),
       rotation_degrees: 233.07295,
-      scale: 1.1929,
+      scale: 0.47715306,
     ),
     /*[6317]*/ (
       kind: "env_grass_tall_04",
@@ -63411,7 +63411,7 @@
         -201.26239,
       ),
       rotation_degrees: 195.54643,
-      scale: 1.0572,
+      scale: 0.42286092,
     ),
     /*[6339]*/ (
       kind: "env_grass_tall_04",
@@ -63721,7 +63721,7 @@
         -226.10704,
       ),
       rotation_degrees: 189.6857,
-      scale: 1.2609,
+      scale: 0.5043757,
     ),
     /*[6370]*/ (
       kind: "env_grass_tall_04",
@@ -63951,7 +63951,7 @@
         -235.34618,
       ),
       rotation_degrees: 302.7701,
-      scale: 1.0709,
+      scale: 0.42837963,
     ),
     /*[6393]*/ (
       kind: "env_grass_tall_04",
@@ -63971,7 +63971,7 @@
         -240.29535,
       ),
       rotation_degrees: 232.43317,
-      scale: 1.2610,
+      scale: 0.5043842,
     ),
     /*[6395]*/ (
       kind: "env_grass_tall_04",
@@ -64461,7 +64461,7 @@
         -228.86252,
       ),
       rotation_degrees: 237.90175,
-      scale: 0.9232,
+      scale: 0.36928338,
     ),
     /*[6444]*/ (
       kind: "env_leaves_03",
@@ -64901,7 +64901,7 @@
         -244.58473,
       ),
       rotation_degrees: 70.50528,
-      scale: 0.8092,
+      scale: 0.32367858,
     ),
     /*[6488]*/ (
       kind: "bush_02",
@@ -64971,7 +64971,7 @@
         -244.21472,
       ),
       rotation_degrees: 226.92682,
-      scale: 1.2151,
+      scale: 0.48603645,
     ),
     /*[6495]*/ (
       kind: "bush_03",
@@ -65221,7 +65221,7 @@
         -239.74625,
       ),
       rotation_degrees: 187.07161,
-      scale: 0.7211,
+      scale: 0.28842148,
     ),
     /*[6520]*/ (
       kind: "env_grass_tall_04",
@@ -65461,7 +65461,7 @@
         -243.53537,
       ),
       rotation_degrees: 89.723495,
-      scale: 1.0423,
+      scale: 0.41692543,
     ),
     /*[6544]*/ (
       kind: "flower_01",
@@ -65491,7 +65491,7 @@
         -249.96019,
       ),
       rotation_degrees: 127.290215,
-      scale: 1.2217,
+      scale: 0.48867154,
     ),
     /*[6547]*/ (
       kind: "bush_02",
@@ -65561,7 +65561,7 @@
         -261.32578,
       ),
       rotation_degrees: 311.06122,
-      scale: 1.1176,
+      scale: 0.44703016,
     ),
     /*[6554]*/ (
       kind: "tree_08",
@@ -65571,7 +65571,7 @@
         -251.12971,
       ),
       rotation_degrees: 207.80612,
-      scale: 0.8854,
+      scale: 0.3541753,
     ),
     /*[6555]*/ (
       kind: "env_grass_tall_04",
@@ -66561,7 +66561,7 @@
         -144.06404,
       ),
       rotation_degrees: 288.0589,
-      scale: 0.7512,
+      scale: 0.30048868,
     ),
     /*[6654]*/ (
       kind: "bush_01",
@@ -66971,7 +66971,7 @@
         -161.86725,
       ),
       rotation_degrees: 233.74786,
-      scale: 0.9107,
+      scale: 0.36428058,
     ),
     /*[6695]*/ (
       kind: "spring_flower_09",
@@ -67091,7 +67091,7 @@
         -162.53294,
       ),
       rotation_degrees: 102.183365,
-      scale: 0.8857,
+      scale: 0.35426933,
     ),
     /*[6707]*/ (
       kind: "env_grass_tall_04",
@@ -67141,7 +67141,7 @@
         -134.52719,
       ),
       rotation_degrees: 185.259,
-      scale: 1.0506,
+      scale: 0.42024836,
     ),
     /*[6712]*/ (
       kind: "flower_05",
@@ -67651,7 +67651,7 @@
         -142.4028,
       ),
       rotation_degrees: 246.17758,
-      scale: 1.2483,
+      scale: 0.49930048,
     ),
     /*[6763]*/ (
       kind: "bush_03",
@@ -67761,7 +67761,7 @@
         -137.4167,
       ),
       rotation_degrees: 98.473526,
-      scale: 1.2396,
+      scale: 0.4958528,
     ),
     /*[6774]*/ (
       kind: "env_grass_tall_04",
@@ -67791,7 +67791,7 @@
         -98.93953,
       ),
       rotation_degrees: 5.692055,
-      scale: 1.0540,
+      scale: 0.4215873,
     ),
     /*[6777]*/ (
       kind: "bush_01",
@@ -67821,7 +67821,7 @@
         -82.433815,
       ),
       rotation_degrees: 301.79526,
-      scale: 0.9905,
+      scale: 0.3961978,
     ),
     /*[6780]*/ (
       kind: "bush_01",
@@ -67841,7 +67841,7 @@
         -104.993095,
       ),
       rotation_degrees: 237.31097,
-      scale: 1.1376,
+      scale: 0.4550583,
     ),
     /*[6782]*/ (
       kind: "rock_3",
@@ -67861,7 +67861,7 @@
         -81.4119,
       ),
       rotation_degrees: 22.594028,
-      scale: 1.0433,
+      scale: 0.4173115,
     ),
     /*[6784]*/ (
       kind: "bush_03",
@@ -67891,7 +67891,7 @@
         -77.25703,
       ),
       rotation_degrees: 289.94238,
-      scale: 0.9212,
+      scale: 0.36846238,
     ),
     /*[6787]*/ (
       kind: "rock_1",
@@ -67931,7 +67931,7 @@
         -105.4014,
       ),
       rotation_degrees: 22.405457,
-      scale: 0.8335,
+      scale: 0.33341345,
     ),
     /*[6791]*/ (
       kind: "pine_tree_2",
@@ -67941,7 +67941,7 @@
         -76.41573,
       ),
       rotation_degrees: 258.34824,
-      scale: 0.9765,
+      scale: 0.39061853,
     ),
     /*[6792]*/ (
       kind: "rock_4",
@@ -67981,7 +67981,7 @@
         -89.16634,
       ),
       rotation_degrees: 50.095425,
-      scale: 0.9897,
+      scale: 0.39586702,
     ),
     /*[6796]*/ (
       kind: "pine_tree_3",
@@ -67991,7 +67991,7 @@
         -76.402695,
       ),
       rotation_degrees: 102.20225,
-      scale: 1.1623,
+      scale: 0.46490917,
     ),
     /*[6797]*/ (
       kind: "rock_1",
@@ -68051,7 +68051,7 @@
         -98.768776,
       ),
       rotation_degrees: 158.6758,
-      scale: 0.9234,
+      scale: 0.36934942,
     ),
     /*[6803]*/ (
       kind: "tree_01",
@@ -68061,7 +68061,7 @@
         -89.5549,
       ),
       rotation_degrees: 82.9574,
-      scale: 1.1222,
+      scale: 0.4488964,
     ),
     /*[6804]*/ (
       kind: "pine_tree_2",
@@ -68071,7 +68071,7 @@
         -91.126915,
       ),
       rotation_degrees: 64.8895,
-      scale: 0.9527,
+      scale: 0.3810763,
     ),
     /*[6805]*/ (
       kind: "bush_01",
@@ -68101,7 +68101,7 @@
         -88.753204,
       ),
       rotation_degrees: 58.058945,
-      scale: 1.1145,
+      scale: 0.44578758,
     ),
     /*[6808]*/ (
       kind: "rock_2",
@@ -68121,7 +68121,7 @@
         -86.29907,
       ),
       rotation_degrees: 319.9525,
-      scale: 1.2199,
+      scale: 0.4879542,
     ),
     /*[6810]*/ (
       kind: "tree_18",
@@ -68131,7 +68131,7 @@
         -95.41605,
       ),
       rotation_degrees: 158.14772,
-      scale: 0.8872,
+      scale: 0.3548636,
     ),
     /*[6811]*/ (
       kind: "bush_01",
@@ -68161,7 +68161,7 @@
         -100.650566,
       ),
       rotation_degrees: 348.19058,
-      scale: 0.8579,
+      scale: 0.343142,
     ),
     /*[6814]*/ (
       kind: "tree_10",
@@ -68171,7 +68171,7 @@
         -72.907906,
       ),
       rotation_degrees: 255.96297,
-      scale: 1.0596,
+      scale: 0.42385912,
     ),
     /*[6815]*/ (
       kind: "tree_09",
@@ -68181,7 +68181,7 @@
         -109.60392,
       ),
       rotation_degrees: 308.48764,
-      scale: 1.0779,
+      scale: 0.43117243,
     ),
     /*[6816]*/ (
       kind: "tree_02",
@@ -68191,7 +68191,7 @@
         -106.40606,
       ),
       rotation_degrees: 217.95322,
-      scale: 1.0557,
+      scale: 0.42228922,
     ),
     /*[6817]*/ (
       kind: "bush_02",
@@ -68231,7 +68231,7 @@
         -82.88974,
       ),
       rotation_degrees: 359.77603,
-      scale: 0.8234,
+      scale: 0.32936844,
     ),
     /*[6821]*/ (
       kind: "tree_02",
@@ -68241,7 +68241,7 @@
         -96.154305,
       ),
       rotation_degrees: 275.04373,
-      scale: 0.9574,
+      scale: 0.38295975,
     ),
     /*[6822]*/ (
       kind: "bush_02",
@@ -68281,7 +68281,7 @@
         -71.52099,
       ),
       rotation_degrees: 55.51945,
-      scale: 1.2763,
+      scale: 0.5105247,
     ),
     /*[6826]*/ (
       kind: "pine_tree_1",
@@ -68291,7 +68291,7 @@
         -91.00601,
       ),
       rotation_degrees: 328.1756,
-      scale: 0.8194,
+      scale: 0.32774955,
     ),
     /*[6827]*/ (
       kind: "tree_09",
@@ -68301,7 +68301,7 @@
         -90.71142,
       ),
       rotation_degrees: 221.10309,
-      scale: 1.0793,
+      scale: 0.43171963,
     ),
     /*[6828]*/ (
       kind: "rock_5",
@@ -68321,7 +68321,7 @@
         -76.226295,
       ),
       rotation_degrees: 91.51695,
-      scale: 0.7728,
+      scale: 0.30910072,
     ),
     /*[6830]*/ (
       kind: "pine_tree_3",
@@ -68331,7 +68331,7 @@
         -73.19026,
       ),
       rotation_degrees: 93.01841,
-      scale: 1.2141,
+      scale: 0.48565266,
     ),
     /*[6831]*/ (
       kind: "tree_02",
@@ -68341,7 +68341,7 @@
         -71.017166,
       ),
       rotation_degrees: 60.674465,
-      scale: 1.1550,
+      scale: 0.46198216,
     ),
     /*[6832]*/ (
       kind: "bush_03",
@@ -68421,7 +68421,7 @@
         -71.068344,
       ),
       rotation_degrees: 270.42526,
-      scale: 1.2547,
+      scale: 0.50188744,
     ),
     /*[6840]*/ (
       kind: "flower_03",
@@ -68471,7 +68471,7 @@
         -90.22664,
       ),
       rotation_degrees: 270.93988,
-      scale: 0.8983,
+      scale: 0.35930955,
     ),
     /*[6845]*/ (
       kind: "tree_01",
@@ -68481,7 +68481,7 @@
         -92.45117,
       ),
       rotation_degrees: 74.82097,
-      scale: 1.1088,
+      scale: 0.44350234,
     ),
     /*[6846]*/ (
       kind: "bush_03",
@@ -68501,7 +68501,7 @@
         -76.67227,
       ),
       rotation_degrees: 50.713406,
-      scale: 1.1083,
+      scale: 0.44331858,
     ),
     /*[6848]*/ (
       kind: "bush_01",
@@ -68521,7 +68521,7 @@
         -77.935036,
       ),
       rotation_degrees: 138.58086,
-      scale: 0.8588,
+      scale: 0.34350166,
     ),
     /*[6850]*/ (
       kind: "rock_1",
@@ -68571,7 +68571,7 @@
         -88.84576,
       ),
       rotation_degrees: 262.50757,
-      scale: 0.7572,
+      scale: 0.30288902,
     ),
     /*[6855]*/ (
       kind: "tree_10",
@@ -68581,7 +68581,7 @@
         -78.444496,
       ),
       rotation_degrees: 216.22516,
-      scale: 0.9002,
+      scale: 0.36006537,
     ),
     /*[6856]*/ (
       kind: "rock_4",
@@ -68641,7 +68641,7 @@
         -81.36893,
       ),
       rotation_degrees: 133.25337,
-      scale: 0.8714,
+      scale: 0.34857595,
     ),
     /*[6862]*/ (
       kind: "pine_tree_1",
@@ -68651,7 +68651,7 @@
         -76.92774,
       ),
       rotation_degrees: 129.7816,
-      scale: 0.9316,
+      scale: 0.37264785,
     ),
     /*[6863]*/ (
       kind: "bush_02",
@@ -68691,7 +68691,7 @@
         -80.0538,
       ),
       rotation_degrees: 186.71144,
-      scale: 0.8232,
+      scale: 0.32928807,
     ),
     /*[6867]*/ (
       kind: "bush_03",
@@ -68721,7 +68721,7 @@
         -70.85038,
       ),
       rotation_degrees: 201.29202,
-      scale: 0.8757,
+      scale: 0.35026684,
     ),
     /*[6870]*/ (
       kind: "bush_01",
@@ -68741,7 +68741,7 @@
         -85.93756,
       ),
       rotation_degrees: 223.1885,
-      scale: 1.2086,
+      scale: 0.48345304,
     ),
     /*[6872]*/ (
       kind: "tree_09",
@@ -68751,7 +68751,7 @@
         -77.4705,
       ),
       rotation_degrees: 331.37567,
-      scale: 1.0494,
+      scale: 0.41974232,
     ),
     /*[6873]*/ (
       kind: "tree_10",
@@ -68761,7 +68761,7 @@
         -81.18978,
       ),
       rotation_degrees: 149.4701,
-      scale: 0.8951,
+      scale: 0.35805795,
     ),
     /*[6874]*/ (
       kind: "pine_tree_1",
@@ -68771,7 +68771,7 @@
         -70.27846,
       ),
       rotation_degrees: 220.44797,
-      scale: 1.0128,
+      scale: 0.40510264,
     ),
     /*[6875]*/ (
       kind: "tree_10",
@@ -68781,7 +68781,7 @@
         -62.92943,
       ),
       rotation_degrees: 317.36087,
-      scale: 0.9530,
+      scale: 0.38119987,
     ),
     /*[6876]*/ (
       kind: "rock_2",
@@ -68821,7 +68821,7 @@
         -81.078545,
       ),
       rotation_degrees: 267.79684,
-      scale: 1.2325,
+      scale: 0.49301013,
     ),
     /*[6880]*/ (
       kind: "tree_09",
@@ -68831,7 +68831,7 @@
         -85.41336,
       ),
       rotation_degrees: 189.35928,
-      scale: 0.8325,
+      scale: 0.33299142,
     ),
     /*[6881]*/ (
       kind: "tree_18",
@@ -68841,7 +68841,7 @@
         -75.67595,
       ),
       rotation_degrees: 276.83426,
-      scale: 0.9705,
+      scale: 0.3881925,
     ),
     /*[6882]*/ (
       kind: "tree_08",
@@ -68851,7 +68851,7 @@
         -79.69067,
       ),
       rotation_degrees: 299.70142,
-      scale: 1.0846,
+      scale: 0.4338235,
     ),
     /*[6883]*/ (
       kind: "pine_tree_2",
@@ -68861,7 +68861,7 @@
         -73.101845,
       ),
       rotation_degrees: 201.46692,
-      scale: 1.2785,
+      scale: 0.5113861,
     ),
     /*[6884]*/ (
       kind: "tree_01",
@@ -68871,7 +68871,7 @@
         -76.469505,
       ),
       rotation_degrees: 189.66617,
-      scale: 1.0100,
+      scale: 0.40401918,
     ),
     /*[6885]*/ (
       kind: "tree_01",
@@ -68881,7 +68881,7 @@
         -73.00272,
       ),
       rotation_degrees: 59.591988,
-      scale: 1.1828,
+      scale: 0.4731309,
     ),
     /*[6886]*/ (
       kind: "pine_tree_4",
@@ -68891,7 +68891,7 @@
         -86.57529,
       ),
       rotation_degrees: 215.52118,
-      scale: 0.7693,
+      scale: 0.3077242,
     ),
     /*[6887]*/ (
       kind: "pine_tree_2",
@@ -68901,7 +68901,7 @@
         -85.59461,
       ),
       rotation_degrees: 76.79145,
-      scale: 1.2107,
+      scale: 0.4842673,
     ),
     /*[6888]*/ (
       kind: "tree_02",
@@ -68911,7 +68911,7 @@
         -89.12543,
       ),
       rotation_degrees: 333.94183,
-      scale: 1.1335,
+      scale: 0.4533848,
     ),
     /*[6889]*/ (
       kind: "rock_4",
@@ -68931,7 +68931,7 @@
         -57.04506,
       ),
       rotation_degrees: 308.61993,
-      scale: 1.0939,
+      scale: 0.43754885,
     ),
     /*[6891]*/ (
       kind: "tree_01",
@@ -68941,7 +68941,7 @@
         -90.04459,
       ),
       rotation_degrees: 291.60843,
-      scale: 0.8906,
+      scale: 0.35624132,
     ),
     /*[6892]*/ (
       kind: "tree_18",
@@ -68951,7 +68951,7 @@
         -92.04413,
       ),
       rotation_degrees: 103.20943,
-      scale: 0.7606,
+      scale: 0.30425733,
     ),
     /*[6893]*/ (
       kind: "pine_tree_1",
@@ -68961,7 +68961,7 @@
         -82.92821,
       ),
       rotation_degrees: 22.162943,
-      scale: 0.9259,
+      scale: 0.37035772,
     ),
     /*[6894]*/ (
       kind: "rock_5",
@@ -68991,7 +68991,7 @@
         -93.852036,
       ),
       rotation_degrees: 29.213226,
-      scale: 0.9482,
+      scale: 0.37926608,
     ),
     /*[6897]*/ (
       kind: "tree_01",
@@ -69001,7 +69001,7 @@
         -62.80558,
       ),
       rotation_degrees: 359.303,
-      scale: 1.1589,
+      scale: 0.46354032,
     ),
     /*[6898]*/ (
       kind: "bush_02",
@@ -69071,7 +69071,7 @@
         -89.55296,
       ),
       rotation_degrees: 277.75003,
-      scale: 1.1632,
+      scale: 0.46526322,
     ),
     /*[6905]*/ (
       kind: "rock_4",
@@ -69091,7 +69091,7 @@
         -67.39959,
       ),
       rotation_degrees: 7.582755,
-      scale: 0.7751,
+      scale: 0.31005597,
     ),
     /*[6907]*/ (
       kind: "tree_02",
@@ -69101,7 +69101,7 @@
         -83.85864,
       ),
       rotation_degrees: 207.19907,
-      scale: 0.7593,
+      scale: 0.30372998,
     ),
     /*[6908]*/ (
       kind: "pine_tree_1",
@@ -69111,7 +69111,7 @@
         -58.493614,
       ),
       rotation_degrees: 64.72601,
-      scale: 1.1983,
+      scale: 0.47932798,
     ),
     /*[6909]*/ (
       kind: "bush_03",
@@ -69141,7 +69141,7 @@
         -69.84106,
       ),
       rotation_degrees: 146.18454,
-      scale: 0.7440,
+      scale: 0.29760715,
     ),
     /*[6912]*/ (
       kind: "pine_tree_2",
@@ -69151,7 +69151,7 @@
         -65.983826,
       ),
       rotation_degrees: 215.51636,
-      scale: 0.8342,
+      scale: 0.33369842,
     ),
     /*[6913]*/ (
       kind: "tree_29",
@@ -69161,7 +69161,7 @@
         -90.30767,
       ),
       rotation_degrees: 44.585804,
-      scale: 1.1846,
+      scale: 0.47385088,
     ),
     /*[6914]*/ (
       kind: "pine_tree_1",
@@ -69171,7 +69171,7 @@
         -72.020966,
       ),
       rotation_degrees: 280.36246,
-      scale: 0.8490,
+      scale: 0.33959138,
     ),
     /*[6915]*/ (
       kind: "bush_01",
@@ -69201,7 +69201,7 @@
         -62.234943,
       ),
       rotation_degrees: 10.341568,
-      scale: 0.7523,
+      scale: 0.30090284,
     ),
     /*[6918]*/ (
       kind: "pine_tree_1",
@@ -69211,7 +69211,7 @@
         -71.78322,
       ),
       rotation_degrees: 187.88506,
-      scale: 0.7746,
+      scale: 0.3098263,
     ),
     /*[6919]*/ (
       kind: "bush_04",
@@ -69241,7 +69241,7 @@
         -86.9299,
       ),
       rotation_degrees: 50.784622,
-      scale: 1.1801,
+      scale: 0.4720292,
     ),
     /*[6922]*/ (
       kind: "bush_01",
@@ -69291,7 +69291,7 @@
         -81.26548,
       ),
       rotation_degrees: 150.8119,
-      scale: 0.7444,
+      scale: 0.29776046,
     ),
     /*[6927]*/ (
       kind: "bush_03",
@@ -69321,7 +69321,7 @@
         -57.10801,
       ),
       rotation_degrees: 127.600174,
-      scale: 1.0477,
+      scale: 0.41908646,
     ),
     /*[6930]*/ (
       kind: "pine_tree_3",
@@ -69331,7 +69331,7 @@
         -68.46864,
       ),
       rotation_degrees: 163.56079,
-      scale: 1.2492,
+      scale: 0.4996727,
     ),
     /*[6931]*/ (
       kind: "tree_29",
@@ -69341,7 +69341,7 @@
         -78.84813,
       ),
       rotation_degrees: 299.90308,
-      scale: 1.1898,
+      scale: 0.4759066,
     ),
     /*[6932]*/ (
       kind: "tree_09",
@@ -69351,7 +69351,7 @@
         -82.344505,
       ),
       rotation_degrees: 302.0579,
-      scale: 1.1349,
+      scale: 0.45394847,
     ),
     /*[6933]*/ (
       kind: "rock_4",
@@ -69381,7 +69381,7 @@
         -68.330475,
       ),
       rotation_degrees: 169.70575,
-      scale: 0.7229,
+      scale: 0.2891448,
     ),
     /*[6936]*/ (
       kind: "pine_tree_1",
@@ -69391,7 +69391,7 @@
         -78.51522,
       ),
       rotation_degrees: 192.22466,
-      scale: 0.8210,
+      scale: 0.32838932,
     ),
     /*[6937]*/ (
       kind: "pine_tree_1",
@@ -69401,7 +69401,7 @@
         -63.804688,
       ),
       rotation_degrees: 273.7433,
-      scale: 0.8995,
+      scale: 0.35978612,
     ),
     /*[6938]*/ (
       kind: "tree_08",
@@ -69411,7 +69411,7 @@
         -76.29896,
       ),
       rotation_degrees: 278.79044,
-      scale: 1.1761,
+      scale: 0.47044516,
     ),
     /*[6939]*/ (
       kind: "tree_10",
@@ -69421,7 +69421,7 @@
         -87.291145,
       ),
       rotation_degrees: 116.019,
-      scale: 1.0529,
+      scale: 0.42114446,
     ),
     /*[6940]*/ (
       kind: "pine_tree_2",
@@ -69431,7 +69431,7 @@
         -67.28833,
       ),
       rotation_degrees: 268.66464,
-      scale: 0.8480,
+      scale: 0.33919805,
     ),
     /*[6941]*/ (
       kind: "bush_04",
@@ -69451,7 +69451,7 @@
         -86.89653,
       ),
       rotation_degrees: 65.023056,
-      scale: 1.1919,
+      scale: 0.47675133,
     ),
     /*[6943]*/ (
       kind: "rock_4",
@@ -69491,7 +69491,7 @@
         -80.84238,
       ),
       rotation_degrees: 295.3184,
-      scale: 1.0450,
+      scale: 0.41798288,
     ),
     /*[6947]*/ (
       kind: "rock_2",
@@ -69511,7 +69511,7 @@
         -69.69948,
       ),
       rotation_degrees: 259.21738,
-      scale: 1.0517,
+      scale: 0.4206949,
     ),
     /*[6949]*/ (
       kind: "tree_18",
@@ -69521,7 +69521,7 @@
         -66.79783,
       ),
       rotation_degrees: 57.669018,
-      scale: 1.0957,
+      scale: 0.43826476,
     ),
     /*[6950]*/ (
       kind: "flower_04",
@@ -69551,7 +69551,7 @@
         -61.228073,
       ),
       rotation_degrees: 11.643126,
-      scale: 1.1372,
+      scale: 0.4548962,
     ),
     /*[6953]*/ (
       kind: "rock_1",
@@ -69581,7 +69581,7 @@
         -74.80407,
       ),
       rotation_degrees: 302.39978,
-      scale: 0.8563,
+      scale: 0.3425283,
     ),
     /*[6956]*/ (
       kind: "tree_18",
@@ -69591,7 +69591,7 @@
         -66.17492,
       ),
       rotation_degrees: 53.780563,
-      scale: 0.9681,
+      scale: 0.38724646,
     ),
     /*[6957]*/ (
       kind: "pine_tree_3",
@@ -69601,7 +69601,7 @@
         -83.62831,
       ),
       rotation_degrees: 27.597141,
-      scale: 0.9124,
+      scale: 0.3649529,
     ),
     /*[6958]*/ (
       kind: "tree_10",
@@ -69611,7 +69611,7 @@
         -68.210236,
       ),
       rotation_degrees: 136.0387,
-      scale: 1.0625,
+      scale: 0.42499572,
     ),
     /*[6959]*/ (
       kind: "tree_01",
@@ -69621,7 +69621,7 @@
         -52.660084,
       ),
       rotation_degrees: 31.368607,
-      scale: 0.9524,
+      scale: 0.3809538,
     ),
     /*[6960]*/ (
       kind: "rock_4",
@@ -69641,7 +69641,7 @@
         -84.35887,
       ),
       rotation_degrees: 303.76508,
-      scale: 0.8372,
+      scale: 0.33489594,
     ),
     /*[6962]*/ (
       kind: "rock_5",
@@ -69661,7 +69661,7 @@
         -86.26198,
       ),
       rotation_degrees: 218.00021,
-      scale: 0.9622,
+      scale: 0.38489327,
     ),
     /*[6964]*/ (
       kind: "bush_02",
@@ -69681,7 +69681,7 @@
         -82.68995,
       ),
       rotation_degrees: 293.22855,
-      scale: 1.0301,
+      scale: 0.41205153,
     ),
     /*[6966]*/ (
       kind: "pine_tree_3",
@@ -69691,7 +69691,7 @@
         -61.276222,
       ),
       rotation_degrees: 91.30821,
-      scale: 1.0489,
+      scale: 0.41956478,
     ),
     /*[6967]*/ (
       kind: "tree_01",
@@ -69701,7 +69701,7 @@
         -62.751602,
       ),
       rotation_degrees: 219.29819,
-      scale: 0.7671,
+      scale: 0.30685195,
     ),
     /*[6968]*/ (
       kind: "flower_02",
@@ -69741,7 +69741,7 @@
         -85.08905,
       ),
       rotation_degrees: 44.92226,
-      scale: 0.7631,
+      scale: 0.305221,
     ),
     /*[6972]*/ (
       kind: "bush_01",
@@ -69801,7 +69801,7 @@
         -60.868687,
       ),
       rotation_degrees: 275.54492,
-      scale: 0.9539,
+      scale: 0.3815795,
     ),
     /*[6978]*/ (
       kind: "tree_29",
@@ -69811,7 +69811,7 @@
         -61.99183,
       ),
       rotation_degrees: 211.7256,
-      scale: 0.9196,
+      scale: 0.36785755,
     ),
     /*[6979]*/ (
       kind: "rock_4",
@@ -69831,7 +69831,7 @@
         -63.25387,
       ),
       rotation_degrees: 250.99286,
-      scale: 0.7769,
+      scale: 0.31075308,
     ),
     /*[6981]*/ (
       kind: "tree_01",
@@ -69841,7 +69841,7 @@
         -71.21435,
       ),
       rotation_degrees: 118.55132,
-      scale: 0.8690,
+      scale: 0.3475872,
     ),
     /*[6982]*/ (
       kind: "tree_29",
@@ -69851,7 +69851,7 @@
         -54.110817,
       ),
       rotation_degrees: 42.514645,
-      scale: 1.0270,
+      scale: 0.41079745,
     ),
     /*[6983]*/ (
       kind: "tree_10",
@@ -69861,7 +69861,7 @@
         -67.10439,
       ),
       rotation_degrees: 215.0099,
-      scale: 0.9356,
+      scale: 0.37423882,
     ),
     /*[6984]*/ (
       kind: "tree_02",
@@ -69871,7 +69871,7 @@
         -83.82086,
       ),
       rotation_degrees: 219.80287,
-      scale: 1.0499,
+      scale: 0.4199644,
     ),
     /*[6985]*/ (
       kind: "rock_2",
@@ -69891,7 +69891,7 @@
         -61.42646,
       ),
       rotation_degrees: 156.50696,
-      scale: 0.8027,
+      scale: 0.32109424,
     ),
     /*[6987]*/ (
       kind: "tree_18",
@@ -69901,7 +69901,7 @@
         -66.55422,
       ),
       rotation_degrees: 66.90669,
-      scale: 0.7613,
+      scale: 0.30453077,
     ),
     /*[6988]*/ (
       kind: "tree_18",
@@ -69911,7 +69911,7 @@
         -73.17188,
       ),
       rotation_degrees: 12.354233,
-      scale: 1.0377,
+      scale: 0.41509566,
     ),
     /*[6989]*/ (
       kind: "pine_tree_4",
@@ -69921,7 +69921,7 @@
         -68.65022,
       ),
       rotation_degrees: 317.291,
-      scale: 1.0321,
+      scale: 0.4128538,
     ),
     /*[6990]*/ (
       kind: "tree_09",
@@ -69931,7 +69931,7 @@
         -55.53573,
       ),
       rotation_degrees: 308.00903,
-      scale: 0.7576,
+      scale: 0.3030502,
     ),
     /*[6991]*/ (
       kind: "tree_02",
@@ -69941,7 +69941,7 @@
         -75.701584,
       ),
       rotation_degrees: 100.59428,
-      scale: 0.9862,
+      scale: 0.39446285,
     ),
     /*[6992]*/ (
       kind: "pine_tree_1",
@@ -69951,7 +69951,7 @@
         -54.08261,
       ),
       rotation_degrees: 270.72006,
-      scale: 0.8463,
+      scale: 0.33850953,
     ),
     /*[6993]*/ (
       kind: "pine_tree_2",
@@ -69961,7 +69961,7 @@
         -83.75812,
       ),
       rotation_degrees: 190.15216,
-      scale: 0.8975,
+      scale: 0.35899654,
     ),
     /*[6994]*/ (
       kind: "pine_tree_3",
@@ -69971,7 +69971,7 @@
         -78.14057,
       ),
       rotation_degrees: 351.2575,
-      scale: 1.2523,
+      scale: 0.5009035,
     ),
     /*[6995]*/ (
       kind: "rock_5",
@@ -69991,7 +69991,7 @@
         -60.16951,
       ),
       rotation_degrees: 334.02707,
-      scale: 0.7492,
+      scale: 0.29967347,
     ),
     /*[6997]*/ (
       kind: "bush_03",
@@ -70031,7 +70031,7 @@
         -76.11685,
       ),
       rotation_degrees: 350.41592,
-      scale: 1.1794,
+      scale: 0.47175866,
     ),
     /*[7001]*/ (
       kind: "bush_01",
@@ -70051,7 +70051,7 @@
         -53.324738,
       ),
       rotation_degrees: 105.26881,
-      scale: 1.1251,
+      scale: 0.45002457,
     ),
     /*[7003]*/ (
       kind: "spring_flower_08",
@@ -70071,7 +70071,7 @@
         -68.83125,
       ),
       rotation_degrees: 167.81294,
-      scale: 1.1400,
+      scale: 0.45601463,
     ),
     /*[7005]*/ (
       kind: "tree_09",
@@ -70081,7 +70081,7 @@
         -71.25841,
       ),
       rotation_degrees: 42.705833,
-      scale: 0.8690,
+      scale: 0.34759176,
     ),
     /*[7006]*/ (
       kind: "pine_tree_4",
@@ -70091,7 +70091,7 @@
         -55.983482,
       ),
       rotation_degrees: 191.72621,
-      scale: 0.8746,
+      scale: 0.3498537,
     ),
     /*[7007]*/ (
       kind: "tree_18",
@@ -70101,7 +70101,7 @@
         -58.182175,
       ),
       rotation_degrees: 163.54054,
-      scale: 1.0261,
+      scale: 0.41042835,
     ),
     /*[7008]*/ (
       kind: "tree_18",
@@ -70111,7 +70111,7 @@
         -84.23505,
       ),
       rotation_degrees: 320.11728,
-      scale: 0.9464,
+      scale: 0.37857193,
     ),
     /*[7009]*/ (
       kind: "bush_01",
@@ -70151,7 +70151,7 @@
         -81.531975,
       ),
       rotation_degrees: 92.72173,
-      scale: 0.9129,
+      scale: 0.36517715,
     ),
     /*[7013]*/ (
       kind: "pine_tree_1",
@@ -70161,7 +70161,7 @@
         -70.50856,
       ),
       rotation_degrees: 317.64853,
-      scale: 0.7233,
+      scale: 0.28933918,
     ),
     /*[7014]*/ (
       kind: "tree_02",
@@ -70171,7 +70171,7 @@
         -64.391106,
       ),
       rotation_degrees: 326.1241,
-      scale: 1.2488,
+      scale: 0.4995079,
     ),
     /*[7015]*/ (
       kind: "bush_02",
@@ -70201,7 +70201,7 @@
         -65.641556,
       ),
       rotation_degrees: 281.82867,
-      scale: 0.9553,
+      scale: 0.38210246,
     ),
     /*[7018]*/ (
       kind: "pine_tree_3",
@@ -70211,7 +70211,7 @@
         -66.76395,
       ),
       rotation_degrees: 166.00343,
-      scale: 1.2164,
+      scale: 0.48656693,
     ),
     /*[7019]*/ (
       kind: "tree_02",
@@ -70221,7 +70221,7 @@
         -68.34129,
       ),
       rotation_degrees: 139.86108,
-      scale: 0.7316,
+      scale: 0.29265654,
     ),
     /*[7020]*/ (
       kind: "rock_2",
@@ -70241,7 +70241,7 @@
         -52.200706,
       ),
       rotation_degrees: 64.097244,
-      scale: 0.9651,
+      scale: 0.38604662,
     ),
     /*[7022]*/ (
       kind: "tree_18",
@@ -70251,7 +70251,7 @@
         -72.71278,
       ),
       rotation_degrees: 264.81784,
-      scale: 0.8361,
+      scale: 0.33444133,
     ),
     /*[7023]*/ (
       kind: "tree_02",
@@ -70261,7 +70261,7 @@
         -80.11079,
       ),
       rotation_degrees: 105.14551,
-      scale: 1.0817,
+      scale: 0.432689,
     ),
     /*[7024]*/ (
       kind: "bush_03",
@@ -70281,7 +70281,7 @@
         -90.17131,
       ),
       rotation_degrees: 119.22256,
-      scale: 0.8578,
+      scale: 0.3431399,
     ),
     /*[7026]*/ (
       kind: "bush_02",
@@ -70311,7 +70311,7 @@
         -62.736732,
       ),
       rotation_degrees: 223.7269,
-      scale: 0.7842,
+      scale: 0.31366563,
     ),
     /*[7029]*/ (
       kind: "rock_5",
@@ -70331,7 +70331,7 @@
         -50.34816,
       ),
       rotation_degrees: 332.72244,
-      scale: 0.8199,
+      scale: 0.32796595,
     ),
     /*[7031]*/ (
       kind: "tree_01",
@@ -70341,7 +70341,7 @@
         -61.368217,
       ),
       rotation_degrees: 324.92377,
-      scale: 1.0897,
+      scale: 0.43588668,
     ),
     /*[7032]*/ (
       kind: "env_leaves_03",
@@ -70381,7 +70381,7 @@
         -67.92278,
       ),
       rotation_degrees: 343.2119,
-      scale: 0.8107,
+      scale: 0.3242608,
     ),
     /*[7036]*/ (
       kind: "bush_03",
@@ -70401,7 +70401,7 @@
         -52.96695,
       ),
       rotation_degrees: 216.65752,
-      scale: 0.8342,
+      scale: 0.33366486,
     ),
     /*[7038]*/ (
       kind: "bush_02",
@@ -70421,7 +70421,7 @@
         -57.724533,
       ),
       rotation_degrees: 27.933962,
-      scale: 0.8262,
+      scale: 0.33048126,
     ),
     /*[7040]*/ (
       kind: "spring_flower_07",
@@ -70451,7 +70451,7 @@
         -44.354156,
       ),
       rotation_degrees: 108.84132,
-      scale: 0.7375,
+      scale: 0.29498178,
     ),
     /*[7043]*/ (
       kind: "rock_3",
@@ -70471,7 +70471,7 @@
         -79.010056,
       ),
       rotation_degrees: 50.168488,
-      scale: 0.7447,
+      scale: 0.29788503,
     ),
     /*[7045]*/ (
       kind: "rock_1",
@@ -70501,7 +70501,7 @@
         -52.869152,
       ),
       rotation_degrees: 135.99638,
-      scale: 1.0129,
+      scale: 0.4051685,
     ),
     /*[7048]*/ (
       kind: "tree_10",
@@ -70511,7 +70511,7 @@
         -83.95685,
       ),
       rotation_degrees: 347.77063,
-      scale: 1.2396,
+      scale: 0.49583203,
     ),
     /*[7049]*/ (
       kind: "rock_5",
@@ -70531,7 +70531,7 @@
         -54.93037,
       ),
       rotation_degrees: 336.42322,
-      scale: 1.2440,
+      scale: 0.49761945,
     ),
     /*[7051]*/ (
       kind: "tree_10",
@@ -70541,7 +70541,7 @@
         -80.46685,
       ),
       rotation_degrees: 32.885536,
-      scale: 0.8586,
+      scale: 0.3434224,
     ),
     /*[7052]*/ (
       kind: "pine_tree_4",
@@ -70551,7 +70551,7 @@
         -80.48598,
       ),
       rotation_degrees: 149.78162,
-      scale: 1.1196,
+      scale: 0.44785124,
     ),
     /*[7053]*/ (
       kind: "tree_02",
@@ -70561,7 +70561,7 @@
         -57.75531,
       ),
       rotation_degrees: 22.124878,
-      scale: 0.8523,
+      scale: 0.3409029,
     ),
     /*[7054]*/ (
       kind: "pine_tree_3",
@@ -70571,7 +70571,7 @@
         -51.15826,
       ),
       rotation_degrees: 208.72118,
-      scale: 1.1590,
+      scale: 0.4635828,
     ),
     /*[7055]*/ (
       kind: "flower_04",
@@ -70601,7 +70601,7 @@
         -79.133255,
       ),
       rotation_degrees: 113.07065,
-      scale: 0.8830,
+      scale: 0.35318986,
     ),
     /*[7058]*/ (
       kind: "pine_tree_2",
@@ -70611,7 +70611,7 @@
         -45.211906,
       ),
       rotation_degrees: 284.95337,
-      scale: 1.2575,
+      scale: 0.5029871,
     ),
     /*[7059]*/ (
       kind: "tree_09",
@@ -70621,7 +70621,7 @@
         -71.49352,
       ),
       rotation_degrees: 147.38618,
-      scale: 0.9865,
+      scale: 0.394583,
     ),
     /*[7060]*/ (
       kind: "flower_02",
@@ -70641,7 +70641,7 @@
         -68.3931,
       ),
       rotation_degrees: 312.16028,
-      scale: 1.2785,
+      scale: 0.5113932,
     ),
     /*[7062]*/ (
       kind: "bush_03",
@@ -70681,7 +70681,7 @@
         -56.23887,
       ),
       rotation_degrees: 118.2492,
-      scale: 0.9378,
+      scale: 0.375139,
     ),
     /*[7066]*/ (
       kind: "spring_flower_08",
@@ -70731,7 +70731,7 @@
         -50.228497,
       ),
       rotation_degrees: 148.27603,
-      scale: 0.9919,
+      scale: 0.39676738,
     ),
     /*[7071]*/ (
       kind: "tree_18",
@@ -70741,7 +70741,7 @@
         -63.290688,
       ),
       rotation_degrees: 145.47266,
-      scale: 0.8754,
+      scale: 0.35015318,
     ),
     /*[7072]*/ (
       kind: "tree_18",
@@ -70751,7 +70751,7 @@
         -79.8399,
       ),
       rotation_degrees: 319.46194,
-      scale: 0.8537,
+      scale: 0.3414667,
     ),
     /*[7073]*/ (
       kind: "pine_tree_4",
@@ -70761,7 +70761,7 @@
         -57.246895,
       ),
       rotation_degrees: 356.0689,
-      scale: 1.2693,
+      scale: 0.50771517,
     ),
     /*[7074]*/ (
       kind: "bush_02",
@@ -70791,7 +70791,7 @@
         -57.419292,
       ),
       rotation_degrees: 144.1307,
-      scale: 0.9594,
+      scale: 0.3837448,
     ),
     /*[7077]*/ (
       kind: "tree_10",
@@ -70801,7 +70801,7 @@
         -74.27284,
       ),
       rotation_degrees: 13.63208,
-      scale: 0.9190,
+      scale: 0.36760238,
     ),
     /*[7078]*/ (
       kind: "bush_01",
@@ -70851,7 +70851,7 @@
         -51.236294,
       ),
       rotation_degrees: 297.15662,
-      scale: 1.1378,
+      scale: 0.45511132,
     ),
     /*[7083]*/ (
       kind: "bush_04",
@@ -70871,7 +70871,7 @@
         -86.0764,
       ),
       rotation_degrees: 161.8312,
-      scale: 1.2475,
+      scale: 0.4989942,
     ),
     /*[7085]*/ (
       kind: "spring_flower_08",
@@ -70891,7 +70891,7 @@
         -73.12846,
       ),
       rotation_degrees: 82.266785,
-      scale: 1.0322,
+      scale: 0.41287333,
     ),
     /*[7087]*/ (
       kind: "bush_04",
@@ -70911,7 +70911,7 @@
         -64.03779,
       ),
       rotation_degrees: 70.632996,
-      scale: 1.2571,
+      scale: 0.5028446,
     ),
     /*[7089]*/ (
       kind: "bush_04",
@@ -70931,7 +70931,7 @@
         -53.434235,
       ),
       rotation_degrees: 32.319866,
-      scale: 1.1165,
+      scale: 0.44659755,
     ),
     /*[7091]*/ (
       kind: "tree_18",
@@ -70941,7 +70941,7 @@
         -61.451237,
       ),
       rotation_degrees: 117.322205,
-      scale: 1.1401,
+      scale: 0.45603585,
     ),
     /*[7092]*/ (
       kind: "tree_09",
@@ -70951,7 +70951,7 @@
         -54.938793,
       ),
       rotation_degrees: 98.309265,
-      scale: 1.0661,
+      scale: 0.4264296,
     ),
     /*[7093]*/ (
       kind: "tree_08",
@@ -70961,7 +70961,7 @@
         -81.48483,
       ),
       rotation_degrees: 93.629715,
-      scale: 1.1011,
+      scale: 0.44044247,
     ),
     /*[7094]*/ (
       kind: "bush_01",

@@ -43,7 +43,10 @@ fn add_triangle(
     colors.push([1.0, 1.0, 1.0, a.depth_norm]);
     colors.push([1.0, 1.0, 1.0, b.depth_norm]);
     colors.push([1.0, 1.0, 1.0, c.depth_norm]);
-    indices.extend_from_slice(&[base, base + 1, base + 2]);
+    // The a/b/c layout below is clockwise seen from above (+Y); emit reversed
+    // so the front face points up — otherwise back-face culling hides the
+    // whole surface from above water.
+    indices.extend_from_slice(&[base, base + 2, base + 1]);
 }
 
 pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Option<Mesh> {

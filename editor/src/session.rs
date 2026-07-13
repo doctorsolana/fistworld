@@ -44,11 +44,15 @@ pub struct ForestBrushSettings {
     pub tree_weight: f32,
     pub bush_weight: f32,
     pub rock_weight: f32,
+    pub grass_weight: f32,
     pub ground_cover_weight: f32,
     pub base_scale: f32,
     pub scale_jitter: f32,
     pub max_slope: f32,
     pub avoid_water: bool,
+    /// Scatter only the asset currently selected in the catalog instead of
+    /// the preset species pools.
+    pub scatter_selected: bool,
 }
 
 impl Default for ForestBrushSettings {
@@ -61,13 +65,55 @@ impl Default for ForestBrushSettings {
             tree_weight: 0.55,
             bush_weight: 0.25,
             rock_weight: 0.12,
+            grass_weight: 0.0,
             ground_cover_weight: 0.08,
             base_scale: 1.0,
             scale_jitter: 0.28,
             max_slope: 1.35,
             avoid_water: true,
+            scatter_selected: false,
         }
     }
+}
+
+impl ForestBrushSettings {
+    /// One-click weight mixes ("what grows here"), independent of the
+    /// species preset row.
+    pub fn apply_mix(&mut self, mix: BrushMix) {
+        let (tree, bush, rock, grass, ground) = match mix {
+            BrushMix::Forest => (0.55, 0.25, 0.12, 0.0, 0.08),
+            BrushMix::Meadow => (0.04, 0.08, 0.02, 0.68, 0.18),
+            BrushMix::GrassOnly => (0.0, 0.0, 0.0, 1.0, 0.0),
+            BrushMix::Rocky => (0.08, 0.12, 0.68, 0.06, 0.06),
+        };
+        self.tree_weight = tree;
+        self.bush_weight = bush;
+        self.rock_weight = rock;
+        self.grass_weight = grass;
+        self.ground_cover_weight = ground;
+        if matches!(mix, BrushMix::Meadow | BrushMix::GrassOnly) {
+            // Dense-field defaults: tufts nearly shoulder-to-shoulder. All
+            // grass is one instanced mesh, so density is cheap; the short
+            // grass draw distance (55m) bounds the in-view count.
+            self.density_per_100m2 = self.density_per_100m2.max(match mix {
+                BrushMix::GrassOnly => 12.0,
+                _ => 8.0,
+            });
+            self.min_spacing = self.min_spacing.min(0.9);
+            // NOTE: base_scale is deliberately NOT touched here — it is
+            // shared across all groups, and clamping it for grass silently
+            // shrank every tree painted afterwards. Grass gets its size cut
+            // from forest_group_scale instead.
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BrushMix {
+    Forest,
+    Meadow,
+    GrassOnly,
+    Rocky,
 }
 
 #[derive(Resource)]
@@ -83,13 +129,27 @@ pub struct EditorUiState {
     pub forest: ForestBrushSettings,
     pub prop_scale: f32,
     pub prop_rotation_degrees: f32,
+    pub prop_random_yaw: bool,
+    pub prop_scale_jitter: f32,
+    pub prop_drag_paint: bool,
+    pub prop_drag_spacing: f32,
     pub road: RoadToolSettings,
     pub plot: PlotToolSettings,
     pub prop_search: String,
     pub selected_custom_scene: Option<String>,
+    pub recent_assets: Vec<RecentAsset>,
     pub show_reset_map_confirm: bool,
+    pub show_exit_confirm: bool,
     pub pointer_over_ui: bool,
+    pub keyboard_captured: bool,
     pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecentAsset {
+    pub scene_path: String,
+    pub display_name: String,
+    pub mapped_index: Option<usize>,
 }
 
 impl Default for EditorUiState {
@@ -106,12 +166,19 @@ impl Default for EditorUiState {
             forest: ForestBrushSettings::default(),
             prop_scale: 1.0,
             prop_rotation_degrees: 0.0,
+            prop_random_yaw: true,
+            prop_scale_jitter: 0.15,
+            prop_drag_paint: false,
+            prop_drag_spacing: 2.0,
             road: RoadToolSettings::default(),
             plot: PlotToolSettings::default(),
             prop_search: String::new(),
             selected_custom_scene: None,
+            recent_assets: Vec::new(),
             show_reset_map_confirm: false,
+            show_exit_confirm: false,
             pointer_over_ui: false,
+            keyboard_captured: false,
             status: "Ready".to_string(),
         }
     }
@@ -144,6 +211,20 @@ impl EditorUiState {
         self.selected_prop_kind()
             .map(|kind| kind.id().to_string())
             .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    /// The string stored in `MapObjectSpawn.kind` for the current selection:
+    /// a `PropKind` id when mapped, otherwise the raw scene path.
+    pub fn selected_kind_or_path(&self) -> String {
+        self.selected_prop_kind()
+            .map(|kind| kind.id().to_string())
+            .unwrap_or_else(|| self.selected_scene_path())
+    }
+
+    pub fn note_recent_asset(&mut self, asset: RecentAsset) {
+        self.recent_assets.retain(|entry| *entry != asset);
+        self.recent_assets.insert(0, asset);
+        self.recent_assets.truncate(8);
     }
 }
 
@@ -213,6 +294,12 @@ impl EditorSession {
     }
 
     pub fn push_undo_snapshot(&mut self, terrain: &WorldTerrain) {
+        // Snapshots are full map clones; cap the stack so long paint
+        // sessions don't grow memory without bound.
+        const MAX_UNDO_STEPS: usize = 64;
+        if self.undo.len() >= MAX_UNDO_STEPS {
+            self.undo.remove(0);
+        }
         self.undo.push(self.capture_snapshot(terrain));
         self.redo.clear();
     }
@@ -266,6 +353,23 @@ pub struct UiActionRequests {
     pub clear_road_draft: bool,
     pub delete_nearest_road: bool,
     pub delete_nearest_plot: bool,
+    pub save_and_exit: bool,
+    pub exit_without_saving: bool,
+}
+
+/// Per-stroke state for paint-style tools: one undo snapshot per stroke and
+/// distance-based stamp spacing while the button is held.
+#[derive(Resource, Default)]
+pub struct BrushStroke {
+    pub last_stamp: Option<Vec2>,
+    pub undo_pushed: bool,
+}
+
+impl BrushStroke {
+    pub fn reset(&mut self) {
+        self.last_stamp = None;
+        self.undo_pushed = false;
+    }
 }
 
 #[derive(Resource, Default)]
@@ -331,6 +435,16 @@ pub struct TerrainChunkVisual;
 
 #[derive(Component)]
 pub struct EditorPropVisual;
+
+/// Index of this visual's object in `map_definition.objects`, kept in sync
+/// by the incremental append/remove paths in `apply_visual_refresh`.
+#[derive(Component, Clone, Copy)]
+pub struct EditorPropIndex(pub usize);
+
+/// Camera distance beyond which this prop visual is hidden in the editor
+/// (mirrors the game's per-kind draw distance).
+#[derive(Component, Clone, Copy)]
+pub struct EditorPropCullDistance(pub f32);
 
 #[derive(Component)]
 pub struct EditorPropPreviewVisual;

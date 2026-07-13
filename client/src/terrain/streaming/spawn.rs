@@ -120,6 +120,7 @@ pub(crate) fn update_terrain_material_lod(
     let player_chunk = ChunkCoord::from_world_pos(anchor_pos);
     if streaming.material_lod_center == Some(player_chunk)
         && streaming.material_lod_radius == splat_normal_radius
+        && !settings.is_changed()
     {
         return;
     }

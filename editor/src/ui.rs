@@ -10,8 +10,8 @@ use shared::props::ALL_PROP_KINDS;
 use crate::camera::{EditorCameraController, EditorCameraMode};
 use crate::city;
 use crate::session::{
-    CursorTerrainHit, EditorEnvironmentState, EditorMainCamera, EditorSession, EditorUiState,
-    ForestBrushPreset, TerrainBrushMode, ToolMode, UiActionRequests,
+    BrushMix, CursorTerrainHit, EditorEnvironmentState, EditorMainCamera, EditorSession,
+    EditorUiState, ForestBrushPreset, RecentAsset, TerrainBrushMode, ToolMode, UiActionRequests,
 };
 use crate::tools::VisualRefreshFlags;
 
@@ -287,7 +287,33 @@ pub fn editor_ui_panel(
         ui_state.show_reset_map_confirm = keep_open;
     }
 
+    if ui_state.show_exit_confirm {
+        let mut keep_open = true;
+        egui::Window::new("Unsaved Changes")
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("You have unsaved changes. Save before exiting?");
+                ui.horizontal(|ui| {
+                    if ui.button("Save & Exit").clicked() {
+                        actions.save_and_exit = true;
+                        keep_open = false;
+                    }
+                    if ui.button("Exit Without Saving").clicked() {
+                        actions.exit_without_saving = true;
+                        keep_open = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        keep_open = false;
+                    }
+                });
+            });
+        ui_state.show_exit_confirm = keep_open;
+    }
+
     ui_state.pointer_over_ui = ctx.wants_pointer_input() || ctx.is_pointer_over_area();
+    ui_state.keyboard_captured = ctx.wants_keyboard_input();
 }
 
 fn apply_editor_style(ctx: &egui::Context) {
@@ -349,19 +375,32 @@ fn draw_tool_palette(ui: &mut egui::Ui, ui_state: &mut EditorUiState) {
     );
     ui.add_space(8.0);
     draw_tool_group(ui, "Terrain & Layout", |ui| {
-        draw_tool_button(ui, &mut ui_state.tool, ToolMode::Terrain, "Terrain");
-        draw_tool_button(ui, &mut ui_state.tool, ToolMode::Road, "Road Network");
-        draw_tool_button(ui, &mut ui_state.tool, ToolMode::Plot, "Plots & Buildings");
+        draw_tool_button(ui, &mut ui_state.tool, ToolMode::Terrain, "Terrain", "1");
+        draw_tool_button(ui, &mut ui_state.tool, ToolMode::Road, "Road Network", "2");
+        draw_tool_button(
+            ui,
+            &mut ui_state.tool,
+            ToolMode::Plot,
+            "Plots & Buildings",
+            "3",
+        );
     });
     draw_tool_group(ui, "Props", |ui| {
-        draw_tool_button(ui, &mut ui_state.tool, ToolMode::PlaceProp, "Place Prop");
+        draw_tool_button(
+            ui,
+            &mut ui_state.tool,
+            ToolMode::PlaceProp,
+            "Place Prop",
+            "4",
+        );
         draw_tool_button(
             ui,
             &mut ui_state.tool,
             ToolMode::ForestBrush,
-            "Forest Brush",
+            "Scatter Brush",
+            "5",
         );
-        draw_tool_button(ui, &mut ui_state.tool, ToolMode::EraseProp, "Erase Prop");
+        draw_tool_button(ui, &mut ui_state.tool, ToolMode::EraseProp, "Erase Props", "6");
     });
     draw_tool_group(ui, "Gameplay", |ui| {
         draw_tool_button(
@@ -369,14 +408,18 @@ fn draw_tool_palette(ui: &mut egui::Ui, ui_state: &mut EditorUiState) {
             &mut ui_state.tool,
             ToolMode::SetPlayerSpawn,
             "Player Spawn",
+            "7",
         );
         draw_tool_button(
             ui,
             &mut ui_state.tool,
             ToolMode::PlaceSpawnMarker,
             "Spawn Marker",
+            "8",
         );
     });
+    ui.add_space(10.0);
+    ui.small("[ and ] resize the active brush.\nHold LMB to paint with brushes.");
 }
 
 fn draw_tool_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
@@ -505,50 +548,112 @@ fn draw_active_tool_settings(
             draw_prop_catalog(ui, ui_state, catalog);
             ui.separator();
             ui.add(egui::Slider::new(&mut ui_state.prop_scale, 0.1..=8.0).text("Scale"));
-            ui.add(egui::Slider::new(&mut ui_state.prop_rotation_degrees, 0.0..=360.0).text("Yaw"));
+            ui.add(
+                egui::Slider::new(&mut ui_state.prop_scale_jitter, 0.0..=0.9)
+                    .text("Scale Jitter"),
+            );
+            ui.checkbox(&mut ui_state.prop_random_yaw, "Random Yaw");
+            if !ui_state.prop_random_yaw {
+                ui.add(
+                    egui::Slider::new(&mut ui_state.prop_rotation_degrees, 0.0..=360.0)
+                        .text("Yaw"),
+                );
+            }
+            ui.checkbox(&mut ui_state.prop_drag_paint, "Drag to Paint");
+            if ui_state.prop_drag_paint {
+                ui.add(
+                    egui::Slider::new(&mut ui_state.prop_drag_spacing, 0.5..=12.0)
+                        .text("Paint Spacing"),
+                );
+                ui.small("Hold LMB and drag to place a prop every few meters.");
+            }
         }
         ToolMode::ForestBrush => {
             ui.label(egui::RichText::new("Brush").strong());
             ui.add(egui::Slider::new(&mut ui_state.forest.radius, 4.0..=96.0).text("Radius"));
             draw_forest_size_presets(ui, &mut ui_state.forest.radius);
             ui.add(
-                egui::Slider::new(&mut ui_state.forest.density_per_100m2, 0.2..=7.5)
+                egui::Slider::new(&mut ui_state.forest.density_per_100m2, 0.2..=16.0)
                     .text("Density / 100m2"),
             );
             ui.add(
-                egui::Slider::new(&mut ui_state.forest.min_spacing, 0.75..=8.0).text("Min Spacing"),
+                egui::Slider::new(&mut ui_state.forest.min_spacing, 0.5..=8.0).text("Min Spacing"),
             );
+            ui.small("Hold LMB and drag to paint continuously.");
 
             ui.separator();
-            ui.label(egui::RichText::new("Preset").strong());
-            ui.horizontal_wrapped(|ui| {
-                ui.selectable_value(
-                    &mut ui_state.forest.preset,
-                    ForestBrushPreset::Mixed,
-                    "Mixed",
-                );
-                ui.selectable_value(
-                    &mut ui_state.forest.preset,
-                    ForestBrushPreset::Broadleaf,
-                    "Broadleaf",
-                );
-                ui.selectable_value(&mut ui_state.forest.preset, ForestBrushPreset::Pine, "Pine");
-                ui.selectable_value(
-                    &mut ui_state.forest.preset,
-                    ForestBrushPreset::Deadwood,
-                    "Deadwood",
-                );
-            });
-
-            ui.separator();
-            ui.label(egui::RichText::new("Makeup").strong());
-            ui.add(egui::Slider::new(&mut ui_state.forest.tree_weight, 0.0..=1.0).text("Trees"));
-            ui.add(egui::Slider::new(&mut ui_state.forest.bush_weight, 0.0..=1.0).text("Bushes"));
-            ui.add(egui::Slider::new(&mut ui_state.forest.rock_weight, 0.0..=1.0).text("Rocks"));
-            ui.add(
-                egui::Slider::new(&mut ui_state.forest.ground_cover_weight, 0.0..=1.0)
-                    .text("Flowers / Leaves"),
+            ui.checkbox(
+                &mut ui_state.forest.scatter_selected,
+                "Paint Selected Asset Only",
             );
+
+            if ui_state.forest.scatter_selected {
+                ui.label(format!("Painting: {}", ui_state.selected_asset_label()));
+                ui.add(
+                    egui::TextEdit::singleline(&mut ui_state.prop_search)
+                        .hint_text("Search assets")
+                        .desired_width(f32::INFINITY),
+                );
+                draw_prop_catalog(ui, ui_state, catalog);
+            } else {
+                ui.label(egui::RichText::new("Species Preset").strong());
+                ui.horizontal_wrapped(|ui| {
+                    ui.selectable_value(
+                        &mut ui_state.forest.preset,
+                        ForestBrushPreset::Mixed,
+                        "Mixed",
+                    );
+                    ui.selectable_value(
+                        &mut ui_state.forest.preset,
+                        ForestBrushPreset::Broadleaf,
+                        "Broadleaf",
+                    );
+                    ui.selectable_value(
+                        &mut ui_state.forest.preset,
+                        ForestBrushPreset::Pine,
+                        "Pine",
+                    );
+                    ui.selectable_value(
+                        &mut ui_state.forest.preset,
+                        ForestBrushPreset::Deadwood,
+                        "Deadwood",
+                    );
+                });
+
+                ui.separator();
+                ui.label(egui::RichText::new("Makeup").strong());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Mix");
+                    if ui.button("Forest").clicked() {
+                        ui_state.forest.apply_mix(BrushMix::Forest);
+                    }
+                    if ui.button("Meadow").clicked() {
+                        ui_state.forest.apply_mix(BrushMix::Meadow);
+                    }
+                    if ui.button("Grass Only").clicked() {
+                        ui_state.forest.apply_mix(BrushMix::GrassOnly);
+                    }
+                    if ui.button("Rocky").clicked() {
+                        ui_state.forest.apply_mix(BrushMix::Rocky);
+                    }
+                });
+                ui.add(
+                    egui::Slider::new(&mut ui_state.forest.tree_weight, 0.0..=1.0).text("Trees"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut ui_state.forest.bush_weight, 0.0..=1.0).text("Bushes"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut ui_state.forest.rock_weight, 0.0..=1.0).text("Rocks"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut ui_state.forest.grass_weight, 0.0..=1.0).text("Grass"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut ui_state.forest.ground_cover_weight, 0.0..=1.0)
+                        .text("Flowers / Leaves"),
+                );
+            }
 
             ui.separator();
             ui.label(egui::RichText::new("Placement").strong());
@@ -567,6 +672,7 @@ fn draw_active_tool_settings(
         ToolMode::EraseProp => {
             ui.add(egui::Slider::new(&mut ui_state.brush_radius, 1.0..=32.0).text("Erase Radius"));
             draw_brush_size_presets(ui, &mut ui_state.brush_radius);
+            ui.small("Erases every prop inside the radius. Hold LMB and drag to sweep.");
         }
         ToolMode::Road | ToolMode::Plot => {
             city::draw_city_tool_controls(ui, ui_state, actions, city_state);
@@ -615,12 +721,39 @@ fn draw_prop_catalog(
         catalog.discovered_asset_count, catalog.mapped_count, catalog.unmapped_count
     ));
 
+    if !ui_state.recent_assets.is_empty() {
+        let recents = ui_state.recent_assets.clone();
+        ui.horizontal_wrapped(|ui| {
+            ui.small("Recent:");
+            for recent in &recents {
+                let selected = if let Some(mapped_index) = recent.mapped_index {
+                    ui_state.selected_custom_scene.is_none()
+                        && ui_state.selected_prop_index == mapped_index
+                } else {
+                    ui_state.selected_custom_scene.as_deref() == Some(recent.scene_path.as_str())
+                };
+                if ui
+                    .selectable_label(selected, &recent.display_name)
+                    .clicked()
+                {
+                    select_catalog_asset(
+                        ui_state,
+                        recent.mapped_index,
+                        &recent.scene_path,
+                        &recent.display_name,
+                    );
+                }
+            }
+        });
+    }
+
     let search = ui_state.prop_search.trim().to_ascii_lowercase();
+    let force_open = (!search.is_empty()).then_some(true);
     let mut any_match = false;
 
     egui::ScrollArea::vertical()
         .id_salt("editor_prop_catalog")
-        .max_height(300.0)
+        .max_height(420.0)
         .show(ui, |ui| {
             for category in &catalog.categories {
                 let matching: Vec<&PropCatalogAssetEntry> = category
@@ -634,6 +767,7 @@ fn draw_prop_catalog(
                 any_match = true;
 
                 egui::CollapsingHeader::new(format!("{} ({})", category.name, matching.len()))
+                    .open(force_open)
                     .show(ui, |ui| {
                         for asset in matching {
                             let selected = if let Some(mapped_index) = asset.mapped_index {
@@ -655,12 +789,12 @@ fn draw_prop_catalog(
                             };
 
                             if ui.selectable_label(selected, label).clicked() {
-                                if let Some(mapped_index) = asset.mapped_index {
-                                    ui_state.selected_prop_index = mapped_index;
-                                    ui_state.selected_custom_scene = None;
-                                } else {
-                                    ui_state.selected_custom_scene = Some(asset.scene_path.clone());
-                                }
+                                select_catalog_asset(
+                                    ui_state,
+                                    asset.mapped_index,
+                                    &asset.scene_path,
+                                    &asset.display_name,
+                                );
                             }
                         }
                     });
@@ -672,9 +806,36 @@ fn draw_prop_catalog(
     }
 }
 
-fn draw_tool_button(ui: &mut egui::Ui, current_tool: &mut ToolMode, tool: ToolMode, label: &str) {
+fn select_catalog_asset(
+    ui_state: &mut EditorUiState,
+    mapped_index: Option<usize>,
+    scene_path: &str,
+    display_name: &str,
+) {
+    if let Some(mapped_index) = mapped_index {
+        ui_state.selected_prop_index = mapped_index;
+        ui_state.selected_custom_scene = None;
+    } else {
+        ui_state.selected_custom_scene = Some(scene_path.to_string());
+    }
+    ui_state.note_recent_asset(RecentAsset {
+        scene_path: scene_path.to_string(),
+        display_name: display_name.to_string(),
+        mapped_index,
+    });
+}
+
+fn draw_tool_button(
+    ui: &mut egui::Ui,
+    current_tool: &mut ToolMode,
+    tool: ToolMode,
+    label: &str,
+    hotkey: &str,
+) {
     let selected = *current_tool == tool;
-    let button = egui::Button::new(label).selected(selected);
+    let button = egui::Button::new(label)
+        .shortcut_text(hotkey)
+        .selected(selected);
     if ui.add_sized([ui.available_width(), 32.0], button).clicked() {
         *current_tool = tool;
     }
@@ -706,7 +867,7 @@ fn active_tool_heading(tool: ToolMode) -> &'static str {
     match tool {
         ToolMode::Terrain => "Terrain",
         ToolMode::PlaceProp => "Prop Placement",
-        ToolMode::ForestBrush => "Forest Brush",
+        ToolMode::ForestBrush => "Scatter Brush",
         ToolMode::EraseProp => "Prop Erase",
         ToolMode::Road => "Road",
         ToolMode::Plot => "Plot",
@@ -718,9 +879,9 @@ fn active_tool_heading(tool: ToolMode) -> &'static str {
 fn active_tool_subtitle(tool: ToolMode) -> &'static str {
     match tool {
         ToolMode::Terrain => "Height sculpting and flattening.",
-        ToolMode::PlaceProp => "Scene asset placement.",
-        ToolMode::ForestBrush => "Biased foliage, rocks, and ground cover.",
-        ToolMode::EraseProp => "Prop cleanup by radius.",
+        ToolMode::PlaceProp => "Single placement with optional drag painting.",
+        ToolMode::ForestBrush => "Paint grass, foliage, rocks, or any selected asset.",
+        ToolMode::EraseProp => "Sweep-erase every prop inside the brush.",
         ToolMode::Road => "Road drafting and street defaults.",
         ToolMode::Plot => "Lots, zones, and building placement.",
         ToolMode::SetPlayerSpawn => "Map start position.",

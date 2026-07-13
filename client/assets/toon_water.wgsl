@@ -3,6 +3,7 @@
 #import bevy_pbr::{
     mesh_bindings::mesh,
     mesh_functions,
+    mesh_view_bindings::view,
     forward_io::{Vertex, VertexOutput},
     view_transformations::position_world_to_clip,
 }
@@ -20,6 +21,8 @@ struct ToonWaterUniform {
     ring_params: vec4<f32>,
     // x: wave amplitude, y: wave frequency, z: wave speed, w: depth start
     wave_params: vec4<f32>,
+    // xyz: direction to the sun (world), w: glint strength (0 at night)
+    sun_params: vec4<f32>,
 };
 
 @group(3) @binding(0) var<uniform> material: ToonWaterUniform;
@@ -30,6 +33,16 @@ fn wave_field(p: vec2<f32>, time: f32, freq: f32, speed: f32) -> f32 {
     let a = sin(dot(p, dir_a) * freq + time * speed);
     let b = sin(dot(p, dir_b) * (freq * 1.37) - time * (speed * 0.83));
     return a * 0.62 + b * 0.38;
+}
+
+// Analytic gradient of wave_field: gives a rippled surface normal without
+// texture lookups or finite differences.
+fn wave_gradient(p: vec2<f32>, time: f32, freq: f32, speed: f32) -> vec2<f32> {
+    let dir_a = normalize(vec2<f32>(0.80, 0.60));
+    let dir_b = normalize(vec2<f32>(-0.35, 0.94));
+    let ca = cos(dot(p, dir_a) * freq + time * speed) * freq;
+    let cb = cos(dot(p, dir_b) * (freq * 1.37) - time * (speed * 0.83)) * (freq * 1.37);
+    return dir_a * ca * 0.62 + dir_b * cb * 0.38;
 }
 
 fn hash12(p: vec2<f32>) -> f32 {
@@ -113,7 +126,11 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let depth = clamp(in.color.a, 0.0, 1.0);
-    let base = mix(material.shallow_color, material.deep_color, depth);
+
+    // Soft-banded depth gradient: quantize a third of the way toward 3 bands
+    // for the stylized "painted shelves of color" read.
+    let depth_banded = mix(depth, floor(depth * 3.0 + 0.5) / 3.0, 0.35);
+    let base = mix(material.shallow_color, material.deep_color, depth_banded);
 
     let wave_scale = max(material.ring_params.x, 0.001);
     let flow_speed = material.foam_params.w;
@@ -156,7 +173,31 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     );
 
     let toon_light = 0.86 + crest01 * 0.14;
-    let base_rgb = clamp(base.rgb * toon_light, vec3<f32>(0.0), vec3<f32>(1.0));
-    let color = mix(vec4<f32>(base_rgb, base.a), material.foam_color, foam_mask);
-    return vec4<f32>(color.rgb, base.a);
+    var base_rgb = clamp(base.rgb * toon_light, vec3<f32>(0.0), vec3<f32>(1.0));
+
+    // Fresnel: grazing views pick up a pale sky tint and turn more opaque;
+    // looking straight down stays clear. Sells the surface as reflective
+    // without any actual reflection rendering.
+    let view_vec = normalize(view.world_position.xyz - in.world_position.xyz);
+    let ndv = clamp(abs(view_vec.y), 0.02, 1.0);
+    let fresnel = pow(1.0 - ndv, 3.0);
+    let sky_tint = vec3<f32>(0.70, 0.84, 0.94);
+    base_rgb = mix(base_rgb, sky_tint, fresnel * 0.5);
+    var alpha = clamp(base.a + fresnel * 0.22, 0.0, 0.97);
+
+    var color_rgb = mix(base_rgb, material.foam_color.rgb, foam_mask);
+
+    // Sun glints: specular streaks off an analytically rippled normal.
+    // Two gradient octaves, pure ALU. Strength fades to 0 at night.
+    let rip_t = globals.time;
+    var grad = wave_gradient(in.world_position.xz * 0.9, rip_t, 2.4, 1.1) * 0.35;
+    grad += wave_gradient(in.world_position.xz * 2.7 + vec2<f32>(13.7, 71.3), rip_t * 1.35, 3.1, 1.7) * 0.18;
+    let ripple_normal = normalize(vec3<f32>(-grad.x, 1.0, -grad.y));
+    let sun_dir = normalize(material.sun_params.xyz);
+    let glint = pow(max(dot(reflect(-view_vec, ripple_normal), sun_dir), 0.0), 90.0)
+        * material.sun_params.w;
+    color_rgb += glint * vec3<f32>(1.0, 0.97, 0.88);
+    alpha = clamp(alpha + min(glint, 1.0) * 0.35 + foam_mask * 0.25, 0.0, 1.0);
+
+    return vec4<f32>(color_rgb, alpha);
 }

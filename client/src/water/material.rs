@@ -38,6 +38,8 @@ pub struct ToonWaterUniform {
     pub foam_params: Vec4,
     pub ring_params: Vec4,
     pub wave_params: Vec4,
+    /// xyz: direction to the sun (world), w: glint strength (0 at night).
+    pub sun_params: Vec4,
 }
 
 impl Material for ToonWaterMaterial {
@@ -83,12 +85,45 @@ pub(super) fn setup_water_assets(
             ring_params: Vec4::new(1.35, 0.03, 0.14, 0.012),
             // x: wave amplitude, y: wave frequency, z: wave speed, w: depth start
             wave_params: Vec4::new(0.28, 0.095, 1.0, 0.12),
+            // Overwritten every frame the sun moves appreciably.
+            sun_params: Vec4::new(0.35, 0.75, 0.30, 1.1),
         },
         alpha_mode: AlphaMode::Blend,
         double_sided: false,
     });
 
     commands.insert_resource(WaterRenderAssets { material });
+}
+
+/// Keep the water's glint direction in sync with the day/night sun. Only
+/// mutates the material when the sun has moved appreciably, so the material
+/// isn't re-prepared every frame.
+pub(super) fn update_water_sun_dir(
+    render_assets: Option<Res<WaterRenderAssets>>,
+    sun: Query<&GlobalTransform, With<SunLight>>,
+    mut materials: ResMut<Assets<ToonWaterMaterial>>,
+) {
+    let Some(render_assets) = render_assets else {
+        return;
+    };
+    let Ok(sun_tf) = sun.single() else {
+        return;
+    };
+
+    let to_sun = Vec3::from(sun_tf.back());
+    // Glints fade out as the sun approaches the horizon.
+    let strength = 1.1 * to_sun.y.clamp(0.0, 1.0).sqrt();
+    let target = Vec4::new(to_sun.x, to_sun.y, to_sun.z, strength);
+
+    let Some(material) = materials.get(&render_assets.material) else {
+        return;
+    };
+    if material.uniform.sun_params.distance_squared(target) < 1e-4 {
+        return;
+    }
+    if let Some(material) = materials.get_mut(&render_assets.material) {
+        material.uniform.sun_params = target;
+    }
 }
 
 /// Flip water between single-sided (camera above water — the cheap, common

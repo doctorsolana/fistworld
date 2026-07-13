@@ -11,7 +11,7 @@ pub struct PropRenderTuning {
     pub visible_end_distance: Option<f32>,
 }
 
-pub(crate) fn default_render_tuning(kind: PropKind) -> PropRenderTuning {
+pub fn default_render_tuning(kind: PropKind) -> PropRenderTuning {
     match kind {
         PropKind::Flower_01
         | PropKind::Flower_02
@@ -31,6 +31,19 @@ pub(crate) fn default_render_tuning(kind: PropKind) -> PropRenderTuning {
             casts_shadows: false,
             visible_end_distance: Some(120.0),
         },
+        // Ground cover: placed VERY densely (BotW-style fields), so the draw
+        // distance is short — it bounds the in-view instance count.
+        PropKind::GrassBlade_9v
+        | PropKind::Env_Grass_Tall_04
+        | PropKind::Env_Grass_06
+        | PropKind::Env_Grass_07 => PropRenderTuning {
+            casts_shadows: false,
+            visible_end_distance: Some(55.0),
+        },
+        PropKind::Env_Ivy_08 | PropKind::Env_Ivy_13 => PropRenderTuning {
+            casts_shadows: false,
+            visible_end_distance: Some(100.0),
+        },
         _ => PropRenderTuning {
             casts_shadows: true,
             visible_end_distance: Some(450.0),
@@ -38,7 +51,7 @@ pub(crate) fn default_render_tuning(kind: PropKind) -> PropRenderTuning {
     }
 }
 
-pub(crate) fn default_unmapped_render_tuning() -> PropRenderTuning {
+pub fn default_unmapped_render_tuning() -> PropRenderTuning {
     PropRenderTuning {
         casts_shadows: true,
         visible_end_distance: Some(450.0),

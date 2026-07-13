@@ -11,7 +11,7 @@ use crate::city;
 use crate::lighting;
 use crate::picking;
 use crate::session::{
-    CursorTerrainHit, EditorEnvironmentState, EditorUiState, PropPreviewState,
+    BrushStroke, CursorTerrainHit, EditorEnvironmentState, EditorUiState, PropPreviewState,
     TerrainChunkRegistry, UiActionRequests, WaterChunkRegistry,
 };
 use crate::tools::{self, VisualRefreshFlags};
@@ -33,6 +33,10 @@ pub fn run() {
                     present_mode: PresentMode::AutoVsync,
                     ..default()
                 }),
+                // Close requests go through the unsaved-changes guard
+                // (tools::handle_window_close_requested) instead of
+                // closing immediately.
+                close_when_requested: false,
                 ..default()
             })
             .set(AssetPlugin {
@@ -45,6 +49,7 @@ pub fn run() {
     app.init_resource::<EditorUiState>();
     app.init_resource::<CursorTerrainHit>();
     app.init_resource::<UiActionRequests>();
+    app.init_resource::<BrushStroke>();
     app.init_resource::<PropPreviewState>();
     app.init_resource::<TerrainChunkRegistry>();
     app.init_resource::<WaterChunkRegistry>();
@@ -69,12 +74,14 @@ pub fn run() {
         (
             camera::update_editor_camera,
             picking::update_cursor_terrain_hit,
+            tools::handle_window_close_requested,
             tools::handle_editor_shortcuts,
             city::handle_city_shortcuts,
             city::handle_city_tool_input,
             city::handle_city_ui_actions,
             tools::handle_tool_input,
             tools::apply_visual_refresh,
+            tools::cull_distant_prop_visuals,
             city::apply_city_visual_refresh,
             lighting::apply_editor_environment,
             tools::refresh_cursor_indicator,

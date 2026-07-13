@@ -136,7 +136,8 @@ pub fn update_day_night_cycle(
     // register; the old ~39 peak was ~1% of that (pitch-black shadows, the
     // "hospital light" contrast). ~2600 at noon puts shadowed sides at a
     // readable ~1:4 ratio against sunlit surfaces, like a clear real sky.
-    ambient.brightness = (16.0 + 2600.0 * day_factor + 600.0 * twilight_factor) * lighting_boost;
+    ambient.brightness =
+        (16.0 + 2600.0 * day_factor + 600.0 * twilight_factor) * lighting_boost;
 
     for mut atmosphere_light in atmosphere_light_query.iter_mut() {
         atmosphere_light.intensity = if settings.atmosphere_enabled {
@@ -146,9 +147,11 @@ pub fn update_day_night_cycle(
         };
     }
 
-    let clear_fog_color = Color::srgba(0.50, 0.60, 0.70, 0.10);
-    let dusty_fog_color = Color::srgba(0.72, 0.67, 0.56, 0.20);
-    let night_fog_color = Color::srgba(0.05, 0.08, 0.14, 0.26);
+    let (clear_fog_color, dusty_fog_color, night_fog_color) = (
+        Color::srgba(0.50, 0.60, 0.70, 0.10),
+        Color::srgba(0.72, 0.67, 0.56, 0.20),
+        Color::srgba(0.05, 0.08, 0.14, 0.26),
+    );
     let day_fog_color = lerp_color(clear_fog_color, dusty_fog_color, dust_factor);
     let fog_color = lerp_color(night_fog_color, day_fog_color, day_factor);
     let visibility = (lerp_f32(320.0, 1050.0, day_factor) * lerp_f32(1.0, 0.68, dust_factor))

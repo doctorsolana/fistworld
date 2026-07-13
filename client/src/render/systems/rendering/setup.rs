@@ -48,35 +48,8 @@ pub fn setup_rendering(
         last_blend: -1.0,
     });
 
-    // Warm, slightly saturated outdoor grade. Shadows are lifted rather than
-    // crushed — the deep-shadow contrast is already provided by the physical
-    // sun:sky ratio, so crushing them again reads clinical.
-    let color_grading = ColorGrading {
-        global: ColorGradingGlobal {
-            exposure: settings.grade_exposure.clamp(-2.0, 2.0),
-            temperature: 0.016,
-            tint: -0.004,
-            post_saturation: 1.07,
-            ..default()
-        },
-        shadows: ColorGradingSection {
-            saturation: 1.04,
-            contrast: 1.03,
-            lift: 0.004,
-            ..default()
-        },
-        midtones: ColorGradingSection {
-            saturation: 1.04,
-            contrast: 1.05,
-            ..default()
-        },
-        highlights: ColorGradingSection {
-            saturation: 1.00,
-            contrast: 1.02,
-            gain: 0.97,
-            ..default()
-        },
-    };
+    let color_grading =
+        super::settings::default_color_grading(settings.grade_exposure.clamp(-2.0, 2.0));
 
     let mut camera = commands.spawn((
         Camera3d::default(),

@@ -51,6 +51,16 @@ pub enum PropKind {
     // environment/leaves
     Env_Leaves_02,
     Env_Leaves_03,
+
+    // environment/grass
+    GrassBlade_9v,
+    Env_Grass_Tall_04,
+    Env_Grass_06,
+    Env_Grass_07,
+
+    // environment/ivy
+    Env_Ivy_08,
+    Env_Ivy_13,
 }
 
 impl PropKind {
@@ -92,6 +102,12 @@ impl PropKind {
             "spring_flower_09" => Some(PropKind::Spring_Flower_09),
             "env_leaves_02" => Some(PropKind::Env_Leaves_02),
             "env_leaves_03" => Some(PropKind::Env_Leaves_03),
+            "grass_blade_9v" => Some(PropKind::GrassBlade_9v),
+            "env_grass_tall_04" => Some(PropKind::Env_Grass_Tall_04),
+            "env_grass_06" => Some(PropKind::Env_Grass_06),
+            "env_grass_07" => Some(PropKind::Env_Grass_07),
+            "env_ivy_08" => Some(PropKind::Env_Ivy_08),
+            "env_ivy_13" => Some(PropKind::Env_Ivy_13),
             _ => None,
         }
     }
@@ -133,6 +149,12 @@ impl PropKind {
             PropKind::Spring_Flower_09 => "spring_flower_09",
             PropKind::Env_Leaves_02 => "env_leaves_02",
             PropKind::Env_Leaves_03 => "env_leaves_03",
+            PropKind::GrassBlade_9v => "grass_blade_9v",
+            PropKind::Env_Grass_Tall_04 => "env_grass_tall_04",
+            PropKind::Env_Grass_06 => "env_grass_06",
+            PropKind::Env_Grass_07 => "env_grass_07",
+            PropKind::Env_Ivy_08 => "env_ivy_08",
+            PropKind::Env_Ivy_13 => "env_ivy_13",
         }
     }
 
@@ -181,6 +203,14 @@ impl PropKind {
             }
             PropKind::Env_Leaves_02 => "game_assets/environment/leaves/Env_Leaves_02.glb#Scene0",
             PropKind::Env_Leaves_03 => "game_assets/environment/leaves/Env_Leaves_03.glb#Scene0",
+            PropKind::GrassBlade_9v => "game_assets/environment/grass/GrassBlade_9v.glb#Scene0",
+            PropKind::Env_Grass_Tall_04 => {
+                "game_assets/environment/grass/Env_Grass_Tall_04.glb#Scene0"
+            }
+            PropKind::Env_Grass_06 => "game_assets/environment/grass/Env_Grass_06.glb#Scene0",
+            PropKind::Env_Grass_07 => "game_assets/environment/grass/Env_Grass_07.glb#Scene0",
+            PropKind::Env_Ivy_08 => "game_assets/environment/ivy/Env_Ivy_08.glb#Scene0",
+            PropKind::Env_Ivy_13 => "game_assets/environment/ivy/Env_Ivy_13.glb#Scene0",
         }
     }
 }
@@ -221,6 +251,12 @@ pub const ALL_PROP_KINDS: &[PropKind] = &[
     PropKind::Spring_Flower_09,
     PropKind::Env_Leaves_02,
     PropKind::Env_Leaves_03,
+    PropKind::GrassBlade_9v,
+    PropKind::Env_Grass_Tall_04,
+    PropKind::Env_Grass_06,
+    PropKind::Env_Grass_07,
+    PropKind::Env_Ivy_08,
+    PropKind::Env_Ivy_13,
 ];
 
 #[cfg(test)]

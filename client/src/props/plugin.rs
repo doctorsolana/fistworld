@@ -1,5 +1,6 @@
 //! Props plugin wiring.
 
+use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;
 
 use crate::states::GameState;
@@ -15,6 +16,7 @@ pub struct PropsPlugin;
 
 impl Plugin for PropsPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(MaterialPlugin::<super::wind::WindFoliageMaterial>::default());
         app.init_resource::<LoadedPropChunks>();
         app.init_resource::<PendingPropSpawns>();
         app.init_resource::<PropChunkIndex>();

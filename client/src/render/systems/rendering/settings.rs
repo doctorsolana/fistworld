@@ -115,6 +115,36 @@ pub struct GraphicsSettings {
 /// Launcher window resolution (physical pixels).
 pub const LAUNCHER_RESOLUTION: (u32, u32) = (1600, 900);
 
+/// The default color grade.
+pub fn default_color_grading(exposure: f32) -> ColorGrading {
+    ColorGrading {
+        global: ColorGradingGlobal {
+            exposure,
+            temperature: 0.016,
+            tint: -0.004,
+            post_saturation: 1.07,
+            ..Default::default()
+        },
+        shadows: ColorGradingSection {
+            saturation: 1.04,
+            contrast: 1.03,
+            lift: 0.004,
+            ..Default::default()
+        },
+        midtones: ColorGradingSection {
+            saturation: 1.04,
+            contrast: 1.05,
+            ..Default::default()
+        },
+        highlights: ColorGradingSection {
+            saturation: 1.00,
+            contrast: 1.02,
+            gain: 0.97,
+            ..Default::default()
+        },
+    }
+}
+
 /// SSAO settings used when the toggle is enabled.
 pub fn default_ssao_settings() -> ScreenSpaceAmbientOcclusion {
     ScreenSpaceAmbientOcclusion {
@@ -240,7 +270,7 @@ pub fn apply_graphics_settings(
         }
 
         *tonemapping = settings.tonemapping;
-        color_grading.global.exposure = settings.grade_exposure.clamp(-2.0, 2.0);
+        *color_grading = default_color_grading(settings.grade_exposure.clamp(-2.0, 2.0));
 
         // Toggle atmosphere environment map intensity
         let lighting_boost = settings.lighting_boost.clamp(0.5, 4.0);

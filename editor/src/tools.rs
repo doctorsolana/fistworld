@@ -16,14 +16,18 @@ use shared::terrain::{
     ChunkCoord, ChunkMeshData, WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, VERTEX_SPACING,
 };
 
+use bevy::app::AppExit;
+use bevy::window::WindowCloseRequested;
+
 use crate::city::CityEditorState;
 use crate::lighting::{EditorFillLight, EditorSunLight};
 use crate::session::{
-    CursorTerrainHit, EditorCursorVisual, EditorEnvironmentState, EditorPropPreviewVisual,
-    EditorPropVisual, EditorSession, EditorSnapshot, EditorSpawnVisual, EditorUiState,
-    EditorWaterChunk, EditorWaterVisual, ForestBrushPreset, ForestBrushSettings, PropPreviewState,
-    TerrainBrushMode, TerrainChunkEntry, TerrainChunkRegistry, TerrainChunkVisual, ToolMode,
-    UiActionRequests, WaterChunkRegistry,
+    BrushStroke, CursorTerrainHit, EditorCursorVisual, EditorEnvironmentState, EditorMainCamera,
+    EditorPropCullDistance, EditorPropIndex, EditorPropPreviewVisual, EditorPropVisual,
+    EditorSession, EditorSnapshot, EditorSpawnVisual, EditorUiState, EditorWaterChunk,
+    EditorWaterVisual, ForestBrushPreset, ForestBrushSettings, PropPreviewState, TerrainBrushMode,
+    TerrainChunkEntry, TerrainChunkRegistry, TerrainChunkVisual, ToolMode, UiActionRequests,
+    WaterChunkRegistry,
 };
 
 #[derive(Resource, Default)]
@@ -32,7 +36,14 @@ pub struct VisualRefreshFlags {
     pub terrain_chunks: HashSet<ChunkCoord>,
     pub water_all: bool,
     pub water_chunks: HashSet<ChunkCoord>,
+    /// Full despawn + respawn of every prop visual. Only for undo/load/reset.
     pub props: bool,
+    /// Cheap incremental paths used by the paint tools: objects appended at
+    /// the tail of the list, indices removed this frame (sorted ascending,
+    /// pre-removal), and terrain-followed re-grounding.
+    pub props_appended: usize,
+    pub props_removed: Vec<usize>,
+    pub props_reground: bool,
     pub markers: bool,
     pub city_layout: bool,
 }
@@ -147,6 +158,7 @@ pub fn setup_editor_scene(
         &mut materials,
         &world,
         &loaded_map.definition.objects,
+        0,
     );
     spawn_spawn_visuals(
         &mut commands,
@@ -193,31 +205,92 @@ pub fn handle_editor_shortcuts(
     mut city_state: ResMut<CityEditorState>,
     mut flags: ResMut<VisualRefreshFlags>,
     mut ui_state: ResMut<EditorUiState>,
+    mut exit: MessageWriter<AppExit>,
 ) {
-    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    let ctrl = keys.pressed(KeyCode::ControlLeft)
+        || keys.pressed(KeyCode::ControlRight)
+        || keys.pressed(KeyCode::SuperLeft)
+        || keys.pressed(KeyCode::SuperRight);
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     if ctrl && keys.just_pressed(KeyCode::KeyS) {
         actions.save = true;
     }
     if ctrl && keys.just_pressed(KeyCode::KeyZ) {
-        actions.undo = true;
+        if shift {
+            actions.redo = true;
+        } else {
+            actions.undo = true;
+        }
     }
     if ctrl && keys.just_pressed(KeyCode::KeyY) {
         actions.redo = true;
     }
 
-    if actions.save {
+    // Tool hotkeys + bracket brush sizing, suppressed while egui owns the
+    // keyboard (e.g. typing in the asset search box).
+    if !ui_state.keyboard_captured && !ctrl {
+        const TOOL_KEYS: [(KeyCode, ToolMode); 8] = [
+            (KeyCode::Digit1, ToolMode::Terrain),
+            (KeyCode::Digit2, ToolMode::Road),
+            (KeyCode::Digit3, ToolMode::Plot),
+            (KeyCode::Digit4, ToolMode::PlaceProp),
+            (KeyCode::Digit5, ToolMode::ForestBrush),
+            (KeyCode::Digit6, ToolMode::EraseProp),
+            (KeyCode::Digit7, ToolMode::SetPlayerSpawn),
+            (KeyCode::Digit8, ToolMode::PlaceSpawnMarker),
+        ];
+        for (key, tool) in TOOL_KEYS {
+            if keys.just_pressed(key) {
+                ui_state.tool = tool;
+            }
+        }
+
+        let size_step = if keys.just_pressed(KeyCode::BracketLeft) {
+            Some(0.8)
+        } else if keys.just_pressed(KeyCode::BracketRight) {
+            Some(1.25)
+        } else {
+            None
+        };
+        if let Some(step) = size_step {
+            match ui_state.tool {
+                ToolMode::Terrain | ToolMode::EraseProp => {
+                    ui_state.brush_radius = (ui_state.brush_radius * step).clamp(1.0, 64.0);
+                }
+                ToolMode::ForestBrush => {
+                    ui_state.forest.radius = (ui_state.forest.radius * step).clamp(4.0, 96.0);
+                }
+                ToolMode::PlaceSpawnMarker => {
+                    ui_state.spawn_marker_radius =
+                        (ui_state.spawn_marker_radius * step).clamp(1.0, 64.0);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if actions.save || actions.save_and_exit {
         session
             .map_edits
             .set_terrain_deltas_from_world(world.delta_chunks());
         match save_all(&mut session) {
             Ok(()) => {
                 ui_state.status = "Saved map.ron + edits.ron".to_string();
+                if actions.save_and_exit {
+                    exit.write(AppExit::Success);
+                }
             }
             Err(err) => {
                 ui_state.status = format!("Save failed: {err}");
             }
         }
         actions.save = false;
+        actions.save_and_exit = false;
+    }
+
+    if actions.exit_without_saving {
+        exit.write(AppExit::Success);
+        actions.exit_without_saving = false;
     }
 
     if actions.undo {
@@ -327,6 +400,28 @@ fn reset_map_to_blank(
     Ok(())
 }
 
+/// Intercepts the window close button: exit immediately when everything is
+/// saved, otherwise pop the save/discard/cancel dialog (requires
+/// `close_when_requested: false` on the WindowPlugin).
+pub fn handle_window_close_requested(
+    mut close_requested: MessageReader<WindowCloseRequested>,
+    session: Option<Res<EditorSession>>,
+    mut ui_state: ResMut<EditorUiState>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    for _ in close_requested.read() {
+        let dirty = session
+            .as_ref()
+            .map(|session| session.dirty_map || session.dirty_edits)
+            .unwrap_or(false);
+        if dirty {
+            ui_state.show_exit_confirm = true;
+        } else {
+            exit.write(AppExit::Success);
+        }
+    }
+}
+
 pub fn handle_tool_input(
     time: Res<Time>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
@@ -336,7 +431,12 @@ pub fn handle_tool_input(
     mut world: ResMut<WorldTerrain>,
     mut session: ResMut<EditorSession>,
     mut flags: ResMut<VisualRefreshFlags>,
+    mut stroke: ResMut<BrushStroke>,
 ) {
+    if !mouse_buttons.pressed(MouseButton::Left) {
+        stroke.reset();
+        return;
+    }
     if ui_state.pointer_over_ui {
         return;
     }
@@ -344,16 +444,18 @@ pub fn handle_tool_input(
     let Some(hit) = cursor_hit.0 else {
         return;
     };
-    if !mouse_buttons.pressed(MouseButton::Left) {
-        return;
-    }
 
     let just_pressed = mouse_buttons.just_pressed(MouseButton::Left);
+    if just_pressed {
+        stroke.reset();
+    }
+    let cursor_xz = Vec2::new(hit.x, hit.z);
 
     match ui_state.tool {
         ToolMode::Terrain => {
-            if just_pressed {
+            if !stroke.undo_pushed {
                 session.push_undo_snapshot(&world);
+                stroke.undo_pushed = true;
             }
 
             let player_spawn_offset = session
@@ -422,79 +524,120 @@ pub fn handle_tool_input(
                 if env_state.show_water {
                     flags.water_chunks.extend(affected.iter().copied());
                 }
-                flags.props = true;
+                flags.props_reground = true;
                 flags.markers = true;
-                flags.water_all = env_state.show_water;
             }
         }
         ToolMode::PlaceProp => {
-            if !just_pressed {
+            let spacing = ui_state.prop_drag_spacing.max(0.25);
+            let should_place = just_pressed
+                || (ui_state.prop_drag_paint
+                    && stroke
+                        .last_stamp
+                        .is_none_or(|last| last.distance(cursor_xz) >= spacing));
+            if !should_place {
                 return;
             }
-            session.push_undo_snapshot(&world);
-            let kind_or_path = ui_state
-                .selected_prop_kind()
-                .map(|kind| kind.id().to_string())
-                .unwrap_or_else(|| ui_state.selected_scene_path());
+            if !stroke.undo_pushed {
+                session.push_undo_snapshot(&world);
+                stroke.undo_pushed = true;
+            }
+
+            let seed = splitmix64(
+                ((hit.x.to_bits() as u64) << 32)
+                    ^ hit.z.to_bits() as u64
+                    ^ session.map_definition.objects.len() as u64,
+            );
+            let rotation_degrees = if ui_state.prop_random_yaw {
+                forest_random(seed, 0, 7) * 360.0
+            } else {
+                ui_state.prop_rotation_degrees
+            };
+            let jitter = ui_state.prop_scale_jitter.clamp(0.0, 0.9);
+            let scale = (ui_state.prop_scale
+                * (1.0 + (forest_random(seed, 1, 11) * 2.0 - 1.0) * jitter))
+                .max(0.05);
 
             let object = MapObjectSpawn {
-                kind: kind_or_path,
+                kind: ui_state.selected_kind_or_path(),
                 position: [hit.x, 0.0, hit.z],
-                rotation_degrees: ui_state.prop_rotation_degrees,
-                scale: ui_state.prop_scale,
+                rotation_degrees,
+                scale,
             };
             session.map_definition.objects.push(object);
             session.mark_map_dirty();
-            flags.props = true;
+            flags.props_appended += 1;
+            stroke.last_stamp = Some(cursor_xz);
         }
         ToolMode::ForestBrush => {
-            if !just_pressed {
+            let stamp_spacing = (ui_state.forest.radius * 0.5).max(1.0);
+            let should_stamp = stroke
+                .last_stamp
+                .is_none_or(|last| last.distance(cursor_xz) >= stamp_spacing);
+            if !should_stamp {
                 return;
             }
 
             let forest = ui_state.forest.clone();
+            let override_kind = forest
+                .scatter_selected
+                .then(|| ui_state.selected_kind_or_path());
             let objects = generate_forest_brush_spawns(
                 hit,
                 &forest,
+                override_kind.as_deref(),
                 &world,
                 &session.map_definition.objects,
                 &env_state,
             );
+            stroke.last_stamp = Some(cursor_xz);
             if objects.is_empty() {
-                ui_state.status = "Forest brush found no valid placements".to_string();
+                if just_pressed {
+                    ui_state.status = "Scatter brush found no valid placements".to_string();
+                }
                 return;
             }
 
-            session.push_undo_snapshot(&world);
+            if !stroke.undo_pushed {
+                session.push_undo_snapshot(&world);
+                stroke.undo_pushed = true;
+            }
             let added = objects.len();
             session.map_definition.objects.extend(objects);
             session.mark_map_dirty();
-            flags.props = true;
-            ui_state.status = format!("Forest brush added {added} prop(s)");
+            flags.props_appended += added;
+            ui_state.status = format!("Scatter brush added {added} prop(s)");
         }
         ToolMode::EraseProp => {
-            if !just_pressed {
+            let radius_sq = ui_state.brush_radius * ui_state.brush_radius;
+            let mut removed: Vec<usize> = session
+                .map_definition
+                .objects
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, object)| {
+                    let dx = object.position[0] - hit.x;
+                    let dz = object.position[2] - hit.z;
+                    (dx * dx + dz * dz <= radius_sq).then_some(idx)
+                })
+                .collect();
+            if removed.is_empty() {
                 return;
             }
 
-            let mut best_idx = None;
-            let mut best_dist_sq = ui_state.brush_radius * ui_state.brush_radius;
-            for (idx, object) in session.map_definition.objects.iter().enumerate() {
-                let dx = object.position[0] - hit.x;
-                let dz = object.position[2] - hit.z;
-                let dist_sq = dx * dx + dz * dz;
-                if dist_sq <= best_dist_sq {
-                    best_dist_sq = dist_sq;
-                    best_idx = Some(idx);
-                }
-            }
-
-            if let Some(idx) = best_idx {
+            if !stroke.undo_pushed {
                 session.push_undo_snapshot(&world);
-                session.map_definition.objects.remove(idx);
-                session.mark_map_dirty();
-                flags.props = true;
+                stroke.undo_pushed = true;
             }
+            let mut index = 0usize;
+            session.map_definition.objects.retain(|_| {
+                let keep = removed.binary_search(&index).is_err();
+                index += 1;
+                keep
+            });
+            session.mark_map_dirty();
+            ui_state.status = format!("Erased {} prop(s)", removed.len());
+            flags.props_removed.append(&mut removed);
         }
         ToolMode::SetPlayerSpawn => {
             if !just_pressed {
@@ -526,36 +669,51 @@ enum ForestPropGroup {
     Tree,
     Bush,
     Rock,
+    Grass,
     GroundCover,
 }
 
 fn generate_forest_brush_spawns(
     center: Vec3,
     settings: &ForestBrushSettings,
+    override_kind: Option<&str>,
     world: &WorldTerrain,
     existing_objects: &[MapObjectSpawn],
     env_state: &EditorEnvironmentState,
 ) -> Vec<MapObjectSpawn> {
     let radius = settings.radius.clamp(1.0, 128.0);
     let density = settings.density_per_100m2.clamp(0.0, 12.0);
-    let target_count =
+    let desired_in_disc =
         ((std::f32::consts::PI * radius * radius / 100.0) * density).round() as usize;
-    let target_count = target_count.min(300);
-    if target_count == 0 || forest_makeup_total(settings) <= f32::EPSILON {
+    if desired_in_disc == 0
+        || (override_kind.is_none() && forest_makeup_total(settings) <= f32::EPSILON)
+    {
         return Vec::new();
     }
 
     let min_spacing = settings.min_spacing.max(0.0);
     let min_spacing_sq = min_spacing * min_spacing;
+    let center_xz = Vec2::new(center.x, center.z);
+    let mut existing_in_disc = 0usize;
     let mut occupied: Vec<Vec2> = existing_objects
         .iter()
         .filter_map(|object| {
             let pos = Vec2::new(object.position[0], object.position[2]);
-            (pos.distance_squared(Vec2::new(center.x, center.z))
-                <= (radius + min_spacing) * (radius + min_spacing))
-                .then_some(pos)
+            let dist_sq = pos.distance_squared(center_xz);
+            if dist_sq <= radius * radius {
+                existing_in_disc += 1;
+            }
+            (dist_sq <= (radius + min_spacing) * (radius + min_spacing)).then_some(pos)
         })
         .collect();
+
+    // Density is a TARGET, not an increment: props already inside the disc
+    // count toward it, so repainting the same spot converges instead of
+    // stacking more grass forever.
+    let target_count = desired_in_disc.saturating_sub(existing_in_disc).min(300);
+    if target_count == 0 {
+        return Vec::new();
+    }
 
     let seed = forest_seed(center, settings.preset);
     let max_attempts = target_count.saturating_mul(14).saturating_add(48);
@@ -593,22 +751,33 @@ fn generate_forest_brush_spawns(
             continue;
         }
 
-        let Some(group) = choose_forest_group(settings, forest_random(seed, attempt as u64, 2))
-        else {
-            continue;
-        };
-        let kind = choose_forest_kind(
-            settings.preset,
-            group,
-            forest_random(seed, attempt as u64, 3),
-        );
-        let rotation_degrees = forest_random(seed, attempt as u64, 4) * 360.0;
         let jitter = settings.scale_jitter.clamp(0.0, 0.9);
         let random_scale = 1.0 + (forest_random(seed, attempt as u64, 5) * 2.0 - 1.0) * jitter;
-        let scale = (settings.base_scale * forest_group_scale(group) * random_scale).max(0.05);
+        let rotation_degrees = forest_random(seed, attempt as u64, 4) * 360.0;
+
+        let (kind, scale) = if let Some(kind) = override_kind {
+            (
+                kind.to_string(),
+                (settings.base_scale * random_scale).max(0.05),
+            )
+        } else {
+            let Some(group) = choose_forest_group(settings, forest_random(seed, attempt as u64, 2))
+            else {
+                continue;
+            };
+            let kind = choose_forest_kind(
+                settings.preset,
+                group,
+                forest_random(seed, attempt as u64, 3),
+            );
+            (
+                kind.id().to_string(),
+                (settings.base_scale * forest_group_scale(group) * random_scale).max(0.05),
+            )
+        };
 
         out.push(MapObjectSpawn {
-            kind: kind.id().to_string(),
+            kind,
             position: [x, 0.0, z],
             rotation_degrees,
             scale,
@@ -623,6 +792,7 @@ fn forest_makeup_total(settings: &ForestBrushSettings) -> f32 {
     settings.tree_weight.max(0.0)
         + settings.bush_weight.max(0.0)
         + settings.rock_weight.max(0.0)
+        + settings.grass_weight.max(0.0)
         + settings.ground_cover_weight.max(0.0)
 }
 
@@ -630,8 +800,9 @@ fn choose_forest_group(settings: &ForestBrushSettings, roll: f32) -> Option<Fore
     let tree = settings.tree_weight.max(0.0);
     let bush = settings.bush_weight.max(0.0);
     let rock = settings.rock_weight.max(0.0);
+    let grass = settings.grass_weight.max(0.0);
     let ground = settings.ground_cover_weight.max(0.0);
-    let total = tree + bush + rock + ground;
+    let total = tree + bush + rock + grass + ground;
     if total <= f32::EPSILON {
         return None;
     }
@@ -643,6 +814,8 @@ fn choose_forest_group(settings: &ForestBrushSettings, roll: f32) -> Option<Fore
         Some(ForestPropGroup::Bush)
     } else if t < tree + bush + rock {
         Some(ForestPropGroup::Rock)
+    } else if t < tree + bush + rock + grass {
+        Some(ForestPropGroup::Grass)
     } else {
         Some(ForestPropGroup::GroundCover)
     }
@@ -694,6 +867,10 @@ fn choose_forest_kind(preset: ForestBrushPreset, group: ForestPropGroup, roll: f
         },
         ForestPropGroup::Bush => choose_from(BUSHES, roll),
         ForestPropGroup::Rock => choose_from(ROCKS, roll),
+        // ONE grass model everywhere: every tuft shares a mesh + wind
+        // material, so the whole field renders as a single instanced batch.
+        // 06/07 (4.6k/5.7k tris) and GrassBlade stay manual-placement only.
+        ForestPropGroup::Grass => Env_Grass_Tall_04,
         ForestPropGroup::GroundCover => match preset {
             ForestBrushPreset::Deadwood => choose_from(DEAD_GROUND, roll),
             _ => {
@@ -717,6 +894,10 @@ fn forest_group_scale(group: ForestPropGroup) -> f32 {
         ForestPropGroup::Tree => 1.0,
         ForestPropGroup::Bush => 0.85,
         ForestPropGroup::Rock => 0.9,
+        // The grass model is a 1.6m tuft cluster at scale 1.0; 0.4 paints it
+        // waist-high (with the shader's 1.3x stretch on top) while trees
+        // keep the shared base_scale at full size.
+        ForestPropGroup::Grass => 0.4,
         ForestPropGroup::GroundCover => 0.7,
     }
 }
@@ -767,6 +948,10 @@ pub fn apply_visual_refresh(
     mut water_registry: ResMut<WaterChunkRegistry>,
     mut flags: ResMut<VisualRefreshFlags>,
     prop_visuals: Query<Entity, With<EditorPropVisual>>,
+    mut indexed_props: Query<
+        (Entity, &mut EditorPropIndex, &mut Transform),
+        With<EditorPropVisual>,
+    >,
     marker_visuals: Query<Entity, With<EditorSpawnVisual>>,
     water_visuals: Query<Entity, With<EditorWaterVisual>>,
 ) {
@@ -833,8 +1018,52 @@ pub fn apply_visual_refresh(
             &mut materials,
             &world,
             &session.map_definition.objects,
+            0,
         );
         flags.props = false;
+        flags.props_appended = 0;
+        flags.props_removed.clear();
+        flags.props_reground = false;
+    } else {
+        // Incremental paths for the paint tools: never rebuild the whole
+        // prop scene for a single stamp or erase.
+        if !flags.props_removed.is_empty() {
+            let removed = std::mem::take(&mut flags.props_removed);
+            for (entity, mut index, _) in indexed_props.iter_mut() {
+                match removed.binary_search(&index.0) {
+                    Ok(_) => commands.entity(entity).despawn(),
+                    Err(shift) => index.0 -= shift,
+                }
+            }
+        }
+
+        if flags.props_appended > 0 {
+            let count = flags
+                .props_appended
+                .min(session.map_definition.objects.len());
+            flags.props_appended = 0;
+            let start = session.map_definition.objects.len() - count;
+            spawn_prop_visuals(
+                &mut commands,
+                &asset_server,
+                &mut meshes,
+                &mut materials,
+                &world,
+                &session.map_definition.objects[start..],
+                start,
+            );
+        }
+
+        if flags.props_reground {
+            flags.props_reground = false;
+            for (_, index, mut transform) in indexed_props.iter_mut() {
+                let Some(object) = session.map_definition.objects.get(index.0) else {
+                    continue;
+                };
+                transform.translation.y =
+                    world.get_height(object.position[0], object.position[2]) + object.position[1];
+            }
+        }
     }
 
     if flags.markers {
@@ -1152,21 +1381,25 @@ fn spawn_prop_visuals(
     materials: &mut Assets<StandardMaterial>,
     world: &WorldTerrain,
     objects: &[MapObjectSpawn],
+    start_index: usize,
 ) {
-    let fallback_mesh = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
-    let fallback_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.9, 0.2, 0.2),
-        unlit: true,
-        ..default()
-    });
+    let mut fallback: Option<(Handle<Mesh>, Handle<StandardMaterial>)> = None;
 
-    for object in objects {
+    for (offset, object) in objects.iter().enumerate() {
         let x = object.position[0];
         let z = object.position[2];
         let y = world.get_height(x, z) + object.position[1];
         let transform = Transform::from_xyz(x, y, z)
             .with_rotation(Quat::from_rotation_y(object.rotation_degrees.to_radians()))
             .with_scale(Vec3::splat(object.scale));
+        let index = EditorPropIndex(start_index + offset);
+
+        // Same draw-distance budget the game applies, so a painted meadow
+        // doesn't render thousands of tufts across the whole map in-editor.
+        let tuning = PropKind::from_id(&object.kind)
+            .map(shared::props::default_render_tuning)
+            .unwrap_or_else(shared::props::default_unmapped_render_tuning);
+        let cull = EditorPropCullDistance(tuning.visible_end_distance.unwrap_or(f32::INFINITY));
 
         if let Some(scene_path) = object.resolved_scene_path() {
             commands.spawn((
@@ -1174,15 +1407,56 @@ fn spawn_prop_visuals(
                 SceneRoot(asset_server.load(scene_path)),
                 transform,
                 EditorPropVisual,
+                index,
+                cull,
             ));
         } else {
+            let (fallback_mesh, fallback_material) = fallback.get_or_insert_with(|| {
+                (
+                    meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+                    materials.add(StandardMaterial {
+                        base_color: Color::srgb(0.9, 0.2, 0.2),
+                        unlit: true,
+                        ..default()
+                    }),
+                )
+            });
             commands.spawn((
                 Name::new("Prop(unknown)"),
                 Mesh3d(fallback_mesh.clone()),
                 MeshMaterial3d(fallback_material.clone()),
                 transform,
                 EditorPropVisual,
+                index,
+                cull,
             ));
+        }
+    }
+}
+
+/// Root-level distance culling for editor prop visuals. `Visibility` on the
+/// root propagates into the GLB scene children, which per-entity
+/// `VisibilityRange` would not.
+pub fn cull_distant_prop_visuals(
+    camera: Query<&Transform, (With<EditorMainCamera>, Without<EditorPropVisual>)>,
+    mut props: Query<
+        (&Transform, &EditorPropCullDistance, &mut Visibility),
+        With<EditorPropVisual>,
+    >,
+) {
+    let Ok(camera_transform) = camera.single() else {
+        return;
+    };
+    let camera_pos = camera_transform.translation;
+    for (transform, cull, mut visibility) in props.iter_mut() {
+        let in_range = transform.translation.distance_squared(camera_pos) <= cull.0 * cull.0;
+        let desired = if in_range {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != desired {
+            *visibility = desired;
         }
     }
 }
