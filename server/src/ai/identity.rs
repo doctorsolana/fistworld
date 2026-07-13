@@ -50,5 +50,6 @@ fn default_occupation_for_archetype(archetype: NpcArchetype) -> &'static str {
     match archetype {
         NpcArchetype::Oilman => "Pedestrian",
         NpcArchetype::DesertOutpost => "Guard",
+        NpcArchetype::Dummy => "Test Dummy",
     }
 }

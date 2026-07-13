@@ -202,5 +202,19 @@ pub fn vehicle_def(vehicle_type: VehicleType) -> VehicleDef {
             suspension_pitch_factor: 0.12,
             suspension_roll_factor: 0.15,
         },
+        VehicleType::CarV2 => {
+            let mut def = vehicle_def(VehicleType::Car);
+            // v2 model derives grip/handling from slip + load transfer, so it
+            // wants realistic friction (≤ ~1.1) and softer damping so weight
+            // transfer is visible. Attitude limits widened for brake dive.
+            def.mu_desert = 1.05;
+            def.mu_grasslands = 0.92;
+            def.max_speed = 32.0;
+            def.engine_force = 7400.0;
+            def.suspension_damping = 4800.0;
+            def.max_terrain_pitch = 0.8;
+            def.max_terrain_roll = 0.6;
+            def
+        }
     }
 }

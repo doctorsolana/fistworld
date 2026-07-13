@@ -29,7 +29,7 @@ pub fn step_vehicle_physics(
 
     state.grounded = height_above_ground <= def.ground_threshold && height_above_ground >= -0.5;
 
-    let bike_up = bike_up_vector(state.pitch, state.roll);
+    let bike_up = bike_up_vector(state.heading, state.pitch, state.roll);
     let wheel_contact = bike_up.dot(ground_normal).max(0.0);
 
     let wheel_contact_factor = if wheel_contact > 0.5 {

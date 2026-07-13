@@ -27,16 +27,15 @@ pub fn update_weapon_warmup_queue(
         &assets.impact_terrain_material,
     );
     push(&assets.impact_disk_mesh_unit, &assets.impact_wall_material);
-    push(
-        &assets.blood_splatter_mesh,
-        &assets.blood_splat_shared_material,
-    );
-    push(
-        &assets.blood_splatter_mesh,
-        &assets.blood_ring_shared_material,
-    );
+    for variant in &assets.blood_splat_variants {
+        push(&assets.blood_splat_mesh, &variant.fresh);
+        push(&assets.blood_splat_mesh, &variant.drying);
+        push(&assets.blood_splat_mesh, &variant.dried);
+    }
     push(&assets.blood_droplet_mesh, &assets.blood_droplet_material);
-    push(&assets.blood_burst_mesh, &assets.blood_burst_material);
+    if let Some(mist) = assets.blood_mist_materials.first() {
+        push(&assets.blood_mist_mesh, mist);
+    }
 
     for mat in &assets.smoke_materials {
         push(&assets.smoke_mesh, mat);

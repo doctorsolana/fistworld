@@ -127,7 +127,17 @@ pub fn update_npc_animation(
             continue;
         };
         if matches!(*visibility, Visibility::Hidden) {
+            // Hidden NPCs still pay full skeletal sampling in Bevy's animation
+            // systems unless the player is actually paused.
+            if !state.anim_paused {
+                player.pause_all();
+                state.anim_paused = true;
+            }
             continue;
+        }
+        if state.anim_paused {
+            player.resume_all();
+            state.anim_paused = false;
         }
         if ragdoll_active.is_some() {
             // Ragdoll owns bone transforms; force-stop any locomotion clip that

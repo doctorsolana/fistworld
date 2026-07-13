@@ -15,7 +15,9 @@ use shared::npc::{NPC_MOVE_SPEED, NPC_RADIUS};
 use shared::physics::{
     FLY_FAST_MULT, FLY_SPEED, JUMP_VELOCITY, MOVE_ACCEL, MOVE_BRAKE, WALKABLE_THRESHOLD,
 };
-use shared::player::{JUMP_ANIM_MIN_SECS, PLAYER_HEIGHT, PLAYER_RADIUS, PLAYER_SPEED};
+use shared::player::{
+    JUMP_ANIM_MIN_SECS, PLAYER_HEIGHT, PLAYER_RADIUS, PLAYER_SPEED, PLAYER_SPRINT_MULT,
+};
 use shared::protocol::PlayerInput;
 use shared::vehicle::{InVehicle, VehicleState};
 
@@ -26,10 +28,11 @@ use crate::player::lifecycle::{is_player_alive, RespawnTimer};
 
 const PLAYER_MASS_KG: f32 = 85.0;
 const NPC_MASS_KG: f32 = 72.0;
+const PLAYER_LINEAR_DAMPING: f32 = 0.65;
 const AIR_CONTROL_ACCEL_MULT: f32 = 0.55;
 const JUMP_BUFFER_SECS: f32 = 0.12;
-const EARLY_RELEASE_GRAVITY_MULT: f32 = 1.85;
-const FALL_GRAVITY_MULT: f32 = 1.35;
+const EARLY_RELEASE_GRAVITY_MULT: f32 = 2.25;
+const FALL_GRAVITY_MULT: f32 = 2.65;
 
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PlayerPhysicsBody;
@@ -113,7 +116,7 @@ pub fn ensure_player_physics_bodies(
             layers::player_groups(),
             AdditionalMassProperties::Mass(PLAYER_MASS_KG),
             Damping {
-                linear_damping: 3.5,
+                linear_damping: PLAYER_LINEAR_DAMPING,
                 angular_damping: 12.0,
             },
             LockedAxes::ROTATION_LOCKED_X | LockedAxes::ROTATION_LOCKED_Z,
@@ -365,7 +368,14 @@ pub fn apply_player_controls(
             move_dir = move_dir.normalize();
         }
 
-        let desired_horiz = move_dir * PLAYER_SPEED;
+        let sprinting =
+            input.fly_fast && input.forward && !input.backward && move_dir.length_squared() > 0.0;
+        let target_speed = if sprinting {
+            PLAYER_SPEED * PLAYER_SPRINT_MULT
+        } else {
+            PLAYER_SPEED
+        };
+        let desired_horiz = move_dir * target_speed;
         let mut horiz = Vec3::new(velocity.linvel.x, 0.0, velocity.linvel.z);
         let delta = desired_horiz - horiz;
         let mut accel = if move_dir.length_squared() > 0.0 {

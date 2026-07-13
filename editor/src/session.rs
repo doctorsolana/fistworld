@@ -12,6 +12,7 @@ use shared::terrain::{ChunkCoord, WorldTerrain};
 pub enum ToolMode {
     Terrain,
     PlaceProp,
+    ForestBrush,
     EraseProp,
     Road,
     Plot,
@@ -26,6 +27,49 @@ pub enum TerrainBrushMode {
     Flatten,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ForestBrushPreset {
+    Mixed,
+    Broadleaf,
+    Pine,
+    Deadwood,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForestBrushSettings {
+    pub preset: ForestBrushPreset,
+    pub radius: f32,
+    pub density_per_100m2: f32,
+    pub min_spacing: f32,
+    pub tree_weight: f32,
+    pub bush_weight: f32,
+    pub rock_weight: f32,
+    pub ground_cover_weight: f32,
+    pub base_scale: f32,
+    pub scale_jitter: f32,
+    pub max_slope: f32,
+    pub avoid_water: bool,
+}
+
+impl Default for ForestBrushSettings {
+    fn default() -> Self {
+        Self {
+            preset: ForestBrushPreset::Mixed,
+            radius: 22.0,
+            density_per_100m2: 2.4,
+            min_spacing: 2.6,
+            tree_weight: 0.55,
+            bush_weight: 0.25,
+            rock_weight: 0.12,
+            ground_cover_weight: 0.08,
+            base_scale: 1.0,
+            scale_jitter: 0.28,
+            max_slope: 1.35,
+            avoid_water: true,
+        }
+    }
+}
+
 #[derive(Resource)]
 pub struct EditorUiState {
     pub tool: ToolMode,
@@ -36,6 +80,7 @@ pub struct EditorUiState {
     pub selected_prop_index: usize,
     pub selected_spawn_kind: SpawnMarkerKind,
     pub spawn_marker_radius: f32,
+    pub forest: ForestBrushSettings,
     pub prop_scale: f32,
     pub prop_rotation_degrees: f32,
     pub road: RoadToolSettings,
@@ -58,6 +103,7 @@ impl Default for EditorUiState {
             selected_prop_index: 0,
             selected_spawn_kind: SpawnMarkerKind::NpcGroup,
             spawn_marker_radius: 4.0,
+            forest: ForestBrushSettings::default(),
             prop_scale: 1.0,
             prop_rotation_degrees: 0.0,
             road: RoadToolSettings::default(),

@@ -90,9 +90,9 @@ pub(super) fn setup_terrain_render_assets(
     let far_mesh_material = materials.add(StandardMaterial {
         // Far mesh uses vertex colors for biome tinting; keep base color white.
         base_color: Color::WHITE,
-        perceptual_roughness: 0.95,
+        perceptual_roughness: 0.98,
         metallic: 0.0,
-        reflectance: 0.2,
+        reflectance: 0.08,
         ..default()
     });
 

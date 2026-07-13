@@ -12,6 +12,10 @@ use crate::items::{
     GroundItemPosition, HotbarSelection, Inventory, InventoryMoveRequest, OpenChestRequest,
     PickupRequest, SelectHotbarSlot,
 };
+use crate::rail::{
+    Company, CompanyLedger, Industry, RailStation, RailTrackSegment, Town, Train, TrainRoute,
+    TrainState,
+};
 use crate::terrain::{TerrainDeltaChunk, TerrainPaintOp};
 use crate::vehicle::{Vehicle, VehicleDriver, VehicleState};
 
@@ -85,6 +89,18 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<TerrainDeltaChunk>()
             .add_prediction();
 
+        // === RAIL TYCOON COMPONENTS ===
+        app.register_component::<Company>().add_prediction();
+        app.register_component::<CompanyLedger>().add_prediction();
+        app.register_component::<RailTrackSegment>()
+            .add_prediction();
+        app.register_component::<RailStation>().add_prediction();
+        app.register_component::<Train>().add_prediction();
+        app.register_component::<TrainState>().add_prediction();
+        app.register_component::<TrainRoute>().add_prediction();
+        app.register_component::<Industry>().add_prediction();
+        app.register_component::<Town>().add_prediction();
+
         // === MESSAGES ===
         // Client -> Server
         app.register_message::<SpawnPlayer>()
@@ -123,9 +139,25 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<RequestPlayerRoster>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<CreateCompanyRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<BuildTrackRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<BuildStationRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<BuyTrainRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<AssignRouteRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<SetTrainCargoPolicyRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<DemolishRailRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
 
         // Server -> Client
         app.register_message::<NameSubmissionResult>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<RailCommandRejected>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HitConfirm>()
             .add_direction(NetworkDirection::ServerToClient);

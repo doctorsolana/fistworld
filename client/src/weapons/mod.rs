@@ -20,7 +20,7 @@ pub use debug::{
 };
 pub use effects::{
     update_blood_bursts, update_blood_droplets, update_blood_ground_splats,
-    update_blood_splash_rings, update_impact_markers, update_muzzle_flash, update_muzzle_smoke,
+    update_impact_markers, update_muzzle_flash, update_muzzle_smoke,
 };
 pub use input::{
     cleanup_shoot_input_suppress, handle_reload_input, handle_shoot_input, handle_weapon_sounds,
@@ -116,19 +116,14 @@ struct FlashSettings {
 
 const BLOOD_GRAVITY: f32 = 12.0; // Gravity for blood droplets
 const BLOOD_DROPLET_LIFETIME: f32 = 3.0; // Max time before despawn if never lands
-const BLOOD_SPLAT_LIFETIME: f32 = 8.0; // How long ground splats last (reduced from 12s)
-const BLOOD_AIR_DRAG: f32 = 1.4; // Simple linear drag
+const BLOOD_SPLAT_LIFETIME: f32 = 30.0; // Ground decals persist and dry out
+const BLOOD_AIR_DRAG: f32 = 0.9; // Simple linear drag
 
 // Entity caps to prevent explosion during sustained firefights
-const MAX_BLOOD_GROUND_SPLATS: usize = 60;
-const MAX_BLOOD_BURSTS: usize = 30;
-const MAX_BLOOD_DROPLETS: usize = 40;
+const MAX_BLOOD_GROUND_SPLATS: usize = 96;
+const MAX_BLOOD_MISTS: usize = 30;
+const MAX_BLOOD_DROPLETS: usize = 48;
 const MAX_IMPACT_MARKERS: usize = 40;
-
-// Blood burst settings (the instant PUBG-style hit indicator)
-const BLOOD_BURST_LIFETIME: f32 = 0.25; // Very short! Punchy feedback
-const BLOOD_BURST_INITIAL_SCALE: f32 = 0.15; // Start size
-const BLOOD_BURST_MAX_SCALE: f32 = 0.6; // End size (expands 4x)
 
 // =============================================================================
 // DEBUG OVERLAY (FPS counter, etc.)

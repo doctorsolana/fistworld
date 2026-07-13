@@ -14,11 +14,7 @@ pub fn draw_city_tool_controls(
 ) {
     match ui_state.tool {
         ToolMode::Road => {
-            ui.label("Road Authoring");
-            ui.small(
-                "LMB adds road points. RMB or Enter finishes. Backspace removes the last point. Nearby road points snap automatically.",
-            );
-
+            ui.label(egui::RichText::new("Road Type").strong());
             let previous_class = ui_state.road.road_class;
             ui.horizontal(|ui| {
                 ui.label("Class");
@@ -49,6 +45,8 @@ pub fn draw_city_tool_controls(
                     road_class_label(ui_state.road.road_class)
                 );
             }
+            ui.separator();
+            ui.label(egui::RichText::new("Geometry").strong());
             ui.add(egui::Slider::new(&mut ui_state.road.width, 3.0..=32.0).text("Road Width"));
             ui.add(egui::Slider::new(&mut ui_state.road.lane_count, 1..=6).text("Lane Count"));
             ui.checkbox(&mut ui_state.road.sidewalk_left, "Left Sidewalk");
@@ -57,7 +55,9 @@ pub fn draw_city_tool_controls(
                 egui::Slider::new(&mut ui_state.road.sidewalk_width, 0.0..=8.0)
                     .text("Sidewalk Width"),
             );
-            ui.small("Class changes now refresh width, lanes, and sidewalk width automatically.");
+
+            ui.separator();
+            ui.label(egui::RichText::new("Snapping & Editing").strong());
             ui.checkbox(&mut ui_state.road.snap_to_endpoints, "Snap To Road Points");
             ui.add(
                 egui::Slider::new(&mut ui_state.road.endpoint_snap_distance, 1.0..=12.0)
@@ -67,6 +67,9 @@ pub fn draw_city_tool_controls(
                 egui::Slider::new(&mut ui_state.road.delete_radius, 2.0..=32.0)
                     .text("Delete Radius"),
             );
+
+            ui.separator();
+            ui.label(egui::RichText::new("Metadata").strong());
             ui.horizontal(|ui| {
                 ui.label("District");
                 ui.text_edit_singleline(&mut ui_state.road.district);
@@ -75,6 +78,8 @@ pub fn draw_city_tool_controls(
                 "Draft points: {}",
                 city_state.draft_road_points.len()
             ));
+
+            ui.separator();
             ui.horizontal(|ui| {
                 if ui.button("Finish Draft").clicked() {
                     actions.finish_road_draft = true;
@@ -88,11 +93,7 @@ pub fn draw_city_tool_controls(
             });
         }
         ToolMode::Plot => {
-            ui.label("Plot Authoring");
-            ui.small(
-                "LMB stamps one or more plots. When aligned to a road, the click chooses frontage.",
-            );
-
+            ui.label(egui::RichText::new("Building").strong());
             let previous_building = ui_state.plot.selected_building;
             egui::ComboBox::from_label("Building")
                 .selected_text(
@@ -140,6 +141,8 @@ pub fn draw_city_tool_controls(
                 ));
             }
 
+            ui.separator();
+            ui.label(egui::RichText::new("Classification").strong());
             ui.horizontal(|ui| {
                 ui.label("Zone");
                 ui.selectable_value(
@@ -186,12 +189,18 @@ pub fn draw_city_tool_controls(
                     "Civic",
                 );
             });
+
+            ui.separator();
+            ui.label(egui::RichText::new("Size").strong());
             ui.add(
                 egui::Slider::new(&mut ui_state.plot.half_extents.x, 2.0..=40.0).text("Half Width"),
             );
             ui.add(
                 egui::Slider::new(&mut ui_state.plot.half_extents.y, 4.0..=48.0).text("Half Depth"),
             );
+
+            ui.separator();
+            ui.label(egui::RichText::new("Placement").strong());
             ui.checkbox(
                 &mut ui_state.plot.align_to_nearest_road,
                 "Align To Nearest Road",
@@ -207,6 +216,9 @@ pub fn draw_city_tool_controls(
                 egui::Slider::new(&mut ui_state.plot.rotation_degrees, 0.0..=360.0)
                     .text("Manual Rotation"),
             );
+
+            ui.separator();
+            ui.label(egui::RichText::new("Editing").strong());
             ui.add(
                 egui::Slider::new(&mut ui_state.plot.delete_radius, 2.0..=32.0)
                     .text("Delete Radius"),

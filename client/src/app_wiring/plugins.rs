@@ -3,13 +3,20 @@
 use super::*;
 
 pub fn setup_plugins(app: &mut App, asset_path: String) {
+    let hitch_profile_enabled = profiling::hitch_profiling_enabled();
+    let rail_mode = super::dev::rail_mode_enabled();
+
     // Full Bevy with rendering - configure asset path for bundled apps
     // Performance: Disable MSAA (expensive), enable GPU-driven rendering
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: "Sandbox Game".to_string(),
+                    title: if rail_mode {
+                        "Railroad Tycoon Prototype".to_string()
+                    } else {
+                        "FistForce".to_string()
+                    },
                     resolution: WindowResolution::new(LAUNCHER_RESOLUTION.0, LAUNCHER_RESOLUTION.1),
                     ..default()
                 }),
@@ -53,16 +60,42 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
     app.add_plugins(FrameTimeDiagnosticsPlugin::default());
     // Extra diagnostics for the debug overlay (entity count + optional render pass timings)
     app.add_plugins(EntityCountDiagnosticsPlugin::default());
-    let render_diag_enabled = std::env::var("FISTFORCE_RENDER_DIAG")
-        .map(|v| v == "1")
-        .unwrap_or(false);
+    let render_diag_enabled = profiling::env_flag("FISTFORCE_RENDER_DIAG");
     if render_diag_enabled {
         app.add_plugins(RenderDiagnosticsPlugin);
-        info!("Render diagnostics plugin enabled via FISTFORCE_RENDER_DIAG=1");
+        info!("Render diagnostics plugin enabled");
     } else {
         info!("Render diagnostics plugin disabled (set FISTFORCE_RENDER_DIAG=1 to enable)");
     }
-    app.add_plugins(SystemInformationDiagnosticsPlugin);
+    // System info sampling (process CPU/memory via sysinfo) polls the OS on a
+    // schedule; keep it opt-in rather than a permanent background cost.
+    if profiling::env_flag("FISTFORCE_SYSINFO_DIAG") {
+        app.add_plugins(SystemInformationDiagnosticsPlugin);
+        info!("System information diagnostics enabled");
+    }
+    if profiling::env_flag("FISTFORCE_LOG_DIAGNOSTICS") {
+        app.add_plugins(LogDiagnosticsPlugin {
+            wait_duration: std::time::Duration::from_secs(2),
+            filter: Some(
+                [
+                    FrameTimeDiagnosticsPlugin::FRAME_TIME,
+                    FrameTimeDiagnosticsPlugin::FPS,
+                    EntityCountDiagnosticsPlugin::ENTITY_COUNT,
+                    SystemInformationDiagnosticsPlugin::PROCESS_CPU_USAGE,
+                    SystemInformationDiagnosticsPlugin::PROCESS_MEM_USAGE,
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            ..default()
+        });
+        info!("Bevy log diagnostics enabled");
+    }
+    if hitch_profile_enabled {
+        info!(
+            "Hitch profiling enabled: walking through busy areas will log ClientPerf and Hitch snapshots for frames over threshold. Set FISTFORCE_RENDER_DIAG=1 for render diagnostics or FISTFORCE_LOG_DIAGNOSTICS=1 for periodic Bevy diagnostics."
+        );
+    }
 
     // Game state machine
     app.init_state::<GameState>();
@@ -85,20 +118,17 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
     // UI plugins
     app.add_plugins(ui::MainMenuPlugin);
     app.add_plugins(ui::PauseMenuPlugin);
-    app.add_plugins(ui::InventoryPlugin);
     app.add_plugins(ui::NameEntryPlugin);
-    app.add_plugins(ui::WorldMapPlugin);
     app.add_plugins(ui::DebugTimeMenuPlugin);
 
-    // Pickup plugin (item pickups with E key)
-    app.add_plugins(pickup::PickupPlugin);
-
-    // Chest plugin (storage containers)
-    app.add_plugins(chest::ChestPlugin);
-
-    // Audio plugin
-    app.add_plugins(audio::GameAudioPlugin);
-
-    // NPC Dialogue plugin
-    app.add_plugins(dialogue::DialoguePlugin);
+    // Shooter-only feature plugins (inventory, map, pickups, chests, audio,
+    // dialogue). The rail prototype shell runs without them.
+    if !rail_mode {
+        app.add_plugins(ui::InventoryPlugin);
+        app.add_plugins(ui::WorldMapPlugin);
+        app.add_plugins(pickup::PickupPlugin);
+        app.add_plugins(chest::ChestPlugin);
+        app.add_plugins(audio::GameAudioPlugin);
+        app.add_plugins(dialogue::DialoguePlugin);
+    }
 }

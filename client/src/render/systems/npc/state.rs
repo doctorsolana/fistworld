@@ -35,10 +35,43 @@ pub struct NpcBoneMap {
     pub bones: HashMap<RagdollBodyId, Entity>,
 }
 
-#[derive(Component, Default, Clone)]
-pub struct NpcBindPose {
-    pub all_bones: Vec<(Entity, Quat)>,
-    pub body_local_rotations: HashMap<RagdollBodyId, Quat>,
+/// One bone in the rig's topological ordering (parents before children).
+#[derive(Clone, Debug)]
+pub struct RagdollRigBone {
+    pub entity: Entity,
+    /// Index of the parent bone in `NpcRagdollRig::bones` (None for the rig root).
+    pub parent: Option<usize>,
+    /// Which streamed physics body drives this bone, if any.
+    pub body: Option<RagdollBodyId>,
+    /// Full local transform captured at rig setup (bind pose).
+    pub bind_local: Transform,
+    /// Bind transform relative to the NPC root entity (chained through the
+    /// model-root yaw flip and the armature's axis-conversion rotation;
+    /// includes the armature's uniform scale in its translation).
+    pub bind_rel: Transform,
+}
+
+/// Precomputed rig data for ragdoll pose application, captured at rig setup
+/// while the skeleton is still in bind pose.
+///
+/// Mapped bones are driven in world-space ROTATION from their physics bodies
+/// (offsets measured at activation against the server's own start frame);
+/// bone translations stay at bind so the mesh keeps its proportions (no
+/// stretching), and the whole rig is snapped to bind pose at ragdoll start so
+/// unmapped bones can't contaminate limb placement.
+#[derive(Component, Clone, Debug)]
+pub struct NpcRagdollRig {
+    /// Transform from the NPC root entity down to (but excluding) the rig
+    /// root: the model-root offset/PI yaw plus any intermediate scene nodes.
+    pub prefix: Transform,
+    /// Bones in parent-before-child order, starting at the rig root.
+    pub bones: Vec<RagdollRigBone>,
+    /// Bind translation of the Hips bone relative to the NPC root entity (in
+    /// world units — armature scale already applied). Used to anchor the mesh
+    /// so the hips bone lands exactly on the streamed pelvis body.
+    pub hips_offset_from_root: Vec3,
+    /// Index of the Hips bone in `bones`.
+    pub hips_index: Option<usize>,
 }
 
 #[derive(Component, Clone, Copy, Debug)]
@@ -64,7 +97,22 @@ pub struct NpcRagdollPoseFrame {
 pub struct NpcRagdollNetState {
     pub prev: Option<NpcRagdollPoseFrame>,
     pub curr: Option<NpcRagdollPoseFrame>,
-    pub local_rotation_corrections: HashMap<RagdollBodyId, Quat>,
+    /// Per-body rotation offset `O = B0⁻¹ · W0(bone)` captured at activation:
+    /// `B0` is the body's world rotation in the start snapshot, `W0` the
+    /// bone's bind-pose world rotation under the root frame at that moment.
+    /// Per frame the desired bone world rotation is then exactly `B · O`.
+    pub body_bone_offsets: HashMap<RagdollBodyId, Quat>,
+    /// World rotations of the bodies in the start snapshot, kept so offsets
+    /// can be computed lazily if the rig wasn't ready at activation.
+    pub start_body_rotations: HashMap<RagdollBodyId, Quat>,
+    /// NPC root world rotation frozen at activation (yaw at death). The root
+    /// stops rotating; all corpse orientation lives in the bones.
+    pub root_fix_rotation: Option<Quat>,
+    /// Client time at ragdoll activation (drives the pose blend-in).
+    pub started_at: f32,
+    /// Whether the rig was snapped to its reference pose at ragdoll start
+    /// (clears death-animation contamination from unmapped bones).
+    pub pose_reset_done: bool,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -113,6 +161,14 @@ impl NpcNetSmoothing {
 /// The NPC entity that owns this rig (cached to avoid per-frame hierarchy walks).
 #[derive(Component, Clone, Copy)]
 pub struct NpcRigOwner(pub Entity);
+
+/// One primitive body part of a ragdoll reference Dummy. Driven DIRECTLY from
+/// the streamed physics poses — no skeleton, no bind pose, no mapping — so it
+/// renders exactly what the server simulates (ground truth for diagnosis).
+#[derive(Component, Clone, Copy)]
+pub struct NpcDummyBody {
+    pub body: RagdollBodyId,
+}
 
 /// Movement animation types for NPCs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -166,6 +222,10 @@ pub struct NpcAnimState {
     pub is_stopping: bool,
     /// Remaining lockout before we can transition again (anti-flap guard).
     pub transition_lock_timer: f32,
+    /// True while the AnimationPlayer is paused because the NPC is hidden.
+    /// Without pausing, Bevy keeps sampling every bone of hidden/far NPCs
+    /// each frame even though nothing is drawn.
+    pub anim_paused: bool,
 }
 
 pub(super) struct NpcAnimSet {

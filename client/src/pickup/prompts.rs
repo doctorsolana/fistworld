@@ -73,6 +73,7 @@ pub(super) fn show_vehicle_prompt(
         let vehicle_name = match vehicle_type {
             VehicleType::Motorbike => "bike",
             VehicleType::Car => "steam car",
+            VehicleType::CarV2 => "steam car v2",
         };
         let prompt_text = format!("Press E to get on {}", vehicle_name);
 

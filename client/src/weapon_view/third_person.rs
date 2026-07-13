@@ -34,7 +34,7 @@ pub struct CurrentThirdPersonWeapon {
 pub fn update_third_person_weapon(
     mut commands: Commands,
     local_player: Query<(Entity, &EquippedWeapon), (With<LocalPlayer>, With<GlobalTransform>)>,
-    existing_weapon: Query<Entity, With<ThirdPersonWeapon>>,
+    mut existing_weapon: Query<(Entity, &mut Visibility), With<ThirdPersonWeapon>>,
     weapon_models: Option<Res<WeaponModelAssets>>,
     mut current_tp_weapon: ResMut<CurrentThirdPersonWeapon>,
     input_state: Res<InputState>,
@@ -48,31 +48,51 @@ pub fn update_third_person_weapon(
         && !input_state.in_vehicle
         && weapon.weapon_type != WeaponType::Unarmed;
 
-    // Check if we need to spawn (not already showing this weapon).
-    let already_showing = current_tp_weapon.weapon_type == Some(weapon.weapon_type);
+    let has_existing_weapon = !existing_weapon.is_empty();
+    let already_spawned =
+        current_tp_weapon.weapon_type == Some(weapon.weapon_type) && has_existing_weapon;
 
-    // Despawn old weapon if switching weapons or hiding.
-    if !should_show || !already_showing {
-        for entity in existing_weapon.iter() {
+    // Switching weapon type still needs a model swap, but camera mode toggles should not churn
+    // the scene/pipeline cache. Hide the local third-person weapon when first-person is active.
+    if current_tp_weapon
+        .weapon_type
+        .is_some_and(|current| current != weapon.weapon_type)
+    {
+        for (entity, _) in existing_weapon.iter_mut() {
             commands.entity(entity).despawn();
         }
         current_tp_weapon.weapon_type = None;
     }
 
     if !should_show {
+        for (_, mut visibility) in existing_weapon.iter_mut() {
+            *visibility = Visibility::Hidden;
+        }
         return;
     }
+
+    if already_spawned {
+        for (_, mut visibility) in existing_weapon.iter_mut() {
+            *visibility = Visibility::Inherited;
+        }
+        return;
+    }
+
+    for (entity, _) in existing_weapon.iter_mut() {
+        commands.entity(entity).despawn();
+    }
+    current_tp_weapon.weapon_type = None;
 
     // Spawn new weapon model if not already showing.
     if current_tp_weapon.weapon_type.is_none() {
         info!("Spawning third-person weapon: {:?}", weapon.weapon_type);
-        spawn_third_person_weapon(
+        current_tp_weapon.weapon_type = spawn_third_person_weapon(
             &mut commands,
             weapon_models.as_deref(),
             weapon.weapon_type,
             player_entity,
-        );
-        current_tp_weapon.weapon_type = Some(weapon.weapon_type);
+        )
+        .map(|_| weapon.weapon_type);
     }
 }
 
@@ -156,10 +176,10 @@ fn spawn_third_person_weapon(
     weapon_models: Option<&WeaponModelAssets>,
     weapon_type: WeaponType,
     player_entity: Entity,
-) {
-    let Some(assets) = weapon_models else { return };
+) -> Option<Entity> {
+    let assets = weapon_models?;
     let Some(scene) = assets.scenes.get(&weapon_type) else {
-        return;
+        return None;
     };
 
     // Position relative to player - roughly where hands would hold a weapon.
@@ -206,6 +226,7 @@ fn spawn_third_person_weapon(
 
     // Make weapon a child of the player so it follows them.
     commands.entity(player_entity).add_child(weapon_entity);
+    Some(weapon_entity)
 }
 
 /// Spawn a simplified third-person weapon model for a remote player.

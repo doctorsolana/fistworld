@@ -42,7 +42,7 @@ pub fn handle_vehicle_spawned(
             },
         ));
 
-        if vehicle.vehicle_type == VehicleType::Car {
+        if matches!(vehicle.vehicle_type, VehicleType::Car | VehicleType::CarV2) {
             commands.entity(entity).insert(NeedsSteamCarRigSetup);
             commands.entity(entity).with_children(|parent| {
                 parent.spawn((

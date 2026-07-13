@@ -47,6 +47,7 @@ pub(super) fn button_interactions(
         if let Some(toggle) = toggle_opt {
             let enabled = match toggle {
                 GraphicsToggle::Bloom => settings.bloom_enabled,
+                GraphicsToggle::Ssao => settings.ssao_enabled,
                 GraphicsToggle::Shadows => settings.shadows_enabled,
                 GraphicsToggle::Atmosphere => settings.atmosphere_enabled,
                 GraphicsToggle::Clouds => settings.clouds_enabled,
@@ -161,6 +162,10 @@ pub(super) fn handle_graphics_toggles(
                     settings.bloom_enabled = !settings.bloom_enabled;
                     settings.bloom_enabled
                 }
+                GraphicsToggle::Ssao => {
+                    settings.ssao_enabled = !settings.ssao_enabled;
+                    settings.ssao_enabled
+                }
                 GraphicsToggle::Shadows => {
                     settings.shadows_enabled = !settings.shadows_enabled;
                     settings.shadows_enabled
@@ -232,6 +237,49 @@ pub(super) fn handle_slider_steps(
     for (interaction, step) in buttons.iter() {
         if *interaction == Interaction::Pressed {
             match step.control {
+                SliderControl::RenderScale => {
+                    // 3D resolution scale: GPU cost scales with the square.
+                    let steps = [0.5, 0.58, 0.66, 0.75, 0.85, 1.0];
+                    let current_idx = steps
+                        .iter()
+                        .position(|&x| (x - settings.render_scale).abs() < 0.03)
+                        .unwrap_or(3); // Default to 0.75 if not found
+
+                    let new_idx = if step.delta > 0 {
+                        (current_idx + 1).min(steps.len() - 1)
+                    } else {
+                        current_idx.saturating_sub(1)
+                    };
+
+                    let new_val = steps[new_idx];
+                    if (new_val - settings.render_scale).abs() > 0.01 {
+                        settings.render_scale = new_val;
+                        info!("Render scale = {:.0}%", new_val * 100.0);
+
+                        for (text_control, mut text) in slider_texts.iter_mut() {
+                            if matches!(text_control.0, SliderControl::RenderScale) {
+                                text.0 = format!("{:.0}%", new_val * 100.0);
+                            }
+                        }
+                    }
+                }
+                SliderControl::ShadowQuality => {
+                    let new_val = if step.delta > 0 {
+                        settings.shadow_quality.next()
+                    } else {
+                        settings.shadow_quality.prev()
+                    };
+                    if new_val != settings.shadow_quality {
+                        settings.shadow_quality = new_val;
+                        info!("Shadow quality = {:?}", new_val);
+
+                        for (text_control, mut text) in slider_texts.iter_mut() {
+                            if matches!(text_control.0, SliderControl::ShadowQuality) {
+                                text.0 = new_val.label().to_string();
+                            }
+                        }
+                    }
+                }
                 SliderControl::Tonemapping => {
                     let options = [
                         Tonemapping::AgX,

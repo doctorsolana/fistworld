@@ -1,6 +1,7 @@
 //! animation systems.
 
 use super::*;
+use shared::player::{PLAYER_SPEED, PLAYER_SPRINT_MULT};
 
 /// Once the model scene hierarchy is spawned, attach the animation graph to the glTF player.
 pub fn setup_player_rig(
@@ -147,7 +148,8 @@ fn determine_remote_target_anim(
 
     if dot_forward.abs() >= dot_right.abs() {
         if dot_forward >= 0.0 {
-            if speed_xz > 4.5 {
+            let run_speed_threshold = PLAYER_SPEED * (1.0 + PLAYER_SPRINT_MULT) * 0.5;
+            if speed_xz > run_speed_threshold {
                 MovementAnim::Run
             } else {
                 MovementAnim::Walk

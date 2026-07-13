@@ -5,6 +5,7 @@
 pub mod atmosphere;
 pub mod clouds;
 pub mod day_night;
+pub mod scaled_target;
 pub mod settings;
 pub mod setup;
 
@@ -14,21 +15,27 @@ pub use clouds::{
     update_cloud_layers, CloudCard, CloudCover, CloudCoverMode, CloudCoverOverride, CloudLayer,
 };
 pub use day_night::update_day_night_cycle;
-pub use settings::{apply_graphics_settings, GraphicsSettings, InputSettings, LAUNCHER_RESOLUTION};
+pub use scaled_target::sync_scene_render_target;
+pub use settings::{
+    apply_graphics_settings, GraphicsSettings, InputSettings, LAUNCHER_RESOLUTION,
+};
 pub use setup::setup_rendering;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::audio::SpatialListener;
 use bevy::camera::Exposure;
+use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::{
-    light_consts::lux, AtmosphereEnvironmentMapLight, DirectionalLightShadowMap, NotShadowCaster,
+    light_consts::lux, AtmosphereEnvironmentMapLight, CascadeShadowConfig,
+    CascadeShadowConfigBuilder, DirectionalLightShadowMap, NotShadowCaster, ShadowFilteringMethod,
 };
 use bevy::math::primitives::Plane3d;
 use bevy::pbr::{
-    Atmosphere, AtmosphereMode, AtmosphereSettings, Falloff, PhaseFunction, ScatteringMedium,
-    ScatteringTerm,
+    Atmosphere, AtmosphereMode, AtmosphereSettings, DistanceFog, Falloff, FogFalloff,
+    PhaseFunction, ScatteringMedium, ScatteringTerm, ScreenSpaceAmbientOcclusion,
+    ScreenSpaceAmbientOcclusionQualityLevel,
 };
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode};
 use bevy::prelude::*;

@@ -110,10 +110,22 @@ pub struct DebugCharacterSelection {
     pub current: PlayerCharacter,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct DebugPerfSettings {
     pub weightmap_stats: bool,
     pub render_diag_logging: bool,
+}
+
+impl Default for DebugPerfSettings {
+    fn default() -> Self {
+        let hitch_profile_enabled = crate::profiling::hitch_profiling_enabled();
+        Self {
+            weightmap_stats: crate::profiling::env_flag("FISTFORCE_WEIGHTMAP_STATS"),
+            render_diag_logging: hitch_profile_enabled
+                || crate::profiling::env_flag("FISTFORCE_HITCH_LOGGING")
+                || crate::profiling::env_flag("FISTFORCE_RENDER_DIAG_LOGGING"),
+        }
+    }
 }
 
 #[derive(Component)]
@@ -155,6 +167,10 @@ struct PerfRenderDiagLabel;
 
 #[derive(Component)]
 struct SpawnOilmanNpcButton;
+
+/// Spawns a gray ragdoll-reference dummy near the player.
+#[derive(Component)]
+struct SpawnDummyNpcButton;
 
 #[derive(Component)]
 struct SpawnPhysicsBoxButton;

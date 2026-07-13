@@ -151,6 +151,7 @@ pub(super) fn spawn_debug_time_menu(
         ));
 
         spawn_oilman_npc_button(panel);
+        spawn_dummy_npc_button(panel);
         spawn_physics_box_button(panel);
 
         panel
@@ -308,6 +309,26 @@ pub(super) fn spawn_oilman_npc_button(parent: &mut ChildSpawnerCommands<'_>) {
         .with_children(|btn| {
             btn.spawn((
                 Text::new("SPAWN 10 OILMAN NPCS"),
+                button_text_style(),
+                TextColor(TEXT_COLOR),
+            ));
+        });
+}
+
+pub(super) fn spawn_dummy_npc_button(parent: &mut ChildSpawnerCommands<'_>) {
+    parent
+        .spawn((
+            Button,
+            SpawnDummyNpcButton,
+            Node {
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..button_style()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                Text::new("SPAWN RAGDOLL DUMMY"),
                 button_text_style(),
                 TextColor(TEXT_COLOR),
             ));

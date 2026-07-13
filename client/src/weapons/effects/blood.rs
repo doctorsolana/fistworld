@@ -1,6 +1,21 @@
+//! Blood effects: billboarded mist puffs on hit, physical droplets, and
+//! textured ground decals that dry over time.
+//!
+//! Realism rules baked in here:
+//! - Blood never glows: no emissive anywhere, colors are dark red.
+//! - The hit "burst" is a soft textured mist (tinted smoke flipbook), not
+//!   geometry — it sprays along the impact direction and dissipates.
+//! - Ground blood is an irregular procedural splatter decal, laid flat on the
+//!   terrain slope with a velocity smear, that dries from glossy red to dark
+//!   matte brown and persists for ~30s.
+
 use super::*;
 
-/// Spawn blood effects: instant burst for feedback + droplets for realism
+fn rand_range(min: f32, max: f32) -> f32 {
+    min + (max - min) * rand::random::<f32>()
+}
+
+/// Spawn blood effects for a character hit: mist puffs + flying droplets.
 pub(crate) fn spawn_blood_splatter(
     commands: &mut Commands,
     visuals: &WeaponVisualAssets,
@@ -9,84 +24,64 @@ pub(crate) fn spawn_blood_splatter(
     impact_normal: Vec3,
     now: f32,
 ) {
-    let impact_normal = impact_normal.normalize_or_zero();
     let normal = if impact_normal.length_squared() > 1e-6 {
-        impact_normal
+        impact_normal.normalize()
     } else {
         Vec3::Y
     };
-
-    // Use a simple pseudo-random based on position for variation
-    let seed = (impact_pos.x * 1000.0 + impact_pos.z * 100.0 + impact_pos.y * 10.0) as i32;
+    let tangent = if normal.y.abs() > 0.9 {
+        Vec3::X
+    } else {
+        normal.cross(Vec3::Y).normalize_or_zero()
+    };
+    let bitangent = normal.cross(tangent).normalize_or_zero();
 
     // =========================================================================
-    // INSTANT BLOOD BURST (the key visual feedback!)
-    // Multiple burst particles for a cloud effect
+    // MIST PUFFS — the instant feedback. 2-3 overlapping dark-red puffs that
+    // spray out along the impact direction and dissipate in ~0.35s.
     // =========================================================================
-    let num_bursts = 3 + (seed.abs() % 3) as usize; // 3-5 burst particles
-    for i in 0..num_bursts {
-        // Slight offset for each burst to create cloud effect
-        let offset_angle = (i as f32 / num_bursts as f32) * std::f32::consts::TAU;
-        let offset_dist = 0.05 + (((seed + i as i32) as f32 * 0.3).sin().abs()) * 0.1;
-        let offset = Vec3::new(
-            offset_angle.cos() * offset_dist,
-            (((seed + i as i32 * 2) as f32 * 0.5).sin()) * 0.08,
-            offset_angle.sin() * offset_dist,
-        );
+    if !visuals.blood_mist_materials.is_empty() {
+        let puffs = 2 + (rand::random::<f32>() * 2.0) as usize; // 2-3
+        for i in 0..puffs {
+            let jitter = tangent * rand_range(-0.06, 0.06) + bitangent * rand_range(-0.06, 0.06);
+            let pos = impact_pos + normal * rand_range(0.08, 0.18) + jitter;
+            let velocity = normal * rand_range(0.7, 1.6)
+                + jitter * 4.0
+                + Vec3::Y * rand_range(0.1, 0.45);
+            let scale = rand_range(0.13, 0.22) * if i == 0 { 1.25 } else { 1.0 };
 
-        let burst_pos = impact_pos + normal * 0.15 + offset;
-        let scale_variation = 0.8 + (((seed + i as i32) as f32 * 0.7).sin().abs()) * 0.4;
-
-        // Use shared burst material (fade via scale instead of alpha mutation)
-        commands.spawn((
-            BloodBurst {
-                spawn_time: now,
-                lifetime: BLOOD_BURST_LIFETIME
-                    + (((seed + i as i32) as f32 * 0.4).sin().abs()) * 0.1,
-                initial_scale: BLOOD_BURST_INITIAL_SCALE * scale_variation,
-                max_scale: BLOOD_BURST_MAX_SCALE * scale_variation,
-                direction: normal,
-            },
-            Mesh3d(visuals.blood_burst_mesh.clone()),
-            MeshMaterial3d(visuals.blood_burst_material.clone()),
-            Transform::from_translation(burst_pos)
-                .with_scale(Vec3::splat(BLOOD_BURST_INITIAL_SCALE * scale_variation)),
-            Visibility::Visible,
-            InheritedVisibility::default(),
-            NotShadowCaster,
-        ));
+            commands.spawn((
+                BloodMist {
+                    spawn_time: now,
+                    lifetime: rand_range(0.28, 0.42),
+                    velocity,
+                    initial_scale: scale,
+                    roll: rand_range(0.0, std::f32::consts::TAU),
+                },
+                Mesh3d(visuals.blood_mist_mesh.clone()),
+                MeshMaterial3d(visuals.blood_mist_materials[0].clone()),
+                Transform::from_translation(pos).with_scale(Vec3::splat(scale)),
+                Visibility::Visible,
+                InheritedVisibility::default(),
+                NotShadowCaster,
+            ));
+        }
     }
 
     // =========================================================================
-    // FLYING DROPLETS (secondary - for realism, less important than burst)
+    // FLYING DROPLETS — small dark specks with gravity; they become ground
+    // decals where they land.
     // =========================================================================
-    let num_droplets = 4 + (seed.abs() % 3) as usize; // 4-6 droplets (reduced from before)
-    for i in 0..num_droplets {
-        let angle = (i as f32 / num_droplets as f32) * std::f32::consts::TAU
-            + ((seed + i as i32) as f32 * 0.3).sin() * 0.8;
-
-        // Create tangent/bitangent for spray direction
-        let tangent = if normal.y.abs() > 0.9 {
-            Vec3::X
-        } else {
-            normal.cross(Vec3::Y).normalize_or_zero()
-        };
-        let bitangent = normal.cross(tangent).normalize_or_zero();
-
-        // Spray direction: mostly outward from surface, with some upward component
-        let horizontal_speed = 2.0 + (((seed + i as i32 * 7) as f32 * 0.5).sin().abs()) * 3.0;
-        let vertical_speed = 1.5 + (((seed + i as i32 * 3) as f32 * 0.7).sin().abs()) * 2.5;
-
+    let num_droplets = 5 + (rand::random::<f32>() * 4.0) as usize; // 5-8
+    for _ in 0..num_droplets {
+        let angle = rand_range(0.0, std::f32::consts::TAU);
         let spray_dir = tangent * angle.cos() + bitangent * angle.sin();
-        // Bias spray outward from the surface and a bit upward.
-        let velocity = spray_dir * horizontal_speed + Vec3::Y * vertical_speed + normal * 1.2;
+        // Cone biased along the impact direction, with lateral spread + lift.
+        let velocity = normal * rand_range(2.0, 4.5)
+            + spray_dir * rand_range(0.3, 2.0)
+            + Vec3::Y * rand_range(0.6, 1.8);
 
-        // Small offset from impact point
-        let droplet_pos = impact_pos + normal * 0.1 + spray_dir * 0.05;
-
-        // Scale varies per droplet (small spheres)
-        let scale = 0.04 + (((seed + i as i32 * 3) as f32 * 0.5).sin().abs()) * 0.06;
-
+        let scale = rand_range(0.02, 0.05);
         commands.spawn((
             BloodDroplet {
                 velocity,
@@ -94,7 +89,8 @@ pub(crate) fn spawn_blood_splatter(
             },
             Mesh3d(visuals.blood_droplet_mesh.clone()),
             MeshMaterial3d(visuals.blood_droplet_material.clone()),
-            Transform::from_translation(droplet_pos).with_scale(Vec3::splat(scale)),
+            Transform::from_translation(impact_pos + normal * 0.08 + spray_dir * 0.04)
+                .with_scale(Vec3::splat(scale)),
             Visibility::Visible,
             InheritedVisibility::default(),
             NotShadowCaster,
@@ -102,7 +98,63 @@ pub(crate) fn spawn_blood_splatter(
     }
 }
 
-/// Update flying blood droplets - apply gravity, check for ground collision
+/// Spawn a ground splat decal, aligned to the terrain slope and smeared along
+/// the landing velocity.
+fn spawn_ground_splat(
+    commands: &mut Commands,
+    visuals: &WeaponVisualAssets,
+    terrain: Option<&WorldTerrain>,
+    pos: Vec3,
+    landing_velocity: Vec3,
+    scale: f32,
+    now: f32,
+) {
+    if visuals.blood_splat_variants.is_empty() {
+        return;
+    }
+    let variant = (rand::random::<f32>() * visuals.blood_splat_variants.len() as f32) as usize
+        % visuals.blood_splat_variants.len();
+
+    // Lay the quad on the terrain slope (not always flat-horizontal).
+    let ground_normal = terrain
+        .map(|t| t.get_normal(pos.x, pos.z))
+        .unwrap_or(Vec3::Y)
+        .normalize_or_zero();
+    let slope_rot = Quat::from_rotation_arc(Vec3::Y, ground_normal);
+
+    // Smear along the landing direction; random yaw otherwise.
+    let dir_xz = Vec2::new(landing_velocity.x, landing_velocity.z);
+    let speed = landing_velocity.length();
+    let yaw = if dir_xz.length_squared() > 0.05 {
+        -dir_xz.y.atan2(dir_xz.x)
+    } else {
+        rand_range(0.0, std::f32::consts::TAU)
+    };
+    let smear = (1.0 + speed * 0.05).clamp(1.0, 1.9);
+
+    // Small random lift avoids z-fighting between overlapping splats.
+    let lift = ground_normal * (0.012 + rand::random::<f32>() * 0.012);
+
+    commands.spawn((
+        BloodGroundSplat {
+            spawn_time: now,
+            lifetime: BLOOD_SPLAT_LIFETIME * rand_range(0.85, 1.15),
+            initial_scale: scale,
+            variant,
+            stage: 0,
+        },
+        Mesh3d(visuals.blood_splat_mesh.clone()),
+        MeshMaterial3d(visuals.blood_splat_variants[variant].fresh.clone()),
+        Transform::from_translation(pos + lift)
+            .with_rotation(slope_rot * Quat::from_rotation_y(yaw))
+            .with_scale(Vec3::new(scale * smear, 1.0, scale)),
+        Visibility::Visible,
+        InheritedVisibility::default(),
+        NotShadowCaster,
+    ));
+}
+
+/// Update flying blood droplets - gravity, stretch along velocity, land into decals.
 pub fn update_blood_droplets(
     mut commands: Commands,
     mut droplets: Query<(Entity, &mut BloodDroplet, &mut Transform)>,
@@ -129,234 +181,191 @@ pub fn update_blood_droplets(
     }
 
     for (entity, mut droplet, mut transform) in droplets.iter_mut() {
-        // Check lifetime
         let age = now - droplet.spawn_time;
         if age > BLOOD_DROPLET_LIFETIME {
             commands.entity(entity).despawn();
             continue;
         }
 
-        // Apply gravity + simple drag
+        // Gravity + drag.
         droplet.velocity.y -= BLOOD_GRAVITY * dt;
         let v = droplet.velocity;
         droplet.velocity -= v * (BLOOD_AIR_DRAG * dt);
 
-        // Move droplet
         let new_pos = transform.translation + droplet.velocity * dt;
 
-        // Make droplets look like moving blobs (stretch along velocity)
+        // Stretch along velocity (motion-blurred teardrop look).
         let speed = droplet.velocity.length();
         if speed > 0.2 {
             let dir = droplet.velocity / speed;
             transform.rotation = Quat::from_rotation_arc(Vec3::Y, dir);
-            // Stretch more at higher speeds
-            let base = transform.scale.x.max(0.01);
-            let stretch = (1.0 + speed * 0.12).clamp(1.0, 2.2);
-            transform.scale = Vec3::new(base * 0.7, base * stretch, base * 0.7);
+            let base = transform.scale.x.max(0.008);
+            let stretch = (1.0 + speed * 0.18).clamp(1.0, 3.0);
+            transform.scale = Vec3::new(base * 0.6, base * stretch, base * 0.6);
         }
 
-        // Check ground collision
         let ground_y = terrain
             .as_ref()
             .map(|t| t.get_height(new_pos.x, new_pos.z))
             .unwrap_or(0.0);
 
         if new_pos.y <= ground_y + 0.02 {
-            // Hit the ground! Spawn a ground splat and despawn the droplet
-            let splat_pos = Vec3::new(new_pos.x, ground_y + 0.02, new_pos.z);
-
-            // Splat size based on droplet size and speed
+            let splat_pos = Vec3::new(new_pos.x, ground_y, new_pos.z);
             let impact_speed = droplet.velocity.length();
-            let base_scale = transform.scale.x.max(0.01);
-            let splat_scale = (base_scale * 4.0 + impact_speed * 0.03).clamp(0.08, 0.55);
+            let base_scale = transform.scale.x.max(0.008);
+            let splat_scale = (base_scale * 6.0 + impact_speed * 0.02).clamp(0.10, 0.45);
 
-            // Direction smear based on impact velocity projected onto ground
-            let dir_xz = Vec2::new(droplet.velocity.x, droplet.velocity.z);
-            let dir_angle = dir_xz.y.atan2(dir_xz.x);
-            let smear_rot = Quat::from_rotation_y(-dir_angle);
-            let smear = (1.0 + impact_speed * 0.06).clamp(1.0, 2.8);
-
-            // Use shared materials (fade via scale, no per-hit allocation)
-            // Main splat (slightly smeared)
-            commands.spawn((
-                BloodGroundSplat {
-                    spawn_time: now,
-                    lifetime: BLOOD_SPLAT_LIFETIME,
-                    initial_scale: splat_scale,
-                },
-                Mesh3d(visuals.blood_splatter_mesh.clone()),
-                MeshMaterial3d(visuals.blood_splat_shared_material.clone()),
-                Transform::from_translation(splat_pos)
-                    .with_rotation(smear_rot)
-                    .with_scale(Vec3::new(splat_scale * smear, splat_scale, splat_scale)),
-                Visibility::Visible,
-                InheritedVisibility::default(),
-                NotShadowCaster,
-            ));
-
-            // Satellite droplets around the main splat (adds "splatter" texture without a texture)
-            let seed = (new_pos.x * 120.0 + new_pos.z * 70.0) as i32;
-            let satellites = 3 + (seed.abs() % 4) as usize; // 3-6
-            for j in 0..satellites {
-                let a = (j as f32 / satellites as f32) * std::f32::consts::TAU
-                    + ((seed + j as i32) as f32 * 0.3).sin() * 0.8;
-                let r = 0.08 + (((seed + j as i32 * 11) as f32 * 0.7).sin().abs()) * 0.25;
-                let off = Vec3::new(a.cos() * r, 0.0, a.sin() * r);
-                let s = (splat_scale
-                    * (0.25 + (((seed + j as i32 * 5) as f32 * 0.9).sin().abs()) * 0.35))
-                    .clamp(0.03, 0.22);
-                let rot = Quat::from_rotation_y(
-                    ((seed + j as i32 * 13) as f32 * 0.17).sin() * std::f32::consts::TAU,
-                );
-                commands.spawn((
-                    BloodGroundSplat {
-                        spawn_time: now,
-                        lifetime: BLOOD_SPLAT_LIFETIME,
-                        initial_scale: s,
-                    },
-                    Mesh3d(visuals.blood_splatter_mesh.clone()),
-                    MeshMaterial3d(visuals.blood_splat_shared_material.clone()),
-                    Transform::from_translation(splat_pos + off)
-                        .with_rotation(rot)
-                        .with_scale(Vec3::splat(s)),
-                    Visibility::Visible,
-                    InheritedVisibility::default(),
-                    NotShadowCaster,
-                ));
-            }
-
-            // Quick splash ring (expands and fades fast)
-            commands.spawn((
-                BloodSplashRing {
-                    spawn_time: now,
-                    lifetime: 0.35,
-                    initial_scale: splat_scale * 0.9,
-                },
-                Mesh3d(visuals.blood_splatter_mesh.clone()),
-                MeshMaterial3d(visuals.blood_ring_shared_material.clone()),
-                Transform::from_translation(splat_pos).with_scale(Vec3::splat(splat_scale * 0.9)),
-                Visibility::Visible,
-                InheritedVisibility::default(),
-                NotShadowCaster,
-            ));
-
+            spawn_ground_splat(
+                &mut commands,
+                &visuals,
+                terrain.as_deref(),
+                splat_pos,
+                droplet.velocity,
+                splat_scale,
+                now,
+            );
             commands.entity(entity).despawn();
         } else {
             transform.translation = new_pos;
-
-            // Shrink slightly as it flies (evaporation effect)
-            transform.scale *= 1.0 - dt * 0.3;
         }
     }
 }
 
-/// Update splash rings - expand quickly then shrink to zero (shared material)
-pub fn update_blood_splash_rings(
-    mut commands: Commands,
-    mut rings: Query<(Entity, &BloodSplashRing, &mut Transform)>,
-    time: Res<Time>,
-) {
-    let now = time.elapsed_secs();
-
-    for (entity, ring, mut transform) in rings.iter_mut() {
-        let age = now - ring.spawn_time;
-        if age > ring.lifetime {
-            commands.entity(entity).despawn();
-            continue;
-        }
-
-        let t = (age / ring.lifetime).clamp(0.0, 1.0);
-        let expand = 1.0 + t * 1.8;
-        let fade = (1.0 - t).powf(0.5); // Shrink towards end of life
-        transform.scale = Vec3::splat(ring.initial_scale * expand * fade);
-    }
-}
-
-/// Update instant blood bursts - expand fast and fade via scale (shared material)
+/// Update blood mist puffs: drift, flipbook, billboard toward the camera.
 pub fn update_blood_bursts(
     mut commands: Commands,
-    mut bursts: Query<(Entity, &BloodBurst, &mut Transform)>,
     time: Res<Time>,
+    camera: Query<&GlobalTransform, With<Camera3d>>,
+    weapon_visuals: Option<Res<WeaponVisualAssets>>,
+    mut mists: Query<(
+        Entity,
+        &mut BloodMist,
+        &mut Transform,
+        &mut MeshMaterial3d<StandardMaterial>,
+    )>,
 ) {
+    let Some(visuals) = weapon_visuals else {
+        return;
+    };
+    let dt = time.delta_secs();
     let now = time.elapsed_secs();
+    let camera_pos = camera.iter().next().map(|c| c.translation());
 
     // Enforce entity cap
-    let count = bursts.iter().len();
-    if count > MAX_BLOOD_BURSTS {
+    let count = mists.iter().len();
+    if count > MAX_BLOOD_MISTS {
         let mut by_age: Vec<(Entity, f32)> =
-            bursts.iter().map(|(e, b, _)| (e, b.spawn_time)).collect();
+            mists.iter().map(|(e, m, _, _)| (e, m.spawn_time)).collect();
         by_age.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        for (entity, _) in by_age.iter().take(count - MAX_BLOOD_BURSTS) {
+        for (entity, _) in by_age.iter().take(count - MAX_BLOOD_MISTS) {
             commands.entity(*entity).despawn();
         }
     }
 
-    for (entity, burst, mut transform) in bursts.iter_mut() {
-        let age = now - burst.spawn_time;
-
-        if age > burst.lifetime {
+    for (entity, mut mist, mut transform, mut material) in mists.iter_mut() {
+        let age = now - mist.spawn_time;
+        if age > mist.lifetime {
             commands.entity(entity).despawn();
             continue;
         }
+        let t = (age / mist.lifetime).clamp(0.0, 1.0);
 
-        // t goes 0->1 over the burst lifetime
-        let t = (age / burst.lifetime).clamp(0.0, 1.0);
+        // Drift outward, sag slightly, slow down.
+        mist.velocity.y -= 1.2 * dt;
+        mist.velocity *= 0.90_f32.powf(dt * 60.0);
+        transform.translation += mist.velocity * dt;
 
-        // Expand quickly (ease-out curve for punchy feel)
-        let ease_t = 1.0 - (1.0 - t).powi(2); // Quadratic ease-out
-        let scale = burst.initial_scale + (burst.max_scale - burst.initial_scale) * ease_t;
+        // Expand as it dissipates; the flipbook's own alpha handles the fade.
+        transform.scale = Vec3::splat(mist.initial_scale * (1.0 + t * 2.4));
 
-        // Slight movement in the burst direction (blood "puffs" outward)
-        let move_dist = ease_t * 0.15;
-        let base_pos = transform.translation;
-        transform.translation = base_pos + burst.direction * move_dist * time.delta_secs() * 10.0;
+        let frame_count = visuals.blood_mist_materials.len();
+        if frame_count > 0 {
+            let frame = (t * (frame_count as f32 - 1.0)).floor() as usize;
+            if let Some(handle) = visuals.blood_mist_materials.get(frame) {
+                material.0 = handle.clone();
+            }
+        }
 
-        // Scale: expand then shrink to zero for fade (shared material, can't mutate alpha)
-        let fade = (1.0 - t).powf(0.7);
-        transform.scale = Vec3::splat(scale * fade);
+        if let Some(cam) = camera_pos {
+            let to_cam = (cam - transform.translation).normalize_or_zero();
+            if to_cam.length_squared() > 0.0001 {
+                transform.rotation = Quat::from_rotation_arc(Vec3::Y, to_cam)
+                    * Quat::from_rotation_y(mist.roll);
+            }
+        }
     }
 }
 
-/// Update ground blood splats - expand slightly then shrink to zero (shared material)
+/// Update ground blood decals: dry over time (material stage swap), fade out
+/// only at the very end of life.
 pub fn update_blood_ground_splats(
     mut commands: Commands,
-    mut splats: Query<(Entity, &BloodGroundSplat, &mut Transform)>,
+    weapon_visuals: Option<Res<WeaponVisualAssets>>,
+    mut splats: Query<(
+        Entity,
+        &mut BloodGroundSplat,
+        &mut Transform,
+        &mut MeshMaterial3d<StandardMaterial>,
+    )>,
     time: Res<Time>,
 ) {
+    let Some(visuals) = weapon_visuals else {
+        return;
+    };
     let now = time.elapsed_secs();
 
     // Enforce entity cap: despawn oldest if over budget
     let count = splats.iter().len();
     if count > MAX_BLOOD_GROUND_SPLATS {
-        let mut by_age: Vec<(Entity, f32)> =
-            splats.iter().map(|(e, s, _)| (e, s.spawn_time)).collect();
+        let mut by_age: Vec<(Entity, f32)> = splats
+            .iter()
+            .map(|(e, s, _, _)| (e, s.spawn_time))
+            .collect();
         by_age.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         for (entity, _) in by_age.iter().take(count - MAX_BLOOD_GROUND_SPLATS) {
             commands.entity(*entity).despawn();
         }
     }
 
-    for (entity, splat, mut transform) in splats.iter_mut() {
+    for (entity, mut splat, mut transform, mut material) in splats.iter_mut() {
         let age = now - splat.spawn_time;
-
         if age > splat.lifetime {
             commands.entity(entity).despawn();
             continue;
         }
-
         let t = age / splat.lifetime;
 
-        // Expand slightly in first 10% of lifetime (blood spreading)
-        let expand = if t < 0.1 { 1.0 + (t / 0.1) * 0.3 } else { 1.3 };
+        // Fresh blood spreads slightly in the first moments.
+        if t < 0.06 {
+            let spread = 1.0 + (t / 0.06) * 0.25;
+            let base = splat.initial_scale;
+            transform.scale.x = transform.scale.x.max(base * spread);
+            transform.scale.z = base * spread;
+        }
 
-        // Shrink to zero in the last 50% of lifetime (shared material, can't mutate alpha)
-        let fade = if t > 0.5 {
-            let fade_t = (t - 0.5) / 0.5;
-            1.0 - fade_t
+        // Drying: swap to the darker/matte stage materials.
+        let desired_stage: u8 = if t > 0.55 {
+            2
+        } else if t > 0.18 {
+            1
         } else {
-            1.0
+            0
         };
+        if desired_stage != splat.stage {
+            if let Some(set) = visuals.blood_splat_variants.get(splat.variant) {
+                material.0 = match desired_stage {
+                    1 => set.drying.clone(),
+                    _ => set.dried.clone(),
+                };
+                splat.stage = desired_stage;
+            }
+        }
 
-        transform.scale = Vec3::splat(splat.initial_scale * expand * fade);
+        // Only shrink away in the final 8% of life.
+        if t > 0.92 {
+            let fade = 1.0 - (t - 0.92) / 0.08;
+            let base = splat.initial_scale * fade.max(0.0);
+            transform.scale = Vec3::new(transform.scale.x.min(base * 1.9), 1.0, base);
+        }
     }
 }

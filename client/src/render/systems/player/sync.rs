@@ -141,7 +141,7 @@ pub fn sync_player_transforms(
             let (seat_height, seat_forward) = match vehicle_type {
                 VehicleType::Motorbike if is_hover_bike => (0.90, 0.45),
                 VehicleType::Motorbike => (0.65, 0.20),
-                VehicleType::Car => (0.92, 0.08),
+                VehicleType::Car | VehicleType::CarV2 => (0.92, 0.08),
             };
 
             // Seat offset: slightly above and forward/back on the vehicle.

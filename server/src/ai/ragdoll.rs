@@ -5,9 +5,9 @@ use bevy_rapier3d::prelude::*;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::*;
 use shared::components::{
-    Health, Npc, NpcActivity, NpcActivityKind, NpcArchetype, NpcPosition, NpcRotation,
+    Health, Npc, NpcActivity, NpcActivityKind, NpcArchetype, NpcPosition, NpcRotation, NpcVelocity,
 };
-use shared::npc::DEAD_NPC_DESPAWN_TIME;
+use shared::npc::{ragdoll_body_axis, RagdollBodyDef, DEAD_NPC_DESPAWN_TIME, HUMANOID_RAGDOLL_BODIES};
 use shared::protocol::{
     pack_quat_i16, NpcRagdollPoseBatch, NpcRagdollPoseSample, NpcRagdollStarted, RagdollBodyId,
     RagdollBodyPose, RagdollPoseChannel, ReliableChannel,
@@ -17,15 +17,38 @@ use std::collections::{HashMap, HashSet};
 use crate::physics::layers;
 
 const DEFAULT_CORPSE_CAP: usize = 64;
-const DEFAULT_RAGDOLL_POSE_HZ: f32 = 15.0;
+// 30 Hz pose streaming: at 15 Hz a falling body linearly interpolated between
+// samples visibly loses its gravity curve ("floaty/wonky" falls). Corpse
+// counts are small, so the bandwidth cost is negligible.
+const DEFAULT_RAGDOLL_POSE_HZ: f32 = 30.0;
 const CORPSE_CELL_SIZE: f32 = 8.0;
 const PELVIS_LOCAL_Y_FROM_NPC_CENTER: f32 = 0.0;
-const RAGDOLL_VISUAL_YAW_OFFSET: f32 = std::f32::consts::PI;
+// Yaw offset between the NPC's replicated yaw and the ragdoll spawn frame.
+// MUST be 0: the old PI value mirrored the whole body layout left<->right
+// (a 180° yaw turn puts "UpperArmL" on the character's anatomical RIGHT),
+// so the client's LeftArm bone was driven by the right arm's physics body —
+// arms swept up/backwards and every corpse curled. The mesh's own model-root
+// PI flip is a render-side concern that the client handles via bind_rel.
+const RAGDOLL_VISUAL_YAW_OFFSET: f32 = 0.0;
 const SOFT_RAGDOLL_MODE: bool = true;
-const RAGDOLL_LINEAR_DAMPING: f32 = 8.5;
-const RAGDOLL_ANGULAR_DAMPING: f32 = 20.0;
-const RAGDOLL_MAX_LINEAR_SPEED: f32 = 4.0;
-const RAGDOLL_MAX_ANGULAR_SPEED: f32 = 5.5;
+// Damping tuned for a real-looking fall: gravity is 18 m/s², so linear damping
+// must stay well below ~1.0 or the corpse reaches a floaty terminal velocity
+// (the old 8.5 capped falls at ~2 m/s). Angular damping sets "floppiness" —
+// Source-style ragdolls sit around 0.5-1.0; higher reads as rigor mortis.
+const RAGDOLL_LINEAR_DAMPING: f32 = 0.15;
+const RAGDOLL_ANGULAR_DAMPING: f32 = 1.1;
+// Velocity clamps are explosion/NaN safeties: above natural fall/tumble
+// speeds (a 1m fall peaks ~6 m/s), below "corpse flies across the street".
+const RAGDOLL_MAX_LINEAR_SPEED: f32 = 9.0;
+const RAGDOLL_MAX_ANGULAR_SPEED: f32 = 18.0;
+// Death impulse split, Source-style: most of it shoves the WHOLE body
+// (mass-proportional, so it's a clean velocity change with no limb whip) and
+// a small remainder kicks the hit body at the impact point for localized
+// spin/flinch. The local kick is capped as a velocity change so light limbs
+// (2.5 kg forearms) can't be launched.
+const IMPULSE_UNIFORM_SHARE: f32 = 0.65;
+const IMPULSE_LOCAL_SHARE: f32 = 0.35;
+const IMPULSE_LOCAL_MAX_DV: f32 = 3.5;
 
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RagdollPhysicsBody;
@@ -189,102 +212,6 @@ impl CorpseCollisionIndex {
     }
 }
 
-#[derive(Clone, Copy)]
-struct BodyDefinition {
-    id: RagdollBodyId,
-    local_offset: Vec3,
-    radius: f32,
-    mass: f32,
-    parent: Option<RagdollBodyId>,
-}
-
-const OILMAN_BODY_DEFS: [BodyDefinition; 12] = [
-    BodyDefinition {
-        id: RagdollBodyId::Pelvis,
-        local_offset: Vec3::new(0.0, 0.0, 0.0),
-        radius: 0.13,
-        mass: 13.0,
-        parent: None,
-    },
-    BodyDefinition {
-        id: RagdollBodyId::SpineLower,
-        local_offset: Vec3::new(0.0, 0.20, 0.0),
-        radius: 0.11,
-        mass: 8.0,
-        parent: Some(RagdollBodyId::Pelvis),
-    },
-    BodyDefinition {
-        id: RagdollBodyId::SpineUpper,
-        local_offset: Vec3::new(0.0, 0.42, 0.0),
-        radius: 0.11,
-        mass: 7.0,
-        parent: Some(RagdollBodyId::SpineLower),
-    },
-    BodyDefinition {
-        id: RagdollBodyId::Head,
-        local_offset: Vec3::new(0.0, 0.74, 0.0),
-        radius: 0.10,
-        mass: 5.0,
-        parent: Some(RagdollBodyId::SpineUpper),
-    },
-    BodyDefinition {
-        id: RagdollBodyId::UpperArmL,
-        local_offset: Vec3::new(-0.24, 0.44, 0.0),
-        radius: 0.07,
-        mass: 3.0,
-        parent: Some(RagdollBodyId::SpineUpper),
-    },
-    BodyDefinition {
-        id: RagdollBodyId::UpperArmR,
-        local_offset: Vec3::new(0.24, 0.44, 0.0),
-        radius: 0.07,
-        mass: 3.0,
-        parent: Some(RagdollBodyId::SpineUpper),
-    },
-    BodyDefinition {
-        id: RagdollBodyId::ForearmL,
-        local_offset: Vec3::new(-0.48, 0.40, 0.0),
-        radius: 0.06,
-        mass: 2.5,
-        parent: Some(RagdollBodyId::UpperArmL),
-    },
-    BodyDefinition {
-        id: RagdollBodyId::ForearmR,
-        local_offset: Vec3::new(0.48, 0.40, 0.0),
-        radius: 0.06,
-        mass: 2.5,
-        parent: Some(RagdollBodyId::UpperArmR),
-    },
-    BodyDefinition {
-        id: RagdollBodyId::ThighL,
-        local_offset: Vec3::new(-0.11, -0.33, 0.0),
-        radius: 0.085,
-        mass: 5.0,
-        parent: Some(RagdollBodyId::Pelvis),
-    },
-    BodyDefinition {
-        id: RagdollBodyId::ThighR,
-        local_offset: Vec3::new(0.11, -0.33, 0.0),
-        radius: 0.085,
-        mass: 5.0,
-        parent: Some(RagdollBodyId::Pelvis),
-    },
-    BodyDefinition {
-        id: RagdollBodyId::CalfL,
-        local_offset: Vec3::new(-0.11, -0.73, 0.0),
-        radius: 0.075,
-        mass: 4.0,
-        parent: Some(RagdollBodyId::ThighL),
-    },
-    BodyDefinition {
-        id: RagdollBodyId::CalfR,
-        local_offset: Vec3::new(0.11, -0.73, 0.0),
-        radius: 0.075,
-        mass: 4.0,
-        parent: Some(RagdollBodyId::ThighR),
-    },
-];
-
 fn apply_joint_limits(
     joint: SphericalJointBuilder,
     body_id: RagdollBodyId,
@@ -326,66 +253,63 @@ fn apply_joint_limits(
     }
 }
 
+/// Soft-mode joint limits. Wide enough that gravity can pull the corpse out of
+/// its spawn T-pose (arms need ~90° of swing to fall to the sides; the spine
+/// must fold a little for a believable crumple) while still preventing
+/// anatomically impossible poses.
 fn apply_soft_joint_limits(
     mut joint: GenericJointBuilder,
     body_id: RagdollBodyId,
 ) -> GenericJointBuilder {
     match body_id {
+        RagdollBodyId::SpineLower => {
+            joint = joint
+                .limits(JointAxis::AngX, [-0.50, 0.50])
+                .limits(JointAxis::AngY, [-0.40, 0.40])
+                .limits(JointAxis::AngZ, [-0.40, 0.40]);
+        }
+        RagdollBodyId::SpineUpper => {
+            joint = joint
+                .limits(JointAxis::AngX, [-0.42, 0.42])
+                .limits(JointAxis::AngY, [-0.35, 0.35])
+                .limits(JointAxis::AngZ, [-0.34, 0.34]);
+        }
         RagdollBodyId::Head => {
             joint = joint
-                .limits(JointAxis::AngX, [-0.65, 0.65])
-                .limits(JointAxis::AngY, [-0.95, 0.95])
-                .limits(JointAxis::AngZ, [-0.55, 0.55]);
+                .limits(JointAxis::AngX, [-0.75, 0.75])
+                .limits(JointAxis::AngY, [-1.05, 1.05])
+                .limits(JointAxis::AngZ, [-0.65, 0.65]);
         }
         RagdollBodyId::UpperArmL | RagdollBodyId::UpperArmR => {
             joint = joint
-                .limits(JointAxis::AngX, [-1.05, 0.95])
-                .limits(JointAxis::AngY, [-0.60, 0.60])
-                .limits(JointAxis::AngZ, [-0.70, 0.70]);
+                .limits(JointAxis::AngX, [-1.60, 1.30])
+                .limits(JointAxis::AngY, [-0.90, 0.90])
+                .limits(JointAxis::AngZ, [-1.20, 1.20]);
         }
         RagdollBodyId::ForearmL | RagdollBodyId::ForearmR => {
             joint = joint
-                .limits(JointAxis::AngX, [0.0, 1.45])
-                .limits(JointAxis::AngY, [-0.15, 0.15])
-                .limits(JointAxis::AngZ, [-0.15, 0.15]);
+                .limits(JointAxis::AngX, [0.0, 1.80])
+                .limits(JointAxis::AngY, [-0.20, 0.20])
+                .limits(JointAxis::AngZ, [-0.20, 0.20]);
         }
         RagdollBodyId::ThighL | RagdollBodyId::ThighR => {
             joint = joint
-                .limits(JointAxis::AngX, [-0.85, 0.50])
-                .limits(JointAxis::AngY, [-0.28, 0.28])
-                .limits(JointAxis::AngZ, [-0.22, 0.22]);
+                .limits(JointAxis::AngX, [-1.50, 0.70])
+                .limits(JointAxis::AngY, [-0.50, 0.50])
+                .limits(JointAxis::AngZ, [-0.45, 0.45]);
         }
         RagdollBodyId::CalfL | RagdollBodyId::CalfR => {
             joint = joint
-                .limits(JointAxis::AngX, [0.0, 1.40])
-                .limits(JointAxis::AngY, [-0.12, 0.12])
-                .limits(JointAxis::AngZ, [-0.12, 0.12]);
+                .limits(JointAxis::AngX, [0.0, 2.30])
+                .limits(JointAxis::AngY, [-0.15, 0.15])
+                .limits(JointAxis::AngZ, [-0.15, 0.15]);
         }
         _ => {}
     }
     joint
 }
 
-fn local_offset_for(body_id: RagdollBodyId) -> Option<Vec3> {
-    OILMAN_BODY_DEFS
-        .iter()
-        .find(|def| def.id == body_id)
-        .map(|def| def.local_offset)
-}
-
-fn local_axis_for(def: &BodyDefinition) -> Vec3 {
-    if let Some(parent_id) = def.parent {
-        if let Some(parent_offset) = local_offset_for(parent_id) {
-            let axis = def.local_offset - parent_offset;
-            if axis.length_squared() > 1.0e-6 {
-                return axis.normalize();
-            }
-        }
-    }
-    Vec3::Y
-}
-
-fn collider_for_body(def: &BodyDefinition) -> Collider {
+fn collider_for_body(def: &RagdollBodyDef) -> Collider {
     match def.id {
         RagdollBodyId::Pelvis => Collider::cuboid(0.12, 0.10, 0.10),
         RagdollBodyId::SpineLower | RagdollBodyId::SpineUpper => {
@@ -466,6 +390,45 @@ pub fn despawn_npc_with_bodies(
     commands.entity(npc_entity).despawn();
 }
 
+/// `CITYSIM_RAGDOLL_TEST_SECS=<n>`: kill every alive NPC `n` seconds after
+/// server start with a synthetic side-on shot impulse. Lets ragdolls be
+/// exercised end-to-end without aiming/shooting (unattended verification).
+pub fn debug_auto_kill_npcs(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut npcs: Query<(Entity, &NpcPosition, &mut Health), (With<Npc>, Without<NpcRagdoll>)>,
+    mut config: Local<Option<Option<f32>>>,
+    mut fired: Local<bool>,
+) {
+    let secs = *config.get_or_insert_with(|| {
+        std::env::var("CITYSIM_RAGDOLL_TEST_SECS")
+            .ok()
+            .and_then(|raw| raw.parse::<f32>().ok())
+    });
+    let Some(secs) = secs else { return };
+    if *fired || time.elapsed_secs() < secs {
+        return;
+    }
+    *fired = true;
+
+    let mut killed = 0usize;
+    for (entity, pos, mut health) in npcs.iter_mut() {
+        health.take_damage(100_000.0);
+        // Synthetic rifle-ish kill shot from the side, matching the impulse
+        // range produced by hit_characters on a lethal hit (mass-proportional
+        // application: 120 N·s ≈ 1.25 m/s whole-body shove).
+        let dir = Vec3::new(1.0, 0.35, 0.25).normalize();
+        commands.entity(entity).insert(NpcDeathImpact {
+            hit_point: pos.0 + Vec3::new(0.0, 0.35, 0.0),
+            impulse: dir * 120.0,
+        });
+        killed += 1;
+    }
+    if killed > 0 {
+        info!("CITYSIM_RAGDOLL_TEST: auto-killed {killed} NPC(s) for ragdoll testing");
+    }
+}
+
 pub fn activate_npc_ragdolls(
     mut commands: Commands,
     time: Res<Time>,
@@ -477,6 +440,7 @@ pub fn activate_npc_ragdolls(
             &Health,
             &NpcPosition,
             &NpcRotation,
+            &NpcVelocity,
             &mut NpcActivity,
             Option<&NpcDeathImpact>,
             Option<&NpcRagdoll>,
@@ -486,13 +450,13 @@ pub fn activate_npc_ragdolls(
     mut clients: Query<&mut MessageSender<NpcRagdollStarted>, (With<ClientOf>, With<Connected>)>,
 ) {
     let now = time.elapsed_secs();
-    for (npc_entity, npc, health, npc_pos, npc_rot, mut activity, death_impact, ragdoll) in
+    for (npc_entity, npc, health, npc_pos, npc_rot, npc_vel, mut activity, death_impact, ragdoll) in
         npcs.iter_mut()
     {
         if !health.is_dead() || ragdoll.is_some() {
             continue;
         }
-        if npc.archetype != NpcArchetype::Oilman {
+        if !matches!(npc.archetype, NpcArchetype::Oilman | NpcArchetype::Dummy) {
             commands.entity(npc_entity).remove::<NpcDeathImpact>();
             continue;
         }
@@ -501,13 +465,13 @@ pub fn activate_npc_ragdolls(
         // Match that frame here so authoritative ragdoll bodies line up with
         // mapped skeleton bones (left/right limbs and knees/elbows).
         let root_rotation = Quat::from_rotation_y(npc_rot.0 + RAGDOLL_VISUAL_YAW_OFFSET);
-        let mut spawned = Vec::with_capacity(OILMAN_BODY_DEFS.len());
+        let mut spawned = Vec::with_capacity(HUMANOID_RAGDOLL_BODIES.len());
         let mut by_id: HashMap<RagdollBodyId, (Entity, Vec3, Quat)> =
-            HashMap::with_capacity(OILMAN_BODY_DEFS.len());
+            HashMap::with_capacity(HUMANOID_RAGDOLL_BODIES.len());
 
-        for def in OILMAN_BODY_DEFS {
+        for def in HUMANOID_RAGDOLL_BODIES {
             let world_pos = npc_pos.0 + root_rotation * def.local_offset;
-            let local_axis = local_axis_for(&def);
+            let local_axis = ragdoll_body_axis(&def);
             let local_rot = Quat::from_rotation_arc(Vec3::Y, local_axis);
             let spawn_tf =
                 Transform::from_translation(world_pos).with_rotation(root_rotation * local_rot);
@@ -562,40 +526,24 @@ pub fn activate_npc_ragdolls(
                 // which looks like immediate ragdoll "breakdancing".
                 let parent_basis_local = Quat::IDENTITY;
                 let child_basis_local = (child_rot.inverse() * parent_rot).normalize();
-                if matches!(
-                    def.id,
-                    RagdollBodyId::SpineLower | RagdollBodyId::SpineUpper
-                ) {
-                    // Keep torso rigid to avoid fold/curl artifacts.
-                    let mut joint = FixedJointBuilder::new()
+                // Every link (torso included) is a limited spherical joint so
+                // the corpse can fold/crumple naturally; per-body limits keep
+                // it anatomical. The old rigid torso welds made the whole
+                // upper body fall as one T-posed plank.
+                let mut joint = apply_soft_joint_limits(
+                    GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
                         .local_anchor1(parent_anchor_local)
                         .local_anchor2(child_anchor_local)
                         .local_basis1(parent_basis_local)
-                        .local_basis2(child_basis_local)
-                        .build();
-                    // Disable parent-child contacts across ragdoll links.
-                    joint.set_contacts_enabled(false);
-                    commands
-                        .entity(*child_entity)
-                        .insert(ImpulseJoint::new(parent_entity, joint));
-                } else {
-                    // Limbs/head use limited spherical joints for a natural fall while
-                    // still preserving the spawned local joint frames.
-                    let mut joint = apply_soft_joint_limits(
-                        GenericJointBuilder::new(JointAxesMask::LOCKED_SPHERICAL_AXES)
-                            .local_anchor1(parent_anchor_local)
-                            .local_anchor2(child_anchor_local)
-                            .local_basis1(parent_basis_local)
-                            .local_basis2(child_basis_local),
-                        def.id,
-                    )
-                    .build();
-                    joint.set_contacts_enabled(false);
-                    commands.entity(*child_entity).insert(ImpulseJoint::new(
-                        parent_entity,
-                        TypedJoint::GenericJoint(joint),
-                    ));
-                }
+                        .local_basis2(child_basis_local),
+                    def.id,
+                )
+                .build();
+                joint.set_contacts_enabled(false);
+                commands.entity(*child_entity).insert(ImpulseJoint::new(
+                    parent_entity,
+                    TypedJoint::GenericJoint(joint),
+                ));
             } else {
                 let mut joint = apply_joint_limits(
                     SphericalJointBuilder::new()
@@ -611,24 +559,65 @@ pub fn activate_npc_ragdolls(
             }
         }
 
-        if let Some(impact) = death_impact {
-            let mut nearest = None;
-            let mut best_dist_sq = f32::INFINITY;
-            for (_def, entity, pos, _rot) in &spawned {
-                let dist_sq = pos.distance_squared(impact.hit_point);
-                if dist_sq < best_dist_sq {
-                    best_dist_sq = dist_sq;
-                    nearest = Some((*entity, *pos));
+        // Death knockback applied as EXPLICIT VELOCITIES, not ExternalImpulse:
+        // impulses applied during body initialization use rapier's
+        // collider-derived mass (AdditionalMassProperties hasn't been synced
+        // yet), which made corpses launch at ~10x the intended speed
+        // ("jet engine" kills). We know our intended masses, so we compute
+        // the velocity change ourselves — deterministic by construction.
+        {
+            let (impulse_mag, impulse_dir) = death_impact
+                .map(|impact| {
+                    (
+                        impact.impulse.length(),
+                        impact.impulse.normalize_or_zero(),
+                    )
+                })
+                .unwrap_or((0.0, Vec3::ZERO));
+            let total_mass: f32 = spawned
+                .iter()
+                .map(|(def, _, _, _)| def.mass.max(0.2))
+                .sum();
+            // Whole-body shove (Source-style): uniform velocity change plus
+            // the NPC's own movement momentum carried into the corpse.
+            let uniform_dv =
+                (impulse_mag * IMPULSE_UNIFORM_SHARE / total_mass.max(1.0)).min(1.6);
+            let base_velocity = npc_vel.0 + impulse_dir * uniform_dv;
+
+            // Localized extra kick + spin on the struck body.
+            let mut nearest: Option<(Entity, Vec3, f32)> = None;
+            if let Some(impact) = death_impact {
+                let mut best_dist_sq = f32::INFINITY;
+                for (def, entity, pos, _rot) in &spawned {
+                    let dist_sq = pos.distance_squared(impact.hit_point);
+                    if dist_sq < best_dist_sq {
+                        best_dist_sq = dist_sq;
+                        nearest = Some((*entity, *pos, def.mass.max(0.2)));
+                    }
                 }
             }
-            if let Some((body_entity, body_pos)) = nearest {
-                let scaled = if SOFT_RAGDOLL_MODE {
-                    impact.impulse * 0.18
-                } else {
-                    impact.impulse
-                };
-                let impulse = ExternalImpulse::at_point(scaled, impact.hit_point, body_pos);
-                commands.entity(body_entity).insert(impulse);
+
+            for (_def, entity, pos, _rot) in &spawned {
+                let mut linvel = base_velocity;
+                let mut angvel = Vec3::ZERO;
+                if let (Some(impact), Some((hit_entity, _hit_pos, hit_mass))) =
+                    (death_impact, nearest)
+                {
+                    if *entity == hit_entity {
+                        let local_dv = (impulse_mag * IMPULSE_LOCAL_SHARE / hit_mass)
+                            .min(IMPULSE_LOCAL_MAX_DV);
+                        linvel += impulse_dir * local_dv;
+                        // Spin from the off-center hit (angular impulse ~ r x J),
+                        // clamped so limbs twitch rather than helicopter.
+                        let lever = impact.hit_point - *pos;
+                        angvel = lever.cross(impulse_dir) * 30.0;
+                        let spin = angvel.length();
+                        if spin > 6.0 {
+                            angvel = angvel / spin * 6.0;
+                        }
+                    }
+                }
+                commands.entity(*entity).insert(Velocity { linvel, angvel });
             }
         }
 
@@ -699,10 +688,15 @@ pub fn stabilize_soft_ragdoll_bodies(mut bodies: Query<&mut Velocity, With<Ragdo
         if ang > RAGDOLL_MAX_ANGULAR_SPEED {
             velocity.angvel = velocity.angvel / ang * RAGDOLL_MAX_ANGULAR_SPEED;
         }
-        if velocity.linvel.length_squared() < 1.0e-4 {
+        // Zero near-rest velocities ONCE (guard on > 0.0): writing Velocity
+        // every tick would wake the bodies forever and cause endless
+        // micro-solving (visible corpse twitching, never sleeping).
+        let lin_sq = velocity.linvel.length_squared();
+        if lin_sq > 0.0 && lin_sq < 1.0e-4 {
             velocity.linvel = Vec3::ZERO;
         }
-        if velocity.angvel.length_squared() < 1.0e-4 {
+        let ang_sq = velocity.angvel.length_squared();
+        if ang_sq > 0.0 && ang_sq < 1.0e-4 {
             velocity.angvel = Vec3::ZERO;
         }
     }

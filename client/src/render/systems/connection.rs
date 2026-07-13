@@ -60,6 +60,7 @@ pub fn handle_start_connection(
 
     // Generate a unique client ID
     let client_id = rand::random::<u64>();
+    commands.insert_resource(crate::rail::RailLocalPeerId(client_id));
 
     // Build authentication (netcode connect token)
     let auth = Authentication::Manual {
@@ -117,6 +118,16 @@ pub fn handle_start_connection(
         MessageSender::<shared::items::ChestTransferRequest>::default(),
     ));
 
+    commands.entity(client_entity).insert((
+        MessageSender::<shared::protocol::CreateCompanyRequest>::default(),
+        MessageSender::<shared::protocol::BuildTrackRequest>::default(),
+        MessageSender::<shared::protocol::BuildStationRequest>::default(),
+        MessageSender::<shared::protocol::BuyTrainRequest>::default(),
+        MessageSender::<shared::protocol::AssignRouteRequest>::default(),
+        MessageSender::<shared::protocol::SetTrainCargoPolicyRequest>::default(),
+        MessageSender::<shared::protocol::DemolishRailRequest>::default(),
+    ));
+
     // Add server -> client message receivers (split to avoid tuple size limit)
     commands.entity(client_entity).insert((
         MessageReceiver::<shared::protocol::HitConfirm>::default(),
@@ -128,6 +139,7 @@ pub fn handle_start_connection(
         // Name submission response
         MessageReceiver::<shared::protocol::NameSubmissionResult>::default(),
         MessageReceiver::<shared::protocol::PlayerRoster>::default(),
+        MessageReceiver::<shared::protocol::RailCommandRejected>::default(),
     ));
 
     // Trigger the Connect event to actually initiate the connection

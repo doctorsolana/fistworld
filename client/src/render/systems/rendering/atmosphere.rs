@@ -160,10 +160,10 @@ pub(super) fn desert_atmosphere_settings_perf() -> AtmosphereSettings {
 
 pub(super) fn default_bloom_settings() -> Bloom {
     Bloom {
-        intensity: 0.08, // Lower = more stable on Metal
-        low_frequency_boost: 0.3,
-        low_frequency_boost_curvature: 0.5,
-        high_pass_frequency: 1.0, // Stricter filter on bright pixels
+        intensity: 0.12,
+        low_frequency_boost: 0.42,
+        low_frequency_boost_curvature: 0.55,
+        high_pass_frequency: 0.92,
         composite_mode: BloomCompositeMode::Additive,
         ..default()
     }

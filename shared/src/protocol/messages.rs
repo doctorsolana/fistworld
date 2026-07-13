@@ -2,6 +2,8 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{NpcArchetype, PlayerCharacter};
+use crate::economy::CargoKind;
+use crate::rail::{RouteStop, StationId, TrackSegmentId, TrainId};
 use crate::vehicle::VehicleInput;
 use crate::weapons::damage::HitZone;
 
@@ -281,10 +283,13 @@ pub struct SetPlayerCharacter {
     pub character: PlayerCharacter,
 }
 
-/// Client -> Server: debug request to spawn Oilman NPCs near the requesting player.
+/// Client -> Server: debug request to spawn NPCs near the requesting player.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct SpawnOilmanDebug {
     pub count: u16,
+    /// Which NPC archetype to spawn (Oilman, or Dummy for the gray
+    /// ragdoll-reference figure).
+    pub archetype: NpcArchetype,
 }
 
 /// Client -> Server: debug request to spawn physics test boxes near the requesting player.
@@ -390,6 +395,62 @@ pub struct PlayerRosterEntry {
     pub level: u32,
     pub prestige: u32,
     pub online: bool,
+}
+
+/// Client -> Server: create or join the player's railroad company.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct CreateCompanyRequest {
+    pub name: String,
+}
+
+/// Client -> Server: request a new freeform cubic rail segment.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct BuildTrackRequest {
+    pub start: Vec3,
+    pub control_a: Vec3,
+    pub control_b: Vec3,
+    pub end: Vec3,
+}
+
+/// Client -> Server: request a station owned by the player's company.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct BuildStationRequest {
+    pub position: Vec3,
+    pub name: String,
+}
+
+/// Client -> Server: buy a train at an owned station.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct BuyTrainRequest {
+    pub station: StationId,
+}
+
+/// Client -> Server: assign an ordered stop-list route to a train.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct AssignRouteRequest {
+    pub train: TrainId,
+    pub stops: Vec<RouteStop>,
+}
+
+/// Client -> Server: prefer a cargo type for a train.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct SetTrainCargoPolicyRequest {
+    pub train: TrainId,
+    pub cargo: Option<CargoKind>,
+}
+
+/// Client -> Server: demolish owned rail infrastructure.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct DemolishRailRequest {
+    pub track: Option<TrackSegmentId>,
+    pub station: Option<StationId>,
+    pub train: Option<TrainId>,
+}
+
+/// Server -> Client: authoritative command rejection reason.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct RailCommandRejected {
+    pub reason: String,
 }
 
 /// Fixed reduced-body id set for Oilman ragdoll sync.

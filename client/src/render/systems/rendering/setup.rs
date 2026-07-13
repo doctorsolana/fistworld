@@ -15,10 +15,21 @@ pub fn setup_rendering(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut scattering_media: ResMut<Assets<ScatteringMedium>>,
+    mut images: ResMut<Assets<Image>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    // Performance: directional light shadows are expensive, especially with multiple cascades.
-    // Use a moderate shadow map size to balance quality and cost.
-    commands.insert_resource(DirectionalLightShadowMap { size: 1024 });
+    // Shadow map resolution follows the shadow quality setting.
+    commands.insert_resource(DirectionalLightShadowMap {
+        size: settings.shadow_quality.shadow_map_size(),
+    });
+
+    // Offscreen scene target (render_scale) + native-res present camera/UI.
+    let scene_target_image = super::scaled_target::setup_scene_render_target(
+        &mut commands,
+        &mut images,
+        windows.single().ok(),
+        settings.render_scale,
+    );
 
     // With Atmosphere enabled, the sky is rendered procedurally, so ClearColor is mostly a fallback.
     commands.insert_resource(ClearColor(Color::BLACK));
@@ -37,13 +48,35 @@ pub fn setup_rendering(
         last_blend: -1.0,
     });
 
-    let color_grading = ColorGrading::with_identical_sections(
-        ColorGradingGlobal {
+    // Warm, slightly saturated outdoor grade. Shadows are lifted rather than
+    // crushed — the deep-shadow contrast is already provided by the physical
+    // sun:sky ratio, so crushing them again reads clinical.
+    let color_grading = ColorGrading {
+        global: ColorGradingGlobal {
             exposure: settings.grade_exposure.clamp(-2.0, 2.0),
+            temperature: 0.016,
+            tint: -0.004,
+            post_saturation: 1.07,
             ..default()
         },
-        ColorGradingSection::default(),
-    );
+        shadows: ColorGradingSection {
+            saturation: 1.04,
+            contrast: 1.03,
+            lift: 0.004,
+            ..default()
+        },
+        midtones: ColorGradingSection {
+            saturation: 1.04,
+            contrast: 1.05,
+            ..default()
+        },
+        highlights: ColorGradingSection {
+            saturation: 1.00,
+            contrast: 1.02,
+            gain: 0.97,
+            ..default()
+        },
+    };
 
     let mut camera = commands.spawn((
         Camera3d::default(),
@@ -84,10 +117,34 @@ pub fn setup_rendering(
         // SpatialListener defines where the "ears" are relative to the entity
         SpatialListener::new(0.1), // ~10cm between ears
     ));
+    // Render the 3D scene into the scaled offscreen target; the present camera
+    // upscales it to the window at native resolution.
+    camera.insert(super::scaled_target::scene_camera_target(
+        scene_target_image,
+    ));
     camera.insert(Projection::Perspective(PerspectiveProjection {
         near: crate::camera::CAMERA_NEAR_CLIP,
         ..default()
     }));
+    camera.insert((
+        DistanceFog {
+            color: Color::srgba(0.56, 0.61, 0.67, 0.12),
+            directional_light_color: Color::srgba(1.0, 0.88, 0.68, 0.18),
+            directional_light_exponent: 24.0,
+            falloff: FogFalloff::from_visibility_colors(
+                900.0,
+                Color::srgb(0.50, 0.53, 0.55),
+                Color::srgb(0.74, 0.76, 0.72),
+            ),
+        },
+        // Keep the quality-focused default explicit so future tuning does not fall back to blockier PCF.
+        ShadowFilteringMethod::Gaussian,
+    ));
+    // SSAO is opt-in: a fullscreen AO pass plus a depth/normal prepass is a
+    // heavy default on integrated GPUs.
+    if settings.ssao_enabled {
+        camera.insert(super::settings::default_ssao_settings());
+    }
     // Keep this out of the large tuple to avoid tuple-size bundle limits.
     camera.insert(crate::render::sniper_fisheye::SniperFisheye::default());
 

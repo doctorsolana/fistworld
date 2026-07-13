@@ -2,10 +2,10 @@
 //!
 //! Spawning world visuals and other static environment.
 
-use bevy::light::{light_consts::lux, CascadeShadowConfigBuilder, SunDisk};
+use bevy::light::{light_consts::lux, SunDisk};
 use bevy::prelude::*;
 
-use super::rendering::{FillLight, SunLight};
+use super::rendering::{FillLight, GraphicsSettings, SunLight};
 
 // =============================================================================
 // COMPONENTS
@@ -20,7 +20,11 @@ pub struct ClientWorldRoot;
 // =============================================================================
 
 /// Spawn the visual world
-pub fn spawn_world(mut commands: Commands, world_roots: Query<Entity, With<ClientWorldRoot>>) {
+pub fn spawn_world(
+    mut commands: Commands,
+    world_roots: Query<Entity, With<ClientWorldRoot>>,
+    settings: Res<GraphicsSettings>,
+) {
     if !world_roots.is_empty() {
         return;
     }
@@ -43,24 +47,16 @@ pub fn spawn_world(mut commands: Commands, world_roots: Query<Entity, With<Clien
         .spawn((
             SunLight,
             DirectionalLight {
-                // Use unfiltered sunlight intensity; the atmosphere will handle scattering.
-                illuminance: lux::RAW_SUNLIGHT,
-                shadows_enabled: true,
-                // Neutral sun color for a cleaner blue sky.
-                color: Color::WHITE,
+                // Overwritten every frame by the day/night cycle; keep the
+                // initial value consistent with its noon output.
+                illuminance: lux::DIRECT_SUNLIGHT,
+                shadows_enabled: settings.shadows_enabled,
+                color: Color::srgb(1.0, 0.97, 0.9),
                 ..default()
             },
-            // Performance: keep shadows enabled, but make them cheaper.
-            //
-            // Tradeoff: fewer cascades = cheaper, larger max distance = more coverage.
-            // This gives "cheap far shadows" while keeping a reasonable near range.
-            CascadeShadowConfigBuilder {
-                num_cascades: 3,
-                maximum_distance: 220.0,
-                first_cascade_far_bound: 12.0,
-                ..default()
-            }
-            .build(),
+            // Cascade count/range/resolution follow the shadow quality setting;
+            // every cascade re-renders scene geometry each frame.
+            settings.shadow_quality.build_cascades(),
             // Brighter sun disk for that harsh desert sun feel
             SunDisk {
                 angular_size: 0.00930842, // Same as EARTH
@@ -78,7 +74,7 @@ pub fn spawn_world(mut commands: Commands, world_roots: Query<Entity, With<Clien
             DirectionalLight {
                 illuminance: 0.0, // Driven by day/night cycle
                 shadows_enabled: false,
-                color: Color::WHITE,
+                color: Color::srgb(0.62, 0.72, 0.92),
                 ..default()
             },
             Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.5, -0.5, 0.0)),
@@ -86,11 +82,10 @@ pub fn spawn_world(mut commands: Commands, world_roots: Query<Entity, With<Clien
         .id();
     commands.entity(root).add_child(fill_light_entity);
 
-    // Initial ambient (will be updated by day/night cycle)
-    // Neutral daylight baseline.
     commands.insert_resource(GlobalAmbientLight {
-        color: Color::srgb(0.75, 0.82, 0.92),
-        brightness: 80.0, // Brighter for desert environment
+        color: Color::srgb(0.46, 0.55, 0.68),
+        // Overwritten every frame by the day/night cycle; matches its noon output.
+        brightness: 2600.0,
         affects_lightmapped_meshes: true,
     });
 

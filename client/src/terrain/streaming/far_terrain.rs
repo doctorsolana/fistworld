@@ -58,18 +58,40 @@ pub(crate) fn ensure_far_terrain_mesh(
     commands.entity(world_root).add_child(entity);
 }
 
+/// In-flight async rebuild of the far-terrain hole index buffer.
+///
+/// The hole is recut every time the streaming anchor crosses a chunk boundary,
+/// and building ~131k triangles of indices (a ~3MB Vec) is too expensive to do
+/// on the main thread; the actual index generation runs on the compute pool
+/// and only the (unavoidable) mesh upload happens here.
+#[derive(Resource, Default)]
+pub(crate) struct FarTerrainHoleTask {
+    pending: Option<PendingHoleRebuild>,
+}
+
+pub(crate) struct PendingHoleRebuild {
+    center_cell: IVec2,
+    view_distance: i32,
+    task: Task<Vec<u32>>,
+}
+
 pub(crate) fn update_far_terrain_hole(
     mut meshes: ResMut<Assets<Mesh>>,
     mut far_query: Query<(&Mesh3d, &mut FarTerrainState), With<FarTerrain>>,
-    player_query: Query<&PlayerPosition, With<LocalPlayer>>,
+    player_query: AnchorPlayer,
+    camera_query: AnchorCamera,
     streaming: Res<TerrainStreamingState>,
     settings: Res<GraphicsSettings>,
+    mut hole_task: ResMut<FarTerrainHoleTask>,
 ) {
     if !settings.far_terrain_enabled {
         return;
     }
 
-    let Ok(player_pos) = player_query.single() else {
+    let Some(anchor_pos) = streaming_anchor(&player_query, &camera_query) else {
+        return;
+    };
+    let Ok((mesh_handle, mut state)) = far_query.single_mut() else {
         return;
     };
 
@@ -78,8 +100,29 @@ pub(crate) fn update_far_terrain_hole(
     } else {
         settings.view_distance
     };
-    let center_chunk = ChunkCoord::from_world_pos(player_pos.0);
+    let center_chunk = ChunkCoord::from_world_pos(anchor_pos);
     let center_cell = IVec2::new(center_chunk.x, center_chunk.z);
+
+    // Apply a finished rebuild (or drop it if the target moved meanwhile).
+    if let Some(pending) = hole_task.pending.as_mut() {
+        let Some(indices) = block_on(poll_once(&mut pending.task)) else {
+            return;
+        };
+        let (done_cell, done_view) = (pending.center_cell, pending.view_distance);
+        hole_task.pending = None;
+        if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
+            mesh.insert_indices(bevy::mesh::Indices::U32(indices));
+        }
+        state.center_cell = done_cell;
+        state.view_distance = done_view;
+        // Fall through: if the anchor moved while the task ran, queue the next
+        // rebuild immediately below.
+    }
+
+    if state.center_cell == center_cell && state.view_distance == view_distance {
+        return;
+    }
+
     let center_chunk_origin = center_chunk.world_pos();
     let inner_center = Vec2::new(
         center_chunk_origin.x + CHUNK_SIZE * 0.5,
@@ -89,23 +132,19 @@ pub(crate) fn update_far_terrain_hole(
     let origin = far_terrain_origin();
     let spacing = far_terrain_spacing();
 
-    for (mesh_handle, mut state) in far_query.iter_mut() {
-        if state.center_cell == center_cell && state.view_distance == view_distance {
-            continue;
-        }
-        if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
-            rebuild_far_terrain_indices(
-                mesh,
+    hole_task.pending = Some(PendingHoleRebuild {
+        center_cell,
+        view_distance,
+        task: AsyncComputeTaskPool::get().spawn(async move {
+            build_far_terrain_indices(
                 origin,
                 spacing,
                 inner_center,
                 inner_half,
                 FAR_TERRAIN_RESOLUTION,
-            );
-        }
-        state.center_cell = center_cell;
-        state.view_distance = view_distance;
-    }
+            )
+        }),
+    });
 }
 
 fn far_terrain_origin() -> Vec2 {

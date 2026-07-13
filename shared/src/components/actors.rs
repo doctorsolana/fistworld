@@ -29,6 +29,10 @@ pub enum NpcArchetype {
     #[default]
     Oilman,
     DesertOutpost,
+    /// Untextured reference dummy whose visual is built directly from the
+    /// ragdoll body definitions (no skeleton/bind-pose mapping) — ground
+    /// truth for diagnosing ragdoll issues.
+    Dummy,
 }
 
 /// Which player character model to use on the client.

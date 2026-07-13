@@ -58,12 +58,14 @@ pub fn handle_npc_spawned(
     mut commands: Commands,
     time: Res<Time>,
     assets: Option<Res<NpcAssets>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     new_npcs: Query<(Entity, &Npc, &NpcPosition, Option<&NpcRotation>), Added<Npc>>,
 ) {
     let Some(assets) = assets else { return };
     let now = time.elapsed_secs();
 
-    for (entity, _npc, pos, rot) in new_npcs.iter() {
+    for (entity, npc, pos, rot) in new_npcs.iter() {
         let yaw = rot.map(|r| r.0).unwrap_or(0.0);
         // Ensure NPC entity has full spatial components for hierarchy propagation.
         // Without GlobalTransform, children with GlobalTransform trigger B0004 warnings.
@@ -77,6 +79,13 @@ pub fn handle_npc_spawned(
             NpcRagdollNetState::default(),
             NoFrustumCulling,
         ));
+
+        // Reference dummy: gray primitives built 1:1 from the shared ragdoll
+        // body table — no skeleton, no GLB, nothing to mis-map.
+        if npc.archetype == shared::components::NpcArchetype::Dummy {
+            spawn_dummy_body_parts(&mut commands, entity, &mut meshes, &mut materials);
+            continue;
+        }
 
         let scene = assets.scene.clone();
 
@@ -97,6 +106,88 @@ pub fn handle_npc_spawned(
             model.insert(NeedsDoubleSidedMaterials);
         });
     }
+}
+
+/// Build the reference Dummy's visual: one gray primitive per ragdoll body,
+/// with shapes/orientations matching the server colliders exactly. While the
+/// dummy is alive they sit in the table's T-pose layout under the NPC root;
+/// during ragdoll each part is driven directly from its streamed body pose.
+fn spawn_dummy_body_parts(
+    commands: &mut Commands,
+    npc_entity: Entity,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    use shared::npc::{ragdoll_body_axis, HUMANOID_RAGDOLL_BODIES};
+    use shared::protocol::RagdollBodyId as B;
+
+    let gray = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.62, 0.62, 0.65),
+        perceptual_roughness: 0.85,
+        metallic: 0.0,
+        ..Default::default()
+    });
+    let nose_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.15, 0.15, 0.18),
+        perceptual_roughness: 0.9,
+        metallic: 0.0,
+        ..Default::default()
+    });
+    let nose_mesh = meshes.add(Cuboid::new(0.05, 0.05, 0.10));
+
+    commands.entity(npc_entity).with_children(|parent| {
+        for def in HUMANOID_RAGDOLL_BODIES.iter() {
+            // Mirror collider_for_body's shapes (server/src/ai/ragdoll.rs).
+            let mesh = match def.id {
+                B::Pelvis => meshes.add(Cuboid::new(0.24, 0.20, 0.20)),
+                B::SpineLower | B::SpineUpper => {
+                    meshes.add(Capsule3d::new(def.radius.max(0.05), 0.16))
+                }
+                B::Head => meshes.add(Sphere::new(def.radius.max(0.05))),
+                B::UpperArmL | B::UpperArmR => {
+                    meshes.add(Capsule3d::new((def.radius * 0.85).max(0.04), 0.22))
+                }
+                B::ForearmL | B::ForearmR => {
+                    meshes.add(Capsule3d::new((def.radius * 0.8).max(0.04), 0.26))
+                }
+                B::ThighL | B::ThighR => {
+                    meshes.add(Capsule3d::new((def.radius * 0.9).max(0.05), 0.32))
+                }
+                B::CalfL | B::CalfR => {
+                    meshes.add(Capsule3d::new((def.radius * 0.85).max(0.045), 0.30))
+                }
+                _ => meshes.add(Sphere::new(def.radius.max(0.04))),
+            };
+
+            let mut part = parent.spawn((
+                NpcDummyBody { body: def.id },
+                Mesh3d(mesh),
+                MeshMaterial3d(gray.clone()),
+                Transform::from_translation(def.local_offset)
+                    .with_rotation(Quat::from_rotation_arc(Vec3::Y, ragdoll_body_axis(def))),
+                GlobalTransform::default(),
+                Visibility::Inherited,
+                InheritedVisibility::default(),
+                NoFrustumCulling,
+            ));
+
+            // A dark "nose" on the head makes facing/inversion instantly
+            // visible (it follows the head body pose during ragdoll).
+            if def.id == B::Head {
+                part.with_children(|head| {
+                    head.spawn((
+                        Mesh3d(nose_mesh.clone()),
+                        MeshMaterial3d(nose_material.clone()),
+                        Transform::from_xyz(0.0, 0.02, -(def.radius + 0.04)),
+                        GlobalTransform::default(),
+                        Visibility::Inherited,
+                        InheritedVisibility::default(),
+                        NoFrustumCulling,
+                    ));
+                });
+            }
+        }
+    });
 }
 
 /// Add `AnimationPlayer` + `AnimationTarget`s to the spawned NPC hierarchy.
@@ -159,17 +250,46 @@ pub fn setup_npc_rig(
             continue;
         };
 
+        // Compose the transform chain from the NPC root entity down to (but
+        // excluding) the rig root: NpcModelRoot (feet offset + PI yaw) plus
+        // any intermediate scene nodes. Needed so ragdoll math can relate
+        // bind-pose bone frames to the NPC root frame.
+        let mut prefix_chain: Vec<Entity> = Vec::new();
+        let mut cursor = rig_root;
+        while let Ok(parent) = parents_q.get(cursor).map(|p| p.parent()) {
+            if parent == owner {
+                break;
+            }
+            prefix_chain.push(parent);
+            cursor = parent;
+        }
+        let mut prefix = Transform::IDENTITY;
+        for entity in prefix_chain.iter().rev() {
+            if let Ok(tf) = transforms_q.get(*entity) {
+                prefix = prefix.mul_transform(*tf);
+            }
+        }
+
         let mut bone_map: HashMap<RagdollBodyId, (Entity, i32)> = HashMap::new();
-        let mut bind_pose_all_bones: Vec<(Entity, Quat)> = Vec::new();
-        let mut stack: Vec<(Entity, Vec<Name>)> = vec![(rig_root, vec![root_name.clone()])];
-        while let Some((e, path)) = stack.pop() {
+        let mut rig_bones: Vec<RagdollRigBone> = Vec::new();
+        // DFS stack: (entity, name path, parent index in rig_bones, parent rel transform)
+        let mut stack: Vec<(Entity, Vec<Name>, Option<usize>, Transform)> =
+            vec![(rig_root, vec![root_name.clone()], None, prefix)];
+        while let Some((e, path, parent_idx, parent_rel)) = stack.pop() {
             commands.entity(e).insert((
                 AnimationTargetId::from_names(path.iter()),
                 AnimatedBy(rig_root),
             ));
-            if let Ok(tf) = transforms_q.get(e) {
-                bind_pose_all_bones.push((e, tf.rotation));
-            }
+            let bind_local = transforms_q.get(e).copied().unwrap_or_default();
+            let rel = parent_rel.mul_transform(bind_local);
+            let bone_index = rig_bones.len();
+            rig_bones.push(RagdollRigBone {
+                entity: e,
+                parent: parent_idx,
+                body: None, // resolved below once name priorities settle
+                bind_local,
+                bind_rel: rel,
+            });
             if let Some(current_name) = path.last() {
                 if let Some(body_id) = ragdoll_body_id_from_name(current_name.as_str()) {
                     let priority = ragdoll_body_match_priority(current_name.as_str());
@@ -189,7 +309,7 @@ pub fn setup_npc_rig(
                     if let Ok(child_name) = names_q.get(child) {
                         child_path.push(child_name.clone());
                     }
-                    stack.push((child, child_path));
+                    stack.push((child, child_path, Some(bone_index), rel));
                 }
             }
         }
@@ -215,21 +335,45 @@ pub fn setup_npc_rig(
                 finalized_bones.len()
             );
         }
-        let body_local_rotations = finalized_bones
+
+        // Back-fill which streamed body drives each bone.
+        let body_by_entity: HashMap<Entity, RagdollBodyId> = finalized_bones
             .iter()
-            .filter_map(|(body, entity)| {
-                transforms_q
-                    .get(*entity)
-                    .ok()
-                    .map(|tf| (*body, tf.rotation))
-            })
+            .map(|(body, entity)| (*entity, *body))
             .collect();
+        for bone in rig_bones.iter_mut() {
+            bone.body = body_by_entity.get(&bone.entity).copied();
+        }
+
+        // Hips anchor: bind translation of the pelvis bone relative to the
+        // NPC root (recompute the rel chain for just that bone).
+        let hips_index = rig_bones
+            .iter()
+            .position(|bone| bone.body == Some(RagdollBodyId::Pelvis));
+        let hips_offset_from_root = hips_index
+            .map(|index| {
+                let mut chain = Vec::new();
+                let mut cursor = Some(index);
+                while let Some(i) = cursor {
+                    chain.push(i);
+                    cursor = rig_bones[i].parent;
+                }
+                let mut rel = prefix;
+                for i in chain.iter().rev() {
+                    rel = rel.mul_transform(rig_bones[*i].bind_local);
+                }
+                rel.translation
+            })
+            .unwrap_or(Vec3::ZERO);
+
         commands.entity(rig_root).insert(NpcBoneMap {
             bones: finalized_bones,
         });
-        commands.entity(rig_root).insert(NpcBindPose {
-            all_bones: bind_pose_all_bones,
-            body_local_rotations,
+        commands.entity(rig_root).insert(NpcRagdollRig {
+            prefix,
+            bones: rig_bones,
+            hips_offset_from_root,
+            hips_index,
         });
 
         commands.entity(model_root).remove::<NeedsNpcRigSetup>();

@@ -1,18 +1,24 @@
 use bevy::prelude::*;
 use shared::building::{build_zones_by_chunk, point_in_any_build_zone_entries, BuildZoneEntry};
 use shared::building::{BuildingPosition, PlacedBuilding};
-use shared::terrain::WorldTerrain;
+use shared::props::PropSpawn;
+use shared::terrain::{WorldTerrain, CHUNK_SIZE};
 use std::collections::HashSet;
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
+use crate::streaming::{streaming_anchor, AnchorCamera, AnchorPlayer};
 use crate::terrain::{LoadedChunks, PerfHitchStats};
 
 use super::foliage::needs_foliage_materials;
 use super::{
     try_spawn_simple_prop_mesh, BuildZoneChunkIndex, EnvironmentProp, LoadedPropChunks,
-    NeedsFoliageMaterials, PendingPropVisibility, PropAssets, PropChunkIndex, PropKindTag,
-    SimplePropMeshCache, TreeActiveLod, TreeLodEntities, TreeLodRoot, TreeLodRuntimeState,
+    NeedsFoliageMaterials, PendingPropSpawns, PendingPropVisibility, PropAssets, PropChunkIndex,
+    PropKindTag, SimplePropMeshCache, TreeActiveLod, TreeLodMeshHandles, TreeLodRoot,
+    TreeLodRuntimeState,
 };
+
+/// Maximum prop instances realized per frame across all pending chunks.
+const MAX_PROP_INSTANCE_SPAWNS_PER_FRAME: usize = 48;
 
 /// When a new building is placed, invalidate prop chunks that overlap with its build zone.
 pub(super) fn invalidate_props_for_new_buildings(
@@ -21,6 +27,7 @@ pub(super) fn invalidate_props_for_new_buildings(
     changed_buildings: Query<Entity, Or<(Changed<PlacedBuilding>, Changed<BuildingPosition>)>>,
     mut removed_buildings: RemovedComponents<PlacedBuilding>,
     mut loaded_prop_chunks: ResMut<LoadedPropChunks>,
+    mut pending_spawns: ResMut<PendingPropSpawns>,
     mut prop_chunk_index: ResMut<PropChunkIndex>,
     mut build_zone_index: ResMut<BuildZoneChunkIndex>,
 ) {
@@ -36,6 +43,7 @@ pub(super) fn invalidate_props_for_new_buildings(
             for cz in min_chunk_z..=max_chunk_z {
                 let coord = shared::terrain::ChunkCoord::new(cx, cz);
                 if loaded_prop_chunks.chunks.remove(&coord) {
+                    pending_spawns.discard_chunk(coord);
                     if let Some(entities) = prop_chunk_index.by_chunk.remove(&coord) {
                         for entity in entities {
                             commands.entity(entity).despawn();
@@ -67,6 +75,7 @@ pub(super) fn invalidate_props_for_new_buildings(
             }
         }
         loaded_prop_chunks.chunks.clear();
+        pending_spawns.queue.clear();
         prop_chunk_index.by_chunk.clear();
     }
 }
@@ -99,17 +108,26 @@ pub(super) fn sync_build_zone_chunk_index(
 }
 
 /// Spawn props for newly loaded terrain chunks.
+///
+/// Two-stage streaming: at most one chunk per frame has its spawn list
+/// *generated* and enqueued, and at most `MAX_PROP_INSTANCE_SPAWNS_PER_FRAME`
+/// instances are *realized* per frame across the queue, so dense forest chunks
+/// no longer land as a single-frame hitch.
 pub(super) fn spawn_chunk_props(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     terrain: Res<WorldTerrain>,
+    anchor: (AnchorPlayer, AnchorCamera),
     prop_assets: Option<Res<PropAssets>>,
     mut simple_mesh_cache: ResMut<SimplePropMeshCache>,
-    gltfs: Option<Res<Assets<bevy::gltf::Gltf>>>,
-    gltf_nodes: Option<Res<Assets<bevy::gltf::GltfNode>>>,
-    gltf_meshes: Option<Res<Assets<bevy::gltf::GltfMesh>>>,
+    gltf_assets: (
+        Option<Res<Assets<bevy::gltf::Gltf>>>,
+        Option<Res<Assets<bevy::gltf::GltfNode>>>,
+        Option<Res<Assets<bevy::gltf::GltfMesh>>>,
+    ),
     loaded_chunks: Res<LoadedChunks>,
     mut loaded_prop_chunks: ResMut<LoadedPropChunks>,
+    mut pending_spawns: ResMut<PendingPropSpawns>,
     mut prop_chunk_index: ResMut<PropChunkIndex>,
     build_zone_index: Res<BuildZoneChunkIndex>,
     world_root_query: Query<Entity, With<ClientWorldRoot>>,
@@ -117,7 +135,12 @@ pub(super) fn spawn_chunk_props(
     mut perf: ResMut<PerfHitchStats>,
 ) {
     let start = std::time::Instant::now();
+    let (player_query, camera_query) = anchor;
+    let (gltfs, gltf_nodes, gltf_meshes) = gltf_assets;
     let Some(assets) = prop_assets else { return };
+    let Some(anchor_pos) = streaming_anchor(&player_query, &camera_query) else {
+        return;
+    };
     let Ok(world_root) = world_root_query.single() else {
         return;
     };
@@ -125,140 +148,167 @@ pub(super) fn spawn_chunk_props(
         return;
     }
 
-    // Find chunks that need props (limit per frame to avoid hitching during streaming).
-    let max_prop_chunks_per_frame = 1usize;
-    let mut coords_to_spawn: Vec<shared::terrain::ChunkCoord> = Vec::new();
+    // Stage 1: enqueue at most one new chunk's spawn list per frame.
+    // Props stream independently from terrain. Terrain can stay loaded farther out for silhouettes,
+    // while dense forests/ground clutter should only exist as live entities near the player.
+    let player_chunk = shared::terrain::ChunkCoord::from_world_pos(anchor_pos);
+    let prop_radius = prop_stream_radius_chunks(&settings);
+    let mut desired: Vec<shared::terrain::ChunkCoord> = player_chunk
+        .chunks_in_radius(prop_radius)
+        .into_iter()
+        .filter(|coord| loaded_chunks.chunks.contains(coord))
+        .collect();
+    desired.sort_by_key(|coord| {
+        let dx = (coord.x - player_chunk.x).abs();
+        let dz = (coord.z - player_chunk.z).abs();
+        dx.max(dz)
+    });
 
-    for coord in loaded_chunks.chunks.iter() {
-        if loaded_prop_chunks.chunks.contains(coord) {
+    for coord in desired {
+        if loaded_prop_chunks.chunks.contains(&coord) {
             continue;
         }
-        coords_to_spawn.push(*coord);
-        if coords_to_spawn.len() >= max_prop_chunks_per_frame {
-            break;
-        }
-    }
-
-    if coords_to_spawn.is_empty() {
-        return;
-    }
-
-    let mut spawned_instances = 0u32;
-    for coord in coords_to_spawn.iter() {
-        let chunk_zones = build_zone_index.by_chunk.get(coord);
-
-        let spawns = shared::props::generate_chunk_prop_spawns(&terrain.generator, *coord);
-        for spawn in spawns {
-            // Skip props inside build zones.
-            if let Some(chunk_zones) = chunk_zones {
+        let chunk_zones = build_zone_index.by_chunk.get(&coord);
+        let mut spawns = shared::props::generate_chunk_prop_spawns(&terrain.generator, coord);
+        if let Some(chunk_zones) = chunk_zones {
+            spawns.retain(|spawn| {
                 let point_xz = Vec2::new(spawn.position.x, spawn.position.z);
-                if point_in_any_build_zone_entries(point_xz, chunk_zones) {
-                    continue;
-                }
-            }
+                !point_in_any_build_zone_entries(point_xz, chunk_zones)
+            });
+        }
+        // Mark loaded immediately so the chunk is not re-enqueued while its
+        // instances trickle in from the queue.
+        loaded_prop_chunks.chunks.insert(coord);
+        perf.props_chunks_spawned += 1;
+        if !spawns.is_empty() {
+            pending_spawns.queue.push_back((coord, spawns));
+        }
+        break;
+    }
 
-            // Use terrain height (includes modifications).
-            let adjusted_y = terrain.get_height(spawn.position.x, spawn.position.z);
-            let adjusted_position = Vec3::new(spawn.position.x, adjusted_y, spawn.position.z);
-
-            let prop = commands
-                .spawn((
-                    EnvironmentProp { chunk: spawn.chunk },
-                    spawn.render_tuning,
-                    PendingPropVisibility,
-                    Transform::from_translation(adjusted_position)
-                        .with_rotation(spawn.rotation)
-                        .with_scale(Vec3::splat(spawn.scale)),
-                    GlobalTransform::default(),
-                    Visibility::Hidden,
-                    InheritedVisibility::default(),
-                ))
-                .id();
-
-            if let Some(kind) = spawn.kind {
-                commands.entity(prop).insert(PropKindTag(kind));
-                if let Some(tree_meshes) = assets.tree_meshes.get(&kind) {
-                    // Explicitly spawn LOD meshes for trees to ensure instancing across identical meshes.
-                    commands.entity(prop).insert(TreeLodRoot);
-                    let mut tree_lods = TreeLodEntities::default();
-                    commands.entity(prop).with_children(|parent| {
-                        let lod0 = parent
-                            .spawn((
-                                Name::new("LOD0"),
-                                Mesh3d(tree_meshes.lod0.clone()),
-                                MeshMaterial3d(tree_meshes.material.clone()),
-                                Transform::IDENTITY,
-                                Visibility::Inherited,
-                                InheritedVisibility::default(),
-                            ))
-                            .id();
-                        tree_lods.lod0 = Some(lod0);
-                        if let Some(lod1_mesh) = tree_meshes.lod1.as_ref() {
-                            let lod1 = parent
-                                .spawn((
-                                    Name::new("LOD1"),
-                                    Mesh3d(lod1_mesh.clone()),
-                                    MeshMaterial3d(tree_meshes.material.clone()),
-                                    Transform::IDENTITY,
-                                    Visibility::Inherited,
-                                    InheritedVisibility::default(),
-                                ))
-                                .id();
-                            tree_lods.lod1 = Some(lod1);
-                        }
-                    });
-                    commands.entity(prop).insert((
-                        tree_lods,
-                        TreeLodRuntimeState {
-                            active_lod: TreeActiveLod::Hidden,
-                            casts_shadows: spawn.render_tuning.casts_shadows,
-                        },
-                    ));
-                } else {
-                    let spawned_simple = try_spawn_simple_prop_mesh(
-                        &mut commands,
-                        prop,
-                        kind,
-                        &assets,
-                        &mut simple_mesh_cache,
-                        gltfs.as_deref(),
-                        gltf_nodes.as_deref(),
-                        gltf_meshes.as_deref(),
-                    );
-                    if !spawned_simple {
-                        let scene = assets
-                            .scenes
-                            .get(&kind)
-                            .cloned()
-                            .unwrap_or_else(|| asset_server.load(spawn.scene_path.clone()));
-                        commands.entity(prop).insert(SceneRoot(scene));
-                    }
-                }
-                if needs_foliage_materials(kind) {
-                    commands.entity(prop).insert(NeedsFoliageMaterials);
-                }
-            } else {
-                let scene = asset_server.load(spawn.scene_path.clone());
-                commands.entity(prop).insert(SceneRoot(scene));
-            }
+    // Stage 2: realize a bounded number of queued instances.
+    let mut budget = MAX_PROP_INSTANCE_SPAWNS_PER_FRAME;
+    let mut spawned_instances = 0u32;
+    while budget > 0 {
+        let Some((coord, spawns)) = pending_spawns.queue.front_mut() else {
+            break;
+        };
+        let coord = *coord;
+        let take = budget.min(spawns.len());
+        for spawn in spawns.drain(..take) {
+            let prop = spawn_prop_instance(
+                &mut commands,
+                &asset_server,
+                &terrain,
+                &assets,
+                &mut simple_mesh_cache,
+                gltfs.as_deref(),
+                gltf_nodes.as_deref(),
+                gltf_meshes.as_deref(),
+                world_root,
+                spawn,
+            );
             prop_chunk_index
                 .by_chunk
-                .entry(spawn.chunk)
+                .entry(coord)
                 .or_default()
                 .push(prop);
-            commands.entity(world_root).add_child(prop);
             spawned_instances += 1;
         }
+        budget -= take;
+        if pending_spawns
+            .queue
+            .front()
+            .is_some_and(|(_, spawns)| spawns.is_empty())
+        {
+            pending_spawns.queue.pop_front();
+        }
+    }
 
-        loaded_prop_chunks.chunks.insert(*coord);
-    }
-    if !coords_to_spawn.is_empty() {
-        perf.props_chunks_spawned += coords_to_spawn.len() as u32;
-    }
     if spawned_instances > 0 {
         perf.props_instances_spawned += spawned_instances;
     }
     perf.props_spawn_ms += start.elapsed().as_secs_f32() * 1000.0;
+}
+
+fn spawn_prop_instance(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    terrain: &WorldTerrain,
+    assets: &PropAssets,
+    simple_mesh_cache: &mut SimplePropMeshCache,
+    gltfs: Option<&Assets<bevy::gltf::Gltf>>,
+    gltf_nodes: Option<&Assets<bevy::gltf::GltfNode>>,
+    gltf_meshes: Option<&Assets<bevy::gltf::GltfMesh>>,
+    world_root: Entity,
+    spawn: PropSpawn,
+) -> Entity {
+    // Use terrain height (includes modifications).
+    let adjusted_y = terrain.get_height(spawn.position.x, spawn.position.z);
+    let adjusted_position = Vec3::new(spawn.position.x, adjusted_y, spawn.position.z);
+
+    let prop = commands
+        .spawn((
+            EnvironmentProp { chunk: spawn.chunk },
+            spawn.render_tuning,
+            PendingPropVisibility,
+            Transform::from_translation(adjusted_position)
+                .with_rotation(spawn.rotation)
+                .with_scale(Vec3::splat(spawn.scale)),
+            GlobalTransform::default(),
+            Visibility::Hidden,
+            InheritedVisibility::default(),
+        ))
+        .id();
+
+    if let Some(kind) = spawn.kind {
+        commands.entity(prop).insert(PropKindTag(kind));
+        if let Some(tree_meshes) = assets.tree_meshes.get(&kind) {
+            // Keep trees as single render entities. The LOD system swaps mesh handles on
+            // the root instead of maintaining child hierarchies for every tree instance.
+            commands.entity(prop).insert((
+                Mesh3d(tree_meshes.lod0.clone()),
+                MeshMaterial3d(tree_meshes.material.clone()),
+                TreeLodRoot,
+                TreeLodMeshHandles {
+                    lod0: tree_meshes.lod0.clone(),
+                    lod1: tree_meshes.lod1.clone(),
+                },
+                TreeLodRuntimeState {
+                    active_lod: TreeActiveLod::Hidden,
+                    casts_shadows: spawn.render_tuning.casts_shadows,
+                },
+            ));
+        } else {
+            let spawned_simple = try_spawn_simple_prop_mesh(
+                commands,
+                prop,
+                kind,
+                assets,
+                simple_mesh_cache,
+                gltfs,
+                gltf_nodes,
+                gltf_meshes,
+            );
+            if !spawned_simple {
+                let scene = assets
+                    .scenes
+                    .get(&kind)
+                    .cloned()
+                    .unwrap_or_else(|| asset_server.load(spawn.scene_path.clone()));
+                commands.entity(prop).insert(SceneRoot(scene));
+            }
+        }
+        if needs_foliage_materials(kind) {
+            commands.entity(prop).insert(NeedsFoliageMaterials);
+        }
+    } else {
+        let scene = asset_server.load(spawn.scene_path.clone());
+        commands.entity(prop).insert(SceneRoot(scene));
+    }
+
+    commands.entity(world_root).add_child(prop);
+    prop
 }
 
 pub(super) fn sync_props_enabled_state(
@@ -266,6 +316,7 @@ pub(super) fn sync_props_enabled_state(
     settings: Res<GraphicsSettings>,
     props: Query<Entity, With<EnvironmentProp>>,
     mut loaded_prop_chunks: ResMut<LoadedPropChunks>,
+    mut pending_spawns: ResMut<PendingPropSpawns>,
     mut prop_chunk_index: ResMut<PropChunkIndex>,
 ) {
     if !settings.is_changed() {
@@ -279,21 +330,39 @@ pub(super) fn sync_props_enabled_state(
         commands.entity(entity).despawn();
     }
     loaded_prop_chunks.chunks.clear();
+    pending_spawns.queue.clear();
     prop_chunk_index.by_chunk.clear();
 }
 
 /// Clean up props when their chunk is unloaded.
 pub(super) fn cleanup_chunk_props(
     mut commands: Commands,
+    player_query: AnchorPlayer,
+    camera_query: AnchorCamera,
+    settings: Res<GraphicsSettings>,
     loaded_chunks: Res<LoadedChunks>,
     mut loaded_prop_chunks: ResMut<LoadedPropChunks>,
+    mut pending_spawns: ResMut<PendingPropSpawns>,
     mut prop_chunk_index: ResMut<PropChunkIndex>,
 ) {
-    // Find chunks that are no longer loaded.
+    let player_chunk = streaming_anchor(&player_query, &camera_query)
+        .map(shared::terrain::ChunkCoord::from_world_pos);
+    let prop_radius = prop_stream_radius_chunks(&settings);
+
+    // Find chunks that are no longer loaded or are outside the tighter prop streaming radius.
     let chunks_to_remove: Vec<shared::terrain::ChunkCoord> = loaded_prop_chunks
         .chunks
-        .difference(&loaded_chunks.chunks)
-        .cloned()
+        .iter()
+        .copied()
+        .filter(|coord| {
+            if !loaded_chunks.chunks.contains(coord) {
+                return true;
+            }
+            let Some(player_chunk) = player_chunk else {
+                return false;
+            };
+            !chunk_in_prop_radius(*coord, player_chunk, prop_radius)
+        })
         .collect();
 
     for coord in chunks_to_remove {
@@ -302,6 +371,29 @@ pub(super) fn cleanup_chunk_props(
                 commands.entity(entity).despawn();
             }
         }
+        pending_spawns.discard_chunk(coord);
         loaded_prop_chunks.chunks.remove(&coord);
     }
+}
+
+fn prop_stream_radius_chunks(settings: &GraphicsSettings) -> i32 {
+    let configured = std::env::var("FISTFORCE_PROP_CHUNK_RADIUS")
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|value| *value >= 0);
+    let default_radius =
+        ((128.0 * settings.prop_render_multiplier.max(0.25)) / CHUNK_SIZE).ceil() as i32;
+    configured
+        .unwrap_or(default_radius)
+        .clamp(1, settings.view_distance.max(1))
+}
+
+fn chunk_in_prop_radius(
+    coord: shared::terrain::ChunkCoord,
+    player_chunk: shared::terrain::ChunkCoord,
+    prop_radius: i32,
+) -> bool {
+    let dx = (coord.x - player_chunk.x).abs();
+    let dz = (coord.z - player_chunk.z).abs();
+    dx <= prop_radius && dz <= prop_radius
 }

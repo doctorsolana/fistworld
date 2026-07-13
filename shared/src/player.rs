@@ -3,6 +3,9 @@
 /// Player movement speed (units per second)
 pub const PLAYER_SPEED: f32 = 8.0;
 
+/// Sprint speed multiplier when holding Shift on foot.
+pub const PLAYER_SPRINT_MULT: f32 = 1.55;
+
 /// Player height (for capsule)
 pub const PLAYER_HEIGHT: f32 = 1.8;
 

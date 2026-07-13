@@ -114,6 +114,7 @@ enum PauseButton {
 #[derive(Component, Clone, Copy, Debug)]
 enum GraphicsToggle {
     Bloom,
+    Ssao,
     Shadows,
     Atmosphere,
     Clouds,
@@ -127,6 +128,8 @@ enum GraphicsToggle {
 /// Slider controls (for view distance and prop distance)
 #[derive(Component, Clone, Copy, Debug)]
 enum SliderControl {
+    RenderScale,
+    ShadowQuality,
     Tonemapping,
     Exposure,
     ViewDistance,

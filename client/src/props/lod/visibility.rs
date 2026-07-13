@@ -107,29 +107,31 @@ pub(crate) fn update_tree_lod_visibility(
     mut commands: Commands,
     settings: Res<GraphicsSettings>,
     debug_mode: Res<PropLodDebugMode>,
-    player: Query<&PlayerPosition, With<LocalPlayer>>,
+    player: AnchorPlayer,
+    camera: AnchorCamera,
     mut roots: Query<
         (
             Entity,
             &GlobalTransform,
             &PropRenderTuning,
-            &TreeLodEntities,
+            &TreeLodMeshHandles,
             Option<&TreeLodRuntimeState>,
             &mut Visibility,
+            &mut Mesh3d,
         ),
         (With<TreeLodRoot>, Without<PendingPropVisibility>),
     >,
     mut elapsed: Local<f32>,
     mut last_player_pos: Local<Option<Vec3>>,
 ) {
-    let Ok(player_pos) = player.single() else {
+    let Some(anchor_pos) = streaming_anchor(&player, &camera) else {
         return;
     };
 
     const TREE_LOD_UPDATE_INTERVAL_SECS: f32 = 0.12;
     const TREE_LOD_PLAYER_MOVE_THRESHOLD: f32 = 4.0;
     let player_moved = last_player_pos.is_none_or(|last| {
-        last.distance_squared(player_pos.0) >= TREE_LOD_PLAYER_MOVE_THRESHOLD.powi(2)
+        last.distance_squared(anchor_pos) >= TREE_LOD_PLAYER_MOVE_THRESHOLD.powi(2)
     });
     let force_update = settings.is_changed() || debug_mode.is_changed() || player_moved;
     *elapsed += time.delta_secs();
@@ -137,13 +139,20 @@ pub(crate) fn update_tree_lod_visibility(
         return;
     }
     *elapsed = 0.0;
-    *last_player_pos = Some(player_pos.0);
+    *last_player_pos = Some(anchor_pos);
 
     let prop_multiplier = settings.prop_render_multiplier;
     let max_prop_distance = settings.view_distance as f32 * CHUNK_SIZE;
+    let shadow_cutoff = TREE_SHADOW_MAX_DISTANCE * prop_multiplier;
+    let shadow_cutoff_far = shadow_cutoff + TREE_LOD_HYSTERESIS;
+    let shadow_cutoff_near = (shadow_cutoff - TREE_LOD_HYSTERESIS).max(0.0);
+    let shadow_cutoff_far_sq = shadow_cutoff_far * shadow_cutoff_far;
+    let shadow_cutoff_near_sq = shadow_cutoff_near * shadow_cutoff_near;
 
-    for (root, transform, tuning, lods, runtime_state, mut root_visibility) in roots.iter_mut() {
-        let distance_sq = transform.translation().distance_squared(player_pos.0);
+    for (root, transform, tuning, lods, runtime_state, mut root_visibility, mut mesh) in
+        roots.iter_mut()
+    {
+        let distance_sq = transform.translation().distance_squared(anchor_pos);
         let base_end = tuning.visible_end_distance.map(|end| end * prop_multiplier);
         let mut lod_end = base_end.unwrap_or(PROP_LOD1_END_FALLBACK * prop_multiplier);
         lod_end = lod_end.min(max_prop_distance);
@@ -154,6 +163,7 @@ pub(crate) fn update_tree_lod_visibility(
         let split = base_end
             .map(|end| end * PROP_LOD1_SPLIT_RATIO)
             .unwrap_or(PROP_LOD1_START_FALLBACK * prop_multiplier)
+            .min(TREE_LOD0_MAX_DISTANCE * prop_multiplier)
             .min(lod_end);
 
         let current_state = runtime_state.copied().unwrap_or_default();
@@ -206,8 +216,17 @@ pub(crate) fn update_tree_lod_visibility(
             }
         };
 
-        let desired_casts_shadows =
-            tuning.casts_shadows && matches!(desired_active_lod, TreeActiveLod::Lod0);
+        // Distance-based shadow cutoff (with hysteresis), independent of LOD1
+        // availability so kinds without a low-poly mesh still stop casting.
+        let within_shadow_range = if current_state.casts_shadows {
+            distance_sq <= shadow_cutoff_far_sq
+        } else {
+            distance_sq <= shadow_cutoff_near_sq
+        };
+        let desired_casts_shadows = tuning.casts_shadows
+            && within_shadow_range
+            && !matches!(desired_active_lod, TreeActiveLod::Hidden)
+            && !matches!(desired_active_lod, TreeActiveLod::Lod1);
 
         if current_state.active_lod == desired_active_lod
             && current_state.casts_shadows == desired_casts_shadows
@@ -215,30 +234,22 @@ pub(crate) fn update_tree_lod_visibility(
             continue;
         }
 
-        if let Some(lod0) = lods.lod0 {
-            commands
-                .entity(lod0)
-                .insert(if matches!(desired_active_lod, TreeActiveLod::Lod0) {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                });
-            if desired_casts_shadows {
-                commands.entity(lod0).remove::<NotShadowCaster>();
-            } else {
-                commands.entity(lod0).insert(NotShadowCaster);
+        match desired_active_lod {
+            TreeActiveLod::Lod0 => {
+                mesh.0 = lods.lod0.clone();
             }
+            TreeActiveLod::Lod1 => {
+                if let Some(lod1) = lods.lod1.as_ref() {
+                    mesh.0 = lod1.clone();
+                }
+            }
+            TreeActiveLod::Hidden => {}
         }
-        if let Some(lod1) = lods.lod1 {
-            commands
-                .entity(lod1)
-                .insert(if matches!(desired_active_lod, TreeActiveLod::Lod1) {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                });
-            // Far LODs should not cast shadows.
-            commands.entity(lod1).insert(NotShadowCaster);
+
+        if desired_casts_shadows {
+            commands.entity(root).remove::<NotShadowCaster>();
+        } else {
+            commands.entity(root).insert(NotShadowCaster);
         }
 
         *root_visibility = if matches!(desired_active_lod, TreeActiveLod::Hidden) {

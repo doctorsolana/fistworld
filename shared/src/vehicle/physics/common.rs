@@ -55,8 +55,39 @@ pub(super) fn terrain_angles_from_normal(
     (pitch, roll)
 }
 
-/// Calculate the bike's local up vector in world space based on pitch/roll.
-pub(super) fn bike_up_vector(pitch: f32, roll: f32) -> Vec3 {
-    let up = Vec3::new(-roll.sin(), pitch.cos() * roll.cos(), pitch.sin());
-    up.normalize()
+/// The vehicle's local up vector in world space.
+///
+/// Derived from the same rotation used for rendering so handedness can never
+/// diverge. The old hand-expanded version had an inverted X term
+/// (`-roll.sin()`) and ignored heading, which made side-slope traction read
+/// backwards — one of this repo's recurring mirror bugs.
+pub(super) fn bike_up_vector(heading: f32, pitch: f32, roll: f32) -> Vec3 {
+    (vehicle_body_rotation(heading, pitch, roll) * Vec3::Y).normalize()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pin the up-vector handedness to the render rotation: positive roll
+    /// leans RIGHT (up tips toward +X at heading 0), positive pitch is
+    /// nose-up, and heading rotates the lean direction with the vehicle.
+    #[test]
+    fn up_vector_matches_body_rotation_handedness() {
+        let up = bike_up_vector(0.0, 0.0, 0.3);
+        assert!(
+            up.x > 0.25,
+            "positive roll must lean right (+X up component), got {up:?}"
+        );
+        let up = bike_up_vector(0.0, 0.3, 0.0);
+        assert!(
+            up.z > 0.25,
+            "positive pitch (nose up) tips up toward +Z, got {up:?}"
+        );
+        let up = bike_up_vector(std::f32::consts::FRAC_PI_2, 0.0, 0.3);
+        assert!(
+            up.z < -0.25,
+            "rolled-right vehicle at heading 90° must tip up toward -Z, got {up:?}"
+        );
+    }
 }

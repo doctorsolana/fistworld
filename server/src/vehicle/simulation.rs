@@ -5,8 +5,8 @@ use bevy::prelude::*;
 use shared::protocol::FIXED_TIMESTEP_HZ;
 use shared::terrain::WorldTerrain;
 use shared::vehicle::{
-    step_car_physics, step_vehicle_physics, CarSuspensionState, Vehicle, VehicleDriver,
-    VehicleState, VehicleType,
+    step_car_physics, step_car_v2_physics, step_vehicle_physics, CarSuspensionState, Vehicle,
+    VehicleDriver, VehicleState, VehicleType,
 };
 
 use crate::net::input::ClientInputs;
@@ -32,6 +32,28 @@ pub fn update_vehicles(
             .unwrap_or_default();
 
         match vehicle.vehicle_type {
+            VehicleType::CarV2 => {
+                if let Some(mut suspension) = suspension {
+                    step_car_v2_physics(
+                        &vehicle_input,
+                        &mut state,
+                        &mut suspension,
+                        &terrain,
+                        dt,
+                        driver.driver_id.is_some(),
+                        vehicle.vehicle_type,
+                    );
+                } else {
+                    step_vehicle_physics(
+                        &vehicle_input,
+                        &mut state,
+                        &terrain,
+                        dt,
+                        driver.driver_id.is_some(),
+                        vehicle.vehicle_type,
+                    );
+                }
+            }
             VehicleType::Car => {
                 if let Some(mut suspension) = suspension {
                     step_car_physics(
@@ -74,7 +96,10 @@ pub fn ensure_car_suspension_state(
     cars: Query<(Entity, &Vehicle), Without<CarSuspensionState>>,
 ) {
     for (entity, vehicle) in cars.iter() {
-        if vehicle.vehicle_type == VehicleType::Car {
+        if matches!(
+            vehicle.vehicle_type,
+            VehicleType::Car | VehicleType::CarV2
+        ) {
             commands
                 .entity(entity)
                 .insert(CarSuspensionState::default());

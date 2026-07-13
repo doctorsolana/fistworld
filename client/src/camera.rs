@@ -24,6 +24,7 @@ const THIRD_PERSON_DEFAULT_PITCH: f32 = 0.25; // Default orbit angle (slightly a
 
 /// FOV settings for aiming
 const FOV_DEFAULT: f32 = 70.0_f32.to_radians(); // Normal FOV in radians
+const FOV_SPRINT: f32 = 76.0_f32.to_radians(); // Slight speed kick when sprinting
 const FOV_ADS: f32 = 45.0_f32.to_radians(); // Zoomed FOV when ADS
 const FOV_SNIPER_ADS: f32 = 20.0_f32.to_radians(); // Extra zoom for sniper
                                                    // Tuned to make distortion visible within the centered sniper scope viewport.
@@ -91,9 +92,13 @@ pub fn update_camera(
         .and_then(|(entity, _, _)| vehicle_bob_offset(&hover_bobs, *entity, time.elapsed_secs()));
 
     let (target_pos, target_rot) = match input_state.camera_mode {
-        CameraMode::FirstPerson => {
-            first_person_target(player_transform, vehicle_pose, vehicle_bob, &input_state)
-        }
+        CameraMode::FirstPerson => first_person_target(
+            player_transform,
+            vehicle_pose,
+            vehicle_bob,
+            &input_state,
+            time.elapsed_secs(),
+        ),
         CameraMode::ThirdPerson => {
             third_person_target(player_transform, vehicle_pose, &input_state)
         }
@@ -118,6 +123,7 @@ fn first_person_target(
     vehicle_pose: Option<(Entity, Vec3, Quat)>,
     vehicle_bob: Option<f32>,
     input_state: &crate::input::InputState,
+    time_secs: f32,
 ) -> (Vec3, Quat) {
     if let Some((_, veh_pos, veh_rot)) = vehicle_pose {
         let (seat_height, bob) = match vehicle_bob {
@@ -138,10 +144,48 @@ fn first_person_target(
         let rot = veh_rot * look_rotation;
         (pos, rot)
     } else {
-        let pos = player_transform.translation + Vec3::new(0.0, CAMERA_HEIGHT_OFFSET, 0.0);
-        let rot = Quat::from_euler(EulerRot::YXZ, input_state.yaw, input_state.pitch, 0.0);
+        let mut pos = player_transform.translation + Vec3::new(0.0, CAMERA_HEIGHT_OFFSET, 0.0);
+        let mut pitch = input_state.pitch;
+        let mut roll = 0.0;
+
+        if is_moving_on_foot(input_state) {
+            let sprinting = is_sprinting_on_foot(input_state);
+            let phase = time_secs * if sprinting { 13.5 } else { 8.25 };
+            let vertical_amp = if sprinting { 0.038 } else { 0.012 };
+            let lateral_amp = if sprinting { 0.016 } else { 0.004 };
+            let pitch_amp = if sprinting { 0.010 } else { 0.003 };
+            let roll_amp = if sprinting { 0.013 } else { 0.004 };
+
+            let yaw_rot = Quat::from_rotation_y(input_state.yaw);
+            let bob_local = Vec3::new(
+                (phase * 0.5).sin() * lateral_amp,
+                phase.sin().abs() * vertical_amp,
+                0.0,
+            );
+            pos += yaw_rot * bob_local;
+            pitch += phase.sin().abs() * pitch_amp;
+            roll = (phase * 0.5).sin() * roll_amp;
+        }
+
+        let rot = Quat::from_euler(EulerRot::YXZ, input_state.yaw, pitch, roll);
         (pos, rot)
     }
+}
+
+#[inline]
+fn is_moving_on_foot(input_state: &crate::input::InputState) -> bool {
+    !input_state.in_vehicle
+        && !input_state.fly_mode
+        && (input_state.forward || input_state.backward || input_state.left || input_state.right)
+}
+
+#[inline]
+fn is_sprinting_on_foot(input_state: &crate::input::InputState) -> bool {
+    is_moving_on_foot(input_state)
+        && input_state.shift
+        && input_state.forward
+        && !input_state.backward
+        && !input_state.aiming
 }
 
 fn third_person_target(
@@ -254,6 +298,10 @@ pub fn update_camera_fov(
         } else {
             FOV_ADS
         }
+    } else if input_state.camera_mode == CameraMode::FirstPerson
+        && is_sprinting_on_foot(&input_state)
+    {
+        FOV_SPRINT
     } else {
         FOV_DEFAULT
     };

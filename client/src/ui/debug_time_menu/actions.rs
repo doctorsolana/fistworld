@@ -83,6 +83,7 @@ pub(super) fn handle_debug_menu_interactions(
             Option<&PerfWeightmapToggleButton>,
             Option<&PerfRenderDiagToggleButton>,
             Option<&SpawnOilmanNpcButton>,
+            Option<&SpawnDummyNpcButton>,
             Option<&SpawnPhysicsBoxButton>,
             &mut BackgroundColor,
         ),
@@ -99,6 +100,7 @@ pub(super) fn handle_debug_menu_interactions(
         weightmap_button,
         render_diag_button,
         oilman_spawn_button,
+        dummy_spawn_button,
         physics_box_button,
         mut bg,
     ) in buttons.iter_mut()
@@ -159,7 +161,20 @@ pub(super) fn handle_debug_menu_interactions(
 
                 if oilman_spawn_button.is_some() {
                     if let Ok(mut sender) = npc_spawn_sender.single_mut() {
-                        sender.send::<ReliableChannel>(SpawnOilmanDebug { count: 10 });
+                        sender.send::<ReliableChannel>(SpawnOilmanDebug {
+                            count: 10,
+                            archetype: shared::components::NpcArchetype::Oilman,
+                        });
+                    }
+                    continue;
+                }
+
+                if dummy_spawn_button.is_some() {
+                    if let Ok(mut sender) = npc_spawn_sender.single_mut() {
+                        sender.send::<ReliableChannel>(SpawnOilmanDebug {
+                            count: 1,
+                            archetype: shared::components::NpcArchetype::Dummy,
+                        });
                     }
                     continue;
                 }

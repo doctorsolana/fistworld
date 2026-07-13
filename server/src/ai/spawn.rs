@@ -77,6 +77,51 @@ pub fn spawn_npcs_once(
     let npc_groups = &loaded_map.definition.npc_groups;
     let world_bounds = loaded_map.definition.bounds;
 
+    // Reference ragdoll dummies near the player spawn (gray primitive figures
+    // built 1:1 from the shared ragdoll body table — ground truth for
+    // diagnosing skeleton-mapping issues). CITYSIM_DUMMY_NPCS overrides count.
+    let dummy_count = std::env::var("CITYSIM_DUMMY_NPCS")
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .unwrap_or(1);
+    let spawn_point = loaded_map
+        .definition
+        .player_spawn
+        .unwrap_or(shared::player::SPAWN_POSITION);
+    for i in 0..dummy_count {
+        let x = spawn_point[0] - 6.0 - 2.0 * i as f32;
+        let z = spawn_point[2] - 8.0;
+        let y = terrain.get_height(x, z) + ground_clearance_center();
+        let pos = Vec3::new(x, y, z);
+        let npc_id = next_npc_id;
+        next_npc_id = next_npc_id.saturating_add(1);
+
+        // Stands still (huge idle timer) so it's a stable shooting reference.
+        let mut wander = NpcWander::new(pos, 1.0, npc_id);
+        wander.idle_timer = 9999.0;
+
+        commands.spawn((
+            Npc {
+                id: npc_id,
+                archetype: NpcArchetype::Dummy,
+            },
+            npc_identity_for_archetype(WORLD_SEED, npc_id, NpcArchetype::Dummy),
+            NpcPosition(pos),
+            NpcRotation(0.0),
+            NpcVelocity(Vec3::ZERO),
+            NpcActivity(NpcActivityKind::Idle),
+            Health::new(npc_max_health(NpcArchetype::Dummy)),
+            wander,
+            ReplicationGroup::new_from_entity().set_priority(NPC_REPLICATION_PRIORITY),
+            Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
+        ));
+        total_spawned += 1;
+    }
+    if dummy_count > 0 {
+        info!("Spawned {dummy_count} ragdoll reference dummy(ies) near spawn");
+    }
+
+
     let configured_cap = configured_npc_cap();
     let mut remaining = configured_cap;
     if remaining == 0 {
@@ -282,18 +327,28 @@ pub fn handle_spawn_oilman_debug(
                 let npc_id = *cursor;
                 *cursor = cursor.saturating_add(1);
 
+                let archetype = msg.archetype;
+                // Reference dummies stand still so they stay a stable target.
+                let mut wander = NpcWander::new(
+                    pos,
+                    if archetype == NpcArchetype::Dummy { 1.0 } else { 14.0 },
+                    npc_id,
+                );
+                if archetype == NpcArchetype::Dummy {
+                    wander.idle_timer = 9999.0;
+                }
                 commands.spawn((
                     Npc {
                         id: npc_id,
-                        archetype: NpcArchetype::Oilman,
+                        archetype,
                     },
-                    npc_identity_for_debug(WORLD_SEED, npc_id, NpcArchetype::Oilman),
+                    npc_identity_for_debug(WORLD_SEED, npc_id, archetype),
                     NpcPosition(pos),
                     NpcRotation(0.0),
                     NpcVelocity(Vec3::ZERO),
                     NpcActivity(NpcActivityKind::Idle),
-                    Health::new(npc_max_health(NpcArchetype::Oilman)),
-                    NpcWander::new(pos, 14.0, npc_id),
+                    Health::new(npc_max_health(archetype)),
+                    wander,
                     ReplicationGroup::new_from_entity().set_priority(NPC_REPLICATION_PRIORITY),
                     Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
                 ));
@@ -302,7 +357,7 @@ pub fn handle_spawn_oilman_debug(
         }
         if total_spawned_for_peer > 0 {
             debug!(
-                "Debug spawned {} Oilman NPCs for {:?} ({} request(s) this tick)",
+                "Debug spawned {} NPCs for {:?} ({} request(s) this tick)",
                 total_spawned_for_peer, peer_id, requests_for_peer
             );
         }

@@ -1,3 +1,4 @@
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use shared::components::{EquippedWeapon, LocalPlayer};
 use shared::weapons::WeaponType;
@@ -10,6 +11,10 @@ use super::WeaponModelAssets;
 /// Marker for the first-person weapon model.
 #[derive(Component)]
 pub struct FirstPersonWeapon;
+
+/// Marker for first-person weapon meshes that have had world shadows disabled.
+#[derive(Component)]
+pub(crate) struct FirstPersonWeaponShadowDisabled;
 
 /// Resource tracking which weapon model is currently shown.
 #[derive(Resource, Default)]
@@ -108,6 +113,35 @@ fn spawn_weapon_model(
     commands.entity(camera_entity).add_child(weapon_entity);
 }
 
+/// First-person weapon models are presentation geometry, not world geometry.
+/// Letting them cast or receive sun shadows causes crawling artifacts over both the gun and nearby ground.
+pub fn disable_first_person_weapon_shadows(
+    mut commands: Commands,
+    weapons: Query<Entity, With<FirstPersonWeapon>>,
+    children: Query<&Children>,
+    pending_meshes: Query<Entity, (With<Mesh3d>, Without<FirstPersonWeaponShadowDisabled>)>,
+) {
+    let mut stack = Vec::new();
+    for weapon_entity in weapons.iter() {
+        stack.clear();
+        stack.push(weapon_entity);
+
+        while let Some(entity) = stack.pop() {
+            if let Ok(children) = children.get(entity) {
+                stack.extend(children.iter());
+            }
+
+            if pending_meshes.get(entity).is_ok() {
+                commands.entity(entity).insert((
+                    NotShadowCaster,
+                    NotShadowReceiver,
+                    FirstPersonWeaponShadowDisabled,
+                ));
+            }
+        }
+    }
+}
+
 /// Add slight weapon sway/bob for visual polish.
 #[derive(Default)]
 pub(crate) struct WeaponViewRecoil {
@@ -176,10 +210,39 @@ pub fn update_weapon_animation(
         offset.x += (t * 1.2).sin() * 0.003;
         offset.y += (t * 0.8).cos() * 0.002;
 
-        // Movement bob (if walking).
-        if input_state.forward || input_state.backward || input_state.left || input_state.right {
-            offset.y += (t * 8.0).sin().abs() * 0.008;
-            offset.x += (t * 4.0).sin() * 0.004;
+        let moving =
+            input_state.forward || input_state.backward || input_state.left || input_state.right;
+        let sprinting = input_state.shift
+            && input_state.forward
+            && !input_state.backward
+            && !input_state.aiming
+            && !input_state.in_vehicle
+            && !input_state.fly_mode;
+
+        let mut move_pitch = 0.0;
+        let mut move_yaw = 0.0;
+        let mut move_roll = 0.0;
+
+        // Movement bob. Sprint gets a lower, looser pose with stronger footfall rhythm.
+        if moving {
+            let freq = if sprinting { 13.5 } else { 8.0 };
+            let phase = t * freq;
+            let stride = (phase * 0.5).sin();
+            let footfall = phase.sin().abs();
+
+            if sprinting {
+                offset.x += stride * 0.014 + 0.018;
+                offset.y += footfall * 0.024 - 0.035;
+                offset.z += stride.cos() * 0.010 - 0.035;
+                move_pitch = -0.050 + footfall * 0.026;
+                move_yaw = stride * 0.018;
+                move_roll = stride * 0.038;
+            } else {
+                offset.y += footfall * 0.008;
+                offset.x += stride * 0.004;
+                move_pitch = footfall * 0.006;
+                move_roll = stride * 0.010;
+            }
         }
 
         if reload_amount != 0.0 {
@@ -211,7 +274,12 @@ pub fn update_weapon_animation(
 
         let reload_pitch = -reload_amount * 1.05;
         transform.translation = offset + recoil.offset;
-        transform.rotation = Quat::from_rotation_x(-recoil.rotation.x + reload_pitch);
+        transform.rotation = Quat::from_euler(
+            EulerRot::YXZ,
+            move_yaw,
+            -recoil.rotation.x + reload_pitch + move_pitch,
+            move_roll,
+        );
     }
 
     if !saw_weapon {

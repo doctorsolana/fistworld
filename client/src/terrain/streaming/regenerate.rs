@@ -62,7 +62,7 @@ pub(crate) fn regenerate_dirty_chunks(
 }
 
 pub(crate) fn process_chunk_tasks(
-    player_query: Query<&PlayerPosition, With<LocalPlayer>>,
+    anchor: (AnchorPlayer, AnchorCamera),
     settings: Res<GraphicsSettings>,
     render_assets: Option<Res<TerrainRenderAssets>>,
     mut tasks: ResMut<TerrainChunkTasks>,
@@ -80,7 +80,8 @@ pub(crate) fn process_chunk_tasks(
     mut scratch: ResMut<TerrainTaskScratch>,
 ) {
     let start = Instant::now();
-    let Ok(player_pos) = player_query.single() else {
+    let (player_query, camera_query) = anchor;
+    let Some(anchor_pos) = streaming_anchor(&player_query, &camera_query) else {
         return;
     };
     let Ok(world_root) = world_root_query.single() else {
@@ -90,7 +91,7 @@ pub(crate) fn process_chunk_tasks(
         return;
     };
 
-    let player_chunk = ChunkCoord::from_world_pos(player_pos.0);
+    let player_chunk = ChunkCoord::from_world_pos(anchor_pos);
     let view_distance = settings.view_distance;
 
     // Bootstrap mode: prioritize getting at least nearby terrain visible quickly after connect.
@@ -220,9 +221,9 @@ pub(crate) fn process_chunk_tasks(
         let material = materials.add(TerrainSplatMaterial {
             base: StandardMaterial {
                 base_color: Color::WHITE,
-                perceptual_roughness: 0.9,
+                perceptual_roughness: 0.97,
                 metallic: 0.0,
-                reflectance: 0.2,
+                reflectance: 0.08,
                 ..default()
             },
             extension: TerrainSplatExtension {

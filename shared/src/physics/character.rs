@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::components::{PlayerGrounded, PlayerPosition, PlayerRotation, PlayerVelocity};
-use crate::player::PLAYER_SPEED;
+use crate::player::{PLAYER_SPEED, PLAYER_SPRINT_MULT};
 use crate::protocol::PlayerInput;
 use crate::terrain::WorldTerrain;
 
@@ -95,8 +95,12 @@ pub fn step_character(
         move_dir = move_dir.normalize();
     }
 
+    let sprinting =
+        input.fly_fast && input.forward && !input.backward && move_dir.length_squared() > 0.0;
     let speed = if in_water {
         PLAYER_SPEED * WATER_SPEED_MULT
+    } else if sprinting {
+        PLAYER_SPEED * PLAYER_SPRINT_MULT
     } else {
         PLAYER_SPEED
     };

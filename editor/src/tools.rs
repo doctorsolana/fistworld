@@ -11,6 +11,7 @@ use shared::map::{
     load_map, load_map_from_parts, map_definition_path, save_map_definition_atomic,
     save_map_edits_atomic, MapObjectSpawn, SpawnMarkerKind, DEFAULT_MAP_ID,
 };
+use shared::props::PropKind;
 use shared::terrain::{
     ChunkCoord, ChunkMeshData, WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, VERTEX_SPACING,
 };
@@ -20,8 +21,9 @@ use crate::lighting::{EditorFillLight, EditorSunLight};
 use crate::session::{
     CursorTerrainHit, EditorCursorVisual, EditorEnvironmentState, EditorPropPreviewVisual,
     EditorPropVisual, EditorSession, EditorSnapshot, EditorSpawnVisual, EditorUiState,
-    EditorWaterChunk, EditorWaterVisual, PropPreviewState, TerrainBrushMode, TerrainChunkEntry,
-    TerrainChunkRegistry, TerrainChunkVisual, ToolMode, UiActionRequests, WaterChunkRegistry,
+    EditorWaterChunk, EditorWaterVisual, ForestBrushPreset, ForestBrushSettings, PropPreviewState,
+    TerrainBrushMode, TerrainChunkEntry, TerrainChunkRegistry, TerrainChunkVisual, ToolMode,
+    UiActionRequests, WaterChunkRegistry,
 };
 
 #[derive(Resource, Default)]
@@ -330,7 +332,7 @@ pub fn handle_tool_input(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     cursor_hit: Res<CursorTerrainHit>,
     env_state: Res<EditorEnvironmentState>,
-    ui_state: Res<EditorUiState>,
+    mut ui_state: ResMut<EditorUiState>,
     mut world: ResMut<WorldTerrain>,
     mut session: ResMut<EditorSession>,
     mut flags: ResMut<VisualRefreshFlags>,
@@ -445,6 +447,31 @@ pub fn handle_tool_input(
             session.mark_map_dirty();
             flags.props = true;
         }
+        ToolMode::ForestBrush => {
+            if !just_pressed {
+                return;
+            }
+
+            let forest = ui_state.forest.clone();
+            let objects = generate_forest_brush_spawns(
+                hit,
+                &forest,
+                &world,
+                &session.map_definition.objects,
+                &env_state,
+            );
+            if objects.is_empty() {
+                ui_state.status = "Forest brush found no valid placements".to_string();
+                return;
+            }
+
+            session.push_undo_snapshot(&world);
+            let added = objects.len();
+            session.map_definition.objects.extend(objects);
+            session.mark_map_dirty();
+            flags.props = true;
+            ui_state.status = format!("Forest brush added {added} prop(s)");
+        }
         ToolMode::EraseProp => {
             if !just_pressed {
                 return;
@@ -492,6 +519,240 @@ pub fn handle_tool_input(
         }
         ToolMode::Road | ToolMode::Plot => {}
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ForestPropGroup {
+    Tree,
+    Bush,
+    Rock,
+    GroundCover,
+}
+
+fn generate_forest_brush_spawns(
+    center: Vec3,
+    settings: &ForestBrushSettings,
+    world: &WorldTerrain,
+    existing_objects: &[MapObjectSpawn],
+    env_state: &EditorEnvironmentState,
+) -> Vec<MapObjectSpawn> {
+    let radius = settings.radius.clamp(1.0, 128.0);
+    let density = settings.density_per_100m2.clamp(0.0, 12.0);
+    let target_count =
+        ((std::f32::consts::PI * radius * radius / 100.0) * density).round() as usize;
+    let target_count = target_count.min(300);
+    if target_count == 0 || forest_makeup_total(settings) <= f32::EPSILON {
+        return Vec::new();
+    }
+
+    let min_spacing = settings.min_spacing.max(0.0);
+    let min_spacing_sq = min_spacing * min_spacing;
+    let mut occupied: Vec<Vec2> = existing_objects
+        .iter()
+        .filter_map(|object| {
+            let pos = Vec2::new(object.position[0], object.position[2]);
+            (pos.distance_squared(Vec2::new(center.x, center.z))
+                <= (radius + min_spacing) * (radius + min_spacing))
+                .then_some(pos)
+        })
+        .collect();
+
+    let seed = forest_seed(center, settings.preset);
+    let max_attempts = target_count.saturating_mul(14).saturating_add(48);
+    let bounds = world.generator.active_map_bounds();
+    let mut out = Vec::with_capacity(target_count);
+
+    for attempt in 0..max_attempts {
+        if out.len() >= target_count {
+            break;
+        }
+
+        let angle = forest_random(seed, attempt as u64, 0) * std::f32::consts::TAU;
+        let distance = radius * forest_random(seed, attempt as u64, 1).sqrt();
+        let x = center.x + angle.cos() * distance;
+        let z = center.z + angle.sin() * distance;
+        if !bounds.contains_xz(x, z) {
+            continue;
+        }
+        let point = Vec2::new(x, z);
+
+        if occupied
+            .iter()
+            .any(|existing| existing.distance_squared(point) < min_spacing_sq)
+        {
+            continue;
+        }
+
+        let ground_y = world.get_height(x, z);
+        if settings.avoid_water && env_state.show_water && ground_y <= env_state.water_level + 0.15
+        {
+            continue;
+        }
+
+        if terrain_slope_at(world, x, z) > settings.max_slope.max(0.05) {
+            continue;
+        }
+
+        let Some(group) = choose_forest_group(settings, forest_random(seed, attempt as u64, 2))
+        else {
+            continue;
+        };
+        let kind = choose_forest_kind(
+            settings.preset,
+            group,
+            forest_random(seed, attempt as u64, 3),
+        );
+        let rotation_degrees = forest_random(seed, attempt as u64, 4) * 360.0;
+        let jitter = settings.scale_jitter.clamp(0.0, 0.9);
+        let random_scale = 1.0 + (forest_random(seed, attempt as u64, 5) * 2.0 - 1.0) * jitter;
+        let scale = (settings.base_scale * forest_group_scale(group) * random_scale).max(0.05);
+
+        out.push(MapObjectSpawn {
+            kind: kind.id().to_string(),
+            position: [x, 0.0, z],
+            rotation_degrees,
+            scale,
+        });
+        occupied.push(point);
+    }
+
+    out
+}
+
+fn forest_makeup_total(settings: &ForestBrushSettings) -> f32 {
+    settings.tree_weight.max(0.0)
+        + settings.bush_weight.max(0.0)
+        + settings.rock_weight.max(0.0)
+        + settings.ground_cover_weight.max(0.0)
+}
+
+fn choose_forest_group(settings: &ForestBrushSettings, roll: f32) -> Option<ForestPropGroup> {
+    let tree = settings.tree_weight.max(0.0);
+    let bush = settings.bush_weight.max(0.0);
+    let rock = settings.rock_weight.max(0.0);
+    let ground = settings.ground_cover_weight.max(0.0);
+    let total = tree + bush + rock + ground;
+    if total <= f32::EPSILON {
+        return None;
+    }
+
+    let t = roll.clamp(0.0, 0.999_999) * total;
+    if t < tree {
+        Some(ForestPropGroup::Tree)
+    } else if t < tree + bush {
+        Some(ForestPropGroup::Bush)
+    } else if t < tree + bush + rock {
+        Some(ForestPropGroup::Rock)
+    } else {
+        Some(ForestPropGroup::GroundCover)
+    }
+}
+
+fn choose_forest_kind(preset: ForestBrushPreset, group: ForestPropGroup, roll: f32) -> PropKind {
+    use PropKind::*;
+
+    const BROADLEAF_TREES: &[PropKind] = &[
+        Tree_01, Tree_02, Tree_08, Tree_09, Tree_10, Tree_18, Tree_29,
+    ];
+    const PINE_TREES: &[PropKind] = &[Pine_Tree_1, Pine_Tree_2, Pine_Tree_3, Pine_Tree_4];
+    const DEAD_TREES: &[PropKind] = &[Dead_tree_1, Dead_tree_2, Dead_tree_3];
+    const MIXED_TREES: &[PropKind] = &[
+        Tree_01,
+        Tree_02,
+        Tree_08,
+        Tree_09,
+        Tree_10,
+        Tree_18,
+        Tree_29,
+        Pine_Tree_1,
+        Pine_Tree_2,
+        Pine_Tree_3,
+        Pine_Tree_4,
+    ];
+    const BUSHES: &[PropKind] = &[Bush_01, Bush_02, Bush_03, Bush_04];
+    const ROCKS: &[PropKind] = &[Rock_1, Rock_2, Rock_3, Rock_4, Rock_5];
+    const FLOWERS: &[PropKind] = &[
+        Flower_01,
+        Flower_02,
+        Flower_03,
+        Flower_04,
+        Flower_05,
+        Spring_Flower_06,
+        Spring_Flower_07,
+        Spring_Flower_08,
+        Spring_Flower_09,
+    ];
+    const LEAVES: &[PropKind] = &[Env_Leaves_02, Env_Leaves_03];
+    const DEAD_GROUND: &[PropKind] = &[Env_Leaves_02, Env_Leaves_03, Rock_1, Rock_2, Rock_3];
+
+    match group {
+        ForestPropGroup::Tree => match preset {
+            ForestBrushPreset::Mixed => choose_from(MIXED_TREES, roll),
+            ForestBrushPreset::Broadleaf => choose_from(BROADLEAF_TREES, roll),
+            ForestBrushPreset::Pine => choose_from(PINE_TREES, roll),
+            ForestBrushPreset::Deadwood => choose_from(DEAD_TREES, roll),
+        },
+        ForestPropGroup::Bush => choose_from(BUSHES, roll),
+        ForestPropGroup::Rock => choose_from(ROCKS, roll),
+        ForestPropGroup::GroundCover => match preset {
+            ForestBrushPreset::Deadwood => choose_from(DEAD_GROUND, roll),
+            _ => {
+                if roll < 0.72 {
+                    choose_from(FLOWERS, roll / 0.72)
+                } else {
+                    choose_from(LEAVES, (roll - 0.72) / 0.28)
+                }
+            }
+        },
+    }
+}
+
+fn choose_from(pool: &[PropKind], roll: f32) -> PropKind {
+    let index = (roll.clamp(0.0, 0.999_999) * pool.len() as f32) as usize;
+    pool[index.min(pool.len().saturating_sub(1))]
+}
+
+fn forest_group_scale(group: ForestPropGroup) -> f32 {
+    match group {
+        ForestPropGroup::Tree => 1.0,
+        ForestPropGroup::Bush => 0.85,
+        ForestPropGroup::Rock => 0.9,
+        ForestPropGroup::GroundCover => 0.7,
+    }
+}
+
+fn terrain_slope_at(world: &WorldTerrain, x: f32, z: f32) -> f32 {
+    let step = 1.5;
+    let dx = (world.get_height(x + step, z) - world.get_height(x - step, z)) / (step * 2.0);
+    let dz = (world.get_height(x, z + step) - world.get_height(x, z - step)) / (step * 2.0);
+    Vec2::new(dx, dz).length()
+}
+
+fn forest_seed(center: Vec3, preset: ForestBrushPreset) -> u64 {
+    let x = (center.x * 10.0).round() as i64 as u64;
+    let z = (center.z * 10.0).round() as i64 as u64;
+    splitmix64(x ^ z.rotate_left(32) ^ forest_preset_seed(preset))
+}
+
+fn forest_preset_seed(preset: ForestBrushPreset) -> u64 {
+    match preset {
+        ForestBrushPreset::Mixed => 0x31b1_4f2d_c9a8_0173,
+        ForestBrushPreset::Broadleaf => 0x6f3d_9a41_0c7e_55aa,
+        ForestBrushPreset::Pine => 0xc43a_1e98_b75f_240d,
+        ForestBrushPreset::Deadwood => 0x91de_6032_57bc_11f7,
+    }
+}
+
+fn forest_random(seed: u64, index: u64, salt: u64) -> f32 {
+    let value = splitmix64(seed ^ index.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ salt.rotate_left(19));
+    ((value >> 40) as f32) / ((1u64 << 24) as f32)
+}
+
+fn splitmix64(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
 }
 
 pub fn apply_visual_refresh(
@@ -608,6 +869,7 @@ pub fn refresh_cursor_indicator(
 
     let radius = match ui_state.tool {
         ToolMode::Terrain | ToolMode::EraseProp => ui_state.brush_radius.max(0.5),
+        ToolMode::ForestBrush => ui_state.forest.radius.max(0.5),
         ToolMode::PlaceSpawnMarker => ui_state.spawn_marker_radius.max(0.5),
         ToolMode::Plot => ui_state.plot.half_extents.max_element().max(0.5),
         _ => 1.0,

@@ -406,7 +406,11 @@ pub fn handle_bullet_character_hits(
                     bullet.initial_velocity.z,
                 )
                 .normalize_or_zero();
-                let impulse_mag = (bullet.weapon_type.stats().damage * 0.0012).clamp(0.003, 0.014);
+                // Shooting an existing corpse should visibly jolt it (fun to
+                // pop a body part), but stay below the kill impulse. Applied
+                // at_point to a single (possibly 2.5 kg) body, so keep it
+                // small — ~8-24 N·s reads as a solid twitch, not a launch.
+                let impulse_mag = (bullet.weapon_type.stats().damage * 0.35).clamp(8.0, 24.0);
                 corpse_hits.push(CorpseHitRecord {
                     bullet_entity,
                     shooter_id: bullet.owner_id,
@@ -537,10 +541,18 @@ pub fn handle_bullet_character_hits(
                 if let Ok((_e, _npc, _pos, mut health)) = npcs.p1().get_mut(npc_entity) {
                     let is_kill = health.take_damage(hit.damage_amount);
                     let is_headshot = hit.hit_zone == damage::HitZone::Head;
-                    let death_impulse_mag = (hit.damage_amount * 0.0025).clamp(0.005, 0.03);
+                    // Kill impulse in N·s against ragdoll bodies of 2.5–13 kg:
+                    // a pistol (~25 dmg) shoves, a sniper (~85 dmg) visibly
+                    // flings. The old 0.005–0.03 N·s range was three orders of
+                    // magnitude too small to move a corpse at all.
+                    // Applied mass-proportionally across all ragdoll bodies
+                    // (see ai/ragdoll.rs), so this maps directly to corpse
+                    // velocity: mag * 0.65 / ~62 kg. Pistol ≈ 0.4 m/s nudge,
+                    // sniper ≈ 1.6 m/s knock-down shove.
+                    let death_impulse_mag = (hit.damage_amount * 1.6).clamp(30.0, 160.0);
                     let death_impulse = Vec3::new(
                         hit.bullet_initial_velocity.x,
-                        hit.bullet_initial_velocity.y * 0.2,
+                        hit.bullet_initial_velocity.y * 0.35,
                         hit.bullet_initial_velocity.z,
                     )
                     .normalize_or_zero()

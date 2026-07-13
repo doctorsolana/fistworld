@@ -239,6 +239,8 @@ pub fn handle_dialogue_queue(
             NpcArchetype::Oilman => &assets.oilman_lines,
             // Legacy archetype keeps existing voice set until dedicated lines are authored.
             NpcArchetype::DesertOutpost => &assets.oilman_lines,
+            // The ragdoll reference dummy has nothing to say.
+            NpcArchetype::Dummy => continue,
         };
 
         if lines.is_empty() {

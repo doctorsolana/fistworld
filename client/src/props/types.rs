@@ -34,11 +34,11 @@ pub struct PropVisibilityReady;
 #[derive(Component)]
 pub struct TreeLodRoot;
 
-/// Cached LOD mesh entities for tree props.
-#[derive(Component, Clone, Copy, Debug, Default)]
-pub struct TreeLodEntities {
-    pub lod0: Option<Entity>,
-    pub lod1: Option<Entity>,
+/// Cached mesh handles for single-entity tree LOD switching.
+#[derive(Component, Clone, Debug)]
+pub struct TreeLodMeshHandles {
+    pub lod0: Handle<Mesh>,
+    pub lod1: Option<Handle<Mesh>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -67,6 +67,22 @@ pub struct PropLodPresence {
 #[derive(Resource, Default)]
 pub struct LoadedPropChunks {
     pub chunks: HashSet<ChunkCoord>,
+}
+
+/// Prop instances waiting to be spawned, budgeted per frame.
+///
+/// A dense forest chunk holds up to ~180 authored props; spawning them all in
+/// one frame is a visible hitch. Chunks enqueue their full spawn list here and
+/// a fixed number of instances are realized each frame instead.
+#[derive(Resource, Default)]
+pub struct PendingPropSpawns {
+    pub queue: std::collections::VecDeque<(ChunkCoord, Vec<shared::props::PropSpawn>)>,
+}
+
+impl PendingPropSpawns {
+    pub fn discard_chunk(&mut self, coord: ChunkCoord) {
+        self.queue.retain(|(queued, _)| *queued != coord);
+    }
 }
 
 /// Index of prop entities by chunk for fast cleanup.

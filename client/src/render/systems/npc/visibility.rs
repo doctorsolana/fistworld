@@ -189,6 +189,15 @@ pub fn apply_double_sided_npc_materials(
                 if let Some(material) = materials.get_mut(&handle.0) {
                     material.cull_mode = None;
                     material.alpha_mode = AlphaMode::Opaque;
+                    // Guard against AI-pipeline GLB exports that omit
+                    // metallicFactor (glTF default = 1.0): a fully-metallic
+                    // rough surface has no diffuse response and renders as a
+                    // dark, muddy husk no matter how strong the lighting is.
+                    if material.metallic > 0.05 {
+                        material.metallic = 0.0;
+                    }
+                    material.perceptual_roughness = material.perceptual_roughness.max(0.7);
+                    material.reflectance = 0.35;
                     updated_any = true;
                 }
             }

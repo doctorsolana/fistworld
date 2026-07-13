@@ -66,15 +66,18 @@ pub struct PerfHitchStats {
 #[derive(Resource, Clone, Copy)]
 pub struct TerrainPerfLogConfig {
     pub detailed_hitches: bool,
+    pub hitch_threshold_ms: f64,
 }
 
 impl Default for TerrainPerfLogConfig {
     fn default() -> Self {
-        let detailed = std::env::var("FISTFORCE_HITCH_DETAIL")
-            .map(|v| v == "1")
-            .unwrap_or(false);
+        let detailed = crate::profiling::hitch_profiling_enabled()
+            || crate::profiling::env_flag("FISTFORCE_HITCH_DETAIL");
+        let hitch_threshold_ms =
+            crate::profiling::env_f32("FISTFORCE_HITCH_THRESHOLD_MS", 35.0).max(1.0) as f64;
         Self {
             detailed_hitches: detailed,
+            hitch_threshold_ms,
         }
     }
 }
@@ -232,14 +235,18 @@ pub(super) fn log_perf_hitch_stats(
     terrain_materials: Res<Assets<TerrainSplatMaterial>>,
     images: Res<Assets<Image>>,
     scenes: Res<Assets<Scene>>,
+    loaded_chunks: Res<super::chunks::LoadedChunks>,
+    loaded_prop_chunks: Res<crate::props::LoadedPropChunks>,
+    prop_roots: Query<(), With<crate::props::EnvironmentProp>>,
+    tree_roots: Query<(), With<crate::props::TreeLodRoot>>,
+    pending_props: Query<(), With<crate::props::PendingPropVisibility>>,
     mut last_detail_log: Local<f64>,
 ) {
     if !debug_perf.render_diag_logging {
         return;
     }
     let frame_ms = time.delta_secs_f64() * 1000.0;
-    const HITCH_MS: f64 = 35.0;
-    if frame_ms < HITCH_MS {
+    if frame_ms < perf_config.hitch_threshold_ms {
         return;
     }
     info!(
@@ -347,6 +354,20 @@ pub(super) fn log_perf_hitch_stats(
         terrain_materials.len(),
         images.len(),
         scenes.len()
+    );
+
+    let entity_count = diagnostics
+        .get(&bevy::diagnostic::EntityCountDiagnosticsPlugin::ENTITY_COUNT)
+        .and_then(|d| d.smoothed())
+        .unwrap_or(0.0);
+    info!(
+        "Hitch world: entities={:.0} terrain_chunks={} prop_chunks={} props={} tree_roots={} pending_props={}",
+        entity_count,
+        loaded_chunks.chunks.len(),
+        loaded_prop_chunks.chunks.len(),
+        prop_roots.iter().count(),
+        tree_roots.iter().count(),
+        pending_props.iter().count(),
     );
 
     info!(

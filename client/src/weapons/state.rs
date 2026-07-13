@@ -16,24 +16,35 @@ pub struct FpsText;
 #[derive(Component)]
 pub struct PerfStatsText;
 
+/// Drying stages for a blood decal variant: fresh (wet, glossy red) ->
+/// drying -> dried (dark brown, matte). Shared across all splats.
+#[derive(Clone)]
+pub struct BloodSplatVariant {
+    pub fresh: Handle<StandardMaterial>,
+    pub drying: Handle<StandardMaterial>,
+    pub dried: Handle<StandardMaterial>,
+}
+
 /// Cached weapon-related render assets (avoid per-shot allocations).
 #[derive(Resource)]
 pub struct WeaponVisualAssets {
     pub tracer_mesh: Handle<Mesh>,
     pub tracer_material: Handle<StandardMaterial>,
     pub impact_disk_mesh_unit: Handle<Mesh>,
-    pub blood_splatter_mesh: Handle<Mesh>, // Flat disk for ground splats
-    pub blood_droplet_mesh: Handle<Mesh>,  // Small sphere for flying droplets
-    pub blood_burst_mesh: Handle<Mesh>,    // Larger sphere for instant burst
+    pub blood_droplet_mesh: Handle<Mesh>, // Small sphere for flying droplets
     pub blood_droplet_material: Handle<StandardMaterial>,
-    pub blood_burst_material: Handle<StandardMaterial>,
+    /// Billboarded quad for blood mist puffs.
+    pub blood_mist_mesh: Handle<Mesh>,
+    /// Dark-red tinted smoke-puff flipbook (shared, one per frame).
+    pub blood_mist_materials: Vec<Handle<StandardMaterial>>,
+    /// Flat quad for ground decals.
+    pub blood_splat_mesh: Handle<Mesh>,
+    /// Procedural splatter texture variants, each with drying stages.
+    pub blood_splat_variants: Vec<BloodSplatVariant>,
     /// Shared impact marker materials (terrain orange, practice wall red).
     /// Re-used across all impacts to avoid per-hit material allocation.
     pub impact_terrain_material: Handle<StandardMaterial>,
     pub impact_wall_material: Handle<StandardMaterial>,
-    /// Shared blood splat/ring materials (re-used across all blood ground effects).
-    pub blood_splat_shared_material: Handle<StandardMaterial>,
-    pub blood_ring_shared_material: Handle<StandardMaterial>,
     pub smoke_mesh: Handle<Mesh>,
     pub smoke_materials: Vec<Handle<StandardMaterial>>,
     pub flash_mesh: Handle<Mesh>,
@@ -154,30 +165,29 @@ pub struct BloodDroplet {
     pub spawn_time: f32,
 }
 
-/// Quick splash ring when a droplet hits the ground (expands fast then fades)
-#[derive(Component)]
-pub struct BloodSplashRing {
-    pub spawn_time: f32,
-    pub lifetime: f32,
-    pub initial_scale: f32,
-}
-
-/// Blood splat on the ground (static decal that fades)
+/// Blood splat decal on the ground. Procedural splatter texture that "dries"
+/// over its lifetime (fresh glossy red -> dark matte brown).
 #[derive(Component)]
 pub struct BloodGroundSplat {
     pub spawn_time: f32,
     pub lifetime: f32,
     pub initial_scale: f32,
+    /// Which splatter texture variant this decal uses.
+    pub variant: usize,
+    /// Drying stage already applied (0 fresh, 1 drying, 2 dried).
+    pub stage: u8,
 }
 
-/// Instant blood burst for hit feedback - expands quickly and fades fast (PUBG-style)
+/// Billboarded blood mist puff (dark-red tinted smoke flipbook) — the instant
+/// hit feedback. Replaces the old expanding emissive spheres.
 #[derive(Component)]
-pub struct BloodBurst {
+pub struct BloodMist {
     pub spawn_time: f32,
-    pub lifetime: f32, // Short! ~0.25s
+    pub lifetime: f32,
+    pub velocity: Vec3,
     pub initial_scale: f32,
-    pub max_scale: f32,  // How big it grows
-    pub direction: Vec3, // Bias expansion direction (away from shooter)
+    /// Random roll around the view axis so overlapping puffs don't align.
+    pub roll: f32,
 }
 
 /// Muzzle smoke puff
@@ -223,23 +233,21 @@ pub struct ClientPerfConfig {
 
 impl Default for ClientPerfConfig {
     fn default() -> Self {
-        let enabled = std::env::var("FISTFORCE_CLIENT_PERF")
-            .map(|v| {
-                let v = v.trim().to_ascii_lowercase();
-                v == "1" || v == "true" || v == "on"
-            })
-            .unwrap_or(false);
+        let enabled = crate::profiling::hitch_profiling_enabled()
+            || crate::profiling::env_flag("FISTFORCE_CLIENT_PERF");
         let emit_interval_secs = std::env::var("FISTFORCE_CLIENT_PERF_INTERVAL_SECS")
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
             .filter(|v| *v > 0.0)
             .unwrap_or(5.0);
+        let hitch_threshold_ms =
+            crate::profiling::env_f32("FISTFORCE_HITCH_THRESHOLD_MS", 35.0).max(1.0);
 
         Self {
             enabled,
             emit_interval_secs,
             rolling_window_samples: 600,
-            hitch_threshold_ms: 35.0,
+            hitch_threshold_ms,
             stats_update_interval_secs: 0.25,
         }
     }

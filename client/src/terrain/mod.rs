@@ -32,6 +32,7 @@ impl Plugin for TerrainPlugin {
         app.init_resource::<paint::TerrainPaintSpatialIndex>();
         app.init_resource::<streaming::TerrainChunkTasks>();
         app.init_resource::<streaming::TerrainTaskScratch>();
+        app.init_resource::<streaming::far_terrain::FarTerrainHoleTask>();
         app.init_resource::<debug::TerrainDebugSettings>();
         app.init_resource::<debug::PerfHitchStats>();
         app.init_resource::<debug::TerrainPerfLogConfig>();

@@ -74,6 +74,7 @@ pub(super) fn spawn_graphics_panel(
                 GraphicsToggle::Bloom,
                 settings.bloom_enabled,
             );
+            spawn_toggle(panel, "SSAO", GraphicsToggle::Ssao, settings.ssao_enabled);
             spawn_toggle(
                 panel,
                 "Shadows",
@@ -135,6 +136,18 @@ pub(super) fn spawn_graphics_panel(
             ));
 
             // Slider controls
+            spawn_slider(
+                panel,
+                "Render Scale",
+                SliderControl::RenderScale,
+                &format!("{:.0}%", settings.render_scale * 100.0),
+            );
+            spawn_slider(
+                panel,
+                "Shadow Quality",
+                SliderControl::ShadowQuality,
+                settings.shadow_quality.label(),
+            );
             spawn_slider(
                 panel,
                 "Tone Map",

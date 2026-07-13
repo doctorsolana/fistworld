@@ -17,6 +17,7 @@ pub use third_person::{
     RemoteThirdPersonWeapon, RemoteWeaponIndex,
 };
 pub use view_model::{
-    update_first_person_weapon, update_weapon_animation, CurrentWeaponView, FirstPersonWeapon,
+    disable_first_person_weapon_shadows, update_first_person_weapon, update_weapon_animation,
+    CurrentWeaponView, FirstPersonWeapon,
 };
 pub use weapon_hud::{despawn_weapon_hud, spawn_weapon_hud, update_weapon_hud};

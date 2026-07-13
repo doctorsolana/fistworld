@@ -59,9 +59,13 @@ pub fn sync_vehicle_transforms(
                 (state.angular_velocity_yaw - smooth.smoothed_angular_yaw) * t_vel;
 
             // === 2. HEADING-AWARE EXTRAPOLATION ===
-            // When turning, rotate velocity by half the yaw change (midpoint approximation for curves)
+            // When turning, rotate velocity by half the yaw change (midpoint
+            // approximation for curves). Heading advances by +yaw_delta, so
+            // the velocity must curve by +yaw_delta/2 as well — the old
+            // negative sign bowed the predicted path to the OUTSIDE of turns
+            // (one of this repo's recurring mirror bugs).
             let yaw_delta = smooth.smoothed_angular_yaw * dt;
-            let half_yaw_rot = Quat::from_rotation_y(-yaw_delta * 0.5);
+            let half_yaw_rot = Quat::from_rotation_y(yaw_delta * 0.5);
             let curved_velocity = half_yaw_rot * smooth.smoothed_velocity;
             smooth.position += curved_velocity * dt;
 

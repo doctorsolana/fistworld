@@ -84,4 +84,4 @@ struct SubmitButton;
 
 /// Marker component to track that we've submitted a name
 #[derive(Component)]
-struct PlayerNameSubmitted;
+pub struct PlayerNameSubmitted;

@@ -2,9 +2,11 @@
 
 use super::*;
 
-/// Determine which chunks should be loaded based on player position.
+/// Determine which chunks should be loaded based on the streaming anchor
+/// (local player, or the RTS camera focus in the rail build).
 pub(crate) fn update_terrain_chunks(
-    player_query: Query<&PlayerPosition, With<LocalPlayer>>,
+    player_query: AnchorPlayer,
+    camera_query: AnchorCamera,
     mut loaded_chunks: ResMut<LoadedChunks>,
     mut streaming: ResMut<TerrainStreamingState>,
     chunk_query: Query<(Entity, &TerrainChunk, &Mesh3d)>,
@@ -18,11 +20,11 @@ pub(crate) fn update_terrain_chunks(
     mut perf: ResMut<PerfHitchStats>,
 ) {
     let start = Instant::now();
-    let Ok(player_pos) = player_query.single() else {
+    let Some(anchor_pos) = streaming_anchor(&player_query, &camera_query) else {
         return;
     };
 
-    let player_chunk = ChunkCoord::from_world_pos(player_pos.0);
+    let player_chunk = ChunkCoord::from_world_pos(anchor_pos);
     let view_distance = settings.view_distance;
 
     // Recompute when player moves to new chunk OR when view distance setting changes.
@@ -96,13 +98,14 @@ pub(crate) fn update_terrain_render_distance(
 
 pub(crate) fn update_terrain_material_lod(
     mut commands: Commands,
-    player_query: Query<&PlayerPosition, With<LocalPlayer>>,
+    player_query: AnchorPlayer,
+    camera_query: AnchorCamera,
     settings: Res<GraphicsSettings>,
     mut streaming: ResMut<TerrainStreamingState>,
     mut terrain_materials: ResMut<Assets<TerrainSplatMaterial>>,
     chunks: Query<(Entity, &TerrainChunk, &TerrainMaterialLod)>,
 ) {
-    let Ok(player_pos) = player_query.single() else {
+    let Some(anchor_pos) = streaming_anchor(&player_query, &camera_query) else {
         return;
     };
     let render_distance = if streaming.render_distance > 0 {
@@ -114,7 +117,7 @@ pub(crate) fn update_terrain_material_lod(
         return;
     }
     let splat_normal_radius = splat_normal_radius(render_distance);
-    let player_chunk = ChunkCoord::from_world_pos(player_pos.0);
+    let player_chunk = ChunkCoord::from_world_pos(anchor_pos);
     if streaming.material_lod_center == Some(player_chunk)
         && streaming.material_lod_radius == splat_normal_radius
     {
@@ -151,7 +154,8 @@ pub(crate) fn update_terrain_material_lod(
 
 /// Spawn terrain chunks that should be loaded but aren't yet.
 pub(crate) fn spawn_terrain_chunks(
-    player_query: Query<&PlayerPosition, With<LocalPlayer>>,
+    player_query: AnchorPlayer,
+    camera_query: AnchorCamera,
     loaded_chunks: Res<LoadedChunks>,
     streaming: Res<TerrainStreamingState>,
     terrain: Res<WorldTerrain>,
@@ -162,7 +166,7 @@ pub(crate) fn spawn_terrain_chunks(
     mut perf: ResMut<PerfHitchStats>,
 ) {
     let start = Instant::now();
-    let Ok(player_pos) = player_query.single() else {
+    let Some(anchor_pos) = streaming_anchor(&player_query, &camera_query) else {
         return;
     };
 
@@ -233,7 +237,7 @@ pub(crate) fn spawn_terrain_chunks(
     // If streaming hasn't initialized yet (no movement / no update), fall back to computing once.
     let use_cached_order = streaming
         .center
-        .is_some_and(|center| center == ChunkCoord::from_world_pos(player_pos.0))
+        .is_some_and(|center| center == ChunkCoord::from_world_pos(anchor_pos))
         && !streaming.desired_order.is_empty();
 
     if use_cached_order {
@@ -243,7 +247,7 @@ pub(crate) fn spawn_terrain_chunks(
             }
         }
     } else {
-        for coord in ChunkCoord::from_world_pos(player_pos.0).chunks_in_radius(view_distance) {
+        for coord in ChunkCoord::from_world_pos(anchor_pos).chunks_in_radius(view_distance) {
             if !enqueue_chunk_if_needed(coord) {
                 break;
             }

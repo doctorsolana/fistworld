@@ -15,9 +15,11 @@ use shared::items::{
 };
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 use shared::protocol::{
-    BulletImpact, DamageReceived, HitConfirm, NameSubmissionResult, NpcRagdollPoseBatch,
-    NpcRagdollStarted, PlayerInput, PlayerKilled, PlayerRoster, ReloadRequest, RequestPlayerRoster,
-    SetPlayerCharacter, SetTimeOfDay, ShootRequest, SpawnOilmanDebug, SpawnPhysicsBoxDebug,
+    AssignRouteRequest, BuildStationRequest, BuildTrackRequest, BulletImpact, BuyTrainRequest,
+    CreateCompanyRequest, DamageReceived, DemolishRailRequest, HitConfirm, NameSubmissionResult,
+    NpcRagdollPoseBatch, NpcRagdollStarted, PlayerInput, PlayerKilled, PlayerRoster,
+    RailCommandRejected, ReloadRequest, RequestPlayerRoster, SetPlayerCharacter, SetTimeOfDay,
+    SetTrainCargoPolicyRequest, ShootRequest, SpawnOilmanDebug, SpawnPhysicsBoxDebug,
     SubmitPlayerName, SwitchWeapon,
 };
 use shared::vehicle::{InVehicle, Vehicle, VehicleDriver, VehicleState};
@@ -92,6 +94,16 @@ pub fn handle_connections(
         ));
 
         commands.entity(client_entity).insert((
+            MessageReceiver::<CreateCompanyRequest>::default(),
+            MessageReceiver::<BuildTrackRequest>::default(),
+            MessageReceiver::<BuildStationRequest>::default(),
+            MessageReceiver::<BuyTrainRequest>::default(),
+            MessageReceiver::<AssignRouteRequest>::default(),
+            MessageReceiver::<SetTrainCargoPolicyRequest>::default(),
+            MessageReceiver::<DemolishRailRequest>::default(),
+        ));
+
+        commands.entity(client_entity).insert((
             MessageReceiver::<PickupRequest>::default(),
             MessageReceiver::<DropRequest>::default(),
             MessageReceiver::<SelectHotbarSlot>::default(),
@@ -110,6 +122,7 @@ pub fn handle_connections(
             MessageSender::<NpcRagdollPoseBatch>::default(),
             MessageSender::<NameSubmissionResult>::default(),
             MessageSender::<PlayerRoster>::default(),
+            MessageSender::<RailCommandRejected>::default(),
         ));
     }
 }

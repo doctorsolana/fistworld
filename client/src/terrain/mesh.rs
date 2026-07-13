@@ -137,18 +137,6 @@ pub(crate) fn build_far_terrain_mesh(
     mesh
 }
 
-pub(crate) fn rebuild_far_terrain_indices(
-    mesh: &mut Mesh,
-    origin: Vec2,
-    spacing: f32,
-    inner_center: Vec2,
-    inner_half: f32,
-    resolution: usize,
-) {
-    let indices = build_far_terrain_indices(origin, spacing, inner_center, inner_half, resolution);
-    mesh.insert_indices(Indices::U32(indices));
-}
-
 pub(crate) fn build_far_terrain_indices(
     origin: Vec2,
     spacing: f32,

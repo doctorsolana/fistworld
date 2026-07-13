@@ -7,7 +7,7 @@ use crate::states::GameState;
 use super::PropLodDebugMode;
 use super::{
     assets, debug, foliage, lod, spawn, BuildZoneChunkIndex, FoliageMaterialCache,
-    LoadedPropChunks, PropChunkIndex, SimplePropMeshCache,
+    LoadedPropChunks, PendingPropSpawns, PropChunkIndex, SimplePropMeshCache,
 };
 
 /// Plugin for environmental props.
@@ -16,6 +16,7 @@ pub struct PropsPlugin;
 impl Plugin for PropsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LoadedPropChunks>();
+        app.init_resource::<PendingPropSpawns>();
         app.init_resource::<PropChunkIndex>();
         app.init_resource::<BuildZoneChunkIndex>();
         app.init_resource::<FoliageMaterialCache>();

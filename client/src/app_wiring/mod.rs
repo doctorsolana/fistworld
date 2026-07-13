@@ -1,5 +1,6 @@
 //! Centralized app wiring helpers for plugins, resources, and systems.
 
+pub mod dev;
 pub mod plugins;
 pub mod resources;
 pub mod systems;
@@ -14,7 +15,8 @@ use window::apply_connect_window_settings;
 use bevy::asset::AssetPlugin;
 use bevy::audio::{AudioPlugin, SpatialScale};
 use bevy::diagnostic::{
-    EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin, SystemInformationDiagnosticsPlugin,
+    EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin,
+    SystemInformationDiagnosticsPlugin,
 };
 use bevy::prelude::*;
 use bevy::render::diagnostic::RenderDiagnosticsPlugin;
@@ -29,7 +31,8 @@ use shared::protocol::{tick_duration, ProtocolPlugin};
 use shared::weapons::WeaponDebugMode;
 
 use crate::{
-    audio, camera, chest, city, crosshair, dialogue, input, pickup, props, render,
-    render::systems as game_systems, states::GameState, terrain, ui, water, weapon_view, weapons,
+    audio, camera, chest, city, crosshair, dialogue, input, pickup, profiling, props, rail,
+    render, render::systems as game_systems, states::GameState, terrain, ui, water, weapon_view,
+    weapons,
 };
 use game_systems::{GraphicsSettings, LAUNCHER_RESOLUTION};

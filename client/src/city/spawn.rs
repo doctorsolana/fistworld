@@ -52,33 +52,55 @@ pub fn spawn_city_layout_visuals(
         "textures/terrain/optimized_1k/Cobblestone_Normals_01.png",
         false,
     );
+    let dirt_albedo = load_repeating_texture(
+        &asset_server,
+        "textures/terrain/optimized_1k/Dirt_Texture_01.png",
+        true,
+    );
+    let dirt_normal = load_repeating_texture(
+        &asset_server,
+        "textures/terrain/optimized_1k/Dirt_Normals_01.png",
+        false,
+    );
     let road_alley_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.07, 0.07, 0.08),
-        perceptual_roughness: 0.98,
+        base_color: Color::srgb(0.24, 0.20, 0.16),
+        base_color_texture: Some(dirt_albedo.clone()),
+        normal_map_texture: Some(dirt_normal),
+        perceptual_roughness: 0.96,
+        metallic: 0.0,
+        reflectance: 0.04,
         ..default()
     });
     let road_local_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.82, 0.82, 0.80),
-        base_color_texture: Some(cobblestone_albedo),
-        normal_map_texture: Some(cobblestone_normal),
-        perceptual_roughness: 1.0,
+        base_color: Color::srgb(0.76, 0.75, 0.70),
+        base_color_texture: Some(cobblestone_albedo.clone()),
+        normal_map_texture: Some(cobblestone_normal.clone()),
+        perceptual_roughness: 0.94,
         metallic: 0.0,
-        reflectance: 0.08,
+        reflectance: 0.06,
         ..default()
     });
     let road_collector_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.14, 0.14, 0.15),
-        perceptual_roughness: 0.95,
+        base_color: Color::srgb(0.105, 0.105, 0.10),
+        perceptual_roughness: 0.93,
+        metallic: 0.0,
+        reflectance: 0.05,
         ..default()
     });
     let road_arterial_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.17, 0.17, 0.18),
-        perceptual_roughness: 0.92,
+        base_color: Color::srgb(0.13, 0.13, 0.125),
+        perceptual_roughness: 0.91,
+        metallic: 0.0,
+        reflectance: 0.055,
         ..default()
     });
     let sidewalk_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.72, 0.72, 0.69),
-        perceptual_roughness: 1.0,
+        base_color: Color::srgb(0.70, 0.69, 0.64),
+        base_color_texture: Some(cobblestone_albedo),
+        normal_map_texture: Some(cobblestone_normal),
+        perceptual_roughness: 0.97,
+        metallic: 0.0,
+        reflectance: 0.035,
         cull_mode: None,
         ..default()
     });

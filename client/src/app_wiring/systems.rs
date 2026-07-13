@@ -1,28 +1,47 @@
-//! systems systems.
+//! Client system wiring.
+//!
+//! Default: the FistForce sandbox shooter (walk around, shoot, drive, loot).
+//! Set `FISTFORCE_RAIL=1` to boot the rail-tycoon prototype shell instead —
+//! the two modes share rendering/terrain/props but need different cameras,
+//! input, and HUD, so they are wired mutually exclusively.
 
 use super::*;
 
 pub fn setup_systems(app: &mut App) {
+    wire_common_systems(app);
+    if super::dev::rail_mode_enabled() {
+        wire_rail_systems(app);
+    } else {
+        wire_fps_systems(app);
+    }
+}
+
+/// Wiring shared by both the shooter and the rail prototype: window setup,
+/// rendering, connection flow, hierarchy fixes, sky, and graphics settings.
+fn wire_common_systems(app: &mut App) {
     app.add_systems(
         OnEnter(GameState::Connecting),
         apply_connect_window_settings,
     );
 
-    // Setup systems (run once at startup - rendering only)
-    app.add_systems(
-        Startup,
-        (
-            game_systems::setup_rendering,
-            game_systems::setup_debug_physics_box_assets,
-            game_systems::setup_particle_assets,
-            game_systems::setup_vehicle_visual_assets,
-            weapons::setup_weapon_visual_assets,
-            weapons::setup_weapon_audio_assets,
-            weapon_view::setup_weapon_model_assets,
-            game_systems::setup_player_character_assets,
-            game_systems::setup_npc_assets,
-        ),
-    );
+    app.add_systems(Startup, game_systems::setup_rendering);
+
+    // Keep the offscreen scene target sized to window * render_scale in every
+    // state (resizes happen in menus and on fullscreen transitions too).
+    app.add_systems(Update, game_systems::sync_scene_render_target);
+
+    // FISTFORCE_AUTOCONNECT: unattended connect + name submission for perf
+    // runs and automated verification.
+    if super::dev::autoconnect_name().is_some() {
+        app.add_systems(
+            Update,
+            super::dev::autoconnect_from_main_menu.run_if(in_state(GameState::MainMenu)),
+        );
+        app.add_systems(
+            Update,
+            super::dev::autoconnect_submit_name.run_if(in_state(GameState::Connected)),
+        );
+    }
 
     // Ensure we clean up visuals when entering menu
     app.add_systems(
@@ -38,6 +57,110 @@ pub fn setup_systems(app: &mut App) {
     app.add_systems(
         Update,
         game_systems::update_connection_status.run_if(in_state(GameState::Connecting)),
+    );
+
+    // Keep hierarchy transform/visibility parents consistent to avoid B0004 warning spam.
+    app.add_systems(
+        PostUpdate,
+        (
+            render::hierarchy_fix::ensure_hierarchy_parent_audit,
+            render::hierarchy_fix::ensure_hierarchy_visibility_parents,
+        )
+            .chain()
+            .before(bevy::transform::TransformSystems::Propagate)
+            .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+    );
+    app.add_observer(render::hierarchy_fix::ensure_parent_components_on_child_add);
+    app.add_observer(render::hierarchy_fix::update_b0004_global_trace);
+
+    // Sky, day/night, and graphics settings application.
+    app.add_systems(
+        Update,
+        (
+            game_systems::update_day_night_cycle,
+            game_systems::update_atmosphere,
+            game_systems::apply_graphics_settings,
+        )
+            .run_if(in_state(GameState::Playing)),
+    );
+    app.add_systems(
+        Update,
+        (
+            game_systems::apply_cloud_texture_sampler,
+            game_systems::update_cloud_cover,
+            game_systems::update_cloud_layers,
+            game_systems::spawn_cloud_cards,
+            game_systems::update_cloud_cards,
+        )
+            .chain()
+            .run_if(in_state(GameState::Playing)),
+    );
+}
+
+/// The rail-tycoon prototype shell (FISTFORCE_RAIL=1): RTS camera + build UI.
+fn wire_rail_systems(app: &mut App) {
+    app.add_systems(
+        Startup,
+        (rail::setup_rail_assets, game_systems::setup_particle_assets),
+    );
+
+    app.add_systems(
+        OnEnter(GameState::Playing),
+        (
+            game_systems::spawn_world,
+            rail::spawn_rail_hud,
+            rail::release_cursor_for_rts,
+        )
+            .chain(),
+    );
+
+    app.add_systems(OnExit(GameState::Playing), rail::despawn_rail_hud);
+
+    app.add_systems(
+        Update,
+        (
+            rail::ensure_rts_camera_controller,
+            rail::release_cursor_for_rts,
+            rail::update_cursor_terrain_hit,
+            rail::handle_rail_hotkeys,
+            rail::handle_rail_build_clicks,
+            rail::receive_rail_rejections,
+            rail::update_rts_camera,
+            rail::update_rail_hud,
+        )
+            .chain()
+            .run_if(in_state(GameState::Playing)),
+    );
+
+    app.add_systems(
+        Update,
+        (
+            rail::setup_track_visuals,
+            rail::setup_station_visuals,
+            rail::setup_train_visuals,
+            rail::setup_industry_visuals,
+            rail::update_train_visuals,
+        )
+            .chain()
+            .run_if(in_state(GameState::Playing)),
+    );
+}
+
+/// The FistForce sandbox shooter (default mode).
+fn wire_fps_systems(app: &mut App) {
+    // Setup systems (run once at startup - rendering only)
+    app.add_systems(
+        Startup,
+        (
+            game_systems::setup_debug_physics_box_assets,
+            game_systems::setup_particle_assets,
+            game_systems::setup_vehicle_visual_assets,
+            weapons::setup_weapon_visual_assets,
+            weapons::setup_weapon_audio_assets,
+            weapon_view::setup_weapon_model_assets,
+            game_systems::setup_player_character_assets,
+            game_systems::setup_npc_assets,
+        ),
     );
 
     // Spawn world visuals, HUD, crosshair, and death screen when entering gameplay
@@ -73,20 +196,6 @@ pub fn setup_systems(app: &mut App) {
         input::handle_send_input_to_server
             .run_if(in_state(GameState::Playing).or(in_state(GameState::Paused))),
     );
-
-    // Keep hierarchy transform/visibility parents consistent to avoid B0004 warning spam.
-    app.add_systems(
-        PostUpdate,
-        (
-            render::hierarchy_fix::ensure_hierarchy_parent_audit,
-            render::hierarchy_fix::ensure_hierarchy_visibility_parents,
-        )
-            .chain()
-            .before(bevy::transform::TransformSystems::Propagate)
-            .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
-    );
-    app.add_observer(render::hierarchy_fix::ensure_parent_components_on_child_add);
-    app.add_observer(render::hierarchy_fix::update_b0004_global_trace);
 
     // Replication-driven spawn/setup must NOT be gated solely to `Playing`.
     app.add_systems(
@@ -129,23 +238,7 @@ pub fn setup_systems(app: &mut App) {
             camera::update_sniper_fisheye,
             game_systems::spawn_sand_particles,
             game_systems::update_sand_particles,
-            game_systems::update_day_night_cycle,
-            game_systems::update_atmosphere,
-            game_systems::apply_graphics_settings,
         )
-            .run_if(in_state(GameState::Playing)),
-    );
-
-    app.add_systems(
-        Update,
-        (
-            game_systems::apply_cloud_texture_sampler,
-            game_systems::update_cloud_cover,
-            game_systems::update_cloud_layers,
-            game_systems::spawn_cloud_cards,
-            game_systems::update_cloud_cards,
-        )
-            .chain()
             .run_if(in_state(GameState::Playing)),
     );
 
@@ -230,7 +323,6 @@ pub fn setup_systems(app: &mut App) {
             weapons::update_impact_markers,
             weapons::update_blood_bursts,
             weapons::update_blood_droplets,
-            weapons::update_blood_splash_rings,
             weapons::update_blood_ground_splats,
             weapons::update_muzzle_smoke,
             weapons::update_muzzle_flash,

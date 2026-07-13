@@ -23,7 +23,7 @@ pub fn setup_steam_car_visual_rigs(
     meshes: Res<Assets<Mesh>>,
 ) {
     for (entity, vehicle) in cars.iter() {
-        if vehicle.vehicle_type != VehicleType::Car {
+        if !matches!(vehicle.vehicle_type, VehicleType::Car | VehicleType::CarV2) {
             commands.entity(entity).remove::<NeedsSteamCarRigSetup>();
             continue;
         }
@@ -185,7 +185,7 @@ pub fn update_steam_car_visuals(
     }
 
     for (vehicle, state, vehicle_transform, mut rig) in cars.iter_mut() {
-        if vehicle.vehicle_type != VehicleType::Car {
+        if !matches!(vehicle.vehicle_type, VehicleType::Car | VehicleType::CarV2) {
             continue;
         }
 

@@ -17,20 +17,20 @@ use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
-use shared::components::{LocalPlayer, PlayerPosition};
 use shared::terrain::{
     ChunkCoord, TerrainDeltaChunk, TerrainDeltaData, TerrainGenerator, TerrainPaintOp,
     WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, WORLD_RADIUS_METERS, WORLD_SEED,
 };
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
+use crate::streaming::{streaming_anchor, AnchorCamera, AnchorPlayer};
 use crate::ui::DebugPerfSettings;
 
 use super::chunks::{FarTerrain, FarTerrainState, LoadedChunks, TerrainChunk, TerrainMaterialLod};
 use super::debug::{PerfHitchStats, TerrainDebugSettings};
 use super::materials::{TerrainRenderAssets, TerrainSplatExtension, TerrainSplatMaterial};
 use super::mesh::{
-    build_far_terrain_mesh, build_terrain_mesh, compute_chunk_tangents, rebuild_far_terrain_indices,
+    build_far_terrain_indices, build_far_terrain_mesh, build_terrain_mesh, compute_chunk_tangents,
 };
 use super::paint::{
     apply_paint_op_to_weights, build_weightmap_from_weights, build_weightmap_weights,

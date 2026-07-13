@@ -14,6 +14,7 @@ use crate::net;
 use crate::persistence;
 use crate::physics;
 use crate::player;
+use crate::rail;
 use crate::telemetry;
 
 pub(crate) fn setup_resources(app: &mut App) {
@@ -22,6 +23,7 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<WorldTerrain>();
     app.init_resource::<AuthoredCityLayout>();
     app.init_resource::<net::input::ClientInputs>();
+    app.init_resource::<rail::RailServerState>();
     app.init_resource::<net::input::ClientInputIngressStats>();
     app.init_resource::<player::index::PlayerEntityIndex>();
     app.init_resource::<player::spatial::PlayerSpatialIndex>();

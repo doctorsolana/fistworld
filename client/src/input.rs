@@ -40,7 +40,7 @@ pub struct InputState {
     pub pitch: f32,
     pub interact: bool,
     pub interact_just_pressed: bool,
-    /// Hold Shift for air tricks (pitch/roll control while airborne)
+    /// Hold Shift to sprint on foot, fly faster in debug fly mode, or do vehicle air tricks.
     pub shift: bool,
 
     /// Camera mode (toggle with P)

@@ -12,6 +12,9 @@ pub enum VehicleType {
     #[default]
     Motorbike,
     Car,
+    /// Same steam-car visual as `Car`, driven by the v2 physics model
+    /// (slip tires, load transfer, dynamic body attitude) for A/B comparison.
+    CarV2,
 }
 
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]

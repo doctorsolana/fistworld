@@ -8,7 +8,7 @@ pub mod overlay;
 pub use chunks::WaterChunk;
 
 use chunks::{cleanup_water_chunks, spawn_water_chunks, LoadedWaterChunks, WaterRenderAssets};
-use material::{setup_water_assets, ToonWaterMaterial};
+use material::{setup_water_assets, update_water_cull_mode, ToonWaterMaterial};
 use overlay::{despawn_underwater_overlay, spawn_underwater_overlay, update_underwater_overlay};
 
 use bevy::asset::RenderAssetUsages;
@@ -49,7 +49,8 @@ impl Plugin for WaterPlugin {
         );
         app.add_systems(
             Update,
-            update_underwater_overlay.run_if(in_state(GameState::Playing)),
+            (update_underwater_overlay, update_water_cull_mode)
+                .run_if(in_state(GameState::Playing)),
         );
     }
 }

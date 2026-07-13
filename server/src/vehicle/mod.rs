@@ -8,5 +8,6 @@
 //! - May depend on `shared` and player identity data.
 //! - Should not depend on UI or client-specific concerns.
 
+pub mod bootstrap;
 pub mod interaction;
 pub mod simulation;
