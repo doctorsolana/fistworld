@@ -37,6 +37,18 @@ pub struct TerrainSplatExtension {
     // 1.0 = full normal mapping, 0.0 = skip normal-map contribution.
     #[uniform(122)]
     pub normal_strength: f32,
+
+    // x: water level (world Y), y: 1.0 when the map has water, zw: unused.
+    #[uniform(123)]
+    pub water_params: Vec4,
+}
+
+/// Terrain water uniform from a generator's loaded map: (level, enabled).
+pub fn water_params_for_generator(generator: &shared::terrain::TerrainGenerator) -> Vec4 {
+    match generator.loaded_map().heightmap.water_level {
+        Some(level) => Vec4::new(level, 1.0, 0.0, 0.0),
+        None => Vec4::ZERO,
+    }
 }
 
 impl MaterialExtension for TerrainSplatExtension {

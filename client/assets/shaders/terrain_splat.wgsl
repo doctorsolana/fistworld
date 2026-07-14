@@ -46,6 +46,11 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(120) var<uniform> layer_tiling: vec4<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(121) var<uniform> debug_mode: u32;
 @group(#{MATERIAL_BIND_GROUP}) @binding(122) var<uniform> normal_strength: f32;
+// x: water level (world Y), y: 1.0 when the map has water, zw: unused.
+@group(#{MATERIAL_BIND_GROUP}) @binding(123) var<uniform> water_params: vec4<f32>;
+
+// The pbr imports already bind view globals; reuse them for caustic time.
+#import bevy_pbr::mesh_view_bindings::globals
 
 fn normalize_weights(weights: vec4<f32>) -> vec4<f32> {
     let clamped = max(weights, vec4<f32>(0.0));
@@ -148,6 +153,37 @@ fn fragment(
                 + dirt_albedo * weights.y
                 + sand_albedo * weights.z
                 + cobble_albedo * weights.w;
+        }
+
+        // --- Water interaction ---
+        if (water_params.y > 0.5) {
+            let water_level = water_params.x;
+            let h = pbr_input.world_position.y;
+
+            // Wet band: ground just above the waterline is darker and
+            // glossier, grounding the water against the shore.
+            let wet = 1.0 - smoothstep(water_level + 0.04, water_level + 0.85, h);
+            albedo *= mix(1.0, 0.60, wet);
+            pbr_input.material.perceptual_roughness =
+                mix(pbr_input.material.perceptual_roughness, 0.38, wet);
+
+            // Caustics: two drifting interference fields multiplied give a
+            // bright cellular web on the submerged bed, fading out both at
+            // the waterline and into the depths.
+            let submersion = water_level - h;
+            let caustic_zone = smoothstep(0.03, 0.35, submersion)
+                * (1.0 - smoothstep(1.6, 3.0, submersion));
+            if (caustic_zone > 0.002) {
+                let p = pbr_input.world_position.xz;
+                let ct = globals.time;
+                let field_a = sin(dot(p, vec2<f32>(0.86, 0.44)) * 2.1 + ct * 1.25)
+                    + sin(dot(p, vec2<f32>(-0.38, 0.95)) * 1.7 - ct * 0.85);
+                let field_b = sin(dot(p, vec2<f32>(0.21, -1.07)) * 2.3 + ct * 1.05)
+                    + sin(dot(p, vec2<f32>(1.05, 0.57)) * 1.9 - ct * 1.35);
+                let web = clamp(field_a * field_b * 0.25, 0.0, 1.0);
+                let caustic = web * web * web * caustic_zone;
+                albedo += caustic * vec3<f32>(0.42, 0.52, 0.55);
+            }
         }
 
         pbr_input.material.base_color = vec4<f32>(albedo, 1.0);

@@ -174,6 +174,7 @@ pub(super) fn warmup_terrain_pipeline(
             layer_tiling: render_assets.layer_tiling,
             debug_mode: debug_settings.mode,
             normal_strength: 1.0,
+            water_params: Vec4::ZERO,
         },
     });
 

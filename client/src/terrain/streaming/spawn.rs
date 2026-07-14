@@ -161,8 +161,6 @@ pub(crate) fn spawn_terrain_chunks(
     streaming: Res<TerrainStreamingState>,
     terrain: Res<WorldTerrain>,
     settings: Res<GraphicsSettings>,
-    paint_state: Res<TerrainPaintState>,
-    paint_index: Res<TerrainPaintSpatialIndex>,
     mut tasks: ResMut<TerrainChunkTasks>,
     mut perf: ResMut<PerfHitchStats>,
 ) {
@@ -190,18 +188,6 @@ pub(crate) fn spawn_terrain_chunks(
             return true;
         }
 
-        // Snapshot paint ops that intersect this chunk.
-        let mut ops_for_chunk: Vec<TerrainPaintOp> = Vec::new();
-        if let Some(op_ids) = paint_index.ops_by_chunk.get(&coord) {
-            ops_for_chunk.reserve(op_ids.len());
-            for op_id in op_ids {
-                if let Some(op) = paint_state.ops.get(op_id) {
-                    ops_for_chunk.push(op.clone());
-                }
-            }
-        }
-        let op_ids: HashSet<u64> = ops_for_chunk.iter().map(|op| op.id).collect();
-
         // Snapshot delta chunks in a 3x3 area for cross-chunk normal sampling.
         let mut delta_map: HashMap<ChunkCoord, TerrainDeltaData> = HashMap::new();
         for dx in -1..=1 {
@@ -219,14 +205,19 @@ pub(crate) fn spawn_terrain_chunks(
             let generator = TerrainGenerator::new(seed);
             let mesh_data = generator.generate_chunk_with_deltas(&delta_map, coord);
             let tangents = compute_chunk_tangents(&mesh_data).unwrap_or_default();
-            let weights = build_weightmap_weights(&generator, coord, &ops_for_chunk, resolution);
+            // Authored surface paint is baked per-chunk map data (like the
+            // height deltas), resolved from this generator's map copy.
+            let weights = generator
+                .loaded_map()
+                .edits
+                .resolve_chunk_weights(&generator, coord, resolution);
             ChunkBuildResult {
                 coord,
+                generator,
                 mesh_data,
                 tangents,
                 weights,
                 resolution,
-                op_ids,
             }
         });
 

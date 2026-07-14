@@ -4,8 +4,7 @@ use bevy::prelude::*;
 use lightyear::prelude::{NetworkTarget, Replicate, ReplicationMode};
 
 use shared::components::{ActiveMapState, CloudSeed};
-use shared::terrain::WorldTerrain;
-use shared::terrain::WORLD_SEED;
+use shared::terrain::{WorldTerrain, WORLD_SEED};
 
 /// One-shot resource to ensure we only spawn `CloudSeed` once.
 #[derive(Resource)]

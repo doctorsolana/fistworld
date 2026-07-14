@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use crate::city::{PlotToolSettings, RoadToolSettings};
 use shared::map::{MapDefinition, MapEditsDefinition, MapSpawnMarker, SpawnMarkerKind};
 use shared::props::{PropKind, ALL_PROP_KINDS};
-use shared::terrain::{ChunkCoord, WorldTerrain};
+use shared::terrain::{ChunkCoord, TerrainLayer, WorldTerrain};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolMode {
@@ -25,6 +25,12 @@ pub enum TerrainBrushMode {
     Raise,
     Lower,
     Flatten,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TerrainEditMode {
+    Sculpt,
+    Paint,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -119,10 +125,14 @@ pub enum BrushMix {
 #[derive(Resource)]
 pub struct EditorUiState {
     pub tool: ToolMode,
+    pub terrain_edit_mode: TerrainEditMode,
     pub terrain_mode: TerrainBrushMode,
     pub brush_radius: f32,
     pub brush_strength: f32,
     pub flatten_blend: f32,
+    pub terrain_layer: TerrainLayer,
+    pub paint_strength: f32,
+    pub paint_softness: f32,
     pub selected_prop_index: usize,
     pub selected_spawn_kind: SpawnMarkerKind,
     pub spawn_marker_radius: f32,
@@ -156,10 +166,14 @@ impl Default for EditorUiState {
     fn default() -> Self {
         Self {
             tool: ToolMode::Terrain,
+            terrain_edit_mode: TerrainEditMode::Sculpt,
             terrain_mode: TerrainBrushMode::Raise,
             brush_radius: 6.0,
             brush_strength: 4.0,
             flatten_blend: 2.0,
+            terrain_layer: TerrainLayer::Grass,
+            paint_strength: 0.55,
+            paint_softness: 0.35,
             selected_prop_index: 0,
             selected_spawn_kind: SpawnMarkerKind::NpcGroup,
             spawn_marker_radius: 4.0,
@@ -245,6 +259,10 @@ pub struct EditorSession {
     pub dirty_edits: bool,
     pub undo: Vec<EditorSnapshot>,
     pub redo: Vec<EditorSnapshot>,
+    /// Working surface-paint buffers per chunk (decoded, mutated in place by
+    /// the paint brush). Synced into `map_edits.terrain_weightmaps` (RLE) at
+    /// snapshot and save boundaries.
+    pub paint_weights: HashMap<ChunkCoord, Vec<[u8; 4]>>,
     pub next_spawn_marker_id: u64,
     pub next_road_id: u64,
     pub next_plot_id: u64,
@@ -268,6 +286,7 @@ impl EditorSession {
             dirty_edits: false,
             undo: Vec::new(),
             redo: Vec::new(),
+            paint_weights: HashMap::new(),
             next_spawn_marker_id: 1,
             next_road_id: 1,
             next_plot_id: 1,
@@ -287,9 +306,20 @@ impl EditorSession {
     pub fn capture_snapshot(&self, terrain: &WorldTerrain) -> EditorSnapshot {
         let mut edits = self.map_edits.clone();
         edits.set_terrain_deltas_from_world(terrain.delta_chunks());
+        for (coord, weights) in &self.paint_weights {
+            edits.set_weightmap_for_chunk(*coord, weights);
+        }
         EditorSnapshot {
             map_definition: self.map_definition.clone(),
             map_edits: edits,
+        }
+    }
+
+    /// Bake the working paint buffers into `map_edits` (RLE) — call before
+    /// saving.
+    pub fn sync_paint_weights_into_edits(&mut self) {
+        for (coord, weights) in &self.paint_weights {
+            self.map_edits.set_weightmap_for_chunk(*coord, weights);
         }
     }
 
@@ -386,6 +416,8 @@ pub struct TerrainChunkRegistry {
 #[derive(Debug, Clone)]
 pub struct TerrainChunkEntry {
     pub mesh: Handle<Mesh>,
+    pub weightmap: Handle<Image>,
+    pub material: Handle<crate::terrain_material::EditorTerrainSplatMaterial>,
 }
 
 #[derive(Resource, Default)]

@@ -9,7 +9,8 @@ pub use chunks::WaterChunk;
 
 use chunks::{cleanup_water_chunks, spawn_water_chunks, LoadedWaterChunks, WaterRenderAssets};
 use material::{
-    setup_water_assets, update_water_cull_mode, update_water_sun_dir, ToonWaterMaterial,
+    emit_water_ripples, setup_water_assets, update_water_cull_mode, update_water_sun_dir,
+    ToonWaterMaterial,
 };
 use overlay::{despawn_underwater_overlay, spawn_underwater_overlay, update_underwater_overlay};
 
@@ -26,7 +27,7 @@ use bevy::render::render_resource::{
 use bevy::shader::ShaderRef;
 use std::collections::HashMap;
 
-use shared::components::{LocalPlayer, PlayerWaterState};
+use shared::components::{LocalPlayer, PlayerPosition, PlayerWaterState};
 use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, VERTEX_SPACING};
 
 use crate::render::systems::{ClientWorldRoot, SunLight};
@@ -55,6 +56,7 @@ impl Plugin for WaterPlugin {
                 update_underwater_overlay,
                 update_water_cull_mode,
                 update_water_sun_dir,
+                emit_water_ripples,
             )
                 .run_if(in_state(GameState::Playing)),
         );

@@ -4,6 +4,7 @@ mod city;
 mod lighting;
 mod picking;
 mod session;
+mod terrain_material;
 mod tools;
 mod ui;
 

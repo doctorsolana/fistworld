@@ -5,6 +5,14 @@ use super::*;
 const WATER_SURFACE_OFFSET: f32 = 0.02;
 const WATER_DEPTH_MAX: f32 = 2.5;
 const WATER_SHORE_OVERLAP: f32 = 0.12;
+/// Horizontal distance (m) at which a vertex counts as fully "open water".
+/// Baked into vertex color G so the shader can zone features by distance to
+/// the coast — vertical depth alone fails on steep banks, where deep water
+/// starts a meter from the shoreline.
+const SHORE_DIST_MAX: f32 = 28.0;
+/// Cells scanned beyond the chunk when collecting shoreline points, so
+/// distances stay correct across chunk borders (32m at 2m spacing).
+const SHORE_SCAN_MARGIN: i32 = 16;
 
 #[derive(Clone, Copy)]
 struct Corner {
@@ -18,6 +26,7 @@ struct WaterVertex {
     pos: [f32; 3],
     uv: [f32; 2],
     depth_norm: f32,
+    shore_dist: f32,
 }
 
 fn add_triangle(
@@ -40,9 +49,9 @@ fn add_triangle(
     uvs.push(a.uv);
     uvs.push(b.uv);
     uvs.push(c.uv);
-    colors.push([1.0, 1.0, 1.0, a.depth_norm]);
-    colors.push([1.0, 1.0, 1.0, b.depth_norm]);
-    colors.push([1.0, 1.0, 1.0, c.depth_norm]);
+    colors.push([1.0, a.shore_dist, 1.0, a.depth_norm]);
+    colors.push([1.0, b.shore_dist, 1.0, b.depth_norm]);
+    colors.push([1.0, c.shore_dist, 1.0, c.depth_norm]);
     // The a/b/c layout below is clockwise seen from above (+Y); emit reversed
     // so the front face points up — otherwise back-face culling hides the
     // whole surface from above water.
@@ -65,6 +74,56 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
     let depth_norm =
         |height: f32| ((water_level - height).max(0.0) / WATER_DEPTH_MAX).clamp(0.0, 1.0);
 
+    // Pass 1: collect shoreline crossing points in and around the chunk so
+    // every vertex can carry its horizontal distance to the coast.
+    let mut shore_points: Vec<Vec2> = Vec::new();
+    {
+        let scan_min = -SHORE_SCAN_MARGIN;
+        let scan_max = (CHUNK_RESOLUTION as i32 - 1) + SHORE_SCAN_MARGIN;
+        for zi in scan_min..=scan_max {
+            for xi in scan_min..=scan_max {
+                let x0 = origin_x + xi as f32 * VERTEX_SPACING;
+                let z0 = origin_z + zi as f32 * VERTEX_SPACING;
+                let h00 = terrain.get_height(x0, z0);
+                let above00 = h00 >= waterline;
+                // East edge
+                let h10 = terrain.get_height(x0 + VERTEX_SPACING, z0);
+                if above00 != (h10 >= waterline) {
+                    let denom = h10 - h00;
+                    let t = if denom.abs() < 1e-6 {
+                        0.5
+                    } else {
+                        ((waterline - h00) / denom).clamp(0.0, 1.0)
+                    };
+                    shore_points.push(Vec2::new(x0 + t * VERTEX_SPACING, z0));
+                }
+                // South edge
+                let h01 = terrain.get_height(x0, z0 + VERTEX_SPACING);
+                if above00 != (h01 >= waterline) {
+                    let denom = h01 - h00;
+                    let t = if denom.abs() < 1e-6 {
+                        0.5
+                    } else {
+                        ((waterline - h00) / denom).clamp(0.0, 1.0)
+                    };
+                    shore_points.push(Vec2::new(x0, z0 + t * VERTEX_SPACING));
+                }
+            }
+        }
+    }
+
+    let shore_dist_norm = |world_x: f32, world_z: f32| -> f32 {
+        if shore_points.is_empty() {
+            return 1.0;
+        }
+        let p = Vec2::new(world_x, world_z);
+        let mut best = f32::MAX;
+        for point in &shore_points {
+            best = best.min(point.distance_squared(p));
+        }
+        (best.sqrt() / SHORE_DIST_MAX).clamp(0.0, 1.0)
+    };
+
     let make_vertex = |local_x: f32, local_z: f32, depth: f32| {
         let world_x = origin_x + local_x;
         let world_z = origin_z + local_z;
@@ -72,6 +131,7 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
             pos: [local_x, water_y, local_z],
             uv: [world_x / CHUNK_SIZE, world_z / CHUNK_SIZE],
             depth_norm: depth,
+            shore_dist: shore_dist_norm(world_x, world_z),
         }
     };
 

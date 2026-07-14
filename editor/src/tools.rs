@@ -9,11 +9,13 @@ use bevy::render::render_resource::PrimitiveTopology;
 
 use shared::map::{
     load_map, load_map_from_parts, map_definition_path, save_map_definition_atomic,
-    save_map_edits_atomic, MapObjectSpawn, SpawnMarkerKind, DEFAULT_MAP_ID,
+    save_map_edits_atomic, MapObjectSpawn, SpawnMarkerKind, DEFAULT_MAP_ID, MAP_EDITS_VERSION,
 };
 use shared::props::PropKind;
 use shared::terrain::{
-    ChunkCoord, ChunkMeshData, WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, VERTEX_SPACING,
+    apply_terrain_paint_op_to_weights, terrain_paint_op_chunk_coords, ChunkCoord, ChunkMeshData,
+    TerrainLayer, TerrainPaintOp, TerrainPaintShape, WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE,
+    TERRAIN_WEIGHTMAP_RESOLUTION, VERTEX_SPACING,
 };
 
 use bevy::app::AppExit;
@@ -26,14 +28,20 @@ use crate::session::{
     EditorPropCullDistance, EditorPropIndex, EditorPropPreviewVisual, EditorPropVisual,
     EditorSession, EditorSnapshot, EditorSpawnVisual, EditorUiState, EditorWaterChunk,
     EditorWaterVisual, ForestBrushPreset, ForestBrushSettings, PropPreviewState, TerrainBrushMode,
-    TerrainChunkEntry, TerrainChunkRegistry, TerrainChunkVisual, ToolMode, UiActionRequests,
-    WaterChunkRegistry,
+    TerrainChunkEntry, TerrainChunkRegistry, TerrainChunkVisual, TerrainEditMode, ToolMode,
+    UiActionRequests, WaterChunkRegistry,
+};
+use crate::terrain_material::{
+    create_weightmap_image, update_weightmap_image, EditorTerrainSplatExtension,
+    EditorTerrainSplatMaterial, EditorTerrainTextureAssets,
 };
 
 #[derive(Resource, Default)]
 pub struct VisualRefreshFlags {
     pub terrain_all: bool,
     pub terrain_chunks: HashSet<ChunkCoord>,
+    pub paint_all: bool,
+    pub paint_chunks: HashSet<ChunkCoord>,
     pub water_all: bool,
     pub water_chunks: HashSet<ChunkCoord>,
     /// Full despawn + respawn of every prop visual. Only for undo/load/reset.
@@ -53,6 +61,9 @@ pub fn setup_editor_scene(
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut terrain_materials: ResMut<Assets<EditorTerrainSplatMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    terrain_textures: Res<EditorTerrainTextureAssets>,
     mut terrain_registry: ResMut<TerrainChunkRegistry>,
     mut water_registry: ResMut<WaterChunkRegistry>,
     mut ui_state: ResMut<EditorUiState>,
@@ -77,13 +88,19 @@ pub fn setup_editor_scene(
         );
     }
 
-    let session = EditorSession::new(
+    let mut session = EditorSession::new(
         map_id.clone(),
         loaded_map.map_dir.clone(),
         map_path,
         loaded_map.definition.clone(),
         loaded_map.edits.clone(),
     );
+    // Migrate legacy stroke-history paint into baked per-chunk weightmaps;
+    // the op list is cleared and the baked form is written on next save.
+    if session.map_edits.bake_legacy_paint_ops(&world.generator) {
+        session.mark_edits_dirty();
+        info!("Baked legacy terrain paint ops into stored weightmaps");
+    }
     *env_state = EditorEnvironmentState::from_map(&loaded_map.definition);
 
     commands.insert_resource(DirectionalLightShadowMap { size: 2048 });
@@ -121,12 +138,6 @@ pub fn setup_editor_scene(
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.6, -0.9, 0.0)),
     ));
 
-    let terrain_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.82, 0.94, 0.80),
-        perceptual_roughness: 1.0,
-        metallic: 0.0,
-        ..default()
-    });
     let water_material = materials.add(StandardMaterial {
         base_color: Color::srgba(0.12, 0.46, 0.58, 0.36),
         alpha_mode: AlphaMode::Blend,
@@ -139,8 +150,12 @@ pub fn setup_editor_scene(
     spawn_all_terrain_chunks(
         &mut commands,
         &world,
+        &session.map_edits,
+        &env_state,
         &mut meshes,
-        terrain_material,
+        &mut terrain_materials,
+        &mut images,
+        &terrain_textures,
         &mut terrain_registry,
     );
     spawn_all_water_chunks(
@@ -273,6 +288,7 @@ pub fn handle_editor_shortcuts(
         session
             .map_edits
             .set_terrain_deltas_from_world(world.delta_chunks());
+        session.sync_paint_weights_into_edits();
         match save_all(&mut session) {
             Ok(()) => {
                 ui_state.status = "Saved map.ron + edits.ron".to_string();
@@ -373,6 +389,9 @@ fn reset_map_to_blank(
     session.map_definition.blockers.clear();
 
     session.map_edits.terrain_deltas.clear();
+    session.map_edits.terrain_paint_ops.clear();
+    session.map_edits.terrain_weightmaps.clear();
+    session.paint_weights.clear();
     session.map_edits.spawn_markers.clear();
     session.map_edits.roads.clear();
     session.map_edits.plots.clear();
@@ -393,11 +412,38 @@ fn reset_map_to_blank(
     session.mark_edits_dirty();
 
     flags.terrain_all = true;
+    flags.paint_all = true;
     flags.water_all = true;
     flags.props = true;
     flags.markers = true;
     flags.city_layout = true;
     Ok(())
+}
+
+/// Keep the terrain material's wet-band/caustics water uniform in sync with
+/// the editor's water level preview.
+pub fn sync_editor_terrain_water(
+    env_state: Res<EditorEnvironmentState>,
+    registry: Res<TerrainChunkRegistry>,
+    mut terrain_materials: ResMut<Assets<EditorTerrainSplatMaterial>>,
+    mut last: Local<Option<(bool, f32)>>,
+) {
+    let current = (env_state.show_water, env_state.water_level);
+    if *last == Some(current) {
+        return;
+    }
+    *last = Some(current);
+
+    let params = if env_state.show_water {
+        Vec4::new(env_state.water_level, 1.0, 0.0, 0.0)
+    } else {
+        Vec4::ZERO
+    };
+    for entry in registry.entries.values() {
+        if let Some(material) = terrain_materials.get_mut(&entry.material) {
+            material.extension.water_params = params;
+        }
+    }
 }
 
 /// Intercepts the window close button: exit immediately when everything is
@@ -453,6 +499,80 @@ pub fn handle_tool_input(
 
     match ui_state.tool {
         ToolMode::Terrain => {
+            if ui_state.terrain_edit_mode == TerrainEditMode::Paint {
+                let spacing = (ui_state.brush_radius * 0.2).max(0.5);
+                let should_paint = just_pressed
+                    || stroke
+                        .last_stamp
+                        .is_none_or(|last| last.distance(cursor_xz) >= spacing);
+                if !should_paint {
+                    return;
+                }
+
+                if !stroke.undo_pushed {
+                    session.push_undo_snapshot(&world);
+                    stroke.undo_pushed = true;
+                }
+
+                let softness = ui_state.paint_softness.clamp(0.0, 0.9);
+                let inner_radius = (ui_state.brush_radius * (1.0 - softness)).max(0.1);
+                let falloff = (ui_state.brush_radius - inner_radius).max(0.0);
+                let shape = match stroke.last_stamp {
+                    Some(last) if !just_pressed => TerrainPaintShape::Line {
+                        start: last,
+                        end: cursor_xz,
+                        width: inner_radius * 2.0,
+                    },
+                    _ => TerrainPaintShape::Circle {
+                        center: cursor_xz,
+                        radius: inner_radius,
+                    },
+                };
+                // Transient op: applied incrementally into the per-chunk
+                // working buffers, never stored. Cost per stamp is the brush
+                // footprint, independent of how much has been painted.
+                let operation = TerrainPaintOp {
+                    id: 1,
+                    layer: ui_state.terrain_layer,
+                    strength: ui_state.paint_strength.clamp(0.0, 1.0),
+                    falloff,
+                    shape,
+                };
+
+                for coord in terrain_paint_op_chunk_coords(&operation) {
+                    if !coord.in_world_bounds() {
+                        continue;
+                    }
+                    if !session.paint_weights.contains_key(&coord) {
+                        let resolved = session.map_edits.resolve_chunk_weights(
+                            &world.generator,
+                            coord,
+                            TERRAIN_WEIGHTMAP_RESOLUTION,
+                        );
+                        session.paint_weights.insert(coord, resolved);
+                    }
+                    let weights = session
+                        .paint_weights
+                        .get_mut(&coord)
+                        .expect("materialized above");
+                    let origin = coord.world_pos();
+                    apply_terrain_paint_op_to_weights(
+                        &operation,
+                        Vec2::new(origin.x, origin.z),
+                        weights,
+                        TERRAIN_WEIGHTMAP_RESOLUTION,
+                    );
+                    flags.paint_chunks.insert(coord);
+                }
+                session.mark_edits_dirty();
+                stroke.last_stamp = Some(cursor_xz);
+                ui_state.status = format!(
+                    "Painted {}",
+                    terrain_layer_display_name(ui_state.terrain_layer)
+                );
+                return;
+            }
+
             if !stroke.undo_pushed {
                 session.push_undo_snapshot(&world);
                 stroke.undo_pushed = true;
@@ -940,7 +1060,9 @@ pub fn apply_visual_refresh(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut terrain_materials: ResMut<Assets<EditorTerrainSplatMaterial>>,
     world: Res<WorldTerrain>,
     session: Res<EditorSession>,
     terrain_registry: Res<TerrainChunkRegistry>,
@@ -955,6 +1077,34 @@ pub fn apply_visual_refresh(
     marker_visuals: Query<Entity, With<EditorSpawnVisual>>,
     water_visuals: Query<Entity, With<EditorWaterVisual>>,
 ) {
+    if flags.paint_all {
+        let paint_coords: Vec<ChunkCoord> = terrain_registry.entries.keys().copied().collect();
+        for coord in paint_coords {
+            refresh_terrain_weightmap(
+                coord,
+                &world,
+                &session,
+                &terrain_registry,
+                &mut images,
+                &mut terrain_materials,
+            );
+        }
+        flags.paint_all = false;
+        flags.paint_chunks.clear();
+    } else if !flags.paint_chunks.is_empty() {
+        let paint_coords: Vec<ChunkCoord> = flags.paint_chunks.drain().collect();
+        for coord in paint_coords {
+            refresh_terrain_weightmap(
+                coord,
+                &world,
+                &session,
+                &terrain_registry,
+                &mut images,
+                &mut terrain_materials,
+            );
+        }
+    }
+
     let mut terrain_coords = Vec::new();
     if flags.terrain_all {
         terrain_coords = terrain_registry.entries.keys().copied().collect();
@@ -1162,6 +1312,7 @@ pub fn update_prop_preview_visual(
 }
 
 fn save_all(session: &mut EditorSession) -> Result<(), String> {
+    session.map_edits.version = MAP_EDITS_VERSION;
     session.map_definition.validate()?;
     session.map_edits.validate()?;
 
@@ -1186,6 +1337,7 @@ fn apply_snapshot(
     )?;
     session.map_definition = snapshot.map_definition;
     session.map_edits = snapshot.map_edits;
+    session.paint_weights.clear();
     session.refresh_next_ids();
     world.reload_from_loaded_map(loaded_map);
     env_state.show_water = session.map_definition.terrain.water_level.is_some();
@@ -1193,6 +1345,7 @@ fn apply_snapshot(
     session.mark_map_dirty();
     session.mark_edits_dirty();
     flags.terrain_all = true;
+    flags.paint_all = true;
     flags.water_all = true;
     flags.props = true;
     flags.markers = true;
@@ -1203,8 +1356,12 @@ fn apply_snapshot(
 fn spawn_all_terrain_chunks(
     commands: &mut Commands,
     world: &WorldTerrain,
+    edits: &shared::map::MapEditsDefinition,
+    env_state: &EditorEnvironmentState,
     meshes: &mut Assets<Mesh>,
-    material: Handle<StandardMaterial>,
+    terrain_materials: &mut Assets<EditorTerrainSplatMaterial>,
+    images: &mut Assets<Image>,
+    terrain_textures: &EditorTerrainTextureAssets,
     registry: &mut TerrainChunkRegistry,
 ) {
     let bounds = world.generator.active_map_bounds();
@@ -1221,6 +1378,34 @@ fn spawn_all_terrain_chunks(
             }
             let mesh_data = world.generate_chunk(coord);
             let mesh = meshes.add(build_chunk_mesh(&mesh_data));
+            let weights =
+                edits.resolve_chunk_weights(&world.generator, coord, TERRAIN_WEIGHTMAP_RESOLUTION);
+            let weightmap = images.add(create_weightmap_image(
+                &weights,
+                TERRAIN_WEIGHTMAP_RESOLUTION,
+            ));
+            let material = terrain_materials.add(EditorTerrainSplatMaterial {
+                base: StandardMaterial {
+                    base_color: Color::WHITE,
+                    perceptual_roughness: 0.97,
+                    metallic: 0.0,
+                    reflectance: 0.08,
+                    ..default()
+                },
+                extension: EditorTerrainSplatExtension {
+                    weight_map: weightmap.clone(),
+                    albedo_array: terrain_textures.albedo_array.clone(),
+                    normal_array: terrain_textures.normal_array.clone(),
+                    layer_tiling: terrain_textures.layer_tiling,
+                    debug_mode: 0,
+                    normal_strength: 1.0,
+                    water_params: if env_state.show_water {
+                        Vec4::new(env_state.water_level, 1.0, 0.0, 0.0)
+                    } else {
+                        Vec4::ZERO
+                    },
+                },
+            });
             commands.spawn((
                 Name::new(format!("TerrainChunk({}, {})", coord.x, coord.z)),
                 Mesh3d(mesh.clone()),
@@ -1228,7 +1413,14 @@ fn spawn_all_terrain_chunks(
                 Transform::from_translation(coord.world_pos()),
                 TerrainChunkVisual,
             ));
-            registry.entries.insert(coord, TerrainChunkEntry { mesh });
+            registry.entries.insert(
+                coord,
+                TerrainChunkEntry {
+                    mesh,
+                    weightmap,
+                    material,
+                },
+            );
         }
     }
 }
@@ -1372,6 +1564,48 @@ fn regenerate_chunk_mesh(
 
     let mesh_data = world.generate_chunk(coord);
     *mesh = build_chunk_mesh(&mesh_data);
+}
+
+fn refresh_terrain_weightmap(
+    coord: ChunkCoord,
+    world: &WorldTerrain,
+    session: &EditorSession,
+    registry: &TerrainChunkRegistry,
+    images: &mut Assets<Image>,
+    terrain_materials: &mut Assets<EditorTerrainSplatMaterial>,
+) {
+    let Some(entry) = registry.entries.get(&coord) else {
+        return;
+    };
+    let Some(image) = images.get_mut(&entry.weightmap) else {
+        return;
+    };
+    let resolved;
+    let weights: &[[u8; 4]] = if let Some(weights) = session.paint_weights.get(&coord) {
+        weights
+    } else {
+        resolved = session.map_edits.resolve_chunk_weights(
+            &world.generator,
+            coord,
+            TERRAIN_WEIGHTMAP_RESOLUTION,
+        );
+        &resolved
+    };
+    update_weightmap_image(image, weights);
+    // Modifying an Image asset makes the renderer create a NEW GPU texture,
+    // but material bind groups are only rebuilt on MATERIAL asset events —
+    // without this poke the chunk keeps rendering the old texture until
+    // restart.
+    terrain_materials.get_mut(&entry.material);
+}
+
+fn terrain_layer_display_name(layer: TerrainLayer) -> &'static str {
+    match layer {
+        TerrainLayer::Grass => "Grass",
+        TerrainLayer::Dirt => "Dark Ground",
+        TerrainLayer::Sand => "Dry Dirt",
+        TerrainLayer::Cobblestone => "Cobblestone",
+    }
 }
 
 fn spawn_prop_visuals(
@@ -2048,6 +2282,29 @@ fn build_chunk_mesh(mesh_data: &ChunkMeshData) -> Mesh {
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_COLOR,
         VertexAttributeValues::Float32x4(mesh_data.colors.clone()),
+    );
+    let tangents: Vec<[f32; 4]> = mesh_data
+        .normals
+        .iter()
+        .map(|normal| {
+            let normal = Vec3::from_array(*normal).normalize_or_zero();
+            let axis = if normal.dot(Vec3::X).abs() > 0.9 {
+                Vec3::Z
+            } else {
+                Vec3::X
+            };
+            let tangent = (axis - normal * normal.dot(axis)).normalize_or_zero();
+            let handedness = if normal.cross(tangent).dot(Vec3::Z) < 0.0 {
+                -1.0
+            } else {
+                1.0
+            };
+            [tangent.x, tangent.y, tangent.z, handedness]
+        })
+        .collect();
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_TANGENT,
+        VertexAttributeValues::Float32x4(tangents),
     );
     mesh.insert_indices(Indices::U32(mesh_data.indices.clone()));
     mesh

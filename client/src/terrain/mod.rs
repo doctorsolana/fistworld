@@ -29,7 +29,6 @@ impl Plugin for TerrainPlugin {
         app.init_resource::<streaming::TerrainStreamingState>();
         app.init_resource::<streaming::TerrainDeltaState>();
         app.init_resource::<paint::TerrainPaintState>();
-        app.init_resource::<paint::TerrainPaintSpatialIndex>();
         app.init_resource::<streaming::TerrainChunkTasks>();
         app.init_resource::<streaming::TerrainTaskScratch>();
         app.init_resource::<streaming::far_terrain::FarTerrainHoleTask>();
@@ -50,7 +49,6 @@ impl Plugin for TerrainPlugin {
             Update,
             (
                 streaming::ingest_delta_chunks_from_server,
-                paint::ingest_paint_ops,
                 streaming::regenerate_dirty_chunks,
                 streaming::update_terrain_render_distance,
                 streaming::update_terrain_chunks,

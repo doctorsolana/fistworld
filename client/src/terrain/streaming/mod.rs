@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 use shared::terrain::{
-    ChunkCoord, TerrainDeltaChunk, TerrainDeltaData, TerrainGenerator, TerrainPaintOp,
+    ChunkCoord, TerrainDeltaChunk, TerrainDeltaData, TerrainGenerator,
     WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, WORLD_RADIUS_METERS, WORLD_SEED,
 };
 
@@ -28,14 +28,14 @@ use crate::ui::DebugPerfSettings;
 
 use super::chunks::{FarTerrain, FarTerrainState, LoadedChunks, TerrainChunk, TerrainMaterialLod};
 use super::debug::{PerfHitchStats, TerrainDebugSettings};
-use super::materials::{TerrainRenderAssets, TerrainSplatExtension, TerrainSplatMaterial};
+use super::materials::{
+    water_params_for_generator, TerrainRenderAssets, TerrainSplatExtension, TerrainSplatMaterial,
+};
 use super::mesh::{
     build_far_terrain_indices, build_far_terrain_mesh, build_terrain_mesh, compute_chunk_tangents,
 };
 use super::paint::{
-    apply_paint_op_to_weights, build_weightmap_from_weights, build_weightmap_weights,
-    log_weightmap_stats, paint_op_intersects_chunk, TerrainPaintSpatialIndex, TerrainPaintState,
-    WEIGHTMAP_RESOLUTION,
+    build_weightmap_from_weights, log_weightmap_stats, TerrainPaintState, WEIGHTMAP_RESOLUTION,
 };
 
 /// Tracks which chunk the player is currently in and the desired chunk ordering.
@@ -98,11 +98,11 @@ pub struct TerrainTaskScratch {
 
 pub struct ChunkBuildResult {
     pub coord: ChunkCoord,
+    pub generator: TerrainGenerator,
     pub mesh_data: shared::terrain::ChunkMeshData,
     pub tangents: Vec<[f32; 4]>,
     pub weights: Vec<[u8; 4]>,
     pub resolution: u32,
-    pub op_ids: HashSet<u64>,
 }
 
 /// Tracks the last seen delta chunk versions for change detection.

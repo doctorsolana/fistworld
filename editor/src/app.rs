@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;
 use bevy::window::{PresentMode, WindowResolution};
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
@@ -13,6 +14,9 @@ use crate::picking;
 use crate::session::{
     BrushStroke, CursorTerrainHit, EditorEnvironmentState, EditorUiState, PropPreviewState,
     TerrainChunkRegistry, UiActionRequests, WaterChunkRegistry,
+};
+use crate::terrain_material::{
+    configure_editor_terrain_arrays, EditorTerrainSplatMaterial, EditorTerrainTextureAssets,
 };
 use crate::tools::{self, VisualRefreshFlags};
 use crate::ui;
@@ -45,6 +49,7 @@ pub fn run() {
             }),
     );
     app.add_plugins(EguiPlugin::default());
+    app.add_plugins(MaterialPlugin::<EditorTerrainSplatMaterial>::default());
 
     app.init_resource::<EditorUiState>();
     app.init_resource::<CursorTerrainHit>();
@@ -57,6 +62,7 @@ pub fn run() {
     app.init_resource::<city::CityEditorState>();
     app.init_resource::<EditorEnvironmentState>();
     app.init_resource::<ui::EditorPropCatalog>();
+    app.init_resource::<EditorTerrainTextureAssets>();
 
     app.add_systems(
         Startup,
@@ -80,10 +86,12 @@ pub fn run() {
             city::handle_city_tool_input,
             city::handle_city_ui_actions,
             tools::handle_tool_input,
+            configure_editor_terrain_arrays,
             tools::apply_visual_refresh,
             tools::cull_distant_prop_visuals,
             city::apply_city_visual_refresh,
             lighting::apply_editor_environment,
+            tools::sync_editor_terrain_water,
             tools::refresh_cursor_indicator,
             tools::update_prop_preview_visual,
             city::update_city_preview_visuals,

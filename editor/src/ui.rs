@@ -6,12 +6,14 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
 
 use shared::props::ALL_PROP_KINDS;
+use shared::terrain::TerrainLayer;
 
 use crate::camera::{EditorCameraController, EditorCameraMode};
 use crate::city;
 use crate::session::{
     BrushMix, CursorTerrainHit, EditorEnvironmentState, EditorMainCamera, EditorSession,
-    EditorUiState, ForestBrushPreset, RecentAsset, TerrainBrushMode, ToolMode, UiActionRequests,
+    EditorUiState, ForestBrushPreset, RecentAsset, TerrainBrushMode, TerrainEditMode, ToolMode,
+    UiActionRequests,
 };
 use crate::tools::VisualRefreshFlags;
 
@@ -338,21 +340,30 @@ fn apply_editor_style(ctx: &egui::Context) {
 fn editor_bar_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(egui::Color32::from_rgb(8, 12, 17))
-        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(34, 48, 60)))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(34, 48, 60),
+        ))
         .inner_margin(egui::Margin::symmetric(14, 8))
 }
 
 fn editor_panel_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(egui::Color32::from_rgb(11, 16, 22))
-        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(32, 45, 56)))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(32, 45, 56),
+        ))
         .inner_margin(egui::Margin::symmetric(12, 12))
 }
 
 fn draw_chip(ui: &mut egui::Ui, label: &str, value: &str) {
     egui::Frame::new()
         .fill(egui::Color32::from_rgb(19, 28, 38))
-        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(46, 62, 74)))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(46, 62, 74),
+        ))
         .corner_radius(egui::CornerRadius::same(5))
         .inner_margin(egui::Margin::symmetric(8, 4))
         .show(ui, |ui| {
@@ -400,7 +411,13 @@ fn draw_tool_palette(ui: &mut egui::Ui, ui_state: &mut EditorUiState) {
             "Scatter Brush",
             "5",
         );
-        draw_tool_button(ui, &mut ui_state.tool, ToolMode::EraseProp, "Erase Props", "6");
+        draw_tool_button(
+            ui,
+            &mut ui_state.tool,
+            ToolMode::EraseProp,
+            "Erase Props",
+            "6",
+        );
     });
     draw_tool_group(ui, "Gameplay", |ui| {
         draw_tool_button(
@@ -451,7 +468,10 @@ fn draw_inspector_header(ui: &mut egui::Ui, tool: ToolMode) {
 fn draw_section(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
         .fill(egui::Color32::from_rgb(15, 22, 30))
-        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(36, 50, 62)))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(36, 50, 62),
+        ))
         .corner_radius(egui::CornerRadius::same(6))
         .inner_margin(egui::Margin::symmetric(12, 10))
         .outer_margin(egui::Margin::symmetric(0, 6))
@@ -521,22 +541,69 @@ fn draw_active_tool_settings(
     match ui_state.tool {
         ToolMode::Terrain => {
             ui.horizontal_wrapped(|ui| {
-                ui.selectable_value(&mut ui_state.terrain_mode, TerrainBrushMode::Raise, "Raise");
-                ui.selectable_value(&mut ui_state.terrain_mode, TerrainBrushMode::Lower, "Lower");
                 ui.selectable_value(
-                    &mut ui_state.terrain_mode,
-                    TerrainBrushMode::Flatten,
-                    "Flatten",
+                    &mut ui_state.terrain_edit_mode,
+                    TerrainEditMode::Sculpt,
+                    "Sculpt",
+                );
+                ui.selectable_value(
+                    &mut ui_state.terrain_edit_mode,
+                    TerrainEditMode::Paint,
+                    "Paint",
                 );
             });
-            ui.add(egui::Slider::new(&mut ui_state.brush_radius, 1.0..=64.0).text("Brush Size"));
-            draw_brush_size_presets(ui, &mut ui_state.brush_radius);
-            ui.add(
-                egui::Slider::new(&mut ui_state.brush_strength, 0.1..=30.0).text("Height Strength"),
-            );
-            ui.add(
-                egui::Slider::new(&mut ui_state.flatten_blend, 0.1..=12.0).text("Flatten Blend"),
-            );
+            ui.separator();
+
+            match ui_state.terrain_edit_mode {
+                TerrainEditMode::Sculpt => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.selectable_value(
+                            &mut ui_state.terrain_mode,
+                            TerrainBrushMode::Raise,
+                            "Raise",
+                        );
+                        ui.selectable_value(
+                            &mut ui_state.terrain_mode,
+                            TerrainBrushMode::Lower,
+                            "Lower",
+                        );
+                        ui.selectable_value(
+                            &mut ui_state.terrain_mode,
+                            TerrainBrushMode::Flatten,
+                            "Flatten",
+                        );
+                    });
+                    ui.add(
+                        egui::Slider::new(&mut ui_state.brush_radius, 1.0..=64.0)
+                            .text("Brush Size"),
+                    );
+                    draw_brush_size_presets(ui, &mut ui_state.brush_radius);
+                    ui.add(
+                        egui::Slider::new(&mut ui_state.brush_strength, 0.1..=30.0)
+                            .text("Height Strength"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut ui_state.flatten_blend, 0.1..=12.0)
+                            .text("Flatten Blend"),
+                    );
+                }
+                TerrainEditMode::Paint => {
+                    ui.label("Surface");
+                    draw_terrain_layer_swatches(ui, &mut ui_state.terrain_layer);
+                    ui.add(
+                        egui::Slider::new(&mut ui_state.brush_radius, 1.0..=64.0)
+                            .text("Brush Size"),
+                    );
+                    draw_brush_size_presets(ui, &mut ui_state.brush_radius);
+                    ui.add(
+                        egui::Slider::new(&mut ui_state.paint_strength, 0.05..=1.0).text("Opacity"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut ui_state.paint_softness, 0.0..=0.9)
+                            .text("Edge Softness"),
+                    );
+                }
+            }
         }
         ToolMode::PlaceProp => {
             ui.label(format!("Selected: {}", ui_state.selected_asset_label()));
@@ -549,14 +616,12 @@ fn draw_active_tool_settings(
             ui.separator();
             ui.add(egui::Slider::new(&mut ui_state.prop_scale, 0.1..=8.0).text("Scale"));
             ui.add(
-                egui::Slider::new(&mut ui_state.prop_scale_jitter, 0.0..=0.9)
-                    .text("Scale Jitter"),
+                egui::Slider::new(&mut ui_state.prop_scale_jitter, 0.0..=0.9).text("Scale Jitter"),
             );
             ui.checkbox(&mut ui_state.prop_random_yaw, "Random Yaw");
             if !ui_state.prop_random_yaw {
                 ui.add(
-                    egui::Slider::new(&mut ui_state.prop_rotation_degrees, 0.0..=360.0)
-                        .text("Yaw"),
+                    egui::Slider::new(&mut ui_state.prop_rotation_degrees, 0.0..=360.0).text("Yaw"),
                 );
             }
             ui.checkbox(&mut ui_state.prop_drag_paint, "Drag to Paint");
@@ -863,6 +928,65 @@ fn draw_forest_size_presets(ui: &mut egui::Ui, brush_radius: &mut f32) {
     });
 }
 
+fn draw_terrain_layer_swatches(ui: &mut egui::Ui, selected: &mut TerrainLayer) {
+    ui.horizontal_wrapped(|ui| {
+        terrain_layer_swatch(
+            ui,
+            selected,
+            TerrainLayer::Grass,
+            "Grass",
+            egui::Color32::from_rgb(105, 128, 36),
+        );
+        terrain_layer_swatch(
+            ui,
+            selected,
+            TerrainLayer::Dirt,
+            "Dark Ground",
+            egui::Color32::from_rgb(70, 84, 42),
+        );
+        terrain_layer_swatch(
+            ui,
+            selected,
+            TerrainLayer::Sand,
+            "Dry Dirt",
+            egui::Color32::from_rgb(157, 137, 113),
+        );
+        terrain_layer_swatch(
+            ui,
+            selected,
+            TerrainLayer::Cobblestone,
+            "Cobblestone",
+            egui::Color32::from_rgb(145, 140, 129),
+        );
+    });
+}
+
+fn terrain_layer_swatch(
+    ui: &mut egui::Ui,
+    selected: &mut TerrainLayer,
+    layer: TerrainLayer,
+    label: &str,
+    color: egui::Color32,
+) {
+    let is_selected = *selected == layer;
+    let stroke = if is_selected {
+        egui::Stroke::new(2.0_f32, egui::Color32::WHITE)
+    } else {
+        egui::Stroke::new(1.0_f32, egui::Color32::from_black_alpha(110))
+    };
+    let text_color = if color.r() as u16 + color.g() as u16 + color.b() as u16 > 410 {
+        egui::Color32::BLACK
+    } else {
+        egui::Color32::WHITE
+    };
+    let button = egui::Button::new(egui::RichText::new(label).color(text_color))
+        .fill(color)
+        .stroke(stroke);
+    if ui.add_sized([112.0, 34.0], button).clicked() {
+        *selected = layer;
+    }
+}
+
 fn active_tool_heading(tool: ToolMode) -> &'static str {
     match tool {
         ToolMode::Terrain => "Terrain",
@@ -878,7 +1002,7 @@ fn active_tool_heading(tool: ToolMode) -> &'static str {
 
 fn active_tool_subtitle(tool: ToolMode) -> &'static str {
     match tool {
-        ToolMode::Terrain => "Height sculpting and flattening.",
+        ToolMode::Terrain => "Height sculpting and surface painting.",
         ToolMode::PlaceProp => "Single placement with optional drag painting.",
         ToolMode::ForestBrush => "Paint grass, foliage, rocks, or any selected asset.",
         ToolMode::EraseProp => "Sweep-erase every prop inside the brush.",

@@ -16,7 +16,7 @@ use crate::rail::{
     Company, CompanyLedger, Industry, RailStation, RailTrackSegment, Town, Train, TrainRoute,
     TrainState,
 };
-use crate::terrain::{TerrainDeltaChunk, TerrainPaintOp};
+use crate::terrain::TerrainDeltaChunk;
 use crate::vehicle::{Vehicle, VehicleDriver, VehicleState};
 
 use super::messages::*;
@@ -67,7 +67,6 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<WorldTime>().add_prediction();
         app.register_component::<CloudSeed>().add_prediction();
         app.register_component::<ActiveMapState>().add_prediction();
-        app.register_component::<TerrainPaintOp>().add_prediction();
 
         // === INVENTORY COMPONENTS ===
         app.register_component::<Inventory>().add_prediction();

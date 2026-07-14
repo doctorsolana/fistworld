@@ -68,7 +68,6 @@ pub(crate) fn process_chunk_tasks(
     mut tasks: ResMut<TerrainChunkTasks>,
     mut loaded_chunks: ResMut<LoadedChunks>,
     mut paint_state: ResMut<TerrainPaintState>,
-    paint_index: Res<TerrainPaintSpatialIndex>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<TerrainSplatMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -175,34 +174,9 @@ pub(crate) fn process_chunk_tasks(
     }
 
     let mut finalized = 0u32;
-    for mut result in scratch.completed.drain(..) {
+    for result in scratch.completed.drain(..) {
         if loaded_chunks.chunks.contains(&result.coord) {
             continue;
-        }
-
-        // Ensure any paint ops added while the task was running are applied.
-        if !paint_state.ops.is_empty() {
-            let origin = result.coord.world_pos();
-            let chunk_min = Vec2::new(origin.x, origin.z);
-            let chunk_max = chunk_min + Vec2::splat(CHUNK_SIZE);
-            if let Some(op_ids) = paint_index.ops_by_chunk.get(&result.coord) {
-                for op_id in op_ids {
-                    if result.op_ids.contains(op_id) {
-                        continue;
-                    }
-                    let Some(op) = paint_state.ops.get(op_id) else {
-                        continue;
-                    };
-                    if paint_op_intersects_chunk(op, chunk_min, chunk_max) {
-                        apply_paint_op_to_weights(
-                            op,
-                            chunk_min,
-                            &mut result.weights,
-                            result.resolution,
-                        );
-                    }
-                }
-            }
         }
 
         let weightmap =
@@ -237,6 +211,7 @@ pub(crate) fn process_chunk_tasks(
                     player_chunk,
                     view_distance,
                 ),
+                water_params: water_params_for_generator(&result.generator),
             },
         });
 
