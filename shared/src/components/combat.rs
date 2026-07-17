@@ -163,4 +163,6 @@ pub struct NpcDamageEvent {
     pub damage_source_position: Vec3,
     pub damage_amount: f32,
     pub attacker_player_id: Option<u64>,
+    pub hit_zone: crate::weapons::damage::HitZone,
+    pub body_part: Option<crate::weapons::damage::HitBodyPart>,
 }

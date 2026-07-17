@@ -34,11 +34,14 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<ai::ragdoll::RagdollPoseStream>();
     app.init_resource::<ai::ragdoll::CorpseCollisionIndex>();
     app.init_resource::<ai::ragdoll::RagdollTelemetry>();
+    app.init_resource::<ai::relevance::NpcRelevanceSettings>();
+    app.init_resource::<ai::pathfinding::PathfindingBudgetSettings>();
     app.init_resource::<collision::building_index::BuildingSpatialIndex>();
     app.init_resource::<collision::streaming::ColliderStreamingState>();
     app.init_resource::<physics::terrain_colliders::TerrainColliderSettings>();
     app.init_resource::<physics::terrain_colliders::TerrainColliderRegistry>();
     app.init_resource::<physics::static_world_colliders::StaticWorldColliderRegistry>();
+    app.init_resource::<physics::dynamic_actors::NpcPhysicsLodSettings>();
     app.init_resource::<combat::target_index::HittableSpatialIndex>();
     app.init_resource::<combat::hit_world::BulletWorldHitCache>();
     app.insert_resource(persistence::profiles::PlayerProfiles::new(

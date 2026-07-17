@@ -15,6 +15,7 @@ pub mod identity;
 pub mod obstacles;
 pub mod pathfinding;
 pub mod ragdoll;
+pub mod relevance;
 pub mod spawn;
 pub mod state;
 pub mod tick;

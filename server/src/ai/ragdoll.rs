@@ -7,7 +7,10 @@ use lightyear::prelude::*;
 use shared::components::{
     Health, Npc, NpcActivity, NpcActivityKind, NpcArchetype, NpcPosition, NpcRotation, NpcVelocity,
 };
-use shared::npc::{ragdoll_body_axis, RagdollBodyDef, DEAD_NPC_DESPAWN_TIME, HUMANOID_RAGDOLL_BODIES};
+use shared::npc::{
+    humanoid_body_bounding_radius, humanoid_body_shape, ragdoll_body_axis, HumanoidBodyShape,
+    RagdollBodyDef, DEAD_NPC_DESPAWN_TIME, HUMANOID_RAGDOLL_BODIES,
+};
 use shared::protocol::{
     pack_quat_i16, NpcRagdollPoseBatch, NpcRagdollPoseSample, NpcRagdollStarted, RagdollBodyId,
     RagdollBodyPose, RagdollPoseChannel, ReliableChannel,
@@ -17,9 +20,9 @@ use std::collections::{HashMap, HashSet};
 use crate::physics::layers;
 
 const DEFAULT_CORPSE_CAP: usize = 64;
-// 30 Hz pose streaming: at 15 Hz a falling body linearly interpolated between
-// samples visibly loses its gravity curve ("floaty/wonky" falls). Corpse
-// counts are small, so the bandwidth cost is negligible.
+// Moving ragdolls stream at 30 Hz so interpolation preserves the gravity
+// curve. Sleeping corpses fall back to a low-rate refresh, and both paths are
+// filtered by per-client network visibility.
 const DEFAULT_RAGDOLL_POSE_HZ: f32 = 30.0;
 const CORPSE_CELL_SIZE: f32 = 8.0;
 const PELVIS_LOCAL_Y_FROM_NPC_CENTER: f32 = 0.0;
@@ -57,6 +60,7 @@ pub struct RagdollPhysicsBody;
 pub struct NpcDeathImpact {
     pub hit_point: Vec3,
     pub impulse: Vec3,
+    pub body: Option<RagdollBodyId>,
 }
 
 #[derive(Component, Clone, Copy, Debug)]
@@ -73,6 +77,7 @@ pub struct RagdollBodyBinding {
 pub struct NpcRagdollBodies {
     pub bindings: Vec<RagdollBodyBinding>,
     pub next_seq: u32,
+    pub last_pose_sent_at: f32,
 }
 
 #[derive(Component, Clone, Copy, Debug)]
@@ -310,28 +315,15 @@ fn apply_soft_joint_limits(
 }
 
 fn collider_for_body(def: &RagdollBodyDef) -> Collider {
-    match def.id {
-        RagdollBodyId::Pelvis => Collider::cuboid(0.12, 0.10, 0.10),
-        RagdollBodyId::SpineLower | RagdollBodyId::SpineUpper => {
-            Collider::capsule_y(0.08, def.radius.max(0.05))
+    match humanoid_body_shape(def.id) {
+        HumanoidBodyShape::Sphere { radius } => Collider::ball(radius),
+        HumanoidBodyShape::Capsule {
+            half_segment,
+            radius,
+        } => Collider::capsule_y(half_segment, radius),
+        HumanoidBodyShape::Cuboid { half_extents } => {
+            Collider::cuboid(half_extents.x, half_extents.y, half_extents.z)
         }
-        RagdollBodyId::Head => Collider::ball(def.radius.max(0.05)),
-        RagdollBodyId::UpperArmL | RagdollBodyId::UpperArmR => {
-            Collider::capsule_y(0.11, (def.radius * 0.85).max(0.04))
-        }
-        RagdollBodyId::ForearmL | RagdollBodyId::ForearmR => {
-            Collider::capsule_y(0.13, (def.radius * 0.8).max(0.04))
-        }
-        RagdollBodyId::HandL | RagdollBodyId::HandR => {
-            Collider::capsule_y(0.06, (def.radius * 0.75).max(0.03))
-        }
-        RagdollBodyId::ThighL | RagdollBodyId::ThighR => {
-            Collider::capsule_y(0.16, (def.radius * 0.9).max(0.05))
-        }
-        RagdollBodyId::CalfL | RagdollBodyId::CalfR => {
-            Collider::capsule_y(0.15, (def.radius * 0.85).max(0.045))
-        }
-        RagdollBodyId::FootL | RagdollBodyId::FootR => Collider::cuboid(0.05, 0.03, 0.09),
     }
 }
 
@@ -343,7 +335,7 @@ fn pose_from_transform(body: RagdollBodyId, transform: &Transform) -> RagdollBod
     }
 }
 
-fn build_started_message(
+pub(crate) fn build_started_message(
     npc: &Npc,
     lifecycle: &CorpseLifecycle,
     bindings: &NpcRagdollBodies,
@@ -421,6 +413,7 @@ pub fn debug_auto_kill_npcs(
         commands.entity(entity).insert(NpcDeathImpact {
             hit_point: pos.0 + Vec3::new(0.0, 0.35, 0.0),
             impulse: dir * 120.0,
+            body: None,
         });
         killed += 1;
     }
@@ -444,19 +437,36 @@ pub fn activate_npc_ragdolls(
             &mut NpcActivity,
             Option<&NpcDeathImpact>,
             Option<&NpcRagdoll>,
+            &ReplicationState,
         ),
         With<Npc>,
     >,
-    mut clients: Query<&mut MessageSender<NpcRagdollStarted>, (With<ClientOf>, With<Connected>)>,
+    mut clients: Query<
+        (Entity, &mut MessageSender<NpcRagdollStarted>),
+        (With<ClientOf>, With<Connected>),
+    >,
 ) {
     let now = time.elapsed_secs();
-    for (npc_entity, npc, health, npc_pos, npc_rot, npc_vel, mut activity, death_impact, ragdoll) in
-        npcs.iter_mut()
+    for (
+        npc_entity,
+        npc,
+        health,
+        npc_pos,
+        npc_rot,
+        npc_vel,
+        mut activity,
+        death_impact,
+        ragdoll,
+        replication,
+    ) in npcs.iter_mut()
     {
         if !health.is_dead() || ragdoll.is_some() {
             continue;
         }
-        if !matches!(npc.archetype, NpcArchetype::Oilman | NpcArchetype::Dummy) {
+        if !matches!(
+            npc.archetype,
+            NpcArchetype::Oilman | NpcArchetype::Dummy | NpcArchetype::CombatDummy
+        ) {
             commands.entity(npc_entity).remove::<NpcDeathImpact>();
             continue;
         }
@@ -497,7 +507,8 @@ pub fn activate_npc_ragdolls(
                     GravityScale(1.0),
                     Velocity::default(),
                     ExternalImpulse::default(),
-                    Ccd::enabled(),
+                    Sleeping::default(),
+                    Ccd::disabled(),
                 ))
                 .id();
 
@@ -567,32 +578,31 @@ pub fn activate_npc_ragdolls(
         // the velocity change ourselves — deterministic by construction.
         {
             let (impulse_mag, impulse_dir) = death_impact
-                .map(|impact| {
-                    (
-                        impact.impulse.length(),
-                        impact.impulse.normalize_or_zero(),
-                    )
-                })
+                .map(|impact| (impact.impulse.length(), impact.impulse.normalize_or_zero()))
                 .unwrap_or((0.0, Vec3::ZERO));
-            let total_mass: f32 = spawned
-                .iter()
-                .map(|(def, _, _, _)| def.mass.max(0.2))
-                .sum();
+            let total_mass: f32 = spawned.iter().map(|(def, _, _, _)| def.mass.max(0.2)).sum();
             // Whole-body shove (Source-style): uniform velocity change plus
             // the NPC's own movement momentum carried into the corpse.
-            let uniform_dv =
-                (impulse_mag * IMPULSE_UNIFORM_SHARE / total_mass.max(1.0)).min(1.6);
+            let uniform_dv = (impulse_mag * IMPULSE_UNIFORM_SHARE / total_mass.max(1.0)).min(1.6);
             let base_velocity = npc_vel.0 + impulse_dir * uniform_dv;
 
             // Localized extra kick + spin on the struck body.
             let mut nearest: Option<(Entity, Vec3, f32)> = None;
             if let Some(impact) = death_impact {
-                let mut best_dist_sq = f32::INFINITY;
-                for (def, entity, pos, _rot) in &spawned {
-                    let dist_sq = pos.distance_squared(impact.hit_point);
-                    if dist_sq < best_dist_sq {
-                        best_dist_sq = dist_sq;
-                        nearest = Some((*entity, *pos, def.mass.max(0.2)));
+                if let Some(body) = impact.body {
+                    nearest = spawned
+                        .iter()
+                        .find(|(def, _, _, _)| def.id == body)
+                        .map(|(def, entity, pos, _)| (*entity, *pos, def.mass.max(0.2)));
+                }
+                if nearest.is_none() {
+                    let mut best_dist_sq = f32::INFINITY;
+                    for (def, entity, pos, _rot) in &spawned {
+                        let dist_sq = pos.distance_squared(impact.hit_point);
+                        if dist_sq < best_dist_sq {
+                            best_dist_sq = dist_sq;
+                            nearest = Some((*entity, *pos, def.mass.max(0.2)));
+                        }
                     }
                 }
             }
@@ -627,10 +637,11 @@ pub fn activate_npc_ragdolls(
                 .map(|(def, entity, _, _)| RagdollBodyBinding {
                     id: def.id,
                     entity: *entity,
-                    radius: def.radius,
+                    radius: humanoid_body_bounding_radius(humanoid_body_shape(def.id)),
                 })
                 .collect(),
             next_seq: 0,
+            last_pose_sent_at: now,
         };
         let lifecycle = CorpseLifecycle {
             started_at: now,
@@ -667,8 +678,10 @@ pub fn activate_npc_ragdolls(
                 .collect(),
         };
 
-        for mut sender in clients.iter_mut() {
-            sender.send::<ReliableChannel>(started.clone());
+        for (client_entity, mut sender) in clients.iter_mut() {
+            if replication.is_visible(client_entity) {
+                sender.send::<ReliableChannel>(started.clone());
+            }
         }
     }
 }
@@ -702,23 +715,6 @@ pub fn stabilize_soft_ragdoll_bodies(mut bodies: Query<&mut Velocity, With<Ragdo
     }
 }
 
-pub fn replay_active_ragdolls_to_new_clients(
-    mut new_clients: Query<
-        &mut MessageSender<NpcRagdollStarted>,
-        (With<ClientOf>, With<Connected>, Added<Connected>),
-    >,
-    corpses: Query<(&Npc, &CorpseLifecycle, &NpcRagdollBodies), With<NpcRagdoll>>,
-    body_transforms: Query<&Transform>,
-) {
-    for mut sender in new_clients.iter_mut() {
-        for (npc, lifecycle, bindings) in corpses.iter() {
-            if let Some(msg) = build_started_message(npc, lifecycle, bindings, &body_transforms) {
-                sender.send::<ReliableChannel>(msg);
-            }
-        }
-    }
-}
-
 pub fn sync_npc_roots_from_ragdolls(
     mut corpses: Query<
         (
@@ -741,11 +737,13 @@ pub fn sync_npc_roots_from_ragdolls(
         let Ok(tf) = body_transforms.get(pelvis.entity) else {
             continue;
         };
-        pos.0 = tf.translation - Vec3::Y * PELVIS_LOCAL_Y_FROM_NPC_CENTER;
+        pos.set_if_neq(NpcPosition(
+            tf.translation - Vec3::Y * PELVIS_LOCAL_Y_FROM_NPC_CENTER,
+        ));
         let (yaw, _, _) = tf.rotation.to_euler(EulerRot::YXZ);
-        rot.0 = yaw - RAGDOLL_VISUAL_YAW_OFFSET;
+        rot.set_if_neq(NpcRotation(yaw - RAGDOLL_VISUAL_YAW_OFFSET));
         if let Some(mut activity) = activity {
-            activity.0 = NpcActivityKind::Dead;
+            activity.set_if_neq(NpcActivity(NpcActivityKind::Dead));
         }
     }
 }
@@ -791,9 +789,13 @@ pub fn send_ragdoll_pose_snapshots(
     time: Res<Time>,
     mut stream: ResMut<RagdollPoseStream>,
     mut telemetry: ResMut<RagdollTelemetry>,
-    mut corpses: Query<(&Npc, &mut NpcRagdollBodies), With<NpcRagdoll>>,
+    mut corpses: Query<(Entity, &Npc, &mut NpcRagdollBodies, &ReplicationState), With<NpcRagdoll>>,
     body_transforms: Query<&Transform>,
-    mut clients: Query<&mut MessageSender<NpcRagdollPoseBatch>, (With<ClientOf>, With<Connected>)>,
+    body_motion: Query<(&Velocity, &Sleeping), With<RagdollPhysicsBody>>,
+    mut clients: Query<
+        (Entity, &mut MessageSender<NpcRagdollPoseBatch>),
+        (With<ClientOf>, With<Connected>),
+    >,
 ) {
     stream.accumulator += time.delta_secs();
     if stream.accumulator < stream.interval_secs {
@@ -801,8 +803,37 @@ pub fn send_ragdoll_pose_snapshots(
     }
     stream.accumulator = 0.0;
 
-    let mut samples = Vec::with_capacity(corpses.iter().len());
-    for (npc, mut bindings) in corpses.iter_mut() {
+    let client_entities: Vec<Entity> = clients.iter_mut().map(|(entity, _)| entity).collect();
+    if client_entities.is_empty() {
+        return;
+    }
+    let now = time.elapsed_secs();
+    let mut samples_by_client: HashMap<Entity, Vec<NpcRagdollPoseSample>> = client_entities
+        .iter()
+        .copied()
+        .map(|entity| (entity, Vec::new()))
+        .collect();
+
+    for (_npc_entity, npc, mut bindings, replication) in corpses.iter_mut() {
+        if !client_entities
+            .iter()
+            .any(|client_entity| replication.is_visible(*client_entity))
+        {
+            continue;
+        }
+        let moving = bindings.bindings.iter().any(|binding| {
+            body_motion
+                .get(binding.entity)
+                .is_ok_and(|(velocity, sleeping)| {
+                    !sleeping.sleeping
+                        && (velocity.linvel.length_squared() > 2.5e-3
+                            || velocity.angvel.length_squared() > 1.0e-2)
+                })
+        });
+        if !moving && now - bindings.last_pose_sent_at < 1.0 {
+            continue;
+        }
+
         let mut body_poses = Vec::with_capacity(bindings.bindings.len());
         let mut root_position = None;
         let mut root_rotation = None;
@@ -823,34 +854,42 @@ pub fn send_ragdoll_pose_snapshots(
         };
         let seq = bindings.next_seq;
         bindings.next_seq = bindings.next_seq.wrapping_add(1);
-        samples.push(NpcRagdollPoseSample {
+        bindings.last_pose_sent_at = now;
+        let sample = NpcRagdollPoseSample {
             npc_id: npc.id,
             seq,
             root_position,
             root_rotation,
             bodies: body_poses,
-        });
+        };
+        for client_entity in &client_entities {
+            if replication.is_visible(*client_entity) {
+                samples_by_client
+                    .get_mut(client_entity)
+                    .expect("connected client pose batch should exist")
+                    .push(sample.clone());
+            }
+        }
     }
 
-    if samples.is_empty() {
-        return;
-    }
-
-    let batch = NpcRagdollPoseBatch {
-        server_time_ms: (time.elapsed_secs() * 1000.0) as u64,
-        samples,
-    };
-    let bytes = bincode::serialized_size(&batch).unwrap_or(0) as u64;
     let mut recipients = 0u64;
-    for mut sender in clients.iter_mut() {
-        sender.send::<RagdollPoseChannel>(batch.clone());
+    let mut bytes_sent = 0u64;
+    for (client_entity, mut sender) in clients.iter_mut() {
+        let samples = samples_by_client.remove(&client_entity).unwrap_or_default();
+        if samples.is_empty() {
+            continue;
+        }
+        let batch = NpcRagdollPoseBatch {
+            server_time_ms: (now * 1000.0) as u64,
+            samples,
+        };
+        bytes_sent = bytes_sent.saturating_add(bincode::serialized_size(&batch).unwrap_or(0));
+        sender.send::<RagdollPoseChannel>(batch);
         recipients = recipients.saturating_add(1);
     }
     if recipients > 0 {
         telemetry.total_pose_msgs = telemetry.total_pose_msgs.saturating_add(recipients);
-        telemetry.total_pose_bytes = telemetry
-            .total_pose_bytes
-            .saturating_add(bytes.saturating_mul(recipients));
+        telemetry.total_pose_bytes = telemetry.total_pose_bytes.saturating_add(bytes_sent);
     }
 }
 
@@ -906,6 +945,7 @@ mod tests {
                         radius: 0.25,
                     }],
                     next_seq: 0,
+                    last_pose_sent_at: 0.0,
                 },
             ))
             .id();

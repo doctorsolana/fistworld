@@ -10,6 +10,10 @@ pub const MOVE_BRAKE: f32 = 55.0;
 pub const GROUND_SNAP_DISTANCE: f32 = 0.35;
 /// Water depth at which we switch to swimming (meters, relative to player center).
 pub const WATER_SWIM_DEPTH: f32 = 0.45;
+/// Shallower exit threshold that prevents swimming from flickering at the waterline.
+pub const WATER_SWIM_EXIT_DEPTH: f32 = 0.25;
+/// Stable player-center depth below the surface while floating without input.
+pub const WATER_FLOAT_DEPTH: f32 = 0.65;
 /// Horizontal speed multiplier when swimming.
 pub const WATER_SPEED_MULT: f32 = 0.55;
 /// Horizontal acceleration multiplier in water.
@@ -26,6 +30,10 @@ pub const WATER_HORIZONTAL_DRAG: f32 = 2.5;
 pub const WATER_BUOYANCY: f32 = 14.0;
 /// Swim-up speed when holding jump in water.
 pub const SWIM_UP_SPEED: f32 = 4.5;
+/// Swim-down speed when holding the descend control in water.
+pub const SWIM_DOWN_SPEED: f32 = 3.5;
+/// Maximum passive downward speed after entering water.
+pub const WATER_MAX_DESCENT_SPEED: f32 = 8.0;
 /// Jump velocity in m/s (upward).
 pub const JUMP_VELOCITY: f32 = 7.5;
 /// Debug fly mode speed (m/s).

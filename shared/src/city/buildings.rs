@@ -3,7 +3,7 @@ use std::f32::consts::PI;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::building::BuildingType;
+use crate::building::{building_rotation_quat, BuildingType};
 
 use super::{MapPlot, OrientedRect, PlotArchetype, PlotZone};
 
@@ -356,12 +356,8 @@ pub fn plot_building_scene_transform(
     let axis_z = Vec2::new(-rect.rotation_y.sin(), rect.rotation_y.cos());
     let root_xz = rect.center - axis_x * spec.local_center.x - axis_z * spec.local_center.y;
 
-    // Shared city geometry uses a 2D rotation convention where local +Z maps to
-    // (-sin(yaw), cos(yaw)) in world XZ. Bevy's Quat::from_rotation_y uses the
-    // opposite sign for local +Z, so negate here to keep the spawned scene root
-    // aligned with the same footprint/frontage math used by plots and colliders.
     Transform::from_translation(Vec3::new(root_xz.x, ground_y - spec.base_y, root_xz.y))
-        .with_rotation(Quat::from_rotation_y(-rect.rotation_y))
+        .with_rotation(building_rotation_quat(rect.rotation_y))
 }
 
 #[cfg(test)]

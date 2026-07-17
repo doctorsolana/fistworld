@@ -4,7 +4,7 @@ mod shapes;
 
 use bevy::prelude::*;
 
-use shared::building::{BuildingPosition, PlacedBuilding};
+use shared::building::{building_rotation_quat, BuildingPosition, PlacedBuilding};
 use shared::physics::WALKABLE_THRESHOLD;
 use shared::structures::StructureCollider;
 
@@ -49,7 +49,7 @@ pub fn handle_capsule_vs_buildings(
             let Ok((_entity, building, building_pos)) = buildings.get(candidate_entity) else {
                 continue;
             };
-            let building_rot = Quat::from_rotation_y(building.rotation);
+            let building_rot = building_rotation_quat(building.rotation);
             let def = building.building_type.definition();
             let building_scale = 1.0;
 

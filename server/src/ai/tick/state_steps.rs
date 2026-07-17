@@ -3,6 +3,15 @@ use crate::ai::pathfinding::{
     find_path_a_star_with_scratch, pick_random_target, PathfindingScratch,
 };
 
+#[inline]
+fn consume_pathfinding_request(remaining: &mut usize) -> bool {
+    if *remaining == 0 {
+        return false;
+    }
+    *remaining -= 1;
+    true
+}
+
 pub(super) fn tick_idle_state(
     wander: &mut NpcWander,
     rot: &mut NpcRotation,
@@ -13,6 +22,7 @@ pub(super) fn tick_idle_state(
     npc_id: u64,
     pathfinding_scratch: &mut PathfindingScratch,
     pathfinding_time_ms: &mut f32,
+    pathfinding_requests_remaining: &mut usize,
 ) {
     wander.idle_timer -= dt;
 
@@ -36,6 +46,10 @@ pub(super) fn tick_idle_state(
                 wander.path.len() - wander.waypoint
             );
         } else {
+            if !consume_pathfinding_request(pathfinding_requests_remaining) {
+                wander.idle_timer = 0.1;
+                return;
+            }
             wander.target = pick_random_target(
                 terrain,
                 obstacles,
@@ -203,6 +217,7 @@ pub(super) fn tick_fleeing_state(
     npc_id: u64,
     pathfinding_scratch: &mut PathfindingScratch,
     pathfinding_time_ms: &mut f32,
+    pathfinding_requests_remaining: &mut usize,
 ) {
     flee_timer -= dt;
 
@@ -218,6 +233,14 @@ pub(super) fn tick_fleeing_state(
     }
 
     if wander.path.is_empty() || wander.waypoint >= wander.path.len() {
+        if !consume_pathfinding_request(pathfinding_requests_remaining) {
+            wander.state = NpcState::Fleeing {
+                from_position,
+                flee_timer,
+                panic_speed_boost,
+            };
+            return;
+        }
         let away_vec = pos.0 - from_position;
         let away_dir = Vec2::new(away_vec.x, away_vec.z).normalize_or_zero();
 
@@ -308,4 +331,19 @@ pub(super) fn tick_fleeing_state(
         flee_timer,
         panic_speed_boost,
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::consume_pathfinding_request;
+
+    #[test]
+    fn pathfinding_budget_never_underflows() {
+        let mut remaining = 2;
+
+        assert!(consume_pathfinding_request(&mut remaining));
+        assert!(consume_pathfinding_request(&mut remaining));
+        assert!(!consume_pathfinding_request(&mut remaining));
+        assert_eq!(remaining, 0);
+    }
 }

@@ -17,9 +17,9 @@ struct ToonWaterUniform {
     foam_color: vec4<f32>,
     // x: foam edge width, y: foam smoothness, z: cell scale, w: flow speed
     foam_params: vec4<f32>,
-    // x: wave scale, y: shore min depth, z: shore max depth, w: shore noise amount
+    // x: foam scale, y/z: shore-distance swell fade, w: near-shore multiplier
     ring_params: vec4<f32>,
-    // x: wave amplitude, y: wave frequency, z: wave speed, w: depth start
+    // x: max swell amplitude, y/z: depth fade, w: authoritative clock offset
     wave_params: vec4<f32>,
     // xyz: direction to the sun (world), w: glint strength (0 at night)
     sun_params: vec4<f32>,
@@ -29,6 +29,11 @@ struct ToonWaterUniform {
 };
 
 @group(3) @binding(0) var<uniform> material: ToonWaterUniform;
+
+const TAU: f32 = 6.28318530718;
+const OCEAN_LOOP_SECONDS: f32 = 120.0;
+const WATER_DEPTH_FADE_METERS: f32 = 2.5;
+const WATER_SURFACE_OFFSET: f32 = 0.02;
 
 fn wave_field(p: vec2<f32>, time: f32, freq: f32, speed: f32) -> f32 {
     let dir_a = normalize(vec2<f32>(0.80, 0.60));
@@ -53,17 +58,55 @@ fn hash12(p: vec2<f32>) -> f32 {
     return fract(sin(h) * 43758.5453);
 }
 
-fn wave_height(world_xz: vec2<f32>, depth: f32, time: f32) -> f32 {
-    let amp = material.wave_params.x;
-    let freq = material.wave_params.y;
-    let speed = material.wave_params.z;
-    let depth_start = material.wave_params.w;
+fn swell_field(world_xz: vec2<f32>, time: f32) -> f32 {
+    let dir_a = vec2<f32>(0.8944272, 0.4472136);
+    let dir_b = vec2<f32>(-0.3939193, 0.9191450);
+    let dir_c = vec2<f32>(0.1961161, -0.9805807);
+    let base_omega = TAU / OCEAN_LOOP_SECONDS;
+    let phase_a = dot(world_xz, dir_a) * (TAU / 42.0) + time * base_omega * 9.0;
+    let phase_b = dot(world_xz, dir_b) * (TAU / 24.0) - time * base_omega * 14.0;
+    let phase_c = dot(world_xz, dir_c) * (TAU / 13.0) + time * base_omega * 21.0;
+    return sin(phase_a) * 0.58 + sin(phase_b) * 0.29 + sin(phase_c) * 0.13;
+}
 
-    // Nearly flat at the shoreline: shallow water shouldn't heave, and the
-    // shore foam lines read best on calm geometry.
-    let depth_scale = mix(0.05, 1.0, smoothstep(depth_start, 1.0, depth));
-    let wave = wave_field(world_xz, time, freq, speed);
-    return wave * amp * depth_scale;
+fn swell_gradient(world_xz: vec2<f32>, time: f32) -> vec2<f32> {
+    let dir_a = vec2<f32>(0.8944272, 0.4472136);
+    let dir_b = vec2<f32>(-0.3939193, 0.9191450);
+    let dir_c = vec2<f32>(0.1961161, -0.9805807);
+    let k_a = TAU / 42.0;
+    let k_b = TAU / 24.0;
+    let k_c = TAU / 13.0;
+    let base_omega = TAU / OCEAN_LOOP_SECONDS;
+    let phase_a = dot(world_xz, dir_a) * k_a + time * base_omega * 9.0;
+    let phase_b = dot(world_xz, dir_b) * k_b - time * base_omega * 14.0;
+    let phase_c = dot(world_xz, dir_c) * k_c + time * base_omega * 21.0;
+    return dir_a * cos(phase_a) * k_a * 0.58
+        + dir_b * cos(phase_b) * k_b * 0.29
+        + dir_c * cos(phase_c) * k_c * 0.13;
+}
+
+fn swell_motion_scale(depth: f32, shore_dist: f32) -> f32 {
+    let depth_scale = smoothstep(material.wave_params.y, material.wave_params.z, depth);
+    let shore_scale = smoothstep(material.ring_params.y, material.ring_params.z, shore_dist);
+    return depth_scale * mix(material.ring_params.w, 1.0, shore_scale);
+}
+
+fn shore_lap_height(world_xz: vec2<f32>, shore_dist: f32, time: f32) -> f32 {
+    // Shore distance is intentionally only a fade mask. Using it as phase
+    // input amplifies its cell-scale nearest-point changes into a sawtooth.
+    let shore_zone = 1.0 - smoothstep(0.12, 0.58, shore_dist);
+    let primary_dir = vec2<f32>(0.8192319, -0.5734623);
+    let secondary_dir = vec2<f32>(0.4472136, 0.8944272);
+    let primary_phase = dot(world_xz, primary_dir) * (TAU / 26.0) - time * (TAU / 11.0);
+    let secondary_phase = dot(world_xz, secondary_dir) * (TAU / 46.0) + time * (TAU / 17.0);
+    return (sin(primary_phase) * 0.095 + sin(secondary_phase) * 0.025) * shore_zone;
+}
+
+fn wave_height(world_xz: vec2<f32>, depth: f32, shore_dist: f32, time: f32) -> f32 {
+    let broad = swell_field(world_xz, time)
+        * material.wave_params.x
+        * swell_motion_scale(depth, shore_dist);
+    return broad + shore_lap_height(world_xz, shore_dist, time);
 }
 
 @vertex
@@ -89,12 +132,19 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
 
 #ifdef VERTEX_COLORS
     let depth = clamp(vertex.color.a, 0.0, 1.0);
-    let shore_flat = smoothstep(0.08, 0.5, vertex.color.g);
+    let shore_dist = clamp(vertex.color.g, 0.0, 1.0);
 #else
     let depth = 1.0;
-    let shore_flat = 1.0;
+    let shore_dist = 1.0;
 #endif
-    world_pos.y += wave_height(world_pos.xz, depth, globals.time) * mix(0.1, 1.0, shore_flat);
+    let wave_time = globals.time + material.wave_params.w;
+    world_pos.y += wave_height(world_pos.xz, depth, shore_dist, wave_time);
+#ifdef VERTEX_NORMALS
+    let swell_slope = swell_gradient(world_pos.xz, wave_time)
+        * material.wave_params.x
+        * swell_motion_scale(depth, shore_dist);
+    out.world_normal = normalize(vec3<f32>(-swell_slope.x, 1.0, -swell_slope.y));
+#endif
     out.world_position = world_pos;
     out.position = position_world_to_clip(out.world_position.xyz);
 #endif
@@ -137,6 +187,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 1 at ~28m out (baked by the mesh builder). Depth alone can't zone
     // features on steep banks — deep water starts right at the coast.
     let shore_dist = clamp(in.color.g, 0.0, 1.0);
+    // Signed base-water depth, including the hidden strip beneath the bank.
+    // This lets contact foam follow the moving water/terrain intersection.
+    let signed_depth = in.color.b;
+    let wave_time = globals.time + material.wave_params.w;
+    let swell_value = swell_field(in.world_position.xz, wave_time);
+    let surface_displacement = swell_value
+        * material.wave_params.x
+        * swell_motion_scale(depth, shore_dist)
+        + shore_lap_height(in.world_position.xz, shore_dist, wave_time);
 
     // Soft-banded depth gradient: quantize a third of the way toward 3 bands
     // for the stylized "painted shelves of color" read.
@@ -155,8 +214,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // coast: foam lines own the shore band, then a calm gap, and crests
     // only fade in ~10-20m out regardless of how steep the bank is.
     let open_water = smoothstep(0.35, 0.75, shore_dist) * smoothstep(0.15, 0.4, depth);
-    let wave = wave_field(flow_uv, t * 0.8, 6.2831, 1.0);
-    let crest01 = wave * 0.5 + 0.5;
+    let detail_wave = wave_field(flow_uv, t * 0.8, 6.2831, 1.0);
+    let crest_wave = swell_value * 0.72 + detail_wave * 0.28;
+    let crest01 = crest_wave * 0.5 + 0.5;
     let edge_width = clamp(material.foam_params.x, 0.001, 0.49);
     let edge_smooth = max(material.foam_params.y, 0.0005);
     let crest_threshold = 1.0 - edge_width;
@@ -170,8 +230,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let line_wobble = wave_field(in.world_position.xz * 0.22, globals.time * 1.4, 1.0, 1.0);
     let shore_zone = 1.0 - smoothstep(0.0, 0.5, shore_dist);
 
-    // Contact line: near-opaque white right where water meets land.
-    let contact = 1.0 - smoothstep(0.015, 0.055 + 0.015 * line_wobble, depth);
+    // Contact line follows the animated surface against signed terrain depth,
+    // so each crest visibly advances up the bank and each trough retreats.
+    let shore_submersion = signed_depth * WATER_DEPTH_FADE_METERS
+        + WATER_SURFACE_OFFSET
+        + surface_displacement;
+    let contact = (1.0 - smoothstep(0.018, 0.13, abs(shore_submersion)))
+        * (1.0 - smoothstep(0.30, 0.62, shore_dist));
 
     // Traveling foam lines: thin bands in shore-DISTANCE space (evenly
     // spaced ~6m apart even on steep banks), drifting shoreward and
@@ -226,7 +291,17 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // looking straight down stays clear. Sells the surface as reflective
     // without any actual reflection rendering.
     let view_vec = normalize(view.world_position.xyz - in.world_position.xyz);
-    let ndv = clamp(abs(view_vec.y), 0.02, 1.0);
+#ifdef VERTEX_NORMALS
+    let broad_normal = normalize(in.world_normal);
+    let safe_normal_y = max(abs(broad_normal.y), 0.001);
+    let swell_slope = vec2<f32>(-broad_normal.x, -broad_normal.z) / safe_normal_y;
+#else
+    let swell_slope = swell_gradient(in.world_position.xz, wave_time)
+        * material.wave_params.x
+        * swell_motion_scale(depth, shore_dist);
+    let broad_normal = normalize(vec3<f32>(-swell_slope.x, 1.0, -swell_slope.y));
+#endif
+    let ndv = clamp(abs(dot(broad_normal, view_vec)), 0.02, 1.0);
     let fresnel = pow(1.0 - ndv, 3.0);
     // A proper sky BLUE, weakly mixed — a strong whitish tint washes the
     // whole lake milky at grazing angles.
@@ -243,7 +318,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // - distance fade, because a sub-pixel ripple field aliases into huge
     //   slow moire blobs far away.
     let rip_t = globals.time;
-    var grad = wave_gradient(in.world_position.xz * 0.9, rip_t, 2.4, 1.1) * 0.30;
+    var grad = swell_slope;
+    grad += wave_gradient(in.world_position.xz * 0.9, rip_t, 2.4, 1.1) * 0.30;
     grad += wave_gradient(in.world_position.xz * 2.7 + vec2<f32>(13.7, 71.3), rip_t * 1.35, 3.1, 1.7) * 0.16;
     let swizzled = vec2<f32>(-in.world_position.z, in.world_position.x) * 1.8 + vec2<f32>(51.0, 8.0);
     let grad_c = wave_gradient(swizzled, rip_t * 0.8, 2.9, 1.4) * 0.14;

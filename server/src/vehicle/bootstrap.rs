@@ -54,8 +54,7 @@ pub fn spawn_world_vehicles(
                 ..Default::default()
             },
             VehicleDriver { driver_id: None },
-            ReplicationGroup::new_from_entity()
-                .set_priority(WORLD_VEHICLE_REPLICATION_PRIORITY),
+            ReplicationGroup::new_from_entity().set_priority(WORLD_VEHICLE_REPLICATION_PRIORITY),
             Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
         ));
         info!(

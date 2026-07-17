@@ -12,6 +12,8 @@ pub struct WorldTime {
     pub day_duration: f32,
     /// Duration of the "night" portion in seconds.
     pub night_duration: f32,
+    /// Independent looping clock for deterministic water motion.
+    pub ocean_seconds: f32,
 }
 
 /// Server-authoritative seed for sky/cloud generation (replicated to clients).
@@ -42,6 +44,7 @@ impl WorldTime {
             seconds_in_cycle,
             day_duration,
             night_duration,
+            ocean_seconds: 0.0,
         };
         wt.wrap();
         wt
@@ -78,7 +81,9 @@ impl WorldTime {
     }
 
     pub fn advance(&mut self, dt: f32) {
-        self.seconds_in_cycle += dt.max(0.0);
+        let dt = dt.max(0.0);
+        self.seconds_in_cycle += dt;
+        self.ocean_seconds = crate::water::advance_ocean_seconds(self.ocean_seconds, dt);
         self.wrap();
     }
 

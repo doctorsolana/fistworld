@@ -1,7 +1,7 @@
 //! Internal combat geometry helpers.
 
 use bevy::prelude::*;
-use shared::building::{BuildingPosition, PlacedBuilding};
+use shared::building::{building_rotation_quat, BuildingPosition, PlacedBuilding};
 use shared::terrain::WorldTerrain;
 
 use crate::collision::library::{
@@ -22,6 +22,102 @@ pub(super) fn ray_sphere_intersection(
     let d = (p - sphere_center).length();
     let effective = sphere_radius * 1.25;
     (d <= effective).then_some(p)
+}
+
+/// Exact nearest ray-segment hit against a sphere.
+pub(super) fn ray_sphere_intersection_exact(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    ray_length: f32,
+    sphere_center: Vec3,
+    sphere_radius: f32,
+) -> Option<(Vec3, Vec3)> {
+    let offset = ray_origin - sphere_center;
+    let b = offset.dot(ray_dir);
+    let c = offset.length_squared() - sphere_radius * sphere_radius;
+    let discriminant = b * b - c;
+    if discriminant < 0.0 {
+        return None;
+    }
+
+    let root = discriminant.sqrt();
+    let near = -b - root;
+    let far = -b + root;
+    let t = if near >= 0.0 { near } else { far };
+    if !(0.0..=ray_length).contains(&t) {
+        return None;
+    }
+
+    let point = ray_origin + ray_dir * t;
+    Some((point, (point - sphere_center).normalize_or_zero()))
+}
+
+/// Exact nearest ray-segment hit against an arbitrarily oriented capsule.
+pub(super) fn ray_oriented_capsule_intersection(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    ray_length: f32,
+    capsule_a: Vec3,
+    capsule_b: Vec3,
+    capsule_radius: f32,
+) -> Option<(Vec3, Vec3)> {
+    const EPS: f32 = 1.0e-6;
+
+    let axis = capsule_b - capsule_a;
+    let axis_len_sq = axis.length_squared();
+    if axis_len_sq <= EPS {
+        return ray_sphere_intersection_exact(
+            ray_origin,
+            ray_dir,
+            ray_length,
+            capsule_a,
+            capsule_radius,
+        );
+    }
+
+    let origin_from_a = ray_origin - capsule_a;
+    let axis_dot_ray = axis.dot(ray_dir);
+    let axis_dot_origin = axis.dot(origin_from_a);
+    let ray_dot_origin = ray_dir.dot(origin_from_a);
+    let origin_len_sq = origin_from_a.length_squared();
+    let qa = axis_len_sq - axis_dot_ray * axis_dot_ray;
+    let qb = axis_len_sq * ray_dot_origin - axis_dot_origin * axis_dot_ray;
+    let qc = axis_len_sq * origin_len_sq
+        - axis_dot_origin * axis_dot_origin
+        - capsule_radius * capsule_radius * axis_len_sq;
+
+    let mut best_t = f32::INFINITY;
+    if qa.abs() > EPS {
+        let discriminant = qb * qb - qa * qc;
+        if discriminant >= 0.0 {
+            let t = (-qb - discriminant.sqrt()) / qa;
+            let axis_t = axis_dot_origin + t * axis_dot_ray;
+            if (0.0..=ray_length).contains(&t) && (0.0..=axis_len_sq).contains(&axis_t) {
+                best_t = t;
+            }
+        }
+    }
+
+    for cap_center in [capsule_a, capsule_b] {
+        if let Some((point, _)) = ray_sphere_intersection_exact(
+            ray_origin,
+            ray_dir,
+            ray_length,
+            cap_center,
+            capsule_radius,
+        ) {
+            best_t = best_t.min((point - ray_origin).dot(ray_dir));
+        }
+    }
+
+    if !best_t.is_finite() || !(0.0..=ray_length).contains(&best_t) {
+        return None;
+    }
+
+    let point = ray_origin + ray_dir * best_t;
+    let segment_t = ((point - capsule_a).dot(axis) / axis_len_sq).clamp(0.0, 1.0);
+    let closest = capsule_a + axis * segment_t;
+    Some((point, (point - closest).normalize_or_zero()))
 }
 
 /// Ray-capsule intersection test.
@@ -169,6 +265,40 @@ pub(super) fn ray_obb_intersection(
     let normal_world = (box_rotation * normal_local).normalize_or_zero();
 
     Some((hit_world, normal_world))
+}
+
+#[cfg(test)]
+mod character_hitbox_tests {
+    use super::*;
+
+    #[test]
+    fn oriented_capsule_hits_horizontal_limb_at_nearest_surface() {
+        let (point, normal) = ray_oriented_capsule_intersection(
+            Vec3::new(0.0, 0.0, 2.0),
+            Vec3::NEG_Z,
+            4.0,
+            Vec3::new(-0.5, 0.0, 0.0),
+            Vec3::new(0.5, 0.0, 0.0),
+            0.1,
+        )
+        .expect("ray should hit horizontal capsule");
+
+        assert!((point.z - 0.1).abs() < 1.0e-4);
+        assert!(normal.z > 0.99);
+    }
+
+    #[test]
+    fn oriented_capsule_misses_beyond_radius() {
+        assert!(ray_oriented_capsule_intersection(
+            Vec3::new(0.0, 0.2, 2.0),
+            Vec3::NEG_Z,
+            4.0,
+            Vec3::new(-0.5, 0.0, 0.0),
+            Vec3::new(0.5, 0.0, 0.0),
+            0.1,
+        )
+        .is_none());
+    }
 }
 
 /// Segment vs terrain heightfield intersection.
@@ -329,7 +459,7 @@ pub(super) fn segment_buildings_intersection(
             continue;
         }
 
-        let rotation = Quat::from_rotation_y(building.rotation);
+        let rotation = building_rotation_quat(building.rotation);
 
         for hull in &shape.hulls {
             for face in &hull.hull_faces {

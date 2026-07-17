@@ -6,7 +6,7 @@ use crate::input::CameraMode;
 use crate::render::systems::VehicleHoverBob;
 use bevy::prelude::*;
 use lightyear::prelude::*;
-use shared::components::LocalPlayer;
+use shared::components::{LocalPlayer, PlayerWaterState};
 use shared::player::PLAYER_HEIGHT;
 use shared::vehicle::{Vehicle, VehicleDriver};
 
@@ -55,6 +55,7 @@ pub fn update_camera(
     >,
     input_state: Res<crate::input::InputState>,
     time: Res<Time>,
+    local_water: Query<(), (With<LocalPlayer>, With<PlayerWaterState>)>,
 ) {
     let Some(player_transform) = player_query.iter().next() else {
         return;
@@ -90,6 +91,7 @@ pub fn update_camera(
     let vehicle_bob = vehicle_pose
         .as_ref()
         .and_then(|(entity, _, _)| vehicle_bob_offset(&hover_bobs, *entity, time.elapsed_secs()));
+    let in_water = !local_water.is_empty();
 
     let (target_pos, target_rot) = match input_state.camera_mode {
         CameraMode::FirstPerson => first_person_target(
@@ -98,6 +100,7 @@ pub fn update_camera(
             vehicle_bob,
             &input_state,
             time.elapsed_secs(),
+            in_water,
         ),
         CameraMode::ThirdPerson => {
             third_person_target(player_transform, vehicle_pose, &input_state)
@@ -124,6 +127,7 @@ fn first_person_target(
     vehicle_bob: Option<f32>,
     input_state: &crate::input::InputState,
     time_secs: f32,
+    in_water: bool,
 ) -> (Vec3, Quat) {
     if let Some((_, veh_pos, veh_rot)) = vehicle_pose {
         let (seat_height, bob) = match vehicle_bob {
@@ -148,7 +152,7 @@ fn first_person_target(
         let mut pitch = input_state.pitch;
         let mut roll = 0.0;
 
-        if is_moving_on_foot(input_state) {
+        if is_moving_on_foot(input_state) && !in_water {
             let sprinting = is_sprinting_on_foot(input_state);
             let phase = time_secs * if sprinting { 13.5 } else { 8.25 };
             let vertical_amp = if sprinting { 0.038 } else { 0.012 };
@@ -273,6 +277,7 @@ pub fn update_camera_fov(
     mut camera_query: Query<&mut Projection, With<Camera3d>>,
     input_state: Res<crate::input::InputState>,
     local_player: Query<&shared::components::EquippedWeapon, With<LocalPlayer>>,
+    local_water: Query<(), (With<LocalPlayer>, With<PlayerWaterState>)>,
     time: Res<Time>,
 ) {
     let Ok(mut projection) = camera_query.single_mut() else {
@@ -300,6 +305,7 @@ pub fn update_camera_fov(
         }
     } else if input_state.camera_mode == CameraMode::FirstPerson
         && is_sprinting_on_foot(&input_state)
+        && local_water.is_empty()
     {
         FOV_SPRINT
     } else {

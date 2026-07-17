@@ -9,8 +9,8 @@ pub use chunks::WaterChunk;
 
 use chunks::{cleanup_water_chunks, spawn_water_chunks, LoadedWaterChunks, WaterRenderAssets};
 use material::{
-    emit_water_ripples, setup_water_assets, update_water_cull_mode, update_water_sun_dir,
-    ToonWaterMaterial,
+    emit_water_ripples, setup_water_assets, sync_water_wave_clock, update_water_cull_mode,
+    update_water_sun_dir, ToonWaterMaterial,
 };
 use overlay::{despawn_underwater_overlay, spawn_underwater_overlay, update_underwater_overlay};
 
@@ -56,6 +56,7 @@ impl Plugin for WaterPlugin {
                 update_underwater_overlay,
                 update_water_cull_mode,
                 update_water_sun_dir,
+                sync_water_wave_clock,
                 emit_water_ripples,
             )
                 .run_if(in_state(GameState::Playing)),

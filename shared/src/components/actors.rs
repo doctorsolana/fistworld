@@ -33,6 +33,9 @@ pub enum NpcArchetype {
     /// ragdoll body definitions (no skeleton/bind-pose mapping) — ground
     /// truth for diagnosing ragdoll issues.
     Dummy,
+    /// Procedural anatomical target using the shared ragdoll body layout for
+    /// its visible model, precise hitboxes, and death physics.
+    CombatDummy,
 }
 
 /// Which player character model to use on the client.
@@ -140,6 +143,7 @@ pub struct PlayerGrounded {
 pub struct PlayerWaterState {
     pub in_water: bool,
     pub surface_y: f32,
+    /// Water surface depth below the player's capsule center.
     pub depth: f32,
 }
 

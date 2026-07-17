@@ -18,8 +18,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 use shared::terrain::{
-    ChunkCoord, TerrainDeltaChunk, TerrainDeltaData, TerrainGenerator,
-    WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, WORLD_RADIUS_METERS, WORLD_SEED,
+    ChunkCoord, TerrainDeltaChunk, TerrainDeltaData, TerrainGenerator, WorldTerrain,
+    CHUNK_RESOLUTION, CHUNK_SIZE, WORLD_RADIUS_METERS, WORLD_SEED,
 };
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};

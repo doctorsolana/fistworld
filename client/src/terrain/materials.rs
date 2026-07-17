@@ -7,6 +7,10 @@ use bevy::prelude::*;
 use bevy::reflect::TypePath;
 use bevy::render::render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension};
 use bevy::shader::ShaderRef;
+use shared::components::WorldTime;
+use shared::water::{OCEAN_LOOP_SECONDS, WATER_SURFACE_OFFSET};
+
+use super::chunks::TerrainChunk;
 
 /// Splatmap material definition (StandardMaterial + extension).
 pub type TerrainSplatMaterial = ExtendedMaterial<StandardMaterial, TerrainSplatExtension>;
@@ -38,15 +42,15 @@ pub struct TerrainSplatExtension {
     #[uniform(122)]
     pub normal_strength: f32,
 
-    // x: water level (world Y), y: 1.0 when the map has water, zw: unused.
+    // x: water level, y: enabled, z: server clock offset, w: surface offset.
     #[uniform(123)]
     pub water_params: Vec4,
 }
 
-/// Terrain water uniform from a generator's loaded map: (level, enabled).
+/// Terrain water uniform from a generator's loaded map.
 pub fn water_params_for_generator(generator: &shared::terrain::TerrainGenerator) -> Vec4 {
     match generator.loaded_map().heightmap.water_level {
-        Some(level) => Vec4::new(level, 1.0, 0.0, 0.0),
+        Some(level) => Vec4::new(level, 1.0, 0.0, WATER_SURFACE_OFFSET),
         None => Vec4::ZERO,
     }
 }
@@ -187,4 +191,44 @@ pub(crate) fn weightmap_sampler() -> ImageSampler {
         mipmap_filter: ImageFilterMode::Linear,
         ..default()
     })
+}
+
+#[derive(Default)]
+pub(super) struct TerrainWaterClockSync {
+    world_time_entity: Option<Entity>,
+    offset: f32,
+}
+
+/// Keep the animated wet shoreline on the same clock as the water shader.
+/// Existing materials are updated once when the replicated clock arrives;
+/// newly streamed chunks inherit the cached offset as they are added.
+pub(super) fn sync_terrain_water_clock(
+    time: Res<Time>,
+    world_time: Query<(Entity, &WorldTime)>,
+    chunks: Query<(&TerrainChunk, Ref<TerrainChunk>)>,
+    mut materials: ResMut<Assets<TerrainSplatMaterial>>,
+    mut sync: Local<TerrainWaterClockSync>,
+) {
+    let Ok((world_time_entity, world_time)) = world_time.single() else {
+        return;
+    };
+
+    let clock_changed = sync.world_time_entity != Some(world_time_entity);
+    if clock_changed {
+        let local = time.elapsed_secs_wrapped().rem_euclid(OCEAN_LOOP_SECONDS);
+        let half_loop = OCEAN_LOOP_SECONDS * 0.5;
+        sync.offset = (world_time.ocean_seconds - local + half_loop).rem_euclid(OCEAN_LOOP_SECONDS)
+            - half_loop;
+        sync.world_time_entity = Some(world_time_entity);
+    }
+
+    for (chunk, change) in &chunks {
+        if !clock_changed && !change.is_added() {
+            continue;
+        }
+        let Some(material) = materials.get_mut(&chunk.material) else {
+            continue;
+        };
+        material.extension.water_params.z = sync.offset;
+    }
 }

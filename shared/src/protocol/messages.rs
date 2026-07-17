@@ -5,7 +5,7 @@ use crate::components::{NpcArchetype, PlayerCharacter};
 use crate::economy::CargoKind;
 use crate::rail::{RouteStop, StationId, TrackSegmentId, TrainId};
 use crate::vehicle::VehicleInput;
-use crate::weapons::damage::HitZone;
+use crate::weapons::damage::{HitBodyPart, HitZone};
 
 /// Player input sent from client to server each tick.
 #[derive(Debug, PartialEq, Clone)]
@@ -18,7 +18,7 @@ pub struct PlayerInput {
     pub jump: bool,
     /// Debug fly mode toggle (server-authoritative movement)
     pub fly_mode: bool,
-    /// Fly down (descend)
+    /// Descend while flying or swimming.
     pub fly_down: bool,
     /// Fly fast (speed multiplier)
     pub fly_fast: bool,
@@ -217,6 +217,8 @@ pub struct HitConfirm {
     pub kill: bool,
     /// Hit zone
     pub hit_zone: HitZone,
+    /// Exact anatomical part for detailed NPC hitboxes.
+    pub body_part: Option<HitBodyPart>,
 }
 
 /// Message sent from server when player takes damage.
@@ -687,5 +689,21 @@ mod tests {
         let batch_decoded: NpcRagdollPoseBatch = bincode::deserialize(&batch_bytes).unwrap();
         assert_eq!(batch_decoded.server_time_ms, 1234);
         assert_eq!(batch_decoded.samples[0].seq, 7);
+    }
+
+    #[test]
+    fn hit_confirmation_preserves_precise_body_part() {
+        let message = HitConfirm {
+            target_id: 42,
+            damage: 18.75,
+            headshot: false,
+            kill: false,
+            hit_zone: HitZone::Arms,
+            body_part: Some(HitBodyPart::LeftForearm),
+        };
+
+        let bytes = bincode::serialize(&message).unwrap();
+        let decoded: HitConfirm = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, message);
     }
 }

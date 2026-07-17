@@ -88,6 +88,7 @@ pub fn update_npc_ai(
     terrain: Res<WorldTerrain>,
     obstacle_grid: Res<SpatialObstacleGrid>,
     player_spatial: Res<PlayerSpatialIndex>,
+    pathfinding_budget: Res<crate::ai::pathfinding::PathfindingBudgetSettings>,
     mut server_perf: Option<ResMut<crate::telemetry::perf::ServerPerfMonitor>>,
     mut ai_tick: Local<u64>,
     mut cadence_cache: Local<HashMap<Entity, (u64, u64)>>,
@@ -128,6 +129,7 @@ pub fn update_npc_ai(
     let mut throttled_npcs = 0u64;
     let mut cadence_eval_ms = 0.0f32;
     let mut pathfinding_ms = 0.0f32;
+    let mut pathfinding_requests_remaining = pathfinding_budget.max_requests_per_tick;
 
     for (entity, npc, mut pos, mut rot, health, mut wander, mut activity, has_fleeing) in
         npcs.iter_mut()
@@ -210,6 +212,7 @@ pub fn update_npc_ai(
                     npc.id,
                     &mut pathfinding_scratch,
                     &mut pathfinding_ms,
+                    &mut pathfinding_requests_remaining,
                 );
             }
             NpcState::Idle => {
@@ -223,6 +226,7 @@ pub fn update_npc_ai(
                     npc.id,
                     &mut pathfinding_scratch,
                     &mut pathfinding_ms,
+                    &mut pathfinding_requests_remaining,
                 );
             }
             NpcState::Walking => {

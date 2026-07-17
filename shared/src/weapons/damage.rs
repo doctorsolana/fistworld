@@ -17,6 +17,16 @@ pub enum HitZone {
 }
 
 impl HitZone {
+    pub fn label(self) -> &'static str {
+        match self {
+            HitZone::Head => "HEAD",
+            HitZone::Chest => "TORSO",
+            HitZone::Stomach => "ABDOMEN",
+            HitZone::Arms => "ARM",
+            HitZone::Legs => "LEG",
+        }
+    }
+
     /// Get the base damage multiplier for this hit zone
     pub fn base_multiplier(&self) -> f32 {
         match self {
@@ -42,6 +52,54 @@ impl HitZone {
             HitZone::Stomach
         } else {
             HitZone::Legs
+        }
+    }
+}
+
+/// Precise anatomical location used by NPC hitboxes and hit feedback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum HitBodyPart {
+    Head,
+    Chest,
+    Abdomen,
+    Pelvis,
+    LeftUpperArm,
+    LeftForearm,
+    RightUpperArm,
+    RightForearm,
+    LeftThigh,
+    LeftCalf,
+    RightThigh,
+    RightCalf,
+}
+
+impl HitBodyPart {
+    pub fn hit_zone(self) -> HitZone {
+        match self {
+            Self::Head => HitZone::Head,
+            Self::Chest => HitZone::Chest,
+            Self::Abdomen | Self::Pelvis => HitZone::Stomach,
+            Self::LeftUpperArm | Self::LeftForearm | Self::RightUpperArm | Self::RightForearm => {
+                HitZone::Arms
+            }
+            Self::LeftThigh | Self::LeftCalf | Self::RightThigh | Self::RightCalf => HitZone::Legs,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Head => "HEAD",
+            Self::Chest => "CHEST",
+            Self::Abdomen => "ABDOMEN",
+            Self::Pelvis => "PELVIS",
+            Self::LeftUpperArm => "LEFT UPPER ARM",
+            Self::LeftForearm => "LEFT FOREARM",
+            Self::RightUpperArm => "RIGHT UPPER ARM",
+            Self::RightForearm => "RIGHT FOREARM",
+            Self::LeftThigh => "LEFT THIGH",
+            Self::LeftCalf => "LEFT LOWER LEG",
+            Self::RightThigh => "RIGHT THIGH",
+            Self::RightCalf => "RIGHT LOWER LEG",
         }
     }
 }
@@ -160,5 +218,14 @@ mod tests {
         let head_damage = calculate_damage(&stats, 100.0, HitZone::Head);
 
         assert!((head_damage / body_damage - stats.headshot_mult).abs() < 0.01);
+    }
+
+    #[test]
+    fn precise_body_parts_map_to_damage_zones() {
+        assert_eq!(HitBodyPart::Head.hit_zone(), HitZone::Head);
+        assert_eq!(HitBodyPart::Chest.hit_zone(), HitZone::Chest);
+        assert_eq!(HitBodyPart::Pelvis.hit_zone(), HitZone::Stomach);
+        assert_eq!(HitBodyPart::LeftForearm.hit_zone(), HitZone::Arms);
+        assert_eq!(HitBodyPart::RightCalf.hit_zone(), HitZone::Legs);
     }
 }

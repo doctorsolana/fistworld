@@ -1,10 +1,11 @@
 //! mesh systems.
 
 use super::*;
+use shared::water::{WATER_DEPTH_FADE_METERS, WATER_SURFACE_OFFSET};
 
-const WATER_SURFACE_OFFSET: f32 = 0.02;
-const WATER_DEPTH_MAX: f32 = 2.5;
-const WATER_SHORE_OVERLAP: f32 = 0.12;
+/// Keep the animated shoreline mesh hidden beneath the bank at its outer edge.
+/// This must remain comfortably larger than the maximum shore-lap crest.
+const WATER_SHORE_OVERLAP: f32 = 0.18;
 /// Horizontal distance (m) at which a vertex counts as fully "open water".
 /// Baked into vertex color G so the shader can zone features by distance to
 /// the coast — vertical depth alone fails on steep banks, where deep water
@@ -26,6 +27,7 @@ struct WaterVertex {
     pos: [f32; 3],
     uv: [f32; 2],
     depth_norm: f32,
+    signed_depth_norm: f32,
     shore_dist: f32,
 }
 
@@ -49,9 +51,9 @@ fn add_triangle(
     uvs.push(a.uv);
     uvs.push(b.uv);
     uvs.push(c.uv);
-    colors.push([1.0, a.shore_dist, 1.0, a.depth_norm]);
-    colors.push([1.0, b.shore_dist, 1.0, b.depth_norm]);
-    colors.push([1.0, c.shore_dist, 1.0, c.depth_norm]);
+    colors.push([1.0, a.shore_dist, a.signed_depth_norm, a.depth_norm]);
+    colors.push([1.0, b.shore_dist, b.signed_depth_norm, b.depth_norm]);
+    colors.push([1.0, c.shore_dist, c.signed_depth_norm, c.depth_norm]);
     // The a/b/c layout below is clockwise seen from above (+Y); emit reversed
     // so the front face points up — otherwise back-face culling hides the
     // whole surface from above water.
@@ -70,9 +72,6 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
     let mut indices = Vec::new();
     let waterline = water_level + WATER_SHORE_OVERLAP;
     let water_y = water_level + WATER_SURFACE_OFFSET;
-
-    let depth_norm =
-        |height: f32| ((water_level - height).max(0.0) / WATER_DEPTH_MAX).clamp(0.0, 1.0);
 
     // Pass 1: collect shoreline crossing points in and around the chunk so
     // every vertex can carry its horizontal distance to the coast.
@@ -124,13 +123,16 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
         (best.sqrt() / SHORE_DIST_MAX).clamp(0.0, 1.0)
     };
 
-    let make_vertex = |local_x: f32, local_z: f32, depth: f32| {
+    let make_vertex = |local_x: f32, local_z: f32, terrain_height: f32| {
         let world_x = origin_x + local_x;
         let world_z = origin_z + local_z;
+        let signed_depth_norm =
+            ((water_level - terrain_height) / WATER_DEPTH_FADE_METERS).clamp(-1.0, 1.0);
         WaterVertex {
             pos: [local_x, water_y, local_z],
             uv: [world_x / CHUNK_SIZE, world_z / CHUNK_SIZE],
-            depth_norm: depth,
+            depth_norm: signed_depth_norm.max(0.0),
+            signed_depth_norm,
             shore_dist: shore_dist_norm(world_x, world_z),
         }
     };
@@ -145,7 +147,7 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
         t = t.clamp(0.0, 1.0);
         let local_x = a.local_x + (b.local_x - a.local_x) * t;
         let local_z = a.local_z + (b.local_z - a.local_z) * t;
-        make_vertex(local_x, local_z, 0.0)
+        make_vertex(local_x, local_z, waterline)
     };
 
     for zi in 0..(CHUNK_RESOLUTION - 1) {
@@ -192,10 +194,10 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
                 continue;
             }
 
-            let v0 = make_vertex(c0.local_x, c0.local_z, depth_norm(c0.height));
-            let v1 = make_vertex(c1.local_x, c1.local_z, depth_norm(c1.height));
-            let v2 = make_vertex(c2.local_x, c2.local_z, depth_norm(c2.height));
-            let v3 = make_vertex(c3.local_x, c3.local_z, depth_norm(c3.height));
+            let v0 = make_vertex(c0.local_x, c0.local_z, c0.height);
+            let v1 = make_vertex(c1.local_x, c1.local_z, c1.height);
+            let v2 = make_vertex(c2.local_x, c2.local_z, c2.height);
+            let v3 = make_vertex(c3.local_x, c3.local_z, c3.height);
 
             let e0 = if w0 != w1 {
                 Some(edge_vertex(c0, c1))

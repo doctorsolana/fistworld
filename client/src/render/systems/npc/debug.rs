@@ -27,19 +27,64 @@ fn ragdoll_parent(
 pub fn update_npc_hitbox_debug_gizmos(
     mut gizmos: Gizmos,
     debug_mode: Res<WeaponDebugMode>,
-    npcs: Query<(&Transform, &Health), With<Npc>>,
+    npcs: Query<(&Npc, &Transform, &Health)>,
 ) {
     if !debug_mode.0 {
         return;
     }
 
-    for (transform, health) in npcs.iter() {
+    for (npc, transform, health) in npcs.iter() {
         let center = transform.translation;
+        let alive = !health.is_dead();
+
+        if alive
+            && matches!(
+                npc.archetype,
+                shared::components::NpcArchetype::Dummy
+                    | shared::components::NpcArchetype::CombatDummy
+            )
+        {
+            for def in HUMANOID_RAGDOLL_BODIES {
+                let part = humanoid_body_part(def.id);
+                let color = match part.hit_zone() {
+                    shared::weapons::damage::HitZone::Head => Color::srgba(1.0, 0.18, 0.12, 0.95),
+                    shared::weapons::damage::HitZone::Chest => Color::srgba(0.15, 0.65, 1.0, 0.9),
+                    shared::weapons::damage::HitZone::Stomach => Color::srgba(0.3, 1.0, 0.35, 0.9),
+                    shared::weapons::damage::HitZone::Arms => Color::srgba(1.0, 0.72, 0.15, 0.9),
+                    shared::weapons::damage::HitZone::Legs => Color::srgba(0.78, 0.4, 1.0, 0.9),
+                };
+                let body_center = center + transform.rotation * def.local_offset;
+                let body_rotation =
+                    transform.rotation * Quat::from_rotation_arc(Vec3::Y, ragdoll_body_axis(&def));
+                let isometry = Isometry3d::new(body_center, body_rotation);
+                match humanoid_body_shape(def.id) {
+                    HumanoidBodyShape::Sphere { radius } => {
+                        gizmos.sphere(isometry, radius, color);
+                    }
+                    HumanoidBodyShape::Capsule {
+                        half_segment,
+                        radius,
+                    } => {
+                        gizmos.primitive_3d(
+                            &Capsule3d::new(radius, half_segment * 2.0),
+                            isometry,
+                            color,
+                        );
+                    }
+                    HumanoidBodyShape::Cuboid { half_extents } => {
+                        gizmos.primitive_3d(
+                            &Cuboid::from_size(half_extents * 2.0),
+                            isometry,
+                            color,
+                        );
+                    }
+                }
+            }
+            continue;
+        }
 
         let head_center = npc_head_center(center);
         let (a, b) = npc_capsule_endpoints(center);
-
-        let alive = !health.is_dead();
 
         let body_color = if alive {
             Color::srgba(1.0, 0.85, 0.2, 0.9)

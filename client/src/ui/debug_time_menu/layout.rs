@@ -328,7 +328,7 @@ pub(super) fn spawn_dummy_npc_button(parent: &mut ChildSpawnerCommands<'_>) {
         ))
         .with_children(|btn| {
             btn.spawn((
-                Text::new("SPAWN RAGDOLL DUMMY"),
+                Text::new("SPAWN ANATOMICAL DUMMY"),
                 button_text_style(),
                 TextColor(TEXT_COLOR),
             ));

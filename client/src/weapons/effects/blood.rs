@@ -45,9 +45,8 @@ pub(crate) fn spawn_blood_splatter(
         for i in 0..puffs {
             let jitter = tangent * rand_range(-0.06, 0.06) + bitangent * rand_range(-0.06, 0.06);
             let pos = impact_pos + normal * rand_range(0.08, 0.18) + jitter;
-            let velocity = normal * rand_range(0.7, 1.6)
-                + jitter * 4.0
-                + Vec3::Y * rand_range(0.1, 0.45);
+            let velocity =
+                normal * rand_range(0.7, 1.6) + jitter * 4.0 + Vec3::Y * rand_range(0.1, 0.45);
             let scale = rand_range(0.13, 0.22) * if i == 0 { 1.25 } else { 1.0 };
 
             commands.spawn((
@@ -289,8 +288,8 @@ pub fn update_blood_bursts(
         if let Some(cam) = camera_pos {
             let to_cam = (cam - transform.translation).normalize_or_zero();
             if to_cam.length_squared() > 0.0001 {
-                transform.rotation = Quat::from_rotation_arc(Vec3::Y, to_cam)
-                    * Quat::from_rotation_y(mist.roll);
+                transform.rotation =
+                    Quat::from_rotation_arc(Vec3::Y, to_cam) * Quat::from_rotation_y(mist.roll);
             }
         }
     }

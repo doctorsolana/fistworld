@@ -18,6 +18,9 @@ pub const NPC_RADIUS: f32 = PLAYER_RADIUS;
 /// Head hitbox radius.
 pub const NPC_HEAD_RADIUS: f32 = 0.18;
 
+/// Maximum horizontal reach of the procedural anatomical target.
+pub const NPC_HUMANOID_HITBOX_REACH: f32 = 0.75;
+
 /// Returns the approximate head hitbox center for an upright NPC.
 ///
 /// `npc_center` is the NPC's capsule *center* position.
@@ -73,6 +76,7 @@ pub fn npc_max_health(archetype: NpcArchetype) -> f32 {
         NpcArchetype::Oilman => 100.0,
         NpcArchetype::DesertOutpost => 100.0,
         NpcArchetype::Dummy => 100.0,
+        NpcArchetype::CombatDummy => 150.0,
     }
 }
 
@@ -141,98 +145,167 @@ pub fn npc_name_for_id(seed: u32, id: u64) -> String {
 // ragdoll spawn frame.
 
 use crate::protocol::RagdollBodyId;
+use crate::weapons::damage::HitBodyPart;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RagdollBodyDef {
     pub id: RagdollBodyId,
     pub local_offset: Vec3,
-    pub radius: f32,
     pub mass: f32,
     pub parent: Option<RagdollBodyId>,
+}
+
+/// Shape shared by the combat dummy visual, living hit detection, and
+/// authoritative ragdoll physics.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HumanoidBodyShape {
+    Sphere { radius: f32 },
+    Capsule { half_segment: f32, radius: f32 },
+    Cuboid { half_extents: Vec3 },
+}
+
+/// Anatomical collider dimensions for one humanoid body.
+pub fn humanoid_body_shape(id: RagdollBodyId) -> HumanoidBodyShape {
+    use RagdollBodyId as B;
+    match id {
+        B::Pelvis => HumanoidBodyShape::Cuboid {
+            half_extents: Vec3::new(0.16, 0.11, 0.12),
+        },
+        B::SpineLower => HumanoidBodyShape::Capsule {
+            half_segment: 0.10,
+            radius: 0.15,
+        },
+        B::SpineUpper => HumanoidBodyShape::Capsule {
+            half_segment: 0.12,
+            radius: 0.18,
+        },
+        B::Head => HumanoidBodyShape::Sphere { radius: 0.13 },
+        B::UpperArmL | B::UpperArmR => HumanoidBodyShape::Capsule {
+            half_segment: 0.12,
+            radius: 0.075,
+        },
+        B::ForearmL | B::ForearmR => HumanoidBodyShape::Capsule {
+            half_segment: 0.14,
+            radius: 0.065,
+        },
+        B::HandL | B::HandR => HumanoidBodyShape::Capsule {
+            half_segment: 0.06,
+            radius: 0.045,
+        },
+        B::ThighL | B::ThighR => HumanoidBodyShape::Capsule {
+            half_segment: 0.17,
+            radius: 0.095,
+        },
+        B::CalfL | B::CalfR => HumanoidBodyShape::Capsule {
+            half_segment: 0.15,
+            radius: 0.08,
+        },
+        B::FootL | B::FootR => HumanoidBodyShape::Cuboid {
+            half_extents: Vec3::new(0.065, 0.045, 0.13),
+        },
+    }
+}
+
+pub fn humanoid_body_bounding_radius(shape: HumanoidBodyShape) -> f32 {
+    match shape {
+        HumanoidBodyShape::Sphere { radius } => radius,
+        HumanoidBodyShape::Capsule {
+            half_segment,
+            radius,
+        } => half_segment + radius,
+        HumanoidBodyShape::Cuboid { half_extents } => half_extents.length(),
+    }
+}
+
+/// Precise hit location represented by a ragdoll body.
+pub fn humanoid_body_part(id: RagdollBodyId) -> HitBodyPart {
+    use RagdollBodyId as B;
+    match id {
+        B::Head => HitBodyPart::Head,
+        B::SpineUpper => HitBodyPart::Chest,
+        B::SpineLower => HitBodyPart::Abdomen,
+        B::Pelvis => HitBodyPart::Pelvis,
+        B::UpperArmL => HitBodyPart::LeftUpperArm,
+        B::ForearmL | B::HandL => HitBodyPart::LeftForearm,
+        B::UpperArmR => HitBodyPart::RightUpperArm,
+        B::ForearmR | B::HandR => HitBodyPart::RightForearm,
+        B::ThighL => HitBodyPart::LeftThigh,
+        B::CalfL | B::FootL => HitBodyPart::LeftCalf,
+        B::ThighR => HitBodyPart::RightThigh,
+        B::CalfR | B::FootR => HitBodyPart::RightCalf,
+    }
 }
 
 pub const HUMANOID_RAGDOLL_BODIES: [RagdollBodyDef; 12] = [
     RagdollBodyDef {
         id: RagdollBodyId::Pelvis,
         local_offset: Vec3::new(0.0, 0.0, 0.0),
-        radius: 0.13,
         mass: 13.0,
         parent: None,
     },
     RagdollBodyDef {
         id: RagdollBodyId::SpineLower,
         local_offset: Vec3::new(0.0, 0.20, 0.0),
-        radius: 0.11,
         mass: 8.0,
         parent: Some(RagdollBodyId::Pelvis),
     },
     RagdollBodyDef {
         id: RagdollBodyId::SpineUpper,
         local_offset: Vec3::new(0.0, 0.42, 0.0),
-        radius: 0.11,
         mass: 7.0,
         parent: Some(RagdollBodyId::SpineLower),
     },
     RagdollBodyDef {
         id: RagdollBodyId::Head,
         local_offset: Vec3::new(0.0, 0.74, 0.0),
-        radius: 0.10,
         mass: 5.0,
         parent: Some(RagdollBodyId::SpineUpper),
     },
     RagdollBodyDef {
         id: RagdollBodyId::UpperArmL,
         local_offset: Vec3::new(-0.24, 0.44, 0.0),
-        radius: 0.07,
         mass: 3.0,
         parent: Some(RagdollBodyId::SpineUpper),
     },
     RagdollBodyDef {
         id: RagdollBodyId::UpperArmR,
         local_offset: Vec3::new(0.24, 0.44, 0.0),
-        radius: 0.07,
         mass: 3.0,
         parent: Some(RagdollBodyId::SpineUpper),
     },
     RagdollBodyDef {
         id: RagdollBodyId::ForearmL,
         local_offset: Vec3::new(-0.48, 0.40, 0.0),
-        radius: 0.06,
         mass: 2.5,
         parent: Some(RagdollBodyId::UpperArmL),
     },
     RagdollBodyDef {
         id: RagdollBodyId::ForearmR,
         local_offset: Vec3::new(0.48, 0.40, 0.0),
-        radius: 0.06,
         mass: 2.5,
         parent: Some(RagdollBodyId::UpperArmR),
     },
     RagdollBodyDef {
         id: RagdollBodyId::ThighL,
         local_offset: Vec3::new(-0.11, -0.33, 0.0),
-        radius: 0.085,
         mass: 5.0,
         parent: Some(RagdollBodyId::Pelvis),
     },
     RagdollBodyDef {
         id: RagdollBodyId::ThighR,
         local_offset: Vec3::new(0.11, -0.33, 0.0),
-        radius: 0.085,
         mass: 5.0,
         parent: Some(RagdollBodyId::Pelvis),
     },
     RagdollBodyDef {
         id: RagdollBodyId::CalfL,
         local_offset: Vec3::new(-0.11, -0.73, 0.0),
-        radius: 0.075,
         mass: 4.0,
         parent: Some(RagdollBodyId::ThighL),
     },
     RagdollBodyDef {
         id: RagdollBodyId::CalfR,
         local_offset: Vec3::new(0.11, -0.73, 0.0),
-        radius: 0.075,
         mass: 4.0,
         parent: Some(RagdollBodyId::ThighR),
     },

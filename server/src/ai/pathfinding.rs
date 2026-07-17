@@ -12,6 +12,25 @@ use crate::ai::state::XorShift64;
 const GRID_CELL_SIZE: f32 = 2.0; // meters
 const GRID_MAX_STEP: f32 = 1.2; // max height delta between neighbor cells
 const GRID_MAX_NODES: usize = 4000; // hard cap per path search (safety)
+const DEFAULT_PATHFINDING_REQUESTS_PER_TICK: usize = 6;
+
+#[derive(Resource, Clone, Debug)]
+pub struct PathfindingBudgetSettings {
+    pub max_requests_per_tick: usize,
+}
+
+impl Default for PathfindingBudgetSettings {
+    fn default() -> Self {
+        let max_requests_per_tick = std::env::var("CITYSIM_PATHFINDING_REQUESTS_PER_TICK")
+            .ok()
+            .and_then(|raw| raw.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_PATHFINDING_REQUESTS_PER_TICK)
+            .clamp(1, 128);
+        Self {
+            max_requests_per_tick,
+        }
+    }
+}
 
 pub(super) fn pick_random_target(
     terrain: &WorldTerrain,

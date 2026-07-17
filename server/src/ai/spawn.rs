@@ -77,9 +77,8 @@ pub fn spawn_npcs_once(
     let npc_groups = &loaded_map.definition.npc_groups;
     let world_bounds = loaded_map.definition.bounds;
 
-    // Reference ragdoll dummies near the player spawn (gray primitive figures
-    // built 1:1 from the shared ragdoll body table — ground truth for
-    // diagnosing skeleton-mapping issues). CITYSIM_DUMMY_NPCS overrides count.
+    // Anatomical combat dummies near the player spawn. They are built from the
+    // same body table used by hit detection and ragdoll physics.
     let dummy_count = std::env::var("CITYSIM_DUMMY_NPCS")
         .ok()
         .and_then(|raw| raw.parse::<u32>().ok())
@@ -103,24 +102,24 @@ pub fn spawn_npcs_once(
         commands.spawn((
             Npc {
                 id: npc_id,
-                archetype: NpcArchetype::Dummy,
+                archetype: NpcArchetype::CombatDummy,
             },
-            npc_identity_for_archetype(WORLD_SEED, npc_id, NpcArchetype::Dummy),
+            npc_identity_for_archetype(WORLD_SEED, npc_id, NpcArchetype::CombatDummy),
             NpcPosition(pos),
             NpcRotation(0.0),
             NpcVelocity(Vec3::ZERO),
             NpcActivity(NpcActivityKind::Idle),
-            Health::new(npc_max_health(NpcArchetype::Dummy)),
+            Health::new(npc_max_health(NpcArchetype::CombatDummy)),
             wander,
             ReplicationGroup::new_from_entity().set_priority(NPC_REPLICATION_PRIORITY),
+            NetworkVisibility,
             Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
         ));
         total_spawned += 1;
     }
     if dummy_count > 0 {
-        info!("Spawned {dummy_count} ragdoll reference dummy(ies) near spawn");
+        info!("Spawned {dummy_count} anatomical combat dummy target(s) near spawn");
     }
-
 
     let configured_cap = configured_npc_cap();
     let mut remaining = configured_cap;
@@ -189,6 +188,7 @@ pub fn spawn_npcs_once(
                 Health::new(npc_max_health(group.archetype)),
                 wander,
                 ReplicationGroup::new_from_entity().set_priority(NPC_REPLICATION_PRIORITY),
+                NetworkVisibility,
                 Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
             ));
 
@@ -225,6 +225,7 @@ pub fn spawn_npcs_once(
             Health::new(npc_max_health(NpcArchetype::Oilman)),
             NpcWander::new(pos, 12.0, npc_id),
             ReplicationGroup::new_from_entity().set_priority(NPC_REPLICATION_PRIORITY),
+            NetworkVisibility,
             Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
         ));
         total_spawned = 1;
@@ -262,6 +263,7 @@ pub fn spawn_npcs_once(
                 Health::new(npc_max_health(archetype)),
                 NpcWander::new(pos, 20.0, npc_id),
                 ReplicationGroup::new_from_entity().set_priority(NPC_REPLICATION_PRIORITY),
+                NetworkVisibility,
                 Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
             ));
 
@@ -331,10 +333,14 @@ pub fn handle_spawn_oilman_debug(
                 // Reference dummies stand still so they stay a stable target.
                 let mut wander = NpcWander::new(
                     pos,
-                    if archetype == NpcArchetype::Dummy { 1.0 } else { 14.0 },
+                    if matches!(archetype, NpcArchetype::Dummy | NpcArchetype::CombatDummy) {
+                        1.0
+                    } else {
+                        14.0
+                    },
                     npc_id,
                 );
-                if archetype == NpcArchetype::Dummy {
+                if matches!(archetype, NpcArchetype::Dummy | NpcArchetype::CombatDummy) {
                     wander.idle_timer = 9999.0;
                 }
                 commands.spawn((
@@ -350,6 +356,7 @@ pub fn handle_spawn_oilman_debug(
                     Health::new(npc_max_health(archetype)),
                     wander,
                     ReplicationGroup::new_from_entity().set_priority(NPC_REPLICATION_PRIORITY),
+                    NetworkVisibility,
                     Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
                 ));
             }

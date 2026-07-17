@@ -186,7 +186,10 @@ pub fn receive_ragdoll_started(
                     npc_entity
                 );
             }
-        } else if started.archetype != shared::components::NpcArchetype::Dummy {
+        } else if !matches!(
+            started.archetype,
+            shared::components::NpcArchetype::Dummy | shared::components::NpcArchetype::CombatDummy
+        ) {
             warn!(
                 "Ragdoll started for npc_entity={:?} but no animation rig map found yet",
                 npc_entity
@@ -352,13 +355,11 @@ pub fn apply_ragdoll_pose(
                     let Ok(dummy) = dummy_bodies.get(child) else {
                         continue;
                     };
-                    let Some(pose) = body_poses.iter().find(|pose| pose.body == dummy.body)
-                    else {
+                    let Some(pose) = body_poses.iter().find(|pose| pose.body == dummy.body) else {
                         continue;
                     };
                     if let Ok(mut part_transform) = bone_transforms.get_mut(child) {
-                        part_transform.translation =
-                            root_rot_inv * (pose.position - root_position);
+                        part_transform.translation = root_rot_inv * (pose.position - root_position);
                         part_transform.rotation = (root_rot_inv * pose.rotation).normalize();
                     }
                 }

@@ -16,9 +16,7 @@ pub use clouds::{
 };
 pub use day_night::update_day_night_cycle;
 pub use scaled_target::sync_scene_render_target;
-pub use settings::{
-    apply_graphics_settings, GraphicsSettings, InputSettings, LAUNCHER_RESOLUTION,
-};
+pub use settings::{apply_graphics_settings, GraphicsSettings, InputSettings, LAUNCHER_RESOLUTION};
 pub use setup::setup_rendering;
 
 use bevy::asset::RenderAssetUsages;

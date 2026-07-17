@@ -39,8 +39,7 @@ pub fn wind_params_for_mesh(mesh: &Mesh, strength: f32, speed: f32) -> Vec4 {
 
 pub fn mesh_y_bounds(mesh: &Mesh) -> Option<(f32, f32)> {
     use bevy::mesh::VertexAttributeValues;
-    let VertexAttributeValues::Float32x3(positions) =
-        mesh.attribute(Mesh::ATTRIBUTE_POSITION)?
+    let VertexAttributeValues::Float32x3(positions) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)?
     else {
         return None;
     };
@@ -83,5 +82,8 @@ pub fn bake_foliage_color_ramp(mesh: &mut Mesh) {
             ]
         })
         .collect();
-    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, VertexAttributeValues::Float32x4(colors));
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_COLOR,
+        VertexAttributeValues::Float32x4(colors),
+    );
 }

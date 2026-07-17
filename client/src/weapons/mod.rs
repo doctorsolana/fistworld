@@ -19,8 +19,8 @@ pub use debug::{
     update_debug_overlay, update_perf_drop_monitor, update_trajectory_debug_gizmos,
 };
 pub use effects::{
-    update_blood_bursts, update_blood_droplets, update_blood_ground_splats,
-    update_impact_markers, update_muzzle_flash, update_muzzle_smoke,
+    update_blood_bursts, update_blood_droplets, update_blood_ground_splats, update_impact_markers,
+    update_muzzle_flash, update_muzzle_smoke,
 };
 pub use input::{
     cleanup_shoot_input_suppress, handle_reload_input, handle_shoot_input, handle_weapon_sounds,

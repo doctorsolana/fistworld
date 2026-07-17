@@ -374,11 +374,18 @@ pub fn handle_hit_confirms(
 
     for confirm in receiver.receive() {
         debug!(
-            "Hit confirmed! Damage: {:.1}, Headshot: {}, Kill: {}",
-            confirm.damage, confirm.headshot, confirm.kill
+            "Hit confirmed! Damage: {:.1}, Zone: {:?}, Part: {:?}, Headshot: {}, Kill: {}",
+            confirm.damage, confirm.hit_zone, confirm.body_part, confirm.headshot, confirm.kill
         );
 
         // Spawn hit marker
-        crosshair::spawn_hit_marker(&mut commands, &time, confirm.kill);
+        crosshair::spawn_hit_marker(
+            &mut commands,
+            &time,
+            confirm.kill,
+            confirm.hit_zone,
+            confirm.body_part,
+            confirm.damage,
+        );
     }
 }

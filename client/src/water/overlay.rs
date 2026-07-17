@@ -45,6 +45,7 @@ pub(super) fn despawn_underwater_overlay(
 pub(super) fn update_underwater_overlay(
     time: Res<Time>,
     local_water: Query<&PlayerWaterState, With<LocalPlayer>>,
+    cameras: Query<&GlobalTransform, With<Camera3d>>,
     mut overlays: Query<(
         &mut UnderwaterOverlay,
         &mut BackgroundColor,
@@ -54,8 +55,10 @@ pub(super) fn update_underwater_overlay(
     let target_alpha = local_water
         .single()
         .ok()
-        .map(|state| {
-            let depth_factor = (state.depth / 2.0).clamp(0.0, 1.0);
+        .zip(cameras.single().ok())
+        .map(|(state, camera)| {
+            let camera_depth = state.surface_y - camera.translation().y;
+            let depth_factor = (camera_depth / 2.0).clamp(0.0, 1.0);
             depth_factor * UNDERWATER_MAX_ALPHA
         })
         .unwrap_or(0.0);

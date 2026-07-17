@@ -173,7 +173,7 @@ pub(super) fn handle_debug_menu_interactions(
                     if let Ok(mut sender) = npc_spawn_sender.single_mut() {
                         sender.send::<ReliableChannel>(SpawnOilmanDebug {
                             count: 1,
-                            archetype: shared::components::NpcArchetype::Dummy,
+                            archetype: shared::components::NpcArchetype::CombatDummy,
                         });
                     }
                     continue;

@@ -54,7 +54,9 @@ impl Default for TerrainColliderSettings {
 #[derive(Resource, Default)]
 pub struct TerrainColliderRegistry {
     pub loaded: HashMap<ChunkCoord, Entity>,
+    pub loaded_versions: HashMap<ChunkCoord, u32>,
     pub terrain_version: u32,
+    pub full_rebuild_version: u32,
     pub radius_chunks: i32,
     pub heightfield_resolution: usize,
     pub centers: Vec<ChunkCoord>,
@@ -159,21 +161,24 @@ pub fn sync_terrain_colliders(
     npcs: Query<&NpcPosition, With<Npc>>,
 ) {
     let terrain_version = terrain.modification_version();
+    let full_rebuild_version = terrain.full_rebuild_version();
     let centers = gather_centers(&players, &vehicles, &npcs);
     let terrain_changed = registry.terrain_version != terrain_version;
+    let full_rebuild_changed = registry.full_rebuild_version != full_rebuild_version;
     let resolution_changed = registry.heightfield_resolution != settings.heightfield_resolution;
-    let desired_changed = terrain_changed
+    let desired_changed = full_rebuild_changed
         || resolution_changed
         || registry.radius_chunks != settings.radius_chunks
         || registry.centers != centers;
 
-    if terrain_changed || resolution_changed {
+    if full_rebuild_changed || resolution_changed {
         let stale: Vec<Entity> = registry.loaded.values().copied().collect();
         for entity in stale {
             commands.entity(entity).despawn();
         }
         registry.loaded.clear();
-        registry.terrain_version = terrain_version;
+        registry.loaded_versions.clear();
+        registry.full_rebuild_version = full_rebuild_version;
         registry.heightfield_resolution = settings.heightfield_resolution;
     }
 
@@ -194,6 +199,7 @@ pub fn sync_terrain_colliders(
             if let Some(entity) = registry.loaded.remove(&coord) {
                 commands.entity(entity).despawn();
             }
+            registry.loaded_versions.remove(&coord);
         }
 
         let mut missing: Vec<ChunkCoord> = registry
@@ -212,6 +218,32 @@ pub fn sync_terrain_colliders(
         registry.pending_load.extend(missing);
     }
 
+    if terrain_changed && !full_rebuild_changed && !resolution_changed {
+        let dirty_loaded: Vec<ChunkCoord> = registry
+            .loaded
+            .keys()
+            .copied()
+            .filter(|coord| {
+                registry.loaded_versions.get(coord).copied().unwrap_or(0)
+                    != terrain.chunk_modification_version(*coord)
+            })
+            .collect();
+
+        for coord in dirty_loaded {
+            if let Some(entity) = registry.loaded.remove(&coord) {
+                commands.entity(entity).despawn();
+            }
+            registry.loaded_versions.remove(&coord);
+            if registry.desired_chunks.contains(&coord) && !registry.pending_load.contains(&coord) {
+                // A loaded collider that just became stale is more urgent than
+                // filling the outer edge of the streaming radius.
+                registry.pending_load.push_front(coord);
+            }
+        }
+    }
+
+    registry.terrain_version = terrain_version;
+
     for _ in 0..settings.max_load_per_tick {
         let Some(coord) = registry.pending_load.pop_front() else {
             break;
@@ -226,5 +258,8 @@ pub fn sync_terrain_colliders(
             settings.heightfield_resolution,
         );
         registry.loaded.insert(coord, entity);
+        registry
+            .loaded_versions
+            .insert(coord, terrain.chunk_modification_version(coord));
     }
 }

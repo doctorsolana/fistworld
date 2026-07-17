@@ -134,7 +134,8 @@ pub struct FoliageMaterialCache {
     pub processed: HashSet<AssetId<StandardMaterial>>,
     pub last_cutout_enabled: Option<bool>,
     /// StandardMaterial -> shared wind material conversion (per foliage kind).
-    pub wind_materials: HashMap<AssetId<StandardMaterial>, Handle<super::wind::WindFoliageMaterial>>,
+    pub wind_materials:
+        HashMap<AssetId<StandardMaterial>, Handle<super::wind::WindFoliageMaterial>>,
     /// Grass meshes that had the root-to-tip color ramp baked into vertex
     /// colors.
     pub ramped_meshes: HashSet<AssetId<Mesh>>,

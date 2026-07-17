@@ -17,4 +17,5 @@ pub mod spatial;
 pub mod structures;
 pub mod terrain;
 pub mod vehicle;
+pub mod water;
 pub mod weapons;

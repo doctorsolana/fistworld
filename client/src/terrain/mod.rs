@@ -64,6 +64,12 @@ impl Plugin for TerrainPlugin {
         );
         app.add_systems(
             Update,
+            materials::sync_terrain_water_clock
+                .after(chunks::TerrainUpdateSet)
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.add_systems(
+            Update,
             (
                 debug::track_asset_activity,
                 debug::handle_terrain_debug_input,

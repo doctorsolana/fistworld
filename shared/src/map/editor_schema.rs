@@ -197,7 +197,8 @@ impl MapEditsDefinition {
             }
         }
         for coord in coords {
-            let weights = self.resolve_chunk_weights(generator, coord, TERRAIN_WEIGHTMAP_RESOLUTION);
+            let weights =
+                self.resolve_chunk_weights(generator, coord, TERRAIN_WEIGHTMAP_RESOLUTION);
             self.set_weightmap_for_chunk(coord, &weights);
         }
         self.terrain_paint_ops.clear();

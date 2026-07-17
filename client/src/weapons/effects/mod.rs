@@ -6,9 +6,7 @@ mod blood;
 mod impacts;
 mod muzzle;
 
-pub use blood::{
-    update_blood_bursts, update_blood_droplets, update_blood_ground_splats,
-};
+pub use blood::{update_blood_bursts, update_blood_droplets, update_blood_ground_splats};
 pub use impacts::update_impact_markers;
 pub use muzzle::{update_muzzle_flash, update_muzzle_smoke};
 

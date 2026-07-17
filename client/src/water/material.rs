@@ -1,6 +1,10 @@
 //! material systems.
 
 use super::*;
+use shared::components::WorldTime;
+use shared::water::{
+    OCEAN_LOOP_SECONDS, WATER_DEEP_SWELL_AMPLITUDE, WATER_SWELL_DEPTH_FULL, WATER_SWELL_DEPTH_START,
+};
 
 const TOON_WATER_SHADER: &str = "toon_water.wgsl";
 
@@ -37,6 +41,7 @@ pub struct ToonWaterUniform {
     pub foam_color: LinearRgba,
     pub foam_params: Vec4,
     pub ring_params: Vec4,
+    /// x: max swell amplitude, y/z: depth fade, w: server clock offset.
     pub wave_params: Vec4,
     /// xyz: direction to the sun (world), w: glint strength (0 at night).
     pub sun_params: Vec4,
@@ -84,10 +89,14 @@ pub(super) fn setup_water_assets(
             foam_color: LinearRgba::new(0.96, 0.98, 1.00, 1.0),
             // x: foam edge width, y: foam smoothness, z: fleck density, w: flow speed
             foam_params: Vec4::new(0.16, 0.055, 1.0, 0.16),
-            // x: wave scale, y: shore min depth, z: shore max depth, w: shore noise amount
-            ring_params: Vec4::new(1.35, 0.03, 0.14, 0.012),
-            // x: wave amplitude, y: wave frequency, z: wave speed, w: depth start
-            wave_params: Vec4::new(0.28, 0.095, 1.0, 0.12),
+            // x: foam scale, y/z: shore-distance swell fade, w: near-shore swell multiplier
+            ring_params: Vec4::new(1.35, 0.03, 0.72, 0.12),
+            wave_params: Vec4::new(
+                WATER_DEEP_SWELL_AMPLITUDE,
+                WATER_SWELL_DEPTH_START,
+                WATER_SWELL_DEPTH_FULL,
+                0.0,
+            ),
             // Overwritten every frame the sun moves appreciably.
             sun_params: Vec4::new(0.35, 0.75, 0.30, 1.1),
             ripples: [Vec4::new(0.0, 0.0, -100.0, 0.0); 8],
@@ -97,6 +106,42 @@ pub(super) fn setup_water_assets(
     });
 
     commands.insert_resource(WaterRenderAssets { material });
+}
+
+#[derive(Default)]
+pub(super) struct WaterWaveClockSync {
+    world_time_entity: Option<Entity>,
+}
+
+/// Align Bevy's client-local shader clock once for each replicated world-clock
+/// entity. Both clocks then advance locally at the same rate, avoiding any
+/// per-frame material updates or packet-timing jitter in the waves.
+pub(super) fn sync_water_wave_clock(
+    time: Res<Time>,
+    render_assets: Option<Res<WaterRenderAssets>>,
+    world_time: Query<(Entity, &WorldTime)>,
+    mut materials: ResMut<Assets<ToonWaterMaterial>>,
+    mut sync: Local<WaterWaveClockSync>,
+) {
+    let Some(render_assets) = render_assets else {
+        return;
+    };
+    let Ok((world_time_entity, world_time)) = world_time.single() else {
+        return;
+    };
+    if sync.world_time_entity == Some(world_time_entity) {
+        return;
+    }
+
+    let local = time.elapsed_secs_wrapped().rem_euclid(OCEAN_LOOP_SECONDS);
+    let half_loop = OCEAN_LOOP_SECONDS * 0.5;
+    let offset =
+        (world_time.ocean_seconds - local + half_loop).rem_euclid(OCEAN_LOOP_SECONDS) - half_loop;
+
+    if let Some(material) = materials.get_mut(&render_assets.material) {
+        material.uniform.wave_params.w = offset;
+        sync.world_time_entity = Some(world_time_entity);
+    }
 }
 
 /// Keep the water's glint direction in sync with the day/night sun. Only

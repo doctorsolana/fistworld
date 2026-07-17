@@ -46,7 +46,7 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(120) var<uniform> layer_tiling: vec4<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(121) var<uniform> debug_mode: u32;
 @group(#{MATERIAL_BIND_GROUP}) @binding(122) var<uniform> normal_strength: f32;
-// x: water level (world Y), y: 1.0 when the map has water, zw: unused.
+// x: water level, y: enabled, z: server clock offset, w: surface offset.
 @group(#{MATERIAL_BIND_GROUP}) @binding(123) var<uniform> water_params: vec4<f32>;
 
 // The pbr imports already bind view globals; reuse them for caustic time.
@@ -61,6 +61,54 @@ fn normalize_weights(weights: vec4<f32>) -> vec4<f32> {
 fn tiled_uv(world_uv: vec2<f32>, tile_size: f32) -> vec2<f32> {
     let size = max(tile_size, 0.0001);
     return world_uv / size;
+}
+
+// Keep these long-wave phases in sync with shore_lap_height in toon_water.wgsl.
+// Terrain only needs the displacement at the bank, where shore influence is full.
+fn shore_lap_height(world_xz: vec2<f32>, time: f32) -> f32 {
+    let tau = 6.28318530718;
+    let primary_dir = vec2<f32>(0.8192319, -0.5734623);
+    let secondary_dir = vec2<f32>(0.4472136, 0.8944272);
+    let primary_phase = dot(world_xz, primary_dir) * (tau / 26.0) - time * (tau / 11.0);
+    let secondary_phase = dot(world_xz, secondary_dir) * (tau / 46.0) + time * (tau / 17.0);
+    return sin(primary_phase) * 0.095 + sin(secondary_phase) * 0.025;
+}
+
+// Reconstruct a short wetness history from the deterministic shore wave.
+// This avoids a broad height-based gradient: a point is damp only if water
+// actually covered it during the previous five seconds, and its darkness is
+// based on how recently that happened.
+fn recent_shore_wetness(
+    world_xz: vec2<f32>,
+    terrain_y: f32,
+    base_surface: f32,
+    time: f32,
+) -> f32 {
+    let current_surface = base_surface + shore_lap_height(world_xz, time);
+    let above_current_surface = terrain_y - current_surface;
+
+    // Do not shade terrain that is still underwater. The narrow transition
+    // avoids a dark seam immediately beneath the foam contact line.
+    let exposed = smoothstep(0.003, 0.015, above_current_surface);
+    if (exposed <= 0.001 || abs(terrain_y - base_surface) > 0.14) {
+        return 0.0;
+    }
+
+    const WET_LINGER_SECONDS: f32 = 5.0;
+    const HISTORY_STEP_SECONDS: f32 = 0.5;
+    const HISTORY_SAMPLES: u32 = 11u;
+    var wet_memory = 0.0;
+
+    for (var sample = 0u; sample < HISTORY_SAMPLES; sample++) {
+        let age = f32(sample) * HISTORY_STEP_SECONDS;
+        let previous_surface = base_surface + shore_lap_height(world_xz, time - age);
+        let clearance = terrain_y - previous_surface;
+        let was_covered = 1.0 - smoothstep(-0.004, 0.012, clearance);
+        let remaining = max(1.0 - age / WET_LINGER_SECONDS, 0.0);
+        wet_memory = max(wet_memory, was_covered * remaining);
+    }
+
+    return exposed * wet_memory;
 }
 
 @fragment
@@ -160,12 +208,18 @@ fn fragment(
             let water_level = water_params.x;
             let h = pbr_input.world_position.y;
 
-            // Wet band: ground just above the waterline is darker and
-            // glossier, grounding the water against the shore.
-            let wet = 1.0 - smoothstep(water_level + 0.04, water_level + 0.85, h);
-            albedo *= mix(1.0, 0.60, wet);
+            // The exposed damp strip follows the exact recent path of the
+            // shore wave, then dries over five seconds after the water leaves.
+            let wave_time = globals.time + water_params.z;
+            let wet = recent_shore_wetness(
+                pbr_input.world_position.xz,
+                h,
+                water_level + water_params.w,
+                wave_time,
+            );
+            albedo *= mix(vec3<f32>(1.0), vec3<f32>(0.82, 0.85, 0.87), wet);
             pbr_input.material.perceptual_roughness =
-                mix(pbr_input.material.perceptual_roughness, 0.38, wet);
+                mix(pbr_input.material.perceptual_roughness, 0.58, wet);
 
             // Caustics: two drifting interference fields multiplied give a
             // bright cellular web on the submerged bed, fading out both at

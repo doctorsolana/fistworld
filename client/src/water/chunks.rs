@@ -2,6 +2,7 @@
 
 use super::mesh::build_water_mesh;
 use super::*;
+use bevy::light::NotShadowCaster;
 
 #[derive(Component)]
 pub struct WaterChunk;
@@ -74,6 +75,10 @@ pub(super) fn spawn_water_chunks(
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(render_assets.material.clone()),
                 Transform::from_translation(chunk_pos),
+                // Blended materials still enter Bevy's shadow pass unless
+                // explicitly excluded. The water mesh overlaps the bank, so
+                // casting from it creates a solid black moving shoreline.
+                NotShadowCaster,
                 WaterChunk,
             ))
             .id();

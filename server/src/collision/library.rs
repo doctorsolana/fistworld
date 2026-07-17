@@ -1,7 +1,7 @@
 //! Static collider resource definitions and startup loading.
 
 use bevy::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use shared::props::PropKind;
 use shared::terrain::ChunkCoord;
@@ -70,6 +70,10 @@ pub struct StaticColliders {
     pub cells: HashMap<(i32, i32), Vec<u32>>,
     pub next_id: u32,
     pub version: u64,
+    /// Instance ids awaiting Rapier collider creation.
+    pub pending_added: VecDeque<u32>,
+    /// Instance ids whose Rapier collider should be removed.
+    pub pending_removed: Vec<u32>,
 }
 
 /// Load baked colliders at startup.

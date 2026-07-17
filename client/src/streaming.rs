@@ -13,12 +13,8 @@ use shared::components::{LocalPlayer, PlayerPosition};
 use crate::rail::RtsRailCamera;
 
 pub type AnchorPlayer<'w, 's> = Query<'w, 's, &'static PlayerPosition, With<LocalPlayer>>;
-pub type AnchorCamera<'w, 's> = Query<
-    'w,
-    's,
-    (&'static GlobalTransform, Option<&'static RtsRailCamera>),
-    With<Camera3d>,
->;
+pub type AnchorCamera<'w, 's> =
+    Query<'w, 's, (&'static GlobalTransform, Option<&'static RtsRailCamera>), With<Camera3d>>;
 
 pub fn streaming_anchor(player: &AnchorPlayer, camera: &AnchorCamera) -> Option<Vec3> {
     let camera_hit = camera.iter().next();

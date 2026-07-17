@@ -132,6 +132,8 @@ pub struct WorldTerrain {
     pub generator: TerrainGenerator,
     delta_chunks: HashMap<ChunkCoord, TerrainDeltaData>,
     version: u32,
+    chunk_versions: HashMap<ChunkCoord, u32>,
+    full_rebuild_version: u32,
 }
 
 impl Default for WorldTerrain {
@@ -143,6 +145,8 @@ impl Default for WorldTerrain {
             generator,
             delta_chunks,
             version: 0,
+            chunk_versions: HashMap::new(),
+            full_rebuild_version: 0,
         }
     }
 }
@@ -153,6 +157,8 @@ impl WorldTerrain {
         self.generator = TerrainGenerator::from_loaded_map(loaded_map, WORLD_SEED);
         self.delta_chunks = delta_chunks;
         self.version = self.version.wrapping_add(1);
+        self.chunk_versions.clear();
+        self.full_rebuild_version = self.full_rebuild_version.wrapping_add(1);
     }
 
     #[inline]
@@ -169,7 +175,8 @@ impl WorldTerrain {
 
     #[inline]
     pub fn get_water_height(&self, x: f32, z: f32) -> Option<f32> {
-        self.generator.get_water_height(x, z)
+        let water = self.water_level()?;
+        (self.get_height(x, z) < water).then_some(water)
     }
 
     fn sample_delta(&self, x: f32, z: f32) -> f32 {
@@ -263,6 +270,7 @@ impl WorldTerrain {
 
         let mut all_affected: Vec<ChunkCoord> = all_affected.into_iter().collect();
         all_affected.sort_by_key(|coord| (coord.x, coord.z));
+        self.mark_chunks_modified(all_affected.iter().copied());
         all_affected
     }
 
@@ -377,11 +385,22 @@ impl WorldTerrain {
 
         let mut all_affected: Vec<ChunkCoord> = all_affected.into_iter().collect();
         all_affected.sort_by_key(|c| (c.x, c.z));
+        self.mark_chunks_modified(all_affected.iter().copied());
         all_affected
     }
 
     pub fn modification_version(&self) -> u32 {
         self.version
+    }
+
+    /// Version for changes that require every derived terrain chunk to be rebuilt.
+    pub fn full_rebuild_version(&self) -> u32 {
+        self.full_rebuild_version
+    }
+
+    /// Version of the height data affecting one terrain chunk.
+    pub fn chunk_modification_version(&self, coord: ChunkCoord) -> u32 {
+        self.chunk_versions.get(&coord).copied().unwrap_or(0)
     }
 
     pub fn get_delta_chunk(&self, coord: ChunkCoord) -> Option<&TerrainDeltaData> {
@@ -391,11 +410,18 @@ impl WorldTerrain {
     pub fn set_delta_chunk(&mut self, coord: ChunkCoord, data: TerrainDeltaData) {
         self.delta_chunks.insert(coord, data);
         self.version = self.version.wrapping_add(1);
+        self.mark_chunks_modified(
+            ((-1)..=1).flat_map(|dx| {
+                ((-1)..=1).map(move |dz| ChunkCoord::new(coord.x + dx, coord.z + dz))
+            }),
+        );
     }
 
     pub fn replace_delta_chunks(&mut self, chunks: HashMap<ChunkCoord, TerrainDeltaData>) {
         self.delta_chunks = chunks;
         self.version = self.version.wrapping_add(1);
+        self.chunk_versions.clear();
+        self.full_rebuild_version = self.full_rebuild_version.wrapping_add(1);
     }
 
     pub fn get_modified_chunk_coords(&self) -> Vec<ChunkCoord> {
@@ -409,6 +435,16 @@ impl WorldTerrain {
     pub fn generate_chunk(&self, coord: ChunkCoord) -> ChunkMeshData {
         self.generator
             .generate_chunk_with_deltas(&self.delta_chunks, coord)
+    }
+
+    fn mark_chunks_modified(&mut self, coords: impl IntoIterator<Item = ChunkCoord>) {
+        for coord in coords {
+            if !coord.in_world_bounds() {
+                continue;
+            }
+            let version = self.chunk_versions.entry(coord).or_default();
+            *version = version.wrapping_add(1);
+        }
     }
 }
 
@@ -436,5 +472,33 @@ mod tests {
             let b = pair[1];
             assert!((a.x, a.z) <= (b.x, b.z));
         }
+    }
+
+    #[test]
+    fn delta_update_advances_only_nearby_chunk_versions() {
+        let mut terrain = WorldTerrain::default();
+        let edited = ChunkCoord::new(2, 3);
+        let nearby = ChunkCoord::new(3, 4);
+        let distant = ChunkCoord::new(12, 12);
+
+        let nearby_before = terrain.chunk_modification_version(nearby);
+        let distant_before = terrain.chunk_modification_version(distant);
+        terrain.set_delta_chunk(edited, TerrainDeltaData::default());
+
+        assert!(terrain.chunk_modification_version(edited) > 0);
+        assert!(terrain.chunk_modification_version(nearby) > nearby_before);
+        assert_eq!(terrain.chunk_modification_version(distant), distant_before);
+    }
+
+    #[test]
+    fn replacing_all_deltas_requests_a_full_rebuild() {
+        let mut terrain = WorldTerrain::default();
+        let full_rebuild_before = terrain.full_rebuild_version();
+        let mut chunks = std::collections::HashMap::new();
+        chunks.insert(ChunkCoord::new(1, 1), TerrainDeltaData::default());
+
+        terrain.replace_delta_chunks(chunks);
+
+        assert_ne!(terrain.full_rebuild_version(), full_rebuild_before);
     }
 }

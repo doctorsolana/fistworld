@@ -69,7 +69,7 @@ pub struct InputState {
     pub debug_menu_open: bool,
     /// Debug fly mode toggle
     pub fly_mode: bool,
-    /// Fly down (descend)
+    /// Descend while flying or swimming.
     pub fly_down: bool,
 }
 

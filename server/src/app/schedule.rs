@@ -112,7 +112,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         FixedUpdate,
         (
             net::connection::handle_connections,
-            ai::ragdoll::replay_active_ragdolls_to_new_clients,
             player::spawn::handle_player_name_submission,
             player::spawn::handle_set_player_character,
             ai::spawn::handle_spawn_oilman_debug,
@@ -202,6 +201,7 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         (
             player::index::sync_player_entity_index,
             player::spatial::sync_player_spatial_index,
+            ai::relevance::update_npc_network_visibility,
         )
             .chain()
             .in_set(FpsServerSet::Indices)
@@ -288,7 +288,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             .run_if(server_is_started),
     );
 }
-
 
 #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
 enum RailServerSet {

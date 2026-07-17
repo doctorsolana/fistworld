@@ -82,8 +82,17 @@ pub fn handle_npc_spawned(
 
         // Reference dummy: gray primitives built 1:1 from the shared ragdoll
         // body table — no skeleton, no GLB, nothing to mis-map.
-        if npc.archetype == shared::components::NpcArchetype::Dummy {
-            spawn_dummy_body_parts(&mut commands, entity, &mut meshes, &mut materials);
+        if matches!(
+            npc.archetype,
+            shared::components::NpcArchetype::Dummy | shared::components::NpcArchetype::CombatDummy
+        ) {
+            spawn_dummy_body_parts(
+                &mut commands,
+                entity,
+                npc.archetype,
+                &mut meshes,
+                &mut materials,
+            );
             continue;
         }
 
@@ -115,16 +124,46 @@ pub fn handle_npc_spawned(
 fn spawn_dummy_body_parts(
     commands: &mut Commands,
     npc_entity: Entity,
+    archetype: shared::components::NpcArchetype,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
-    use shared::npc::{ragdoll_body_axis, HUMANOID_RAGDOLL_BODIES};
+    use shared::npc::{
+        humanoid_body_part, humanoid_body_shape, ragdoll_body_axis, HumanoidBodyShape,
+        HUMANOID_RAGDOLL_BODIES,
+    };
     use shared::protocol::RagdollBodyId as B;
+    use shared::weapons::damage::HitZone;
 
     let gray = materials.add(StandardMaterial {
         base_color: Color::srgb(0.62, 0.62, 0.65),
         perceptual_roughness: 0.85,
         metallic: 0.0,
+        ..Default::default()
+    });
+    let head = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.70, 0.30, 0.24),
+        perceptual_roughness: 0.82,
+        ..Default::default()
+    });
+    let chest = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.23, 0.34, 0.42),
+        perceptual_roughness: 0.78,
+        ..Default::default()
+    });
+    let abdomen = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.34, 0.39, 0.29),
+        perceptual_roughness: 0.82,
+        ..Default::default()
+    });
+    let arms = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.55, 0.40, 0.23),
+        perceptual_roughness: 0.84,
+        ..Default::default()
+    });
+    let legs = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.28, 0.30, 0.34),
+        perceptual_roughness: 0.86,
         ..Default::default()
     });
     let nose_material = materials.add(StandardMaterial {
@@ -137,32 +176,34 @@ fn spawn_dummy_body_parts(
 
     commands.entity(npc_entity).with_children(|parent| {
         for def in HUMANOID_RAGDOLL_BODIES.iter() {
-            // Mirror collider_for_body's shapes (server/src/ai/ragdoll.rs).
-            let mesh = match def.id {
-                B::Pelvis => meshes.add(Cuboid::new(0.24, 0.20, 0.20)),
-                B::SpineLower | B::SpineUpper => {
-                    meshes.add(Capsule3d::new(def.radius.max(0.05), 0.16))
+            let mesh = match humanoid_body_shape(def.id) {
+                HumanoidBodyShape::Sphere { radius } => meshes.add(Sphere::new(radius)),
+                HumanoidBodyShape::Capsule {
+                    half_segment,
+                    radius,
+                } => meshes.add(Capsule3d::new(radius, half_segment * 2.0)),
+                HumanoidBodyShape::Cuboid { half_extents } => meshes.add(Cuboid::new(
+                    half_extents.x * 2.0,
+                    half_extents.y * 2.0,
+                    half_extents.z * 2.0,
+                )),
+            };
+            let material = if archetype == shared::components::NpcArchetype::CombatDummy {
+                match humanoid_body_part(def.id).hit_zone() {
+                    HitZone::Head => head.clone(),
+                    HitZone::Chest => chest.clone(),
+                    HitZone::Stomach => abdomen.clone(),
+                    HitZone::Arms => arms.clone(),
+                    HitZone::Legs => legs.clone(),
                 }
-                B::Head => meshes.add(Sphere::new(def.radius.max(0.05))),
-                B::UpperArmL | B::UpperArmR => {
-                    meshes.add(Capsule3d::new((def.radius * 0.85).max(0.04), 0.22))
-                }
-                B::ForearmL | B::ForearmR => {
-                    meshes.add(Capsule3d::new((def.radius * 0.8).max(0.04), 0.26))
-                }
-                B::ThighL | B::ThighR => {
-                    meshes.add(Capsule3d::new((def.radius * 0.9).max(0.05), 0.32))
-                }
-                B::CalfL | B::CalfR => {
-                    meshes.add(Capsule3d::new((def.radius * 0.85).max(0.045), 0.30))
-                }
-                _ => meshes.add(Sphere::new(def.radius.max(0.04))),
+            } else {
+                gray.clone()
             };
 
             let mut part = parent.spawn((
                 NpcDummyBody { body: def.id },
                 Mesh3d(mesh),
-                MeshMaterial3d(gray.clone()),
+                MeshMaterial3d(material),
                 Transform::from_translation(def.local_offset)
                     .with_rotation(Quat::from_rotation_arc(Vec3::Y, ragdoll_body_axis(def))),
                 GlobalTransform::default(),
@@ -171,14 +212,13 @@ fn spawn_dummy_body_parts(
                 NoFrustumCulling,
             ));
 
-            // A dark "nose" on the head makes facing/inversion instantly
-            // visible (it follows the head body pose during ragdoll).
+            // Facial marker makes facing and inversion visible during ragdoll.
             if def.id == B::Head {
                 part.with_children(|head| {
                     head.spawn((
                         Mesh3d(nose_mesh.clone()),
                         MeshMaterial3d(nose_material.clone()),
-                        Transform::from_xyz(0.0, 0.02, -(def.radius + 0.04)),
+                        Transform::from_xyz(0.0, 0.02, -0.17),
                         GlobalTransform::default(),
                         Visibility::Inherited,
                         InheritedVisibility::default(),

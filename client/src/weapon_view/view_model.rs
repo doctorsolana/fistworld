@@ -1,6 +1,6 @@
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
-use shared::components::{EquippedWeapon, LocalPlayer};
+use shared::components::{EquippedWeapon, LocalPlayer, PlayerWaterState};
 use shared::weapons::WeaponType;
 
 use crate::input::{CameraMode, InputState};
@@ -152,6 +152,7 @@ pub(crate) struct WeaponViewRecoil {
 pub fn update_weapon_animation(
     mut weapons: Query<&mut Transform, With<FirstPersonWeapon>>,
     local_player: Query<&EquippedWeapon, With<LocalPlayer>>,
+    local_water: Query<(), (With<LocalPlayer>, With<PlayerWaterState>)>,
     input_state: Res<InputState>,
     shooting_state: Res<ShootingState>,
     reload_state: Res<ReloadState>,
@@ -161,6 +162,7 @@ pub fn update_weapon_animation(
     let t = time.elapsed_secs();
     let dt = time.delta_secs();
     let now = t;
+    let in_water = !local_water.is_empty();
 
     let mut reload_amount = 0.0;
     if let Ok(weapon) = local_player.single() {
@@ -210,9 +212,13 @@ pub fn update_weapon_animation(
         offset.x += (t * 1.2).sin() * 0.003;
         offset.y += (t * 0.8).cos() * 0.002;
 
-        let moving =
-            input_state.forward || input_state.backward || input_state.left || input_state.right;
-        let sprinting = input_state.shift
+        let moving = !in_water
+            && (input_state.forward
+                || input_state.backward
+                || input_state.left
+                || input_state.right);
+        let sprinting = !in_water
+            && input_state.shift
             && input_state.forward
             && !input_state.backward
             && !input_state.aiming

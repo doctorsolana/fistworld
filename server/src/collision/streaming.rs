@@ -181,6 +181,7 @@ fn unload_chunk(colliders: &mut StaticColliders, chunk: ChunkCoord) {
     };
     for id in ids {
         if let Some(inst) = colliders.instances.remove(&id) {
+            colliders.pending_removed.push(id);
             if let Some(cell_list) = colliders.cells.get_mut(&inst.cell) {
                 cell_list.retain(|x| *x != id);
                 if cell_list.is_empty() {
@@ -230,6 +231,7 @@ fn load_chunk(
         };
 
         colliders.instances.insert(id, inst);
+        colliders.pending_added.push_back(id);
         colliders.cells.entry(cell).or_default().push(id);
         ids.push(id);
     }

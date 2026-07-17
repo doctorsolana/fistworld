@@ -96,10 +96,7 @@ pub fn ensure_car_suspension_state(
     cars: Query<(Entity, &Vehicle), Without<CarSuspensionState>>,
 ) {
     for (entity, vehicle) in cars.iter() {
-        if matches!(
-            vehicle.vehicle_type,
-            VehicleType::Car | VehicleType::CarV2
-        ) {
+        if matches!(vehicle.vehicle_type, VehicleType::Car | VehicleType::CarV2) {
             commands
                 .entity(entity)
                 .insert(CarSuspensionState::default());

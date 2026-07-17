@@ -96,7 +96,8 @@ pub fn step_car_v2_physics(
     } else {
         0.0
     };
-    let steer_delta = (steer_target - suspension.steer_angle).clamp(-STEER_RATE * dt, STEER_RATE * dt);
+    let steer_delta =
+        (steer_target - suspension.steer_angle).clamp(-STEER_RATE * dt, STEER_RATE * dt);
     suspension.steer_angle += steer_delta;
 
     // --- Suspension pass: wheel positions use the FULL body rotation, so
@@ -144,7 +145,8 @@ pub fn step_car_v2_physics(
         }
         grounded_wheels += 1;
         ground_normal_sum += ground_normal;
-        let (wheel_pitch, wheel_roll) = terrain_angles_from_normal(ground_normal, state.heading, &def);
+        let (wheel_pitch, wheel_roll) =
+            terrain_angles_from_normal(ground_normal, state.heading, &def);
         ground_pitch_sum += wheel_pitch;
         ground_roll_sum += wheel_roll;
 
@@ -216,8 +218,8 @@ pub fn step_car_v2_physics(
             .max(0.0)
             .sqrt();
         let slip_angle = v_lat.atan2(v_long.abs().max(0.6));
-        let lateral =
-            (-tire_curve(slip_angle / PEAK_SLIP_ANGLE) * max_friction).clamp(-lateral_budget, lateral_budget);
+        let lateral = (-tire_curve(slip_angle / PEAK_SLIP_ANGLE) * max_friction)
+            .clamp(-lateral_budget, lateral_budget);
 
         let tire_force = wheel_forward * longitudinal + wheel_right * lateral;
         total_force += tire_force + ground_normal * normal_force;

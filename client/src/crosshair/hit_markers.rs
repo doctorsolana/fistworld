@@ -3,12 +3,24 @@
 use super::*;
 
 /// Spawn a hit marker when we hit someone
-pub fn spawn_hit_marker(commands: &mut Commands, time: &Time, is_kill: bool) {
+pub fn spawn_hit_marker(
+    commands: &mut Commands,
+    time: &Time,
+    is_kill: bool,
+    hit_zone: shared::weapons::damage::HitZone,
+    body_part: Option<shared::weapons::damage::HitBodyPart>,
+    damage: f32,
+) {
     let color = if is_kill {
         Color::srgba(1.0, 0.2, 0.2, 1.0) // Red for kill
+    } else if hit_zone == shared::weapons::damage::HitZone::Head {
+        Color::srgba(1.0, 0.78, 0.18, 1.0) // Gold for headshot
     } else {
         Color::srgba(1.0, 1.0, 1.0, 1.0) // White for hit
     };
+    let location = body_part
+        .map(shared::weapons::damage::HitBodyPart::label)
+        .unwrap_or_else(|| hit_zone.label());
 
     commands
         .spawn((
@@ -91,20 +103,34 @@ pub fn spawn_hit_marker(commands: &mut Commands, time: &Time, is_kill: bool) {
                 BackgroundColor(color),
                 Transform::from_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4)),
             ));
+
+            parent.spawn((
+                Text::new(format!("{location}  {damage:.0}")),
+                TextFont {
+                    font_size: 13.0,
+                    ..default()
+                },
+                TextColor(color),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(25.0),
+                    ..default()
+                },
+            ));
         });
 }
 
 /// Update and cleanup hit markers
 pub fn update_hit_markers(
     mut commands: Commands,
-    mut hit_markers: Query<(Entity, &HitMarker, &mut BackgroundColor)>,
+    hit_markers: Query<(Entity, &HitMarker)>,
     time: Res<Time>,
 ) {
     let current_time = time.elapsed_secs();
     let hit_duration = 0.15;
     let kill_duration = 0.3;
 
-    for (entity, marker, mut _bg) in hit_markers.iter_mut() {
+    for (entity, marker) in hit_markers.iter() {
         let duration = if marker.is_kill {
             kill_duration
         } else {

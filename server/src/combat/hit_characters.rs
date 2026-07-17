@@ -7,10 +7,12 @@ use lightyear::prelude::*;
 
 use shared::components::{
     Bullet, BulletPrevPosition, DebugPhysicsBox, DebugPhysicsBoxPosition, DebugPhysicsBoxRotation,
-    Health, Npc, NpcDamageEvent, NpcPosition, Player, PlayerPosition,
+    Health, Npc, NpcArchetype, NpcDamageEvent, NpcPosition, NpcRotation, Player, PlayerPosition,
 };
 use shared::npc::{
-    npc_capsule_endpoints, npc_head_center, NPC_HEAD_RADIUS, NPC_HEIGHT, NPC_RADIUS,
+    humanoid_body_part, humanoid_body_shape, npc_capsule_endpoints, npc_head_center,
+    ragdoll_body_axis, HumanoidBodyShape, HUMANOID_RAGDOLL_BODIES, NPC_HEAD_RADIUS, NPC_HEIGHT,
+    NPC_HUMANOID_HITBOX_REACH, NPC_RADIUS,
 };
 use shared::player::{PLAYER_HEIGHT, PLAYER_RADIUS};
 use shared::protocol::{
@@ -23,11 +25,85 @@ use std::time::Instant;
 use crate::ai::ragdoll::{CorpseCollisionIndex, NpcDeathImpact};
 use crate::combat::bullet_sim::BulletPendingDespawn;
 use crate::combat::geometry::{
-    ray_capsule_intersection, ray_obb_intersection, ray_sphere_intersection,
+    ray_capsule_intersection, ray_obb_intersection, ray_oriented_capsule_intersection,
+    ray_sphere_intersection, ray_sphere_intersection_exact,
 };
 use crate::combat::hit_world::BulletWorldHitCache;
 use crate::combat::target_index::HittableSpatialIndex;
 use crate::net::peer::peer_id_to_u64;
+
+#[derive(Clone, Copy, Debug)]
+struct AnatomicalNpcHit {
+    point: Vec3,
+    normal: Vec3,
+    body: shared::protocol::RagdollBodyId,
+    body_part: damage::HitBodyPart,
+    ray_distance_sq: f32,
+}
+
+fn hit_anatomical_npc(
+    ray_start: Vec3,
+    ray_dir: Vec3,
+    ray_length: f32,
+    npc_center: Vec3,
+    npc_yaw: f32,
+) -> Option<AnatomicalNpcHit> {
+    let root_rotation = Quat::from_rotation_y(npc_yaw);
+    let mut best: Option<AnatomicalNpcHit> = None;
+
+    for def in HUMANOID_RAGDOLL_BODIES {
+        let center = npc_center + root_rotation * def.local_offset;
+        let body_rotation =
+            root_rotation * Quat::from_rotation_arc(Vec3::Y, ragdoll_body_axis(&def));
+        let hit = match humanoid_body_shape(def.id) {
+            HumanoidBodyShape::Sphere { radius } => {
+                ray_sphere_intersection_exact(ray_start, ray_dir, ray_length, center, radius)
+            }
+            HumanoidBodyShape::Capsule {
+                half_segment,
+                radius,
+            } => {
+                let axis = body_rotation * Vec3::Y * half_segment;
+                ray_oriented_capsule_intersection(
+                    ray_start,
+                    ray_dir,
+                    ray_length,
+                    center - axis,
+                    center + axis,
+                    radius,
+                )
+            }
+            HumanoidBodyShape::Cuboid { half_extents } => ray_obb_intersection(
+                ray_start,
+                ray_dir,
+                ray_length,
+                center,
+                body_rotation,
+                half_extents,
+            ),
+        };
+
+        let Some((point, normal)) = hit else {
+            continue;
+        };
+        let ray_distance_sq = point.distance_squared(ray_start);
+        if best
+            .as_ref()
+            .is_some_and(|current| current.ray_distance_sq <= ray_distance_sq)
+        {
+            continue;
+        }
+        best = Some(AnatomicalNpcHit {
+            point,
+            normal,
+            body: def.id,
+            body_part: humanoid_body_part(def.id),
+            ray_distance_sq,
+        });
+    }
+
+    best
+}
 
 /// Detect bullet hits against players and NPCs.
 pub fn handle_bullet_character_hits(
@@ -46,8 +122,11 @@ pub fn handle_bullet_character_hits(
         Query<(Entity, &Player, &PlayerPosition, &mut Health), (With<Player>, Without<Npc>)>,
     )>,
     mut npcs: ParamSet<(
-        Query<(Entity, &Npc, &NpcPosition, &Health), (With<Npc>, Without<Player>)>,
-        Query<(Entity, &Npc, &NpcPosition, &mut Health), (With<Npc>, Without<Player>)>,
+        Query<(Entity, &Npc, &NpcPosition, &NpcRotation, &Health), (With<Npc>, Without<Player>)>,
+        Query<
+            (Entity, &Npc, &NpcPosition, &NpcRotation, &mut Health),
+            (With<Npc>, Without<Player>),
+        >,
     )>,
     mut corpse_body_impulses: Query<&mut ExternalImpulse, Without<DebugPhysicsBox>>,
     debug_boxes: Query<(
@@ -85,6 +164,8 @@ pub fn handle_bullet_character_hits(
         hit_normal: Vec3,
         damage_amount: f32,
         hit_zone: damage::HitZone,
+        body_part: Option<damage::HitBodyPart>,
+        ragdoll_body: Option<shared::protocol::RagdollBodyId>,
         weapon_type: shared::weapons::WeaponType,
         bullet_spawn_position: Vec3,
         bullet_initial_velocity: Vec3,
@@ -157,98 +238,146 @@ pub fn handle_bullet_character_hits(
 
             let mut hit_recorded = false;
 
-            // NPC hits: head sphere first, then capsule.
+            // Anatomical dummies use one collider per visible/ragdoll body.
+            // Other NPC rigs retain their conservative head + body capsule
+            // until the server has animation bone poses to follow their limbs.
             hittable_index.collect_npc_candidates_segment(
                 ray_start,
                 ray_end,
-                NPC_RADIUS + NPC_HEAD_RADIUS,
+                NPC_HUMANOID_HITBOX_REACH,
                 &mut candidate_cells,
                 &mut npc_candidates,
             );
+            let mut best_npc_hit: Option<(
+                Entity,
+                u64,
+                Vec3,
+                Vec3,
+                Vec3,
+                damage::HitZone,
+                Option<damage::HitBodyPart>,
+                Option<shared::protocol::RagdollBodyId>,
+                f32,
+            )> = None;
             for npc_entity in npc_candidates.iter().copied() {
-                let Ok((_entity, npc, npc_pos, health)) = npcs_ro.get(npc_entity) else {
+                let Ok((_entity, npc, npc_pos, npc_rot, health)) = npcs_ro.get(npc_entity) else {
                     continue;
                 };
                 if health.is_dead() {
                     continue;
                 }
 
-                let head_center = npc_head_center(npc_pos.0);
-                if let Some(hit_point) = ray_sphere_intersection(
-                    ray_start,
-                    ray_dir_norm,
-                    max_hit_distance,
-                    head_center,
-                    NPC_HEAD_RADIUS,
+                let candidate = if matches!(
+                    npc.archetype,
+                    NpcArchetype::Dummy | NpcArchetype::CombatDummy
                 ) {
-                    let distance = (hit_point - bullet.spawn_position).length();
-                    let stats = bullet.weapon_type.stats();
-                    let damage_amount =
-                        damage::calculate_damage(&stats, distance, damage::HitZone::Head);
-
-                    let hit_normal = (hit_point - head_center).normalize_or_zero();
-                    hits.push(HitRecord {
-                        bullet_entity,
-                        shooter_id: bullet.owner_id,
-                        victim: Victim::Npc(npc_entity, npc.id),
-                        victim_pos: npc_pos.0,
-                        hit_point,
-                        hit_normal,
-                        damage_amount,
-                        hit_zone: damage::HitZone::Head,
-                        weapon_type: bullet.weapon_type,
-                        bullet_spawn_position: bullet.spawn_position,
-                        bullet_initial_velocity: bullet.initial_velocity,
-                    });
-                    world_hits.consumed.insert(bullet_entity);
-                    hit_recorded = true;
-                    break;
-                }
-
-                let (a, b) = npc_capsule_endpoints(npc_pos.0);
-                if let Some(hit_point) = ray_capsule_intersection(
-                    ray_start,
-                    ray_dir_norm,
-                    max_hit_distance,
-                    a,
-                    b,
-                    NPC_RADIUS,
-                ) {
-                    let bottom_y = npc_pos.0.y - NPC_HEIGHT * 0.5;
-                    let relative_height = (hit_point.y - bottom_y) / NPC_HEIGHT;
-                    let hit_zone = damage::HitZone::from_relative_height(relative_height);
-
-                    let distance = (hit_point - bullet.spawn_position).length();
-                    let stats = bullet.weapon_type.stats();
-                    let damage_amount = damage::calculate_damage(&stats, distance, hit_zone);
-
-                    let ab = b - a;
-                    let t = if ab.length_squared() > 1e-6 {
-                        (hit_point - a).dot(ab) / ab.length_squared()
+                    hit_anatomical_npc(
+                        ray_start,
+                        ray_dir_norm,
+                        max_hit_distance,
+                        npc_pos.0,
+                        npc_rot.0,
+                    )
+                    .map(|hit| {
+                        (
+                            hit.point,
+                            hit.normal,
+                            hit.body_part.hit_zone(),
+                            Some(hit.body_part),
+                            Some(hit.body),
+                            hit.ray_distance_sq,
+                        )
+                    })
+                } else {
+                    let head_center = npc_head_center(npc_pos.0);
+                    if let Some(hit_point) = ray_sphere_intersection(
+                        ray_start,
+                        ray_dir_norm,
+                        max_hit_distance,
+                        head_center,
+                        NPC_HEAD_RADIUS,
+                    ) {
+                        Some((
+                            hit_point,
+                            (hit_point - head_center).normalize_or_zero(),
+                            damage::HitZone::Head,
+                            None,
+                            None,
+                            hit_point.distance_squared(ray_start),
+                        ))
                     } else {
-                        0.0
+                        let (a, b) = npc_capsule_endpoints(npc_pos.0);
+                        ray_capsule_intersection(
+                            ray_start,
+                            ray_dir_norm,
+                            max_hit_distance,
+                            a,
+                            b,
+                            NPC_RADIUS,
+                        )
+                        .map(|hit_point| {
+                            let bottom_y = npc_pos.0.y - NPC_HEIGHT * 0.5;
+                            let relative_height = (hit_point.y - bottom_y) / NPC_HEIGHT;
+                            let ab = b - a;
+                            let t = ((hit_point - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0);
+                            let closest = a + ab * t;
+                            (
+                                hit_point,
+                                (hit_point - closest).normalize_or_zero(),
+                                damage::HitZone::from_relative_height(relative_height),
+                                None,
+                                None,
+                                hit_point.distance_squared(ray_start),
+                            )
+                        })
                     }
-                    .clamp(0.0, 1.0);
-                    let closest = a + ab * t;
-                    let hit_normal = (hit_point - closest).normalize_or_zero();
+                };
 
-                    hits.push(HitRecord {
-                        bullet_entity,
-                        shooter_id: bullet.owner_id,
-                        victim: Victim::Npc(npc_entity, npc.id),
-                        victim_pos: npc_pos.0,
-                        hit_point,
-                        hit_normal,
-                        damage_amount,
-                        hit_zone,
-                        weapon_type: bullet.weapon_type,
-                        bullet_spawn_position: bullet.spawn_position,
-                        bullet_initial_velocity: bullet.initial_velocity,
-                    });
-                    world_hits.consumed.insert(bullet_entity);
-                    hit_recorded = true;
-                    break;
+                let Some((point, normal, zone, part, body, ray_distance_sq)) = candidate else {
+                    continue;
+                };
+                if best_npc_hit
+                    .as_ref()
+                    .is_some_and(|current| current.8 <= ray_distance_sq)
+                {
+                    continue;
                 }
+                best_npc_hit = Some((
+                    npc_entity,
+                    npc.id,
+                    npc_pos.0,
+                    point,
+                    normal,
+                    zone,
+                    part,
+                    body,
+                    ray_distance_sq,
+                ));
+            }
+
+            if let Some((npc_entity, npc_id, npc_pos, point, normal, zone, part, body, _)) =
+                best_npc_hit
+            {
+                let distance = point.distance(bullet.spawn_position);
+                let damage_amount =
+                    damage::calculate_damage(&bullet.weapon_type.stats(), distance, zone);
+                hits.push(HitRecord {
+                    bullet_entity,
+                    shooter_id: bullet.owner_id,
+                    victim: Victim::Npc(npc_entity, npc_id),
+                    victim_pos: npc_pos,
+                    hit_point: point,
+                    hit_normal: normal,
+                    damage_amount,
+                    hit_zone: zone,
+                    body_part: part,
+                    ragdoll_body: body,
+                    weapon_type: bullet.weapon_type,
+                    bullet_spawn_position: bullet.spawn_position,
+                    bullet_initial_velocity: bullet.initial_velocity,
+                });
+                world_hits.consumed.insert(bullet_entity);
+                hit_recorded = true;
             }
 
             if hit_recorded {
@@ -312,6 +441,8 @@ pub fn handle_bullet_character_hits(
                         hit_normal,
                         damage_amount,
                         hit_zone,
+                        body_part: None,
+                        ragdoll_body: None,
                         weapon_type: bullet.weapon_type,
                         bullet_spawn_position: bullet.spawn_position,
                         bullet_initial_velocity: bullet.initial_velocity,
@@ -507,6 +638,7 @@ pub fn handle_bullet_character_hits(
                             headshot: is_headshot,
                             kill: is_kill,
                             hit_zone: hit.hit_zone,
+                            body_part: hit.body_part,
                         });
                     }
 
@@ -538,9 +670,13 @@ pub fn handle_bullet_character_hits(
                 }
             }
             Victim::Npc(npc_entity, npc_id) => {
-                if let Ok((_e, _npc, _pos, mut health)) = npcs.p1().get_mut(npc_entity) {
+                if let Ok((_e, _npc, _pos, _rot, mut health)) = npcs.p1().get_mut(npc_entity) {
                     let is_kill = health.take_damage(hit.damage_amount);
                     let is_headshot = hit.hit_zone == damage::HitZone::Head;
+                    let hit_location = hit
+                        .body_part
+                        .map(damage::HitBodyPart::label)
+                        .unwrap_or_else(|| hit.hit_zone.label());
                     // Kill impulse in N·s against ragdoll bodies of 2.5–13 kg:
                     // a pistol (~25 dmg) shoves, a sniper (~85 dmg) visibly
                     // flings. The old 0.005–0.03 N·s range was three orders of
@@ -562,19 +698,23 @@ pub fn handle_bullet_character_hits(
                         damage_source_position: hit.bullet_spawn_position,
                         damage_amount: hit.damage_amount,
                         attacker_player_id: Some(hit.shooter_id),
+                        hit_zone: hit.hit_zone,
+                        body_part: hit.body_part,
                     });
                     if is_kill {
                         commands.entity(npc_entity).insert(NpcDeathImpact {
                             hit_point: hit.hit_point,
                             impulse: death_impulse,
+                            body: hit.ragdoll_body,
                         });
                     }
 
                     if crate::telemetry::hotlog_enabled() {
                         info!(
-                            "Hit NPC! {:?} -> npc:{} ({:?}) for {:.1} damage (headshot: {}, kill: {})",
+                            "Hit NPC! {:?} -> npc:{} [{} / {:?}] for {:.1} damage (headshot: {}, kill: {})",
                             hit.shooter_id,
                             npc_id,
+                            hit_location,
                             hit.hit_zone,
                             hit.damage_amount,
                             is_headshot,
@@ -582,9 +722,10 @@ pub fn handle_bullet_character_hits(
                         );
                     } else {
                         trace!(
-                            "Hit NPC! {:?} -> npc:{} ({:?}) for {:.1} damage (headshot: {}, kill: {})",
+                            "Hit NPC! {:?} -> npc:{} [{} / {:?}] for {:.1} damage (headshot: {}, kill: {})",
                             hit.shooter_id,
                             npc_id,
+                            hit_location,
                             hit.hit_zone,
                             hit.damage_amount,
                             is_headshot,
@@ -609,6 +750,7 @@ pub fn handle_bullet_character_hits(
                             headshot: is_headshot,
                             kill: is_kill,
                             hit_zone: hit.hit_zone,
+                            body_part: hit.body_part,
                         });
                     }
                 }
@@ -713,5 +855,40 @@ pub fn handle_bullet_character_hits(
 
     if let Some(perf) = perf_monitor.as_deref_mut() {
         perf.record_bullet_hits_ms(phase_start.elapsed().as_secs_f32() * 1000.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shared::protocol::RagdollBodyId;
+
+    fn shoot_at(local_target: Vec3, yaw: f32) -> AnatomicalNpcHit {
+        let rotation = Quat::from_rotation_y(yaw);
+        let target = rotation * local_target;
+        let origin = target + rotation * Vec3::Z * 2.0;
+        let direction = (target - origin).normalize();
+        hit_anatomical_npc(origin, direction, 4.0, Vec3::ZERO, yaw)
+            .expect("shot should hit anatomical dummy")
+    }
+
+    #[test]
+    fn anatomical_dummy_records_head_and_torso() {
+        assert_eq!(
+            shoot_at(Vec3::new(0.0, 0.74, 0.0), 0.0).body,
+            RagdollBodyId::Head
+        );
+        assert_eq!(
+            shoot_at(Vec3::new(0.0, 0.42, 0.0), 0.0).body,
+            RagdollBodyId::SpineUpper
+        );
+    }
+
+    #[test]
+    fn anatomical_dummy_distinguishes_left_forearm_after_yaw_rotation() {
+        let hit = shoot_at(Vec3::new(-0.48, 0.40, 0.0), std::f32::consts::FRAC_PI_2);
+        assert_eq!(hit.body, RagdollBodyId::ForearmL);
+        assert_eq!(hit.body_part, damage::HitBodyPart::LeftForearm);
+        assert_eq!(hit.body_part.hit_zone(), damage::HitZone::Arms);
     }
 }

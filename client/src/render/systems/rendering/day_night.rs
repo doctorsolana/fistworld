@@ -136,8 +136,7 @@ pub fn update_day_night_cycle(
     // register; the old ~39 peak was ~1% of that (pitch-black shadows, the
     // "hospital light" contrast). ~2600 at noon puts shadowed sides at a
     // readable ~1:4 ratio against sunlit surfaces, like a clear real sky.
-    ambient.brightness =
-        (16.0 + 2600.0 * day_factor + 600.0 * twilight_factor) * lighting_boost;
+    ambient.brightness = (16.0 + 2600.0 * day_factor + 600.0 * twilight_factor) * lighting_boost;
 
     for mut atmosphere_light in atmosphere_light_query.iter_mut() {
         atmosphere_light.intensity = if settings.atmosphere_enabled {
