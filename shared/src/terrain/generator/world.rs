@@ -153,6 +153,7 @@ impl Default for WorldTerrain {
 
 impl WorldTerrain {
     pub fn reload_from_loaded_map(&mut self, loaded_map: LoadedMap) {
+        super::map_access::set_active_map_bounds(loaded_map.definition.bounds);
         let delta_chunks = loaded_map.terrain_deltas_by_chunk.clone();
         self.generator = TerrainGenerator::from_loaded_map(loaded_map, WORLD_SEED);
         self.delta_chunks = delta_chunks;

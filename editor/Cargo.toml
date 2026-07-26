@@ -9,3 +9,4 @@ shared = { path = "../shared" }
 serde = { workspace = true }
 ron = { workspace = true }
 bevy_egui = "0.39"
+noise = { workspace = true }

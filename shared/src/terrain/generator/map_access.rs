@@ -1,10 +1,12 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::map::{load_map, LoadedMap, MapBounds, DEFAULT_MAP_ID};
 
 use super::WORLD_RADIUS_METERS;
 
-static ACTIVE_MAP_BOUNDS: OnceLock<MapBounds> = OnceLock::new();
+// RwLock, not OnceLock: the editor can RESIZE the map mid-session, and the
+// global bounds must follow or every in_world_bounds check goes stale.
+static ACTIVE_MAP_BOUNDS: RwLock<Option<MapBounds>> = RwLock::new(None);
 static ACTIVE_LOADED_MAP: OnceLock<Arc<LoadedMap>> = OnceLock::new();
 
 pub(super) fn load_active_map() -> Arc<LoadedMap> {
@@ -22,13 +24,20 @@ pub(super) fn load_active_map() -> Arc<LoadedMap> {
             })
             .clone();
 
-    let _ = ACTIVE_MAP_BOUNDS.set(loaded.definition.bounds);
+    set_active_map_bounds(loaded.definition.bounds);
     loaded
+}
+
+/// Update the process-wide active bounds (map load and editor resize).
+pub fn set_active_map_bounds(bounds: MapBounds) {
+    if let Ok(mut slot) = ACTIVE_MAP_BOUNDS.write() {
+        *slot = Some(bounds);
+    }
 }
 
 /// Whether a world position is inside active map bounds.
 pub fn world_pos_in_bounds(x: f32, z: f32) -> bool {
-    if let Some(bounds) = ACTIVE_MAP_BOUNDS.get() {
+    if let Some(bounds) = ACTIVE_MAP_BOUNDS.read().ok().and_then(|b| *b) {
         return bounds.contains_xz(x, z);
     }
 

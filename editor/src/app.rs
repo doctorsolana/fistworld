@@ -87,6 +87,7 @@ pub fn run() {
             city::handle_city_ui_actions,
             tools::handle_tool_input,
             configure_editor_terrain_arrays,
+            tools::rebuild_chunk_visuals,
             tools::apply_visual_refresh,
             tools::cull_distant_prop_visuals,
             city::apply_city_visual_refresh,

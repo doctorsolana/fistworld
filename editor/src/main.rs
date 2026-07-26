@@ -7,6 +7,7 @@ mod session;
 mod terrain_material;
 mod tools;
 mod ui;
+mod worldgen;
 
 fn main() {
     app::run();

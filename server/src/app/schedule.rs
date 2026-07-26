@@ -169,6 +169,7 @@ fn configure_fps_fixed_schedule(app: &mut App) {
     app.add_systems(
         FixedUpdate,
         (
+            physics::dynamic_actors::clamp_players_to_map_bounds,
             physics::dynamic_actors::sync_players_from_physics,
             physics::contacts::update_player_grounding_from_queries,
             physics::dynamic_actors::sync_npcs_from_physics_after_writeback,

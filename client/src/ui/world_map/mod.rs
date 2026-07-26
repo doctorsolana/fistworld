@@ -22,11 +22,10 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui::UiTransform;
 use bevy::window::{CursorOptions, PrimaryWindow};
-use image::ImageReader;
 
 use shared::components::{LocalPlayer, PlayerPosition, PlayerRotation};
 use shared::map::MapBounds;
-use shared::terrain::{Biome, TerrainGenerator, WORLD_SEED};
+use shared::terrain::{TerrainGenerator, WORLD_SEED};
 
 use super::modal::sync_modal_cursor;
 use super::styles::{ACCENT_COLOR, BUTTON_BORDER, MENU_BACKGROUND, TEXT_COLOR};

@@ -638,6 +638,32 @@ pub fn tick_player_jump_timers(
     }
 }
 
+/// Hard map boundary for on-foot/swimming players: clamp the physics body
+/// inside the playable bounds and kill outward velocity.
+pub fn clamp_players_to_map_bounds(
+    terrain: Res<shared::terrain::WorldTerrain>,
+    mut players: Query<(&mut Transform, &mut Velocity), (With<Player>, With<PlayerPhysicsBody>)>,
+) {
+    let bounds = terrain.generator.active_map_bounds();
+    const EDGE_MARGIN: f32 = 1.5;
+    let min_x = bounds.min[0] + EDGE_MARGIN;
+    let max_x = bounds.max[0] - EDGE_MARGIN;
+    let min_z = bounds.min[1] + EDGE_MARGIN;
+    let max_z = bounds.max[1] - EDGE_MARGIN;
+
+    for (mut transform, mut velocity) in players.iter_mut() {
+        let p = transform.translation;
+        if p.x < min_x || p.x > max_x {
+            transform.translation.x = p.x.clamp(min_x, max_x);
+            velocity.linvel.x = 0.0;
+        }
+        if p.z < min_z || p.z > max_z {
+            transform.translation.z = p.z.clamp(min_z, max_z);
+            velocity.linvel.z = 0.0;
+        }
+    }
+}
+
 pub fn sync_players_from_physics(
     mut players: Query<
         (

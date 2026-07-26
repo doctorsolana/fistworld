@@ -7,20 +7,111 @@ pub(super) fn ensure_map_texture(
     map_config: Res<MapUiConfig>,
     mut map_texture: ResMut<MapTexture>,
     mut images: ResMut<Assets<Image>>,
+    terrain: Res<shared::terrain::WorldTerrain>,
 ) {
     if !map_open.0 || map_texture.handle.is_some() {
         return;
     }
 
-    if let Some(image) = load_authored_minimap_image() {
-        map_texture.handle = Some(images.add(image));
-        return;
+    // Always render from the LIVE terrain (heights + edits + water level).
+    // The authored minimap.png goes stale the moment the world is sculpted
+    // or generated, so it is no longer used.
+    let bounds = map_config.bounds.unwrap_or_else(load_active_map_bounds);
+    let image = build_live_map_image(MAP_TEX_SIZE, bounds, &terrain);
+    map_texture.handle = Some(images.add(image));
+}
+
+/// Hillshaded elevation map from the real heightfield: deep-to-shallow
+/// water blues, sandy shores, greens rising through the hills, rocky gray
+/// peaks — with a simple NW-light hillshade so the relief reads.
+fn build_live_map_image(
+    size: u32,
+    bounds: MapBounds,
+    terrain: &shared::terrain::WorldTerrain,
+) -> Image {
+    let min_x = bounds.min[0];
+    let min_z = bounds.min[1];
+    let width = bounds.width();
+    let depth = bounds.depth();
+    let water_level = terrain.water_level();
+
+    // Sample heights once; reuse for color + hillshade.
+    let n = size as usize;
+    let mut heights = vec![0.0f32; n * n];
+    for y in 0..n {
+        for x in 0..n {
+            let world_x = min_x + (x as f32 / (size - 1) as f32) * width;
+            let world_z = min_z + (y as f32 / (size - 1) as f32) * depth;
+            heights[y * n + x] = terrain.get_height(world_x, world_z);
+        }
+    }
+    let step_world = width / size as f32;
+
+    let lerp3 = |a: [f32; 3], b: [f32; 3], t: f32| {
+        let t = t.clamp(0.0, 1.0);
+        [
+            a[0] + (b[0] - a[0]) * t,
+            a[1] + (b[1] - a[1]) * t,
+            a[2] + (b[2] - a[2]) * t,
+        ]
+    };
+
+    let mut pixels = Vec::with_capacity(n * n * 4);
+    for y in 0..n {
+        for x in 0..n {
+            let h = heights[y * n + x];
+
+            // Hillshade from central differences (NW light).
+            let xl = heights[y * n + x.saturating_sub(1)];
+            let xr = heights[y * n + (x + 1).min(n - 1)];
+            let zu = heights[y.saturating_sub(1) * n + x];
+            let zd = heights[(y + 1).min(n - 1) * n + x];
+            let dx = (xr - xl) / (2.0 * step_world);
+            let dz = (zd - zu) / (2.0 * step_world);
+            let shade = (1.0 - (dx * 0.7 + dz * 0.7) * 1.6).clamp(0.55, 1.35);
+
+            let underwater = water_level.map(|wl| h < wl).unwrap_or(false);
+            let rgb = if underwater {
+                let wl = water_level.unwrap_or(0.0);
+                let depth_t = ((wl - h) / 8.0).clamp(0.0, 1.0);
+                lerp3([0.36, 0.66, 0.80], [0.05, 0.20, 0.38], depth_t)
+            } else {
+                let wl = water_level.unwrap_or(0.0);
+                let above = h - wl;
+                let base = if above < 2.2 {
+                    // Beach sand.
+                    [0.82, 0.74, 0.54]
+                } else if above < 14.0 {
+                    // Lowland to hill greens.
+                    lerp3([0.32, 0.52, 0.26], [0.45, 0.58, 0.30], (above - 2.2) / 11.8)
+                } else if above < 28.0 {
+                    // High ground drying out.
+                    lerp3([0.45, 0.58, 0.30], [0.52, 0.48, 0.38], (above - 14.0) / 14.0)
+                } else {
+                    // Rocky peaks.
+                    lerp3([0.52, 0.48, 0.38], [0.72, 0.72, 0.74], (above - 28.0) / 15.0)
+                };
+                [base[0] * shade, base[1] * shade, base[2] * shade]
+            };
+
+            pixels.push((rgb[0].clamp(0.0, 1.0) * 255.0) as u8);
+            pixels.push((rgb[1].clamp(0.0, 1.0) * 255.0) as u8);
+            pixels.push((rgb[2].clamp(0.0, 1.0) * 255.0) as u8);
+            pixels.push(255);
+        }
     }
 
-    warn!("Map UI: minimap image missing, using generated minimap fallback");
-    let bounds = map_config.bounds.unwrap_or_else(load_active_map_bounds);
-    let image = build_map_image(MAP_TEX_SIZE, bounds);
-    map_texture.handle = Some(images.add(image));
+    Image::new(
+        Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        pixels,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    )
 }
 
 pub(super) fn ensure_marker_assets(
@@ -65,95 +156,9 @@ pub(super) fn update_marker_image_handle(
     }
 }
 
-pub(super) fn load_authored_minimap_image() -> Option<Image> {
-    let loaded = shared::map::load_default_map().ok()?;
-    let rel = loaded.definition.terrain.minimap.as_deref()?;
-    let path =
-        shared::map::resolve_map_relative_file(&loaded.map_dir, &loaded.definition.map_id, rel)?;
 
-    let bytes = std::fs::read(path).ok()?;
-    let reader = ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .ok()?;
-    let rgba = reader.decode().ok()?.to_rgba8();
-    let (width, height) = rgba.dimensions();
 
-    Some(Image::new(
-        Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        rgba.into_raw(),
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    ))
-}
 
-pub(super) fn build_map_image(size: u32, bounds: MapBounds) -> Image {
-    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
-    let terrain = TerrainGenerator::new(WORLD_SEED);
-    let min_x = bounds.min[0];
-    let min_z = bounds.min[1];
-    let width = bounds.width();
-    let depth = bounds.depth();
-
-    for y in 0..size {
-        for x in 0..size {
-            let nx = x as f32 / (size - 1) as f32;
-            let nz = y as f32 / (size - 1) as f32;
-
-            let world_x = min_x + nx * width;
-            let world_z = min_z + nz * depth;
-            let biome = terrain.get_biome(world_x, world_z);
-            let water_height = terrain.get_water_height(world_x, world_z);
-            let rgba = if water_height.is_some() {
-                water_color(biome)
-            } else {
-                biome_color(biome)
-            };
-            pixels.push(rgba[0]);
-            pixels.push(rgba[1]);
-            pixels.push(rgba[2]);
-            pixels.push(255);
-        }
-    }
-
-    Image::new(
-        Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        pixels,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-}
-
-pub(super) fn biome_color(biome: Biome) -> [u8; 3] {
-    let rgba = biome.color().to_srgba();
-    [
-        (rgba.red * 255.0) as u8,
-        (rgba.green * 255.0) as u8,
-        (rgba.blue * 255.0) as u8,
-    ]
-}
-
-pub(super) fn water_color(biome: Biome) -> [u8; 3] {
-    let color = match biome {
-        Biome::Ocean => Color::srgb(0.06, 0.22, 0.38),
-        _ => Color::srgb(0.10, 0.50, 0.72),
-    };
-    let rgba = color.to_srgba();
-    [
-        (rgba.red * 255.0) as u8,
-        (rgba.green * 255.0) as u8,
-        (rgba.blue * 255.0) as u8,
-    ]
-}
 
 pub(super) fn build_player_arrow_image(size: u32, color: Color) -> Image {
     let mut pixels = vec![0u8; (size * size * 4) as usize];

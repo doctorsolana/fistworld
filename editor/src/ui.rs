@@ -122,15 +122,88 @@ pub fn editor_ui_panel(
     apply_editor_style(ctx);
 
     egui::TopBottomPanel::top("editor_top_bar")
-        .exact_height(52.0)
         .frame(editor_bar_frame())
         .show(ctx, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.label(
-                    egui::RichText::new("CitySim Editor")
-                        .heading()
-                        .color(egui::Color32::from_rgb(230, 238, 246)),
-                );
+            // --- Menu bar ---
+            egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("Save\t(Ctrl+S)").clicked() {
+                        actions.save = true;
+                    }
+                    if ui.button("Save & Exit").clicked() {
+                        actions.save_and_exit = true;
+                    }
+                    if ui.button("Exit Without Saving").clicked() {
+                        actions.exit_without_saving = true;
+                    }
+                    ui.separator();
+                    if ui.button("Reset Map To Blank…").clicked() {
+                        ui_state.show_reset_map_confirm = true;
+                    }
+                });
+                ui.menu_button("Edit", |ui| {
+                    if ui
+                        .button(format!("Undo ({})\t(Ctrl+Z)", session.undo.len()))
+                        .clicked()
+                    {
+                        actions.undo = true;
+                    }
+                    if ui
+                        .button(format!("Redo ({})\t(Ctrl+Y)", session.redo.len()))
+                        .clicked()
+                    {
+                        actions.redo = true;
+                    }
+                });
+                ui.menu_button("View", |ui| {
+                    if let Ok(mut camera) = camera_query.single_mut() {
+                        ui.selectable_value(&mut camera.mode, EditorCameraMode::Rts, "Top-Down");
+                        ui.selectable_value(
+                            &mut camera.mode,
+                            EditorCameraMode::Free,
+                            "Free Camera\t(F5)",
+                        );
+                    }
+                });
+                ui.menu_button("World", |ui| {
+                    ui.menu_button("Generate World", |ui| {
+                        if ui.button("Island…").clicked() {
+                            ui_state.pending_generate = Some(crate::worldgen::WorldStyle::Island);
+                        }
+                        if ui.button("Mainland…").clicked() {
+                            ui_state.pending_generate =
+                                Some(crate::worldgen::WorldStyle::Mainland);
+                        }
+                        ui.separator();
+                        if ui.button("Great Open World…").clicked() {
+                            ui_state.pending_generate =
+                                Some(crate::worldgen::WorldStyle::Showcase);
+                        }
+                        ui.small("Mountains, bay, islands, lakes, rivers,\nroads and a harbour village.");
+                    });
+                    ui.separator();
+                    ui.menu_button("Map Size", |ui| {
+                        let bounds = session.map_definition.bounds;
+                        ui.label(format!(
+                            "Current: {:.0} x {:.0} m",
+                            bounds.max[0] - bounds.min[0],
+                            bounds.max[1] - bounds.min[1]
+                        ));
+                        ui.separator();
+                        for size in [704.0f32, 1408.0, 2112.0, 2816.0] {
+                            if ui.button(format!("{size:.0} x {size:.0} m…")).clicked() {
+                                ui_state.pending_resize = Some(size * 0.5);
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Custom…").clicked() {
+                            ui_state.custom_map_size =
+                                session.map_definition.bounds.max[0] * 2.0;
+                            ui_state.show_custom_size = true;
+                        }
+                    });
+                });
+
                 ui.separator();
                 draw_chip(ui, "Map", &session.map_id);
                 draw_chip(
@@ -287,6 +360,107 @@ pub fn editor_ui_panel(
                 });
             });
         ui_state.show_reset_map_confirm = keep_open;
+    }
+
+    if let Some(style) = ui_state.pending_generate {
+        let mut keep_open = true;
+        egui::Window::new("Generate Random World")
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "Generate a random {} world? This replaces the current \
+                     map (Ctrl+Z undoes it).",
+                    style.label()
+                ));
+                if style == crate::worldgen::WorldStyle::Showcase {
+                    ui.small(
+                        "The big one: a mountain range, a great bay with \
+                         beaches, an offshore archipelago, inland lakes, \
+                         rivers, a harbour village, and roads pathfound \
+                         through the valleys. Building the scene takes a \
+                         few seconds.",
+                    );
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Generate").clicked() {
+                        let seed = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.subsec_nanos() as u64 ^ (d.as_secs() << 20))
+                            .unwrap_or(12345);
+                        actions.generate_world = Some((style, seed));
+                        keep_open = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        keep_open = false;
+                    }
+                });
+            });
+        if !keep_open {
+            ui_state.pending_generate = None;
+        }
+    }
+
+    if let Some(half) = ui_state.pending_resize {
+        let mut keep_open = true;
+        egui::Window::new("Resize Map")
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "Resize the map to {:.0} x {:.0} m? Content outside the \
+                     new bounds is removed (Ctrl+Z undoes it).",
+                    half * 2.0,
+                    half * 2.0
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button("Resize").clicked() {
+                        actions.resize_map = Some(half);
+                        keep_open = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        keep_open = false;
+                    }
+                });
+            });
+        if !keep_open {
+            ui_state.pending_resize = None;
+        }
+    }
+
+    if ui_state.show_custom_size {
+        let mut keep_open = true;
+        egui::Window::new("Custom Map Size")
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.add(
+                    egui::Slider::new(&mut ui_state.custom_map_size, 512.0..=2816.0)
+                        .step_by(128.0)
+                        .text("Size (m)"),
+                );
+                ui.small(format!(
+                    "{:.0} x {:.0} m — {} chunks per side",
+                    ui_state.custom_map_size,
+                    ui_state.custom_map_size,
+                    (ui_state.custom_map_size / 64.0).round() as i32
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button("Apply…").clicked() {
+                        ui_state.pending_resize = Some(ui_state.custom_map_size * 0.5);
+                        keep_open = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        keep_open = false;
+                    }
+                });
+            });
+        if !keep_open {
+            ui_state.show_custom_size = false;
+        }
     }
 
     if ui_state.show_exit_confirm {

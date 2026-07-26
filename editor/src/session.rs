@@ -150,6 +150,13 @@ pub struct EditorUiState {
     pub recent_assets: Vec<RecentAsset>,
     pub show_reset_map_confirm: bool,
     pub show_exit_confirm: bool,
+    /// Pending world-generation request awaiting modal confirmation.
+    pub pending_generate: Option<crate::worldgen::WorldStyle>,
+    /// Pending map-resize request (half extent) awaiting confirmation.
+    pub pending_resize: Option<f32>,
+    /// Custom-size picker window state (full size, meters).
+    pub show_custom_size: bool,
+    pub custom_map_size: f32,
     pub pointer_over_ui: bool,
     pub keyboard_captured: bool,
     pub status: String,
@@ -191,6 +198,10 @@ impl Default for EditorUiState {
             recent_assets: Vec::new(),
             show_reset_map_confirm: false,
             show_exit_confirm: false,
+            pending_generate: None,
+            pending_resize: None,
+            show_custom_size: false,
+            custom_map_size: 1408.0,
             pointer_over_ui: false,
             keyboard_captured: false,
             status: "Ready".to_string(),
@@ -385,6 +396,12 @@ pub struct UiActionRequests {
     pub delete_nearest_plot: bool,
     pub save_and_exit: bool,
     pub exit_without_saving: bool,
+    /// Generate a whole random world (style, seed). Destructive; confirmed
+    /// through a modal first.
+    pub generate_world: Option<(crate::worldgen::WorldStyle, u64)>,
+    /// Resize the map to this half-extent (meters). Content outside the new
+    /// bounds is pruned; confirmed through a modal first.
+    pub resize_map: Option<f32>,
 }
 
 /// Per-stroke state for paint-style tools: one undo snapshot per stroke and

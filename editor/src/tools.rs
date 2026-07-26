@@ -54,6 +54,10 @@ pub struct VisualRefreshFlags {
     pub props_reground: bool,
     pub markers: bool,
     pub city_layout: bool,
+    /// Map bounds changed: despawn and respawn the entire terrain/water
+    /// chunk visual set (regenerating existing meshes is not enough when
+    /// the chunk GRID itself grows or shrinks).
+    pub rebuild_chunks: bool,
 }
 
 pub fn setup_editor_scene(
@@ -371,6 +375,178 @@ pub fn handle_editor_shortcuts(
         }
         actions.reset_map_to_blank = false;
     }
+
+    if let Some(half) = actions.resize_map.take() {
+        session.push_undo_snapshot(&world);
+        match apply_map_resize(half, &mut session, &mut world, &mut flags) {
+            Ok(()) => {
+                ui_state.status = format!("Resized map to {:.0}x{:.0}m", half * 2.0, half * 2.0);
+            }
+            Err(err) => {
+                ui_state.status = format!("Resize failed: {err}");
+            }
+        }
+    }
+
+    if let Some((style, seed)) = actions.generate_world.take() {
+        session.push_undo_snapshot(&world);
+        let result = reset_map_to_blank(
+            &mut session,
+            &mut world,
+            &mut env_state,
+            &mut city_state,
+            &mut flags,
+        )
+        .and_then(|_| {
+            crate::worldgen::generate_world(
+                style,
+                seed,
+                &mut session,
+                &mut world,
+                &mut env_state,
+                &mut city_state,
+                &mut flags,
+            )
+        });
+        match result {
+            Ok(()) => {
+                ui_state.status = format!(
+                    "Generated {} world (seed {seed}) — {} props",
+                    style.label(),
+                    session.map_definition.objects.len()
+                );
+            }
+            Err(err) => {
+                ui_state.status = format!("World generation failed: {err}");
+            }
+        }
+    }
+}
+
+/// Resize the map bounds, pruning content that falls outside. Growing keeps
+/// everything; shrinking trims props/markers/paint/deltas beyond the edge.
+fn apply_map_resize(
+    half: f32,
+    session: &mut EditorSession,
+    world: &mut WorldTerrain,
+    flags: &mut VisualRefreshFlags,
+) -> Result<(), String> {
+    let half = half.clamp(128.0, 1408.0);
+    session.map_definition.bounds = shared::map::MapBounds {
+        min: [-half, -half],
+        max: [half, half],
+    };
+    let bounds = session.map_definition.bounds;
+
+    session
+        .map_definition
+        .objects
+        .retain(|object| bounds.contains_xz(object.position[0], object.position[2]));
+    let chunk_center_in = |coord: &ChunkCoord| {
+        let cx = (coord.x as f32 + 0.5) * CHUNK_SIZE;
+        let cz = (coord.z as f32 + 0.5) * CHUNK_SIZE;
+        bounds.contains_xz(cx, cz)
+    };
+    session
+        .map_edits
+        .terrain_deltas
+        .retain(|chunk| chunk_center_in(&chunk.coord));
+    session
+        .map_edits
+        .terrain_weightmaps
+        .retain(|chunk| chunk_center_in(&chunk.coord));
+    session.paint_weights.retain(|coord, _| chunk_center_in(coord));
+    session
+        .map_edits
+        .spawn_markers
+        .retain(|marker| bounds.contains_xz(marker.position[0], marker.position[2]));
+    session
+        .map_edits
+        .roads
+        .retain(|road| road.points.iter().any(|p| bounds.contains_xz(p[0], p[1])));
+    session
+        .map_edits
+        .plots
+        .retain(|plot| bounds.contains_xz(plot.center[0], plot.center[1]));
+    if let Some(spawn) = session.map_definition.player_spawn.as_mut() {
+        spawn[0] = spawn[0].clamp(-half + 8.0, half - 8.0);
+        spawn[2] = spawn[2].clamp(-half + 8.0, half - 8.0);
+    }
+
+    let loaded_map = load_map_from_parts(
+        &session.map_dir,
+        &session.map_definition,
+        &session.map_edits,
+    )?;
+    world.reload_from_loaded_map(loaded_map);
+    session.refresh_next_ids();
+    session.mark_map_dirty();
+    session.mark_edits_dirty();
+
+    flags.rebuild_chunks = true;
+    flags.props = true;
+    flags.markers = true;
+    flags.city_layout = true;
+    Ok(())
+}
+
+/// Despawn + respawn the full terrain/water chunk visual set when the map
+/// bounds change. Runs before apply_visual_refresh.
+#[allow(clippy::too_many_arguments)]
+pub fn rebuild_chunk_visuals(
+    mut commands: Commands,
+    mut flags: ResMut<VisualRefreshFlags>,
+    world: Res<WorldTerrain>,
+    session: Res<EditorSession>,
+    env_state: Res<EditorEnvironmentState>,
+    terrain_textures: Res<EditorTerrainTextureAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut terrain_materials: ResMut<Assets<EditorTerrainSplatMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut terrain_registry: ResMut<TerrainChunkRegistry>,
+    mut water_registry: ResMut<WaterChunkRegistry>,
+    chunk_visuals: Query<Entity, With<TerrainChunkVisual>>,
+    water_visuals: Query<Entity, With<EditorWaterVisual>>,
+) {
+    if !flags.rebuild_chunks {
+        return;
+    }
+    flags.rebuild_chunks = false;
+    // The fresh spawn below already covers what these flags would redo.
+    flags.terrain_all = false;
+    flags.terrain_chunks.clear();
+    flags.paint_all = false;
+    flags.paint_chunks.clear();
+    flags.water_all = false;
+    flags.water_chunks.clear();
+
+    for entity in chunk_visuals.iter() {
+        commands.entity(entity).despawn();
+    }
+    for entity in water_visuals.iter() {
+        commands.entity(entity).despawn();
+    }
+    terrain_registry.entries.clear();
+    water_registry.chunks.clear();
+
+    spawn_all_terrain_chunks(
+        &mut commands,
+        &world,
+        &session.map_edits,
+        &env_state,
+        &mut meshes,
+        &mut terrain_materials,
+        &mut images,
+        &terrain_textures,
+        &mut terrain_registry,
+    );
+    spawn_all_water_chunks(
+        &mut commands,
+        &world,
+        &env_state,
+        &mut meshes,
+        &mut water_registry,
+    );
 }
 
 fn reset_map_to_blank(
@@ -1335,6 +1511,9 @@ fn apply_snapshot(
         &snapshot.map_definition,
         &snapshot.map_edits,
     )?;
+    let bounds_changed = session.map_definition.bounds.min
+        != snapshot.map_definition.bounds.min
+        || session.map_definition.bounds.max != snapshot.map_definition.bounds.max;
     session.map_definition = snapshot.map_definition;
     session.map_edits = snapshot.map_edits;
     session.paint_weights.clear();
@@ -1350,6 +1529,9 @@ fn apply_snapshot(
     flags.props = true;
     flags.markers = true;
     flags.city_layout = true;
+    if bounds_changed {
+        flags.rebuild_chunks = true;
+    }
     Ok(())
 }
 
