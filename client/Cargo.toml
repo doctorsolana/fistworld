@@ -2,6 +2,9 @@
 name = "client"
 version = "0.1.0"
 edition = "2021"
+# This crate ships two binaries (`client` and `capture`), so bare `cargo run -p client`
+# is ambiguous without this. run.sh relies on it.
+default-run = "client"
 
 [dependencies]
 bevy = { workspace = true }
