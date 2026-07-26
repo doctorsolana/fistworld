@@ -266,20 +266,17 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             telemetry::perf::handle_perf_tick_begin.before(world::time::handle_set_time_of_day),
             telemetry::perf::handle_perf_core_phase_begin
                 .before(world::time::handle_set_time_of_day),
-            telemetry::perf::handle_perf_core_phase_end
-                .after(physics::dynamic_actors::sync_debug_boxes_from_physics),
+            // Phase brackets anchor on SystemSets, not individual systems, so that
+            // deleting any single gameplay system cannot silently skew the timings.
+            telemetry::perf::handle_perf_core_phase_end.after(FpsServerSet::PhysicsPost),
             telemetry::perf::handle_perf_npc_inventory_build_phase_begin
-                .before(ai::obstacles::sync_obstacle_grid),
+                .before(FpsServerSet::AISim),
             telemetry::perf::handle_perf_npc_inventory_build_phase_end
-                .after(inventory::chest::update_distant_chest_auto_close),
-            telemetry::perf::handle_perf_weapons_phase_begin
-                .before(combat::reload::update_reload_timers),
-            telemetry::perf::handle_perf_weapons_phase_end
-                .after(inventory::death_drop::handle_inventory_drop_on_death),
-            telemetry::perf::update_server_perf_log
-                .after(inventory::death_drop::handle_inventory_drop_on_death),
-            telemetry::network::sample_replication_change_pressure
-                .after(inventory::death_drop::handle_inventory_drop_on_death),
+                .after(FpsServerSet::Inventory),
+            telemetry::perf::handle_perf_weapons_phase_begin.before(FpsServerSet::Combat),
+            telemetry::perf::handle_perf_weapons_phase_end.after(FpsServerSet::Combat),
+            telemetry::perf::update_server_perf_log.after(FpsServerSet::Combat),
+            telemetry::network::sample_replication_change_pressure.after(FpsServerSet::Combat),
         )
             .run_if(server_is_started),
     );

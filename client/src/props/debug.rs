@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use shared::terrain::ChunkCoord;
-use shared::weapons::WeaponDebugMode;
+use shared::debug::DebugGizmoMode;
 
 use crate::props::is_tree_kind;
 
@@ -144,7 +144,7 @@ pub(super) fn log_prop_density_snapshot(
 /// Draw client-side prop collider gizmos (debug-only).
 pub(super) fn debug_draw_prop_colliders(
     mut gizmos: Gizmos,
-    debug_mode: Res<WeaponDebugMode>,
+    debug_mode: Res<DebugGizmoMode>,
     library: Option<Res<ClientDerivedColliderLibrary>>,
     camera: Query<&Transform, With<Camera3d>>,
     props: Query<(&PropKindTag, &Transform), With<EnvironmentProp>>,

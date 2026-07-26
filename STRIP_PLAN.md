@@ -86,16 +86,33 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 ### 🟨 P0 — Pre-flight refactor (NO deletions)
 Pure moves/renames. Tree compiles and game runs identically after each. **Highest-leverage phase.**
 
-- [ ] **P0-1** Perf overlay out of `client/src/weapons/` → `client/src/perf_overlay/`
-      (F3 overlay, `FISTFORCE_CLIENT_PERF`, and the verify skill's success grep depend on it)
-- [ ] **P0-2** `WeaponDebugMode` → `shared/src/debug.rs` as `DebugGizmoMode` (used by prop collider gizmos)
-- [ ] **P0-3** `Pickable` → `client/src/ui/mod.rs` (consumed by `water/overlay.rs` via glob import — grep-invisible)
-- [ ] **P0-4** Harvest RTS camera from `client/src/rail/` → `client/src/camera_rts.rs` as `CommanderCamera`
-- [ ] **P0-5** Re-anchor `client/src/streaming.rs` onto it + `warn_once!` on `None` (Danger 3)
-- [ ] **P0-6** Re-anchor 9 telemetry ordering constraints onto `FpsServerSet` instead of dying systems
-- [ ] **P0-7** Delete `shared/src/prelude.rs` (zero consumers, re-exports 17 kill-side symbols)
-- [ ] **P0-8** `mv server_data/players server_data/players.pre-strip` (Danger 2)
-- [ ] Compile checkpoint + smoke test: **verify streaming, audio, F3 overlay, editor loads `city_alpha`**
+- [x] **P0-1** Perf overlay out of `client/src/weapons/` → `client/src/perf_overlay/`
+      (F3 overlay, `FISTFORCE_CLIENT_PERF`, and the verify skill's success grep depend on it).
+      Dropped the bullet/tracer/muzzle counters from the overlay while moving, so P1 need not touch it.
+- [x] **P0-2** `WeaponDebugMode` → `shared/src/debug.rs` as `DebugGizmoMode` (used by prop collider gizmos)
+- [x] **P0-3** ~~`Pickable` → `client/src/ui/mod.rs`~~ — **plan was wrong; deleted instead.**
+      `Pickable` is exported by `bevy::prelude` (bevy_picking 0.18). The `crosshair` copy was a redundant
+      *inert* unit-struct shadowing Bevy's real component — its `IGNORE` did nothing. Deleting it means
+      every call site (incl. `water/overlay.rs`) now resolves to Bevy's, which is correct **and** functional.
+- [x] **P0-4** Harvest RTS camera from `client/src/rail/` → `client/src/camera_rts.rs` as `CommanderCamera`
+      (+ `LocalPeerId`, `CursorTerrainHit`, `intersect_terrain`). Resource init moved to `app_wiring`
+      so it survives the P3 rail deletion.
+- [x] **P0-5** Re-anchor `client/src/streaming.rs` onto it + `warn_once!` on `None` (Danger 3)
+- [x] **P0-6** Re-anchor 7 telemetry ordering constraints onto `FpsServerSet` instead of dying systems.
+      Note: `handle_perf_core_phase_end` now anchors on the `PhysicsPost` *set*, which widens that
+      bracket slightly to include ragdoll sync (those systems die in P4 anyway).
+- [x] **P0-7** Delete `shared/src/prelude.rs` (zero consumers, re-exported 17 kill-side symbols)
+- [x] **P0-8** `mv server_data/players server_data/players.pre-strip` — 48 profiles (Danger 2)
+- [x] Compile checkpoint: `cargo check --workspace --all-targets` green · `cargo check -p editor` green ·
+      61 shared tests pass · 4 editor tests pass
+- [x] Smoke test **passed on both streaming-anchor paths**:
+      - FPS mode — no panics, no anchor warning, `ClientPerf frame_ms_p50=16.67` emitted from
+        `client::perf_overlay` (overlay move verified end-to-end), terrain/props/player/ambient audio alive.
+      - Rail mode — no panics, no anchor warning; `Rail command rejected: Track length…` proves the
+        harvested `update_cursor_terrain_hit` + `intersect_terrain` still resolve real world positions.
+      - Editor — boots on `city_alpha`, terrain arrays load, no panics.
+      - *(Pre-existing, not a regression: rail mode emits no `ClientPerf` because the perf systems are
+        wired only in `wire_fps_systems`.)*
 
 ### ⬜ P1 — Weapons & combat (~9,100 lines)
 - [ ] Rescue first: split `Health` → `shared/src/components/health.rs`; move segment raycasts →

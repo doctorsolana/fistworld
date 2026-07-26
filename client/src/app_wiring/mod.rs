@@ -28,10 +28,12 @@ use bevy::window::{
 };
 use lightyear::prelude::client::ClientPlugins;
 use shared::protocol::{tick_duration, ProtocolPlugin};
-use shared::weapons::WeaponDebugMode;
+use shared::debug::DebugGizmoMode;
 
 use crate::{
-    audio, camera, chest, city, crosshair, dialogue, input, pickup, profiling, props, rail, render,
+    audio, camera, camera_rts, chest, city, crosshair, dialogue, input, perf_overlay, pickup,
+    profiling, props,
+    rail, render,
     render::systems as game_systems, states::GameState, terrain, ui, water, weapon_view, weapons,
 };
 use game_systems::{GraphicsSettings, LAUNCHER_RESOLUTION};

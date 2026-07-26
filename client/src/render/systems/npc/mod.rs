@@ -36,6 +36,6 @@ use shared::npc::{
     NPC_RADIUS,
 };
 use shared::terrain::CHUNK_SIZE;
-use shared::weapons::WeaponDebugMode;
+use shared::debug::DebugGizmoMode;
 
 use super::GraphicsSettings;

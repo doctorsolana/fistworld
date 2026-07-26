@@ -8,6 +8,8 @@ mod city;
 mod crosshair;
 mod dialogue;
 mod input;
+mod camera_rts;
+mod perf_overlay;
 mod pickup;
 mod profiling;
 mod props;

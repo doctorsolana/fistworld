@@ -247,7 +247,7 @@ pub fn handle_bullet_impacts(
     >,
     time: Res<Time>,
     terrain: Option<Res<WorldTerrain>>,
-    debug_mode: Res<WeaponDebugMode>,
+    debug_mode: Res<DebugGizmoMode>,
     mut debug_trails: ResMut<DebugBulletTrails>,
 ) {
     let Some(weapon_visuals) = weapon_visuals else {

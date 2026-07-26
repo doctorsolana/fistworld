@@ -4,18 +4,6 @@ use super::*;
 use bevy::asset::AssetId;
 use std::collections::{HashMap, HashSet, VecDeque};
 
-/// Marker for the debug overlay UI
-#[derive(Component)]
-pub struct DebugOverlay;
-
-/// Marker for the FPS text specifically
-#[derive(Component)]
-pub struct FpsText;
-
-/// Multi-line performance stats text in debug overlay
-#[derive(Component)]
-pub struct PerfStatsText;
-
 /// Drying stages for a blood decal variant: fresh (wet, glossy red) ->
 /// drying -> dried (dark brown, matte). Shared across all splats.
 #[derive(Clone)]
@@ -244,51 +232,6 @@ pub struct DebugBulletTrails {
     pub trails: Vec<(Vec<Vec3>, f32, Color)>, // (positions, spawn_time, color)
 }
 
-/// Rolling client performance configuration.
-#[derive(Resource, Clone, Debug)]
-pub struct ClientPerfConfig {
-    pub enabled: bool,
-    pub emit_interval_secs: f32,
-    pub rolling_window_samples: usize,
-    pub hitch_threshold_ms: f32,
-    pub stats_update_interval_secs: f32,
-}
-
-impl Default for ClientPerfConfig {
-    fn default() -> Self {
-        let enabled = crate::profiling::hitch_profiling_enabled()
-            || crate::profiling::env_flag("FISTFORCE_CLIENT_PERF");
-        let emit_interval_secs = std::env::var("FISTFORCE_CLIENT_PERF_INTERVAL_SECS")
-            .ok()
-            .and_then(|v| v.parse::<f32>().ok())
-            .filter(|v| *v > 0.0)
-            .unwrap_or(5.0);
-        let hitch_threshold_ms =
-            crate::profiling::env_f32("FISTFORCE_HITCH_THRESHOLD_MS", 35.0).max(1.0);
-
-        Self {
-            enabled,
-            emit_interval_secs,
-            rolling_window_samples: 600,
-            hitch_threshold_ms,
-            stats_update_interval_secs: 0.25,
-        }
-    }
-}
-
-/// Rolling frame-time snapshot used by overlay and optional perf logging.
-#[derive(Resource, Default)]
-pub struct ClientPerfSnapshot {
-    pub frame_times_ms: VecDeque<f32>,
-    pub hitch_count_window: u32,
-    pub total_samples: u64,
-    pub p50_ms: f32,
-    pub p95_ms: f32,
-    pub p99_ms: f32,
-    pub last_stats_update_secs: f32,
-    pub last_emit_secs: f32,
-}
-
 /// Cache from network owner id to replicated player entity.
 #[derive(Resource, Default)]
 pub struct PlayerOwnerIndex {
@@ -302,19 +245,4 @@ pub struct RemoteMuzzleIndex {
     pub by_owner: HashMap<Entity, (Vec3, Vec3)>,
     pub by_weapon_entity: HashMap<Entity, Entity>,
     pub by_owner_weapon: HashMap<Entity, Entity>,
-}
-
-/// Toggle the perf overlay (FPS + counters) with F3.
-///
-/// This is intentionally separate from debug gizmos so you can inspect performance
-/// without paying the cost of drawing lots of gizmo lines.
-#[derive(Resource, Default)]
-pub struct PerfOverlayEnabled(pub bool);
-
-/// Logs a snapshot when FPS stays low for a bit.
-#[derive(Resource, Default)]
-pub struct PerfDropMonitor {
-    pub(super) below_seconds: f32,
-    pub(super) sample_timer: f32,
-    pub(super) last_snapshot: f32,
 }

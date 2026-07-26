@@ -109,7 +109,7 @@ fn wire_rail_systems(app: &mut App) {
         (
             game_systems::spawn_world,
             rail::spawn_rail_hud,
-            rail::release_cursor_for_rts,
+            camera_rts::release_cursor_for_rts,
         )
             .chain(),
     );
@@ -119,13 +119,13 @@ fn wire_rail_systems(app: &mut App) {
     app.add_systems(
         Update,
         (
-            rail::ensure_rts_camera_controller,
-            rail::release_cursor_for_rts,
-            rail::update_cursor_terrain_hit,
+            camera_rts::ensure_commander_camera_controller,
+            camera_rts::release_cursor_for_rts,
+            camera_rts::update_cursor_terrain_hit,
             rail::handle_rail_hotkeys,
             rail::handle_rail_build_clicks,
             rail::receive_rail_rejections,
-            rail::update_rts_camera,
+            camera_rts::update_commander_camera,
             rail::update_rail_hud,
         )
             .chain()
@@ -171,7 +171,7 @@ fn wire_fps_systems(app: &mut App) {
             crosshair::spawn_crosshair,
             crosshair::spawn_death_screen,
             weapon_view::spawn_weapon_hud,
-            weapons::spawn_debug_overlay,
+            perf_overlay::spawn_debug_overlay,
             weapons::cleanup_shoot_input_suppress,
         ),
     );
@@ -186,7 +186,7 @@ fn wire_fps_systems(app: &mut App) {
             weapon_view::despawn_third_person_weapon,
             weapon_view::despawn_remote_third_person_weapons,
             weapons::reset_projectile_indices,
-            weapons::despawn_debug_overlay,
+            perf_overlay::despawn_debug_overlay,
         ),
     );
 
@@ -294,7 +294,7 @@ fn wire_fps_systems(app: &mut App) {
             weapons::sync_player_owner_index,
             weapons::sync_remote_muzzle_index
                 .after(weapon_view::update_remote_third_person_weapons),
-            weapons::update_client_perf_snapshot,
+            perf_overlay::update_client_perf_snapshot,
             weapons::update_weapon_warmup_queue,
             weapons::spawn_weapon_warmups,
             weapons::cleanup_weapon_warmups,
@@ -333,12 +333,12 @@ fn wire_fps_systems(app: &mut App) {
 
     app.add_systems(
         Update,
-        weapons::handle_toggle_perf_overlay.run_if(in_state(GameState::Playing)),
+        perf_overlay::handle_toggle_perf_overlay.run_if(in_state(GameState::Playing)),
     );
 
     app.add_systems(
         Update,
-        weapons::handle_toggle_debug_mode.run_if(in_state(GameState::Playing)),
+        perf_overlay::handle_toggle_debug_mode.run_if(in_state(GameState::Playing)),
     );
 
     app.add_systems(
@@ -348,7 +348,7 @@ fn wire_fps_systems(app: &mut App) {
 
     app.add_systems(
         Update,
-        weapons::update_debug_overlay
+        perf_overlay::update_debug_overlay
             .run_if(in_state(GameState::Playing))
             .run_if(bevy::time::common_conditions::on_timer(
                 std::time::Duration::from_millis(125),
@@ -357,7 +357,7 @@ fn wire_fps_systems(app: &mut App) {
 
     app.add_systems(
         Update,
-        weapons::update_perf_drop_monitor
+        perf_overlay::update_perf_drop_monitor
             .run_if(in_state(GameState::Playing))
             .run_if(bevy::time::common_conditions::on_timer(
                 std::time::Duration::from_millis(500),
@@ -366,7 +366,7 @@ fn wire_fps_systems(app: &mut App) {
 
     app.add_systems(
         Update,
-        weapons::emit_client_perf_summary.run_if(in_state(GameState::Playing)),
+        perf_overlay::emit_client_perf_summary.run_if(in_state(GameState::Playing)),
     );
 
     // Weapon view systems (3D models and HUD)

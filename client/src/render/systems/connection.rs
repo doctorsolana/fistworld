@@ -60,7 +60,7 @@ pub fn handle_start_connection(
 
     // Generate a unique client ID
     let client_id = rand::random::<u64>();
-    commands.insert_resource(crate::rail::RailLocalPeerId(client_id));
+    commands.insert_resource(crate::camera_rts::LocalPeerId(client_id));
 
     // Build authentication (netcode connect token)
     let auth = Authentication::Manual {

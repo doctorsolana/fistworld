@@ -3,18 +3,21 @@
 use super::*;
 
 pub fn setup_resources(app: &mut App) {
-    // Weapon debug mode resource
-    app.init_resource::<WeaponDebugMode>();
-    app.init_resource::<weapons::PerfOverlayEnabled>();
-    app.init_resource::<weapons::PerfDropMonitor>();
+    // Debug gizmo toggle (F4)
+    app.init_resource::<DebugGizmoMode>();
+
+    // Top-down commander camera
+    app.init_resource::<camera_rts::CursorTerrainHit>();
+    app.init_resource::<perf_overlay::PerfOverlayEnabled>();
+    app.init_resource::<perf_overlay::PerfDropMonitor>();
     app.init_resource::<weapons::ShootingState>();
     app.init_resource::<weapons::MeleeSwingState>();
     app.init_resource::<weapon_view::offhand::OffhandShieldIndex>();
     app.init_resource::<weapons::ShootInputSuppress>();
     app.init_resource::<weapons::ReloadState>();
     app.init_resource::<weapons::DebugBulletTrails>();
-    app.init_resource::<weapons::ClientPerfConfig>();
-    app.init_resource::<weapons::ClientPerfSnapshot>();
+    app.init_resource::<perf_overlay::ClientPerfConfig>();
+    app.init_resource::<perf_overlay::ClientPerfSnapshot>();
     app.init_resource::<weapons::PlayerOwnerIndex>();
     app.init_resource::<weapons::RemoteMuzzleIndex>();
     app.init_resource::<weapons::WeaponWarmupQueue>();

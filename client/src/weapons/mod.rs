@@ -13,11 +13,7 @@ pub mod state;
 pub mod warmup;
 
 pub use assets::{setup_weapon_audio_assets, setup_weapon_visual_assets};
-pub use debug::{
-    despawn_debug_overlay, emit_client_perf_summary, handle_toggle_debug_mode,
-    handle_toggle_perf_overlay, spawn_debug_overlay, update_client_perf_snapshot,
-    update_debug_overlay, update_perf_drop_monitor, update_trajectory_debug_gizmos,
-};
+pub use debug::update_trajectory_debug_gizmos;
 pub use effects::{
     update_blood_bursts, update_blood_droplets, update_blood_ground_splats, update_impact_markers,
     update_muzzle_flash, update_muzzle_smoke,
@@ -37,9 +33,6 @@ pub(crate) use effects::{spawn_blood_splatter, spawn_muzzle_flash, spawn_muzzle_
 
 use bevy::audio::Volume;
 use bevy::camera::visibility::NoFrustumCulling;
-use bevy::diagnostic::{
-    DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin,
-};
 use bevy::light::NotShadowCaster;
 use bevy::math::primitives::Plane3d;
 use bevy::prelude::*;
@@ -52,10 +45,10 @@ use shared::protocol::{
     BulletImpact, BulletImpactSurface, HitConfirm, MeleeAttackRequest, ReliableChannel,
     ReloadRequest, ShootRequest,
 };
-use shared::terrain::{ChunkCoord, WorldTerrain};
-use shared::vehicle::Vehicle;
+use shared::terrain::WorldTerrain;
+use shared::debug::DebugGizmoMode;
 use shared::weapons::{
-    ballistics, muzzle_offset, WeaponDebugMode, WeaponType, RECOIL_ACCUMULATION_MULT,
+    ballistics, muzzle_offset, WeaponType, RECOIL_ACCUMULATION_MULT,
     RECOIL_ADS_MULTIPLIER, RECOIL_BURST_RESET_TIME, RECOIL_RECOVERY_SPEED,
 };
 use std::collections::HashMap;

@@ -26,7 +26,7 @@ fn ragdoll_parent(
 
 pub fn update_npc_hitbox_debug_gizmos(
     mut gizmos: Gizmos,
-    debug_mode: Res<WeaponDebugMode>,
+    debug_mode: Res<DebugGizmoMode>,
     npcs: Query<(&Npc, &Transform, &Health)>,
 ) {
     if !debug_mode.0 {
@@ -116,7 +116,7 @@ pub fn update_npc_hitbox_debug_gizmos(
 /// vs bad server ragdoll constraints.
 pub fn update_npc_ragdoll_debug_gizmos(
     mut gizmos: Gizmos,
-    debug_mode: Res<WeaponDebugMode>,
+    debug_mode: Res<DebugGizmoMode>,
     npcs: Query<
         (
             Entity,

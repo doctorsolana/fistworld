@@ -56,14 +56,6 @@ pub struct HitMarker {
 #[derive(Component)]
 pub struct SniperScopeOverlay;
 
-/// Pickable marker to ignore mouse events
-#[derive(Component, Clone, Copy)]
-pub struct Pickable;
-
-impl Pickable {
-    pub const IGNORE: Self = Self;
-}
-
 // =============================================================================
 // DEATH SCREEN UI
 // =============================================================================
