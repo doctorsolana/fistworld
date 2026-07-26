@@ -43,10 +43,14 @@ fn sway_strength(kind: shared::props::PropKind) -> (f32, f32) {
     }
 }
 
-/// Matte-flatten a cloned base material so swaying foliage never glints.
-fn flatten_base(base: &mut StandardMaterial) {
-    base.reflectance = base.reflectance.min(0.12);
-    base.perceptual_roughness = base.perceptual_roughness.max(0.82);
+/// Matte-flatten a cloned base material.
+///
+/// The dreamy look has no specular: highlights on a thousand props read as noise from
+/// altitude, and glints are exactly what made the old water/foliage look busy. Fully
+/// rough + zero reflectance gives flat, readable shapes lit only by diffuse + ambient.
+pub(crate) fn flatten_base(base: &mut StandardMaterial) {
+    base.reflectance = 0.0;
+    base.perceptual_roughness = 1.0;
     base.metallic = 0.0;
 }
 

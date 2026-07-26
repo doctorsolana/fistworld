@@ -104,14 +104,20 @@ pub fn setup_rendering(
         ..default()
     }));
     camera.insert((
+        // Aerial haze is the main depth cue in the dreamy look: distant terrain fades
+        // toward a pale sky-blue instead of staying crisp, which reads as atmosphere and
+        // hides LOD transitions on a 2.8km map. Tuned stronger and cooler than the FPS
+        // fog, which was a thin dust veil.
         DistanceFog {
-            color: Color::srgba(0.56, 0.61, 0.67, 0.12),
-            directional_light_color: Color::srgba(1.0, 0.88, 0.68, 0.18),
-            directional_light_exponent: 24.0,
+            // Keep the haze subtle up close (a heavy constant veil reads as mud) and let
+            // it build with distance so far terrain melts into the sky.
+            color: Color::srgba(0.72, 0.82, 0.92, 0.05),
+            directional_light_color: Color::srgba(1.0, 0.94, 0.82, 0.22),
+            directional_light_exponent: 20.0,
             falloff: FogFalloff::from_visibility_colors(
-                900.0,
-                Color::srgb(0.50, 0.53, 0.55),
-                Color::srgb(0.74, 0.76, 0.72),
+                2000.0,
+                Color::srgb(0.70, 0.80, 0.90),
+                Color::srgb(0.88, 0.92, 0.96),
             ),
         },
         // Keep the quality-focused default explicit so future tuning does not fall back to blockier PCF.

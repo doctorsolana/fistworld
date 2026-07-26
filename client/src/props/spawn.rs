@@ -6,7 +6,7 @@ use shared::terrain::{WorldTerrain, CHUNK_SIZE};
 use std::collections::HashSet;
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
-use crate::streaming::{streaming_anchor, AnchorCamera, AnchorPlayer};
+use crate::streaming::{camera_view_distance, streaming_anchor, AnchorCamera, AnchorPlayer};
 use crate::terrain::{LoadedChunks, PerfHitchStats};
 
 use super::foliage::needs_foliage_materials;
@@ -152,7 +152,7 @@ pub(super) fn spawn_chunk_props(
     // Props stream independently from terrain. Terrain can stay loaded farther out for silhouettes,
     // while dense forests/ground clutter should only exist as live entities near the player.
     let player_chunk = shared::terrain::ChunkCoord::from_world_pos(anchor_pos);
-    let prop_radius = prop_stream_radius_chunks(&settings);
+    let prop_radius = prop_stream_radius_chunks(&settings, camera_view_distance(&camera_query));
     let mut desired: Vec<shared::terrain::ChunkCoord> = player_chunk
         .chunks_in_radius(prop_radius)
         .into_iter()
@@ -170,6 +170,13 @@ pub(super) fn spawn_chunk_props(
         }
         let chunk_zones = build_zone_index.by_chunk.get(&coord);
         let mut spawns = shared::props::generate_chunk_prop_spawns(&terrain.generator, coord);
+        // Ground detail reads as nothing from a camera 200m+ up; spawning it is pure
+        // cost. Ground cover belongs in the terrain texture at this camera distance.
+        spawns.retain(|spawn| {
+            spawn.kind.is_none_or(|kind| {
+                shared::props::visual_role(kind) != shared::props::PropVisualRole::GroundDetail
+            })
+        });
         if let Some(chunk_zones) = chunk_zones {
             spawns.retain(|spawn| {
                 let point_xz = Vec2::new(spawn.position.x, spawn.position.z);
@@ -347,7 +354,7 @@ pub(super) fn cleanup_chunk_props(
 ) {
     let player_chunk = streaming_anchor(&player_query, &camera_query)
         .map(shared::terrain::ChunkCoord::from_world_pos);
-    let prop_radius = prop_stream_radius_chunks(&settings);
+    let prop_radius = prop_stream_radius_chunks(&settings, camera_view_distance(&camera_query));
 
     // Find chunks that are no longer loaded or are outside the tighter prop streaming radius.
     let chunks_to_remove: Vec<shared::terrain::ChunkCoord> = loaded_prop_chunks
@@ -376,13 +383,24 @@ pub(super) fn cleanup_chunk_props(
     }
 }
 
-fn prop_stream_radius_chunks(settings: &GraphicsSettings) -> i32 {
+/// How far props stream, in chunks.
+///
+/// A fixed radius is wrong for a top-down camera: the visible ground footprint grows
+/// with zoom, so a radius tuned for an eye-level view leaves the screen empty as soon as
+/// you zoom out. Scale with camera distance instead, and keep the FPS-era override.
+fn prop_stream_radius_chunks(settings: &GraphicsSettings, camera_distance: f32) -> i32 {
     let configured = std::env::var("FISTFORCE_PROP_CHUNK_RADIUS")
         .ok()
         .and_then(|value| value.parse::<i32>().ok())
         .filter(|value| *value >= 0);
+
+    // Ground covered by the view is roughly the camera distance again; pad it so props
+    // exist slightly beyond the frame rather than popping in at the edge.
+    let visible_ground_radius = (camera_distance * 1.35).max(180.0);
     let default_radius =
-        ((128.0 * settings.prop_render_multiplier.max(0.25)) / CHUNK_SIZE).ceil() as i32;
+        ((visible_ground_radius * settings.prop_render_multiplier.max(0.25)) / CHUNK_SIZE).ceil()
+            as i32;
+
     configured
         .unwrap_or(default_radius)
         .clamp(1, settings.view_distance.max(1))

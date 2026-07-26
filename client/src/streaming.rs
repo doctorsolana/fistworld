@@ -38,3 +38,18 @@ pub fn streaming_anchor(player: &AnchorPlayer, camera: &AnchorCamera) -> Option<
     }
     fallback
 }
+
+/// How far the camera is from the ground it is looking at.
+///
+/// Streaming radii scale off this: with a top-down camera the visible ground footprint
+/// grows with zoom, so anything using a fixed radius empties the screen when zoomed out.
+pub fn camera_view_distance(camera: &AnchorCamera) -> f32 {
+    camera
+        .iter()
+        .next()
+        .and_then(|(_, controller)| controller.map(|c| c.zoom))
+        .unwrap_or(DEFAULT_VIEW_DISTANCE)
+}
+
+/// Fallback when no commander camera exists yet (first frames, or a non-gameplay app).
+const DEFAULT_VIEW_DISTANCE: f32 = 220.0;

@@ -116,30 +116,40 @@ pub struct GraphicsSettings {
 pub const LAUNCHER_RESOLUTION: (u32, u32) = (1600, 900);
 
 /// The default color grade.
+/// Grade for the top-down look: keep colour, soften light slightly.
+///
+/// Two failed attempts are worth recording, because both are tempting:
+/// 1. Pulling saturation down across every band ("pastel") turned the world muddy olive.
+///    Dreamy art is *saturated*; the softness comes from light, not from removing colour.
+/// 2. Lifting shadows hard (0.038) to get haze washed the entire frame. A top-down camera
+///    sees mostly midtones, so a global lift flattens everything rather than just shadows.
+///
+/// Style beyond this belongs in shading and terrain colour, not in the grade — a tone
+/// curve cannot make photographic terrain textures look low-poly.
 pub fn default_color_grading(exposure: f32) -> ColorGrading {
     ColorGrading {
         global: ColorGradingGlobal {
             exposure,
-            temperature: 0.016,
-            tint: -0.004,
-            post_saturation: 1.07,
+            temperature: 0.030,
+            tint: -0.010,
+            post_saturation: 1.06,
             ..Default::default()
         },
         shadows: ColorGradingSection {
             saturation: 1.04,
-            contrast: 1.03,
-            lift: 0.004,
+            contrast: 0.99,
+            lift: 0.008,
             ..Default::default()
         },
         midtones: ColorGradingSection {
-            saturation: 1.04,
-            contrast: 1.05,
+            saturation: 1.05,
+            contrast: 1.01,
             ..Default::default()
         },
         highlights: ColorGradingSection {
+            // Soft highlight rolloff is the one part of the dreamy pass that helped.
             saturation: 1.00,
-            contrast: 1.02,
-            gain: 0.97,
+            contrast: 0.98,
             ..Default::default()
         },
     }
