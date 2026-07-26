@@ -1,16 +1,34 @@
-# FistForce
+# Top-Down Tactics (working title)
 
-A multiplayer 3D sandbox shooter built with **Rust** and **Bevy 0.18**.
+A multiplayer top-down unit-tactics game built with **Rust** and **Bevy 0.18** — many units,
+formations, huge maps.
 
-## Features
+> **This repo was a first-person shooter (FistForce) until July 2026.** It is mid-conversion:
+> the FPS layers have been stripped out and the world/terrain/editor foundation kept. The unit
+> simulation is not written yet.
+>
+> - The complete FPS game is preserved at git tag **`citysim-final`**.
+> - Conversion status and remaining work: [`STRIP_PLAN.md`](STRIP_PLAN.md).
+> - Full analysis behind it: [`docs/strip/`](docs/strip/).
 
-- 🗺️ Fixed authored city map (`city_alpha`) loaded from `map.ron` + heightmap
-- 🎯 Server-authoritative shooting with realistic bullet ballistics (drop, travel time)
-- 🤖 NPCs with pathfinding AI and hit detection (headshots, body zones)
-- 🌅 Dynamic day/night cycle with atmospheric scattering
-- 🚗 Driveable vehicles (motorbike)
-- 🎮 Client-side prediction with server reconciliation
-- 🌲 Baked convex-hull colliders for environment props (trees, rocks)
+---
+
+## What works today
+
+- 🗺️ **Huge authored maps** — chunk-streamed terrain, resizable up to ~2.8 km²
+- 🎨 **Full map editor** — sculpt, texture paint, scatter brush, roads/plots, undo, live minimap
+- 🌍 **Procedural world generation** — Island / Mainland / "Great Open World" (A\*-pathed roads,
+  mountains, rivers, beaches, archipelagos, a village)
+- 🌊 **Water** — shore foam, caustics, wet sand, depth shading, wind-driven waves
+- 🌲 **Props & foliage** — wind sway, LOD, baked collider library
+- 🌅 **Day/night cycle** with atmospheric scattering and clouds
+- 🎥 **Top-down commander camera** — WASD pan, RMB orbit, wheel zoom, cursor→terrain picking
+- 🔌 **Multiplayer plumbing** — lightyear connection, replication, profile persistence
+
+## Not built yet
+
+Units, selection, orders, formations, combat, and the AI/economy that make it a game.
+See the netcode decision still open at the bottom of [`STRIP_PLAN.md`](STRIP_PLAN.md).
 
 ---
 
@@ -18,313 +36,67 @@ A multiplayer 3D sandbox shooter built with **Rust** and **Bevy 0.18**.
 
 | Crate | Description |
 |-------|-------------|
-| `client/` | Bevy app with rendering, input, UI, terrain/prop streaming |
-| `server/` | Headless authoritative server (physics, AI, hit detection) |
-| `shared/` | Deterministic terrain/props, protocol, components, ballistics |
-| `editor/` | Offline map editor app (terrain sculpt, prop placement, spawn authoring) |
+| `client/` | Bevy app: rendering, camera, UI, terrain/prop streaming |
+| `server/` | Headless authoritative server: world tick, persistence, collider streaming, navigation |
+| `shared/` | Deterministic terrain/props, protocol, components, map schema |
+| `editor/` | Map editor (terrain sculpt, painting, prop placement, worldgen) |
 | `tools/collider_baker/` | Offline tool to bake convex-hull colliders from GLTF meshes |
+| `tools/terrain_ktx_builder/` | Offline terrain texture-array packer |
 
 Assets live in `client/assets/` (models, audio, `colliders.bin`).
 
-Contributor workflow and architecture guardrails:
-- See `CONTRIBUTING.md`.
-- See `RAGDOLL_HANDOFF.md` for the Oilman ragdoll investigation summary and redesign direction.
-
-## Module Rules
-
-- `mod.rs` files are orchestration surfaces only:
-  - declare `mod ...`
-  - `pub use ...` re-exports
-  - plugin/build wiring
-  - tiny guards/constants needed for module wiring
-- Large implementation bodies belong in focused submodules.
-- Domain ownership is explicit:
-  - `client`: feature domains (`weapons`, `audio`, `ui`, `terrain`, `systems`, etc.)
-  - `server`: runtime domains (`net`, `player`, `vehicle`, `inventory`, `world`, `combat`, `collision`, `ai`, `persistence`, `telemetry`)
-  - `shared`: protocol/data/physics domains with namespaced modules as the default import style
-- Compatibility aliases are intentionally avoided; call canonical names directly.
-
-### Post-Rewrite Status
-
-- Shared flat compatibility bridge has been removed.
-- Namespaced shared imports are standard across runtime and tools.
-- Lean `mod.rs` policy is enforced for high-impact domains and remains the default for new modules.
-
-### Post-Rewrite Performance Baseline (Validated February 14, 2026)
-
-This repository includes a full pass of behavior-preserving performance work across `client`, `server`, and `shared`.
-
-- Client:
-  - Added frame-time instrumentation and periodic perf logs (`FISTFORCE_CLIENT_PERF`, `FISTFORCE_CLIENT_PERF_INTERVAL_SECS`).
-  - Reduced projectile and remote-weapon hot-path overhead with cached indices and incremental reconciliation.
-  - Batched remote audio event handling and moved emitter admission to cached-membership + squared-distance checks.
-  - Added send-on-change `PlayerInput` transport with burst resend and heartbeat to reduce idle traffic while keeping controls responsive on unreliable channels.
-- Server:
-  - Added broadphase indices for bullet/entity checks and reduced message fanout overhead with batched dispatch paths.
-  - Moved profile persistence off fixed tick via async save queue; added roster cache for lower IO pressure.
-  - Switched building spatial index rebuild gating to ECS change/removal signals (no no-op full scans each tick).
-  - Incrementalized collider streaming with cached build-zone chunk lookup and loaded-chunk refresh when building zones change.
-  - Improved AI/pathfinding cadence and scratch reuse in hot loops.
-  - Added server-authoritative Oilman ragdoll pipeline with lethal-shot impulse capture, 15 Hz pose streaming, corpse budget eviction, and corpse gameplay collision.
-- Shared:
-  - Optimized terrain mesh generation by caching stencil samples and deriving biome/material data from cached authored values.
-  - Optimized `sample_height` via cached sampling scalars in `HeightmapData`.
-  - Added map object pre-resolution and per-chunk indexing at map load; prop rotations are precomputed quaternions.
-  - Added shared build-zone precompute + chunk indexing helpers used by both client prop filtering and server collider filtering.
-  - Packed `PlayerInput` wire format (bitfield + quantized controls/yaw) and protocol update.
-  - Removed dead reserve-ammo compatibility path (`EquippedWeapon`) in favor of inventory-driven reload flow only.
-
-Current baseline checks:
-- `cargo check --workspace`
-- `cargo test -p shared`
-- Targeted server collision/index tests for streaming + building index invalidation
-
----
-
-## Architecture Overview
-
-### Networking (Lightyear)
-
-- **Server-authoritative**: The server owns all gameplay state (positions, health, bullets).
-- **Client-side prediction**: The client predicts local player movement; server corrects if needed.
-- **Replication**: Components marked with `Replicate` are automatically synced to clients.
-- **Messages**: `PlayerInput`, `ShootRequest`, `HitConfirm`, `BulletImpact`, etc.
-
-### Terrain & Props
-
-- **Authored map data**: Client and server load the same map definition (`shared/src/map/`) and sample the same heightmap.
-- **Chunk streaming**: Client loads/unloads terrain meshes and authored props based on player/camera position.
-- **Runtime bounds**: Active map bounds are authoritative and replicated from server to clients.
-
-### Collisions
-
-- **Single authority**: Server runs one Rapier world for terrain, static world, players, NPCs, vehicles, ragdolls, and debug bodies.
-- **Terrain**: Chunk-streamed heightfield colliders generated from `WorldTerrain`.
-- **Static world**: Baked prop/building colliders materialized as fixed Rapier colliders.
-- **Dynamics**: Players/NPCs/vehicles/debug bodies are dynamic rigid bodies driven by server control systems.
-
-### Weapons & Combat
-
-- **Ballistics**: Bullets are physical projectiles with velocity, gravity, drag.
-- **Hit detection**: Server raycasts against NPC/player hitboxes (head, chest, limbs).
-- **Recoil**: Accumulative recoil for rapid fire; reduced when ADS.
+Contributor workflow and architecture guardrails: [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Character `.glb` animation indices: [`docs/character-animations.md`](docs/character-animations.md).
 
 ---
 
 ## Quick Start
 
 ```bash
-# Build and run (starts server in background, then client)
-./run.sh
+./run.sh              # server in background, then client
+./run.sh editor       # map editor
 ```
 
 Or manually:
 
 ```bash
-# Terminal 1 — server
-cargo run -p server --release
-# Optional: reduce NPCs for faster local testing
-CITYSIM_MAX_NPCS=20 cargo run -p server --release
-
-# Terminal 2 — client
-cargo run -p client --release
+cargo run -p server --release     # terminal 1
+cargo run -p client --release     # terminal 2
+cargo run -p editor -- --map city_alpha
 ```
 
 Useful env flags:
-- `CITYSIM_MAX_NPCS=<n>`: cap total spawned NPCs (`0` = none).
-- `CITYSIM_MAP_ID=<id>`: select authored map at startup (client/server/editor).
-- `CITYSIM_CORPSE_CAP=<n>`: maximum live ragdoll corpses before oldest-evict.
-- `CITYSIM_RAGDOLL_POSE_HZ=<hz>`: authoritative ragdoll pose stream rate (server->client).
-- `CITYSIM_TERRAIN_COLLIDER_RADIUS_CHUNKS=<n>`: radius (in chunks) kept loaded around active physics centers.
-- `CITYSIM_TERRAIN_COLLIDER_MAX_LOAD_PER_TICK=<n>`: max terrain collider chunks spawned per fixed tick.
-- `CITYSIM_TERRAIN_COLLIDER_RESOLUTION=<n>`: per-chunk heightfield resolution for terrain colliders.
-- `FISTFORCE_SERVER_PERF=0`: disable server phase timing logs.
-- `CITYSIM_SERVER_HOTLOG=1`: enable extra hot-loop debug logs on server.
-- `FISTFORCE_CLIENT_PERF=1`: enable client frame/perf rolling logs.
-- `FISTFORCE_CLIENT_PERF_INTERVAL_SECS=<n>`: client perf log cadence in seconds.
-- `FISTFORCE_HIERARCHY_AUDIT=1`: log which scene nodes are triggering parent hierarchy warnings.
 
-### Map Editor (MVP)
-
-```bash
-# Open editor on default map (city_alpha)
-./run.sh editor
-
-# Open editor on another map id
-./run.sh editor --map city_alpha
-```
-
-Editor save behavior:
-- `map.ron`: map definition (`objects`, `player_spawn`, etc.)
-- `edits.ron`: terrain delta chunks + spawn markers + future road/plot data
-
-Current editor tools:
-- Terrain: raise / lower / flatten brush
-- Props: place / erase authored props
-- Roads: polyline road authoring with derived sidewalks
-- Plots: road-aligned house/shop/warehouse plot stamping
-- Spawns: set player spawn and add spawn markers
-
-Core editor controls:
-- `RMB`: look
-- `WASD`: move
-- `Q/E`: vertical move
-- `LMB`: apply selected tool
-- `RMB` / `Enter`: finish road draft
-- `Backspace` / `Esc`: remove last road point / clear draft
-- `Ctrl+S`: save
-- `Ctrl+Z` / `Ctrl+Y`: undo / redo
+| Flag | Effect |
+|------|--------|
+| `CITYSIM_MAP_ID=<id>` | Select authored map at startup (client/server/editor) |
+| `CITYSIM_TERRAIN_COLLIDER_RADIUS_CHUNKS=<n>` | Radius (in chunks) of streamed terrain colliders |
+| `CITYSIM_TERRAIN_COLLIDER_MAX_LOAD_PER_TICK=<n>` | Max collider chunks spawned per fixed tick |
+| `CITYSIM_TERRAIN_COLLIDER_RESOLUTION=<n>` | Per-chunk heightfield resolution for colliders |
+| `FISTFORCE_AUTOCONNECT=<name>` | Skip main menu + name entry (dev) |
+| `FISTFORCE_CLIENT_PERF=1` | Emit rolling `ClientPerf` frame-time lines |
+| `FISTFORCE_SERVER_PERF=1` | Emit `ServerPerf` tick/phase lines |
 
 ---
 
-## Build for macOS (MacBook)
+## Architecture notes
 
-### Release build (fastest)
+### World
 
-```bash
-cargo build -p client --release
-```
+- **Authored map data**: client, server and editor load the same map definition
+  (`shared/src/map/`) and sample the same heightmap.
+- **Chunk streaming**: terrain meshes and props load/unload around the commander camera focus.
+  This anchor is load-bearing — see the Danger notes in `STRIP_PLAN.md`.
+- **Runtime bounds**: active map bounds are authoritative and replicated server → client.
 
-### Universal `.app` bundle (Intel + Apple Silicon)
+### Server
 
-This produces a zip you can copy to another Mac and run by double-clicking:
-
-```bash
-# Build both architectures
-cargo build -p client --release --target aarch64-apple-darwin
-cargo build -p client --release --target x86_64-apple-darwin
-
-# Create a universal .app + zip (outputs dist/client-macos-universal.zip)
-rm -rf dist && mkdir -p dist/client.app/Contents/MacOS dist/client.app/Contents/Resources
-lipo -create -output dist/client.app/Contents/MacOS/client \
-  target/aarch64-apple-darwin/release/client \
-  target/x86_64-apple-darwin/release/client
-cp -R client/assets dist/client.app/Contents/MacOS/assets
-
-cat > dist/client.app/Contents/Info.plist <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleName</key><string>3DGame</string>
-  <key>CFBundleDisplayName</key><string>3DGame</string>
-  <key>CFBundleIdentifier</key><string>com.terninator.3dgame</string>
-  <key>CFBundleVersion</key><string>1.0.0</string>
-  <key>CFBundleShortVersionString</key><string>1.0.0</string>
-  <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleExecutable</key><string>client</string>
-  <key>LSMinimumSystemVersion</key><string>11.0</string>
-  <key>NSHighResolutionCapable</key><true/>
-</dict>
-</plist>
-PLIST
-
-chmod +x dist/client.app/Contents/MacOS/client
-(cd dist && ditto -c -k --sequesterRsrc --keepParent client.app client-macos-universal.zip)
-```
-
-If macOS blocks the app on the other machine: right-click `client.app` → **Open** → **Open** (one-time).
-
-## Collider Baker
-
-Environment props (trees, rocks) use **pre-baked convex-hull colliders** so the server doesn't need to load meshes at runtime.
-
-### When to run
-
-- After adding new collidable props to `client/assets/`
-- After editing `client/assets/colliders_manifest.ron`
-- After changing a prop's mesh file
-
-### How to run
-
-```bash
-cargo run -p collider_baker --release
-```
-
-This reads `colliders_manifest.ron`, loads each GLTF, computes a convex hull (with optional trunk-slice for trees), and writes `colliders.bin`.
-
-### Collider Baker v2 (convex decomposition)
-
-Use this when you need better collisions for **concave buildings** (balconies/overhangs).
-
-```bash
-cargo run -p collider_baker --bin collider_baker_v2 --release
-```
-
-Notes:
-- v2 only applies to manifest entries with `mode: ConvexDecomposition`.
-- v1 (`collider_baker`) still works and ignores that mode (falls back to convex hulls).
-- Accuracy/perf knobs live in `tools/collider_baker/src/bin/collider_baker_v2.rs`.
-  v2 auto-adjusts quality based on triangle count; tweak the thresholds there if needed:
-  - `resolution`, `concavity`, `max_convex_hulls`, `plane_downsampling`, `convex_hull_downsampling`
-
-### Manifest format (`colliders_manifest.ron`)
-
-```ron
-(
-    entries: [
-        ( kind: "KayKitTree1A", gltf_path: "Assetsfromassetpack/gltf/tree_1a.gltf", mode: ConvexHull, vertex_filter: LowerYPercent(0.35) ),
-        ( kind: "KayKitRock1A", gltf_path: "Assetsfromassetpack/gltf/rock_1a.gltf", mode: ConvexHull, vertex_filter: All ),
-        ( kind: "building_church", gltf_path: "game_assets/buildings/village/Church.glb#Scene0", mode: ConvexDecomposition, vertex_filter: All ),
-        // ...
-    ]
-)
-```
-
-- `vertex_filter: LowerYPercent(0.35)` → only use the bottom 35% of vertices (avoids giant canopy colliders on trees).
-- `vertex_filter: All` → use all vertices (rocks, buildings).
-
----
-
-## Controls
-
-| Key | Action |
-|-----|--------|
-| WASD | Move |
-| Space | Jump |
-| Mouse | Look |
-| LMB | Shoot |
-| RMB | Toggle ADS (Aim Down Sights) |
-| R | Reload |
-| E | Enter/exit vehicle |
-| 1-4 | Switch weapon |
-| F3 | Toggle debug overlay |
-| Esc | Release cursor / Pause menu |
-
----
-
-## Debug Overlay (F3)
-
-When enabled, the overlay shows:
-
-- **FPS** (color-coded: green ≥55, yellow ≥30, red <30)
-- **Entity count**
-- **Loaded terrain chunks**
-- **Props** (total and collidable)
-- **Collider chunks** (server streaming radius)
-- **Render CPU times** (top 5 passes)
-
-Gizmos are drawn for:
-
-- Bullet trajectories (green lines)
-- NPC hitboxes (body capsule + head sphere)
-- Collidable prop colliders (cyan cylinders)
-
----
-
-## Tech Stack
-
-| Crate | Purpose |
-|-------|---------|
-| [Bevy 0.18](https://bevyengine.org/) | Game engine (ECS, rendering, audio) |
-| [Lightyear 0.26](https://github.com/cBournhonesque/lightyear) | Networking (replication, prediction) |
-| [bevy_rapier3d](https://github.com/dimforge/bevy_rapier) | Convex-hull computation (bake tool only) |
-| [noise](https://docs.rs/noise) | Procedural noise utilities (used in visual effects) |
-| [ron](https://docs.rs/ron) | Manifest file format |
-| [bincode](https://docs.rs/bincode) | Baked collider serialization |
-
----
-
-## License
-
-Assets from [KayKit](https://kaylousberg.itch.io/) and [Stylized Nature MegaKit](https://quaternius.com/) — see their respective license files in `client/assets/`.
+- **Single physics authority**: one Rapier world for terrain and static world colliders,
+  streamed around the commander view. Raycast helpers for line-of-sight live in
+  `server/src/collision/raycast.rs` and `server/src/physics/queries.rs`.
+- **Navigation groundwork**: `server/src/world/navgrid.rs` keeps a spatial obstacle grid fed
+  from authored buildings; `server/src/world/pathfinding.rs` is grid A\* over terrain +
+  obstacles. Both are agent-agnostic and awaiting the unit sim. Note that hundreds of units
+  moving to a shared goal want a flow field, not per-unit A\*.
+- **Persistence**: player profiles are bincode; `PROFILE_VERSION` must be bumped on any
+  layout change (bincode is positional and fails silently otherwise).

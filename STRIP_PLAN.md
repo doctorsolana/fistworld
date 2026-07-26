@@ -3,7 +3,9 @@
 Tracking doc for converting this repo from **FistForce** (multiplayer FPS sandbox) into a
 **top-down multiplayer unit-tactics game** (many units, formations, huge maps).
 
-> **Status:** P0 ✅ · P1 ✅ · P2 ✅ · P3 ✅ · P4 ✅ · P5 ✅ · P6 next.
+> **Status: STRIP COMPLETE.** P0–P6 all ✅. ~31,000 lines removed, ~10 MB of assets.
+> The tree builds, tests pass, and server/client/editor all boot clean.
+> Next: decide the netcode model (bottom of this file), then start the unit sim.
 
 **Detailed analysis lives in [`docs/strip/`](docs/strip/):**
 [MASTER-STRIP-PLAN.md](docs/strip/MASTER-STRIP-PLAN.md) (the authoritative execution plan — ordering
@@ -204,16 +206,21 @@ Pure moves/renames. Tree compiles and game runs identically after each. **Highes
       spawned, audio alive, 6 `ClientPerf` lines, 0 anchor warnings, **input ingress ~55/s
       confirming the commander view reaches the server**
 
-### ⬜ P6 — Protocol, wiring, assets, naming (~1,550 lines)
-- [ ] Bump `PROTOCOL_ID`; slim `plugin.rs` (9 components, 6 messages, 2 channels)
-- [ ] One clean `PackedPlayerInput` rewrite (all bit gaps closed at once)
-- [ ] Cargo trim; asset deletion (~16.6 MB slice-attributable + ~55 MB pre-existing orphans, separate commit)
-- [ ] Rename FistForce/citysim identifiers (⚠️ asset paths, save dirs, env vars)
-- [ ] Rewrite `README.md`; drop the dead `RAGDOLL_HANDOFF.md` link
-- [ ] lightyear required-component experiment as its **own isolated commit**
-- [ ] Full verify-skill run · commit
+### ✅ P6 — Protocol, assets, docs
+- [x] `PROTOCOL_ID` bumped — stale binaries are now refused at the handshake instead of
+      mis-routing messages. Final surface: **9 components, 6 messages, 2 channels**
+      (was 30 / 30 / 3)
+- [x] Assets −10 MB: `game_assets/{weapons,vehicles,trains,items}`, `audio/sfx`,
+      `audio/dialogue`, `ui/item_preview`. Verified zero code refs first, then zero
+      `ERROR bevy_asset` at runtime.
+      **Kept on purpose:** `characters/` (12 MB → the units) and `VFX/kenney_smoke-particles`
+      (5.9 MB → unit dust; `ParticleAssets` is still wired for it)
+- [x] README rewritten to describe what actually exists; verify skill corrected
+      (dropped `CITYSIM_MAX_NPCS`/`FISTFORCE_RAIL`, documented the `pkill` trap)
+- [x] Full three-binary smoke: server + client + editor boot with **zero panics and zero
+      asset errors**, audio ready, 5 `ClientPerf` lines, no anchor warnings
 
-**Net removal: ~29,000 lines** (~32,100 raw, minus ~3,100 double-claimed).
+**Net removal: ~31,000 lines of Rust + ~10 MB of assets.**
 
 ---
 

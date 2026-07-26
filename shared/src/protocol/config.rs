@@ -2,7 +2,7 @@ use std::time::Duration;
 
 pub const SERVER_PORT: u16 = 5000;
 pub const SERVER_ADDR: &str = "127.0.0.1";
-pub const PROTOCOL_ID: u64 = 0x1234567890ABCDF4;
+pub const PROTOCOL_ID: u64 = 0x1234567890ABCDF5;
 pub const NETCODE_CLIENT_TIMEOUT_SECS: i32 = 10;
 pub const NETCODE_TOKEN_EXPIRE_SECS: i32 = 30;
 
