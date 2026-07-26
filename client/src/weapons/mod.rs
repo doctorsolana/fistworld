@@ -49,7 +49,8 @@ use shared::components::{
     Bullet, BulletVelocity, EquippedWeapon, LocalPlayer, LocalTracer, Player, PlayerPosition,
 };
 use shared::protocol::{
-    BulletImpact, BulletImpactSurface, HitConfirm, ReliableChannel, ReloadRequest, ShootRequest,
+    BulletImpact, BulletImpactSurface, HitConfirm, MeleeAttackRequest, ReliableChannel,
+    ReloadRequest, ShootRequest,
 };
 use shared::terrain::{ChunkCoord, WorldTerrain};
 use shared::vehicle::Vehicle;

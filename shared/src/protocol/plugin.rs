@@ -5,6 +5,7 @@ use crate::components::{
     ActiveMapState, Bullet, BulletVelocity, CloudSeed, DebugPhysicsBox, DebugPhysicsBoxPosition,
     DebugPhysicsBoxRotation, EquippedWeapon, Health, Npc, NpcActivity, NpcFleeing, NpcIdentity,
     NpcPosition, NpcRotation, NpcVelocity, Player, PlayerCharacter, PlayerJumpState,
+    PlayerMeleeState,
     PlayerPosition, PlayerProgression, PlayerRotation, PlayerVelocity, PlayerWaterState, WorldTime,
 };
 use crate::items::{
@@ -31,6 +32,7 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<PlayerRotation>().add_prediction();
         app.register_component::<PlayerVelocity>().add_prediction();
         app.register_component::<PlayerJumpState>().add_prediction();
+        app.register_component::<PlayerMeleeState>().add_prediction();
         app.register_component::<PlayerWaterState>()
             .add_prediction();
         app.register_component::<PlayerProgression>()
@@ -111,6 +113,8 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<SwitchWeapon>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<ReloadRequest>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<MeleeAttackRequest>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SetTimeOfDay>()
             .add_direction(NetworkDirection::ClientToServer);

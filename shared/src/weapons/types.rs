@@ -13,6 +13,9 @@ pub enum WeaponType {
     Shotgun,
     /// No weapon equipped
     Unarmed,
+    // NOTE: profiles persist this enum via bincode — append variants only.
+    Sword,
+    Shield,
 }
 
 /// Complete stats for a weapon type.
@@ -116,7 +119,9 @@ impl WeaponType {
                 headshot_mult: 1.5,
                 pellet_count: 9,
             },
-            WeaponType::Unarmed => WeaponStats {
+            // Melee weapons share the inert gun profile: magazine 0 keeps
+            // can_fire() permanently false, so the bullet path ignores them.
+            WeaponType::Unarmed | WeaponType::Sword | WeaponType::Shield => WeaponStats {
                 damage: 0.0,
                 fire_rate: 0.0,
                 bullet_speed: 0.0,
@@ -133,6 +138,21 @@ impl WeaponType {
                 pellet_count: 1,
             },
         }
+    }
+
+    /// Melee weapons swing instead of firing; they have no ammo or reload.
+    pub fn is_melee(&self) -> bool {
+        matches!(self, WeaponType::Sword | WeaponType::Shield)
+    }
+
+    /// Shields grant hold-to-block (in the main hand or the off-hand).
+    pub fn is_shield(&self) -> bool {
+        matches!(self, WeaponType::Shield)
+    }
+
+    /// Swing/block tuning for melee weapons.
+    pub fn melee_stats(&self) -> Option<crate::weapons::melee::MeleeStats> {
+        crate::weapons::melee::MeleeStats::for_weapon(*self)
     }
 
     /// Get the fire cooldown in seconds.
@@ -161,7 +181,8 @@ impl WeaponType {
             WeaponType::AssaultRifle => ItemType::RifleAmmo,
             WeaponType::Sniper => ItemType::SniperRounds,
             WeaponType::Shotgun => ItemType::ShotgunShells,
-            WeaponType::Unarmed => ItemType::RifleAmmo,
+            // Fallback only — melee/unarmed never reload; HUD gates on is_melee().
+            WeaponType::Unarmed | WeaponType::Sword | WeaponType::Shield => ItemType::RifleAmmo,
         }
     }
 

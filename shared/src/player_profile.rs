@@ -107,39 +107,43 @@ impl PlayerProfile {
             ammo_in_mag: Some(30),
         });
 
-        // Slot 1: 90x Rifle Ammo (3 stacks of 30)
+        // Slot 1: Sword, Slot 2: Shield (shield rides the off-hand while a
+        // one-handed weapon is selected — hold RMB to block).
         inventory_slots[1] = Some(ItemStack {
-            item_type: ItemType::RifleAmmo,
-            quantity: 30,
-            ammo_in_mag: None,
+            item_type: ItemType::Weapon(WeaponType::Sword),
+            quantity: 1,
+            ammo_in_mag: Some(0),
         });
         inventory_slots[2] = Some(ItemStack {
-            item_type: ItemType::RifleAmmo,
-            quantity: 30,
-            ammo_in_mag: None,
+            item_type: ItemType::Weapon(WeaponType::Shield),
+            quantity: 1,
+            ammo_in_mag: Some(0),
         });
+
+        // Slots 3-5 (rest of the hotbar): ammo
         inventory_slots[3] = Some(ItemStack {
             item_type: ItemType::RifleAmmo,
             quantity: 30,
             ammo_in_mag: None,
         });
-
-        // Slot 4: 20x Shotgun Shells
         inventory_slots[4] = Some(ItemStack {
             item_type: ItemType::ShotgunShells,
             quantity: 20,
             ammo_in_mag: None,
         });
-
-        // Slot 5: 24x Bullets
         inventory_slots[5] = Some(ItemStack {
             item_type: ItemType::RifleAmmo,
-            quantity: 24,
+            quantity: 30,
             ammo_in_mag: None,
         });
 
-        // Slot 6: 10x Sniper Rounds
+        // Backpack: more reserve ammo
         inventory_slots[6] = Some(ItemStack {
+            item_type: ItemType::RifleAmmo,
+            quantity: 54,
+            ammo_in_mag: None,
+        });
+        inventory_slots[7] = Some(ItemStack {
             item_type: ItemType::SniperRounds,
             quantity: 10,
             ammo_in_mag: None,

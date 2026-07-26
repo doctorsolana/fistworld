@@ -40,6 +40,8 @@ pub struct InputState {
     pub pitch: f32,
     pub interact: bool,
     pub interact_just_pressed: bool,
+    /// Holding RMB with a shield available (blocks instead of ADS toggle).
+    pub blocking_held: bool,
     /// Hold Shift to sprint on foot, fly faster in debug fly mode, or do vehicle air tricks.
     pub shift: bool,
 
@@ -85,6 +87,7 @@ impl Default for InputState {
             pitch: 0.0,
             interact: false,
             interact_just_pressed: false,
+            blocking_held: false,
             shift: false,
             camera_mode: CameraMode::FirstPerson,
             in_vehicle: false,
@@ -163,16 +166,30 @@ pub fn handle_mouse_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
     mut input_state: ResMut<InputState>,
     input_settings: Res<InputSettings>,
+    local_weapon: Query<&shared::components::EquippedWeapon, With<shared::components::LocalPlayer>>,
 ) {
     // Skip mouse look if inventory is open (but still consume events)
     if input_state.ui_blocking() {
+        input_state.blocking_held = false;
         for _ in mouse_motion.read() {}
         return;
     }
 
-    // Track ADS (right-click to toggle, not hold)
-    if mouse_button.just_pressed(MouseButton::Right) && !input_state.in_vehicle {
-        input_state.aiming = !input_state.aiming;
+    // RMB is hold-to-block when a shield is in the loadout, otherwise the
+    // usual ADS toggle.
+    let can_block = local_weapon
+        .single()
+        .map(|weapon| weapon.can_block())
+        .unwrap_or(false);
+    if can_block && !input_state.in_vehicle {
+        input_state.blocking_held = mouse_button.pressed(MouseButton::Right);
+        input_state.aiming = false;
+    } else {
+        input_state.blocking_held = false;
+        // Track ADS (right-click to toggle, not hold)
+        if mouse_button.just_pressed(MouseButton::Right) && !input_state.in_vehicle {
+            input_state.aiming = !input_state.aiming;
+        }
     }
     // Disable ADS when entering vehicle
     if input_state.in_vehicle {
@@ -327,6 +344,7 @@ pub fn handle_send_input_to_server(
         yaw: input_state.yaw,
         vehicle_input: None,
         interact: input_state.interact_just_pressed,
+        block: input_state.blocking_held,
     };
 
     // Disable all movement input when dead, paused, or inventory open
@@ -336,6 +354,7 @@ pub fn handle_send_input_to_server(
         input.left = false;
         input.right = false;
         input.jump = false;
+        input.block = false;
         input.interact = false;
         input.fly_down = false;
         input.fly_fast = false;

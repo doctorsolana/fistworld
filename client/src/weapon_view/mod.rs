@@ -9,6 +9,9 @@ mod third_person;
 mod view_model;
 mod weapon_hud;
 
+pub mod melee_models;
+pub mod offhand;
+pub mod slash_trail;
 pub use assets::{setup_weapon_model_assets, WeaponModelAssets};
 pub use hotbar_input::handle_weapon_switch;
 pub use third_person::{

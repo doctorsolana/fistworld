@@ -28,6 +28,8 @@ pub struct PlayerInput {
     pub vehicle_input: Option<VehicleInput>,
     /// Request to enter/exit vehicle
     pub interact: bool,
+    /// Holding block (shield raised).
+    pub block: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -50,6 +52,7 @@ const FLAG_FLY_FAST: u16 = 1 << 7;
 const FLAG_INTERACT: u16 = 1 << 8;
 const FLAG_HAS_VEHICLE_INPUT: u16 = 1 << 9;
 const FLAG_VEHICLE_AIR_CONTROL: u16 = 1 << 10;
+const FLAG_BLOCK: u16 = 1 << 11;
 
 #[inline]
 fn quantize_unit_u8(value: f32) -> u8 {
@@ -97,6 +100,7 @@ impl Default for PlayerInput {
             yaw: 0.0,
             vehicle_input: None,
             interact: false,
+            block: false,
         }
     }
 }
@@ -133,6 +137,9 @@ impl Serialize for PlayerInput {
         }
         if self.interact {
             flags |= FLAG_INTERACT;
+        }
+        if self.block {
+            flags |= FLAG_BLOCK;
         }
 
         let (throttle_q, brake_q, steer_q) = if let Some(vehicle_input) = &self.vehicle_input {
@@ -185,6 +192,7 @@ impl<'de> Deserialize<'de> for PlayerInput {
                 air_control: (packed.flags & FLAG_VEHICLE_AIR_CONTROL) != 0,
             }),
             interact: (packed.flags & FLAG_INTERACT) != 0,
+            block: (packed.flags & FLAG_BLOCK) != 0,
         })
     }
 }
@@ -253,6 +261,13 @@ pub struct SwitchWeapon {
 /// Message sent from client to reload current weapon.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct ReloadRequest;
+
+/// Message sent from client to swing a melee weapon.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct MeleeAttackRequest {
+    /// Normalized aim direction in world space.
+    pub direction: Vec3,
+}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 pub enum TimeOfDayPreset {
@@ -329,6 +344,10 @@ pub enum AudioEventKind {
     Gunshot {
         weapon_type: crate::weapons::WeaponType,
     },
+    /// Melee swing whoosh.
+    MeleeSwing,
+    /// Melee connecting with a victim; `blocked` = clang off a shield.
+    MeleeImpact { blocked: bool },
 }
 
 /// Server -> Client: audio event broadcast for spatial audio.
@@ -582,6 +601,7 @@ mod tests {
             yaw: 1.2345,
             vehicle_input: None,
             interact: true,
+            block: true,
         };
 
         let bytes = bincode::serialize(&input).unwrap();
@@ -622,6 +642,7 @@ mod tests {
                 air_control: true,
             }),
             interact: false,
+            block: true,
         };
 
         let bytes = bincode::serialize(&input).unwrap();

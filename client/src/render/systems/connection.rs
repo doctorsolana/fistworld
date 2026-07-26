@@ -99,6 +99,7 @@ pub fn handle_start_connection(
         MessageSender::<shared::protocol::ShootRequest>::default(),
         MessageSender::<shared::protocol::SwitchWeapon>::default(),
         MessageSender::<shared::protocol::ReloadRequest>::default(),
+        MessageSender::<shared::protocol::MeleeAttackRequest>::default(),
         MessageSender::<shared::protocol::SetTimeOfDay>::default(),
         MessageSender::<shared::protocol::SpawnOilmanDebug>::default(),
         MessageSender::<shared::protocol::SpawnPhysicsBoxDebug>::default(),

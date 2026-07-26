@@ -6,6 +6,7 @@ pub mod ballistics;
 pub mod constants;
 pub mod damage;
 pub mod debug;
+pub mod melee;
 pub mod offsets;
 pub mod types;
 

@@ -15,10 +15,11 @@ pub fn handle_shoot_input(
     mut reload_state: ResMut<ReloadState>,
     mut suppress: ResMut<ShootInputSuppress>,
     // In Lightyear 0.26, we send messages via MessageSender component - typed on message type
-    mut client_query: Query<
-        &mut MessageSender<ShootRequest>,
-        (With<crate::GameClient>, With<Connected>),
-    >,
+    mut senders: (
+        Query<&mut MessageSender<ShootRequest>, (With<crate::GameClient>, With<Connected>)>,
+        Query<&mut MessageSender<MeleeAttackRequest>, (With<crate::GameClient>, With<Connected>)>,
+        ResMut<MeleeSwingState>,
+    ),
     mut input_state: ResMut<InputState>,
     weapon_visuals: Option<Res<WeaponVisualAssets>>,
     local_player: Query<&EquippedWeapon, With<LocalPlayer>>,
@@ -31,6 +32,8 @@ pub fn handle_shoot_input(
     cursor_opts: Query<&CursorOptions>,
     mut cursor_guard: Local<CursorGrabShootGuard>,
 ) {
+    let (client_query, melee_sender, melee_state) = (&mut senders.0, &mut senders.1, &mut senders.2);
+    melee_state.swing_started_this_frame = false;
     // Reset flags each frame
     shooting_state.shot_fired_this_frame = false;
     shooting_state.out_of_ammo_this_frame = false;
@@ -110,6 +113,26 @@ pub fn handle_shoot_input(
         || (reload_state.expected_ammo > 0 && weapon.ammo_in_mag >= reload_state.expected_ammo)
     {
         reload_state.clear();
+    }
+
+    // Melee weapons swing on click instead of firing.
+    if weapon.weapon_type.is_melee() {
+        shooting_state.fire_held = false;
+        if mouse.just_pressed(MouseButton::Left) && !input_state.blocking_held {
+            if let Some(stats) = weapon.weapon_type.melee_stats() {
+                if current_time - melee_state.last_swing >= stats.cooldown {
+                    melee_state.last_swing = current_time;
+                    melee_state.duration = stats.swing_duration;
+                    melee_state.swing_started_this_frame = true;
+                    melee_state.mirror = !melee_state.mirror;
+                    let direction = camera_transform.forward().as_vec3();
+                    if let Ok(mut sender) = melee_sender.single_mut() {
+                        sender.send::<ReliableChannel>(MeleeAttackRequest { direction });
+                    }
+                }
+            }
+        }
+        return;
     }
 
     // Left click to fire
@@ -363,7 +386,9 @@ pub fn handle_weapon_sounds(
                 WeaponType::Sniper => audio.sniper_shot.clone(),
                 WeaponType::Pistol => audio.revolver_shot.clone(),
                 WeaponType::AssaultRifle => audio.assault_shot.clone(),
-                WeaponType::Unarmed => audio.assault_shot.clone(),
+                WeaponType::Unarmed | WeaponType::Sword | WeaponType::Shield => {
+                    audio.assault_shot.clone()
+                }
             }
         } else {
             audio.assault_shot.clone()
@@ -391,7 +416,8 @@ pub fn handle_weapon_sounds(
             Some(WeaponType::AssaultRifle) => audio.assault_reload.clone(),
             Some(WeaponType::Pistol) => audio.revolver_reload.clone(),
             Some(WeaponType::Sniper) => audio.sniper_reload.clone(),
-            Some(WeaponType::Unarmed) | None => audio.gun_reload.clone(),
+            Some(WeaponType::Unarmed) | Some(WeaponType::Sword) | Some(WeaponType::Shield)
+            | None => audio.gun_reload.clone(),
             Some(WeaponType::Shotgun) => audio.shotgun_reload.clone(),
         };
         commands.spawn((

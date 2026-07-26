@@ -34,6 +34,10 @@ impl Inventory {
             0,
             Some(ItemStack::new_weapon_full_mag(WeaponType::AssaultRifle)),
         );
+        // Melee starter kit: sword in slot 1, shield in slot 2 (the shield
+        // also rides the off-hand while a one-handed weapon is selected).
+        let _ = inv.set_slot(1, Some(ItemStack::new_weapon(WeaponType::Sword, 0)));
+        let _ = inv.set_slot(2, Some(ItemStack::new_weapon(WeaponType::Shield, 0)));
 
         // Starting ammo
         inv.add_item(ItemType::RifleAmmo, 114); // Rifle + revolver bullets

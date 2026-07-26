@@ -16,5 +16,6 @@ pub mod fire;
 pub mod geometry;
 pub mod hit_characters;
 pub mod hit_world;
+pub mod melee;
 pub mod reload;
 pub mod target_index;

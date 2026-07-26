@@ -8,6 +8,8 @@ pub fn setup_resources(app: &mut App) {
     app.init_resource::<weapons::PerfOverlayEnabled>();
     app.init_resource::<weapons::PerfDropMonitor>();
     app.init_resource::<weapons::ShootingState>();
+    app.init_resource::<weapons::MeleeSwingState>();
+    app.init_resource::<weapon_view::offhand::OffhandShieldIndex>();
     app.init_resource::<weapons::ShootInputSuppress>();
     app.init_resource::<weapons::ReloadState>();
     app.init_resource::<weapons::DebugBulletTrails>();

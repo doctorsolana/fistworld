@@ -20,6 +20,66 @@ pub struct OpenChests {
     pub map: HashMap<PeerId, Entity>,
 }
 
+/// Spawn the armory chests near the map spawn point: one with every weapon
+/// (including the sword and shield), one with ammo and supplies. The chest
+/// plumbing (open/transfer/UI) existed but nothing ever spawned a chest.
+pub fn spawn_world_chests(
+    mut commands: Commands,
+    terrain: Res<shared::terrain::WorldTerrain>,
+    mut spawned: Local<bool>,
+) {
+    use shared::items::ItemType;
+    use shared::weapons::WeaponType;
+
+    if *spawned {
+        return;
+    }
+    *spawned = true;
+
+    let spawn = terrain
+        .generator
+        .loaded_map()
+        .definition
+        .player_spawn
+        .unwrap_or(shared::player::SPAWN_POSITION);
+
+    // The client renders a 0.8 x 0.5 x 0.5 box centered on ChestPosition.
+    let mut place = |offset: [f32; 2], items: Vec<ItemStack>| {
+        let x = spawn[0] + offset[0];
+        let z = spawn[2] + offset[1];
+        let y = terrain.get_height(x, z) + 0.25;
+        spawn_chest(&mut commands, Vec3::new(x, y, z), items);
+    };
+
+    // Armory: every weapon, guns with full magazines.
+    place(
+        [-5.0, -5.0],
+        vec![
+            ItemStack::new_weapon_full_mag(WeaponType::Pistol),
+            ItemStack::new_weapon_full_mag(WeaponType::AssaultRifle),
+            ItemStack::new_weapon_full_mag(WeaponType::Shotgun),
+            ItemStack::new_weapon_full_mag(WeaponType::Sniper),
+            ItemStack::new_weapon(WeaponType::Sword, 0),
+            ItemStack::new_weapon(WeaponType::Shield, 0),
+        ],
+    );
+
+    // Supplies: full ammo stacks + spare resources.
+    place(
+        [-2.5, -5.0],
+        vec![
+            ItemStack::new(ItemType::RifleAmmo, 60),
+            ItemStack::new(ItemType::RifleAmmo, 60),
+            ItemStack::new(ItemType::ShotgunShells, 60),
+            ItemStack::new(ItemType::SniperRounds, 60),
+            ItemStack::new(ItemType::GoldCoin, 250),
+            ItemStack::new(ItemType::Wood, 50),
+        ],
+    );
+
+    info!("Spawned world chests (armory + supplies) near player spawn");
+}
+
 /// Spawn a chest in the world with initial items.
 pub fn spawn_chest(commands: &mut Commands, position: Vec3, items: Vec<ItemStack>) -> Entity {
     commands

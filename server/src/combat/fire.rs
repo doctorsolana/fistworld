@@ -11,8 +11,11 @@ use shared::player::PLAYER_HEIGHT;
 use shared::protocol::{AudioEvent, AudioEventKind, ReliableChannel, ShootRequest};
 use shared::weapons::{ballistics, muzzle_offset};
 
+use bevy_rapier3d::plugin::ReadRapierContext;
+
 use crate::combat::reload::WeaponReload;
 use crate::net::peer::peer_id_to_u64;
+use crate::physics::queries::cast_world_impact;
 use crate::player::index::PlayerEntityIndex;
 
 /// Handle shoot requests from clients.
@@ -23,9 +26,11 @@ pub fn handle_shoot_requests(
     mut players: Query<(&PlayerPosition, &mut EquippedWeapon, Option<&WeaponReload>), With<Player>>,
     mut audio_senders: Query<&mut MessageSender<AudioEvent>, (With<ClientOf>, With<Connected>)>,
     time: Res<Time>,
+    rapier: ReadRapierContext,
     mut shots_fired: Local<Vec<(u64, Vec3, shared::weapons::WeaponType)>>,
 ) {
     let current_time = time.elapsed_secs();
+    let rapier_context = rapier.single().ok();
 
     // Collect shots to broadcast audio events after processing.
     shots_fired.clear();
@@ -65,15 +70,35 @@ pub fn handle_shoot_requests(
             let up = Vec3::Y;
             let muzzle_local = muzzle_offset(weapon.weapon_type);
             let camera_height = PLAYER_HEIGHT * 0.4;
-            let spawn_pos = position.0
-                + up * (camera_height + muzzle_local.y)
+            let eye = position.0 + up * camera_height;
+            let spawn_pos = eye
+                + up * muzzle_local.y
                 + right * muzzle_local.x
                 + forward * (-muzzle_local.z);
+
+            // Crosshair convergence: the bullet spawns at the muzzle (offset
+            // right/below the eye), so flying parallel to the camera ray
+            // would land a constant ~0.3m right-and-low of the crosshair at
+            // EVERY distance. Instead, aim the muzzle at the point the
+            // camera ray actually hits (or max range in open air) — bullets
+            // land on the crosshair while still visibly leaving the gun.
+            // Point-blank clamp keeps the aim from inverting when a wall is
+            // closer than the muzzle.
+            let converge_dist = rapier_context
+                .as_ref()
+                .and_then(|context| {
+                    cast_world_impact(context, eye, forward, ballistics::BULLET_MAX_RANGE)
+                        .map(|(_, intersection)| intersection.time_of_impact)
+                })
+                .unwrap_or(ballistics::BULLET_MAX_RANGE)
+                .max(3.0);
+            let converge_point = eye + forward * converge_dist;
+            let aim_dir = (converge_point - spawn_pos).normalize_or(forward.into());
 
             let spread = weapon.current_spread();
 
             for _ in 0..stats.pellet_count {
-                let spread_direction = ballistics::apply_spread(request.direction, spread);
+                let spread_direction = ballistics::apply_spread(aim_dir, spread);
                 let velocity = spread_direction * stats.bullet_speed;
 
                 commands.spawn((

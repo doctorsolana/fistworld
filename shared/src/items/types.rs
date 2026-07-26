@@ -51,6 +51,8 @@ impl ItemType {
                 WeaponType::AssaultRifle => "Automatic Rifle",
                 WeaponType::Sniper => "Sniper Rifle",
                 WeaponType::Shotgun => "Shotgun",
+                WeaponType::Sword => "Sword",
+                WeaponType::Shield => "Shield",
             },
         }
     }
@@ -70,6 +72,8 @@ impl ItemType {
                 WeaponType::AssaultRifle => Color::srgb(0.25, 0.75, 0.35),
                 WeaponType::Shotgun => Color::srgb(0.8, 0.55, 0.25),
                 WeaponType::Sniper => Color::srgb(0.75, 0.25, 0.55),
+                WeaponType::Sword => Color::srgb(0.75, 0.78, 0.85),
+                WeaponType::Shield => Color::srgb(0.45, 0.35, 0.22),
             },
         }
     }

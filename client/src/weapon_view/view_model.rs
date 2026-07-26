@@ -117,7 +117,13 @@ fn spawn_weapon_model(
 /// Letting them cast or receive sun shadows causes crawling artifacts over both the gun and nearby ground.
 pub fn disable_first_person_weapon_shadows(
     mut commands: Commands,
-    weapons: Query<Entity, With<FirstPersonWeapon>>,
+    weapons: Query<
+        Entity,
+        Or<(
+            With<FirstPersonWeapon>,
+            With<super::offhand::FirstPersonOffhandShield>,
+        )>,
+    >,
     children: Query<&Children>,
     pending_meshes: Query<Entity, (With<Mesh3d>, Without<FirstPersonWeaponShadowDisabled>)>,
 ) {
@@ -156,8 +162,10 @@ pub fn update_weapon_animation(
     input_state: Res<InputState>,
     shooting_state: Res<ShootingState>,
     reload_state: Res<ReloadState>,
+    melee_state: Res<crate::weapons::MeleeSwingState>,
     time: Res<Time>,
     mut recoil: Local<WeaponViewRecoil>,
+    mut block_blend: Local<f32>,
 ) {
     let t = time.elapsed_secs();
     let dt = time.delta_secs();
@@ -278,14 +286,43 @@ pub fn update_weapon_animation(
         recoil.offset = recoil.offset.lerp(Vec3::ZERO, lerp_t);
         recoil.rotation = recoil.rotation.lerp(Vec3::ZERO, lerp_t);
 
+        // Melee: procedural swing arc + main-hand shield block pose.
+        let mut melee_offset = Vec3::ZERO;
+        let mut melee_rot = Quat::IDENTITY;
+        if let Ok(weapon) = local_player.single() {
+            if weapon.weapon_type.is_melee() {
+                let elapsed = now - melee_state.last_swing;
+                if elapsed >= 0.0 && elapsed < melee_state.duration {
+                    let progress = (elapsed / melee_state.duration).clamp(0.0, 1.0);
+                    let (off, rot) =
+                        crate::weapon_view::offhand::swing_pose(progress, melee_state.mirror);
+                    melee_offset = off;
+                    melee_rot = rot;
+                }
+            }
+            // Main-hand shield raise (off-hand shields animate separately).
+            let block_target = if weapon.weapon_type.is_shield()
+                && (input_state.blocking_held || weapon.blocking)
+            {
+                1.0
+            } else {
+                0.0
+            };
+            let rate = if block_target > *block_blend { 14.0 } else { 8.0 };
+            *block_blend += (block_target - *block_blend) * (rate * dt).clamp(0.0, 1.0);
+            melee_offset += Vec3::new(-0.19, 0.07, 0.02) * *block_blend;
+            melee_rot = Quat::from_euler(EulerRot::YXZ, 0.28 * *block_blend, -0.06 * *block_blend, 0.0)
+                * melee_rot;
+        }
+
         let reload_pitch = -reload_amount * 1.05;
-        transform.translation = offset + recoil.offset;
+        transform.translation = offset + recoil.offset + melee_offset;
         transform.rotation = Quat::from_euler(
             EulerRot::YXZ,
             move_yaw,
             -recoil.rotation.x + reload_pitch + move_pitch,
             move_roll,
-        );
+        ) * melee_rot;
     }
 
     if !saw_weapon {

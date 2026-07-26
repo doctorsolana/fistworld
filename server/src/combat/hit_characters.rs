@@ -7,7 +7,8 @@ use lightyear::prelude::*;
 
 use shared::components::{
     Bullet, BulletPrevPosition, DebugPhysicsBox, DebugPhysicsBoxPosition, DebugPhysicsBoxRotation,
-    Health, Npc, NpcArchetype, NpcDamageEvent, NpcPosition, NpcRotation, Player, PlayerPosition,
+    EquippedWeapon, Health, Npc, NpcArchetype, NpcDamageEvent, NpcPosition, NpcRotation, Player,
+    PlayerPosition, PlayerRotation,
 };
 use shared::npc::{
     humanoid_body_part, humanoid_body_shape, npc_capsule_endpoints, npc_head_center,
@@ -16,7 +17,8 @@ use shared::npc::{
 };
 use shared::player::{PLAYER_HEIGHT, PLAYER_RADIUS};
 use shared::protocol::{
-    BulletImpact, BulletImpactSurface, DamageReceived, HitConfirm, PlayerKilled, ReliableChannel,
+    AudioEvent, AudioEventKind, BulletImpact, BulletImpactSurface, DamageReceived, HitConfirm,
+    PlayerKilled, ReliableChannel,
 };
 use shared::weapons::damage;
 use std::collections::HashMap;
@@ -119,7 +121,17 @@ pub fn handle_bullet_character_hits(
     >,
     mut players: ParamSet<(
         Query<(Entity, &Player, &PlayerPosition, &Health), (With<Player>, Without<Npc>)>,
-        Query<(Entity, &Player, &PlayerPosition, &mut Health), (With<Player>, Without<Npc>)>,
+        Query<
+            (
+                Entity,
+                &Player,
+                &PlayerPosition,
+                &mut Health,
+                &PlayerRotation,
+                &EquippedWeapon,
+            ),
+            (With<Player>, Without<Npc>),
+        >,
     )>,
     mut npcs: ParamSet<(
         Query<(Entity, &Npc, &NpcPosition, &NpcRotation, &Health), (With<Npc>, Without<Player>)>,
@@ -146,6 +158,7 @@ pub fn handle_bullet_character_hits(
         ),
         (With<ClientOf>, With<Connected>),
     >,
+    mut audio_senders: Query<&mut MessageSender<AudioEvent>, (With<ClientOf>, With<Connected>)>,
 ) {
     let phase_start = Instant::now();
     #[derive(Clone, Copy, Debug)]
@@ -405,8 +418,12 @@ pub fn handle_bullet_character_hits(
                     continue;
                 }
 
-                let capsule_bottom = player_pos.0;
-                let capsule_top = player_pos.0 + Vec3::new(0.0, PLAYER_HEIGHT, 0.0);
+                // PlayerPosition is the CAPSULE CENTER (rapier capsule_y is
+                // centered on the body transform; the client drops the model
+                // by H/2). Treating it as the feet shifted the whole hitbox
+                // 0.9m up: leg shots whiffed, headshots read as stomach.
+                let capsule_bottom = player_pos.0 - Vec3::new(0.0, PLAYER_HEIGHT * 0.5, 0.0);
+                let capsule_top = player_pos.0 + Vec3::new(0.0, PLAYER_HEIGHT * 0.5, 0.0);
 
                 if let Some(hit_point) = ray_capsule_intersection(
                     ray_start,
@@ -579,6 +596,7 @@ pub fn handle_bullet_character_hits(
     }
 
     let mut impacts_to_broadcast: Vec<BulletImpact> = Vec::new();
+    let mut blocked_impacts: Vec<Vec3> = Vec::new();
     let mut confirms_by_peer: HashMap<PeerId, Vec<HitConfirm>> = HashMap::new();
     let mut damage_by_peer: HashMap<PeerId, Vec<DamageReceived>> = HashMap::new();
     let mut kills_by_peer: HashMap<PeerId, Vec<PlayerKilled>> = HashMap::new();
@@ -593,10 +611,23 @@ pub fn handle_bullet_character_hits(
                     continue;
                 };
 
-                if let Ok((_entity, _player, _player_pos, mut health)) =
+                if let Ok((_entity, _player, _player_pos, mut health, rotation, equipped)) =
                     players.p1().get_mut(victim_entity)
                 {
-                    let is_kill = health.take_damage(hit.damage_amount);
+                    // Raised shield: frontal bullets are reduced to chip
+                    // damage (melee is blocked outright in combat::melee).
+                    let mut damage_amount = hit.damage_amount;
+                    if equipped.blocking
+                        && shared::weapons::melee::is_attack_blocked(
+                            rotation.0,
+                            hit.victim_pos,
+                            hit.bullet_spawn_position,
+                        )
+                    {
+                        damage_amount *= shared::weapons::melee::BLOCK_BULLET_DAMAGE_MULT;
+                        blocked_impacts.push(hit.hit_point);
+                    }
+                    let is_kill = health.take_damage(damage_amount);
                     let is_headshot = hit.hit_zone == damage::HitZone::Head;
 
                     if crate::telemetry::hotlog_enabled() {
@@ -634,7 +665,7 @@ pub fn handle_bullet_character_hits(
                     if let Some(sid) = shooter_peer_id {
                         confirms_by_peer.entry(sid).or_default().push(HitConfirm {
                             target_id: peer_id_to_u64(victim_id),
-                            damage: hit.damage_amount,
+                            damage: damage_amount,
                             headshot: is_headshot,
                             kill: is_kill,
                             hit_zone: hit.hit_zone,
@@ -653,7 +684,7 @@ pub fn handle_bullet_character_hits(
                         .or_default()
                         .push(DamageReceived {
                             direction: damage_direction,
-                            damage: hit.damage_amount,
+                            damage: damage_amount,
                             health_remaining: health.current,
                         });
 
@@ -840,6 +871,18 @@ pub fn handle_bullet_character_hits(
                     kill_sender.send::<ReliableChannel>(kill);
                 }
             }
+        }
+    }
+
+    // Shield clangs are audible to everyone near the block.
+    for hit_point in blocked_impacts {
+        let event = AudioEvent {
+            player_id: 0, // matches no client, so nobody skips it as "self"
+            position: hit_point,
+            kind: AudioEventKind::MeleeImpact { blocked: true },
+        };
+        for mut sender in audio_senders.iter_mut() {
+            sender.send::<ReliableChannel>(event.clone());
         }
     }
 

@@ -93,6 +93,29 @@ pub fn sync_equipped_weapon_from_hotbar(
             })
             .unwrap_or((WeaponType::Unarmed, 0));
 
+        // Off-hand shield: a shield in any NON-selected hotbar slot rides in
+        // the left hand, but only alongside one-handed weapons (must agree
+        // with EquippedWeapon::can_block, and two-handed rifles would clip).
+        let one_handed = matches!(
+            desired,
+            WeaponType::Sword | WeaponType::Pistol | WeaponType::Unarmed
+        );
+        let offhand_shield = one_handed
+            && (0..HOTBAR_SLOTS).any(|idx| {
+                idx != slot_idx
+                    && inventory
+                        .get_slot(idx)
+                        .and_then(|stack| stack.item_type.as_weapon_type())
+                        .map(|wt| wt.is_shield())
+                        .unwrap_or(false)
+            });
+        if equipped.offhand_shield != offhand_shield {
+            equipped.offhand_shield = offhand_shield;
+            if !offhand_shield && !equipped.weapon_type.is_shield() {
+                equipped.blocking = false;
+            }
+        }
+
         let switching = prev_slot.index != Some(slot_idx) || equipped.weapon_type != desired;
 
         if switching {
@@ -108,6 +131,7 @@ pub fn sync_equipped_weapon_from_hotbar(
 
             equipped.weapon_type = desired;
             equipped.aiming = false;
+            equipped.blocking = false;
             equipped.last_fire_time = -10.0;
 
             if desired != WeaponType::Unarmed {

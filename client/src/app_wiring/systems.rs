@@ -378,9 +378,18 @@ fn wire_fps_systems(app: &mut App) {
             weapon_view::update_first_person_weapon,
             weapon_view::update_third_person_weapon,
             weapon_view::update_remote_third_person_weapons,
+            weapon_view::offhand::update_first_person_offhand_shield,
+            weapon_view::offhand::animate_first_person_offhand_shield,
+            weapon_view::offhand::update_third_person_offhand_shields,
+            weapon_view::offhand::animate_third_person_offhand_shields,
+            weapon_view::offhand::animate_third_person_melee
+                .after(weapon_view::update_third_person_weapon)
+                .after(weapon_view::update_remote_third_person_weapons),
             weapon_view::update_weapon_animation
                 .after(weapons::handle_shoot_input)
                 .after(weapons::handle_reload_input),
+            weapon_view::slash_trail::spawn_slash_trails.after(weapons::handle_shoot_input),
+            weapon_view::slash_trail::animate_slash_trails,
         )
             .after(game_systems::handle_player_spawned)
             .after(game_systems::sync_player_character_models)

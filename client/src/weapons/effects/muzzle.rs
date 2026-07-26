@@ -38,7 +38,7 @@ fn smoke_settings(weapon_type: WeaponType) -> SmokeSettings {
             spread: 0.0,
             forward_offset: 0.1,
         },
-        WeaponType::Unarmed => SmokeSettings {
+        WeaponType::Unarmed | WeaponType::Sword | WeaponType::Shield => SmokeSettings {
             puff_count: 0,
             base_scale: 0.0,
             scale_jitter: 0.0,
@@ -76,7 +76,7 @@ fn flash_settings(weapon_type: WeaponType) -> FlashSettings {
             lifetime: 0.06,
             forward_offset: 0.1,
         },
-        WeaponType::Unarmed => FlashSettings {
+        WeaponType::Unarmed | WeaponType::Sword | WeaponType::Shield => FlashSettings {
             base_scale: 0.0,
             scale_jitter: 0.0,
             lifetime: 0.0,

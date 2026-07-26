@@ -51,6 +51,11 @@ pub struct EquippedWeapon {
     pub last_fire_time: f32,
     /// Whether currently aiming down sights
     pub aiming: bool,
+    /// Whether the shield is raised (server-stamped from PlayerInput).
+    pub blocking: bool,
+    /// A shield sits in a non-selected hotbar slot while a one-handed
+    /// weapon is equipped — rendered in the left hand, enables blocking.
+    pub offhand_shield: bool,
 }
 
 impl Default for EquippedWeapon {
@@ -62,6 +67,8 @@ impl Default for EquippedWeapon {
             ammo_in_mag: stats.magazine_size,
             last_fire_time: -10.0, // Allow immediate first shot
             aiming: false,
+            blocking: false,
+            offhand_shield: false,
         }
     }
 }
@@ -74,7 +81,21 @@ impl EquippedWeapon {
             ammo_in_mag: stats.magazine_size,
             last_fire_time: -10.0,
             aiming: false,
+            blocking: false,
+            offhand_shield: false,
         }
+    }
+
+    /// Can this loadout block right now? A shield blocks in the main hand,
+    /// or from the off-hand alongside a one-handed weapon (sword, revolver,
+    /// bare fists). Two-handed guns can't pair with a shield.
+    pub fn can_block(&self) -> bool {
+        self.weapon_type.is_shield()
+            || (self.offhand_shield
+                && matches!(
+                    self.weapon_type,
+                    WeaponType::Sword | WeaponType::Unarmed | WeaponType::Pistol
+                ))
     }
 
     /// Check if weapon can fire (has ammo and cooldown passed).

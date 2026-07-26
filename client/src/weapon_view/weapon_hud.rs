@@ -163,7 +163,7 @@ pub fn update_weapon_hud(
     }
 
     // Update ammo - reserve comes from inventory (no ammo display when Unarmed).
-    if weapon.weapon_type == WeaponType::Unarmed {
+    if weapon.weapon_type == WeaponType::Unarmed || weapon.weapon_type.is_melee() {
         for mut text in ammo_text.iter_mut() {
             **text = String::new();
         }
@@ -184,6 +184,8 @@ fn weapon_name(weapon: WeaponType) -> String {
         WeaponType::Sniper => "Sniper Rifle".to_string(),
         WeaponType::Shotgun => "Shotgun".to_string(),
         WeaponType::Unarmed => "Unarmed".to_string(),
+        WeaponType::Sword => "Sword".to_string(),
+        WeaponType::Shield => "Shield".to_string(),
     }
 }
 
@@ -197,6 +199,8 @@ fn hotbar_item_name(item_type: &shared::items::ItemType) -> String {
             WeaponType::Sniper => "Sniper".to_string(),
             WeaponType::Shotgun => "Shotgun".to_string(),
             WeaponType::Unarmed => "-".to_string(),
+            WeaponType::Sword => "Sword".to_string(),
+            WeaponType::Shield => "Shield".to_string(),
         },
         ItemType::RifleAmmo => "Bullets".to_string(),
         ItemType::ShotgunShells => "Shells".to_string(),

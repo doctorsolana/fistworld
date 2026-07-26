@@ -50,6 +50,10 @@ pub fn handle_remote_audio_events(
                 AudioEventKind::Gunshot { weapon_type } => {
                     pending_gunshots.push((weapon_type, audio_event.position));
                 }
+                // TODO: no melee sfx assets exist yet (whoosh/clang/thud);
+                // these events are received but currently silent.
+                AudioEventKind::MeleeSwing => {}
+                AudioEventKind::MeleeImpact { .. } => {}
             }
         }
     }
@@ -109,7 +113,9 @@ pub fn handle_remote_audio_events(
             shared::weapons::WeaponType::Sniper => audio.sniper_shot.clone(),
             shared::weapons::WeaponType::Pistol => audio.revolver_shot.clone(),
             shared::weapons::WeaponType::AssaultRifle => audio.assault_shot.clone(),
-            shared::weapons::WeaponType::Unarmed => audio.assault_shot.clone(),
+            shared::weapons::WeaponType::Unarmed
+            | shared::weapons::WeaponType::Sword
+            | shared::weapons::WeaponType::Shield => audio.assault_shot.clone(),
         };
 
         commands.spawn((

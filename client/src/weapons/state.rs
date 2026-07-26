@@ -75,6 +75,29 @@ pub struct WeaponWarmupQueue {
     pub(crate) done: bool,
 }
 
+/// Local melee swing prediction: drives the first-person swing animation
+/// and the client-side cooldown gate (the server re-validates).
+#[derive(Resource)]
+pub struct MeleeSwingState {
+    pub last_swing: f32,
+    pub duration: f32,
+    /// Set for one frame when a swing starts (for audio).
+    pub swing_started_this_frame: bool,
+    /// Alternate slash direction per swing (right-to-left, then back).
+    pub mirror: bool,
+}
+
+impl Default for MeleeSwingState {
+    fn default() -> Self {
+        Self {
+            last_swing: -10.0,
+            duration: 0.4,
+            swing_started_this_frame: false,
+            mirror: false,
+        }
+    }
+}
+
 /// Resource to track shooting state
 #[derive(Resource)]
 pub struct ShootingState {
