@@ -52,3 +52,19 @@ Gotchas:
   regression you just introduced. Always wait for the port to free before relaunching.
 - Every protocol change needs BOTH binaries rebuilt and restarted; a stale one mis-routes messages.
 - No mouse/keyboard automation is available on this Mac (no cliclick/pyobjc); anything beyond boot-to-ingame needs the user to playtest.
+
+## Seeing the game (not just its logs)
+
+Boot logs prove the game *started*, never that it *renders correctly*. For anything visual use
+the capture binary — it runs the real renderer without a server and writes PNGs you can read:
+
+```bash
+cargo run -p client --bin capture -- --at <x>,<z> --preset survey --out /tmp/shots
+```
+
+Then open the PNGs. Notes:
+- `--time 0.5` is noon. Getting time-of-day wrong photographs the world at night and looks
+  exactly like a broken renderer.
+- Props stream far slower than terrain and are position-dependent — check the logged
+  `N terrain chunks loaded` line, and aim at somewhere content actually exists
+  (`player_spawn` in `map.ron`) rather than the origin.

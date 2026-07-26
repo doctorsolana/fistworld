@@ -65,6 +65,20 @@ cargo run -p client --release     # terminal 2
 cargo run -p editor -- --map city_alpha
 ```
 
+### Visual capture
+
+Screenshot the real renderer with no server, for verifying how things actually look:
+
+```bash
+cargo run -p client --bin capture -- --at -226,-163 --preset survey
+cargo run -p client --bin capture -- --at 0,0 --preset daycycle --out /tmp/shots
+cargo run -p client --bin capture -- --help
+```
+
+Presets: `survey` (near/mid/far/horizon), `orbit` (4 yaws — catches one-sided geometry),
+`daycycle` (dawn/noon/dusk), `water` (low angle over water). Compiling proves nothing about
+winding order, shaders, foliage orientation or lighting; this does.
+
 Useful env flags:
 
 | Flag | Effect |
