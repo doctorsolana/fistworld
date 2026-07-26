@@ -604,8 +604,6 @@ fn scatter_props(
 ) -> Vec<MapObjectSpawn> {
     let forest_mask = fbm(splitmix64(seed ^ 77) as u32, 3, 1.0 / 260.0);
     let meadow_mask = fbm(splitmix64(seed ^ 78) as u32, 3, 1.0 / 150.0);
-    let mut rng = splitmix64(seed ^ 0xF00D);
-    let mut out: Vec<MapObjectSpawn> = Vec::new();
 
     const TREES_BROADLEAF: &[PropKind] = &[
         PropKind::Tree_01,
@@ -645,69 +643,118 @@ fn scatter_props(
     // Jittered grid sampling across the whole map.
     let cell = 7.0;
     let cells = (half_extent * 2.0 / cell) as i32;
-    let max_props = 6500usize;
+
+    // Each cell seeds its own stream from its own index instead of drawing
+    // from one sequential stream, so a cell's contents never depend on how
+    // many cells were visited or accepted before it. That is what lets the
+    // density pass below sample cells out of order and still agree with the
+    // full sweep for a given seed.
+    let cell_seed = |xi: i32, zi: i32, salt: u64| {
+        let key = ((zi as u32 as u64) << 32) | (xi as u32 as u64);
+        splitmix64(splitmix64(key ^ salt) ^ seed)
+    };
+
+    let sample_cell = |xi: i32, zi: i32| -> Option<MapObjectSpawn> {
+        let mut rng = cell_seed(xi, zi, 0xF00D);
+        let x = -half_extent + (xi as f32 + rand01(&mut rng)) * cell;
+        let z = -half_extent + (zi as f32 + rand01(&mut rng)) * cell;
+        let h = grid.height(x, z);
+        if h < SEA_LEVEL + 1.1 {
+            return None; // no vegetation in the water or on the wet sand line
+        }
+        // Keep the roads and their shoulders clear.
+        if let Some(roads) = roads {
+            if roads.distance(x, z) < 11.0 {
+                return None;
+            }
+        }
+        let slope = grid.slope(x, z);
+
+        let forest = (forest_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
+        let meadow = (meadow_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
+        let roll = rand01(&mut rng);
+
+        let (kind, scale) = if slope > 0.85 {
+            // Steep ground: occasional rocks only.
+            if roll < 0.12 {
+                (pick(ROCKS, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.7)
+            } else {
+                return None;
+            }
+        } else if forest > 0.62 && h > SEA_LEVEL + 2.0 && roll < (forest - 0.45) * 1.6 {
+            // Forest: pines up high, broadleaf low, bushes at the fringe.
+            let fringe = forest < 0.70;
+            if fringe && rand01(&mut rng) < 0.35 {
+                (pick(BUSHES, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.5)
+            } else if h > 16.0 {
+                (pick(TREES_PINE, rand01(&mut rng)), 0.85 + rand01(&mut rng) * 0.45)
+            } else {
+                (
+                    pick(TREES_BROADLEAF, rand01(&mut rng)),
+                    0.85 + rand01(&mut rng) * 0.45,
+                )
+            }
+        } else if meadow > 0.55 && forest < 0.6 && roll < 0.5 {
+            // Meadows: dense grass with sparse flowers.
+            if rand01(&mut rng) < 0.06 {
+                (pick(FLOWERS, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.4)
+            } else {
+                (PropKind::Env_Grass_Tall_04, 0.32 + rand01(&mut rng) * 0.16)
+            }
+        } else if roll < 0.02 {
+            (pick(ROCKS, rand01(&mut rng)), 0.5 + rand01(&mut rng) * 0.6)
+        } else {
+            return None;
+        };
+
+        Some(MapObjectSpawn {
+            kind: kind.id().to_string(),
+            position: [x, 0.0, z],
+            rotation_degrees: rand01(&mut rng) * 360.0,
+            scale,
+        })
+    };
+
+    // Estimate the natural yield on a strided subsample, then thin the full
+    // sweep by budget/estimate. Stopping the sweep at a hard cap instead would
+    // fill a band along the low-z edge and leave the rest of the map bare,
+    // because the sweep is z-major. Thinning scales every biome by the same
+    // factor, so forests stay denser than scrub, and rolling the (cheap) thin
+    // test before the (expensive) noise lookups makes the full sweep cost less
+    // than the truncated one did.
+    const PROP_BUDGET: usize = 6500;
+    const ESTIMATE_STRIDE: i32 = 7;
+    let mut sampled = 0usize;
+    let mut hits = 0usize;
+    let mut zi = 0;
+    while zi < cells {
+        let mut xi = 0;
+        while xi < cells {
+            sampled += 1;
+            if sample_cell(xi, zi).is_some() {
+                hits += 1;
+            }
+            xi += ESTIMATE_STRIDE;
+        }
+        zi += ESTIMATE_STRIDE;
+    }
+    if hits == 0 {
+        return Vec::new();
+    }
+    let estimated = hits as f32 * (cells as f32 * cells as f32) / sampled as f32;
+    let keep = (PROP_BUDGET as f32 / estimated).min(1.0);
+
+    let capacity = estimated.min(PROP_BUDGET as f32) as usize;
+    let mut out: Vec<MapObjectSpawn> = Vec::with_capacity(capacity);
     for zi in 0..cells {
         for xi in 0..cells {
-            if out.len() >= max_props {
-                break;
-            }
-            let x = -half_extent + (xi as f32 + rand01(&mut rng)) * cell;
-            let z = -half_extent + (zi as f32 + rand01(&mut rng)) * cell;
-            let h = grid.height(x, z);
-            if h < SEA_LEVEL + 1.1 {
-                continue; // no vegetation in the water or on the wet sand line
-            }
-            // Keep the roads and their shoulders clear.
-            if let Some(roads) = roads {
-                if roads.distance(x, z) < 11.0 {
-                    continue;
-                }
-            }
-            let slope = grid.slope(x, z);
-
-            let forest = (forest_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
-            let meadow = (meadow_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
-            let roll = rand01(&mut rng);
-
-            let (kind, scale) = if slope > 0.85 {
-                // Steep ground: occasional rocks only.
-                if roll < 0.12 {
-                    (pick(ROCKS, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.7)
-                } else {
-                    continue;
-                }
-            } else if forest > 0.62 && h > SEA_LEVEL + 2.0 && roll < (forest - 0.45) * 1.6 {
-                // Forest: pines up high, broadleaf low, bushes at the fringe.
-                let fringe = forest < 0.70;
-                if fringe && rand01(&mut rng) < 0.35 {
-                    (pick(BUSHES, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.5)
-                } else if h > 16.0 {
-                    (pick(TREES_PINE, rand01(&mut rng)), 0.85 + rand01(&mut rng) * 0.45)
-                } else {
-                    (
-                        pick(TREES_BROADLEAF, rand01(&mut rng)),
-                        0.85 + rand01(&mut rng) * 0.45,
-                    )
-                }
-            } else if meadow > 0.55 && forest < 0.6 && roll < 0.5 {
-                // Meadows: dense grass with sparse flowers.
-                if rand01(&mut rng) < 0.06 {
-                    (pick(FLOWERS, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.4)
-                } else {
-                    (PropKind::Env_Grass_Tall_04, 0.32 + rand01(&mut rng) * 0.16)
-                }
-            } else if roll < 0.02 {
-                (pick(ROCKS, rand01(&mut rng)), 0.5 + rand01(&mut rng) * 0.6)
-            } else {
+            let mut thin = cell_seed(xi, zi, 0x7A15);
+            if rand01(&mut thin) >= keep {
                 continue;
-            };
-
-            out.push(MapObjectSpawn {
-                kind: kind.id().to_string(),
-                position: [x, 0.0, z],
-                rotation_degrees: rand01(&mut rng) * 360.0,
-                scale,
-            });
+            }
+            if let Some(spawn) = sample_cell(xi, zi) {
+                out.push(spawn);
+            }
         }
     }
     out
@@ -985,6 +1032,99 @@ mod tests {
                     assert!(ha > SEA_LEVEL - 0.5, "seed {seed}: road underwater");
                 }
             }
+        }
+    }
+
+    /// Props must reach every part of the map. The count assertions above pass
+    /// happily when the sweep truncates at a budget cap and fills a single
+    /// edge band, so coverage is asserted per grid bucket instead.
+    ///
+    /// This runs at the shipped map's half extent on purpose: the smaller
+    /// 700m worlds the other tests use never produce more props than the
+    /// budget, so truncation cannot show up there at all.
+    #[test]
+    fn props_cover_the_whole_map() {
+        const HALF: f32 = 1408.0;
+        const N: usize = 4;
+        let bucket = |v: f32| (((v + HALF) / (HALF * 2.0 / N as f32)) as usize).min(N - 1);
+
+        for (style, seed) in [
+            (WorldStyle::Island, 7u64),
+            (WorldStyle::Mainland, 3),
+            (WorldStyle::Showcase, 11),
+        ] {
+            let field = HeightField::new(style, seed, HALF);
+            let mut grid = HeightGrid::build(&field, HALF);
+            // Showcase carries a road mask through to the scatter, so run the
+            // same pipeline the editor does.
+            let showcase = (style == WorldStyle::Showcase)
+                .then(|| build_showcase_content(&field, &mut grid, seed, HALF));
+            let props = scatter_props(
+                &grid,
+                seed,
+                HALF,
+                showcase.as_ref().map(|content| &content.road_mask),
+            );
+            assert!(!props.is_empty(), "{style:?} seed {seed}: no props at all");
+
+            // Land coverage per bucket, so ocean-only buckets are exempt.
+            let mut land = [[0u32; N]; N];
+            let mut total = [[0u32; N]; N];
+            let mut z = -HALF;
+            while z < HALF {
+                let mut x = -HALF;
+                while x < HALF {
+                    total[bucket(z)][bucket(x)] += 1;
+                    if grid.height(x, z) > SEA_LEVEL + 2.0 {
+                        land[bucket(z)][bucket(x)] += 1;
+                    }
+                    x += 10.0;
+                }
+                z += 10.0;
+            }
+
+            let mut counts = [[0usize; N]; N];
+            let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
+            let (mut min_z, mut max_z) = (f32::MAX, f32::MIN);
+            for prop in &props {
+                counts[bucket(prop.position[2])][bucket(prop.position[0])] += 1;
+                min_x = min_x.min(prop.position[0]);
+                max_x = max_x.max(prop.position[0]);
+                min_z = min_z.min(prop.position[2]);
+                max_z = max_z.max(prop.position[2]);
+            }
+
+            for bz in 0..N {
+                for bx in 0..N {
+                    let land_frac = land[bz][bx] as f32 / total[bz][bx] as f32;
+                    if land_frac < 0.25 {
+                        continue; // mostly water: nothing is expected to grow
+                    }
+                    assert!(
+                        counts[bz][bx] > 0,
+                        "{style:?} seed {seed}: bucket ({bx},{bz}) is {:.0}% land but got no props ({:?})",
+                        land_frac * 100.0,
+                        counts
+                    );
+                }
+            }
+
+            // The truncated sweep spanned ~18% of the map in z; a healthy
+            // scatter spans most of both axes.
+            assert!(
+                max_x - min_x > HALF * 1.4 && max_z - min_z > HALF * 1.4,
+                "{style:?} seed {seed}: props span x {:.0}..{:.0}, z {:.0}..{:.0}",
+                min_x,
+                max_x,
+                min_z,
+                max_z
+            );
+            // Budget stays bounded: the thinning must not explode the count.
+            assert!(
+                props.len() < 9000,
+                "{style:?} seed {seed}: {} props blows the budget",
+                props.len()
+            );
         }
     }
 

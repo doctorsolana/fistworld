@@ -4,6 +4,7 @@ use bevy::image::{
 };
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
+use bevy::render::render_resource::ShaderType;
 use bevy::reflect::TypePath;
 use bevy::render::render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension};
 use bevy::shader::ShaderRef;
@@ -45,6 +46,54 @@ pub struct TerrainSplatExtension {
     // x: water level, y: enabled, z: server clock offset, w: surface offset.
     #[uniform(123)]
     pub water_params: Vec4,
+
+    // --- Stylised palette ---
+    //
+    // The photographic splat textures read as "realistic dirt" no matter how the frame is
+    // graded, which fights the low-poly look. These flat per-layer colours replace them.
+    // `stylize.x` blends between the two (0 = photo textures, 1 = flat colour) so the
+    // change stays A/B-able instead of being a one-way rewrite.
+    //
+    // Packed into ONE binding on purpose: seven separate `#[uniform]` attributes each
+    // allocate their own buffer, which overran the Metal vertex-stage buffer limit
+    // ("pipeline needs too many buffers in the vertex stage: 1 vertex and 17 layout").
+    #[uniform(124)]
+    pub palette: TerrainPalette,
+}
+
+/// Flat palette for the stylised terrain.
+///
+/// Slightly desaturated, slightly blue-shifted in shadow-facing values so the world reads
+/// storybook rather than photographic. Keep these as the single source of truth — the
+/// far-terrain material below should match, or distant hills change colour at the LOD seam.
+pub fn stylized_palette() -> TerrainPalette {
+    TerrainPalette {
+        // Deep enough to survive the sun's exposure and the aerial haze. A first pass used
+        // mid-value colours and the whole world came out pale and bland — the light and fog
+        // both wash these out, so the authored values need to sit darker/richer than the
+        // intended on-screen result.
+        grass: Vec4::new(0.26, 0.45, 0.20, 1.0),
+        dirt: Vec4::new(0.42, 0.32, 0.22, 1.0),
+        sand: Vec4::new(0.78, 0.70, 0.50, 1.0),
+        cobble: Vec4::new(0.40, 0.39, 0.38, 1.0),
+        rock: Vec4::new(0.36, 0.35, 0.38, 1.0),
+        // 1.0 stylised, 5 bands, gentle banding, strong slope rock.
+        stylize: Vec4::new(1.0, 5.0, 0.10, 0.85),
+        // Bands span 0..90m of height, with a little texture break-up so large flat areas
+        // are not perfectly uniform (which reads as untextured rather than stylised).
+        bands: Vec4::new(0.0, 90.0, 0.18, 0.0),
+    }
+}
+
+#[derive(Clone, Copy, Debug, ShaderType)]
+pub struct TerrainPalette {
+    pub grass: Vec4,
+    pub dirt: Vec4,
+    pub sand: Vec4,
+    pub cobble: Vec4,
+    pub rock: Vec4,
+    pub stylize: Vec4,
+    pub bands: Vec4,
 }
 
 /// Terrain water uniform from a generator's loaded map.

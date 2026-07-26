@@ -49,8 +49,28 @@
 // x: water level, y: enabled, z: server clock offset, w: surface offset.
 @group(#{MATERIAL_BIND_GROUP}) @binding(123) var<uniform> water_params: vec4<f32>;
 
+// Stylised flat palette. One binding, not seven — separate uniforms each allocate their
+// own buffer and overrun the Metal vertex-stage buffer limit.
+struct TerrainPalette {
+    grass: vec4<f32>,
+    dirt: vec4<f32>,
+    sand: vec4<f32>,
+    cobble: vec4<f32>,
+    rock: vec4<f32>,
+    // x: stylize blend, y: band count, z: band strength, w: slope-rock strength.
+    stylize: vec4<f32>,
+    // x: band base height, y: band height span, z: texture break-up, w: unused.
+    bands: vec4<f32>,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(124) var<uniform> palette: TerrainPalette;
+
 // The pbr imports already bind view globals; reuse them for caustic time.
 #import bevy_pbr::mesh_view_bindings::globals
+
+// Average channel value, floored so the grain divide below cannot blow up on black.
+fn luminance_safe(c: vec3<f32>) -> f32 {
+    return max((c.r + c.g + c.b) / 3.0, 0.02);
+}
 
 fn normalize_weights(weights: vec4<f32>) -> vec4<f32> {
     let clamped = max(weights, vec4<f32>(0.0));
@@ -201,6 +221,46 @@ fn fragment(
                 + dirt_albedo * weights.y
                 + sand_albedo * weights.z
                 + cobble_albedo * weights.w;
+        }
+
+        // --- Stylised palette ---
+        //
+        // Photographic splat textures read as "realistic dirt" at any grade, which is what
+        // fights the low-poly look. Blend the sampled albedo toward flat per-layer colours,
+        // then quantise a height tint into discrete bands — the banding is what actually
+        // reads as stylised, more than any model does. A little of the sampled texture is
+        // kept (palette.bands.z) so large flat areas do not look untextured.
+        let stylize = palette.stylize.x;
+        if (stylize > 0.001) {
+            var flat_albedo = palette.grass.rgb * weights.x
+                + palette.dirt.rgb * weights.y
+                + palette.sand.rgb * weights.z
+                + palette.cobble.rgb * weights.w;
+
+            // Steep faces read as rock whatever the painted layer says, so cliffs stay
+            // legible from directly above where slope is the only shape cue.
+            let world_normal = normalize(pbr_input.world_normal);
+            let slope = 1.0 - clamp(world_normal.y, 0.0, 1.0);
+            let rockiness = smoothstep(0.30, 0.62, slope) * palette.stylize.w;
+            flat_albedo = mix(flat_albedo, palette.rock.rgb, rockiness);
+
+            // Discrete height bands: value steps rather than a smooth gradient.
+            let band_count = max(palette.stylize.y, 1.0);
+            let height_norm = clamp(
+                (pbr_input.world_position.y - palette.bands.x) / max(palette.bands.y, 0.001),
+                0.0,
+                1.0,
+            );
+            let banded = floor(height_norm * band_count) / band_count;
+            // Higher ground drifts lighter and cooler, like aerial perspective baked in.
+            let band_tint = mix(vec3<f32>(0.94, 0.96, 0.93), vec3<f32>(1.06, 1.05, 1.02), banded);
+            flat_albedo *= mix(vec3<f32>(1.0), band_tint, palette.stylize.z * 4.0);
+
+            // Retain a trace of the sampled texture so the surface has grain.
+            let grain = mix(vec3<f32>(1.0), albedo / max(luminance_safe(albedo), 0.001), palette.bands.z);
+            flat_albedo *= grain;
+
+            albedo = mix(albedo, flat_albedo, stylize);
         }
 
         // --- Water interaction ---

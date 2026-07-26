@@ -159,6 +159,7 @@ pub(super) fn warmup_terrain_pipeline(
     let weights = vec![[255, 0, 0, 0]];
     let weightmap = build_weightmap_from_weights(weights, 1, &mut images);
 
+    let palette = super::materials::stylized_palette();
     let material = materials.add(TerrainSplatMaterial {
         base: StandardMaterial {
             base_color: Color::WHITE,
@@ -175,6 +176,7 @@ pub(super) fn warmup_terrain_pipeline(
             debug_mode: debug_settings.mode,
             normal_strength: 1.0,
             water_params: Vec4::ZERO,
+            palette,
         },
     });
 

@@ -192,6 +192,7 @@ pub(crate) fn process_chunk_tasks(
         };
         let mesh_handle = build_terrain_mesh(&result.mesh_data, tangents_ref, &mut meshes);
 
+        let palette = crate::terrain::materials::stylized_palette();
         let material = materials.add(TerrainSplatMaterial {
             base: StandardMaterial {
                 base_color: Color::WHITE,
@@ -212,6 +213,7 @@ pub(crate) fn process_chunk_tasks(
                     view_distance,
                 ),
                 water_params: water_params_for_generator(&result.generator),
+                palette,
             },
         });
 

@@ -24,12 +24,21 @@ fn tree_mesh_labels(kind: shared::props::PropKind) -> Option<TreeMeshLabels> {
                 material_label: "Material0",
             })
         }
-        Dead_tree_1 | Dead_tree_2 | Dead_tree_3 | Pine_Tree_1 | Pine_Tree_2 | Pine_Tree_3
-        | Pine_Tree_4 => Some(TreeMeshLabels {
+        Dead_tree_1 | Dead_tree_2 | Dead_tree_3 => Some(TreeMeshLabels {
             lod0_label: "Mesh0/Primitive0",
             lod1_label: None,
             material_label: "Material0",
         }),
+        // Pines are deliberately NOT in this table.
+        //
+        // Their GLBs are one mesh with TWO primitives — Primitive0 is the bark and
+        // Primitive1 is `Leaves_Pine` — and this fast path renders a single primitive with
+        // a single material. Taking Primitive0 drew ~2000 bare trunk skeletons across the
+        // map, which is what the "thin stalks" in capture screenshots were. lod1 cannot
+        // hold the leaves either: it is a level of detail, so the tree would swap between
+        // trunk and foliage with distance. Falling through to the full SceneRoot spawns
+        // every primitive with its own material, which is correct at the cost of a child
+        // hierarchy per tree.
         _ => None,
     }
 }
