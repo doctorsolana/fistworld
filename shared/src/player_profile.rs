@@ -4,13 +4,12 @@
 //! across disconnects and server restarts. Uses bincode serialization like the
 //! collider baker system.
 
-use crate::items::{ItemStack, ItemType, INVENTORY_SLOTS};
 use crate::player::SPAWN_POSITION;
 use crate::vehicle::VehicleType;
 use serde::{Deserialize, Serialize};
 
 /// Current profile version for migration support
-pub const PROFILE_VERSION: u32 = 2;
+pub const PROFILE_VERSION: u32 = 3;
 
 /// Serializable player profile containing all persistent state
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,10 +35,6 @@ pub struct PlayerProfile {
     pub health_max: f32,
 
     // === Inventory ===
-    /// 24-slot inventory (None = empty slot)
-    pub inventory_slots: [Option<ItemStack>; INVENTORY_SLOTS],
-    /// Active hotbar slot index (0-5)
-    pub hotbar_selection: u8,
 
     // === Vehicle State ===
     /// Whether player was in a vehicle when they disconnected
@@ -91,34 +86,6 @@ pub struct PlayerProfile {
 impl PlayerProfile {
     /// Create a new player profile with default starting state
     pub fn new_player(name: String) -> Self {
-        // Get starting inventory slots from Inventory::with_starting_items()
-        // We'll construct this manually since we can't call the method directly
-        let mut inventory_slots = [None; INVENTORY_SLOTS];
-
-        // Slots 3-5 (rest of the hotbar): ammo
-        inventory_slots[3] = Some(ItemStack {
-            item_type: ItemType::RifleAmmo,
-            quantity: 30,
-        });
-        inventory_slots[4] = Some(ItemStack {
-            item_type: ItemType::ShotgunShells,
-            quantity: 20,
-        });
-        inventory_slots[5] = Some(ItemStack {
-            item_type: ItemType::RifleAmmo,
-            quantity: 30,
-        });
-
-        // Backpack: more reserve ammo
-        inventory_slots[6] = Some(ItemStack {
-            item_type: ItemType::RifleAmmo,
-            quantity: 54,
-        });
-        inventory_slots[7] = Some(ItemStack {
-            item_type: ItemType::SniperRounds,
-            quantity: 10,
-        });
-
         Self {
             version: PROFILE_VERSION,
             player_name: name,
@@ -131,10 +98,6 @@ impl PlayerProfile {
             // Default combat stats
             health_current: 100.0,
             health_max: 100.0,
-
-            // Starting inventory
-            inventory_slots,
-            hotbar_selection: 0,
 
             // Not in vehicle
             in_vehicle: false,

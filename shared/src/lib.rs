@@ -4,7 +4,6 @@ pub mod colliders;
 pub mod components;
 pub mod debug;
 pub mod economy;
-pub mod items;
 pub mod map;
 pub mod npc;
 pub mod physics;

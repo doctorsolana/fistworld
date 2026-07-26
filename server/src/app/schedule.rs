@@ -1,7 +1,6 @@
 //! Fixed-update schedule sets and system wiring.
 //!
-//! Default: the full FistForce simulation (physics, AI, inventory,
-//! persistence). Set `FISTFORCE_RAIL=1` (same flag as the client) to run the
+//! Default: the full FistForce simulation (physics, AI, persistence). Set `FISTFORCE_RAIL=1` (same flag as the client) to run the
 //! rail-tycoon prototype schedule instead; the two consume the same network
 //! messages (e.g. `SubmitPlayerName`), so they are wired mutually exclusively.
 
@@ -12,7 +11,6 @@ use lightyear::link::LinkSystems;
 
 use crate::ai;
 use crate::collision;
-use crate::inventory;
 use crate::net;
 use crate::persistence;
 use crate::physics;
@@ -52,7 +50,6 @@ enum FpsServerSet {
     PlayerSim,
     Indices,
     Persistence,
-    Inventory,
 }
 
 fn configure_fps_fixed_schedule(app: &mut App) {
@@ -69,7 +66,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             FpsServerSet::PlayerSim,
             FpsServerSet::Indices,
             FpsServerSet::Persistence,
-            FpsServerSet::Inventory,
         )
             .chain(),
     );
@@ -219,23 +215,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
     app.add_systems(
         FixedUpdate,
         (
-            inventory::hotbar::handle_hotbar_selection_requests,
-            inventory::hotbar::handle_inventory_move_requests,
-            inventory::ground_items::handle_pickup_requests,
-            inventory::ground_items::handle_drop_requests,
-            inventory::chest::handle_open_chest_requests,
-            inventory::chest::handle_close_chest_requests,
-            inventory::chest::handle_chest_transfer_requests,
-            inventory::chest::update_distant_chest_auto_close,
-        )
-            .chain()
-            .in_set(FpsServerSet::Inventory)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
             telemetry::perf::handle_perf_tick_begin.before(world::time::handle_set_time_of_day),
             telemetry::perf::handle_perf_core_phase_begin
                 .before(world::time::handle_set_time_of_day),
@@ -245,9 +224,9 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             telemetry::perf::handle_perf_npc_inventory_build_phase_begin
                 .before(FpsServerSet::AISim),
             telemetry::perf::handle_perf_npc_inventory_build_phase_end
-                .after(FpsServerSet::Inventory),
-            telemetry::perf::update_server_perf_log.after(FpsServerSet::Inventory),
-            telemetry::network::sample_replication_change_pressure.after(FpsServerSet::Inventory),
+                .after(FpsServerSet::Persistence),
+            telemetry::perf::update_server_perf_log.after(FpsServerSet::Persistence),
+            telemetry::network::sample_replication_change_pressure.after(FpsServerSet::Persistence),
         )
             .run_if(server_is_started),
     );

@@ -8,7 +8,6 @@ use shared::terrain::WorldTerrain;
 
 use crate::ai;
 use crate::collision;
-use crate::inventory;
 use crate::net;
 use crate::persistence;
 use crate::physics;
@@ -26,7 +25,6 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<net::input::ClientInputIngressStats>();
     app.init_resource::<player::index::PlayerEntityIndex>();
     app.init_resource::<player::spatial::PlayerSpatialIndex>();
-    app.init_resource::<inventory::chest::OpenChests>();
     app.init_resource::<SpatialObstacleGrid>();
     app.init_resource::<ai::obstacles::ObstacleGridState>();
     app.init_resource::<ai::ragdoll::CorpseBudget>();

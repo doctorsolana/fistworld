@@ -2,7 +2,6 @@
 
 use bevy::prelude::*;
 use shared::components::{Npc, Player};
-use shared::items::GroundItem;
 use shared::protocol::FIXED_TIMESTEP_HZ;
 use std::cmp::Ordering;
 use std::time::{Duration, Instant};
@@ -207,7 +206,6 @@ pub fn update_server_perf_log(
     mut perf: ResMut<ServerPerfMonitor>,
     players: Query<&Player>,
     npcs: Query<(), With<Npc>>,
-    ground_items: Query<(), With<GroundItem>>,
     ragdoll_telemetry: Res<RagdollTelemetry>,
     client_inputs: Res<ClientInputs>,
     mut input_ingress: ResMut<ClientInputIngressStats>,
@@ -283,7 +281,7 @@ pub fn update_server_perf_log(
     };
 
     info!(
-        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} npc={:.2}/{:.2} collision={:.2}/{:.2} ai_cadence={:.3}/{:.3} pathfinding={:.3}/{:.3} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} npcs={} corpses={} ground_items={} evicted_corpses={}",
+        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} npc={:.2}/{:.2} collision={:.2}/{:.2} ai_cadence={:.3}/{:.3} pathfinding={:.3}/{:.3} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} npcs={} corpses={} evicted_corpses={}",
         tick_avg_ms,
         tick_max_ms,
         over_budget_pct,
@@ -304,7 +302,6 @@ pub fn update_server_perf_log(
         players_count,
         npcs.iter().count(),
         ragdoll_telemetry.active_corpses,
-        ground_items.iter().count(),
         ragdoll_telemetry.total_evicted,
     );
 

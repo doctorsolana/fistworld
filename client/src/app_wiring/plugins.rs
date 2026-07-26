@@ -123,10 +123,7 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
     // Shooter-only feature plugins (inventory, map, pickups, chests, audio,
     // dialogue). The rail prototype shell runs without them.
     if !rail_mode {
-        app.add_plugins(ui::InventoryPlugin);
         app.add_plugins(ui::WorldMapPlugin);
-        app.add_plugins(pickup::PickupPlugin);
-        app.add_plugins(chest::ChestPlugin);
         app.add_plugins(audio::GameAudioPlugin);
         app.add_plugins(dialogue::DialoguePlugin);
     }

@@ -3,7 +3,7 @@
 Tracking doc for converting this repo from **FistForce** (multiplayer FPS sandbox) into a
 **top-down multiplayer unit-tactics game** (many units, formations, huge maps).
 
-> **Status:** P0 ✅ · P1 ✅ · P2 next.
+> **Status:** P0 ✅ · P1 ✅ · P2 ✅ · P3 next.
 
 **Detailed analysis lives in [`docs/strip/`](docs/strip/):**
 [MASTER-STRIP-PLAN.md](docs/strip/MASTER-STRIP-PLAN.md) (the authoritative execution plan — ordering
@@ -83,7 +83,7 @@ disconnect again.
 
 Legend: ⬜ not started · 🟨 in progress · ✅ done
 
-### 🟨 P0 — Pre-flight refactor (NO deletions)
+### ✅ P0 — Pre-flight refactor (NO deletions)
 Pure moves/renames. Tree compiles and game runs identically after each. **Highest-leverage phase.**
 
 - [x] **P0-1** Perf overlay out of `client/src/weapons/` → `client/src/perf_overlay/`
@@ -133,12 +133,19 @@ Pure moves/renames. Tree compiles and game runs identically after each. **Highes
       and `ServerPerf` now reports exactly 5 phases with the `bullets=` counter gone.
 - [x] **Committed. 45 files deleted, 9,563 deletions.**
 
-### ⬜ P2 — Items & inventory (~3,700 lines)
-- [ ] `PROFILE_VERSION` 2→3
-- [ ] `shared/src/items/`, `server/src/inventory/`, `client/src/ui/inventory/`,
-      `client/src/pickup/`, `client/src/chest.rs`
-- [ ] Fix `shared/src/building/defs.rs`
-- [ ] `cargo build --workspace` (catches `tools/collider_baker`) · verify profile round-trip · commit
+### ✅ P2 — Items & inventory (3,366 deletions)
+- [x] `PROFILE_VERSION` 2→3
+- [x] `shared/src/items/`, `server/src/inventory/`, `client/src/ui/inventory/`,
+      `client/src/pickup/`, `client/src/chest.rs` — 21 files
+- [x] Fixed `shared/src/building/defs.rs` — dropped `BuildingDef.cost` (verified zero readers
+      repo-wide before deleting; it transitively feeds `tools/collider_baker`)
+- [x] `FpsServerSet::Inventory` removed; telemetry re-anchored onto `Persistence` (new last set)
+- [x] `cargo check --all-targets` + `cargo build --workspace` (collider_baker gate) + editor green ·
+      48 shared tests · no new warnings
+- [x] Smoke test passed: no panics; run 1 `Name accepted! Created new profile`; **run 2 against a
+      fresh server `Name accepted! Loaded existing profile`** with no "Creating new profile"
+      fallback — the bincode round-trip survives the layout change (**Danger 2 cleared**)
+- [ ] Assets (`game_assets/items/`, `ui/item_preview/`) deferred to P6 per ground rule 7
 
 ### ⬜ P3 — Vehicles & rail (~6,000 lines)
 - [ ] `PROFILE_VERSION` 3→4; hoist `WorldMapPlugin` + `GameAudioPlugin` out of the `rail_mode` branch (**Danger 6**)
@@ -186,10 +193,23 @@ cargo check -p editor                     # hard gate — nothing else catches e
 cargo test -p shared                      # 61 tests
 
 # Smoke test (no `timeout` on this Mac — background + sleep + kill)
-./target/debug/server &
-BEVY_ASSET_ROOT=$PWD/client FISTFORCE_AUTOCONNECT=Test$(date +%H%M%S) ./target/debug/client &
-sleep 25; pkill -f "citysim/target"
+# NOTE: kill by "target/debug/<bin>". `pkill -f "citysim/target"` does NOT match —
+# the processes run as ./target/debug/server, so that pattern silently kills nothing,
+# leaves a stale server on UDP :5000, and the next run connects to the OLD binary.
+# That reproduces as "Address already in use" on the server plus
+# "the message protocol doesn't match" on the client (Danger 8) — a phantom regression.
+pkill -9 -f "target/debug/server"; pkill -9 -f "target/debug/client"
+until ! lsof -nP -iUDP 2>/dev/null | grep -q ":5000"; do sleep 1; done
+
+./target/debug/server > /tmp/server.log 2>&1 &
+sleep 6                       # let the server bind before connecting
+BEVY_ASSET_ROOT=$PWD/client FISTFORCE_AUTOCONNECT=Test$(date +%H%M%S) \
+  FISTFORCE_CLIENT_PERF=1 ./target/debug/client > /tmp/client.log 2>&1 &
+sleep 30; pkill -9 -f "target/debug/client"; pkill -9 -f "target/debug/server"
 ```
+
+**Every protocol edit requires a non-rolling restart of both binaries** — a stale binary on
+either side mis-routes messages or fails the protocol handshake.
 
 Grep logs for panics / shader errors / asset-not-found. Then check by **behaviour**, not logs:
 terrain + props stream while moving · audio audible · F3 overlay renders · editor opens `city_alpha`.

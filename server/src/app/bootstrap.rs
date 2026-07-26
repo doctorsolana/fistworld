@@ -99,11 +99,7 @@ pub(crate) fn configure_bootstrap(app: &mut App) {
         app.add_systems(Update, ai::spawn::spawn_npcs_once.run_if(server_is_started));
         app.add_systems(
             Update,
-            (
-                crate::vehicle::bootstrap::spawn_world_vehicles,
-                crate::inventory::chest::spawn_world_chests,
-            )
-                .run_if(server_is_started),
+            crate::vehicle::bootstrap::spawn_world_vehicles.run_if(server_is_started),
         );
     }
 }

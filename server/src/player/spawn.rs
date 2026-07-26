@@ -11,7 +11,6 @@ use shared::components::{
     Health, Player, PlayerCharacter, PlayerGrounded, PlayerPosition,
     PlayerProgression, PlayerRotation, PlayerVelocity,
 };
-use shared::items::{HotbarSelection, Inventory};
 use shared::physics::ground_clearance_center;
 use shared::player::SPAWN_POSITION;
 use shared::player_profile::PlayerProfile;
@@ -101,16 +100,12 @@ pub fn handle_player_name_submission(
                 spawn_rot,
                 spawn_vel,
                 health,
-                inventory,
-                hotbar_sel,
                 vehicle_spawn,
             ): (
                 Vec3,
                 f32,
                 Vec3,
                 Health,
-                Inventory,
-                u8,
                 Option<(VehicleType, [f32; 3], [f32; 3], [f32; 3], [f32; 3])>,
             ) = if profile.is_dead {
                 info!(
@@ -124,19 +119,11 @@ pub fn handle_player_name_submission(
                     0.0,
                     Vec3::ZERO,
                     Health::default(),
-                    Inventory::new(),
-                    0,
                     None,
                 )
             } else if !profile_loaded {
                 info!("Spawning new player '{}' at map spawn", name);
 
-                let mut inventory = Inventory::new();
-                for (i, slot) in profile.inventory_slots.iter().enumerate() {
-                    if let Some(stack) = slot {
-                        let _ = inventory.set_slot(i, Some(*stack));
-                    }
-                }
 
                 (
                     resolve_map_spawn_position(&terrain),
@@ -146,8 +133,6 @@ pub fn handle_player_name_submission(
                         current: profile.health_current,
                         max: profile.health_max,
                     },
-                    inventory,
-                    profile.hotbar_selection,
                     None,
                 )
             } else if profile.in_vehicle {
@@ -161,12 +146,6 @@ pub fn handle_player_name_submission(
                 let veh_ang_vel = profile.vehicle_angular_velocity.unwrap_or([0.0, 0.0, 0.0]);
                 let veh_type = profile.vehicle_type.unwrap_or(VehicleType::Motorbike);
 
-                let mut inventory = Inventory::new();
-                for (i, slot) in profile.inventory_slots.iter().enumerate() {
-                    if let Some(stack) = slot {
-                        let _ = inventory.set_slot(i, Some(*stack));
-                    }
-                }
 
                 (
                     Vec3::from_slice(&veh_pos),
@@ -176,8 +155,6 @@ pub fn handle_player_name_submission(
                         current: profile.health_current,
                         max: profile.health_max,
                     },
-                    inventory,
-                    profile.hotbar_selection,
                     Some((veh_type, veh_pos, veh_rot, veh_vel, veh_ang_vel)),
                 )
             } else {
@@ -186,12 +163,6 @@ pub fn handle_player_name_submission(
                     name, profile.position
                 );
 
-                let mut inventory = Inventory::new();
-                for (i, slot) in profile.inventory_slots.iter().enumerate() {
-                    if let Some(stack) = slot {
-                        let _ = inventory.set_slot(i, Some(*stack));
-                    }
-                }
 
                 (
                     Vec3::from_slice(&profile.position),
@@ -201,8 +172,6 @@ pub fn handle_player_name_submission(
                         current: profile.health_current,
                         max: profile.health_max,
                     },
-                    inventory,
-                    profile.hotbar_selection,
                     None,
                 )
             };
@@ -225,8 +194,6 @@ pub fn handle_player_name_submission(
                     PlayerCharacter::default(),
                     health,
                     progression,
-                    inventory,
-                    HotbarSelection { index: hotbar_sel },
                     ReplicationGroup::new_from_entity().set_priority(PLAYER_REPLICATION_PRIORITY),
                     Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
                     ControlledBy {

@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::items::ItemType;
 
 /// Types of buildings that can be constructed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -115,7 +114,6 @@ impl BuildingType {
             BuildingType::Windmill => BuildingDef {
                 building_type: *self,
                 display_name: "Windmill",
-                cost: &[(ItemType::Wood, 20), (ItemType::Stone, 10)],
                 footprint: Vec2::new(8.0, 8.0),
                 height: 10.0,
                 flatten_radius: 2.0,
@@ -125,7 +123,6 @@ impl BuildingType {
             BuildingType::Church => BuildingDef {
                 building_type: *self,
                 display_name: "Church",
-                cost: &[(ItemType::Wood, 30), (ItemType::Stone, 25)],
                 footprint: Vec2::new(12.0, 8.0),
                 height: 12.0,
                 flatten_radius: 3.0,
@@ -135,7 +132,6 @@ impl BuildingType {
             BuildingType::House05 => BuildingDef {
                 building_type: *self,
                 display_name: "House 05",
-                cost: &[(ItemType::Wood, 8), (ItemType::Stone, 6)],
                 footprint: Vec2::new(7.0, 6.0),
                 height: 5.0,
                 flatten_radius: 1.5,
@@ -145,7 +141,6 @@ impl BuildingType {
             BuildingType::House06 => BuildingDef {
                 building_type: *self,
                 display_name: "House 06",
-                cost: &[(ItemType::Wood, 8), (ItemType::Stone, 6)],
                 footprint: Vec2::new(7.0, 6.0),
                 height: 5.0,
                 flatten_radius: 1.5,
@@ -155,7 +150,6 @@ impl BuildingType {
             BuildingType::House07 => BuildingDef {
                 building_type: *self,
                 display_name: "House 07",
-                cost: &[(ItemType::Wood, 9), (ItemType::Stone, 7)],
                 footprint: Vec2::new(8.0, 6.5),
                 height: 6.0,
                 flatten_radius: 1.75,
@@ -206,7 +200,6 @@ fn multistory_def(
     BuildingDef {
         building_type,
         display_name,
-        cost: &[],
         footprint,
         height,
         flatten_radius: 1.5,
@@ -220,8 +213,6 @@ fn multistory_def(
 pub struct BuildingDef {
     pub building_type: BuildingType,
     pub display_name: &'static str,
-    /// Resource cost as (ItemType, quantity) pairs.
-    pub cost: &'static [(ItemType, u32)],
     /// Building footprint in meters (width x depth).
     pub footprint: Vec2,
     /// Building height in meters.

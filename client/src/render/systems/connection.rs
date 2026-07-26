@@ -99,20 +99,9 @@ pub fn handle_start_connection(
         MessageSender::<shared::protocol::SetTimeOfDay>::default(),
         MessageSender::<shared::protocol::SpawnOilmanDebug>::default(),
         MessageSender::<shared::protocol::SpawnPhysicsBoxDebug>::default(),
-        MessageSender::<shared::items::PickupRequest>::default(),
-        MessageSender::<shared::items::DropRequest>::default(),
-        MessageSender::<shared::items::SelectHotbarSlot>::default(),
-        MessageSender::<shared::items::InventoryMoveRequest>::default(),
         // Player name submission
         MessageSender::<shared::protocol::SubmitPlayerName>::default(),
         MessageSender::<shared::protocol::RequestPlayerRoster>::default(),
-    ));
-
-    // Chest messages (split to avoid tuple size limit)
-    commands.entity(client_entity).insert((
-        MessageSender::<shared::items::OpenChestRequest>::default(),
-        MessageSender::<shared::items::CloseChestRequest>::default(),
-        MessageSender::<shared::items::ChestTransferRequest>::default(),
     ));
 
     commands.entity(client_entity).insert((

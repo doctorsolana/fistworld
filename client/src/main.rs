@@ -3,13 +3,11 @@
 mod app_wiring;
 mod audio;
 mod camera;
-mod chest;
 mod city;
 mod dialogue;
 mod input;
 mod camera_rts;
 mod perf_overlay;
-mod pickup;
 mod profiling;
 mod props;
 mod rail;

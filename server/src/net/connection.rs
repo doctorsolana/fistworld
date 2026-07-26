@@ -8,10 +8,6 @@ use std::time::Duration;
 use shared::components::{
     Health, Player, PlayerPosition, PlayerProgression, PlayerRotation, PlayerVelocity,
 };
-use shared::items::{
-    ChestTransferRequest, CloseChestRequest, DropRequest, HotbarSelection, Inventory,
-    InventoryMoveRequest, OpenChestRequest, PickupRequest, SelectHotbarSlot,
-};
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 use shared::protocol::{
     AssignRouteRequest, BuildStationRequest, BuildTrackRequest, BuyTrainRequest,
@@ -99,16 +95,6 @@ pub fn handle_connections(
         ));
 
         commands.entity(client_entity).insert((
-            MessageReceiver::<PickupRequest>::default(),
-            MessageReceiver::<DropRequest>::default(),
-            MessageReceiver::<SelectHotbarSlot>::default(),
-            MessageReceiver::<InventoryMoveRequest>::default(),
-            MessageReceiver::<OpenChestRequest>::default(),
-            MessageReceiver::<CloseChestRequest>::default(),
-            MessageReceiver::<ChestTransferRequest>::default(),
-        ));
-
-        commands.entity(client_entity).insert((
             MessageSender::<NpcRagdollStarted>::default(),
             MessageSender::<NpcRagdollPoseBatch>::default(),
             MessageSender::<NameSubmissionResult>::default(),
@@ -133,8 +119,6 @@ pub fn handle_disconnections(
         &PlayerRotation,
         &PlayerVelocity,
         &Health,
-        &Inventory,
-        &HotbarSelection,
         &PlayerProgression,
         Option<&InVehicle>,
         Option<&RespawnTimer>,
@@ -179,8 +163,6 @@ pub fn handle_disconnections(
         rot,
         vel,
         health,
-        inventory,
-        hotbar,
         progression,
         in_vehicle,
         respawn_timer,
@@ -193,8 +175,6 @@ pub fn handle_disconnections(
                 rot,
                 vel,
                 health,
-                inventory,
-                hotbar,
                 progression,
                 in_vehicle,
                 respawn_timer,
@@ -209,8 +189,6 @@ pub fn handle_disconnections(
         rot,
         vel,
         health,
-        inventory,
-        hotbar,
         progression,
         in_vehicle,
         respawn_timer,
@@ -268,8 +246,6 @@ pub fn handle_disconnections(
         velocity: [vel.0.x, vel.0.y, vel.0.z],
         health_current: health.current,
         health_max: health.max,
-        inventory_slots: *inventory.slots(),
-        hotbar_selection: hotbar.index,
         in_vehicle: in_veh,
         vehicle_type: vehicle_data.as_ref().map(|(vt, _, _, _, _)| *vt),
         vehicle_position: vehicle_data.as_ref().map(|(_, pos, _, _, _)| *pos),

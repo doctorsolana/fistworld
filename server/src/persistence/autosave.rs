@@ -4,7 +4,6 @@ use bevy::prelude::*;
 use shared::components::{ Health, Player, PlayerPosition, PlayerProgression, PlayerRotation,
     PlayerVelocity,
 };
-use shared::items::{HotbarSelection, Inventory};
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 use shared::vehicle::{InVehicle, Vehicle, VehicleState};
 
@@ -28,8 +27,6 @@ pub fn update_periodic_player_save(
         &PlayerRotation,
         &PlayerVelocity,
         &Health,
-        &Inventory,
-        &HotbarSelection,
         &PlayerProgression,
         Option<&InVehicle>,
         Option<&RespawnTimer>,
@@ -52,8 +49,6 @@ pub fn update_periodic_player_save(
         rot,
         vel,
         health,
-        inventory,
-        hotbar,
         progression,
         in_vehicle,
         respawn_timer,
@@ -102,8 +97,6 @@ pub fn update_periodic_player_save(
             velocity: [vel.0.x, vel.0.y, vel.0.z],
             health_current: health.current,
             health_max: health.max,
-            inventory_slots: *inventory.slots(),
-            hotbar_selection: hotbar.index,
             in_vehicle: in_veh,
             vehicle_type: vehicle_data.as_ref().map(|(vt, _, _, _, _)| *vt),
             vehicle_position: vehicle_data.as_ref().map(|(_, pos, _, _, _)| *pos),

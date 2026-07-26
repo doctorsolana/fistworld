@@ -7,11 +7,6 @@ use crate::components::{
     Player, PlayerCharacter, PlayerJumpState, PlayerPosition, PlayerProgression, PlayerRotation,
     PlayerVelocity, PlayerWaterState, WorldTime,
 };
-use crate::items::{
-    ChestPosition, ChestStorage, ChestTransferRequest, CloseChestRequest, DropRequest, GroundItem,
-    GroundItemPosition, HotbarSelection, Inventory, InventoryMoveRequest, OpenChestRequest,
-    PickupRequest, SelectHotbarSlot,
-};
 use crate::rail::{
     Company, CompanyLedger, Industry, RailStation, RailTrackSegment, Town, Train, TrainRoute,
     TrainState,
@@ -63,21 +58,8 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<CloudSeed>().add_prediction();
         app.register_component::<ActiveMapState>().add_prediction();
 
-        // === INVENTORY COMPONENTS ===
-        app.register_component::<Inventory>().add_prediction();
-        app.register_component::<GroundItem>().add_prediction();
-        app.register_component::<GroundItemPosition>()
-            .add_prediction();
-
         // === NPC IDENTITY ===
         app.register_component::<NpcIdentity>().add_prediction();
-
-        // === EQUIPMENT / HOTBAR ===
-        app.register_component::<HotbarSelection>().add_prediction();
-
-        // === CHEST / STORAGE ===
-        app.register_component::<ChestStorage>().add_prediction();
-        app.register_component::<ChestPosition>().add_prediction();
 
         // === TERRAIN DELTA CHUNKS ===
         app.register_component::<TerrainDeltaChunk>()
@@ -108,20 +90,6 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<SpawnOilmanDebug>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SpawnPhysicsBoxDebug>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<PickupRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<DropRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<SelectHotbarSlot>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<InventoryMoveRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<OpenChestRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<CloseChestRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<ChestTransferRequest>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SubmitPlayerName>()
             .add_direction(NetworkDirection::ClientToServer);
