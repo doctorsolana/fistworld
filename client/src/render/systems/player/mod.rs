@@ -11,7 +11,6 @@ pub mod visibility;
 
 pub use animation::{setup_player_rig, update_player_animation};
 pub use assets::setup_player_character_assets;
-pub(crate) use ids::peer_id_to_u64;
 pub use spawn::{ensure_local_player_tag, handle_player_spawned, sync_player_character_models};
 pub use sync::sync_player_transforms;
 pub use visibility::{
@@ -33,11 +32,9 @@ use shared::components::{
 use shared::physics::{ground_clearance_center, GROUND_SNAP_DISTANCE};
 use shared::player::{JUMP_ANIM_MIN_SECS, PLAYER_HEIGHT};
 use shared::terrain::WorldTerrain;
-use shared::vehicle::{Vehicle, VehicleDriver, VehicleType};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::input::{CameraMode, InputState};
-use crate::render::systems::VehicleHoverBob;
 
 // =============================================================================
 // COMPONENTS & RESOURCES
@@ -107,7 +104,6 @@ pub enum MovementAnim {
     StrafeLeft,
     StrafeRight,
     Run,
-    Driving,
     Jump,
     Fall,
 }

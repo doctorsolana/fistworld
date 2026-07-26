@@ -10,7 +10,6 @@ use shared::components::Player;
 use shared::protocol::{
     NETCODE_CLIENT_TIMEOUT_SECS, NETCODE_TOKEN_EXPIRE_SECS, PRIVATE_KEY, PROTOCOL_ID,
 };
-use shared::vehicle::Vehicle;
 use std::net::{SocketAddr, ToSocketAddrs};
 
 use super::particles::SandParticle;
@@ -104,16 +103,6 @@ pub fn handle_start_connection(
         MessageSender::<shared::protocol::RequestPlayerRoster>::default(),
     ));
 
-    commands.entity(client_entity).insert((
-        MessageSender::<shared::protocol::CreateCompanyRequest>::default(),
-        MessageSender::<shared::protocol::BuildTrackRequest>::default(),
-        MessageSender::<shared::protocol::BuildStationRequest>::default(),
-        MessageSender::<shared::protocol::BuyTrainRequest>::default(),
-        MessageSender::<shared::protocol::AssignRouteRequest>::default(),
-        MessageSender::<shared::protocol::SetTrainCargoPolicyRequest>::default(),
-        MessageSender::<shared::protocol::DemolishRailRequest>::default(),
-    ));
-
     // Add server -> client message receivers (split to avoid tuple size limit)
     commands.entity(client_entity).insert((
         MessageReceiver::<shared::protocol::NpcRagdollStarted>::default(),
@@ -121,7 +110,6 @@ pub fn handle_start_connection(
         // Name submission response
         MessageReceiver::<shared::protocol::NameSubmissionResult>::default(),
         MessageReceiver::<shared::protocol::PlayerRoster>::default(),
-        MessageReceiver::<shared::protocol::RailCommandRejected>::default(),
     ));
 
     // Trigger the Connect event to actually initiate the connection
@@ -205,7 +193,6 @@ pub fn cleanup_enter_main_menu(
     world_roots: Query<Entity, With<ClientWorldRoot>>,
     players: Query<Entity, With<Player>>,
     npcs: Query<Entity, With<Npc>>,
-    vehicles: Query<Entity, With<Vehicle>>,
     particles: Query<Entity, With<SandParticle>>,
     mut loaded_chunks: ResMut<LoadedChunks>,
 ) {
@@ -229,9 +216,6 @@ pub fn cleanup_enter_main_menu(
         commands.entity(entity).despawn();
     }
 
-    for entity in vehicles.iter() {
-        commands.entity(entity).despawn();
-    }
 
     // Clean up particles
     for entity in particles.iter() {

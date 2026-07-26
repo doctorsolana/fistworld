@@ -3,7 +3,7 @@
 Tracking doc for converting this repo from **FistForce** (multiplayer FPS sandbox) into a
 **top-down multiplayer unit-tactics game** (many units, formations, huge maps).
 
-> **Status:** P0 ✅ · P1 ✅ · P2 ✅ · P3 next.
+> **Status:** P0 ✅ · P1 ✅ · P2 ✅ · P3 ✅ · P4 next.
 
 **Detailed analysis lives in [`docs/strip/`](docs/strip/):**
 [MASTER-STRIP-PLAN.md](docs/strip/MASTER-STRIP-PLAN.md) (the authoritative execution plan — ordering
@@ -147,11 +147,22 @@ Pure moves/renames. Tree compiles and game runs identically after each. **Highes
       fallback — the bincode round-trip survives the layout change (**Danger 2 cleared**)
 - [ ] Assets (`game_assets/items/`, `ui/item_preview/`) deferred to P6 per ground rule 7
 
-### ⬜ P3 — Vehicles & rail (~6,000 lines)
-- [ ] `PROFILE_VERSION` 3→4; hoist `WorldMapPlugin` + `GameAudioPlugin` out of the `rail_mode` branch (**Danger 6**)
-- [ ] `shared/src/{vehicle,rail.rs,economy.rs}`, `server/src/{vehicle,rail}`, `client/src/rail`,
-      `client/src/render/systems/vehicle`, `client/src/audio/vehicles.rs`, `FISTFORCE_RAIL`
-- [ ] `cargo check -p editor` · **verify terrain + prop streaming** (Danger 3) · commit
+### ✅ P3 — Vehicles & rail (~6,000 lines)
+- [x] `PROFILE_VERSION` 3→4
+- [x] **Danger 6 handled first:** hoisted `WorldMapPlugin` + `GameAudioPlugin` out of the
+      `if !rail_mode { … }` branch *before* deleting it — they were registered nowhere else,
+      so a wholesale delete would have silently removed the world map and all audio
+- [x] `shared/src/{vehicle,rail.rs,economy.rs}`, `server/src/{vehicle,rail}`, `client/src/rail`,
+      `client/src/render/systems/vehicle`, `client/src/audio/vehicles.rs`, `resolve_vehicle.rs`
+- [x] `FISTFORCE_RAIL` removed entirely (rail schedule, `RailServerSet`, `wire_rail_systems`)
+- [x] `PackedPlayerInput` loses throttle/brake/steer + 4 quantizers — **bits 9/10 left vacant**
+- [x] **Danger 4 (partial):** `gather_centers` anchor chain is now players → NPCs → origin.
+      P4 removes the NPC rung; after that players are the *only* anchor. Documented in-place.
+- [x] Removed `MovementAnim::Driving`, in-vehicle camera modes, vehicle mouse-look, remote
+      vehicle audio emitters, sand-particle spawner (`ParticleAssets` kept for future unit dust)
+- [x] `--all-targets` + editor green · no warnings · 40 shared tests · 4 editor tests
+- [x] Smoke test: no panics, world visuals spawned, terrain+props loaded, 6 `ClientPerf` lines,
+      **audio alive (Danger 6 clear)**, **zero `streaming_anchor` warnings (Danger 3 clear)**
 
 ### ⬜ P4 — NPCs & AI (~6,450 lines)
 - [ ] Salvage `sync_obstacle_grid`, A\* core, `XorShift64` before deleting

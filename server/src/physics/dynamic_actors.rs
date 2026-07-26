@@ -23,7 +23,6 @@ use shared::player::{
 };
 use shared::protocol::PlayerInput;
 use shared::terrain::WorldTerrain;
-use shared::vehicle::{InVehicle, VehicleState};
 use shared::water::{water_swell_height, OCEAN_LOOP_SECONDS, WATER_SURFACE_OFFSET};
 
 use crate::ai::ragdoll::NpcRagdoll;
@@ -335,11 +334,9 @@ pub fn sync_player_bodies_from_authoritative_state(
             &mut Velocity,
             &mut GravityScale,
             &mut CollisionGroups,
-            Option<&InVehicle>,
         ),
         (With<Player>, With<PlayerPhysicsBody>),
     >,
-    vehicles: Query<&VehicleState>,
 ) {
     for (
         position,
@@ -348,21 +345,8 @@ pub fn sync_player_bodies_from_authoritative_state(
         mut velocity,
         mut gravity_scale,
         mut collision_groups,
-        in_vehicle,
     ) in players.iter_mut()
     {
-        if let Some(in_vehicle) = in_vehicle {
-            if let Ok(vehicle_state) = vehicles.get(in_vehicle.vehicle_entity) {
-                transform.translation = vehicle_state.position + Vec3::new(0.0, 1.3, 0.0);
-                transform.rotation = Quat::from_rotation_y(vehicle_state.heading);
-                velocity.linvel = Vec3::ZERO;
-                velocity.angvel = Vec3::ZERO;
-                gravity_scale.0 = 0.0;
-                *collision_groups = layers::player_seated_groups();
-                continue;
-            }
-        }
-
         gravity_scale.0 = 1.0;
         *collision_groups = layers::player_groups();
 
@@ -393,7 +377,6 @@ pub fn apply_player_controls(
             &mut GravityScale,
             &mut PlayerJumpControllerState,
             Option<&RespawnTimer>,
-            Option<&InVehicle>,
             Option<&FlyMode>,
             Option<&mut PlayerWaterState>,
         ),
@@ -418,7 +401,6 @@ pub fn apply_player_controls(
         mut gravity_scale,
         mut jump_controller,
         respawn_timer,
-        in_vehicle,
         fly_mode,
         mut water_state,
     ) in players.iter_mut()
@@ -428,16 +410,6 @@ pub fn apply_player_controls(
             velocity.linvel = Vec3::ZERO;
             velocity.angvel = Vec3::ZERO;
             gravity_scale.0 = 1.0;
-            if water_state.is_some() {
-                commands.entity(entity).remove::<PlayerWaterState>();
-            }
-            continue;
-        }
-
-        if in_vehicle.is_some() {
-            jump_controller.reset();
-            velocity.linvel = Vec3::ZERO;
-            velocity.angvel = Vec3::ZERO;
             if water_state.is_some() {
                 commands.entity(entity).remove::<PlayerWaterState>();
             }

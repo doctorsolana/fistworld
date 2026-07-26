@@ -7,12 +7,7 @@ use crate::components::{
     Player, PlayerCharacter, PlayerJumpState, PlayerPosition, PlayerProgression, PlayerRotation,
     PlayerVelocity, PlayerWaterState, WorldTime,
 };
-use crate::rail::{
-    Company, CompanyLedger, Industry, RailStation, RailTrackSegment, Town, Train, TrainRoute,
-    TrainState,
-};
 use crate::terrain::TerrainDeltaChunk;
-use crate::vehicle::{Vehicle, VehicleDriver, VehicleState};
 
 use super::messages::*;
 
@@ -45,10 +40,6 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<DebugPhysicsBoxRotation>()
             .add_prediction();
 
-        // === VEHICLE COMPONENTS ===
-        app.register_component::<Vehicle>().add_prediction();
-        app.register_component::<VehicleState>().add_prediction();
-        app.register_component::<VehicleDriver>().add_prediction();
 
         // === HEALTH ===
         app.register_component::<Health>().add_prediction();
@@ -65,17 +56,6 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<TerrainDeltaChunk>()
             .add_prediction();
 
-        // === RAIL TYCOON COMPONENTS ===
-        app.register_component::<Company>().add_prediction();
-        app.register_component::<CompanyLedger>().add_prediction();
-        app.register_component::<RailTrackSegment>()
-            .add_prediction();
-        app.register_component::<RailStation>().add_prediction();
-        app.register_component::<Train>().add_prediction();
-        app.register_component::<TrainState>().add_prediction();
-        app.register_component::<TrainRoute>().add_prediction();
-        app.register_component::<Industry>().add_prediction();
-        app.register_component::<Town>().add_prediction();
 
         // === MESSAGES ===
         // Client -> Server
@@ -95,25 +75,9 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<RequestPlayerRoster>()
             .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<CreateCompanyRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<BuildTrackRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<BuildStationRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<BuyTrainRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<AssignRouteRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<SetTrainCargoPolicyRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<DemolishRailRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
 
         // Server -> Client
         app.register_message::<NameSubmissionResult>()
-            .add_direction(NetworkDirection::ServerToClient);
-        app.register_message::<RailCommandRejected>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<PlayerRoster>()
             .add_direction(NetworkDirection::ServerToClient);

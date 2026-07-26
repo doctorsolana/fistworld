@@ -14,12 +14,8 @@ mod persistence;
 mod physics;
 #[path = "player/mod.rs"]
 mod player;
-#[path = "rail/mod.rs"]
-mod rail;
 #[path = "telemetry/mod.rs"]
 mod telemetry;
-#[path = "vehicle/mod.rs"]
-mod vehicle;
 #[path = "world/mod.rs"]
 mod world;
 

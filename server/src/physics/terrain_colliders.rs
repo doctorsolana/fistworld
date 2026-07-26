@@ -6,7 +6,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use shared::components::{Npc, NpcPosition, Player, PlayerPosition};
 use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
-use shared::vehicle::{Vehicle, VehicleState};
 
 use crate::physics::layers;
 
@@ -121,19 +120,15 @@ fn desired_chunks_for_centers(centers: &[ChunkCoord], radius_chunks: i32) -> Has
 
 fn gather_centers(
     players: &Query<&PlayerPosition, With<Player>>,
-    vehicles: &Query<&VehicleState, With<Vehicle>>,
     npcs: &Query<&NpcPosition, With<Npc>>,
 ) -> Vec<ChunkCoord> {
+    // Anchor chain: players -> NPCs -> origin. If both go away the collider set
+    // silently collapses to chunk (0,0) and long-range raycasts pass through hills
+    // with no error, so keep at least one live anchor.
     let mut centers = Vec::new();
 
     for pos in players.iter() {
         centers.push(ChunkCoord::from_world_pos(pos.0));
-    }
-
-    if centers.is_empty() {
-        for vehicle in vehicles.iter() {
-            centers.push(ChunkCoord::from_world_pos(vehicle.position));
-        }
     }
 
     if centers.is_empty() {
@@ -157,12 +152,11 @@ pub fn sync_terrain_colliders(
     settings: Res<TerrainColliderSettings>,
     mut registry: ResMut<TerrainColliderRegistry>,
     players: Query<&PlayerPosition, With<Player>>,
-    vehicles: Query<&VehicleState, With<Vehicle>>,
     npcs: Query<&NpcPosition, With<Npc>>,
 ) {
     let terrain_version = terrain.modification_version();
     let full_rebuild_version = terrain.full_rebuild_version();
-    let centers = gather_centers(&players, &vehicles, &npcs);
+    let centers = gather_centers(&players, &npcs);
     let terrain_changed = registry.terrain_version != terrain_version;
     let full_rebuild_changed = registry.full_rebuild_version != full_rebuild_version;
     let resolution_changed = registry.heightfield_resolution != settings.heightfield_resolution;

@@ -10,16 +10,12 @@ use shared::components::{
 };
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 use shared::protocol::{
-    AssignRouteRequest, BuildStationRequest, BuildTrackRequest, BuyTrainRequest,
-    CreateCompanyRequest, DemolishRailRequest, NameSubmissionResult, NpcRagdollPoseBatch,
-    NpcRagdollStarted, PlayerInput, PlayerRoster, RailCommandRejected, RequestPlayerRoster,
-    SetPlayerCharacter, SetTimeOfDay, SetTrainCargoPolicyRequest, SpawnOilmanDebug,
-    SpawnPhysicsBoxDebug, SubmitPlayerName,
+    NameSubmissionResult, NpcRagdollPoseBatch, NpcRagdollStarted, PlayerInput, PlayerRoster,
+    RequestPlayerRoster, SetPlayerCharacter, SetTimeOfDay, SpawnOilmanDebug, SpawnPhysicsBoxDebug,
+    SubmitPlayerName,
 };
-use shared::vehicle::{InVehicle, Vehicle, VehicleDriver, VehicleState};
 
 use crate::net::input::ClientInputs;
-use crate::net::peer::peer_id_to_u64;
 use crate::persistence::io_queue::{ProfileIoQueue, SavePriority};
 use crate::persistence::profiles::PlayerProfiles;
 use crate::player::lifecycle::RespawnTimer;
@@ -85,21 +81,10 @@ pub fn handle_connections(
         ));
 
         commands.entity(client_entity).insert((
-            MessageReceiver::<CreateCompanyRequest>::default(),
-            MessageReceiver::<BuildTrackRequest>::default(),
-            MessageReceiver::<BuildStationRequest>::default(),
-            MessageReceiver::<BuyTrainRequest>::default(),
-            MessageReceiver::<AssignRouteRequest>::default(),
-            MessageReceiver::<SetTrainCargoPolicyRequest>::default(),
-            MessageReceiver::<DemolishRailRequest>::default(),
-        ));
-
-        commands.entity(client_entity).insert((
             MessageSender::<NpcRagdollStarted>::default(),
             MessageSender::<NpcRagdollPoseBatch>::default(),
             MessageSender::<NameSubmissionResult>::default(),
             MessageSender::<PlayerRoster>::default(),
-            MessageSender::<RailCommandRejected>::default(),
         ));
     }
 }
@@ -120,10 +105,8 @@ pub fn handle_disconnections(
         &PlayerVelocity,
         &Health,
         &PlayerProgression,
-        Option<&InVehicle>,
         Option<&RespawnTimer>,
     )>,
-    mut vehicles: Query<(&mut VehicleDriver, &VehicleState, &Vehicle)>,
     mut inputs: ResMut<ClientInputs>,
 ) {
     let client_entity = trigger.entity;
@@ -164,7 +147,6 @@ pub fn handle_disconnections(
         vel,
         health,
         progression,
-        in_vehicle,
         respawn_timer,
     ) in players.iter()
     {
@@ -176,8 +158,7 @@ pub fn handle_disconnections(
                 vel,
                 health,
                 progression,
-                in_vehicle,
-                respawn_timer,
+                        respawn_timer,
             ));
             break;
         }
@@ -190,7 +171,6 @@ pub fn handle_disconnections(
         vel,
         health,
         progression,
-        in_vehicle,
         respawn_timer,
     )) = found_player
     else {
@@ -201,41 +181,7 @@ pub fn handle_disconnections(
         profiles.peer_to_name.remove(&peer_id);
         profiles.name_to_peer.remove(&name_lower);
         inputs.latest.remove(&peer_id);
-        inputs.latest_by_driver_id.remove(&peer_id_to_u64(peer_id));
         return;
-    };
-
-    let (vehicle_data, in_veh) = if let Some(in_veh) = in_vehicle {
-        if let Ok((mut driver, veh_state, vehicle)) = vehicles.get_mut(in_veh.vehicle_entity) {
-            driver.driver_id = None;
-
-            let veh_type = vehicle.vehicle_type;
-            let veh_pos = [
-                veh_state.position.x,
-                veh_state.position.y,
-                veh_state.position.z,
-            ];
-            let veh_rot = [veh_state.heading, veh_state.pitch, veh_state.roll];
-            let veh_vel = [
-                veh_state.velocity.x,
-                veh_state.velocity.y,
-                veh_state.velocity.z,
-            ];
-            let veh_ang_vel = [
-                veh_state.angular_velocity_yaw,
-                veh_state.angular_velocity_pitch,
-                veh_state.angular_velocity_roll,
-            ];
-
-            (
-                Some((veh_type, veh_pos, veh_rot, veh_vel, veh_ang_vel)),
-                true,
-            )
-        } else {
-            (None, false)
-        }
-    } else {
-        (None, false)
     };
 
     let profile = PlayerProfile {
@@ -246,12 +192,6 @@ pub fn handle_disconnections(
         velocity: [vel.0.x, vel.0.y, vel.0.z],
         health_current: health.current,
         health_max: health.max,
-        in_vehicle: in_veh,
-        vehicle_type: vehicle_data.as_ref().map(|(vt, _, _, _, _)| *vt),
-        vehicle_position: vehicle_data.as_ref().map(|(_, pos, _, _, _)| *pos),
-        vehicle_rotation: vehicle_data.as_ref().map(|(_, _, rot, _, _)| *rot),
-        vehicle_velocity: vehicle_data.as_ref().map(|(_, _, _, vel, _)| *vel),
-        vehicle_angular_velocity: vehicle_data.as_ref().map(|(_, _, _, _, ang)| *ang),
         is_dead: respawn_timer.is_some() || health.is_dead(),
         death_timestamp: if respawn_timer.is_some() || health.is_dead() {
             Some(
@@ -292,16 +232,10 @@ pub fn handle_disconnections(
         name_lower, job_id
     );
 
-    for (mut driver, _, _) in vehicles.iter_mut() {
-        if driver.driver_id == Some(peer_id_to_u64(peer_id)) {
-            driver.driver_id = None;
-        }
-    }
 
     profiles.peer_to_name.remove(&peer_id);
     profiles.name_to_peer.remove(&name_lower);
     info!("Freed up name '{}' for peer {:?}", name_lower, peer_id);
 
     inputs.latest.remove(&peer_id);
-    inputs.latest_by_driver_id.remove(&peer_id_to_u64(peer_id));
 }

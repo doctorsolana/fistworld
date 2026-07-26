@@ -8,7 +8,6 @@ use lightyear::prelude::*;
 use shared::components::{LocalPlayer, Player};
 use shared::player::MOUSE_SENSITIVITY;
 use shared::protocol::{InputChannel, PlayerInput};
-use shared::vehicle::{VehicleDriver, VehicleInput};
 use std::f32::consts::FRAC_PI_2;
 
 use crate::render::systems::InputSettings;
@@ -34,9 +33,7 @@ pub struct InputState {
     pub right: bool,
     /// Jump request (spacebar)
     pub jump: bool,
-    /// Mouse-controlled yaw (used when on foot)
     pub yaw: f32,
-    /// Mouse-controlled pitch
     pub pitch: f32,
     pub interact: bool,
     pub interact_just_pressed: bool,
@@ -49,10 +46,7 @@ pub struct InputState {
 
     // Vehicle camera state
     /// True when we are currently driving a vehicle (used for camera + mouse look behavior)
-    pub in_vehicle: bool,
     /// When in vehicle: relative look offset from center (for looking around)
-    pub vehicle_look_yaw: f32,
-    pub vehicle_look_pitch: f32,
 
     /// Right-click = Aim Down Sights
 
@@ -86,9 +80,6 @@ impl Default for InputState {
             interact_just_pressed: false,
             shift: false,
             camera_mode: CameraMode::FirstPerson,
-            in_vehicle: false,
-            vehicle_look_yaw: 0.0,
-            vehicle_look_pitch: 0.0,
             inventory_open: false,
             pause_menu_open: false,
             map_open: false,
@@ -175,59 +166,12 @@ pub fn handle_mouse_input(
         // Apply user's sensitivity multiplier
         let sensitivity = MOUSE_SENSITIVITY * input_settings.mouse_sensitivity;
 
-        if input_state.in_vehicle {
-            // In vehicle: update relative look angles
-            input_state.vehicle_look_yaw -= delta.x * sensitivity;
-            input_state.vehicle_look_pitch -= delta.y * sensitivity;
-
-            // Clamp: can look ~90° left/right, ~60° up/down
-            input_state.vehicle_look_yaw =
-                input_state.vehicle_look_yaw.clamp(-FRAC_PI_2, FRAC_PI_2);
-            input_state.vehicle_look_pitch = input_state.vehicle_look_pitch.clamp(-0.5, 0.7);
-        } else {
-            // On foot: free look
-            input_state.yaw -= delta.x * sensitivity;
-            input_state.pitch -= delta.y * sensitivity;
-            input_state.pitch = input_state.pitch.clamp(-FRAC_PI_2 + 0.01, FRAC_PI_2 - 0.01);
-        }
+        input_state.yaw -= delta.x * sensitivity;
+        input_state.pitch -= delta.y * sensitivity;
+        input_state.pitch = input_state.pitch.clamp(-FRAC_PI_2 + 0.01, FRAC_PI_2 - 0.01);
     }
 }
 
-/// Helper to convert PeerId to u64 for driver tracking
-fn peer_id_to_u64(peer_id: PeerId) -> u64 {
-    match peer_id {
-        PeerId::Netcode(id) => id,
-        PeerId::Steam(id) => id,
-        PeerId::Local(id) => id,
-        _ => 0, // Server or other types
-    }
-}
-
-/// Update input state with whether we're driving a vehicle.
-/// (The camera uses the *smoothed vehicle Transform* directly; this is just for mouse-look mode.)
-pub fn update_vehicle_state(
-    mut input_state: ResMut<InputState>,
-    // In Lightyear 0.26, use LocalId to identify the local client peer id
-    client_query: Query<&LocalId, (With<crate::GameClient>, With<Connected>)>,
-    vehicles: Query<&VehicleDriver>,
-) {
-    // Get our peer ID from the connected client entity
-    let Some(our_peer_id) = client_query.iter().next().map(|r| r.0) else {
-        return;
-    };
-
-    let is_driving = vehicles
-        .iter()
-        .any(|driver| driver.driver_id == Some(peer_id_to_u64(our_peer_id)));
-
-    // If we just exited, reset look offsets.
-    if input_state.in_vehicle && !is_driving {
-        input_state.vehicle_look_yaw = 0.0;
-        input_state.vehicle_look_pitch = 0.0;
-    }
-
-    input_state.in_vehicle = is_driving;
-}
 
 /// Send input to server
 pub fn handle_send_input_to_server(
@@ -288,7 +232,6 @@ pub fn handle_send_input_to_server(
         fly_down: input_state.fly_down,
         fly_fast: input_state.shift,
         yaw: input_state.yaw,
-        vehicle_input: None,
         interact: input_state.interact_just_pressed,
     };
 
@@ -300,28 +243,6 @@ pub fn handle_send_input_to_server(
         input.right = false;
         input.jump = false;
         input.interact = false;
-        input.fly_down = false;
-        input.fly_fast = false;
-        input.vehicle_input = None;
-    } else if input_state.in_vehicle {
-        input.vehicle_input = Some(VehicleInput {
-            throttle: if input_state.forward { 1.0 } else { 0.0 },
-            brake: if input_state.backward { 1.0 } else { 0.0 },
-            steer: if input_state.left {
-                -1.0
-            } else if input_state.right {
-                1.0
-            } else {
-                0.0
-            },
-            air_control: input_state.shift, // Hold Shift for air tricks
-        });
-        input.forward = false;
-        input.backward = false;
-        input.left = false;
-        input.right = false;
-        input.jump = false; // Can't jump while in vehicle
-        input.fly_mode = false;
         input.fly_down = false;
         input.fly_fast = false;
     }

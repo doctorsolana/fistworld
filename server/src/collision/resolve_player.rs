@@ -6,7 +6,6 @@ use shared::building::{BuildingPosition, PlacedBuilding};
 use shared::components::{FlyMode, Player, PlayerGrounded, PlayerPosition, PlayerVelocity};
 use shared::player::{PLAYER_HEIGHT, PLAYER_RADIUS, STEP_UP_HEIGHT};
 use shared::terrain::WorldTerrain;
-use shared::vehicle::InVehicle;
 use std::time::Instant;
 
 use crate::ai::ragdoll::{CorpseBodyPoint, CorpseCollisionIndex};
@@ -32,7 +31,6 @@ pub fn handle_player_static_collisions(
             &mut PlayerPosition,
             &mut PlayerVelocity,
             &mut PlayerGrounded,
-            Option<&InVehicle>,
             Option<&FlyMode>,
         ),
         With<Player>,
@@ -48,8 +46,8 @@ pub fn handle_player_static_collisions(
     let building_lib = building_derived.as_deref();
     let building_index = building_index.as_deref();
 
-    for (mut pos, mut vel, mut grounded, in_vehicle, fly_mode) in players.iter_mut() {
-        if in_vehicle.is_some() || fly_mode.is_some() {
+    for (mut pos, mut vel, mut grounded, fly_mode) in players.iter_mut() {
+        if fly_mode.is_some() {
             grounded.on_static = false;
             continue;
         }

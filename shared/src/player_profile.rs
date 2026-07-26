@@ -5,11 +5,10 @@
 //! collider baker system.
 
 use crate::player::SPAWN_POSITION;
-use crate::vehicle::VehicleType;
 use serde::{Deserialize, Serialize};
 
 /// Current profile version for migration support
-pub const PROFILE_VERSION: u32 = 3;
+pub const PROFILE_VERSION: u32 = 4;
 
 /// Serializable player profile containing all persistent state
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,19 +35,6 @@ pub struct PlayerProfile {
 
     // === Inventory ===
 
-    // === Vehicle State ===
-    /// Whether player was in a vehicle when they disconnected
-    pub in_vehicle: bool,
-    /// Type of vehicle (if in_vehicle == true)
-    pub vehicle_type: Option<VehicleType>,
-    /// Vehicle world position [x, y, z]
-    pub vehicle_position: Option<[f32; 3]>,
-    /// Vehicle orientation [heading, pitch, roll] in radians
-    pub vehicle_rotation: Option<[f32; 3]>,
-    /// Vehicle linear velocity [x, y, z]
-    pub vehicle_velocity: Option<[f32; 3]>,
-    /// Vehicle angular velocity [yaw, pitch, roll] in radians/sec
-    pub vehicle_angular_velocity: Option<[f32; 3]>,
 
     // === Death State ===
     /// Whether player is currently dead (awaiting respawn)
@@ -99,13 +85,6 @@ impl PlayerProfile {
             health_current: 100.0,
             health_max: 100.0,
 
-            // Not in vehicle
-            in_vehicle: false,
-            vehicle_type: None,
-            vehicle_position: None,
-            vehicle_rotation: None,
-            vehicle_velocity: None,
-            vehicle_angular_velocity: None,
 
             // Not dead
             is_dead: false,

@@ -47,8 +47,7 @@ pub fn update_desert_walking_ambient(
 
     let biome = terrain.get_biome(pos.0.x, pos.0.z);
     let walking =
-        (input_state.forward || input_state.backward || input_state.left || input_state.right)
-            && !input_state.in_vehicle;
+        input_state.forward || input_state.backward || input_state.left || input_state.right;
     let should_play = walking && biome == Biome::Desert;
 
     for sink in ambient.iter() {
@@ -72,29 +71,15 @@ pub fn cleanup_ambient_sounds(
     audio_state.ambient_spawned = false;
 }
 
-/// Stop/despawn remote looped spatial sounds (footsteps + vehicle engines).
-///
-/// Remote gunshots are one-shots with `DESPAWN` and don't need explicit cleanup.
+/// Stop/despawn remote looped spatial sounds (footsteps).
 pub fn cleanup_remote_loop_sounds(
     mut commands: Commands,
     mut emitter_index: ResMut<RemoteAudioEmitterIndex>,
     footsteps: Query<Entity, With<RemoteFootstepEmitter>>,
-    remote_idle: Query<Entity, With<RemoteVehicleIdleSound>>,
-    remote_cruise: Query<Entity, With<RemoteVehicleCruiseSound>>,
 ) {
     for e in footsteps.iter() {
         commands.entity(e).despawn();
     }
-    for e in remote_idle.iter() {
-        commands.entity(e).despawn();
-    }
-    for e in remote_cruise.iter() {
-        commands.entity(e).despawn();
-    }
     emitter_index.footstep_targets.clear();
     emitter_index.footstep_by_emitter.clear();
-    emitter_index.vehicle_idle_targets.clear();
-    emitter_index.vehicle_idle_by_emitter.clear();
-    emitter_index.vehicle_cruise_targets.clear();
-    emitter_index.vehicle_cruise_by_emitter.clear();
 }

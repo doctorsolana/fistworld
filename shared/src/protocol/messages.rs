@@ -2,9 +2,6 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::{NpcArchetype, PlayerCharacter};
-use crate::economy::CargoKind;
-use crate::rail::{RouteStop, StationId, TrackSegmentId, TrainId};
-use crate::vehicle::VehicleInput;
 
 /// Player input sent from client to server each tick.
 #[derive(Debug, PartialEq, Clone)]
@@ -23,9 +20,7 @@ pub struct PlayerInput {
     pub fly_fast: bool,
     /// Player's facing direction (yaw) for movement calculation
     pub yaw: f32,
-    /// If in a vehicle, this contains the vehicle input
-    pub vehicle_input: Option<VehicleInput>,
-    /// Request to enter/exit vehicle
+    /// Context-sensitive interact request
     pub interact: bool,
 }
 
@@ -33,9 +28,6 @@ pub struct PlayerInput {
 struct PackedPlayerInput {
     flags: u16,
     yaw_q: u16,
-    throttle_q: u8,
-    brake_q: u8,
-    steer_q: i8,
 }
 
 const FLAG_FORWARD: u16 = 1 << 0;
@@ -47,29 +39,8 @@ const FLAG_FLY_MODE: u16 = 1 << 5;
 const FLAG_FLY_DOWN: u16 = 1 << 6;
 const FLAG_FLY_FAST: u16 = 1 << 7;
 const FLAG_INTERACT: u16 = 1 << 8;
-const FLAG_HAS_VEHICLE_INPUT: u16 = 1 << 9;
-const FLAG_VEHICLE_AIR_CONTROL: u16 = 1 << 10;
+// bits 9/10 intentionally vacant (were vehicle input flags).
 // bit 11 intentionally vacant (was FLAG_BLOCK); PackedPlayerInput is rewritten in P6.
-
-#[inline]
-fn quantize_unit_u8(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0).round() as u8
-}
-
-#[inline]
-fn dequantize_unit_u8(value: u8) -> f32 {
-    value as f32 / 255.0
-}
-
-#[inline]
-fn quantize_signed_i8(value: f32) -> i8 {
-    (value.clamp(-1.0, 1.0) * 127.0).round() as i8
-}
-
-#[inline]
-fn dequantize_signed_i8(value: i8) -> f32 {
-    (value as f32 / 127.0).clamp(-1.0, 1.0)
-}
 
 #[inline]
 fn quantize_yaw_u16(yaw: f32) -> u16 {
@@ -95,7 +66,6 @@ impl Default for PlayerInput {
             fly_down: false,
             fly_fast: false,
             yaw: 0.0,
-            vehicle_input: None,
             interact: false,
         }
     }
@@ -134,26 +104,9 @@ impl Serialize for PlayerInput {
         if self.interact {
             flags |= FLAG_INTERACT;
         }
-        let (throttle_q, brake_q, steer_q) = if let Some(vehicle_input) = &self.vehicle_input {
-            flags |= FLAG_HAS_VEHICLE_INPUT;
-            if vehicle_input.air_control {
-                flags |= FLAG_VEHICLE_AIR_CONTROL;
-            }
-            (
-                quantize_unit_u8(vehicle_input.throttle),
-                quantize_unit_u8(vehicle_input.brake),
-                quantize_signed_i8(vehicle_input.steer),
-            )
-        } else {
-            (0, 0, 0)
-        };
-
         PackedPlayerInput {
             flags,
             yaw_q: quantize_yaw_u16(self.yaw),
-            throttle_q,
-            brake_q,
-            steer_q,
         }
         .serialize(serializer)
     }
@@ -165,7 +118,6 @@ impl<'de> Deserialize<'de> for PlayerInput {
         D: serde::Deserializer<'de>,
     {
         let packed = PackedPlayerInput::deserialize(deserializer)?;
-        let has_vehicle_input = (packed.flags & FLAG_HAS_VEHICLE_INPUT) != 0;
 
         Ok(Self {
             forward: (packed.flags & FLAG_FORWARD) != 0,
@@ -177,12 +129,6 @@ impl<'de> Deserialize<'de> for PlayerInput {
             fly_down: (packed.flags & FLAG_FLY_DOWN) != 0,
             fly_fast: (packed.flags & FLAG_FLY_FAST) != 0,
             yaw: dequantize_yaw_u16(packed.yaw_q),
-            vehicle_input: has_vehicle_input.then_some(VehicleInput {
-                throttle: dequantize_unit_u8(packed.throttle_q),
-                brake: dequantize_unit_u8(packed.brake_q),
-                steer: dequantize_signed_i8(packed.steer_q),
-                air_control: (packed.flags & FLAG_VEHICLE_AIR_CONTROL) != 0,
-            }),
             interact: (packed.flags & FLAG_INTERACT) != 0,
         })
     }
@@ -297,62 +243,6 @@ pub struct PlayerRosterEntry {
 }
 
 /// Client -> Server: create or join the player's railroad company.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct CreateCompanyRequest {
-    pub name: String,
-}
-
-/// Client -> Server: request a new freeform cubic rail segment.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct BuildTrackRequest {
-    pub start: Vec3,
-    pub control_a: Vec3,
-    pub control_b: Vec3,
-    pub end: Vec3,
-}
-
-/// Client -> Server: request a station owned by the player's company.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct BuildStationRequest {
-    pub position: Vec3,
-    pub name: String,
-}
-
-/// Client -> Server: buy a train at an owned station.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct BuyTrainRequest {
-    pub station: StationId,
-}
-
-/// Client -> Server: assign an ordered stop-list route to a train.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct AssignRouteRequest {
-    pub train: TrainId,
-    pub stops: Vec<RouteStop>,
-}
-
-/// Client -> Server: prefer a cargo type for a train.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct SetTrainCargoPolicyRequest {
-    pub train: TrainId,
-    pub cargo: Option<CargoKind>,
-}
-
-/// Client -> Server: demolish owned rail infrastructure.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct DemolishRailRequest {
-    pub track: Option<TrackSegmentId>,
-    pub station: Option<StationId>,
-    pub train: Option<TrainId>,
-}
-
-/// Server -> Client: authoritative command rejection reason.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct RailCommandRejected {
-    pub reason: String,
-}
-
-/// Fixed reduced-body id set for Oilman ragdoll sync.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Eq, Hash)]
 pub enum RagdollBodyId {
     Pelvis,
@@ -477,7 +367,6 @@ mod tests {
             fly_down: false,
             fly_fast: true,
             yaw: 1.2345,
-            vehicle_input: None,
             interact: true,
         };
 
@@ -493,43 +382,10 @@ mod tests {
         assert_eq!(decoded.fly_down, input.fly_down);
         assert_eq!(decoded.fly_fast, input.fly_fast);
         assert_eq!(decoded.interact, input.interact);
-        assert!(decoded.vehicle_input.is_none());
 
         let yaw_step = std::f32::consts::TAU / u16::MAX as f32;
         assert!((decoded.yaw - input.yaw).abs() <= yaw_step);
         assert!(bytes.len() <= 8);
-    }
-
-    #[test]
-    fn player_input_roundtrip_vehicle_preserves_air_control_and_quantized_controls() {
-        let input = PlayerInput {
-            forward: false,
-            backward: true,
-            left: false,
-            right: true,
-            jump: false,
-            fly_mode: true,
-            fly_down: true,
-            fly_fast: false,
-            yaw: -2.4,
-            vehicle_input: Some(VehicleInput {
-                throttle: 0.73,
-                brake: 0.15,
-                steer: -0.44,
-                air_control: true,
-            }),
-            interact: false,
-        };
-
-        let bytes = bincode::serialize(&input).unwrap();
-        let decoded: PlayerInput = bincode::deserialize(&bytes).unwrap();
-        let vehicle = decoded.vehicle_input.expect("vehicle input should decode");
-        let expected_vehicle = input.vehicle_input.as_ref().unwrap();
-
-        assert!(vehicle.air_control);
-        assert!((vehicle.throttle - expected_vehicle.throttle).abs() <= (1.0 / 255.0));
-        assert!((vehicle.brake - expected_vehicle.brake).abs() <= (1.0 / 255.0));
-        assert!((vehicle.steer - expected_vehicle.steer).abs() <= (1.0 / 127.0));
     }
 
     #[test]

@@ -8,30 +8,11 @@ use std::collections::{HashMap, HashSet};
 #[derive(Resource)]
 pub struct GameAudio {
     pub desert_ambient: Handle<AudioSource>,
-    // Vehicle sounds
-    pub hover_idle: Handle<AudioSource>,
-    pub bike_cruise: Handle<AudioSource>,
 }
 
 /// Marker for ambient sound entities.
 #[derive(Component)]
 pub struct AmbientSound;
-
-/// Marker for vehicle idle hover sound.
-#[derive(Component)]
-pub struct VehicleIdleSound;
-
-/// Marker for vehicle cruise/driving sound.
-#[derive(Component)]
-pub struct VehicleCruiseSound;
-
-/// Track vehicle audio state.
-#[derive(Resource, Default)]
-pub struct VehicleAudioState {
-    pub sounds_spawned: bool,
-    /// Track if player was in vehicle last frame (for detecting enter/exit)
-    pub was_in_vehicle: bool,
-}
 
 /// Track audio state.
 #[derive(Resource, Default)]
@@ -106,26 +87,10 @@ pub const REMOTE_FOOTSTEP_START_SPEED: f32 = 0.6;
 pub const REMOTE_FOOTSTEP_STOP_SPEED: f32 = 0.25;
 pub const REMOTE_FOOTSTEP_VOLUME: f32 = 0.22;
 
-#[derive(Component, Clone, Copy, Debug)]
-pub struct RemoteVehicleIdleSound {
-    pub vehicle: Entity,
-}
-
-#[derive(Component, Clone, Copy, Debug)]
-pub struct RemoteVehicleCruiseSound {
-    pub vehicle: Entity,
-}
-
-pub const REMOTE_VEHICLE_MAX_SPAWN_DISTANCE: f32 = 160.0;
-pub const REMOTE_VEHICLE_DESPAWN_DISTANCE: f32 = 220.0;
 
 /// Incremental cache for remote audio emitter ownership/membership.
 #[derive(Resource, Default)]
 pub struct RemoteAudioEmitterIndex {
     pub footstep_targets: HashSet<Entity>,
     pub footstep_by_emitter: HashMap<Entity, Entity>,
-    pub vehicle_idle_targets: HashSet<Entity>,
-    pub vehicle_idle_by_emitter: HashMap<Entity, Entity>,
-    pub vehicle_cruise_targets: HashSet<Entity>,
-    pub vehicle_cruise_by_emitter: HashMap<Entity, Entity>,
 }

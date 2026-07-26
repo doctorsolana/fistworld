@@ -63,11 +63,6 @@ fn wrap_yaw_delta(delta: f32) -> f32 {
 /// Sync player transforms (visibility is handled by update_local_player_visibility)
 pub fn sync_player_transforms(
     time: Res<Time>,
-    vehicles: Query<
-        (Entity, &Vehicle, &VehicleDriver, &Transform),
-        (With<Vehicle>, Without<Player>),
-    >,
-    hover_bobs: Query<(&VehicleHoverBob, &ChildOf)>,
     mut players: Query<
         (
             &Player,
@@ -76,10 +71,7 @@ pub fn sync_player_transforms(
             Option<&LocalPlayer>,
             &mut Transform,
         ),
-        Without<Vehicle>,
     >,
-    mut driver_to_vehicle: Local<HashMap<u64, (Entity, VehicleType, Vec3, Quat)>>,
-    mut vehicle_bobs: Local<HashMap<Entity, f32>>,
     mut local_net_debug: Local<LocalPlayerNetDebugWindow>,
 ) {
     let now = time.elapsed_secs();
@@ -102,60 +94,12 @@ pub fn sync_player_transforms(
     let t_pos = 1.0_f32 - (-pos_rate * dt).exp();
     let t_rot = 1.0_f32 - (-rot_rate * dt).exp();
 
-    // Map: driver_id -> vehicle transform (already smoothed in `sync_vehicle_transforms`)
-    driver_to_vehicle.clear();
-    for (entity, vehicle, driver, veh_transform) in vehicles.iter() {
-        if let Some(driver_id) = driver.driver_id {
-            driver_to_vehicle.insert(
-                driver_id,
-                (
-                    entity,
-                    vehicle.vehicle_type,
-                    veh_transform.translation,
-                    veh_transform.rotation,
-                ),
-            );
-        }
-    }
-
-    let t = now;
-    vehicle_bobs.clear();
-    for (hover, parent) in hover_bobs.iter() {
-        let vehicle_entity = parent.parent();
-        let bob = (t * hover.frequency + hover.phase).sin() * hover.amplitude;
-        vehicle_bobs.insert(vehicle_entity, bob);
-    }
-
     let mut saw_local_player = false;
 
-    for (player, position, rotation, is_local, mut transform) in players.iter_mut() {
-        // If this player is driving a vehicle, attach their visual to the vehicle to eliminate
-        // relative jitter between player and bike at high speed.
-        if let Some((veh_entity, vehicle_type, veh_pos, veh_rot)) =
-            driver_to_vehicle.get(&peer_id_to_u64(player.client_id))
-        {
-            let (bob, is_hover_bike) = match vehicle_bobs.get(veh_entity) {
-                Some(bob) => (*bob, true),
-                None => (0.0, false),
-            };
-            let (seat_height, seat_forward) = match vehicle_type {
-                VehicleType::Motorbike if is_hover_bike => (0.90, 0.45),
-                VehicleType::Motorbike => (0.65, 0.20),
-                VehicleType::Car | VehicleType::CarV2 => (0.92, 0.08),
-            };
-
-            // Seat offset: slightly above and forward/back on the vehicle.
-            let seat_local = Vec3::new(0.0, seat_height, seat_forward) + Vec3::Y * bob;
-            let seat_offset = *veh_rot * seat_local;
-            let target_pos = *veh_pos + seat_offset;
-            // SNAP directly to vehicle - no lerp needed, vehicle is already smoothed
-            transform.translation = target_pos;
-            transform.rotation = *veh_rot;
-        } else {
+    for (_player, position, rotation, is_local, mut transform) in players.iter_mut() {
             transform.translation = transform.translation.lerp(position.0, t_pos);
-            let target_rot = Quat::from_rotation_y(rotation.0);
-            transform.rotation = transform.rotation.slerp(target_rot, t_rot);
-        }
+        let target_rot = Quat::from_rotation_y(rotation.0);
+        transform.rotation = transform.rotation.slerp(target_rot, t_rot);
 
         if local_net_debug.enabled && is_local.is_some() {
             saw_local_player = true;

@@ -68,7 +68,6 @@ fn movement_anim_to_node(anim: MovementAnim, assets: &CharacterAssets) -> Animat
         MovementAnim::StrafeLeft => assets.strafe_left_node,
         MovementAnim::StrafeRight => assets.strafe_right_node,
         MovementAnim::Run => assets.run_node,
-        MovementAnim::Driving => assets.driving_node,
         MovementAnim::Jump => assets.jump_node,
         MovementAnim::Fall => assets.fall_node,
     }
@@ -80,9 +79,6 @@ fn determine_local_target_anim(
     speed_xz: f32,
     was_moving: bool,
 ) -> MovementAnim {
-    if input.in_vehicle {
-        return MovementAnim::Driving;
-    }
 
     let forward = input.forward;
     let backward = input.backward;
@@ -185,23 +181,14 @@ pub fn update_player_animation(
     >,
     local_players: Query<(), With<LocalPlayer>>,
     players_with_health: Query<&Health, With<Player>>,
-    players: Query<&Player>,
     player_transforms: Query<&Transform, With<Player>>,
     player_jump_states: Query<&PlayerJumpState, With<Player>>,
     player_water_states: Query<&PlayerWaterState, With<Player>>,
-    vehicles: Query<&VehicleDriver, With<Vehicle>>,
 ) {
     let Some(character_assets) = character_assets else {
         return;
     };
     let dt = time.delta_secs().max(1e-6);
-    let mut active_drivers: HashSet<u64> = HashSet::new();
-    for driver in vehicles.iter() {
-        if let Some(id) = driver.driver_id {
-            active_drivers.insert(id);
-        }
-    }
-
     for (owner, rig_character, mut state, mut player) in anim_roots.iter_mut() {
         let Some(assets) = character_assets.characters.get(&rig_character.0) else {
             continue;
@@ -288,17 +275,6 @@ pub fn update_player_animation(
             };
 
         let is_local = local_players.contains(owner.0);
-        let is_driving_remote = players
-            .get(owner.0)
-            .ok()
-            .map(|p| peer_id_to_u64(p.client_id))
-            .map(|id| active_drivers.contains(&id))
-            .unwrap_or(false);
-        let is_driving = if is_local {
-            input_state.in_vehicle
-        } else {
-            is_driving_remote
-        };
         let in_water = player_water_states
             .get(owner.0)
             .map(|s| s.in_water)
@@ -324,7 +300,7 @@ pub fn update_player_animation(
                 | MovementAnim::StrafeRight
         );
 
-        let jump_pressed = is_local && !is_driving && input_state.jump && !in_water;
+        let jump_pressed = is_local && input_state.jump && !in_water;
         let jump_just_pressed = jump_pressed && !state.last_jump_pressed;
         let fall_looks_like_jump = assets.fall_node == assets.jump_node;
         let remote_jump_timer = if !is_local {
@@ -392,9 +368,7 @@ pub fn update_player_animation(
         state.last_jump_pressed = if is_local { input_state.jump } else { false };
 
         let allow_fall_anim = !fall_looks_like_jump || state.airborne_from_jump;
-        let target_anim = if is_driving {
-            MovementAnim::Driving
-        } else if state.airborne && state.jump_timer > 0.0 {
+        let target_anim = if state.airborne && state.jump_timer > 0.0 {
             MovementAnim::Jump
         } else if state.airborne && allow_fall_anim {
             MovementAnim::Fall

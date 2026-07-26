@@ -1,8 +1,6 @@
 //! Fixed-update schedule sets and system wiring.
 //!
-//! Default: the full FistForce simulation (physics, AI, persistence). Set `FISTFORCE_RAIL=1` (same flag as the client) to run the
-//! rail-tycoon prototype schedule instead; the two consume the same network
-//! messages (e.g. `SubmitPlayerName`), so they are wired mutually exclusively.
+//! The full simulation schedule (physics, AI, persistence).
 
 use bevy::ecs::schedule::SystemSet;
 use bevy::prelude::*;
@@ -15,27 +13,13 @@ use crate::net;
 use crate::persistence;
 use crate::physics;
 use crate::player;
-use crate::rail;
 use crate::telemetry;
-use crate::vehicle;
 use crate::world;
 
 use super::bootstrap::server_is_started;
 
-/// `FISTFORCE_RAIL=1`: run the rail-tycoon prototype instead of the shooter.
-pub(crate) fn rail_mode_enabled() -> bool {
-    std::env::var("FISTFORCE_RAIL")
-        .map(|value| matches!(value.trim(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false)
-}
-
 pub(crate) fn configure_fixed_schedule(app: &mut App) {
-    if rail_mode_enabled() {
-        info!("FISTFORCE_RAIL=1: wiring rail-tycoon server schedule");
-        configure_rail_fixed_schedule(app);
-    } else {
-        configure_fps_fixed_schedule(app);
-    }
+    configure_fps_fixed_schedule(app);
 }
 
 #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -43,7 +27,6 @@ enum FpsServerSet {
     WorldTick,
     PhysicsWorld,
     NetIngress,
-    VehicleSim,
     AISim,
     PhysicsControl,
     PhysicsPost,
@@ -59,7 +42,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             FpsServerSet::WorldTick,
             FpsServerSet::PhysicsWorld,
             FpsServerSet::NetIngress,
-            FpsServerSet::VehicleSim,
             FpsServerSet::AISim,
             FpsServerSet::PhysicsControl,
             FpsServerSet::PhysicsPost,
@@ -114,19 +96,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         )
             .chain()
             .in_set(FpsServerSet::NetIngress)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
-            vehicle::interaction::handle_vehicle_interaction_requests,
-            vehicle::simulation::ensure_car_suspension_state,
-            vehicle::simulation::update_vehicles,
-            collision::resolve_vehicle::handle_vehicle_static_collisions,
-        )
-            .chain()
-            .in_set(FpsServerSet::VehicleSim)
             .run_if(server_is_started),
     );
 
@@ -228,94 +197,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             telemetry::perf::update_server_perf_log.after(FpsServerSet::Persistence),
             telemetry::network::sample_replication_change_pressure.after(FpsServerSet::Persistence),
         )
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        PostUpdate,
-        telemetry::network::sample_link_flow_post_send
-            .after(ConnectionSystems::Send)
-            .before(LinkSystems::Send)
-            .run_if(server_is_started),
-    );
-}
-
-#[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
-enum RailServerSet {
-    WorldTick,
-    NetIngress,
-    RailCommands,
-    RailSim,
-    Telemetry,
-}
-
-fn configure_rail_fixed_schedule(app: &mut App) {
-    app.configure_sets(
-        FixedUpdate,
-        (
-            RailServerSet::WorldTick,
-            RailServerSet::NetIngress,
-            RailServerSet::RailCommands,
-            RailServerSet::RailSim,
-            RailServerSet::Telemetry,
-        )
-            .chain(),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
-            world::time::handle_set_time_of_day,
-            world::time::update_world_time,
-        )
-            .chain()
-            .in_set(RailServerSet::WorldTick)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
-            net::connection::handle_connections,
-            rail::handle_company_name_submission,
-            rail::handle_create_company_requests,
-        )
-            .chain()
-            .in_set(RailServerSet::NetIngress)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
-            rail::handle_build_track_requests,
-            rail::handle_build_station_requests,
-            rail::handle_buy_train_requests,
-            rail::handle_assign_route_requests,
-            rail::handle_set_train_cargo_policy_requests,
-            rail::handle_demolish_rail_requests,
-        )
-            .chain()
-            .in_set(RailServerSet::RailCommands)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (rail::tick_economy, rail::update_train_movement)
-            .chain()
-            .in_set(RailServerSet::RailSim)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
-            telemetry::network::sample_replication_change_pressure,
-            telemetry::perf::update_server_perf_log,
-        )
-            .chain()
-            .in_set(RailServerSet::Telemetry)
             .run_if(server_is_started),
     );
 

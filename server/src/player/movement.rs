@@ -9,7 +9,6 @@ use shared::physics::{step_character, WATER_SWIM_DEPTH};
 use shared::player::JUMP_ANIM_MIN_SECS;
 use shared::protocol::{PlayerInput, FIXED_TIMESTEP_HZ};
 use shared::terrain::WorldTerrain;
-use shared::vehicle::{InVehicle, VehicleState};
 
 use crate::net::input::ClientInputs;
 use crate::player::lifecycle::{is_player_alive, RespawnTimer};
@@ -29,11 +28,9 @@ pub fn update_players(
         &mut PlayerGrounded,
         Option<&mut PlayerJumpState>,
         Option<&mut PlayerWaterState>,
-        Option<&InVehicle>,
         Option<&RespawnTimer>,
         Option<&FlyMode>,
     )>,
-    vehicles: Query<&VehicleState>,
 ) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     let default_input = PlayerInput::default();
@@ -48,7 +45,6 @@ pub fn update_players(
         mut grounded,
         jump_state,
         water_state,
-        in_vehicle,
         respawn_timer,
         fly_mode,
     ) in players.iter_mut()
@@ -67,31 +63,12 @@ pub fn update_players(
             continue;
         }
 
-        if let Some(in_veh) = in_vehicle {
-            if let Ok(veh_state) = vehicles.get(in_veh.vehicle_entity) {
-                position.0 = veh_state.position;
-                rotation.0 = veh_state.heading;
-                velocity.0 = Vec3::ZERO;
-                grounded.on_terrain = true;
-                if fly_mode.is_some() {
-                    commands.entity(entity).remove::<FlyMode>();
-                }
-                if jump_state.is_some() {
-                    commands.entity(entity).remove::<PlayerJumpState>();
-                }
-                if water_state.is_some() {
-                    commands.entity(entity).remove::<PlayerWaterState>();
-                }
-                continue;
-            }
-        }
-
         let input = inputs
             .latest
             .get(&player.client_id)
             .unwrap_or(&default_input);
 
-        let did_jump = if input.fly_mode && in_vehicle.is_none() {
+        let did_jump = if input.fly_mode {
             if fly_mode.is_none() {
                 commands.entity(entity).insert(FlyMode);
             }

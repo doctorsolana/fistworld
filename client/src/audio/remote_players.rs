@@ -20,9 +20,6 @@ pub fn ensure_remote_footstep_emitters(
     players: Query<(Entity, &Player, &Transform), (With<Player>, Without<LocalPlayer>)>,
     // NPCs
     npcs: Query<(Entity, &Transform), With<Npc>>,
-    // Vehicles to identify which players are driving (no footsteps)
-    vehicles: Query<&VehicleDriver, With<Vehicle>>,
-    mut driving_ids_cache: Local<HashSet<u64>>,
     mut candidate_cache: Local<Vec<(Entity, Vec3, f32)>>,
 ) {
     if !audio_state.assets_ready {
@@ -40,21 +37,11 @@ pub fn ensure_remote_footstep_emitters(
     }
     let available_slots = audio_manager.max_remote_footsteps - current_count;
 
-    driving_ids_cache.clear();
-    for driver in vehicles.iter() {
-        if let Some(id) = driver.driver_id {
-            driving_ids_cache.insert(id);
-        }
-    }
-
     candidate_cache.clear();
     let max_dist_sq = REMOTE_FOOTSTEP_MAX_SPAWN_DISTANCE * REMOTE_FOOTSTEP_MAX_SPAWN_DISTANCE;
 
-    for (entity, player, transform) in players.iter() {
-        let player_id = peer_id_to_u64(player.client_id);
-        if driving_ids_cache.contains(&player_id)
-            || emitter_index.footstep_targets.contains(&entity)
-        {
+    for (entity, _player, transform) in players.iter() {
+        if emitter_index.footstep_targets.contains(&entity) {
             continue;
         }
 

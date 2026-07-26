@@ -23,5 +23,4 @@ pub fn setup_resources(app: &mut App) {
     // Input resource
     app.init_resource::<input::InputState>();
     app.init_resource::<game_systems::LastCameraMode>();
-    rail::setup_rail_resources(app);
 }

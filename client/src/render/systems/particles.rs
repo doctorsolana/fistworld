@@ -2,9 +2,7 @@
 //!
 //! Sand/dust trail particles for vehicles.
 
-use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use shared::vehicle::{vehicle_def, Vehicle, VehicleState};
 
 // =============================================================================
 // COMPONENTS & RESOURCES
@@ -66,107 +64,6 @@ pub fn setup_particle_assets(
 }
 
 // =============================================================================
-// SPAWNING
-// =============================================================================
-
-const MAX_SAND_PARTICLES: usize = 50;
-
-/// Spawn sand particles behind moving vehicles
-pub fn spawn_sand_particles(
-    mut commands: Commands,
-    particle_assets: Option<Res<ParticleAssets>>,
-    vehicles: Query<(&Vehicle, &VehicleState, &Transform)>,
-    existing_particles: Query<(), With<SandParticle>>,
-    time: Res<Time>,
-) {
-    let Some(assets) = particle_assets else {
-        return;
-    };
-
-    // Don't spawn if already at cap
-    if existing_particles.iter().len() >= MAX_SAND_PARTICLES {
-        return;
-    }
-
-    for (vehicle, state, transform) in vehicles.iter() {
-        let def = vehicle_def(vehicle.vehicle_type);
-        // Only spawn particles when grounded and moving
-        if !state.grounded {
-            continue;
-        }
-
-        // Use horizontal speed only: hover/settling vertical jitter shouldn't create dust.
-        let horizontal_velocity = Vec3::new(state.velocity.x, 0.0, state.velocity.z);
-        let speed = horizontal_velocity.length();
-        if speed < 2.0 {
-            continue; // Too slow for dust
-        }
-
-        // Spawn rate increases with speed
-        // At 10 m/s: ~15 particles/sec, at max speed: ~40 particles/sec
-        let speed_factor = (speed / def.max_speed).clamp(0.0, 1.0);
-        let spawn_rate = 15.0 + speed_factor * 25.0;
-        let spawn_chance = spawn_rate * time.delta_secs();
-
-        // Use a simple pseudo-random based on time
-        let random_val = (time.elapsed_secs() * 1000.0).fract();
-        if random_val > spawn_chance {
-            continue;
-        }
-
-        // Spawn position: behind the vehicle, slightly to the sides
-        let bike_rotation = transform.rotation;
-        let back_offset = bike_rotation * Vec3::new(0.0, 0.0, def.size.z * 0.6); // Behind the vehicle
-
-        // Add randomness to spawn position
-        let random_x = ((time.elapsed_secs() * 3456.789).fract() - 0.5) * (def.size.x * 0.4);
-        let random_z = ((time.elapsed_secs() * 7891.234).fract() - 0.5) * (def.size.z * 0.2);
-        let side_offset = bike_rotation * Vec3::new(random_x, 0.0, random_z);
-
-        let spawn_pos = transform.translation + back_offset + side_offset;
-
-        // Particle velocity: upward and backward with some spread
-        let up_speed = 2.0 + speed_factor * 3.0;
-        let back_speed = speed * 0.3;
-        let random_spread_x = ((time.elapsed_secs() * 5678.123).fract() - 0.5) * 2.0;
-        let random_spread_z = ((time.elapsed_secs() * 9012.456).fract() - 0.5) * 2.0;
-
-        let velocity = Vec3::new(random_spread_x, up_speed, random_spread_z)
-            + bike_rotation * Vec3::new(0.0, 0.0, back_speed);
-
-        // Particle size scales with speed
-        let base_scale = 0.08 + speed_factor * 0.15;
-        let scale_variation = ((time.elapsed_secs() * 2345.678).fract() - 0.5) * 0.04;
-        let initial_scale = base_scale + scale_variation;
-
-        // Lifetime: faster = longer visible trail
-        let lifetime = 0.8 + speed_factor * 0.7;
-
-        // Pick random material
-        let mat_idx = ((time.elapsed_secs() * 8765.432).fract()
-            * assets.sand_materials.len() as f32) as usize;
-        let material = assets.sand_materials[mat_idx % assets.sand_materials.len()].clone();
-
-        commands.spawn((
-            SandParticle {
-                lifetime,
-                max_lifetime: lifetime,
-                velocity,
-                initial_scale,
-            },
-            Mesh3d(assets.sand_mesh.clone()),
-            MeshMaterial3d(material),
-            Transform::from_translation(spawn_pos).with_scale(Vec3::splat(initial_scale)),
-            NotShadowCaster,
-        ));
-    }
-}
-
-// =============================================================================
-// UPDATE
-// =============================================================================
-
-/// Update sand particles: move, scale up, fade out, despawn
 pub fn update_sand_particles(
     mut commands: Commands,
     time: Res<Time>,

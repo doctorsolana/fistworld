@@ -12,10 +12,8 @@ use shared::protocol::{
 use crate::ai;
 use crate::collision;
 use crate::net;
-use crate::rail;
 use crate::world;
 
-use super::schedule::rail_mode_enabled;
 
 /// Marker for the server host entity.
 #[derive(Component)]
@@ -90,16 +88,5 @@ pub(crate) fn configure_bootstrap(app: &mut App) {
             .run_if(server_is_started),
     );
 
-    if rail_mode_enabled() {
-        app.add_systems(
-            Update,
-            rail::setup_initial_industries.run_if(server_is_started),
-        );
-    } else {
-        app.add_systems(Update, ai::spawn::spawn_npcs_once.run_if(server_is_started));
-        app.add_systems(
-            Update,
-            crate::vehicle::bootstrap::spawn_world_vehicles.run_if(server_is_started),
-        );
-    }
+    app.add_systems(Update, ai::spawn::spawn_npcs_once.run_if(server_is_started));
 }

@@ -13,7 +13,6 @@ use std::collections::VecDeque;
 use shared::components::{Player, PlayerPosition};
 use shared::debug::DebugGizmoMode;
 use shared::terrain::ChunkCoord;
-use shared::vehicle::Vehicle;
 
 // =============================================================================
 // COMPONENTS
@@ -292,7 +291,6 @@ pub fn update_debug_overlay(
         Query<(), With<crate::props::EnvironmentProp>>,
         Query<&crate::props::PropKindTag, With<crate::props::EnvironmentProp>>,
         Query<&PlayerPosition, With<Player>>,
-        Query<(), With<Vehicle>>,
         Query<(), With<crate::render::systems::SandParticle>>,
     )>,
     mut counts_b: ParamSet<(
@@ -383,13 +381,12 @@ pub fn update_debug_overlay(
             collider_chunks.extend(center.chunks_in_radius(collider_chunk_radius));
         }
         lines.push_str(&format!(
-            "Gizmos: {}\nEntities: {:.0}\nChunks: {}\nProps: {}\nVehicles: {}\nSand particles: {}\nCollider chunks: {}\nCollidable props: {} (baked kinds: {})\nCloud layers: {} | Cloud cards: {}\nFrame ms p50/p95/p99: {:.2}/{:.2}/{:.2}\nHitches > {:.1}ms (window): {}\nAssets: meshes {} | materials {} | images {}\n",
+            "Gizmos: {}\nEntities: {:.0}\nChunks: {}\nProps: {}\nSand particles: {}\nCollider chunks: {}\nCollidable props: {} (baked kinds: {})\nCloud layers: {} | Cloud cards: {}\nFrame ms p50/p95/p99: {:.2}/{:.2}/{:.2}\nHitches > {:.1}ms (window): {}\nAssets: meshes {} | materials {} | images {}\n",
             if debug_mode.0 { "ON" } else { "OFF" },
             entity_count,
             loaded_chunks.chunks.len(),
             counts_a.p0().iter().count(),
             counts_a.p3().iter().count(),
-            counts_a.p4().iter().count(),
             collider_chunks.len(),
             collidable_props,
             baked_kinds,
@@ -436,7 +433,6 @@ pub fn update_perf_drop_monitor(
     materials: Res<Assets<StandardMaterial>>,
     images: Res<Assets<Image>>,
     counts_a: Query<(), With<crate::props::EnvironmentProp>>,
-    counts_b: Query<(), With<Vehicle>>,
     counts_c: Query<(), With<crate::render::systems::SandParticle>>,
     counts_d: Query<(), With<crate::render::systems::CloudLayer>>,
     counts_e: Query<(), With<crate::render::systems::CloudCard>>,
@@ -473,12 +469,11 @@ pub fn update_perf_drop_monitor(
         .unwrap_or(0.0);
 
     info!(
-        "PERF DROP snapshot: fps={:.1} entities={:.0} chunks={} props={} vehicles={} sand={} clouds={} cards={} assets(mesh={}, mat={}, img={})",
+        "PERF DROP snapshot: fps={:.1} entities={:.0} chunks={} props={} sand={} clouds={} cards={} assets(mesh={}, mat={}, img={})",
         fps,
         entity_count,
         loaded_chunks.chunks.len(),
         counts_a.iter().count(),
-        counts_b.iter().count(),
         counts_c.iter().count(),
         counts_d.iter().count(),
         counts_e.iter().count(),

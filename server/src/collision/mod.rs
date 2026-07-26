@@ -16,5 +16,4 @@ pub mod library;
 pub mod raycast;
 pub mod resolve_npc;
 pub mod resolve_player;
-pub mod resolve_vehicle;
 pub mod streaming;

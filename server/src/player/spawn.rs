@@ -19,9 +19,7 @@ use shared::protocol::{
     SubmitPlayerName,
 };
 use shared::terrain::WorldTerrain;
-use shared::vehicle::{InVehicle, Vehicle, VehicleDriver, VehicleState, VehicleType};
 
-use crate::net::peer::peer_id_to_u64;
 use crate::persistence::profiles::PlayerProfiles;
 use crate::player::index::PlayerEntityIndex;
 use crate::player::roster_cache::PlayerRosterCache;
@@ -100,13 +98,11 @@ pub fn handle_player_name_submission(
                 spawn_rot,
                 spawn_vel,
                 health,
-                vehicle_spawn,
             ): (
                 Vec3,
                 f32,
                 Vec3,
                 Health,
-                Option<(VehicleType, [f32; 3], [f32; 3], [f32; 3], [f32; 3])>,
             ) = if profile.is_dead {
                 info!(
                     "Player '{}' was dead - spawning at spawn point with empty inventory",
@@ -118,9 +114,7 @@ pub fn handle_player_name_submission(
                     pos,
                     0.0,
                     Vec3::ZERO,
-                    Health::default(),
-                    None,
-                )
+                    Health::default(),                )
             } else if !profile_loaded {
                 info!("Spawning new player '{}' at map spawn", name);
 
@@ -132,31 +126,7 @@ pub fn handle_player_name_submission(
                     Health {
                         current: profile.health_current,
                         max: profile.health_max,
-                    },
-                    None,
-                )
-            } else if profile.in_vehicle {
-                info!("Player '{}' was in vehicle - restoring vehicle state", name);
-
-                let veh_pos = profile.vehicle_position.unwrap_or(profile.position);
-                let veh_rot = profile
-                    .vehicle_rotation
-                    .unwrap_or([profile.rotation, 0.0, 0.0]);
-                let veh_vel = profile.vehicle_velocity.unwrap_or([0.0, 0.0, 0.0]);
-                let veh_ang_vel = profile.vehicle_angular_velocity.unwrap_or([0.0, 0.0, 0.0]);
-                let veh_type = profile.vehicle_type.unwrap_or(VehicleType::Motorbike);
-
-
-                (
-                    Vec3::from_slice(&veh_pos),
-                    veh_rot[0],
-                    Vec3::ZERO,
-                    Health {
-                        current: profile.health_current,
-                        max: profile.health_max,
-                    },
-                    Some((veh_type, veh_pos, veh_rot, veh_vel, veh_ang_vel)),
-                )
+                    },                )
             } else {
                 info!(
                     "Player '{}' spawning at saved position {:?}",
@@ -171,9 +141,7 @@ pub fn handle_player_name_submission(
                     Health {
                         current: profile.health_current,
                         max: profile.health_max,
-                    },
-                    None,
-                )
+                    },                )
             };
 
             let progression = PlayerProgression {
@@ -184,7 +152,7 @@ pub fn handle_player_name_submission(
                 intelligence: profile.intelligence,
             };
 
-            let player_entity = commands
+            let _player_entity = commands
                 .spawn((
                     Player { client_id: peer_id },
                     PlayerPosition(spawn_pos),
@@ -203,38 +171,6 @@ pub fn handle_player_name_submission(
                 ))
                 .id();
 
-            if let Some((veh_type, veh_pos, veh_rot, veh_vel, veh_ang_vel)) = vehicle_spawn {
-                let vehicle_entity = commands
-                    .spawn((
-                        Vehicle {
-                            vehicle_type: veh_type,
-                        },
-                        VehicleState {
-                            position: Vec3::from_slice(&veh_pos),
-                            heading: veh_rot[0],
-                            pitch: veh_rot[1],
-                            roll: veh_rot[2],
-                            velocity: Vec3::from_slice(&veh_vel),
-                            angular_velocity_yaw: veh_ang_vel[0],
-                            angular_velocity_pitch: veh_ang_vel[1],
-                            angular_velocity_roll: veh_ang_vel[2],
-                            grounded: true,
-                        },
-                        VehicleDriver {
-                            driver_id: Some(peer_id_to_u64(peer_id)),
-                        },
-                        ReplicationGroup::new_from_entity()
-                            .set_priority(VEHICLE_REPLICATION_PRIORITY),
-                        Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
-                    ))
-                    .id();
-
-                commands
-                    .entity(player_entity)
-                    .insert(InVehicle { vehicle_entity });
-
-                info!("Spawned vehicle {:?} for player '{}'", veh_type, name);
-            }
 
             profiles.peer_to_name.insert(peer_id, name_lower.clone());
             profiles.name_to_peer.insert(name_lower.clone(), peer_id);

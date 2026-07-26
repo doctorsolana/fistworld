@@ -99,22 +99,16 @@ fn wire_common_systems(app: &mut App) {
 
 /// The rail-tycoon prototype shell (FISTFORCE_RAIL=1): RTS camera + build UI.
 fn wire_rail_systems(app: &mut App) {
-    app.add_systems(
-        Startup,
-        (rail::setup_rail_assets, game_systems::setup_particle_assets),
-    );
 
     app.add_systems(
         OnEnter(GameState::Playing),
         (
             game_systems::spawn_world,
-            rail::spawn_rail_hud,
             camera_rts::release_cursor_for_rts,
         )
             .chain(),
     );
 
-    app.add_systems(OnExit(GameState::Playing), rail::despawn_rail_hud);
 
     app.add_systems(
         Update,
@@ -122,28 +116,12 @@ fn wire_rail_systems(app: &mut App) {
             camera_rts::ensure_commander_camera_controller,
             camera_rts::release_cursor_for_rts,
             camera_rts::update_cursor_terrain_hit,
-            rail::handle_rail_hotkeys,
-            rail::handle_rail_build_clicks,
-            rail::receive_rail_rejections,
             camera_rts::update_commander_camera,
-            rail::update_rail_hud,
         )
             .chain()
             .run_if(in_state(GameState::Playing)),
     );
 
-    app.add_systems(
-        Update,
-        (
-            rail::setup_track_visuals,
-            rail::setup_station_visuals,
-            rail::setup_train_visuals,
-            rail::setup_industry_visuals,
-            rail::update_train_visuals,
-        )
-            .chain()
-            .run_if(in_state(GameState::Playing)),
-    );
 }
 
 /// The FistForce sandbox shooter (default mode).
@@ -154,7 +132,6 @@ fn wire_fps_systems(app: &mut App) {
         (
             game_systems::setup_debug_physics_box_assets,
             game_systems::setup_particle_assets,
-            game_systems::setup_vehicle_visual_assets,
             game_systems::setup_player_character_assets,
             game_systems::setup_npc_assets,
         ),
@@ -191,7 +168,6 @@ fn wire_fps_systems(app: &mut App) {
             game_systems::handle_player_spawned,
             game_systems::sync_player_character_models,
             game_systems::handle_npc_spawned,
-            game_systems::handle_vehicle_spawned,
             game_systems::ensure_local_player_tag,
         )
             .chain()
@@ -203,25 +179,17 @@ fn wire_fps_systems(app: &mut App) {
         Update,
         (
             input::handle_keyboard_input,
-            input::update_vehicle_state,
             input::handle_mouse_input,
             game_systems::apply_cursor_grab,
             game_systems::spawn_debug_physics_box_visuals,
-            game_systems::setup_steam_car_visual_rigs,
             (
-                game_systems::sync_vehicle_transforms,
-                game_systems::update_steam_car_visuals,
                 game_systems::sync_player_transforms,
                 game_systems::sync_npc_transforms,
                 game_systems::sync_debug_physics_box_transforms,
                 camera::update_camera,
             )
                 .chain(),
-            game_systems::update_vehicle_hover,
-            game_systems::update_vehicle_shadow_culling,
-            game_systems::apply_vehicle_shadow_state_to_new_meshes,
             camera::update_camera_fov,
-            game_systems::spawn_sand_particles,
             game_systems::update_sand_particles,
         )
             .run_if(in_state(GameState::Playing)),

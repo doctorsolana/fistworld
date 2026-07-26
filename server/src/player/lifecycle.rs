@@ -6,9 +6,7 @@ use shared::physics::ground_clearance_center;
 use shared::player::{RESPAWN_TIME, SPAWN_POSITION};
 use shared::protocol::FIXED_TIMESTEP_HZ;
 use shared::terrain::WorldTerrain;
-use shared::vehicle::{InVehicle, VehicleDriver};
 
-use crate::net::peer::peer_id_to_u64;
 
 /// Component added to dead players while waiting to respawn.
 #[derive(Component)]
@@ -32,7 +30,6 @@ fn resolve_map_spawn_position(terrain: &WorldTerrain) -> Vec3 {
 pub fn handle_player_deaths(
     mut commands: Commands,
     players: Query<(Entity, &Player, &Health), (Without<RespawnTimer>,)>,
-    mut vehicles: Query<&mut VehicleDriver>,
 ) {
     for (entity, player, health) in players.iter() {
         if health.is_dead() {
@@ -41,14 +38,6 @@ pub fn handle_player_deaths(
             commands.entity(entity).insert(RespawnTimer {
                 time_remaining: RESPAWN_TIME,
             });
-
-            for mut driver in vehicles.iter_mut() {
-                if driver.driver_id == Some(peer_id_to_u64(player.client_id)) {
-                    driver.driver_id = None;
-                }
-            }
-
-            commands.entity(entity).remove::<InVehicle>();
         }
     }
 }
