@@ -4,8 +4,7 @@ mod state_steps;
 
 use bevy::prelude::*;
 use shared::components::{
-    Health, Npc, NpcActivity, NpcActivityKind, NpcDamageEvent, NpcFleeing, NpcPosition,
-    NpcRotation, Player,
+    Health, Npc, NpcActivity, NpcActivityKind, NpcFleeing, NpcPosition, NpcRotation, Player,
 };
 use shared::npc::{
     NPC_IDLE_TIME_MAX, NPC_IDLE_TIME_MIN, NPC_MIN_TARGET_DIST, NPC_MOVE_SPEED, NPC_TURN_SPEED,
@@ -40,44 +39,6 @@ fn activity_from_state(state: &NpcState) -> NpcActivityKind {
         NpcState::Idle => NpcActivityKind::Idle,
         NpcState::Walking => NpcActivityKind::Walk,
         NpcState::Fleeing { .. } => NpcActivityKind::Flee,
-    }
-}
-
-/// Damage events currently push NPCs into a flee loop.
-pub fn handle_npc_damage_events(
-    mut commands: Commands,
-    mut npcs: Query<(
-        Entity,
-        &Npc,
-        &Health,
-        &mut NpcWander,
-        &mut NpcActivity,
-        &NpcDamageEvent,
-    )>,
-) {
-    for (entity, _npc, health, mut wander, mut activity, damage_event) in npcs.iter_mut() {
-        if health.is_dead() {
-            commands.entity(entity).remove::<NpcDamageEvent>();
-            continue;
-        }
-        // Randomize flee parameters.
-        let flee_duration = 5.0 + wander.rng.next_f32() * 3.0; // 5-8 seconds
-        let panic_boost = 1.5 + wander.rng.next_f32() * 0.3; // 1.5-1.8x speed
-
-        wander.state = NpcState::Fleeing {
-            from_position: damage_event.damage_source_position,
-            flee_timer: flee_duration,
-            panic_speed_boost: panic_boost,
-        };
-
-        // Clear current path so flee logic takes over immediately.
-        wander.path.clear();
-        wander.waypoint = 0;
-        activity.0 = NpcActivityKind::Flee;
-
-        let mut entity_cmd = commands.entity(entity);
-        entity_cmd.insert(NpcFleeing);
-        entity_cmd.remove::<NpcDamageEvent>();
     }
 }
 

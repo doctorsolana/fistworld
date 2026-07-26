@@ -5,6 +5,11 @@ use bevy_rapier3d::prelude::{QueryFilter, RapierContext, RayIntersection};
 
 use crate::physics::layers;
 
+/// Raycast against streamed rapier colliders. Currently unused (its only caller was
+/// bullet simulation) but kept for unit line-of-sight: see also
+/// `collision::raycast`, which queries terrain/prop/building data directly and so
+/// works beyond the streamed-collider radius.
+#[allow(dead_code)]
 #[inline]
 pub fn cast_world_impact(
     context: &RapierContext<'_>,

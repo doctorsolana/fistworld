@@ -154,15 +154,6 @@ pub struct PlayerJumpState {
     pub timer: f32,
 }
 
-/// Server-authoritative melee swing animation state (replicated).
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-pub struct PlayerMeleeState {
-    /// Seconds remaining in the swing animation.
-    pub timer: f32,
-    /// Full duration of this swing (for normalized animation progress).
-    pub duration: f32,
-}
-
 /// Debug fly mode (server-authoritative).
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct FlyMode;

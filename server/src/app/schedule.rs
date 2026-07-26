@@ -1,6 +1,6 @@
 //! Fixed-update schedule sets and system wiring.
 //!
-//! Default: the full FistForce simulation (physics, AI, combat, inventory,
+//! Default: the full FistForce simulation (physics, AI, inventory,
 //! persistence). Set `FISTFORCE_RAIL=1` (same flag as the client) to run the
 //! rail-tycoon prototype schedule instead; the two consume the same network
 //! messages (e.g. `SubmitPlayerName`), so they are wired mutually exclusively.
@@ -12,7 +12,6 @@ use lightyear::link::LinkSystems;
 
 use crate::ai;
 use crate::collision;
-use crate::combat;
 use crate::inventory;
 use crate::net;
 use crate::persistence;
@@ -54,7 +53,6 @@ enum FpsServerSet {
     Indices,
     Persistence,
     Inventory,
-    Combat,
 }
 
 fn configure_fps_fixed_schedule(app: &mut App) {
@@ -72,7 +70,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             FpsServerSet::Indices,
             FpsServerSet::Persistence,
             FpsServerSet::Inventory,
-            FpsServerSet::Combat,
         )
             .chain(),
     );
@@ -141,7 +138,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         FixedUpdate,
         (
             ai::obstacles::sync_obstacle_grid,
-            ai::tick::handle_npc_damage_events,
             ai::tick::update_npc_ai,
             ai::ragdoll::debug_auto_kill_npcs,
             ai::ragdoll::activate_npc_ragdolls,
@@ -227,7 +223,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             inventory::hotbar::handle_inventory_move_requests,
             inventory::ground_items::handle_pickup_requests,
             inventory::ground_items::handle_drop_requests,
-            inventory::hotbar::sync_equipped_weapon_from_hotbar,
             inventory::chest::handle_open_chest_requests,
             inventory::chest::handle_close_chest_requests,
             inventory::chest::handle_chest_transfer_requests,
@@ -235,28 +230,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         )
             .chain()
             .in_set(FpsServerSet::Inventory)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
-            combat::target_index::sync_hittable_spatial_index,
-            combat::reload::update_reload_timers,
-            combat::reload::handle_reload_request,
-            combat::fire::handle_shoot_requests,
-            combat::melee::stamp_block_state,
-            combat::melee::handle_melee_attacks,
-            combat::melee::tick_melee_state,
-            combat::bullet_sim::update_bullets,
-            combat::hit_world::prepare_bullet_world_hits,
-            combat::hit_characters::handle_bullet_character_hits,
-            combat::hit_world::handle_bullet_world_hits,
-            combat::cleanup::cleanup_bullets,
-            inventory::death_drop::handle_inventory_drop_on_death,
-        )
-            .chain()
-            .in_set(FpsServerSet::Combat)
             .run_if(server_is_started),
     );
 
@@ -273,10 +246,8 @@ fn configure_fps_fixed_schedule(app: &mut App) {
                 .before(FpsServerSet::AISim),
             telemetry::perf::handle_perf_npc_inventory_build_phase_end
                 .after(FpsServerSet::Inventory),
-            telemetry::perf::handle_perf_weapons_phase_begin.before(FpsServerSet::Combat),
-            telemetry::perf::handle_perf_weapons_phase_end.after(FpsServerSet::Combat),
-            telemetry::perf::update_server_perf_log.after(FpsServerSet::Combat),
-            telemetry::network::sample_replication_change_pressure.after(FpsServerSet::Combat),
+            telemetry::perf::update_server_perf_log.after(FpsServerSet::Inventory),
+            telemetry::network::sample_replication_change_pressure.after(FpsServerSet::Inventory),
         )
             .run_if(server_is_started),
     );

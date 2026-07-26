@@ -3,10 +3,7 @@
 use super::*;
 
 pub(super) fn icon_bg_color(item_type: ItemType) -> Color {
-    match item_type {
-        ItemType::Weapon(_) => WEAPON_ICON_BG,
-        _ => item_type.color(),
-    }
+    item_type.color()
 }
 
 pub(super) fn preview_icon_handle(
@@ -18,22 +15,6 @@ pub(super) fn preview_icon_handle(
 
 pub(super) fn setup_item_preview_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut item_icons = HashMap::new();
-    item_icons.insert(
-        ItemType::Weapon(WeaponType::AssaultRifle),
-        asset_server.load("ui/item_preview/automatic512.png"),
-    );
-    item_icons.insert(
-        ItemType::Weapon(WeaponType::Shotgun),
-        asset_server.load("ui/item_preview/shotgun512.png"),
-    );
-    item_icons.insert(
-        ItemType::Weapon(WeaponType::Sniper),
-        asset_server.load("ui/item_preview/sniper512.png"),
-    );
-    item_icons.insert(
-        ItemType::Weapon(WeaponType::Pistol),
-        asset_server.load("ui/item_preview/revolver512.png"),
-    );
     // Ammo previews
     item_icons.insert(
         ItemType::RifleAmmo,

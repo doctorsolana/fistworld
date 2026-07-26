@@ -1,7 +1,7 @@
 //! Fixed-tick server performance diagnostics.
 
 use bevy::prelude::*;
-use shared::components::{Bullet, Npc, Player};
+use shared::components::{Npc, Player};
 use shared::items::GroundItem;
 use shared::protocol::FIXED_TIMESTEP_HZ;
 use std::cmp::Ordering;
@@ -18,26 +18,20 @@ enum Phase {
     Core,
     NpcInventoryBuild,
     Collision,
-    Weapons,
     AiCadence,
     Pathfinding,
-    BulletHits,
-    WorldHits,
 }
 
 impl Phase {
-    const COUNT: usize = 8;
+    const COUNT: usize = 5;
 
     fn idx(self) -> usize {
         match self {
             Phase::Core => 0,
             Phase::NpcInventoryBuild => 1,
             Phase::Collision => 2,
-            Phase::Weapons => 3,
-            Phase::AiCadence => 4,
-            Phase::Pathfinding => 5,
-            Phase::BulletHits => 6,
-            Phase::WorldHits => 7,
+            Phase::AiCadence => 3,
+            Phase::Pathfinding => 4,
         }
     }
 }
@@ -158,25 +152,6 @@ impl ServerPerfMonitor {
         );
     }
 
-    pub fn record_bullet_hits_ms(&mut self, ms: f32) {
-        if !self.enabled || ms <= 0.0 {
-            return;
-        }
-        self.add_phase_duration(
-            Phase::BulletHits,
-            Duration::from_secs_f64(ms as f64 / 1000.0),
-        );
-    }
-
-    pub fn record_world_hits_ms(&mut self, ms: f32) {
-        if !self.enabled || ms <= 0.0 {
-            return;
-        }
-        self.add_phase_duration(
-            Phase::WorldHits,
-            Duration::from_secs_f64(ms as f64 / 1000.0),
-        );
-    }
 }
 
 pub fn handle_perf_tick_begin(mut perf: ResMut<ServerPerfMonitor>) {
@@ -228,23 +203,10 @@ pub fn handle_perf_npc_inventory_build_phase_end(mut perf: ResMut<ServerPerfMoni
     }
 }
 
-pub fn handle_perf_weapons_phase_begin(mut perf: ResMut<ServerPerfMonitor>) {
-    if perf.enabled {
-        perf.start_phase(Phase::Weapons);
-    }
-}
-
-pub fn handle_perf_weapons_phase_end(mut perf: ResMut<ServerPerfMonitor>) {
-    if perf.enabled {
-        perf.end_phase(Phase::Weapons);
-    }
-}
-
 pub fn update_server_perf_log(
     mut perf: ResMut<ServerPerfMonitor>,
     players: Query<&Player>,
     npcs: Query<(), With<Npc>>,
-    bullets: Query<(), With<Bullet>>,
     ground_items: Query<(), With<GroundItem>>,
     ragdoll_telemetry: Res<RagdollTelemetry>,
     client_inputs: Res<ClientInputs>,
@@ -273,18 +235,11 @@ pub fn update_server_perf_log(
     let npc_max_ms = perf.phase_max[Phase::NpcInventoryBuild.idx()].as_secs_f64() * 1000.0;
     let collision_avg_ms = perf.phase_sum[Phase::Collision.idx()].as_secs_f64() * 1000.0 / ticks_f;
     let collision_max_ms = perf.phase_max[Phase::Collision.idx()].as_secs_f64() * 1000.0;
-    let weapons_avg_ms = perf.phase_sum[Phase::Weapons.idx()].as_secs_f64() * 1000.0 / ticks_f;
-    let weapons_max_ms = perf.phase_max[Phase::Weapons.idx()].as_secs_f64() * 1000.0;
     let ai_cadence_avg_ms = perf.phase_sum[Phase::AiCadence.idx()].as_secs_f64() * 1000.0 / ticks_f;
     let ai_cadence_max_ms = perf.phase_max[Phase::AiCadence.idx()].as_secs_f64() * 1000.0;
     let pathfinding_avg_ms =
         perf.phase_sum[Phase::Pathfinding.idx()].as_secs_f64() * 1000.0 / ticks_f;
     let pathfinding_max_ms = perf.phase_max[Phase::Pathfinding.idx()].as_secs_f64() * 1000.0;
-    let bullet_hits_avg_ms =
-        perf.phase_sum[Phase::BulletHits.idx()].as_secs_f64() * 1000.0 / ticks_f;
-    let bullet_hits_max_ms = perf.phase_max[Phase::BulletHits.idx()].as_secs_f64() * 1000.0;
-    let world_hits_avg_ms = perf.phase_sum[Phase::WorldHits.idx()].as_secs_f64() * 1000.0 / ticks_f;
-    let world_hits_max_ms = perf.phase_max[Phase::WorldHits.idx()].as_secs_f64() * 1000.0;
 
     let mut players_count = 0usize;
     let mut missing_input_players = 0usize;
@@ -328,7 +283,7 @@ pub fn update_server_perf_log(
     };
 
     info!(
-        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} npc={:.2}/{:.2} collision={:.2}/{:.2} weapons={:.2}/{:.2} ai_cadence={:.3}/{:.3} pathfinding={:.3}/{:.3} bullet_hits={:.3}/{:.3} world_hits={:.3}/{:.3} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} npcs={} corpses={} bullets={} ground_items={} evicted_corpses={}",
+        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} npc={:.2}/{:.2} collision={:.2}/{:.2} ai_cadence={:.3}/{:.3} pathfinding={:.3}/{:.3} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} npcs={} corpses={} ground_items={} evicted_corpses={}",
         tick_avg_ms,
         tick_max_ms,
         over_budget_pct,
@@ -338,16 +293,10 @@ pub fn update_server_perf_log(
         npc_max_ms,
         collision_avg_ms,
         collision_max_ms,
-        weapons_avg_ms,
-        weapons_max_ms,
         ai_cadence_avg_ms,
         ai_cadence_max_ms,
         pathfinding_avg_ms,
         pathfinding_max_ms,
-        bullet_hits_avg_ms,
-        bullet_hits_max_ms,
-        world_hits_avg_ms,
-        world_hits_max_ms,
         client_inputs.latest.len(),
         missing_input_players,
         input_ingress_total_per_sec,
@@ -355,7 +304,6 @@ pub fn update_server_perf_log(
         players_count,
         npcs.iter().count(),
         ragdoll_telemetry.active_corpses,
-        bullets.iter().count(),
         ground_items.iter().count(),
         ragdoll_telemetry.total_evicted,
     );

@@ -29,7 +29,6 @@ pub fn spawn_world_chests(
     mut spawned: Local<bool>,
 ) {
     use shared::items::ItemType;
-    use shared::weapons::WeaponType;
 
     if *spawned {
         return;
@@ -50,19 +49,6 @@ pub fn spawn_world_chests(
         let y = terrain.get_height(x, z) + 0.25;
         spawn_chest(&mut commands, Vec3::new(x, y, z), items);
     };
-
-    // Armory: every weapon, guns with full magazines.
-    place(
-        [-5.0, -5.0],
-        vec![
-            ItemStack::new_weapon_full_mag(WeaponType::Pistol),
-            ItemStack::new_weapon_full_mag(WeaponType::AssaultRifle),
-            ItemStack::new_weapon_full_mag(WeaponType::Shotgun),
-            ItemStack::new_weapon_full_mag(WeaponType::Sniper),
-            ItemStack::new_weapon(WeaponType::Sword, 0),
-            ItemStack::new_weapon(WeaponType::Shield, 0),
-        ],
-    );
 
     // Supplies: full ammo stacks + spare resources.
     place(

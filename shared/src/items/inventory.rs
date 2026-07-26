@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::weapons::WeaponType;
-
 use super::{ItemStack, ItemType, INVENTORY_SLOTS};
 
 /// Player inventory with fixed slots.
@@ -28,16 +26,6 @@ impl Inventory {
     /// Create inventory with starting items for a new player.
     pub fn with_starting_items() -> Self {
         let mut inv = Self::new();
-
-        // Starting weapon in hotbar slot 0 (with full magazine)
-        let _ = inv.set_slot(
-            0,
-            Some(ItemStack::new_weapon_full_mag(WeaponType::AssaultRifle)),
-        );
-        // Melee starter kit: sword in slot 1, shield in slot 2 (the shield
-        // also rides the off-hand while a one-handed weapon is selected).
-        let _ = inv.set_slot(1, Some(ItemStack::new_weapon(WeaponType::Sword, 0)));
-        let _ = inv.set_slot(2, Some(ItemStack::new_weapon(WeaponType::Shield, 0)));
 
         // Starting ammo
         inv.add_item(ItemType::RifleAmmo, 114); // Rifle + revolver bullets
@@ -138,10 +126,8 @@ impl Inventory {
                 self.slots[slot_idx] = Some(ItemStack {
                     item_type: remaining.item_type,
                     quantity: stack_amount,
-                    ammo_in_mag: remaining.ammo_in_mag, // Preserve ammo for first stack
                 });
                 remaining.quantity -= stack_amount;
-                remaining.ammo_in_mag = None; // Only first stack gets ammo
             } else {
                 break;
             }

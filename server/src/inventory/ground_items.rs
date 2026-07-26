@@ -50,19 +50,17 @@ pub fn handle_pickup_requests(
             if inventory.add_stack(stack).is_none() {
                 if crate::telemetry::hotlog_enabled() {
                     info!(
-                        "Player {:?} picked up {}x {} (mag: {:?})",
+                        "Player {:?} picked up {}x {}",
                         peer_id,
                         ground_item.quantity,
-                        ground_item.item_type.display_name(),
-                        ground_item.ammo_in_mag
+                        ground_item.item_type.display_name()
                     );
                 } else {
                     trace!(
-                        "Player {:?} picked up {}x {} (mag: {:?})",
+                        "Player {:?} picked up {}x {}",
                         peer_id,
                         ground_item.quantity,
-                        ground_item.item_type.display_name(),
-                        ground_item.ammo_in_mag
+                        ground_item.item_type.display_name()
                     );
                 }
                 commands.entity(item_entity).despawn();
@@ -101,30 +99,7 @@ pub fn handle_drop_requests(
                 continue;
             };
 
-            if let Some(mut stack) = inventory.remove_slot(request.slot_index) {
-                if let Some(weapon_type) = stack.item_type.as_weapon_type() {
-                    let ammo_in_mag = stack.get_weapon_ammo();
-                    if ammo_in_mag > 0 {
-                        let ammo_type = weapon_type.ammo_type();
-                        inventory.add_item(ammo_type, ammo_in_mag);
-                        if crate::telemetry::hotlog_enabled() {
-                            info!(
-                                "Player {:?} returned {} {} to inventory from dropped weapon",
-                                peer_id,
-                                ammo_in_mag,
-                                ammo_type.display_name()
-                            );
-                        } else {
-                            trace!(
-                                "Player {:?} returned {} {} to inventory from dropped weapon",
-                                peer_id,
-                                ammo_in_mag,
-                                ammo_type.display_name()
-                            );
-                        }
-                    }
-                    stack.set_weapon_ammo(0);
-                }
+            if let Some(stack) = inventory.remove_slot(request.slot_index) {
 
                 if crate::telemetry::hotlog_enabled() {
                     info!(

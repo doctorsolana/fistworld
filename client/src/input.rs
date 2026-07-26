@@ -5,7 +5,7 @@
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use lightyear::prelude::*;
-use shared::components::{Health, LocalPlayer, Player};
+use shared::components::{LocalPlayer, Player};
 use shared::player::MOUSE_SENSITIVITY;
 use shared::protocol::{InputChannel, PlayerInput};
 use shared::vehicle::{VehicleDriver, VehicleInput};
@@ -41,7 +41,6 @@ pub struct InputState {
     pub interact: bool,
     pub interact_just_pressed: bool,
     /// Holding RMB with a shield available (blocks instead of ADS toggle).
-    pub blocking_held: bool,
     /// Hold Shift to sprint on foot, fly faster in debug fly mode, or do vehicle air tricks.
     pub shift: bool,
 
@@ -56,10 +55,8 @@ pub struct InputState {
     pub vehicle_look_pitch: f32,
 
     /// Right-click = Aim Down Sights
-    pub aiming: bool,
 
     /// True when local player is dead (disables movement input)
-    pub is_dead: bool,
 
     /// True when inventory UI is open (disables all gameplay input)
     pub inventory_open: bool,
@@ -87,14 +84,11 @@ impl Default for InputState {
             pitch: 0.0,
             interact: false,
             interact_just_pressed: false,
-            blocking_held: false,
             shift: false,
             camera_mode: CameraMode::FirstPerson,
             in_vehicle: false,
             vehicle_look_yaw: 0.0,
             vehicle_look_pitch: 0.0,
-            aiming: false,
-            is_dead: false,
             inventory_open: false,
             pause_menu_open: false,
             map_open: false,
@@ -163,37 +157,13 @@ pub fn handle_keyboard_input(
 /// Handle mouse input for looking around
 pub fn handle_mouse_input(
     mut mouse_motion: MessageReader<MouseMotion>,
-    mouse_button: Res<ButtonInput<MouseButton>>,
     mut input_state: ResMut<InputState>,
     input_settings: Res<InputSettings>,
-    local_weapon: Query<&shared::components::EquippedWeapon, With<shared::components::LocalPlayer>>,
 ) {
     // Skip mouse look if inventory is open (but still consume events)
     if input_state.ui_blocking() {
-        input_state.blocking_held = false;
         for _ in mouse_motion.read() {}
         return;
-    }
-
-    // RMB is hold-to-block when a shield is in the loadout, otherwise the
-    // usual ADS toggle.
-    let can_block = local_weapon
-        .single()
-        .map(|weapon| weapon.can_block())
-        .unwrap_or(false);
-    if can_block && !input_state.in_vehicle {
-        input_state.blocking_held = mouse_button.pressed(MouseButton::Right);
-        input_state.aiming = false;
-    } else {
-        input_state.blocking_held = false;
-        // Track ADS (right-click to toggle, not hold)
-        if mouse_button.just_pressed(MouseButton::Right) && !input_state.in_vehicle {
-            input_state.aiming = !input_state.aiming;
-        }
-    }
-    // Disable ADS when entering vehicle
-    if input_state.in_vehicle {
-        input_state.aiming = false;
     }
 
     let mut delta = Vec2::ZERO;
@@ -202,12 +172,8 @@ pub fn handle_mouse_input(
     }
 
     if delta != Vec2::ZERO {
-        // Apply user's sensitivity multiplier, and reduce when aiming for more precise control
-        let sensitivity = if input_state.aiming {
-            MOUSE_SENSITIVITY * input_settings.mouse_sensitivity * 0.5
-        } else {
-            MOUSE_SENSITIVITY * input_settings.mouse_sensitivity
-        };
+        // Apply user's sensitivity multiplier
+        let sensitivity = MOUSE_SENSITIVITY * input_settings.mouse_sensitivity;
 
         if input_state.in_vehicle {
             // In vehicle: update relative look angles
@@ -261,26 +227,6 @@ pub fn update_vehicle_state(
     }
 
     input_state.in_vehicle = is_driving;
-}
-
-/// Check if local player is dead (updates InputState.is_dead)
-pub fn update_death_state(
-    mut input_state: ResMut<InputState>,
-    local_player: Query<&Health, With<LocalPlayer>>,
-) {
-    let was_dead = input_state.is_dead;
-    input_state.is_dead = local_player
-        .iter()
-        .next()
-        .map(|h| h.is_dead())
-        .unwrap_or(false);
-
-    // Log state changes
-    if input_state.is_dead && !was_dead {
-        info!("Local player died!");
-    } else if !input_state.is_dead && was_dead {
-        info!("Local player respawned!");
-    }
 }
 
 /// Send input to server
@@ -344,17 +290,15 @@ pub fn handle_send_input_to_server(
         yaw: input_state.yaw,
         vehicle_input: None,
         interact: input_state.interact_just_pressed,
-        block: input_state.blocking_held,
     };
 
     // Disable all movement input when dead, paused, or inventory open
-    if game_state.get() == &GameState::Paused || input_state.is_dead || input_state.ui_blocking() {
+    if game_state.get() == &GameState::Paused || input_state.ui_blocking() {
         input.forward = false;
         input.backward = false;
         input.left = false;
         input.right = false;
         input.jump = false;
-        input.block = false;
         input.interact = false;
         input.fly_down = false;
         input.fly_fast = false;

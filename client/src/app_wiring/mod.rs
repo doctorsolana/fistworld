@@ -31,9 +31,7 @@ use shared::protocol::{tick_duration, ProtocolPlugin};
 use shared::debug::DebugGizmoMode;
 
 use crate::{
-    audio, camera, camera_rts, chest, city, crosshair, dialogue, input, perf_overlay, pickup,
-    profiling, props,
-    rail, render,
-    render::systems as game_systems, states::GameState, terrain, ui, water, weapon_view, weapons,
+    audio, camera, camera_rts, chest, city, dialogue, input, perf_overlay, pickup, profiling,
+    props, rail, render, render::systems as game_systems, states::GameState, terrain, ui, water,
 };
 use game_systems::{GraphicsSettings, LAUNCHER_RESOLUTION};

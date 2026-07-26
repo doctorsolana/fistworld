@@ -1,4 +1,12 @@
-//! Internal combat geometry helpers.
+//! Direct segment/ray queries against terrain, props and buildings.
+//!
+//! These query `WorldTerrain` / prop / building data directly, so they work at any
+//! distance — unlike `physics::queries::cast_world_impact`, which only sees terrain
+//! colliders that have actually been streamed in around an anchor. For a top-down
+//! game whose camera can pan far from any unit, the direct-query version is the more
+//! useful of the two. Rescued from the deleted combat module for line-of-sight work.
+
+#![allow(dead_code)]
 
 use bevy::prelude::*;
 use shared::building::{building_rotation_quat, BuildingPosition, PlacedBuilding};
@@ -8,157 +16,8 @@ use crate::collision::library::{
     DerivedBuildingColliderLibrary, DerivedColliderLibrary, StaticColliders,
 };
 
-/// Ray-sphere intersection (approx): returns closest point along ray segment if within radius.
-pub(super) fn ray_sphere_intersection(
-    ray_origin: Vec3,
-    ray_dir: Vec3,
-    ray_length: f32,
-    sphere_center: Vec3,
-    sphere_radius: f32,
-) -> Option<Vec3> {
-    let to_center = sphere_center - ray_origin;
-    let t = to_center.dot(ray_dir).clamp(0.0, ray_length);
-    let p = ray_origin + ray_dir * t;
-    let d = (p - sphere_center).length();
-    let effective = sphere_radius * 1.25;
-    (d <= effective).then_some(p)
-}
-
-/// Exact nearest ray-segment hit against a sphere.
-pub(super) fn ray_sphere_intersection_exact(
-    ray_origin: Vec3,
-    ray_dir: Vec3,
-    ray_length: f32,
-    sphere_center: Vec3,
-    sphere_radius: f32,
-) -> Option<(Vec3, Vec3)> {
-    let offset = ray_origin - sphere_center;
-    let b = offset.dot(ray_dir);
-    let c = offset.length_squared() - sphere_radius * sphere_radius;
-    let discriminant = b * b - c;
-    if discriminant < 0.0 {
-        return None;
-    }
-
-    let root = discriminant.sqrt();
-    let near = -b - root;
-    let far = -b + root;
-    let t = if near >= 0.0 { near } else { far };
-    if !(0.0..=ray_length).contains(&t) {
-        return None;
-    }
-
-    let point = ray_origin + ray_dir * t;
-    Some((point, (point - sphere_center).normalize_or_zero()))
-}
-
-/// Exact nearest ray-segment hit against an arbitrarily oriented capsule.
-pub(super) fn ray_oriented_capsule_intersection(
-    ray_origin: Vec3,
-    ray_dir: Vec3,
-    ray_length: f32,
-    capsule_a: Vec3,
-    capsule_b: Vec3,
-    capsule_radius: f32,
-) -> Option<(Vec3, Vec3)> {
-    const EPS: f32 = 1.0e-6;
-
-    let axis = capsule_b - capsule_a;
-    let axis_len_sq = axis.length_squared();
-    if axis_len_sq <= EPS {
-        return ray_sphere_intersection_exact(
-            ray_origin,
-            ray_dir,
-            ray_length,
-            capsule_a,
-            capsule_radius,
-        );
-    }
-
-    let origin_from_a = ray_origin - capsule_a;
-    let axis_dot_ray = axis.dot(ray_dir);
-    let axis_dot_origin = axis.dot(origin_from_a);
-    let ray_dot_origin = ray_dir.dot(origin_from_a);
-    let origin_len_sq = origin_from_a.length_squared();
-    let qa = axis_len_sq - axis_dot_ray * axis_dot_ray;
-    let qb = axis_len_sq * ray_dot_origin - axis_dot_origin * axis_dot_ray;
-    let qc = axis_len_sq * origin_len_sq
-        - axis_dot_origin * axis_dot_origin
-        - capsule_radius * capsule_radius * axis_len_sq;
-
-    let mut best_t = f32::INFINITY;
-    if qa.abs() > EPS {
-        let discriminant = qb * qb - qa * qc;
-        if discriminant >= 0.0 {
-            let t = (-qb - discriminant.sqrt()) / qa;
-            let axis_t = axis_dot_origin + t * axis_dot_ray;
-            if (0.0..=ray_length).contains(&t) && (0.0..=axis_len_sq).contains(&axis_t) {
-                best_t = t;
-            }
-        }
-    }
-
-    for cap_center in [capsule_a, capsule_b] {
-        if let Some((point, _)) = ray_sphere_intersection_exact(
-            ray_origin,
-            ray_dir,
-            ray_length,
-            cap_center,
-            capsule_radius,
-        ) {
-            best_t = best_t.min((point - ray_origin).dot(ray_dir));
-        }
-    }
-
-    if !best_t.is_finite() || !(0.0..=ray_length).contains(&best_t) {
-        return None;
-    }
-
-    let point = ray_origin + ray_dir * best_t;
-    let segment_t = ((point - capsule_a).dot(axis) / axis_len_sq).clamp(0.0, 1.0);
-    let closest = capsule_a + axis * segment_t;
-    Some((point, (point - closest).normalize_or_zero()))
-}
-
-/// Ray-capsule intersection test.
-pub(super) fn ray_capsule_intersection(
-    ray_origin: Vec3,
-    ray_dir: Vec3,
-    ray_length: f32,
-    capsule_a: Vec3,
-    capsule_b: Vec3,
-    capsule_radius: f32,
-) -> Option<Vec3> {
-    let capsule_center = (capsule_a + capsule_b) * 0.5;
-    let capsule_half_height = (capsule_b.y - capsule_a.y) * 0.5;
-
-    let to_center = capsule_center - ray_origin;
-    let closest_t = to_center.dot(ray_dir).clamp(0.0, ray_length);
-    let closest_point = ray_origin + ray_dir * closest_t;
-
-    let effective_radius = capsule_radius * 1.5;
-
-    let horizontal_dist = Vec2::new(
-        closest_point.x - capsule_center.x,
-        closest_point.z - capsule_center.z,
-    )
-    .length();
-
-    if horizontal_dist > effective_radius {
-        return None;
-    }
-
-    let height_diff = closest_point.y - capsule_center.y;
-    if height_diff.abs() > capsule_half_height + effective_radius {
-        return None;
-    }
-
-    Some(closest_point)
-}
-
-/// Ray-oriented-box intersection over a finite segment.
 /// Returns hit point + outward normal for the nearest hit along `[0, ray_length]`.
-pub(super) fn ray_obb_intersection(
+fn ray_obb_intersection(
     ray_origin: Vec3,
     ray_dir: Vec3,
     ray_length: f32,
@@ -267,43 +126,10 @@ pub(super) fn ray_obb_intersection(
     Some((hit_world, normal_world))
 }
 
-#[cfg(test)]
-mod character_hitbox_tests {
-    use super::*;
-
-    #[test]
-    fn oriented_capsule_hits_horizontal_limb_at_nearest_surface() {
-        let (point, normal) = ray_oriented_capsule_intersection(
-            Vec3::new(0.0, 0.0, 2.0),
-            Vec3::NEG_Z,
-            4.0,
-            Vec3::new(-0.5, 0.0, 0.0),
-            Vec3::new(0.5, 0.0, 0.0),
-            0.1,
-        )
-        .expect("ray should hit horizontal capsule");
-
-        assert!((point.z - 0.1).abs() < 1.0e-4);
-        assert!(normal.z > 0.99);
-    }
-
-    #[test]
-    fn oriented_capsule_misses_beyond_radius() {
-        assert!(ray_oriented_capsule_intersection(
-            Vec3::new(0.0, 0.2, 2.0),
-            Vec3::NEG_Z,
-            4.0,
-            Vec3::new(-0.5, 0.0, 0.0),
-            Vec3::new(0.5, 0.0, 0.0),
-            0.1,
-        )
-        .is_none());
-    }
-}
 
 /// Segment vs terrain heightfield intersection.
 /// Returns (distance_along_segment, hit_point, hit_normal) for the nearest hit.
-pub(super) fn segment_terrain_intersection(
+pub fn segment_terrain_intersection(
     terrain: &WorldTerrain,
     start: Vec3,
     end: Vec3,
@@ -359,7 +185,7 @@ pub(super) fn segment_terrain_intersection(
 
 /// Test ray segment against static props (trees, rocks, etc.).
 /// Returns (t, hit_point, hit_normal) for the closest hit.
-pub(super) fn segment_props_intersection(
+pub fn segment_props_intersection(
     start: Vec3,
     end: Vec3,
     colliders: &StaticColliders,
@@ -428,7 +254,7 @@ pub(super) fn segment_props_intersection(
 }
 
 /// Test ray segment against placed buildings (baked convex hulls).
-pub(super) fn segment_buildings_intersection(
+pub fn segment_buildings_intersection(
     start: Vec3,
     end: Vec3,
     buildings: &Query<(&PlacedBuilding, &BuildingPosition)>,

@@ -8,7 +8,7 @@ use lightyear::prelude::{
 };
 
 use shared::components::{
-    EquippedWeapon, Health, Player, PlayerCharacter, PlayerGrounded, PlayerPosition,
+    Health, Player, PlayerCharacter, PlayerGrounded, PlayerPosition,
     PlayerProgression, PlayerRotation, PlayerVelocity,
 };
 use shared::items::{HotbarSelection, Inventory};
@@ -21,9 +21,7 @@ use shared::protocol::{
 };
 use shared::terrain::WorldTerrain;
 use shared::vehicle::{InVehicle, Vehicle, VehicleDriver, VehicleState, VehicleType};
-use shared::weapons::WeaponType;
 
-use crate::inventory::hotbar::PreviousHotbarSlot;
 use crate::net::peer::peer_id_to_u64;
 use crate::persistence::profiles::PlayerProfiles;
 use crate::player::index::PlayerEntityIndex;
@@ -103,8 +101,6 @@ pub fn handle_player_name_submission(
                 spawn_rot,
                 spawn_vel,
                 health,
-                equipped_weapon,
-                weapon_ammo,
                 inventory,
                 hotbar_sel,
                 vehicle_spawn,
@@ -113,8 +109,6 @@ pub fn handle_player_name_submission(
                 f32,
                 Vec3,
                 Health,
-                EquippedWeapon,
-                u32,
                 Inventory,
                 u8,
                 Option<(VehicleType, [f32; 3], [f32; 3], [f32; 3], [f32; 3])>,
@@ -130,8 +124,6 @@ pub fn handle_player_name_submission(
                     0.0,
                     Vec3::ZERO,
                     Health::default(),
-                    EquippedWeapon::new(WeaponType::AssaultRifle),
-                    30,
                     Inventory::new(),
                     0,
                     None,
@@ -154,8 +146,6 @@ pub fn handle_player_name_submission(
                         current: profile.health_current,
                         max: profile.health_max,
                     },
-                    EquippedWeapon::new(profile.equipped_weapon),
-                    profile.weapon_ammo_in_mag,
                     inventory,
                     profile.hotbar_selection,
                     None,
@@ -186,8 +176,6 @@ pub fn handle_player_name_submission(
                         current: profile.health_current,
                         max: profile.health_max,
                     },
-                    EquippedWeapon::new(profile.equipped_weapon),
-                    profile.weapon_ammo_in_mag,
                     inventory,
                     profile.hotbar_selection,
                     Some((veh_type, veh_pos, veh_rot, veh_vel, veh_ang_vel)),
@@ -213,8 +201,6 @@ pub fn handle_player_name_submission(
                         current: profile.health_current,
                         max: profile.health_max,
                     },
-                    EquippedWeapon::new(profile.equipped_weapon),
-                    profile.weapon_ammo_in_mag,
                     inventory,
                     profile.hotbar_selection,
                     None,
@@ -229,9 +215,6 @@ pub fn handle_player_name_submission(
                 intelligence: profile.intelligence,
             };
 
-            let mut equipped_weapon_component = equipped_weapon;
-            equipped_weapon_component.ammo_in_mag = weapon_ammo;
-
             let player_entity = commands
                 .spawn((
                     Player { client_id: peer_id },
@@ -242,12 +225,8 @@ pub fn handle_player_name_submission(
                     PlayerCharacter::default(),
                     health,
                     progression,
-                    equipped_weapon_component,
                     inventory,
                     HotbarSelection { index: hotbar_sel },
-                    PreviousHotbarSlot {
-                        index: Some(hotbar_sel as usize),
-                    },
                     ReplicationGroup::new_from_entity().set_priority(PLAYER_REPLICATION_PRIORITY),
                     Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
                     ControlledBy {

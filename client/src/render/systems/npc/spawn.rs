@@ -129,11 +129,9 @@ fn spawn_dummy_body_parts(
     materials: &mut Assets<StandardMaterial>,
 ) {
     use shared::npc::{
-        humanoid_body_part, humanoid_body_shape, ragdoll_body_axis, HumanoidBodyShape,
-        HUMANOID_RAGDOLL_BODIES,
+        humanoid_body_shape, ragdoll_body_axis, HumanoidBodyShape, HUMANOID_RAGDOLL_BODIES,
     };
     use shared::protocol::RagdollBodyId as B;
-    use shared::weapons::damage::HitZone;
 
     let gray = materials.add(StandardMaterial {
         base_color: Color::srgb(0.62, 0.62, 0.65),
@@ -189,12 +187,15 @@ fn spawn_dummy_body_parts(
                 )),
             };
             let material = if archetype == shared::components::NpcArchetype::CombatDummy {
-                match humanoid_body_part(def.id).hit_zone() {
-                    HitZone::Head => head.clone(),
-                    HitZone::Chest => chest.clone(),
-                    HitZone::Stomach => abdomen.clone(),
-                    HitZone::Arms => arms.clone(),
-                    HitZone::Legs => legs.clone(),
+                match def.id {
+                    B::Head => head.clone(),
+                    B::SpineUpper => chest.clone(),
+                    B::SpineLower | B::Pelvis => abdomen.clone(),
+                    B::UpperArmL | B::ForearmL | B::HandL | B::UpperArmR | B::ForearmR
+                    | B::HandR => arms.clone(),
+                    B::ThighL | B::CalfL | B::FootL | B::ThighR | B::CalfR | B::FootR => {
+                        legs.clone()
+                    }
                 }
             } else {
                 gray.clone()

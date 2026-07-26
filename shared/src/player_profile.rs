@@ -7,11 +7,10 @@
 use crate::items::{ItemStack, ItemType, INVENTORY_SLOTS};
 use crate::player::SPAWN_POSITION;
 use crate::vehicle::VehicleType;
-use crate::weapons::WeaponType;
 use serde::{Deserialize, Serialize};
 
 /// Current profile version for migration support
-pub const PROFILE_VERSION: u32 = 1;
+pub const PROFILE_VERSION: u32 = 2;
 
 /// Serializable player profile containing all persistent state
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,10 +34,6 @@ pub struct PlayerProfile {
     pub health_current: f32,
     /// Maximum health points
     pub health_max: f32,
-    /// Currently equipped weapon type
-    pub equipped_weapon: WeaponType,
-    /// Ammo loaded in equipped weapon's magazine
-    pub weapon_ammo_in_mag: u32,
 
     // === Inventory ===
     /// 24-slot inventory (None = empty slot)
@@ -100,53 +95,28 @@ impl PlayerProfile {
         // We'll construct this manually since we can't call the method directly
         let mut inventory_slots = [None; INVENTORY_SLOTS];
 
-        // Slot 0: Assault Rifle with full mag (30 rounds)
-        inventory_slots[0] = Some(ItemStack {
-            item_type: ItemType::Weapon(WeaponType::AssaultRifle),
-            quantity: 1,
-            ammo_in_mag: Some(30),
-        });
-
-        // Slot 1: Sword, Slot 2: Shield (shield rides the off-hand while a
-        // one-handed weapon is selected — hold RMB to block).
-        inventory_slots[1] = Some(ItemStack {
-            item_type: ItemType::Weapon(WeaponType::Sword),
-            quantity: 1,
-            ammo_in_mag: Some(0),
-        });
-        inventory_slots[2] = Some(ItemStack {
-            item_type: ItemType::Weapon(WeaponType::Shield),
-            quantity: 1,
-            ammo_in_mag: Some(0),
-        });
-
         // Slots 3-5 (rest of the hotbar): ammo
         inventory_slots[3] = Some(ItemStack {
             item_type: ItemType::RifleAmmo,
             quantity: 30,
-            ammo_in_mag: None,
         });
         inventory_slots[4] = Some(ItemStack {
             item_type: ItemType::ShotgunShells,
             quantity: 20,
-            ammo_in_mag: None,
         });
         inventory_slots[5] = Some(ItemStack {
             item_type: ItemType::RifleAmmo,
             quantity: 30,
-            ammo_in_mag: None,
         });
 
         // Backpack: more reserve ammo
         inventory_slots[6] = Some(ItemStack {
             item_type: ItemType::RifleAmmo,
             quantity: 54,
-            ammo_in_mag: None,
         });
         inventory_slots[7] = Some(ItemStack {
             item_type: ItemType::SniperRounds,
             quantity: 10,
-            ammo_in_mag: None,
         });
 
         Self {
@@ -161,8 +131,6 @@ impl PlayerProfile {
             // Default combat stats
             health_current: 100.0,
             health_max: 100.0,
-            equipped_weapon: WeaponType::AssaultRifle,
-            weapon_ammo_in_mag: 30,
 
             // Starting inventory
             inventory_slots,

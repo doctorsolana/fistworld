@@ -6,8 +6,6 @@ mod app;
 mod city;
 #[path = "collision/mod.rs"]
 mod collision;
-#[path = "combat/mod.rs"]
-mod combat;
 #[path = "inventory/mod.rs"]
 mod inventory;
 #[path = "net/mod.rs"]

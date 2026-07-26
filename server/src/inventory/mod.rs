@@ -11,6 +11,5 @@
 //! - Should avoid direct dependency on net transport details.
 
 pub mod chest;
-pub mod death_drop;
 pub mod ground_items;
 pub mod hotbar;

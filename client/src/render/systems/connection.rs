@@ -96,10 +96,6 @@ pub fn handle_start_connection(
     // Add Client -> Server message senders (split to avoid tuple size limit)
     commands.entity(client_entity).insert((
         MessageSender::<shared::protocol::PlayerInput>::default(),
-        MessageSender::<shared::protocol::ShootRequest>::default(),
-        MessageSender::<shared::protocol::SwitchWeapon>::default(),
-        MessageSender::<shared::protocol::ReloadRequest>::default(),
-        MessageSender::<shared::protocol::MeleeAttackRequest>::default(),
         MessageSender::<shared::protocol::SetTimeOfDay>::default(),
         MessageSender::<shared::protocol::SpawnOilmanDebug>::default(),
         MessageSender::<shared::protocol::SpawnPhysicsBoxDebug>::default(),
@@ -131,10 +127,6 @@ pub fn handle_start_connection(
 
     // Add server -> client message receivers (split to avoid tuple size limit)
     commands.entity(client_entity).insert((
-        MessageReceiver::<shared::protocol::HitConfirm>::default(),
-        MessageReceiver::<shared::protocol::BulletImpact>::default(),
-        MessageReceiver::<shared::protocol::DamageReceived>::default(),
-        MessageReceiver::<shared::protocol::PlayerKilled>::default(),
         MessageReceiver::<shared::protocol::NpcRagdollStarted>::default(),
         MessageReceiver::<shared::protocol::NpcRagdollPoseBatch>::default(),
         // Name submission response

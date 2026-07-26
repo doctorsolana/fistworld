@@ -155,37 +155,24 @@ fn wire_fps_systems(app: &mut App) {
             game_systems::setup_debug_physics_box_assets,
             game_systems::setup_particle_assets,
             game_systems::setup_vehicle_visual_assets,
-            weapons::setup_weapon_visual_assets,
-            weapons::setup_weapon_audio_assets,
-            weapon_view::setup_weapon_model_assets,
             game_systems::setup_player_character_assets,
             game_systems::setup_npc_assets,
         ),
     );
 
-    // Spawn world visuals, HUD, crosshair, and death screen when entering gameplay
+    // Spawn world visuals and the perf overlay when entering gameplay
     app.add_systems(
         OnEnter(GameState::Playing),
         (
             game_systems::spawn_world,
-            crosshair::spawn_crosshair,
-            crosshair::spawn_death_screen,
-            weapon_view::spawn_weapon_hud,
             perf_overlay::spawn_debug_overlay,
-            weapons::cleanup_shoot_input_suppress,
         ),
     );
 
-    // Cleanup HUD, crosshair, and death screen when leaving gameplay
+    // Cleanup overlays when leaving gameplay
     app.add_systems(
         OnExit(GameState::Playing),
         (
-            crosshair::despawn_crosshair,
-            crosshair::despawn_death_screen,
-            weapon_view::despawn_weapon_hud,
-            weapon_view::despawn_third_person_weapon,
-            weapon_view::despawn_remote_third_person_weapons,
-            weapons::reset_projectile_indices,
             perf_overlay::despawn_debug_overlay,
         ),
     );
@@ -218,7 +205,6 @@ fn wire_fps_systems(app: &mut App) {
             input::handle_keyboard_input,
             input::update_vehicle_state,
             input::handle_mouse_input,
-            input::update_death_state,
             game_systems::apply_cursor_grab,
             game_systems::spawn_debug_physics_box_visuals,
             game_systems::setup_steam_car_visual_rigs,
@@ -235,7 +221,6 @@ fn wire_fps_systems(app: &mut App) {
             game_systems::update_vehicle_shadow_culling,
             game_systems::apply_vehicle_shadow_state_to_new_meshes,
             camera::update_camera_fov,
-            camera::update_sniper_fisheye,
             game_systems::spawn_sand_particles,
             game_systems::update_sand_particles,
         )
@@ -277,59 +262,16 @@ fn wire_fps_systems(app: &mut App) {
             .run_if(in_state(GameState::Playing)),
     );
 
-    app.add_systems(
-        Update,
-        (
-            crosshair::update_crosshair_visibility,
-            crosshair::update_crosshair_ads,
-            crosshair::update_hit_markers,
-            crosshair::update_death_screen,
-        )
-            .run_if(in_state(GameState::Playing)),
-    );
 
     app.add_systems(
         Update,
         (
-            weapons::sync_player_owner_index,
-            weapons::sync_remote_muzzle_index
-                .after(weapon_view::update_remote_third_person_weapons),
             perf_overlay::update_client_perf_snapshot,
-            weapons::update_weapon_warmup_queue,
-            weapons::spawn_weapon_warmups,
-            weapons::cleanup_weapon_warmups,
-            weapons::handle_shoot_input,
-            weapons::handle_reload_input,
-            weapons::handle_weapon_sounds,
-            weapons::handle_bullet_spawned,
-            weapons::update_recoil_recovery,
         )
             .run_if(in_state(GameState::Playing)),
     );
 
-    app.add_systems(
-        Update,
-        (
-            weapons::update_bullet_visuals,
-            weapons::update_local_tracers,
-            weapons::handle_bullet_impacts,
-        )
-            .run_if(in_state(GameState::Playing)),
-    );
 
-    app.add_systems(
-        Update,
-        (
-            weapons::update_impact_markers,
-            weapons::update_blood_bursts,
-            weapons::update_blood_droplets,
-            weapons::update_blood_ground_splats,
-            weapons::update_muzzle_smoke,
-            weapons::update_muzzle_flash,
-            weapons::handle_hit_confirms,
-        )
-            .run_if(in_state(GameState::Playing)),
-    );
 
     app.add_systems(
         Update,
@@ -341,10 +283,6 @@ fn wire_fps_systems(app: &mut App) {
         perf_overlay::handle_toggle_debug_mode.run_if(in_state(GameState::Playing)),
     );
 
-    app.add_systems(
-        Update,
-        weapons::update_trajectory_debug_gizmos.run_if(in_state(GameState::Playing)),
-    );
 
     app.add_systems(
         Update,
@@ -369,30 +307,4 @@ fn wire_fps_systems(app: &mut App) {
         perf_overlay::emit_client_perf_summary.run_if(in_state(GameState::Playing)),
     );
 
-    // Weapon view systems (3D models and HUD)
-    app.add_systems(
-        Update,
-        (
-            weapon_view::handle_weapon_switch,
-            weapon_view::update_weapon_hud,
-            weapon_view::update_first_person_weapon,
-            weapon_view::update_third_person_weapon,
-            weapon_view::update_remote_third_person_weapons,
-            weapon_view::offhand::update_first_person_offhand_shield,
-            weapon_view::offhand::animate_first_person_offhand_shield,
-            weapon_view::offhand::update_third_person_offhand_shields,
-            weapon_view::offhand::animate_third_person_offhand_shields,
-            weapon_view::offhand::animate_third_person_melee
-                .after(weapon_view::update_third_person_weapon)
-                .after(weapon_view::update_remote_third_person_weapons),
-            weapon_view::update_weapon_animation
-                .after(weapons::handle_shoot_input)
-                .after(weapons::handle_reload_input),
-            weapon_view::slash_trail::spawn_slash_trails.after(weapons::handle_shoot_input),
-            weapon_view::slash_trail::animate_slash_trails,
-        )
-            .after(game_systems::handle_player_spawned)
-            .after(game_systems::sync_player_character_models)
-            .run_if(in_state(GameState::Playing)),
-    );
 }

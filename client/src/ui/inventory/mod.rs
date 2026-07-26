@@ -27,7 +27,6 @@ use shared::items::{
     InventoryMoveRequest, ItemStack, ItemType, CHEST_SLOTS, HOTBAR_SLOTS, INVENTORY_SLOTS,
 };
 use shared::protocol::ReliableChannel;
-use shared::weapons::WeaponType;
 use std::collections::HashMap;
 
 use super::modal::sync_modal_cursor;
@@ -160,6 +159,5 @@ const SLOT_HOVERED: Color = Color::srgba(0.25, 0.20, 0.15, 0.95);
 const SLOT_EMPTY: Color = Color::srgba(0.10, 0.08, 0.06, 0.7);
 const SLOT_BORDER: Color = Color::srgba(0.4, 0.3, 0.2, 0.8);
 const HOTBAR_BORDER: Color = Color::srgba(0.55, 0.45, 0.25, 0.9);
-const WEAPON_ICON_BG: Color = Color::srgba(0.08, 0.08, 0.08, 0.45);
 const DRAG_ICON_SIZE: f32 = 46.0;
 const DRAG_ICON_HALF: f32 = DRAG_ICON_SIZE * 0.5;

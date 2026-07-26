@@ -33,7 +33,6 @@ use shared::vehicle::{Vehicle, VehicleDriver, VehicleState, VehicleType};
 
 use crate::input::InputState;
 use crate::states::GameState;
-use crate::weapon_view::WeaponModelAssets;
 use std::collections::HashMap;
 
 /// Plugin for the pickup system

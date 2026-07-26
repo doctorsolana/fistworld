@@ -13,7 +13,7 @@ pub(super) fn detect_nearby_vehicles(
     mut initialized: Local<bool>,
 ) {
     // Don't show prompt if already in vehicle or dead
-    if input_state.in_vehicle || input_state.is_dead {
+    if input_state.in_vehicle {
         *nearby = NearbyVehicle::default();
         return;
     }
@@ -120,7 +120,7 @@ pub(super) fn detect_nearby_items(
     mut initialized: Local<bool>,
 ) {
     // Don't detect while in vehicle or dead
-    if input_state.in_vehicle || input_state.is_dead {
+    if input_state.in_vehicle {
         *nearby = NearbyItem::default();
         return;
     }

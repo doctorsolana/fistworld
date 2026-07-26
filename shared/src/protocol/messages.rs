@@ -5,7 +5,6 @@ use crate::components::{NpcArchetype, PlayerCharacter};
 use crate::economy::CargoKind;
 use crate::rail::{RouteStop, StationId, TrackSegmentId, TrainId};
 use crate::vehicle::VehicleInput;
-use crate::weapons::damage::{HitBodyPart, HitZone};
 
 /// Player input sent from client to server each tick.
 #[derive(Debug, PartialEq, Clone)]
@@ -28,8 +27,6 @@ pub struct PlayerInput {
     pub vehicle_input: Option<VehicleInput>,
     /// Request to enter/exit vehicle
     pub interact: bool,
-    /// Holding block (shield raised).
-    pub block: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -52,7 +49,7 @@ const FLAG_FLY_FAST: u16 = 1 << 7;
 const FLAG_INTERACT: u16 = 1 << 8;
 const FLAG_HAS_VEHICLE_INPUT: u16 = 1 << 9;
 const FLAG_VEHICLE_AIR_CONTROL: u16 = 1 << 10;
-const FLAG_BLOCK: u16 = 1 << 11;
+// bit 11 intentionally vacant (was FLAG_BLOCK); PackedPlayerInput is rewritten in P6.
 
 #[inline]
 fn quantize_unit_u8(value: f32) -> u8 {
@@ -100,7 +97,6 @@ impl Default for PlayerInput {
             yaw: 0.0,
             vehicle_input: None,
             interact: false,
-            block: false,
         }
     }
 }
@@ -138,10 +134,6 @@ impl Serialize for PlayerInput {
         if self.interact {
             flags |= FLAG_INTERACT;
         }
-        if self.block {
-            flags |= FLAG_BLOCK;
-        }
-
         let (throttle_q, brake_q, steer_q) = if let Some(vehicle_input) = &self.vehicle_input {
             flags |= FLAG_HAS_VEHICLE_INPUT;
             if vehicle_input.air_control {
@@ -192,7 +184,6 @@ impl<'de> Deserialize<'de> for PlayerInput {
                 air_control: (packed.flags & FLAG_VEHICLE_AIR_CONTROL) != 0,
             }),
             interact: (packed.flags & FLAG_INTERACT) != 0,
-            block: (packed.flags & FLAG_BLOCK) != 0,
         })
     }
 }
@@ -202,73 +193,6 @@ impl<'de> Deserialize<'de> for PlayerInput {
 pub struct SpawnPlayer;
 
 /// Message sent from client to request firing a weapon.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct ShootRequest {
-    /// Normalized aim direction in world space
-    pub direction: Vec3,
-    /// Player's pitch for aiming
-    pub pitch: f32,
-    /// Whether aiming down sights
-    pub aiming: bool,
-}
-
-/// Message sent from server to confirm a hit.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct HitConfirm {
-    /// ID of the player that was hit
-    pub target_id: u64,
-    /// Damage dealt
-    pub damage: f32,
-    /// Was it a headshot
-    pub headshot: bool,
-    /// Did it kill the target
-    pub kill: bool,
-    /// Hit zone
-    pub hit_zone: HitZone,
-    /// Exact anatomical part for detailed NPC hitboxes.
-    pub body_part: Option<HitBodyPart>,
-}
-
-/// Message sent from server when player takes damage.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct DamageReceived {
-    /// Direction damage came from (for hit indicator)
-    pub direction: Vec3,
-    /// Damage amount
-    pub damage: f32,
-    /// Current health after damage
-    pub health_remaining: f32,
-}
-
-/// Message sent from server when player dies.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct PlayerKilled {
-    /// ID of player who killed us
-    pub killer_id: u64,
-    /// Weapon used
-    pub weapon: crate::weapons::WeaponType,
-    /// Was it a headshot
-    pub headshot: bool,
-}
-
-/// Message sent from client to switch weapons.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct SwitchWeapon {
-    /// Weapon type to switch to
-    pub weapon_type: crate::weapons::WeaponType,
-}
-
-/// Message sent from client to reload current weapon.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct ReloadRequest;
-
-/// Message sent from client to swing a melee weapon.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct MeleeAttackRequest {
-    /// Normalized aim direction in world space.
-    pub direction: Vec3,
-}
-
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 pub enum TimeOfDayPreset {
     Night,
@@ -317,52 +241,6 @@ pub struct SpawnPhysicsBoxDebug {
 }
 
 /// What the bullet impacted (used for visuals/debug).
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
-pub enum BulletImpactSurface {
-    Terrain,
-    PracticeWall,
-    Player,
-    Npc,
-}
-
-/// Server -> Client: bullet impact (reliable visual feedback independent of bullet replication).
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct BulletImpact {
-    pub owner_id: u64,
-    pub weapon_type: crate::weapons::WeaponType,
-    pub spawn_position: Vec3,
-    pub initial_velocity: Vec3,
-    pub impact_position: Vec3,
-    pub impact_normal: Vec3,
-    pub surface: BulletImpactSurface,
-}
-
-/// Type of audio event for spatial audio.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
-pub enum AudioEventKind {
-    /// Gunshot sound (weapon type affects which sound to play)
-    Gunshot {
-        weapon_type: crate::weapons::WeaponType,
-    },
-    /// Melee swing whoosh.
-    MeleeSwing,
-    /// Melee connecting with a victim; `blocked` = clang off a shield.
-    MeleeImpact { blocked: bool },
-}
-
-/// Server -> Client: audio event broadcast for spatial audio.
-/// Allows clients to hear other players' sounds (gunshots, etc.)
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct AudioEvent {
-    /// ID of the player who made the sound (skip if it's ourselves)
-    pub player_id: u64,
-    /// World position where the sound originated
-    pub position: Vec3,
-    /// Type of audio event
-    pub kind: AudioEventKind,
-}
-
-/// Message sent from client to submit their player name on connection.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct SubmitPlayerName {
     /// Chosen player name (3-16 chars, alphanumeric + _ and -)
@@ -601,7 +479,6 @@ mod tests {
             yaw: 1.2345,
             vehicle_input: None,
             interact: true,
-            block: true,
         };
 
         let bytes = bincode::serialize(&input).unwrap();
@@ -642,7 +519,6 @@ mod tests {
                 air_control: true,
             }),
             interact: false,
-            block: true,
         };
 
         let bytes = bincode::serialize(&input).unwrap();
@@ -712,19 +588,4 @@ mod tests {
         assert_eq!(batch_decoded.samples[0].seq, 7);
     }
 
-    #[test]
-    fn hit_confirmation_preserves_precise_body_part() {
-        let message = HitConfirm {
-            target_id: 42,
-            damage: 18.75,
-            headshot: false,
-            kill: false,
-            hit_zone: HitZone::Arms,
-            body_part: Some(HitBodyPart::LeftForearm),
-        };
-
-        let bytes = bincode::serialize(&message).unwrap();
-        let decoded: HitConfirm = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded, message);
-    }
 }

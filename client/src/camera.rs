@@ -25,12 +25,7 @@ const THIRD_PERSON_DEFAULT_PITCH: f32 = 0.25; // Default orbit angle (slightly a
 /// FOV settings for aiming
 const FOV_DEFAULT: f32 = 70.0_f32.to_radians(); // Normal FOV in radians
 const FOV_SPRINT: f32 = 76.0_f32.to_radians(); // Slight speed kick when sprinting
-const FOV_ADS: f32 = 45.0_f32.to_radians(); // Zoomed FOV when ADS
-const FOV_SNIPER_ADS: f32 = 20.0_f32.to_radians(); // Extra zoom for sniper
                                                    // Tuned to make distortion visible within the centered sniper scope viewport.
-const SNIPER_FISHEYE_STRENGTH: f32 = 0.12;
-const SNIPER_FISHEYE_EDGE_START: f32 = 0.09;
-const SNIPER_FISHEYE_BLEND_SPEED: f32 = 14.0;
 
 /// Helper to convert PeerId to u64 for driver tracking
 pub(crate) fn peer_id_to_u64(peer_id: PeerId) -> u64 {
@@ -189,7 +184,6 @@ fn is_sprinting_on_foot(input_state: &crate::input::InputState) -> bool {
         && input_state.shift
         && input_state.forward
         && !input_state.backward
-        && !input_state.aiming
 }
 
 fn third_person_target(
@@ -276,7 +270,6 @@ fn look_at_level(eye: Vec3, target: Vec3) -> Quat {
 pub fn update_camera_fov(
     mut camera_query: Query<&mut Projection, With<Camera3d>>,
     input_state: Res<crate::input::InputState>,
-    local_player: Query<&shared::components::EquippedWeapon, With<LocalPlayer>>,
     local_water: Query<(), (With<LocalPlayer>, With<PlayerWaterState>)>,
     time: Res<Time>,
 ) {
@@ -292,18 +285,7 @@ pub fn update_camera_fov(
     persp.near = CAMERA_NEAR_CLIP;
 
     // Determine target FOV
-    let target_fov = if input_state.aiming && input_state.camera_mode == CameraMode::FirstPerson {
-        // Check if using sniper for extra zoom
-        if let Some(weapon) = local_player.iter().next() {
-            if weapon.weapon_type == shared::weapons::WeaponType::Sniper {
-                FOV_SNIPER_ADS
-            } else {
-                FOV_ADS
-            }
-        } else {
-            FOV_ADS
-        }
-    } else if input_state.camera_mode == CameraMode::FirstPerson
+    let target_fov = if input_state.camera_mode == CameraMode::FirstPerson
         && is_sprinting_on_foot(&input_state)
         && local_water.is_empty()
     {
@@ -318,30 +300,3 @@ pub fn update_camera_fov(
     persp.fov = persp.fov + (target_fov - persp.fov) * t;
 }
 
-/// Update sniper fisheye settings on the main gameplay camera.
-pub fn update_sniper_fisheye(
-    mut camera_query: Query<&mut crate::render::sniper_fisheye::SniperFisheye, With<Camera3d>>,
-    input_state: Res<crate::input::InputState>,
-    local_player: Query<&shared::components::EquippedWeapon, With<LocalPlayer>>,
-    time: Res<Time>,
-) {
-    let sniper_ads = input_state.aiming
-        && input_state.camera_mode == CameraMode::FirstPerson
-        && local_player
-            .iter()
-            .next()
-            .map(|weapon| weapon.weapon_type == shared::weapons::WeaponType::Sniper)
-            .unwrap_or(false);
-
-    let target_strength = if sniper_ads {
-        SNIPER_FISHEYE_STRENGTH
-    } else {
-        0.0
-    };
-    let t = 1.0 - (-SNIPER_FISHEYE_BLEND_SPEED * time.delta_secs()).exp();
-
-    for mut effect in camera_query.iter_mut() {
-        effect.edge_start = SNIPER_FISHEYE_EDGE_START;
-        effect.strength = effect.strength + (target_strength - effect.strength) * t;
-    }
-}

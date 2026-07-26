@@ -10,6 +10,5 @@ pub(super) fn item_model_scale(item_type: ItemType) -> f32 {
         ItemType::Stone => 0.6,
         ItemType::Wood => 0.65,
         ItemType::GoldCoin => 0.35,
-        _ => 1.0,
     }
 }

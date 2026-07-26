@@ -5,7 +5,6 @@ use super::*;
 /// Spawn 3D visuals for new ground items
 pub(super) fn spawn_ground_item_visuals(
     mut commands: Commands,
-    weapon_models: Option<Res<WeaponModelAssets>>,
     item_models: Option<Res<ItemModelAssets>>,
     new_items: Query<(Entity, &GroundItem, &GroundItemPosition), Added<GroundItemPosition>>,
     existing_visuals: Query<&GroundItemVisual>,
@@ -19,17 +18,7 @@ pub(super) fn spawn_ground_item_visuals(
 
         let mut transform = Transform::from_translation(pos.0);
 
-        let scene = if let ItemType::Weapon(weapon_type) = item.item_type {
-            let weapon_scene = weapon_models
-                .as_ref()
-                .and_then(|assets| assets.scenes.get(&weapon_type))
-                .cloned();
-            let Some(weapon_scene) = weapon_scene else {
-                continue;
-            };
-            transform.scale = Vec3::splat(0.45);
-            weapon_scene
-        } else {
+        let scene = {
             let ammo_scene = item_models
                 .as_ref()
                 .and_then(|assets| assets.scenes.get(&item.item_type))

@@ -7,10 +7,6 @@ use std::collections::{HashMap, HashSet};
 /// Resource holding all loaded audio assets.
 #[derive(Resource)]
 pub struct GameAudio {
-    pub assault_shot: Handle<AudioSource>,
-    pub revolver_shot: Handle<AudioSource>,
-    pub shotgun_shot: Handle<AudioSource>,
-    pub sniper_shot: Handle<AudioSource>,
     pub desert_ambient: Handle<AudioSource>,
     // Vehicle sounds
     pub hover_idle: Handle<AudioSource>,
@@ -44,17 +40,11 @@ pub struct AudioState {
     pub assets_ready: bool,
 }
 
-/// Marker for remote player spatial audio (gunshots, etc.).
-#[derive(Component)]
-pub struct RemoteSpatialSound;
-
 /// Priority levels for audio - higher value = higher priority (less likely to be dropped).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AudioPriority {
     /// Remote footsteps - lowest priority, drop first.
     Ambient = 0,
-    /// Remote gunshots.
-    CombatRemote = 1,
     /// NPC dialogue.
     Dialogue = 2,
 }
@@ -81,8 +71,6 @@ pub struct AudioManager {
     pub max_total: usize,
     /// Max concurrent dialogue sounds.
     pub max_dialogue: usize,
-    /// Max remote gunshot sounds.
-    pub max_remote_combat: usize,
     /// Max remote footstep emitters.
     pub max_remote_footsteps: usize,
     /// Queued dialogue requests for this frame.
@@ -94,7 +82,6 @@ impl Default for AudioManager {
         Self {
             max_total: 32,
             max_dialogue: 4,
-            max_remote_combat: 8,
             max_remote_footsteps: 12,
             dialogue_queue: Vec::with_capacity(8),
         }

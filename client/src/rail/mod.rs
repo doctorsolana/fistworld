@@ -1,9 +1,6 @@
 //! Client RTS shell for the railroad management pivot.
 
-use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
-use bevy::math::Ray3d;
 use bevy::prelude::*;
-use bevy::window::{CursorOptions, PrimaryWindow};
 use lightyear::prelude::*;
 
 use shared::economy::{CargoKind, TRAIN_COST};
@@ -16,7 +13,6 @@ use shared::rail::{
     StationId, Train, TrainState,
 };
 use crate::camera_rts::{CursorTerrainHit, LocalPeerId};
-use shared::terrain::WorldTerrain;
 
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RailBuildMode {

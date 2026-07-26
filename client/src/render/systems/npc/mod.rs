@@ -31,7 +31,7 @@ use shared::components::{
     PlayerPosition,
 };
 use shared::npc::{
-    humanoid_body_part, humanoid_body_shape, npc_capsule_endpoints, npc_head_center,
+    humanoid_body_shape, npc_capsule_endpoints, npc_head_center,
     ragdoll_body_axis, HumanoidBodyShape, HUMANOID_RAGDOLL_BODIES, NPC_HEAD_RADIUS, NPC_HEIGHT,
     NPC_RADIUS,
 };

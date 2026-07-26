@@ -3,7 +3,7 @@
 Tracking doc for converting this repo from **FistForce** (multiplayer FPS sandbox) into a
 **top-down multiplayer unit-tactics game** (many units, formations, huge maps).
 
-> **Status:** Phase 0 in progress.
+> **Status:** P0 ✅ · P1 ✅ · P2 next.
 
 **Detailed analysis lives in [`docs/strip/`](docs/strip/):**
 [MASTER-STRIP-PLAN.md](docs/strip/MASTER-STRIP-PLAN.md) (the authoritative execution plan — ordering
@@ -114,14 +114,24 @@ Pure moves/renames. Tree compiles and game runs identically after each. **Highes
       - *(Pre-existing, not a regression: rail mode emits no `ClientPerf` because the perf systems are
         wired only in `wire_fps_systems`.)*
 
-### ⬜ P1 — Weapons & combat (~9,100 lines)
-- [ ] Rescue first: split `Health` → `shared/src/components/health.rs`; move segment raycasts →
-      `server/src/collision/raycast.rs`; `PROFILE_VERSION` 1→2
-- [ ] `client/src/{weapons,weapon_view,crosshair}/`, `render/sniper_fisheye.*`
-- [ ] `server/src/combat/`, `server/src/inventory/death_drop.rs`
-- [ ] `shared/src/weapons/`, `shared/src/components/combat.rs`
-- [ ] Fix audio readiness match (**Danger 5**) — verify audio is NOT silent
-- [ ] `cargo check` green · `cargo test -p shared` · commit
+### ✅ P1 — Weapons & combat (9,563 deletions)
+- [x] Rescued first: `Health` → `shared/src/components/health.rs`; segment raycasts →
+      `server/src/collision/raycast.rs` (plus `ray_obb_intersection`, which the plan missed —
+      it only surfaced under `--all-targets`); `PROFILE_VERSION` 1→2
+- [x] `client/src/{weapons,weapon_view,crosshair}/`, `render/sniper_fisheye.*`
+- [x] `server/src/combat/`, `server/src/inventory/death_drop.rs`
+- [x] `shared/src/weapons/`, `shared/src/components/combat.rs`, `PlayerMeleeState`
+- [x] Protocol slimmed: 4 components + 9 messages unregistered; `PlayerInput.block` removed with
+      **bit 11 left vacant** (no mid-strip renumbering)
+- [x] Fixed audio readiness match (**Danger 5**) — gate reduced from the 4-gunshot tuple to ambient only
+- [x] NPC hitbox debug colouring reimplemented on `RagdollBodyId` regions (was `HitZone`)
+- [x] `cargo check --workspace --all-targets` green · `cargo check -p editor` green ·
+      51 shared tests (was 61; the 10 lost were weapon/melee tests deleted with the module) ·
+      4 editor tests
+- [x] Smoke test passed: `Audio assets loaded successfully!` + desert ambient spawning (**Danger 5
+      averted**), no panics, no asset errors, no streaming-anchor warning, 42 `ClientPerf` lines,
+      and `ServerPerf` now reports exactly 5 phases with the `bullets=` counter gone.
+- [x] **Committed. 45 files deleted, 9,563 deletions.**
 
 ### ⬜ P2 — Items & inventory (~3,700 lines)
 - [ ] `PROFILE_VERSION` 2→3

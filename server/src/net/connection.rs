@@ -6,8 +6,7 @@ use lightyear::prelude::*;
 use std::time::Duration;
 
 use shared::components::{
-    EquippedWeapon, Health, Player, PlayerPosition, PlayerProgression, PlayerRotation,
-    PlayerVelocity,
+    Health, Player, PlayerPosition, PlayerProgression, PlayerRotation, PlayerVelocity,
 };
 use shared::items::{
     ChestTransferRequest, CloseChestRequest, DropRequest, HotbarSelection, Inventory,
@@ -15,12 +14,11 @@ use shared::items::{
 };
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 use shared::protocol::{
-    AssignRouteRequest, BuildStationRequest, BuildTrackRequest, BulletImpact, BuyTrainRequest,
-    CreateCompanyRequest, DamageReceived, DemolishRailRequest, HitConfirm, NameSubmissionResult,
-    NpcRagdollPoseBatch, NpcRagdollStarted, PlayerInput, PlayerKilled, PlayerRoster,
-    RailCommandRejected, ReloadRequest, RequestPlayerRoster, SetPlayerCharacter, SetTimeOfDay,
-    SetTrainCargoPolicyRequest, ShootRequest, SpawnOilmanDebug, SpawnPhysicsBoxDebug,
-    SubmitPlayerName, SwitchWeapon,
+    AssignRouteRequest, BuildStationRequest, BuildTrackRequest, BuyTrainRequest,
+    CreateCompanyRequest, DemolishRailRequest, NameSubmissionResult, NpcRagdollPoseBatch,
+    NpcRagdollStarted, PlayerInput, PlayerRoster, RailCommandRejected, RequestPlayerRoster,
+    SetPlayerCharacter, SetTimeOfDay, SetTrainCargoPolicyRequest, SpawnOilmanDebug,
+    SpawnPhysicsBoxDebug, SubmitPlayerName,
 };
 use shared::vehicle::{InVehicle, Vehicle, VehicleDriver, VehicleState};
 
@@ -82,9 +80,6 @@ pub fn handle_connections(
         commands.entity(client_entity).insert((
             ReplicationSender::new(replication_interval, replication_mode, false),
             MessageReceiver::<PlayerInput>::default(),
-            MessageReceiver::<ShootRequest>::default(),
-            MessageReceiver::<SwitchWeapon>::default(),
-            MessageReceiver::<ReloadRequest>::default(),
             MessageReceiver::<SetTimeOfDay>::default(),
             MessageReceiver::<SetPlayerCharacter>::default(),
             MessageReceiver::<SpawnOilmanDebug>::default(),
@@ -114,10 +109,6 @@ pub fn handle_connections(
         ));
 
         commands.entity(client_entity).insert((
-            MessageSender::<HitConfirm>::default(),
-            MessageSender::<DamageReceived>::default(),
-            MessageSender::<PlayerKilled>::default(),
-            MessageSender::<BulletImpact>::default(),
             MessageSender::<NpcRagdollStarted>::default(),
             MessageSender::<NpcRagdollPoseBatch>::default(),
             MessageSender::<NameSubmissionResult>::default(),
@@ -142,7 +133,6 @@ pub fn handle_disconnections(
         &PlayerRotation,
         &PlayerVelocity,
         &Health,
-        &EquippedWeapon,
         &Inventory,
         &HotbarSelection,
         &PlayerProgression,
@@ -189,7 +179,6 @@ pub fn handle_disconnections(
         rot,
         vel,
         health,
-        weapon,
         inventory,
         hotbar,
         progression,
@@ -204,7 +193,6 @@ pub fn handle_disconnections(
                 rot,
                 vel,
                 health,
-                weapon,
                 inventory,
                 hotbar,
                 progression,
@@ -221,7 +209,6 @@ pub fn handle_disconnections(
         rot,
         vel,
         health,
-        weapon,
         inventory,
         hotbar,
         progression,
@@ -281,8 +268,6 @@ pub fn handle_disconnections(
         velocity: [vel.0.x, vel.0.y, vel.0.z],
         health_current: health.current,
         health_max: health.max,
-        equipped_weapon: weapon.weapon_type,
-        weapon_ammo_in_mag: weapon.ammo_in_mag,
         inventory_slots: *inventory.slots(),
         hotbar_selection: hotbar.index,
         in_vehicle: in_veh,

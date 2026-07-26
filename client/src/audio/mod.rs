@@ -15,7 +15,7 @@ pub use ambient::{
 pub use assets::{ensure_audio_assets_loaded, setup_audio};
 pub use limits::apply_audio_limits;
 pub use remote_players::{
-    ensure_remote_footstep_emitters, handle_remote_audio_events, update_remote_footstep_emitters,
+    ensure_remote_footstep_emitters, update_remote_footstep_emitters,
 };
 pub use state::*;
 pub use vehicles::{
@@ -28,7 +28,6 @@ use bevy::prelude::*;
 use bevy::time::common_conditions::on_timer;
 use lightyear::prelude::*;
 use shared::components::{LocalPlayer, Npc, Player, PlayerPosition};
-use shared::protocol::{AudioEvent, AudioEventKind};
 use shared::terrain::{Biome, WorldTerrain};
 use shared::vehicle::{Vehicle, VehicleDriver, VehicleState};
 use std::collections::HashSet;
@@ -69,10 +68,6 @@ impl Plugin for GameAudioPlugin {
         );
         app.add_systems(
             Update,
-            handle_remote_audio_events.run_if(in_state(GameState::Playing)),
-        );
-        app.add_systems(
-            Update,
             ensure_remote_footstep_emitters
                 .run_if(in_state(GameState::Playing))
                 .run_if(on_timer(Duration::from_millis(150))),
@@ -105,8 +100,7 @@ impl Plugin for GameAudioPlugin {
                 .run_if(in_state(GameState::Playing))
                 .run_if(on_timer(Duration::from_millis(100)))
                 .after(ensure_remote_footstep_emitters)
-                .after(ensure_remote_vehicle_audio_emitters)
-                .after(handle_remote_audio_events),
+                .after(ensure_remote_vehicle_audio_emitters),
         );
     }
 }

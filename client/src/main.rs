@@ -5,7 +5,6 @@ mod audio;
 mod camera;
 mod chest;
 mod city;
-mod crosshair;
 mod dialogue;
 mod input;
 mod camera_rts;
@@ -20,8 +19,6 @@ mod streaming;
 mod terrain;
 mod ui;
 mod water;
-mod weapon_view;
-mod weapons;
 
 use bevy::prelude::*;
 use shared::protocol::{SERVER_ADDR, SERVER_PORT};

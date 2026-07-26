@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::weapons::WeaponType;
 
 use super::{ItemStack, ItemType, CHEST_SLOTS};
 
@@ -10,8 +9,6 @@ use super::{ItemStack, ItemType, CHEST_SLOTS};
 pub struct GroundItem {
     pub item_type: ItemType,
     pub quantity: u32,
-    /// For weapon items: ammo currently in the magazine (None = empty mag, needs reload)
-    pub ammo_in_mag: Option<u32>,
 }
 
 impl GroundItem {
@@ -19,25 +16,14 @@ impl GroundItem {
         Self {
             item_type,
             quantity,
-            ammo_in_mag: None,
         }
     }
 
-    /// Create a ground item from an ItemStack (preserves weapon ammo).
+    /// Create a ground item from an ItemStack.
     pub fn from_stack(stack: &ItemStack) -> Self {
         Self {
             item_type: stack.item_type,
             quantity: stack.quantity,
-            ammo_in_mag: stack.ammo_in_mag,
-        }
-    }
-
-    /// Create a weapon ground item with specified ammo in mag.
-    pub fn new_weapon(weapon_type: WeaponType, ammo_in_mag: u32) -> Self {
-        Self {
-            item_type: ItemType::Weapon(weapon_type),
-            quantity: 1,
-            ammo_in_mag: Some(ammo_in_mag),
         }
     }
 
@@ -46,7 +32,6 @@ impl GroundItem {
         ItemStack {
             item_type: self.item_type,
             quantity: self.quantity,
-            ammo_in_mag: self.ammo_in_mag,
         }
     }
 }

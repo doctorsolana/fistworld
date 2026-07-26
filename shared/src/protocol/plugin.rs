@@ -2,11 +2,10 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::components::{
-    ActiveMapState, Bullet, BulletVelocity, CloudSeed, DebugPhysicsBox, DebugPhysicsBoxPosition,
-    DebugPhysicsBoxRotation, EquippedWeapon, Health, Npc, NpcActivity, NpcFleeing, NpcIdentity,
-    NpcPosition, NpcRotation, NpcVelocity, Player, PlayerCharacter, PlayerJumpState,
-    PlayerMeleeState,
-    PlayerPosition, PlayerProgression, PlayerRotation, PlayerVelocity, PlayerWaterState, WorldTime,
+    ActiveMapState, CloudSeed, DebugPhysicsBox, DebugPhysicsBoxPosition, DebugPhysicsBoxRotation,
+    Health, Npc, NpcActivity, NpcFleeing, NpcIdentity, NpcPosition, NpcRotation, NpcVelocity,
+    Player, PlayerCharacter, PlayerJumpState, PlayerPosition, PlayerProgression, PlayerRotation,
+    PlayerVelocity, PlayerWaterState, WorldTime,
 };
 use crate::items::{
     ChestPosition, ChestStorage, ChestTransferRequest, CloseChestRequest, DropRequest, GroundItem,
@@ -32,7 +31,6 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<PlayerRotation>().add_prediction();
         app.register_component::<PlayerVelocity>().add_prediction();
         app.register_component::<PlayerJumpState>().add_prediction();
-        app.register_component::<PlayerMeleeState>().add_prediction();
         app.register_component::<PlayerWaterState>()
             .add_prediction();
         app.register_component::<PlayerProgression>()
@@ -57,13 +55,8 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<VehicleState>().add_prediction();
         app.register_component::<VehicleDriver>().add_prediction();
 
-        // === COMBAT COMPONENTS ===
+        // === HEALTH ===
         app.register_component::<Health>().add_prediction();
-        app.register_component::<EquippedWeapon>().add_prediction();
-
-        // === BULLET COMPONENTS ===
-        app.register_component::<Bullet>().add_prediction();
-        app.register_component::<BulletVelocity>().add_prediction();
 
         // === WORLD COMPONENTS ===
         app.register_component::<WorldTime>().add_prediction();
@@ -107,14 +100,6 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<SpawnPlayer>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<PlayerInput>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<ShootRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<SwitchWeapon>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<ReloadRequest>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<MeleeAttackRequest>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SetTimeOfDay>()
             .add_direction(NetworkDirection::ClientToServer);
@@ -161,16 +146,6 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<NameSubmissionResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<RailCommandRejected>()
-            .add_direction(NetworkDirection::ServerToClient);
-        app.register_message::<HitConfirm>()
-            .add_direction(NetworkDirection::ServerToClient);
-        app.register_message::<BulletImpact>()
-            .add_direction(NetworkDirection::ServerToClient);
-        app.register_message::<DamageReceived>()
-            .add_direction(NetworkDirection::ServerToClient);
-        app.register_message::<PlayerKilled>()
-            .add_direction(NetworkDirection::ServerToClient);
-        app.register_message::<AudioEvent>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<PlayerRoster>()
             .add_direction(NetworkDirection::ServerToClient);

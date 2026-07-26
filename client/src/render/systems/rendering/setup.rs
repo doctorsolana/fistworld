@@ -119,7 +119,6 @@ pub fn setup_rendering(
         camera.insert(super::settings::default_ssao_settings());
     }
     // Keep this out of the large tuple to avoid tuple-size bundle limits.
-    camera.insert(crate::render::sniper_fisheye::SniperFisheye::default());
 
     setup_cloud_layers(&mut commands, &asset_server, &mut meshes, &mut materials);
     commands.insert_resource(CloudCover::default());

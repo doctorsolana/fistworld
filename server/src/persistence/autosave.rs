@@ -1,8 +1,7 @@
 //! Periodic autosave systems.
 
 use bevy::prelude::*;
-use shared::components::{
-    EquippedWeapon, Health, Player, PlayerPosition, PlayerProgression, PlayerRotation,
+use shared::components::{ Health, Player, PlayerPosition, PlayerProgression, PlayerRotation,
     PlayerVelocity,
 };
 use shared::items::{HotbarSelection, Inventory};
@@ -29,7 +28,6 @@ pub fn update_periodic_player_save(
         &PlayerRotation,
         &PlayerVelocity,
         &Health,
-        &EquippedWeapon,
         &Inventory,
         &HotbarSelection,
         &PlayerProgression,
@@ -54,7 +52,6 @@ pub fn update_periodic_player_save(
         rot,
         vel,
         health,
-        weapon,
         inventory,
         hotbar,
         progression,
@@ -105,8 +102,6 @@ pub fn update_periodic_player_save(
             velocity: [vel.0.x, vel.0.y, vel.0.z],
             health_current: health.current,
             health_max: health.max,
-            equipped_weapon: weapon.weapon_type,
-            weapon_ammo_in_mag: weapon.ammo_in_mag,
             inventory_slots: *inventory.slots(),
             hotbar_selection: hotbar.index,
             in_vehicle: in_veh,

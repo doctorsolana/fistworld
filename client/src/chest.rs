@@ -105,7 +105,7 @@ fn detect_nearby_chests(
     input_state: Res<InputState>,
 ) {
     // Don't detect while in vehicle or dead
-    if input_state.in_vehicle || input_state.is_dead {
+    if input_state.in_vehicle {
         *nearby = NearbyChest::default();
         return;
     }

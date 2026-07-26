@@ -45,14 +45,7 @@ pub fn update_npc_hitbox_debug_gizmos(
             )
         {
             for def in HUMANOID_RAGDOLL_BODIES {
-                let part = humanoid_body_part(def.id);
-                let color = match part.hit_zone() {
-                    shared::weapons::damage::HitZone::Head => Color::srgba(1.0, 0.18, 0.12, 0.95),
-                    shared::weapons::damage::HitZone::Chest => Color::srgba(0.15, 0.65, 1.0, 0.9),
-                    shared::weapons::damage::HitZone::Stomach => Color::srgba(0.3, 1.0, 0.35, 0.9),
-                    shared::weapons::damage::HitZone::Arms => Color::srgba(1.0, 0.72, 0.15, 0.9),
-                    shared::weapons::damage::HitZone::Legs => Color::srgba(0.78, 0.4, 1.0, 0.9),
-                };
+                let color = ragdoll_body_debug_color(def.id);
                 let body_center = center + transform.rotation * def.local_offset;
                 let body_rotation =
                     transform.rotation * Quat::from_rotation_arc(Vec3::Y, ragdoll_body_axis(&def));
@@ -216,6 +209,22 @@ pub fn update_npc_ragdoll_debug_gizmos(
                 continue;
             };
             gizmos.line(body_pos, bone_pos, Color::srgba(1.0, 0.95, 0.2, 0.75));
+        }
+    }
+}
+
+/// Debug palette for ragdoll bodies, grouped by anatomical region.
+fn ragdoll_body_debug_color(id: shared::protocol::RagdollBodyId) -> Color {
+    use shared::protocol::RagdollBodyId as B;
+    match id {
+        B::Head => Color::srgba(1.0, 0.18, 0.12, 0.95),
+        B::SpineUpper => Color::srgba(0.15, 0.65, 1.0, 0.9),
+        B::SpineLower | B::Pelvis => Color::srgba(0.3, 1.0, 0.35, 0.9),
+        B::UpperArmL | B::ForearmL | B::HandL | B::UpperArmR | B::ForearmR | B::HandR => {
+            Color::srgba(1.0, 0.72, 0.15, 0.9)
+        }
+        B::ThighL | B::CalfL | B::FootL | B::ThighR | B::CalfR | B::FootR => {
+            Color::srgba(0.78, 0.4, 1.0, 0.9)
         }
     }
 }

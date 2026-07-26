@@ -145,7 +145,6 @@ pub fn npc_name_for_id(seed: u32, id: u64) -> String {
 // ragdoll spawn frame.
 
 use crate::protocol::RagdollBodyId;
-use crate::weapons::damage::HitBodyPart;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RagdollBodyDef {
@@ -214,25 +213,6 @@ pub fn humanoid_body_bounding_radius(shape: HumanoidBodyShape) -> f32 {
             radius,
         } => half_segment + radius,
         HumanoidBodyShape::Cuboid { half_extents } => half_extents.length(),
-    }
-}
-
-/// Precise hit location represented by a ragdoll body.
-pub fn humanoid_body_part(id: RagdollBodyId) -> HitBodyPart {
-    use RagdollBodyId as B;
-    match id {
-        B::Head => HitBodyPart::Head,
-        B::SpineUpper => HitBodyPart::Chest,
-        B::SpineLower => HitBodyPart::Abdomen,
-        B::Pelvis => HitBodyPart::Pelvis,
-        B::UpperArmL => HitBodyPart::LeftUpperArm,
-        B::ForearmL | B::HandL => HitBodyPart::LeftForearm,
-        B::UpperArmR => HitBodyPart::RightUpperArm,
-        B::ForearmR | B::HandR => HitBodyPart::RightForearm,
-        B::ThighL => HitBodyPart::LeftThigh,
-        B::CalfL | B::FootL => HitBodyPart::LeftCalf,
-        B::ThighR => HitBodyPart::RightThigh,
-        B::CalfR | B::FootR => HitBodyPart::RightCalf,
     }
 }
 
