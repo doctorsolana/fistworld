@@ -5,19 +5,13 @@ use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use std::time::Duration;
 
-use shared::components::{
-    Health, Player, PlayerPosition, PlayerProgression, PlayerRotation, PlayerVelocity,
-};
+use shared::components::{Player, PlayerPosition, PlayerProgression, PlayerRotation};
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
-use shared::protocol::{
-    NameSubmissionResult, PlayerInput, PlayerRoster, RequestPlayerRoster, SetPlayerCharacter,
-    SetTimeOfDay, SubmitPlayerName,
-};
+use shared::protocol::{NameSubmissionResult, PlayerInput, PlayerRoster, RequestPlayerRoster, SetTimeOfDay, SubmitPlayerName};
 
 use crate::net::input::ClientInputs;
 use crate::persistence::io_queue::{ProfileIoQueue, SavePriority};
 use crate::persistence::profiles::PlayerProfiles;
-use crate::player::lifecycle::RespawnTimer;
 use crate::player::roster_cache::PlayerRosterCache;
 
 fn configured_replication_send_interval() -> Duration {
@@ -72,7 +66,6 @@ pub fn handle_connections(
             ReplicationSender::new(replication_interval, replication_mode, false),
             MessageReceiver::<PlayerInput>::default(),
             MessageReceiver::<SetTimeOfDay>::default(),
-            MessageReceiver::<SetPlayerCharacter>::default(),
             MessageReceiver::<SubmitPlayerName>::default(),
             MessageReceiver::<RequestPlayerRoster>::default(),
         ));
@@ -97,10 +90,7 @@ pub fn handle_disconnections(
         &Player,
         &PlayerPosition,
         &PlayerRotation,
-        &PlayerVelocity,
-        &Health,
         &PlayerProgression,
-        Option<&RespawnTimer>,
     )>,
     mut inputs: ResMut<ClientInputs>,
 ) {
@@ -131,43 +121,27 @@ pub fn handle_disconnections(
         return;
     };
 
-    info!("Saving state for player '{}'", name_lower);
+    // Preserve the player's authored capitalisation. `name_lower` is only the lookup key;
+    // writing it into `player_name` silently lowercased display names after the first
+    // disconnect. The cached profile (created by spawn.rs with the original casing) is
+    // the source of truth.
+    let display_name = profiles
+        .profiles
+        .get(&name_lower)
+        .map(|p| p.player_name.clone())
+        .unwrap_or_else(|| name_lower.clone());
+
+    info!("Saving state for player '{}'", display_name);
 
     let mut found_player = None;
-    for (
-        player_entity,
-        player,
-        pos,
-        rot,
-        vel,
-        health,
-        progression,
-        respawn_timer,
-    ) in players.iter()
-    {
+    for (player_entity, player, pos, rot, progression) in players.iter() {
         if player.client_id == peer_id {
-            found_player = Some((
-                player_entity,
-                pos,
-                rot,
-                vel,
-                health,
-                progression,
-                        respawn_timer,
-            ));
+            found_player = Some((player_entity, pos, rot, progression));
             break;
         }
     }
 
-    let Some((
-        _player_entity,
-        pos,
-        rot,
-        vel,
-        health,
-        progression,
-        respawn_timer,
-    )) = found_player
+    let Some((_player_entity, pos, rot, progression)) = found_player
     else {
         warn!(
             "Player entity not found for disconnected peer {:?} - state not saved!",
@@ -181,23 +155,9 @@ pub fn handle_disconnections(
 
     let profile = PlayerProfile {
         version: PROFILE_VERSION,
-        player_name: name_lower.clone(),
+        player_name: display_name,
         position: [pos.0.x, pos.0.y, pos.0.z],
         rotation: rot.0,
-        velocity: [vel.0.x, vel.0.y, vel.0.z],
-        health_current: health.current,
-        health_max: health.max,
-        is_dead: respawn_timer.is_some() || health.is_dead(),
-        death_timestamp: if respawn_timer.is_some() || health.is_dead() {
-            Some(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs_f64(),
-            )
-        } else {
-            None
-        },
         level: progression.level,
         prestige: progression.prestige,
         reputation: progression.reputation,

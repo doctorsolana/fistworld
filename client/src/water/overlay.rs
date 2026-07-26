@@ -44,7 +44,7 @@ pub(super) fn despawn_underwater_overlay(
 
 pub(super) fn update_underwater_overlay(
     time: Res<Time>,
-    local_water: Query<&PlayerWaterState, With<LocalPlayer>>,
+    terrain: Option<Res<WorldTerrain>>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     mut overlays: Query<(
         &mut UnderwaterOverlay,
@@ -52,12 +52,14 @@ pub(super) fn update_underwater_overlay(
         &mut Visibility,
     )>,
 ) {
-    let target_alpha = local_water
-        .single()
-        .ok()
+    // The commander has no body, so submersion is judged from the camera itself
+    // against the map's water plane.
+    let target_alpha = terrain
+        .as_deref()
+        .and_then(|terrain| terrain.water_level())
         .zip(cameras.single().ok())
-        .map(|(state, camera)| {
-            let camera_depth = state.surface_y - camera.translation().y;
+        .map(|(surface_y, camera)| {
+            let camera_depth = surface_y - camera.translation().y;
             let depth_factor = (camera_depth / 2.0).clamp(0.0, 1.0);
             depth_factor * UNDERWATER_MAX_ALPHA
         })

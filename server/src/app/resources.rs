@@ -21,7 +21,6 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<net::input::ClientInputs>();
     app.init_resource::<net::input::ClientInputIngressStats>();
     app.init_resource::<player::index::PlayerEntityIndex>();
-    app.init_resource::<player::spatial::PlayerSpatialIndex>();
     app.init_resource::<SpatialObstacleGrid>();
     app.init_resource::<crate::world::navgrid::ObstacleGridState>();
     app.init_resource::<crate::world::pathfinding::PathfindingBudgetSettings>();
@@ -30,7 +29,6 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<physics::terrain_colliders::TerrainColliderSettings>();
     app.init_resource::<physics::terrain_colliders::TerrainColliderRegistry>();
     app.init_resource::<physics::static_world_colliders::StaticWorldColliderRegistry>();
-    app.init_resource::<physics::dynamic_actors::NpcPhysicsLodSettings>();
     app.insert_resource(persistence::profiles::PlayerProfiles::new(
         profile_storage_dir.clone(),
     ));

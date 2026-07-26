@@ -50,17 +50,12 @@ pub(super) fn handle_backdrop_click(
 
 pub(super) fn handle_debug_menu_interactions(
     mut open: ResMut<DebugTimeMenuOpen>,
-    mut input_state: ResMut<InputState>,
+    _input_state: ResMut<InputState>,
     mut cover: ResMut<CloudCover>,
     mut cover_override: ResMut<CloudCoverOverride>,
-    mut char_selection: ResMut<DebugCharacterSelection>,
     mut perf_settings: ResMut<DebugPerfSettings>,
     mut time_sender: Query<
         &mut MessageSender<SetTimeOfDay>,
-        (With<crate::GameClient>, With<Connected>),
-    >,
-    mut char_sender: Query<
-        &mut MessageSender<SetPlayerCharacter>,
         (With<crate::GameClient>, With<Connected>),
     >,
     mut buttons: Query<
@@ -68,9 +63,7 @@ pub(super) fn handle_debug_menu_interactions(
             &Interaction,
             Option<&TimeButton>,
             Option<&CloseButton>,
-            Option<&FlyToggleButton>,
             Option<&CloudCoverButton>,
-            Option<&CharacterToggleButton>,
             Option<&PerfWeightmapToggleButton>,
             Option<&PerfRenderDiagToggleButton>,
             &mut BackgroundColor,
@@ -82,9 +75,7 @@ pub(super) fn handle_debug_menu_interactions(
         interaction,
         time_button,
         close_button,
-        fly_button,
         cover_button,
-        char_button,
         weightmap_button,
         render_diag_button,
         mut bg,
@@ -96,11 +87,6 @@ pub(super) fn handle_debug_menu_interactions(
 
                 if close_button.is_some() {
                     open.0 = false;
-                    continue;
-                }
-
-                if fly_button.is_some() {
-                    input_state.fly_mode = !input_state.fly_mode;
                     continue;
                 }
 
@@ -118,18 +104,6 @@ pub(super) fn handle_debug_menu_interactions(
                             cover.current = 1.0;
                             cover.target = 1.0;
                         }
-                    }
-                    continue;
-                }
-
-                if char_button.is_some() {
-                    let next = match char_selection.current {
-                        PlayerCharacter::Oilman => PlayerCharacter::Base,
-                        PlayerCharacter::Base => PlayerCharacter::Oilman,
-                    };
-                    char_selection.current = next;
-                    if let Ok(mut sender) = char_sender.single_mut() {
-                        sender.send::<ReliableChannel>(SetPlayerCharacter { character: next });
                     }
                     continue;
                 }

@@ -9,20 +9,14 @@ use actions::{
     debug_menu_open, handle_backdrop_click, handle_debug_menu_interactions, toggle_debug_time_menu,
 };
 use layout::{despawn_debug_time_menu, spawn_debug_time_menu, style_debug_time_menu};
-use state_sync::{
-    sync_debug_character_selection, sync_debug_menu_open_state, update_character_button_label,
-    update_perf_button_labels,
-};
+use state_sync::{sync_debug_menu_open_state, update_perf_button_labels};
 
 use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 use lightyear::prelude::*;
 
-use shared::components::{LocalPlayer, PlayerCharacter};
-use shared::protocol::{
-    ReliableChannel, SetPlayerCharacter, SetTimeOfDay,
-    TimeOfDayPreset,
-};
+
+use shared::protocol::{ReliableChannel, SetTimeOfDay, TimeOfDayPreset};
 
 use crate::input::InputState;
 use crate::render::systems::{CloudCover, CloudCoverMode, CloudCoverOverride};
@@ -38,7 +32,6 @@ pub struct DebugTimeMenuPlugin;
 impl Plugin for DebugTimeMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugTimeMenuOpen>();
-        app.init_resource::<DebugCharacterSelection>();
         app.init_resource::<DebugPerfSettings>();
         app.add_systems(
             Update,
@@ -58,10 +51,6 @@ impl Plugin for DebugTimeMenuPlugin {
         );
         app.add_systems(
             Update,
-            sync_debug_character_selection.run_if(in_state(GameState::Playing)),
-        );
-        app.add_systems(
-            Update,
             sync_debug_menu_open_state
                 .run_if(in_state(GameState::Playing))
                 .after(toggle_debug_time_menu)
@@ -70,12 +59,6 @@ impl Plugin for DebugTimeMenuPlugin {
         app.add_systems(
             Update,
             spawn_debug_time_menu
-                .run_if(debug_menu_open)
-                .run_if(in_state(GameState::Playing)),
-        );
-        app.add_systems(
-            Update,
-            update_character_button_label
                 .run_if(debug_menu_open)
                 .run_if(in_state(GameState::Playing)),
         );
@@ -104,11 +87,6 @@ impl Plugin for DebugTimeMenuPlugin {
 
 #[derive(Resource, Default)]
 pub struct DebugTimeMenuOpen(pub bool);
-
-#[derive(Resource, Default)]
-pub struct DebugCharacterSelection {
-    pub current: PlayerCharacter,
-}
 
 #[derive(Resource)]
 pub struct DebugPerfSettings {
@@ -146,12 +124,6 @@ struct FlyToggleButton;
 
 #[derive(Component, Clone, Copy)]
 struct CloudCoverButton(CloudCoverMode);
-
-#[derive(Component)]
-struct CharacterToggleButton;
-
-#[derive(Component)]
-struct CharacterLabel;
 
 #[derive(Component)]
 struct PerfWeightmapToggleButton;

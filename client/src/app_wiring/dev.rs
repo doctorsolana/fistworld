@@ -1,21 +1,13 @@
 //! Development conveniences, all gated behind env vars (off by default).
 
 use bevy::prelude::*;
-
-/// `FISTFORCE_RAIL=1`: boot the rail-tycoon prototype shell (RTS camera, rail
-/// build tools) instead of the default FistForce sandbox shooter.
-pub fn rail_mode_enabled() -> bool {
-    crate::profiling::env_flag("FISTFORCE_RAIL")
-}
 use lightyear::prelude::MessageSender;
 use shared::protocol::{ReliableChannel, SubmitPlayerName};
 
 use crate::states::GameState;
 use crate::ui::name_entry::PlayerNameSubmitted;
 
-/// `FISTFORCE_AUTOCONNECT=<name>`: skip the main menu and name entry so the
-/// client can be driven unattended (perf runs, automated verification).
-/// Any value that isn't a valid name (e.g. `1`) falls back to "DevClient".
+/// `FISTFORCE_AUTOCONNECT=<name>`: the profile name to auto-submit, if set.
 pub(super) fn autoconnect_name() -> Option<String> {
     let raw = std::env::var("FISTFORCE_AUTOCONNECT").ok()?;
     let trimmed = raw.trim();
@@ -31,6 +23,7 @@ pub(super) fn autoconnect_name() -> Option<String> {
     Some(name)
 }
 
+/// Skip the main menu and name entry so the client boots straight into gameplay.
 pub(super) fn autoconnect_from_main_menu(
     mut next_state: ResMut<NextState<GameState>>,
     mut fired: Local<bool>,

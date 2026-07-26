@@ -11,7 +11,13 @@ use bevy::math::Ray3d;
 use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
+use lightyear::prelude::*;
+use shared::protocol::{InputChannel, PlayerInput};
 use shared::terrain::WorldTerrain;
+
+/// Resend the view at least this often even when the camera is still, so a dropped
+/// packet cannot strand the server's streaming anchor.
+const VIEW_HEARTBEAT_SECS: f32 = 0.25;
 
 /// Network peer id of the local client.
 #[derive(Resource, Debug, Clone, Copy, Default)]
@@ -251,4 +257,38 @@ pub fn intersect_terrain(ray: Ray3d, terrain: &WorldTerrain) -> Option<Vec3> {
     }
 
     None
+}
+
+/// Send the commander's view (focus + yaw) to the server each tick.
+///
+/// The server anchors terrain-collider streaming on this, so it must keep flowing while
+/// the camera pans. Only sends on change (plus a heartbeat) to avoid spamming the link.
+pub fn send_commander_view(
+    time: Res<Time>,
+    cameras: Query<&CommanderCamera>,
+    mut clients: Query<&mut MessageSender<PlayerInput>, With<crate::GameClient>>,
+    mut last_sent: Local<Option<PlayerInput>>,
+    mut heartbeat: Local<f32>,
+) {
+    let Ok(controller) = cameras.single() else {
+        return;
+    };
+    let Ok(mut sender) = clients.single_mut() else {
+        return;
+    };
+
+    let view = PlayerInput {
+        yaw: controller.yaw,
+        focus: controller.focus,
+    };
+
+    *heartbeat += time.delta_secs();
+    let changed = last_sent.as_ref() != Some(&view);
+    if !changed && *heartbeat < VIEW_HEARTBEAT_SECS {
+        return;
+    }
+
+    *heartbeat = 0.0;
+    *last_sent = Some(view.clone());
+    sender.send::<InputChannel>(view);
 }

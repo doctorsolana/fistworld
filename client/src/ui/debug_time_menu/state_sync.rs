@@ -16,35 +16,6 @@ pub(super) fn sync_debug_menu_open_state(
     }
 }
 
-/// Sync the debug character selection resource with the local player's actual character.
-pub(super) fn sync_debug_character_selection(
-    mut selection: ResMut<DebugCharacterSelection>,
-    local_player: Query<&PlayerCharacter, With<LocalPlayer>>,
-) {
-    if let Ok(character) = local_player.single() {
-        if selection.current != *character {
-            selection.current = *character;
-        }
-    }
-}
-
-/// Update the character toggle button label to match the current selection.
-pub(super) fn update_character_button_label(
-    selection: Res<DebugCharacterSelection>,
-    mut labels: Query<&mut Text, With<CharacterLabel>>,
-) {
-    if !selection.is_changed() {
-        return;
-    }
-    let label_text = match selection.current {
-        PlayerCharacter::Oilman => "OILMAN",
-        PlayerCharacter::Base => "BASE",
-    };
-    for mut text in labels.iter_mut() {
-        text.0 = label_text.to_string();
-    }
-}
-
 pub(super) fn update_perf_button_labels(
     settings: Res<DebugPerfSettings>,
     mut labels: ParamSet<(

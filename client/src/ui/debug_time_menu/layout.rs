@@ -118,25 +118,6 @@ pub(super) fn spawn_debug_time_menu(
             },
         ));
 
-        panel
-            .spawn((
-                Button,
-                CharacterToggleButton,
-                Node {
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                    ..button_style()
-                },
-                BackgroundColor(BUTTON_NORMAL),
-            ))
-            .with_children(|btn| {
-                btn.spawn((
-                    CharacterLabel,
-                    Text::new("OILMAN"),
-                    button_text_style(),
-                    TextColor(TEXT_COLOR),
-                ));
-            });
-
         panel.spawn((
             Text::new("NPC debug"),
             TextFont {

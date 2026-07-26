@@ -1,7 +1,8 @@
-//! Shared character-controller style physics.
+//! Shared physics constants and ground-clearance helpers.
+//!
+//! The character controller (`step_character`) died with the FPS embodiment; what
+//! survives is terrain/ground math still used by spawn placement and unit pathfinding.
 
-mod character;
 mod constants;
 
-pub use character::step_character;
 pub use constants::*;

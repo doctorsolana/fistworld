@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::components::{
-    ActiveMapState, CloudSeed, Health, Player, PlayerCharacter, PlayerJumpState, PlayerPosition,
-    PlayerProgression, PlayerRotation, PlayerVelocity, PlayerWaterState, WorldTime,
+    ActiveMapState, CloudSeed, Health, Player, PlayerPosition, PlayerProgression, PlayerRotation,
+    WorldTime,
 };
 use crate::terrain::TerrainDeltaChunk;
 
@@ -17,13 +17,8 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<Player>().add_prediction();
         app.register_component::<PlayerPosition>().add_prediction();
         app.register_component::<PlayerRotation>().add_prediction();
-        app.register_component::<PlayerVelocity>().add_prediction();
-        app.register_component::<PlayerJumpState>().add_prediction();
-        app.register_component::<PlayerWaterState>()
-            .add_prediction();
         app.register_component::<PlayerProgression>()
             .add_prediction();
-        app.register_component::<PlayerCharacter>().add_prediction();
 
 
 
@@ -43,13 +38,9 @@ impl Plugin for ProtocolPlugin {
 
         // === MESSAGES ===
         // Client -> Server
-        app.register_message::<SpawnPlayer>()
-            .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<PlayerInput>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SetTimeOfDay>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<SetPlayerCharacter>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SubmitPlayerName>()
             .add_direction(NetworkDirection::ClientToServer);

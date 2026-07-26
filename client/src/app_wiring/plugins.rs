@@ -4,7 +4,6 @@ use super::*;
 
 pub fn setup_plugins(app: &mut App, asset_path: String) {
     let hitch_profile_enabled = profiling::hitch_profiling_enabled();
-    let rail_mode = super::dev::rail_mode_enabled();
 
     // Full Bevy with rendering - configure asset path for bundled apps
     // Performance: Disable MSAA (expensive), enable GPU-driven rendering
@@ -12,11 +11,7 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
         DefaultPlugins
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: if rail_mode {
-                        "Railroad Tycoon Prototype".to_string()
-                    } else {
-                        "FistForce".to_string()
-                    },
+                    title: "FistForce".to_string(),
                     resolution: WindowResolution::new(LAUNCHER_RESOLUTION.0, LAUNCHER_RESOLUTION.1),
                     ..default()
                 }),

@@ -26,9 +26,6 @@ enum FpsServerSet {
     WorldTick,
     PhysicsWorld,
     NetIngress,
-    PhysicsControl,
-    PhysicsPost,
-    PlayerSim,
     Indices,
     Persistence,
 }
@@ -40,9 +37,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             FpsServerSet::WorldTick,
             FpsServerSet::PhysicsWorld,
             FpsServerSet::NetIngress,
-            FpsServerSet::PhysicsControl,
-            FpsServerSet::PhysicsPost,
-            FpsServerSet::PlayerSim,
             FpsServerSet::Indices,
             FpsServerSet::Persistence,
         )
@@ -70,8 +64,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             physics::terrain_colliders::sync_terrain_colliders,
             physics::static_world_colliders::sync_static_prop_colliders,
             physics::static_world_colliders::sync_static_building_colliders,
-            physics::dynamic_actors::ensure_player_physics_bodies,
-            physics::dynamic_actors::sync_player_bodies_from_authoritative_state,
         )
             .chain()
             .in_set(FpsServerSet::PhysicsWorld)
@@ -83,9 +75,9 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         (
             net::connection::handle_connections,
             player::spawn::handle_player_name_submission,
-            player::spawn::handle_set_player_character,
             player::roster::handle_player_roster_requests,
             net::input::handle_client_input_messages,
+            player::commander::sync_commander_views,
         )
             .chain()
             .in_set(FpsServerSet::NetIngress)
@@ -95,44 +87,7 @@ fn configure_fps_fixed_schedule(app: &mut App) {
     app.add_systems(
         FixedUpdate,
         (
-            physics::dynamic_actors::apply_player_controls,
-        )
-            .chain()
-            .before(bevy_rapier3d::plugin::PhysicsSet::SyncBackend)
-            .in_set(FpsServerSet::PhysicsControl)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
-            physics::dynamic_actors::clamp_players_to_map_bounds,
-            physics::dynamic_actors::sync_players_from_physics,
-            physics::contacts::update_player_grounding_from_queries,
-        )
-            .chain()
-            .after(bevy_rapier3d::plugin::PhysicsSet::Writeback)
-            .in_set(FpsServerSet::PhysicsPost)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
-            physics::dynamic_actors::tick_player_jump_timers,
-            player::lifecycle::handle_player_deaths,
-            player::lifecycle::update_respawn_timers,
-        )
-            .chain()
-            .in_set(FpsServerSet::PlayerSim)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
             player::index::sync_player_entity_index,
-            player::spatial::sync_player_spatial_index,
         )
             .chain()
             .in_set(FpsServerSet::Indices)
@@ -158,7 +113,7 @@ fn configure_fps_fixed_schedule(app: &mut App) {
                 .before(world::time::handle_set_time_of_day),
             // Phase brackets anchor on SystemSets, not individual systems, so that
             // deleting any single gameplay system cannot silently skew the timings.
-            telemetry::perf::handle_perf_core_phase_end.after(FpsServerSet::PhysicsPost),
+            telemetry::perf::handle_perf_core_phase_end.after(FpsServerSet::PhysicsWorld),
             telemetry::perf::update_server_perf_log.after(FpsServerSet::Persistence),
             telemetry::network::sample_replication_change_pressure.after(FpsServerSet::Persistence),
         )

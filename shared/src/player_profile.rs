@@ -8,7 +8,7 @@ use crate::player::SPAWN_POSITION;
 use serde::{Deserialize, Serialize};
 
 /// Current profile version for migration support
-pub const PROFILE_VERSION: u32 = 4;
+pub const PROFILE_VERSION: u32 = 5;
 
 /// Serializable player profile containing all persistent state
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,23 +24,13 @@ pub struct PlayerProfile {
     pub position: [f32; 3],
     /// Yaw rotation in radians
     pub rotation: f32,
-    /// Movement velocity [x, y, z]
-    pub velocity: [f32; 3],
 
     // === Combat State ===
-    /// Current health points
-    pub health_current: f32,
-    /// Maximum health points
-    pub health_max: f32,
 
     // === Inventory ===
 
 
     // === Death State ===
-    /// Whether player is currently dead (awaiting respawn)
-    pub is_dead: bool,
-    /// Timestamp when player died (for analytics)
-    pub death_timestamp: Option<f64>,
 
     // === Progression ===
     /// Player's main level (starts at 0)
@@ -79,16 +69,10 @@ impl PlayerProfile {
             // Spawn at default spawn position
             position: SPAWN_POSITION,
             rotation: 0.0,
-            velocity: [0.0, 0.0, 0.0],
 
-            // Default combat stats
-            health_current: 100.0,
-            health_max: 100.0,
 
 
             // Not dead
-            is_dead: false,
-            death_timestamp: None,
 
             // Progression defaults
             level: 0,

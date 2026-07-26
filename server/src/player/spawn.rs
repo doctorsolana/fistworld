@@ -7,21 +7,14 @@ use lightyear::prelude::{
     ReplicationGroup, ReplicationMode,
 };
 
-use shared::components::{
-    Health, Player, PlayerCharacter, PlayerGrounded, PlayerPosition,
-    PlayerProgression, PlayerRotation, PlayerVelocity,
-};
+use shared::components::{Player, PlayerPosition, PlayerProgression, PlayerRotation};
 use shared::physics::ground_clearance_center;
 use shared::player::SPAWN_POSITION;
 use shared::player_profile::PlayerProfile;
-use shared::protocol::{
-    NameRejectionReason, NameSubmissionResult, ReliableChannel, SetPlayerCharacter,
-    SubmitPlayerName,
-};
+use shared::protocol::{NameRejectionReason, NameSubmissionResult, ReliableChannel, SubmitPlayerName};
 use shared::terrain::WorldTerrain;
 
 use crate::persistence::profiles::PlayerProfiles;
-use crate::player::index::PlayerEntityIndex;
 use crate::player::roster_cache::PlayerRosterCache;
 
 const PLAYER_REPLICATION_PRIORITY: f32 = 20.0;
@@ -93,55 +86,16 @@ pub fn handle_player_name_submission(
                 }
             };
 
-            let (
-                spawn_pos,
-                spawn_rot,
-                spawn_vel,
-                health,
-            ): (
-                Vec3,
-                f32,
-                Vec3,
-                Health,
-            ) = if profile.is_dead {
+            // The commander has no body: restore the saved camera focus + yaw.
+            let (spawn_pos, spawn_rot): (Vec3, f32) = if profile_loaded {
                 info!(
-                    "Player '{}' was dead - spawning at spawn point with empty inventory",
-                    name
-                );
-                let pos = resolve_map_spawn_position(&terrain);
-
-                (
-                    pos,
-                    0.0,
-                    Vec3::ZERO,
-                    Health::default(),                )
-            } else if !profile_loaded {
-                info!("Spawning new player '{}' at map spawn", name);
-
-
-                (
-                    resolve_map_spawn_position(&terrain),
-                    profile.rotation,
-                    Vec3::ZERO,
-                    Health {
-                        current: profile.health_current,
-                        max: profile.health_max,
-                    },                )
-            } else {
-                info!(
-                    "Player '{}' spawning at saved position {:?}",
+                    "Player '{}' resuming at saved view {:?}",
                     name, profile.position
                 );
-
-
-                (
-                    Vec3::from_slice(&profile.position),
-                    profile.rotation,
-                    Vec3::from_slice(&profile.velocity),
-                    Health {
-                        current: profile.health_current,
-                        max: profile.health_max,
-                    },                )
+                (Vec3::from_slice(&profile.position), profile.rotation)
+            } else {
+                info!("Spawning new player '{}' at map spawn", name);
+                (resolve_map_spawn_position(&terrain), profile.rotation)
             };
 
             let progression = PlayerProgression {
@@ -157,10 +111,6 @@ pub fn handle_player_name_submission(
                     Player { client_id: peer_id },
                     PlayerPosition(spawn_pos),
                     PlayerRotation(spawn_rot),
-                    PlayerVelocity(spawn_vel),
-                    PlayerGrounded::default(),
-                    PlayerCharacter::default(),
-                    health,
                     progression,
                     ReplicationGroup::new_from_entity().set_priority(PLAYER_REPLICATION_PRIORITY),
                     Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
@@ -179,41 +129,6 @@ pub fn handle_player_name_submission(
 
             sender.send::<ReliableChannel>(NameSubmissionResult::Accepted { profile_loaded });
             info!("Player '{}' spawned successfully for {:?}", name, peer_id);
-        }
-    }
-}
-
-/// Handle player character selection requests from clients.
-pub fn handle_set_player_character(
-    mut commands: Commands,
-    mut client_links: Query<(&RemoteId, &mut MessageReceiver<SetPlayerCharacter>), With<ClientOf>>,
-    player_index: Res<PlayerEntityIndex>,
-    players: Query<(Entity, &Player, Option<&PlayerCharacter>)>,
-) {
-    for (remote_id, mut receiver) in client_links.iter_mut() {
-        let peer_id = remote_id.0;
-        for msg in receiver.receive() {
-            let player_entity = player_index.entity_for_peer(peer_id).or_else(|| {
-                players
-                    .iter()
-                    .find_map(|(entity, player, _)| (player.client_id == peer_id).then_some(entity))
-            });
-            let Some(player_entity) = player_entity else {
-                continue;
-            };
-            let Ok((_entity, _player, current)) = players.get(player_entity) else {
-                continue;
-            };
-
-            if current.is_some_and(|c| *c == msg.character) {
-                continue;
-            }
-
-            commands.entity(player_entity).insert(msg.character);
-            info!(
-                "Player {:?} selected character {:?}",
-                peer_id, msg.character
-            );
         }
     }
 }

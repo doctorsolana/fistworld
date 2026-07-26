@@ -175,59 +175,6 @@ pub(super) fn update_water_sun_dir(
     }
 }
 
-/// Ring buffer cursor + per-entity last-emission positions for wading
-/// ripples.
-#[derive(Default)]
-pub(super) struct RippleEmitState {
-    next_slot: usize,
-    last_emit: HashMap<Entity, Vec2>,
-}
-
-/// Spawn expanding foam rings around players moving through water. The
-/// material is only mutated when someone actually wades (every ~0.6m of
-/// travel), so the shared water material isn't re-prepared every frame.
-pub(super) fn emit_water_ripples(
-    time: Res<Time>,
-    render_assets: Option<Res<WaterRenderAssets>>,
-    waders: Query<(Entity, &PlayerPosition, &PlayerWaterState)>,
-    mut materials: ResMut<Assets<ToonWaterMaterial>>,
-    mut state: Local<RippleEmitState>,
-) {
-    let Some(render_assets) = render_assets else {
-        return;
-    };
-
-    let now = time.elapsed_secs_wrapped();
-    let mut pending: Vec<(Vec2, f32)> = Vec::new();
-
-    for (entity, position, water_state) in waders.iter() {
-        if !water_state.in_water {
-            state.last_emit.remove(&entity);
-            continue;
-        }
-        let pos = Vec2::new(position.0.x, position.0.z);
-        match state.last_emit.get(&entity) {
-            Some(last) if last.distance_squared(pos) < 0.36 => continue,
-            _ => {}
-        }
-        state.last_emit.insert(entity, pos);
-        // Deeper wading pushes less water sideways than ankle splashing.
-        let strength = if water_state.depth > 1.2 { 0.55 } else { 0.9 };
-        pending.push((pos, strength));
-    }
-
-    if pending.is_empty() {
-        return;
-    }
-    if let Some(material) = materials.get_mut(&render_assets.material) {
-        for (pos, strength) in pending {
-            let slot = state.next_slot % 8;
-            state.next_slot = state.next_slot.wrapping_add(1);
-            material.uniform.ripples[slot] = Vec4::new(pos.x, pos.y, now, strength);
-        }
-    }
-}
-
 /// Flip water between single-sided (camera above water — the cheap, common
 /// case) and double-sided (camera underwater, so the surface stays visible
 /// from below). Mutates the shared material only on the transition.

@@ -1,16 +1,11 @@
 //! Audio system for game sounds.
 
-pub mod ambient;
 pub mod assets;
 pub mod limits;
 pub mod paths;
 pub mod remote_players;
 pub mod state;
 
-pub use ambient::{
-    cleanup_ambient_sounds, cleanup_remote_loop_sounds, ensure_ambient_entity,
-    update_desert_walking_ambient,
-};
 pub use assets::{ensure_audio_assets_loaded, setup_audio};
 pub use limits::apply_audio_limits;
 pub use remote_players::{
@@ -21,11 +16,9 @@ pub use state::*;
 use bevy::audio::{SpatialAudioSink, Volume};
 use bevy::prelude::*;
 use bevy::time::common_conditions::on_timer;
-use shared::components::{LocalPlayer, Player, PlayerPosition};
-use shared::terrain::{Biome, WorldTerrain};
+use shared::components::{LocalPlayer, Player};
 use std::time::Duration;
 
-use crate::input::InputState;
 use crate::states::GameState;
 
 /// Audio plugin for easy integration.
@@ -37,24 +30,8 @@ impl Plugin for GameAudioPlugin {
 
         app.add_systems(Startup, setup_audio);
         app.add_systems(
-            OnExit(GameState::Playing),
-            (
-                cleanup_ambient_sounds,
-                cleanup_remote_loop_sounds,
-            ),
-        );
-
-        app.add_systems(
             Update,
             ensure_audio_assets_loaded.run_if(in_state(GameState::Playing)),
-        );
-        app.add_systems(
-            Update,
-            ensure_ambient_entity.run_if(in_state(GameState::Playing)),
-        );
-        app.add_systems(
-            Update,
-            update_desert_walking_ambient.run_if(in_state(GameState::Playing)),
         );
         app.add_systems(
             Update,

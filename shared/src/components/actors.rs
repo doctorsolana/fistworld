@@ -39,57 +39,6 @@ pub struct PlayerPosition(pub Vec3);
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct PlayerRotation(pub f32);
 
-/// Player velocity (server-authoritative). Not replicated right now.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-pub struct PlayerVelocity(pub Vec3);
-
-/// Player grounded state (server-authoritative)
-/// Computed each tick based on terrain proximity and static collider contacts.
-#[derive(Component, Clone, Debug, Default)]
-pub struct PlayerGrounded {
-    /// Whether player is on terrain
-    pub on_terrain: bool,
-    /// Whether player is on a static collider (prop/structure)
-    pub on_static: bool,
-    /// Time since last grounded (for coyote time)
-    pub time_since_grounded: f32,
-}
-
-/// Server-authoritative water state (replicated).
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-pub struct PlayerWaterState {
-    pub in_water: bool,
-    pub surface_y: f32,
-    /// Water surface depth below the player's capsule center.
-    pub depth: f32,
-}
-
-/// Server-authoritative jump animation state (replicated).
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-pub struct PlayerJumpState {
-    /// Seconds remaining to show jump animation.
-    pub timer: f32,
-}
-
-/// Debug fly mode (server-authoritative).
-#[derive(Component, Clone, Copy, Debug, Default)]
-pub struct FlyMode;
-
-impl PlayerGrounded {
-    /// Small grace period for jumping after leaving ground.
-    pub const COYOTE_TIME: f32 = 0.1;
-
-    /// Check if player can jump (grounded or within coyote time).
-    pub fn can_jump(&self) -> bool {
-        self.is_grounded() || self.time_since_grounded < Self::COYOTE_TIME
-    }
-
-    /// Check if player is grounded on anything.
-    pub fn is_grounded(&self) -> bool {
-        self.on_terrain || self.on_static
-    }
-}
-
 /// Marker for the local player (client-side only).
 #[derive(Component)]
 pub struct LocalPlayer;

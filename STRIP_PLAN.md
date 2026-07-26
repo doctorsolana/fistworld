@@ -3,7 +3,7 @@
 Tracking doc for converting this repo from **FistForce** (multiplayer FPS sandbox) into a
 **top-down multiplayer unit-tactics game** (many units, formations, huge maps).
 
-> **Status:** P0 ✅ · P1 ✅ · P2 ✅ · P3 ✅ · P4 ✅ · P5 next.
+> **Status:** P0 ✅ · P1 ✅ · P2 ✅ · P3 ✅ · P4 ✅ · P5 ✅ · P6 next.
 
 **Detailed analysis lives in [`docs/strip/`](docs/strip/):**
 [MASTER-STRIP-PLAN.md](docs/strip/MASTER-STRIP-PLAN.md) (the authoritative execution plan — ordering
@@ -181,15 +181,28 @@ Pure moves/renames. Tree compiles and game runs identically after each. **Highes
 - [x] `--all-targets` + editor green · 37 shared + 4 editor tests · smoke: no panics,
       audio alive, zero anchor warnings, 5 `ClientPerf` lines, `entities players=1`
 
-### ⬜ P5 — FPS embodiment ➜ commander (~5,300 lines)
-- [ ] `PROFILE_VERSION` 4→5; copy the `.glb` animation-index table out first
-- [ ] **KEEP `PlayerPosition`/`PlayerRotation`** — they *become* the commander view (no `CommanderView` type)
-- [ ] `client/src/render/systems/player/`, `server/src/player/{movement,lifecycle,spatial}.rs`,
-      `server/src/physics/{dynamic_actors,contacts}.rs`,
-      `server/src/collision/{resolve_player,geometry}.rs` + `building_geometry/`,
-      `shared/src/physics/character.rs`
-- [ ] Trim `InputState` — do not delete it
-- [ ] `cargo clippy -D warnings` · **verify server terrain colliders** (Danger 4) · commit
+### ✅ P5 — FPS embodiment ➜ commander (~5,300 lines)
+- [x] `PROFILE_VERSION` 4→5; animation index table preserved in
+      [docs/character-animations.md](docs/character-animations.md) before `assets.rs` died
+- [x] **No `CommanderView` type** (C1): `PlayerPosition` = camera focus, `PlayerRotation` = yaw,
+      so streaming anchors / world-map marker / profile writers keep working unchanged
+- [x] **New `server/src/player/commander.rs`** applies the client view to those components —
+      load-bearing, since `gather_centers` is now players→origin only (**Danger 4**)
+- [x] `client/src/camera_rts.rs::send_commander_view` streams focus+yaw (change + 0.25s heartbeat)
+- [x] **`PlayerInput` → `{ yaw, focus }`** — every packed bit was already vacant, so this is the
+      clean rewrite P6 planned, and the hand-written `Serialize`/`Deserialize` pair is gone.
+      **Danger 7 retired.**
+- [x] **`FISTFORCE_RAIL` removed from the client** — the commander camera was wired *only* in
+      `wire_rail_systems`, so with the body gone the default path had no camera driver at all
+- [x] Ported the correct `peer_id_to_u64` (the `camera.rs` copy collided `Entity`/`Raw` peers on 0)
+- [x] Fixed pre-existing bug: profile writers saved the lowercased key as `player_name`,
+      lowercasing display names after the first disconnect
+- [x] Underwater overlay now judges submersion from camera vs water plane; wade ripples and
+      footstep ambience removed; character selector + `SetPlayerCharacter` removed end to end
+      (leaving its receiver registered crashed lightyear — caught by the smoke test)
+- [x] `--all-targets` + editor green · 37 shared + 4 editor tests · smoke: no panics, world
+      spawned, audio alive, 6 `ClientPerf` lines, 0 anchor warnings, **input ingress ~55/s
+      confirming the commander view reaches the server**
 
 ### ⬜ P6 — Protocol, wiring, assets, naming (~1,550 lines)
 - [ ] Bump `PROTOCOL_ID`; slim `plugin.rs` (9 components, 6 messages, 2 channels)
