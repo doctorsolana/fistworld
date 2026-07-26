@@ -52,7 +52,6 @@ pub struct CharacterAssets {
     pub strafe_left_node: AnimationNodeIndex,
     pub strafe_right_node: AnimationNodeIndex,
     pub run_node: AnimationNodeIndex,
-    pub driving_node: AnimationNodeIndex,
     pub jump_node: AnimationNodeIndex,
     pub fall_node: AnimationNodeIndex,
     // Visual tweaks

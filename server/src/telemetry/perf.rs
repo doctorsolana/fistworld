@@ -1,12 +1,11 @@
 //! Fixed-tick server performance diagnostics.
 
 use bevy::prelude::*;
-use shared::components::{Npc, Player};
+use shared::components::Player;
 use shared::protocol::FIXED_TIMESTEP_HZ;
 use std::cmp::Ordering;
 use std::time::{Duration, Instant};
 
-use crate::ai::ragdoll::RagdollTelemetry;
 use crate::net::input::{ClientInputIngressStats, ClientInputs};
 
 const LOG_INTERVAL: Duration = Duration::from_secs(3);
@@ -15,22 +14,16 @@ const TARGET_TICK_SECS: f64 = 1.0 / FIXED_TIMESTEP_HZ;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Phase {
     Core,
-    NpcInventoryBuild,
     Collision,
-    AiCadence,
-    Pathfinding,
 }
 
 impl Phase {
-    const COUNT: usize = 5;
+    const COUNT: usize = 2;
 
     fn idx(self) -> usize {
         match self {
             Phase::Core => 0,
-            Phase::NpcInventoryBuild => 1,
-            Phase::Collision => 2,
-            Phase::AiCadence => 3,
-            Phase::Pathfinding => 4,
+            Phase::Collision => 1,
         }
     }
 }
@@ -131,26 +124,6 @@ impl ServerPerfMonitor {
         );
     }
 
-    pub fn record_ai_cadence_ms(&mut self, ms: f32) {
-        if !self.enabled || ms <= 0.0 {
-            return;
-        }
-        self.add_phase_duration(
-            Phase::AiCadence,
-            Duration::from_secs_f64(ms as f64 / 1000.0),
-        );
-    }
-
-    pub fn record_pathfinding_ms(&mut self, ms: f32) {
-        if !self.enabled || ms <= 0.0 {
-            return;
-        }
-        self.add_phase_duration(
-            Phase::Pathfinding,
-            Duration::from_secs_f64(ms as f64 / 1000.0),
-        );
-    }
-
 }
 
 pub fn handle_perf_tick_begin(mut perf: ResMut<ServerPerfMonitor>) {
@@ -190,23 +163,9 @@ pub fn handle_perf_core_phase_end(mut perf: ResMut<ServerPerfMonitor>) {
     }
 }
 
-pub fn handle_perf_npc_inventory_build_phase_begin(mut perf: ResMut<ServerPerfMonitor>) {
-    if perf.enabled {
-        perf.start_phase(Phase::NpcInventoryBuild);
-    }
-}
-
-pub fn handle_perf_npc_inventory_build_phase_end(mut perf: ResMut<ServerPerfMonitor>) {
-    if perf.enabled {
-        perf.end_phase(Phase::NpcInventoryBuild);
-    }
-}
-
 pub fn update_server_perf_log(
     mut perf: ResMut<ServerPerfMonitor>,
     players: Query<&Player>,
-    npcs: Query<(), With<Npc>>,
-    ragdoll_telemetry: Res<RagdollTelemetry>,
     client_inputs: Res<ClientInputs>,
     mut input_ingress: ResMut<ClientInputIngressStats>,
 ) {
@@ -228,16 +187,8 @@ pub fn update_server_perf_log(
 
     let core_avg_ms = perf.phase_sum[Phase::Core.idx()].as_secs_f64() * 1000.0 / ticks_f;
     let core_max_ms = perf.phase_max[Phase::Core.idx()].as_secs_f64() * 1000.0;
-    let npc_avg_ms =
-        perf.phase_sum[Phase::NpcInventoryBuild.idx()].as_secs_f64() * 1000.0 / ticks_f;
-    let npc_max_ms = perf.phase_max[Phase::NpcInventoryBuild.idx()].as_secs_f64() * 1000.0;
     let collision_avg_ms = perf.phase_sum[Phase::Collision.idx()].as_secs_f64() * 1000.0 / ticks_f;
     let collision_max_ms = perf.phase_max[Phase::Collision.idx()].as_secs_f64() * 1000.0;
-    let ai_cadence_avg_ms = perf.phase_sum[Phase::AiCadence.idx()].as_secs_f64() * 1000.0 / ticks_f;
-    let ai_cadence_max_ms = perf.phase_max[Phase::AiCadence.idx()].as_secs_f64() * 1000.0;
-    let pathfinding_avg_ms =
-        perf.phase_sum[Phase::Pathfinding.idx()].as_secs_f64() * 1000.0 / ticks_f;
-    let pathfinding_max_ms = perf.phase_max[Phase::Pathfinding.idx()].as_secs_f64() * 1000.0;
 
     let mut players_count = 0usize;
     let mut missing_input_players = 0usize;
@@ -281,28 +232,19 @@ pub fn update_server_perf_log(
     };
 
     info!(
-        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} npc={:.2}/{:.2} collision={:.2}/{:.2} ai_cadence={:.3}/{:.3} pathfinding={:.3}/{:.3} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} npcs={} corpses={} evicted_corpses={}",
+        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} collision={:.2}/{:.2} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={}",
         tick_avg_ms,
         tick_max_ms,
         over_budget_pct,
         core_avg_ms,
         core_max_ms,
-        npc_avg_ms,
-        npc_max_ms,
         collision_avg_ms,
         collision_max_ms,
-        ai_cadence_avg_ms,
-        ai_cadence_max_ms,
-        pathfinding_avg_ms,
-        pathfinding_max_ms,
         client_inputs.latest.len(),
         missing_input_players,
         input_ingress_total_per_sec,
         per_client_input_summary,
         players_count,
-        npcs.iter().count(),
-        ragdoll_telemetry.active_corpses,
-        ragdoll_telemetry.total_evicted,
     );
 
     input_ingress.reset_window();

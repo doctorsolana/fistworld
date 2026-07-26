@@ -1,7 +1,6 @@
 //! Audio domain state, resources, components, and tuning constants.
 
 use bevy::prelude::*;
-use shared::components::NpcArchetype;
 use std::collections::{HashMap, HashSet};
 
 /// Resource holding all loaded audio assets.
@@ -26,8 +25,6 @@ pub struct AudioState {
 pub enum AudioPriority {
     /// Remote footsteps - lowest priority, drop first.
     Ambient = 0,
-    /// NPC dialogue.
-    Dialogue = 2,
 }
 
 /// Marker component for audio entities managed by AudioManager.
@@ -37,34 +34,20 @@ pub struct ManagedAudioTag {
     pub spawn_time: f32,
 }
 
-/// A queued dialogue request (NPC wants to speak).
-#[derive(Debug, Clone)]
-pub struct DialogueRequest {
-    pub npc_entity: Entity,
-    pub distance_sq: f32,
-    pub archetype: NpcArchetype,
-}
-
 /// Central audio manager - tracks limits and queues.
 #[derive(Resource)]
 pub struct AudioManager {
     /// Hard cap on all managed audio entities.
     pub max_total: usize,
-    /// Max concurrent dialogue sounds.
-    pub max_dialogue: usize,
     /// Max remote footstep emitters.
     pub max_remote_footsteps: usize,
-    /// Queued dialogue requests for this frame.
-    pub dialogue_queue: Vec<DialogueRequest>,
 }
 
 impl Default for AudioManager {
     fn default() -> Self {
         Self {
             max_total: 32,
-            max_dialogue: 4,
             max_remote_footsteps: 12,
-            dialogue_queue: Vec::with_capacity(8),
         }
     }
 }

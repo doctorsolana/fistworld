@@ -4,7 +4,6 @@ use bevy::prelude::*;
 
 use shared::physics::WALKABLE_THRESHOLD;
 
-use crate::ai::ragdoll::{CorpseBodyPoint, CorpseCollisionIndex};
 use crate::collision::library::{DerivedColliderLibrary, DerivedHull, HullFace, StaticColliders};
 
 const COLLIDER_CELL_SIZE: f32 = 16.0;
@@ -23,94 +22,6 @@ pub struct SupportContact {
     pub has_support: bool,
     /// The best support normal encountered.
     pub support_normal: Vec3,
-}
-
-/// Vehicle-specific collision that can skip small obstacles (hover over rocks).
-pub fn handle_vehicle_vs_static(
-    derived: &DerivedColliderLibrary,
-    colliders: &StaticColliders,
-    pos: &mut Vec3,
-    mut velocity: Option<&mut Vec3>,
-    radius: f32,
-    height: f32,
-    min_obstacle_radius: f32,
-    candidate_ids: &mut Vec<u32>,
-) {
-    let half_h = height * 0.5;
-
-    for _ in 0..4 {
-        let mut moved = false;
-        collect_nearby_instance_ids(colliders, *pos, radius + 6.0, candidate_ids);
-
-        for id in candidate_ids.iter() {
-            let Some(inst) = colliders.instances.get(id) else {
-                continue;
-            };
-            let Some(shape) = derived.by_kind.get(&inst.kind) else {
-                continue;
-            };
-
-            let obstacle_size = shape.bounding_radius * inst.scale;
-            if obstacle_size < min_obstacle_radius {
-                continue;
-            }
-
-            let bounding_r = obstacle_size.max(0.05);
-            let to_prop = *pos - inst.position;
-            let dist2 = to_prop.length_squared();
-            let max_dist = radius + bounding_r + half_h;
-            if dist2 >= max_dist * max_dist {
-                continue;
-            }
-
-            let sphere_positions = [
-                *pos - Vec3::Y * (half_h - radius).max(0.0),
-                *pos,
-                *pos + Vec3::Y * (half_h - radius).max(0.0),
-            ];
-
-            let mut best_penetration = 0.0f32;
-            let mut best_normal = Vec3::ZERO;
-
-            for sphere_pos in sphere_positions {
-                if let Some((pen, normal)) = sphere_vs_compound_hulls(
-                    sphere_pos,
-                    radius,
-                    &shape.hulls,
-                    inst.position,
-                    inst.rotation,
-                    inst.scale,
-                ) {
-                    if pen > best_penetration {
-                        best_penetration = pen;
-                        best_normal = normal;
-                    }
-                }
-            }
-
-            if best_penetration <= 0.0 {
-                continue;
-            }
-
-            let push = best_normal * best_penetration;
-            pos.x += push.x;
-            pos.y += push.y.max(0.0);
-            pos.z += push.z;
-
-            if let Some(v) = velocity.as_deref_mut() {
-                let vn = v.dot(best_normal);
-                if vn < 0.0 {
-                    *v -= best_normal * vn;
-                }
-            }
-
-            moved = true;
-        }
-
-        if !moved {
-            break;
-        }
-    }
 }
 
 pub fn handle_capsule_vs_static(
@@ -266,98 +177,6 @@ pub fn handle_capsule_vs_static(
     }
 
     support
-}
-
-pub fn handle_capsule_vs_corpse_spheres(
-    corpse_index: &CorpseCollisionIndex,
-    pos: &mut Vec3,
-    mut velocity: Option<&mut Vec3>,
-    radius: f32,
-    height: f32,
-    candidates: &mut Vec<CorpseBodyPoint>,
-) {
-    let half_h = height * 0.5;
-    let sphere_offset = (half_h - radius).max(0.0);
-    let search_radius = radius + half_h + 2.0;
-    corpse_index.collect_nearby(*pos, search_radius, candidates);
-
-    for _ in 0..2 {
-        let mut moved = false;
-        for corpse in candidates.iter().copied() {
-            let sphere_positions = [
-                *pos - Vec3::Y * sphere_offset,
-                *pos,
-                *pos + Vec3::Y * sphere_offset,
-            ];
-            let mut best_pen = 0.0f32;
-            let mut best_normal = Vec3::ZERO;
-            for sphere_pos in sphere_positions {
-                let delta = sphere_pos - corpse.position;
-                let dist_sq = delta.length_squared();
-                let min_dist = radius + corpse.radius;
-                if dist_sq >= min_dist * min_dist || dist_sq <= 1.0e-8 {
-                    continue;
-                }
-                let dist = dist_sq.sqrt();
-                let pen = min_dist - dist;
-                if pen > best_pen {
-                    best_pen = pen;
-                    best_normal = delta / dist;
-                }
-            }
-
-            if best_pen <= 0.0 {
-                continue;
-            }
-
-            pos.x += best_normal.x * best_pen;
-            pos.y += (best_normal.y * best_pen).max(0.0);
-            pos.z += best_normal.z * best_pen;
-
-            if let Some(v) = velocity.as_deref_mut() {
-                let vn = v.dot(best_normal);
-                if vn < 0.0 {
-                    *v -= best_normal * vn;
-                }
-            }
-            moved = true;
-        }
-        if !moved {
-            break;
-        }
-        corpse_index.collect_nearby(*pos, search_radius, candidates);
-    }
-}
-
-pub fn handle_vehicle_proxy_vs_corpse_spheres(
-    corpse_index: &CorpseCollisionIndex,
-    pos: &mut Vec3,
-    mut velocity: Option<&mut Vec3>,
-    proxy_radius: f32,
-    candidates: &mut Vec<CorpseBodyPoint>,
-) {
-    let search_radius = proxy_radius + 2.5;
-    corpse_index.collect_nearby(*pos, search_radius, candidates);
-    for corpse in candidates.iter().copied() {
-        let delta = *pos - corpse.position;
-        let dist_sq = delta.length_squared();
-        let min_dist = proxy_radius + corpse.radius;
-        if dist_sq >= min_dist * min_dist || dist_sq <= 1.0e-8 {
-            continue;
-        }
-        let dist = dist_sq.sqrt();
-        let pen = min_dist - dist;
-        let normal = delta / dist;
-        pos.x += normal.x * pen;
-        pos.y += (normal.y * pen).max(0.0);
-        pos.z += normal.z * pen;
-        if let Some(v) = velocity.as_deref_mut() {
-            let vn = v.dot(normal);
-            if vn < 0.0 {
-                *v -= normal * vn;
-            }
-        }
-    }
 }
 
 fn sphere_vs_convex_hull_3d(

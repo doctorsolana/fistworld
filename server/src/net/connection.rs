@@ -10,9 +10,8 @@ use shared::components::{
 };
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 use shared::protocol::{
-    NameSubmissionResult, NpcRagdollPoseBatch, NpcRagdollStarted, PlayerInput, PlayerRoster,
-    RequestPlayerRoster, SetPlayerCharacter, SetTimeOfDay, SpawnOilmanDebug, SpawnPhysicsBoxDebug,
-    SubmitPlayerName,
+    NameSubmissionResult, PlayerInput, PlayerRoster, RequestPlayerRoster, SetPlayerCharacter,
+    SetTimeOfDay, SubmitPlayerName,
 };
 
 use crate::net::input::ClientInputs;
@@ -74,15 +73,11 @@ pub fn handle_connections(
             MessageReceiver::<PlayerInput>::default(),
             MessageReceiver::<SetTimeOfDay>::default(),
             MessageReceiver::<SetPlayerCharacter>::default(),
-            MessageReceiver::<SpawnOilmanDebug>::default(),
-            MessageReceiver::<SpawnPhysicsBoxDebug>::default(),
             MessageReceiver::<SubmitPlayerName>::default(),
             MessageReceiver::<RequestPlayerRoster>::default(),
         ));
 
         commands.entity(client_entity).insert((
-            MessageSender::<NpcRagdollStarted>::default(),
-            MessageSender::<NpcRagdollPoseBatch>::default(),
             MessageSender::<NameSubmissionResult>::default(),
             MessageSender::<PlayerRoster>::default(),
         ));

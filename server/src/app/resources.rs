@@ -6,7 +6,6 @@ use shared::city::AuthoredCityLayout;
 use shared::spatial::SpatialObstacleGrid;
 use shared::terrain::WorldTerrain;
 
-use crate::ai;
 use crate::collision;
 use crate::net;
 use crate::persistence;
@@ -24,13 +23,8 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<player::index::PlayerEntityIndex>();
     app.init_resource::<player::spatial::PlayerSpatialIndex>();
     app.init_resource::<SpatialObstacleGrid>();
-    app.init_resource::<ai::obstacles::ObstacleGridState>();
-    app.init_resource::<ai::ragdoll::CorpseBudget>();
-    app.init_resource::<ai::ragdoll::RagdollPoseStream>();
-    app.init_resource::<ai::ragdoll::CorpseCollisionIndex>();
-    app.init_resource::<ai::ragdoll::RagdollTelemetry>();
-    app.init_resource::<ai::relevance::NpcRelevanceSettings>();
-    app.init_resource::<ai::pathfinding::PathfindingBudgetSettings>();
+    app.init_resource::<crate::world::navgrid::ObstacleGridState>();
+    app.init_resource::<crate::world::pathfinding::PathfindingBudgetSettings>();
     app.init_resource::<collision::building_index::BuildingSpatialIndex>();
     app.init_resource::<collision::streaming::ColliderStreamingState>();
     app.init_resource::<physics::terrain_colliders::TerrainColliderSettings>();

@@ -17,7 +17,6 @@ use super::world::ClientWorldRoot;
 use crate::states::GameState;
 use crate::terrain::LoadedChunks;
 use crate::ui::ServerAddress;
-use shared::components::Npc;
 
 // =============================================================================
 // CONNECTION
@@ -96,8 +95,6 @@ pub fn handle_start_connection(
     commands.entity(client_entity).insert((
         MessageSender::<shared::protocol::PlayerInput>::default(),
         MessageSender::<shared::protocol::SetTimeOfDay>::default(),
-        MessageSender::<shared::protocol::SpawnOilmanDebug>::default(),
-        MessageSender::<shared::protocol::SpawnPhysicsBoxDebug>::default(),
         // Player name submission
         MessageSender::<shared::protocol::SubmitPlayerName>::default(),
         MessageSender::<shared::protocol::RequestPlayerRoster>::default(),
@@ -105,8 +102,6 @@ pub fn handle_start_connection(
 
     // Add server -> client message receivers (split to avoid tuple size limit)
     commands.entity(client_entity).insert((
-        MessageReceiver::<shared::protocol::NpcRagdollStarted>::default(),
-        MessageReceiver::<shared::protocol::NpcRagdollPoseBatch>::default(),
         // Name submission response
         MessageReceiver::<shared::protocol::NameSubmissionResult>::default(),
         MessageReceiver::<shared::protocol::PlayerRoster>::default(),
@@ -192,7 +187,6 @@ pub fn cleanup_enter_main_menu(
     mut cursor_opts: Query<&mut CursorOptions>,
     world_roots: Query<Entity, With<ClientWorldRoot>>,
     players: Query<Entity, With<Player>>,
-    npcs: Query<Entity, With<Npc>>,
     particles: Query<Entity, With<SandParticle>>,
     mut loaded_chunks: ResMut<LoadedChunks>,
 ) {
@@ -212,9 +206,6 @@ pub fn cleanup_enter_main_menu(
         commands.entity(entity).despawn();
     }
 
-    for entity in npcs.iter() {
-        commands.entity(entity).despawn();
-    }
 
 
     // Clean up particles

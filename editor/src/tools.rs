@@ -561,7 +561,6 @@ fn reset_map_to_blank(
     session.map_definition.terrain.water_level = None;
     session.map_definition.player_spawn = None;
     session.map_definition.objects.clear();
-    session.map_definition.npc_groups.clear();
     session.map_definition.blockers.clear();
 
     session.map_edits.terrain_deltas.clear();

@@ -2,7 +2,6 @@ use bevy::prelude::{Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path};
 
-use crate::components::NpcArchetype;
 use crate::props::PropKind;
 
 pub const DEFAULT_MAP_ID: &str = "city_alpha";
@@ -16,8 +15,6 @@ pub struct MapDefinition {
     pub player_spawn: Option<[f32; 3]>,
     #[serde(default)]
     pub objects: Vec<MapObjectSpawn>,
-    #[serde(default)]
-    pub npc_groups: Vec<MapNpcGroup>,
     #[serde(default)]
     pub blockers: Vec<MapBlocker>,
 }
@@ -52,32 +49,6 @@ impl MapDefinition {
             }
             if object.scale <= 0.0 {
                 return Err(format!("objects[{index}] scale must be > 0"));
-            }
-        }
-
-        for (index, npc_group) in self.npc_groups.iter().enumerate() {
-            if npc_group.count == 0 {
-                return Err(format!("npc_groups[{index}] count must be > 0"));
-            }
-            if npc_group.zone_half_extents[0] <= 0.0 || npc_group.zone_half_extents[1] <= 0.0 {
-                return Err(format!("npc_groups[{index}] zone_half_extents must be > 0"));
-            }
-            if matches!(npc_group.preset, MapBehaviorPreset::PatrolRoute)
-                && npc_group.route.len() < 2
-            {
-                return Err(format!(
-                    "npc_groups[{index}] PatrolRoute requires at least 2 route points"
-                ));
-            }
-            if npc_group.occupation.is_some() && npc_group.authored_occupation().is_none() {
-                return Err(format!(
-                    "npc_groups[{index}] occupation must not be empty when provided"
-                ));
-            }
-            if npc_group.faction.is_some() && npc_group.authored_faction().is_none() {
-                return Err(format!(
-                    "npc_groups[{index}] faction must not be empty when provided"
-                ));
             }
         }
 
@@ -227,51 +198,6 @@ fn is_safe_relative_glb_path(path_part: &str) -> bool {
     })
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MapNpcGroup {
-    pub archetype: NpcArchetype,
-    pub count: u32,
-    pub zone_center: [f32; 2],
-    pub zone_half_extents: [f32; 2],
-    pub preset: MapBehaviorPreset,
-    #[serde(default)]
-    pub route: Vec<[f32; 2]>,
-    #[serde(default)]
-    pub occupation: Option<String>,
-    #[serde(default)]
-    pub faction: Option<String>,
-}
-
-impl MapNpcGroup {
-    pub fn zone_center_vec2(&self) -> Vec2 {
-        Vec2::new(self.zone_center[0], self.zone_center[1])
-    }
-
-    pub fn zone_half_extents_vec2(&self) -> Vec2 {
-        Vec2::new(self.zone_half_extents[0], self.zone_half_extents[1])
-    }
-
-    pub fn authored_occupation(&self) -> Option<&str> {
-        self.occupation
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    }
-
-    pub fn authored_faction(&self) -> Option<&str> {
-        self.faction
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MapBehaviorPreset {
-    IdleWanderZone,
-    PatrolRoute,
-    StandAndFaceFlow,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MapBlocker {
@@ -498,20 +424,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn npc_group_trims_authored_metadata() {
-        let group = MapNpcGroup {
-            archetype: NpcArchetype::Oilman,
-            count: 3,
-            zone_center: [0.0, 0.0],
-            zone_half_extents: [10.0, 10.0],
-            preset: MapBehaviorPreset::IdleWanderZone,
-            route: Vec::new(),
-            occupation: Some("  Mechanic  ".to_string()),
-            faction: Some("  Dock Union ".to_string()),
-        };
-
-        assert_eq!(group.authored_occupation(), Some("Mechanic"));
-        assert_eq!(group.authored_faction(), Some("Dock Union"));
-    }
 }

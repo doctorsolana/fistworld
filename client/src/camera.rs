@@ -11,13 +11,9 @@ use shared::player::PLAYER_HEIGHT;
 /// Camera offset from player position (eye level) for first person
 const CAMERA_HEIGHT_OFFSET: f32 = PLAYER_HEIGHT * 0.4;
 pub(crate) const CAMERA_NEAR_CLIP: f32 = 0.001;
-const VEHICLE_FP_SEAT_HEIGHT: f32 = 0.75;
-const HOVERBIKE_FP_SEAT_HEIGHT: f32 = 0.95;
-const VEHICLE_FP_SEAT_FORWARD: f32 = 0.15;
 
 /// Third person camera settings (GTA-style orbit)
 const THIRD_PERSON_DISTANCE: f32 = 5.5; // Orbit radius from pivot
-const THIRD_PERSON_BASE_HEIGHT: f32 = 1.0; // Base height offset of pivot point
 const THIRD_PERSON_DEFAULT_PITCH: f32 = 0.25; // Default orbit angle (slightly above)
 
 /// FOV settings for aiming

@@ -8,10 +8,9 @@ use shared::player::{PLAYER_HEIGHT, PLAYER_RADIUS, STEP_UP_HEIGHT};
 use shared::terrain::WorldTerrain;
 use std::time::Instant;
 
-use crate::ai::ragdoll::{CorpseBodyPoint, CorpseCollisionIndex};
 use crate::collision::building_geometry::handle_capsule_vs_buildings;
 use crate::collision::building_index::BuildingSpatialIndex;
-use crate::collision::geometry::{handle_capsule_vs_corpse_spheres, handle_capsule_vs_static};
+use crate::collision::geometry::handle_capsule_vs_static;
 use crate::collision::library::{
     DerivedBuildingColliderLibrary, DerivedColliderLibrary, StaticColliders,
 };
@@ -22,7 +21,6 @@ pub fn handle_player_static_collisions(
     derived: Option<Res<DerivedColliderLibrary>>,
     building_derived: Option<Res<DerivedBuildingColliderLibrary>>,
     building_index: Option<Res<BuildingSpatialIndex>>,
-    corpse_index: Res<CorpseCollisionIndex>,
     colliders: Res<StaticColliders>,
     buildings: Query<(Entity, &PlacedBuilding, &BuildingPosition)>,
     mut perf_monitor: Option<ResMut<crate::telemetry::perf::ServerPerfMonitor>>,
@@ -37,7 +35,6 @@ pub fn handle_player_static_collisions(
     >,
     mut static_candidates: Local<Vec<u32>>,
     mut building_candidates: Local<Vec<Entity>>,
-    mut corpse_candidates: Local<Vec<CorpseBodyPoint>>,
 ) {
     const POS_WRITE_EPS_SQ: f32 = 1.0e-10;
     const VEL_WRITE_EPS_SQ: f32 = 1.0e-10;
@@ -82,14 +79,6 @@ pub fn handle_player_static_collisions(
 
         grounded.on_static = prop_support.has_support || building_support.has_support;
 
-        handle_capsule_vs_corpse_spheres(
-            &corpse_index,
-            &mut resolved_pos,
-            Some(&mut resolved_vel),
-            PLAYER_RADIUS,
-            PLAYER_HEIGHT,
-            &mut corpse_candidates,
-        );
 
         let ground_y = terrain.get_height(resolved_pos.x, resolved_pos.z);
         let min_y = ground_y + shared::physics::ground_clearance_center();

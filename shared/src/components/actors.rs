@@ -23,21 +23,6 @@ pub struct PlayerProgression {
     pub intelligence: u32,
 }
 
-/// Which NPC character model to use on the client.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub enum NpcArchetype {
-    #[default]
-    Oilman,
-    DesertOutpost,
-    /// Untextured reference dummy whose visual is built directly from the
-    /// ragdoll body definitions (no skeleton/bind-pose mapping) — ground
-    /// truth for diagnosing ragdoll issues.
-    Dummy,
-    /// Procedural anatomical target using the shared ragdoll body layout for
-    /// its visible model, precise hitboxes, and death physics.
-    CombatDummy,
-}
-
 /// Which player character model to use on the client.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum PlayerCharacter {
@@ -45,74 +30,6 @@ pub enum PlayerCharacter {
     Oilman,
     Base,
 }
-
-/// Marker component for NPC entities (server authoritative, replicated to clients)
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Npc {
-    pub id: u64,
-    pub archetype: NpcArchetype,
-}
-
-/// High-level server-authoritative NPC intent/state for animation and behavior.
-///
-/// This is intentionally semantic and stable (what the NPC is doing), not low-level
-/// motion-derived state.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub enum NpcActivityKind {
-    #[default]
-    Idle,
-    Walk,
-    Run,
-    Sit,
-    Work,
-    Talk,
-    Sleep,
-    Flee,
-    Dead,
-}
-
-/// Replicated high-level activity state for NPCs.
-#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub struct NpcActivity(pub NpcActivityKind);
-
-/// Identity data for NPCs (replicated).
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct NpcIdentity {
-    pub name: String,
-    pub occupation: String,
-    pub faction: Option<String>,
-}
-
-/// NPC position component - replicated across network.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-pub struct NpcPosition(pub Vec3);
-
-/// NPC rotation (yaw) - replicated across network.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-pub struct NpcRotation(pub f32);
-
-/// NPC linear velocity (server-authoritative, replicated for smoothing/telemetry).
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-pub struct NpcVelocity(pub Vec3);
-
-/// Marker for NPCs that are fleeing (replicated across network).
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-pub struct NpcFleeing;
-
-/// Replicated debug rigidbody box entity.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct DebugPhysicsBox {
-    pub id: u64,
-    pub half_extents: Vec3,
-}
-
-/// Replicated debug box position.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-pub struct DebugPhysicsBoxPosition(pub Vec3);
-
-/// Replicated debug box rotation.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
-pub struct DebugPhysicsBoxRotation(pub Quat);
 
 /// Player position component - replicated across network.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]

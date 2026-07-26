@@ -3,7 +3,7 @@
 Tracking doc for converting this repo from **FistForce** (multiplayer FPS sandbox) into a
 **top-down multiplayer unit-tactics game** (many units, formations, huge maps).
 
-> **Status:** P0 ✅ · P1 ✅ · P2 ✅ · P3 ✅ · P4 next.
+> **Status:** P0 ✅ · P1 ✅ · P2 ✅ · P3 ✅ · P4 ✅ · P5 next.
 
 **Detailed analysis lives in [`docs/strip/`](docs/strip/):**
 [MASTER-STRIP-PLAN.md](docs/strip/MASTER-STRIP-PLAN.md) (the authoritative execution plan — ordering
@@ -164,12 +164,22 @@ Pure moves/renames. Tree compiles and game runs identically after each. **Highes
 - [x] Smoke test: no panics, world visuals spawned, terrain+props loaded, 6 `ClientPerf` lines,
       **audio alive (Danger 6 clear)**, **zero `streaming_anchor` warnings (Danger 3 clear)**
 
-### ⬜ P4 — NPCs & AI (~6,450 lines)
-- [ ] Salvage `sync_obstacle_grid`, A\* core, `XorShift64` before deleting
-- [ ] **KEEP `SpawnMarkerKind::NpcGroup`** (Danger 1)
-- [ ] `server/src/ai/`, `shared/src/npc.rs`, `client/src/dialogue.rs`, `client/src/render/systems/npc/`
-- [ ] Fix `editor/src/tools.rs:564`
-- [ ] `cargo check -p editor` **and** `./run.sh editor` against `city_alpha` · commit
+### ✅ P4 — NPCs & AI (~6,400 lines)
+- [x] **Salvaged for the RTS first** (none of it referenced an NPC type):
+      `server/src/world/navgrid.rs` (building obstacle grid — without it navigation
+      obstacles silently vanish), `server/src/world/pathfinding.rs` (grid A\* over terrain +
+      obstacles), `shared/src/rng.rs` (`XorShift64`, deterministic — matters for lockstep)
+- [x] **Danger 1 respected: `SpawnMarkerKind::NpcGroup` KEPT.** `city_alpha/edits.ron` has a live
+      one; RON hard-fails unknown enum variants → panic in `WorldTerrain` init in all three
+      binaries. **Verified by booting the editor against `city_alpha`: zero panics.**
+      (`MapDefinition::npc_groups`, a *field*, is load-safe to remove; `editor/src/tools.rs` updated.)
+- [x] `server/src/ai/`, `shared/src/npc.rs`, `client/src/render/systems/npc/`,
+      `client/src/dialogue.rs`, debug-physics-box feature, NPC/ragdoll protocol traffic
+- [x] **Danger 4 escalated:** `PlayerPosition` is now the *only* terrain-collider anchor.
+      Commented at the site — P5 rewrites exactly that entity.
+- [x] `ServerPerf` phases 5 → 2 (`core`, `collision`); ragdoll/NPC net counters removed
+- [x] `--all-targets` + editor green · 37 shared + 4 editor tests · smoke: no panics,
+      audio alive, zero anchor warnings, 5 `ClientPerf` lines, `entities players=1`
 
 ### ⬜ P5 — FPS embodiment ➜ commander (~5,300 lines)
 - [ ] `PROFILE_VERSION` 4→5; copy the `.glb` animation-index table out first

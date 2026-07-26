@@ -14,6 +14,5 @@ pub mod building_index;
 pub mod geometry;
 pub mod library;
 pub mod raycast;
-pub mod resolve_npc;
 pub mod resolve_player;
 pub mod streaming;

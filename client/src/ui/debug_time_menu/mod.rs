@@ -20,7 +20,7 @@ use lightyear::prelude::*;
 
 use shared::components::{LocalPlayer, PlayerCharacter};
 use shared::protocol::{
-    ReliableChannel, SetPlayerCharacter, SetTimeOfDay, SpawnOilmanDebug, SpawnPhysicsBoxDebug,
+    ReliableChannel, SetPlayerCharacter, SetTimeOfDay,
     TimeOfDayPreset,
 };
 
@@ -164,13 +164,3 @@ struct PerfRenderDiagToggleButton;
 
 #[derive(Component)]
 struct PerfRenderDiagLabel;
-
-#[derive(Component)]
-struct SpawnOilmanNpcButton;
-
-/// Spawns a gray ragdoll-reference dummy near the player.
-#[derive(Component)]
-struct SpawnDummyNpcButton;
-
-#[derive(Component)]
-struct SpawnPhysicsBoxButton;

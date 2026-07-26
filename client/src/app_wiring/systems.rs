@@ -130,10 +130,8 @@ fn wire_fps_systems(app: &mut App) {
     app.add_systems(
         Startup,
         (
-            game_systems::setup_debug_physics_box_assets,
             game_systems::setup_particle_assets,
             game_systems::setup_player_character_assets,
-            game_systems::setup_npc_assets,
         ),
     );
 
@@ -167,7 +165,6 @@ fn wire_fps_systems(app: &mut App) {
         (
             game_systems::handle_player_spawned,
             game_systems::sync_player_character_models,
-            game_systems::handle_npc_spawned,
             game_systems::ensure_local_player_tag,
         )
             .chain()
@@ -181,11 +178,8 @@ fn wire_fps_systems(app: &mut App) {
             input::handle_keyboard_input,
             input::handle_mouse_input,
             game_systems::apply_cursor_grab,
-            game_systems::spawn_debug_physics_box_visuals,
             (
                 game_systems::sync_player_transforms,
-                game_systems::sync_npc_transforms,
-                game_systems::sync_debug_physics_box_transforms,
                 camera::update_camera,
             )
                 .chain(),
@@ -209,26 +203,6 @@ fn wire_fps_systems(app: &mut App) {
     );
 
     // NPC visuals/animation + debug hitboxes
-    app.add_systems(
-        Update,
-        (
-            game_systems::setup_npc_rig,
-            (
-                game_systems::receive_ragdoll_started,
-                game_systems::receive_ragdoll_pose_batch,
-                game_systems::apply_ragdoll_pose,
-            )
-                .chain(),
-            game_systems::update_npc_visibility,
-            game_systems::apply_npc_no_frustum_culling_to_new_meshes,
-            game_systems::apply_npc_shadow_state_to_new_meshes,
-            game_systems::apply_double_sided_npc_materials,
-            game_systems::update_npc_animation,
-            game_systems::update_npc_hitbox_debug_gizmos,
-            game_systems::update_npc_ragdoll_debug_gizmos,
-        )
-            .run_if(in_state(GameState::Playing)),
-    );
 
 
     app.add_systems(

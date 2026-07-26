@@ -18,8 +18,6 @@ pub fn ensure_remote_footstep_emitters(
     camera: Query<&Transform, With<Camera3d>>,
     // Remote players only (local player has their own loop)
     players: Query<(Entity, &Player, &Transform), (With<Player>, Without<LocalPlayer>)>,
-    // NPCs
-    npcs: Query<(Entity, &Transform), With<Npc>>,
     mut candidate_cache: Local<Vec<(Entity, Vec3, f32)>>,
 ) {
     if !audio_state.assets_ready {
@@ -51,16 +49,6 @@ pub fn ensure_remote_footstep_emitters(
         }
     }
 
-    for (entity, transform) in npcs.iter() {
-        if emitter_index.footstep_targets.contains(&entity) {
-            continue;
-        }
-
-        let dist_sq = transform.translation.distance_squared(listener_pos);
-        if dist_sq <= max_dist_sq {
-            candidate_cache.push((entity, transform.translation, dist_sq));
-        }
-    }
 
     if candidate_cache.len() > available_slots {
         candidate_cache.select_nth_unstable_by(available_slots, |a, b| a.2.total_cmp(&b.2));

@@ -4,7 +4,6 @@ mod app_wiring;
 mod audio;
 mod camera;
 mod city;
-mod dialogue;
 mod input;
 mod camera_rts;
 mod perf_overlay;

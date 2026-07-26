@@ -1,6 +1,8 @@
 //! Particle systems
 //!
-//! Sand/dust trail particles for vehicles.
+//! Dust/impact puff particles. The vehicle sand-spray producer was removed with
+//! the vehicles; the asset + update machinery is kept as the intended home for
+//! unit dust in the tactics game.
 
 use bevy::prelude::*;
 
@@ -8,7 +10,7 @@ use bevy::prelude::*;
 // COMPONENTS & RESOURCES
 // =============================================================================
 
-/// Sand/dust particle for vehicle trails
+/// Dust particle instance.
 #[derive(Component)]
 pub struct SandParticle {
     pub lifetime: f32,      // Remaining lifetime in seconds
@@ -17,7 +19,10 @@ pub struct SandParticle {
     pub initial_scale: f32, // Starting scale
 }
 
-/// Pre-made assets for particles (avoid recreating each frame)
+/// Pre-made assets for particles (avoid recreating each frame).
+///
+/// Currently has no producer - see module docs.
+#[allow(dead_code)]
 #[derive(Resource)]
 pub struct ParticleAssets {
     pub sand_mesh: Handle<Mesh>,

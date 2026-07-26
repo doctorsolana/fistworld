@@ -1,5 +1,3 @@
-#[path = "ai/mod.rs"]
-mod ai;
 #[path = "app/mod.rs"]
 mod app;
 #[path = "city/mod.rs"]

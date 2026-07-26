@@ -122,5 +122,4 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
 
     app.add_plugins(ui::WorldMapPlugin);
     app.add_plugins(audio::GameAudioPlugin);
-    app.add_plugins(dialogue::DialoguePlugin);
 }

@@ -1,4 +1,14 @@
-//! NPC wander target selection and grid A* pathfinding.
+//! Grid A* pathfinding over the terrain heightfield and building obstacle grid.
+//!
+//! Salvaged from the deleted NPC AI. Deliberately free of any unit/agent type:
+//! the search takes only `(&WorldTerrain, &SpatialObstacleGrid, from, to, &mut scratch)`,
+//! so it can back whatever the tactics unit sim ends up being.
+//!
+//! NOTE: this is per-agent A*. Moving hundreds of units toward a shared destination
+//! wants a flow field instead (one Dijkstra sweep from the goal, then every unit reads
+//! a direction from the grid). Keep this for single-agent queries and formation anchors.
+
+#![allow(dead_code)]
 
 use bevy::prelude::*;
 use shared::physics::ground_clearance_center;
@@ -6,8 +16,6 @@ use shared::spatial::SpatialObstacleGrid;
 use shared::terrain::WorldTerrain;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
-
-use crate::ai::state::XorShift64;
 
 const GRID_CELL_SIZE: f32 = 2.0; // meters
 const GRID_MAX_STEP: f32 = 1.2; // max height delta between neighbor cells
@@ -30,45 +38,6 @@ impl Default for PathfindingBudgetSettings {
             max_requests_per_tick,
         }
     }
-}
-
-pub(super) fn pick_random_target(
-    terrain: &WorldTerrain,
-    obstacles: &SpatialObstacleGrid,
-    home: Vec3,
-    current_pos: Vec3,
-    max_radius: f32,
-    min_dist: f32,
-    rng: &mut XorShift64,
-) -> Vec3 {
-    // Try multiple times to pick a target that is far enough and not blocked.
-    for _ in 0..16 {
-        let angle = rng.next_f32() * std::f32::consts::TAU;
-        let r = min_dist + (max_radius - min_dist) * rng.next_f32();
-        let x = home.x + angle.cos() * r;
-        let z = home.z + angle.sin() * r;
-        let y = terrain.get_height(x, z) + ground_clearance_center();
-        let candidate = Vec3::new(x, y, z);
-
-        let candidate_xz = Vec2::new(candidate.x, candidate.z);
-        if obstacles.point_blocked(candidate_xz) {
-            continue;
-        }
-
-        let dist_from_current =
-            Vec2::new(candidate.x - current_pos.x, candidate.z - current_pos.z).length();
-        if dist_from_current >= min_dist {
-            return candidate;
-        }
-    }
-
-    // Fallback: target from outer ring.
-    let angle = rng.next_f32() * std::f32::consts::TAU;
-    let r = max_radius * 0.7 + max_radius * 0.3 * rng.next_f32();
-    let x = home.x + angle.cos() * r;
-    let z = home.z + angle.sin() * r;
-    let y = terrain.get_height(x, z) + ground_clearance_center();
-    Vec3::new(x, y, z)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -133,7 +102,7 @@ pub(crate) struct PathfindingScratch {
     height_cache: HashMap<GridPos, f32>,
 }
 
-pub(super) fn find_path_a_star_with_scratch(
+pub fn find_path_a_star_with_scratch(
     terrain: &WorldTerrain,
     obstacles: &SpatialObstacleGrid,
     start_world: Vec3,

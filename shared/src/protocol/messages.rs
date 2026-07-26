@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::components::{NpcArchetype, PlayerCharacter};
+use crate::components::PlayerCharacter;
 
 /// Player input sent from client to server each tick.
 #[derive(Debug, PartialEq, Clone)]
@@ -170,22 +170,6 @@ pub struct SetPlayerCharacter {
     pub character: PlayerCharacter,
 }
 
-/// Client -> Server: debug request to spawn NPCs near the requesting player.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct SpawnOilmanDebug {
-    pub count: u16,
-    /// Which NPC archetype to spawn (Oilman, or Dummy for the gray
-    /// ragdoll-reference figure).
-    pub archetype: NpcArchetype,
-}
-
-/// Client -> Server: debug request to spawn physics test boxes near the requesting player.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct SpawnPhysicsBoxDebug {
-    pub count: u16,
-    pub anchor_position: Option<Vec3>,
-}
-
 /// What the bullet impacted (used for visuals/debug).
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct SubmitPlayerName {
@@ -242,114 +226,11 @@ pub struct PlayerRosterEntry {
     pub online: bool,
 }
 
-/// Client -> Server: create or join the player's railroad company.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Eq, Hash)]
-pub enum RagdollBodyId {
-    Pelvis,
-    SpineLower,
-    SpineUpper,
-    Head,
-    UpperArmL,
-    UpperArmR,
-    ForearmL,
-    ForearmR,
-    HandL,
-    HandR,
-    ThighL,
-    ThighR,
-    CalfL,
-    CalfR,
-    FootL,
-    FootR,
-}
-
-/// Compact quaternion transport (i16 per component).
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Eq)]
-pub struct PackedQuatI16 {
-    pub x: i16,
-    pub y: i16,
-    pub z: i16,
-    pub w: i16,
-}
-
-#[inline]
-fn quantize_quat_component(value: f32) -> i16 {
-    (value.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
-}
-
-#[inline]
-fn dequantize_quat_component(value: i16) -> f32 {
-    (value as f32 / i16::MAX as f32).clamp(-1.0, 1.0)
-}
-
-/// Pack a unit quaternion for transport.
-#[inline]
-pub fn pack_quat_i16(quat: Quat) -> PackedQuatI16 {
-    let normalized = quat.normalize();
-    PackedQuatI16 {
-        x: quantize_quat_component(normalized.x),
-        y: quantize_quat_component(normalized.y),
-        z: quantize_quat_component(normalized.z),
-        w: quantize_quat_component(normalized.w),
-    }
-}
-
-/// Unpack a quaternion from transport representation.
-#[inline]
-pub fn unpack_quat_i16(packed: PackedQuatI16) -> Quat {
-    Quat::from_xyzw(
-        dequantize_quat_component(packed.x),
-        dequantize_quat_component(packed.y),
-        dequantize_quat_component(packed.z),
-        dequantize_quat_component(packed.w),
-    )
-    .normalize()
-}
-
-/// Per-body pose sample for reduced-body ragdoll sync.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct RagdollBodyPose {
-    pub body: RagdollBodyId,
-    pub position: Vec3,
-    pub rotation: PackedQuatI16,
-}
-
-/// Reliable event indicating NPC ragdoll start.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct NpcRagdollStarted {
-    pub npc_id: u64,
-    pub archetype: NpcArchetype,
-    pub started_at: f32,
-    pub root_position: Vec3,
-    pub root_rotation: PackedQuatI16,
-    pub bodies: Vec<RagdollBodyPose>,
-}
-
-/// One NPC ragdoll pose sample.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct NpcRagdollPoseSample {
-    pub npc_id: u64,
-    pub seq: u32,
-    pub root_position: Vec3,
-    pub root_rotation: PackedQuatI16,
-    pub bodies: Vec<RagdollBodyPose>,
-}
-
-/// Batched ragdoll pose samples streamed server -> client.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct NpcRagdollPoseBatch {
-    pub server_time_ms: u64,
-    pub samples: Vec<NpcRagdollPoseSample>,
-}
-
 /// Reliable channel for important messages.
 pub struct ReliableChannel;
 
 /// Unreliable channel for frequent input (lowest latency).
 pub struct InputChannel;
-
-/// Unreliable server->client channel for ragdoll pose snapshots.
-pub struct RagdollPoseChannel;
 
 #[cfg(test)]
 mod tests {
@@ -388,60 +269,5 @@ mod tests {
         assert!(bytes.len() <= 8);
     }
 
-    #[test]
-    fn packed_quat_roundtrip_stays_within_quantization_error() {
-        let q = Quat::from_rotation_y(1.1) * Quat::from_rotation_x(-0.37);
-        let packed = pack_quat_i16(q);
-        let decoded = unpack_quat_i16(packed);
-        let alignment = q.normalize().dot(decoded).abs();
-        assert!(alignment > 0.9999);
-    }
-
-    #[test]
-    fn npc_ragdoll_messages_roundtrip() {
-        let started = NpcRagdollStarted {
-            npc_id: 42,
-            archetype: NpcArchetype::Oilman,
-            started_at: 12.5,
-            root_position: Vec3::new(1.0, 2.0, 3.0),
-            root_rotation: pack_quat_i16(Quat::from_rotation_y(0.5)),
-            bodies: vec![
-                RagdollBodyPose {
-                    body: RagdollBodyId::Pelvis,
-                    position: Vec3::new(1.0, 0.8, 3.0),
-                    rotation: pack_quat_i16(Quat::IDENTITY),
-                },
-                RagdollBodyPose {
-                    body: RagdollBodyId::FootR,
-                    position: Vec3::new(1.2, 0.1, 3.1),
-                    rotation: pack_quat_i16(Quat::from_rotation_x(0.2)),
-                },
-            ],
-        };
-        let bytes = bincode::serialize(&started).unwrap();
-        let decoded: NpcRagdollStarted = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.npc_id, started.npc_id);
-        assert_eq!(decoded.archetype, started.archetype);
-        assert_eq!(decoded.bodies.len(), 2);
-        assert!(decoded
-            .bodies
-            .iter()
-            .any(|pose| pose.body == RagdollBodyId::FootR));
-
-        let batch = NpcRagdollPoseBatch {
-            server_time_ms: 1234,
-            samples: vec![NpcRagdollPoseSample {
-                npc_id: 42,
-                seq: 7,
-                root_position: Vec3::new(4.0, 5.0, 6.0),
-                root_rotation: pack_quat_i16(Quat::from_rotation_x(0.1)),
-                bodies: vec![],
-            }],
-        };
-        let batch_bytes = bincode::serialize(&batch).unwrap();
-        let batch_decoded: NpcRagdollPoseBatch = bincode::deserialize(&batch_bytes).unwrap();
-        assert_eq!(batch_decoded.server_time_ms, 1234);
-        assert_eq!(batch_decoded.samples[0].seq, 7);
-    }
 
 }

@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy_rapier3d::prelude::{Collider, RigidBody};
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use shared::components::{Npc, NpcPosition, Player, PlayerPosition};
+use shared::components::{Player, PlayerPosition};
 use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
 
 use crate::physics::layers;
@@ -118,23 +118,15 @@ fn desired_chunks_for_centers(centers: &[ChunkCoord], radius_chunks: i32) -> Has
     desired
 }
 
-fn gather_centers(
-    players: &Query<&PlayerPosition, With<Player>>,
-    npcs: &Query<&NpcPosition, With<Npc>>,
-) -> Vec<ChunkCoord> {
-    // Anchor chain: players -> NPCs -> origin. If both go away the collider set
-    // silently collapses to chunk (0,0) and long-range raycasts pass through hills
-    // with no error, so keep at least one live anchor.
+fn gather_centers(players: &Query<&PlayerPosition, With<Player>>) -> Vec<ChunkCoord> {
+    // DANGER: `PlayerPosition` is now the ONLY streaming anchor. If it ever stops being
+    // written (e.g. the commander entity loses it), this silently falls through to
+    // chunk (0,0): no crash, no log, but long-range raycasts pass straight through hills
+    // more than ~6 chunks from the origin. Keep a live anchor here.
     let mut centers = Vec::new();
 
     for pos in players.iter() {
         centers.push(ChunkCoord::from_world_pos(pos.0));
-    }
-
-    if centers.is_empty() {
-        for pos in npcs.iter().take(8) {
-            centers.push(ChunkCoord::from_world_pos(pos.0));
-        }
     }
 
     if centers.is_empty() {
@@ -152,11 +144,10 @@ pub fn sync_terrain_colliders(
     settings: Res<TerrainColliderSettings>,
     mut registry: ResMut<TerrainColliderRegistry>,
     players: Query<&PlayerPosition, With<Player>>,
-    npcs: Query<&NpcPosition, With<Npc>>,
 ) {
     let terrain_version = terrain.modification_version();
     let full_rebuild_version = terrain.full_rebuild_version();
-    let centers = gather_centers(&players, &npcs);
+    let centers = gather_centers(&players);
     let terrain_changed = registry.terrain_version != terrain_version;
     let full_rebuild_changed = registry.full_rebuild_version != full_rebuild_version;
     let resolution_changed = registry.heightfield_resolution != settings.heightfield_resolution;

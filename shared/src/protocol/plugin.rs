@@ -2,10 +2,8 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::components::{
-    ActiveMapState, CloudSeed, DebugPhysicsBox, DebugPhysicsBoxPosition, DebugPhysicsBoxRotation,
-    Health, Npc, NpcActivity, NpcFleeing, NpcIdentity, NpcPosition, NpcRotation, NpcVelocity,
-    Player, PlayerCharacter, PlayerJumpState, PlayerPosition, PlayerProgression, PlayerRotation,
-    PlayerVelocity, PlayerWaterState, WorldTime,
+    ActiveMapState, CloudSeed, Health, Player, PlayerCharacter, PlayerJumpState, PlayerPosition,
+    PlayerProgression, PlayerRotation, PlayerVelocity, PlayerWaterState, WorldTime,
 };
 use crate::terrain::TerrainDeltaChunk;
 
@@ -27,18 +25,6 @@ impl Plugin for ProtocolPlugin {
             .add_prediction();
         app.register_component::<PlayerCharacter>().add_prediction();
 
-        // === NPC COMPONENTS ===
-        app.register_component::<Npc>().add_prediction();
-        app.register_component::<NpcPosition>().add_prediction();
-        app.register_component::<NpcRotation>().add_prediction();
-        app.register_component::<NpcVelocity>().add_prediction();
-        app.register_component::<NpcActivity>().add_prediction();
-        app.register_component::<NpcFleeing>().add_prediction();
-        app.register_component::<DebugPhysicsBox>().add_prediction();
-        app.register_component::<DebugPhysicsBoxPosition>()
-            .add_prediction();
-        app.register_component::<DebugPhysicsBoxRotation>()
-            .add_prediction();
 
 
         // === HEALTH ===
@@ -49,8 +35,6 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<CloudSeed>().add_prediction();
         app.register_component::<ActiveMapState>().add_prediction();
 
-        // === NPC IDENTITY ===
-        app.register_component::<NpcIdentity>().add_prediction();
 
         // === TERRAIN DELTA CHUNKS ===
         app.register_component::<TerrainDeltaChunk>()
@@ -67,10 +51,6 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SetPlayerCharacter>()
             .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<SpawnOilmanDebug>()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<SpawnPhysicsBoxDebug>()
-            .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SubmitPlayerName>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<RequestPlayerRoster>()
@@ -80,10 +60,6 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<NameSubmissionResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<PlayerRoster>()
-            .add_direction(NetworkDirection::ServerToClient);
-        app.register_message::<NpcRagdollStarted>()
-            .add_direction(NetworkDirection::ServerToClient);
-        app.register_message::<NpcRagdollPoseBatch>()
             .add_direction(NetworkDirection::ServerToClient);
 
         // === CHANNELS ===
@@ -101,10 +77,5 @@ impl Plugin for ProtocolPlugin {
         // High-frequency input: client -> server only
         .add_direction(NetworkDirection::ClientToServer);
 
-        app.add_channel::<RagdollPoseChannel>(ChannelSettings {
-            mode: ChannelMode::UnorderedUnreliable,
-            ..default()
-        })
-        .add_direction(NetworkDirection::ServerToClient);
     }
 }

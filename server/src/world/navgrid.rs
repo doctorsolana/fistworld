@@ -1,4 +1,9 @@
-//! Obstacle grid synchronization.
+//! Navigation obstacle grid: keeps `SpatialObstacleGrid` in sync with authored buildings.
+//!
+//! Salvaged from the deleted NPC AI - it contains no unit types, it just expands each
+//! building footprint by its flatten radius into the shared spatial grid that
+//! `world::pathfinding` queries. Without it the grid stays permanently empty and
+//! "buildings block navigation" is silently lost.
 
 use bevy::prelude::*;
 use shared::spatial::{ObstacleEntry, SpatialObstacleGrid};

@@ -21,7 +21,7 @@ pub use state::*;
 use bevy::audio::{SpatialAudioSink, Volume};
 use bevy::prelude::*;
 use bevy::time::common_conditions::on_timer;
-use shared::components::{LocalPlayer, Npc, Player, PlayerPosition};
+use shared::components::{LocalPlayer, Player, PlayerPosition};
 use shared::terrain::{Biome, WorldTerrain};
 use std::time::Duration;
 

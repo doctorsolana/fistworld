@@ -110,7 +110,6 @@ pub fn sync_player_spatial_index(
             &PlayerPosition,
             Option<&crate::player::lifecycle::RespawnTimer>,
         ),
-        Without<shared::components::Npc>,
     >,
 ) {
     index.alive_cells.clear();

@@ -9,7 +9,6 @@ use shared::protocol::{
     get_server_bind_addr, NETCODE_CLIENT_TIMEOUT_SECS, PRIVATE_KEY, PROTOCOL_ID, SERVER_PORT,
 };
 
-use crate::ai;
 use crate::collision;
 use crate::net;
 use crate::world;
@@ -88,5 +87,4 @@ pub(crate) fn configure_bootstrap(app: &mut App) {
             .run_if(server_is_started),
     );
 
-    app.add_systems(Update, ai::spawn::spawn_npcs_once.run_if(server_is_started));
 }
