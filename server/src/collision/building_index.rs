@@ -43,6 +43,8 @@ impl BuildingSpatialIndex {
         )
     }
 
+    /// Spatial building lookup. Unused until units query cover/obstruction.
+    #[allow(dead_code)]
     pub fn collect_nearby_entities(&self, pos: Vec3, radius: f32, out: &mut Vec<Entity>) {
         out.clear();
 

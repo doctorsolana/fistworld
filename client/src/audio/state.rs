@@ -9,14 +9,9 @@ pub struct GameAudio {
     pub desert_ambient: Handle<AudioSource>,
 }
 
-/// Marker for ambient sound entities.
-#[derive(Component)]
-pub struct AmbientSound;
-
 /// Track audio state.
 #[derive(Resource, Default)]
 pub struct AudioState {
-    pub ambient_spawned: bool,
     pub assets_ready: bool,
 }
 

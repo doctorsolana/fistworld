@@ -19,7 +19,10 @@ use shared::terrain::WorldTerrain;
 /// packet cannot strand the server's streaming anchor.
 const VIEW_HEARTBEAT_SECS: f32 = 0.25;
 
-/// Network peer id of the local client.
+/// Network peer id of the local client, published on connect.
+///
+/// Not read yet — it is the hook for "which units are mine" once unit ownership exists.
+#[allow(dead_code)]
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct LocalPeerId(pub u64);
 

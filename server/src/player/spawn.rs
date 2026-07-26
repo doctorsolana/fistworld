@@ -18,7 +18,6 @@ use crate::persistence::profiles::PlayerProfiles;
 use crate::player::roster_cache::PlayerRosterCache;
 
 const PLAYER_REPLICATION_PRIORITY: f32 = 20.0;
-const VEHICLE_REPLICATION_PRIORITY: f32 = 5.0;
 
 fn resolve_map_spawn_position(terrain: &WorldTerrain) -> Vec3 {
     if let Some(spawn) = terrain.generator.loaded_map().definition.player_spawn {

@@ -15,6 +15,8 @@ pub struct PlayerEntityIndex {
 
 impl PlayerEntityIndex {
     #[inline]
+    /// Look up a commander entity by peer. Unused until unit ownership needs it.
+    #[allow(dead_code)]
     pub fn entity_for_peer(&self, peer_id: PeerId) -> Option<Entity> {
         self.by_peer.get(&peer_id).copied()
     }

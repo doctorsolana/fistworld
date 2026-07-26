@@ -7,6 +7,10 @@ use super::atmosphere::{
 use super::clouds::{setup_cloud_layers, CloudCover, CloudCoverOverride, CloudMaterialCache};
 use super::*;
 
+/// Near clip plane for the main 3D camera. Small so geometry close to the camera does
+/// not clip out when zoomed in.
+const CAMERA_NEAR_CLIP: f32 = 0.001;
+
 /// One-time rendering setup.
 pub fn setup_rendering(
     mut commands: Commands,
@@ -96,7 +100,7 @@ pub fn setup_rendering(
         scene_target_image,
     ));
     camera.insert(Projection::Perspective(PerspectiveProjection {
-        near: crate::camera::CAMERA_NEAR_CLIP,
+        near: CAMERA_NEAR_CLIP,
         ..default()
     }));
     camera.insert((

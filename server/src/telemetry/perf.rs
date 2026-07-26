@@ -114,6 +114,9 @@ impl ServerPerfMonitor {
         self.phase_max = [Duration::ZERO; Phase::COUNT];
     }
 
+    /// Nothing records collision time now that character resolution is gone, so the
+    /// `collision` phase reads 0.00 until the unit sim starts feeding it.
+    #[allow(dead_code)]
     pub fn record_collision_ms(&mut self, ms: f32) {
         if !self.enabled || ms <= 0.0 {
             return;

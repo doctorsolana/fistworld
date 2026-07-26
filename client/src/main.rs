@@ -2,7 +2,6 @@
 
 mod app_wiring;
 mod audio;
-mod camera;
 mod city;
 mod input;
 mod camera_rts;

@@ -23,7 +23,7 @@ pub fn cast_world_impact(
         max_distance,
         true,
         QueryFilter::new()
-            .groups(layers::bullet_world_query_groups())
+            .groups(layers::los_query_groups())
             .exclude_sensors(),
     )
 }
