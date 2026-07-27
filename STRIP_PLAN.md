@@ -257,13 +257,12 @@ terrain + props stream while moving · audio audible · F3 overlay renders · ed
 
 ---
 
-## Deferred decision — netcode model
+## Netcode model — DECIDED (2026-07-27)
 
-**Not decided, and does not block the strip.** Once the unit sim starts:
+**Server-authoritative with interest management.** Deterministic lockstep is ruled out:
+the game is a persistent, always-on multiplayer world, and lockstep cannot support players
+joining mid-game, logging off while their economy keeps running, or a server owning
+persistence.
 
-- **Deterministic lockstep** — exchange only commands; scales to thousands of units; requires a fully
-  deterministic sim (fixed-point or disciplined f32, seeded RNG, no map-iteration-order leaks).
-- **Server-authoritative + interest management** — reuses far more of the existing lightyear
-  replication; caps practical unit count much lower.
-
-Either way the connection/channel plumbing survives, which is why it is on the keep list.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design, including the
+two-tier (strategic/tactical) simulation that this scale requires.

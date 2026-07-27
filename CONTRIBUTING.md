@@ -134,14 +134,14 @@ Add regression tests when fixing:
 - Tests and checks pass; the tree has no new warnings.
 - Docs updated when architecture, protocol, or workflow changes.
 
-## Open Architecture Decision
+## Architecture
 
-The netcode model for the unit simulation is **not decided**, and it shapes almost everything:
+The netcode model is **decided**: server-authoritative with interest management, not
+deterministic lockstep. The simulation is **two-tier** (a cheap always-on strategic layer
+and a 60 Hz tactical layer, with entities promoted/demoted between them), and **regions**
+are the single primitive for political ownership, interest management, simulation LOD and
+persistence.
 
-- **Deterministic lockstep** — clients exchange only commands and simulate identically. Scales to
-  thousands of units on tiny bandwidth, but requires a fully deterministic sim: fixed-point or very
-  disciplined f32, seeded RNG (`shared/src/rng.rs`), and no `HashMap` iteration-order leaks.
-- **Server-authoritative + interest management** — reuses the existing lightyear replication and the
-  commander view as the interest anchor, but caps practical unit counts much lower.
-
-Do not add unit-simulation code that silently assumes one of these before it is chosen.
+Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before writing simulation code. In
+particular: the strategic tick runs for the entire world forever, so it must contain no
+pathfinding, no physics and nothing per-soldier.
