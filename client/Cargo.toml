@@ -6,6 +6,12 @@ edition = "2021"
 # is ambiguous without this. run.sh relies on it.
 default-run = "client"
 
+[features]
+# Iteration speed: links Bevy as a shared library so a code change relinks in seconds
+# instead of rebuilding the whole binary. Dev only - never ship with this on.
+#   cargo run -p client --features dev
+dev = ["bevy/dynamic_linking"]
+
 [dependencies]
 bevy = { workspace = true }
 lightyear = { workspace = true }

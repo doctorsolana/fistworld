@@ -722,7 +722,16 @@ fn scatter_props(
     // factor, so forests stay denser than scrub, and rolling the (cheap) thin
     // test before the (expensive) noise lookups makes the full sweep cost less
     // than the truncated one did.
-    const PROP_BUDGET: usize = 6500;
+    // Density, not a fixed count. A flat 6500 was tuned for a 2816m map and left an 8km
+    // world at ~97 props/km² — visibly empty. Cost is per-radius (the client streams props
+    // around the camera), so density is what matters for frame time; the absolute total
+    // only drives map.ron size. Clustering from the forest mask means real forests come out
+    // far denser than this average.
+    const PROPS_PER_KM2: f32 = 1_100.0;
+    /// Ceiling on total props so map.ron stays a manageable size (~190 bytes each).
+    const PROP_HARD_CAP: usize = 90_000;
+    let area_km2 = (half_extent * 2.0 / 1000.0).powi(2);
+    let prop_budget = ((PROPS_PER_KM2 * area_km2) as usize).min(PROP_HARD_CAP);
     const ESTIMATE_STRIDE: i32 = 7;
     let mut sampled = 0usize;
     let mut hits = 0usize;
@@ -742,9 +751,9 @@ fn scatter_props(
         return Vec::new();
     }
     let estimated = hits as f32 * (cells as f32 * cells as f32) / sampled as f32;
-    let keep = (PROP_BUDGET as f32 / estimated).min(1.0);
+    let keep = (prop_budget as f32 / estimated).min(1.0);
 
-    let capacity = estimated.min(PROP_BUDGET as f32) as usize;
+    let capacity = estimated.min(prop_budget as f32) as usize;
     let mut out: Vec<MapObjectSpawn> = Vec::with_capacity(capacity);
     for zi in 0..cells {
         for xi in 0..cells {

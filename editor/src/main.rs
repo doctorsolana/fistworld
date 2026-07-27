@@ -1,14 +1,5 @@
-mod app;
-mod camera;
-mod city;
-mod lighting;
-mod picking;
-mod session;
-mod terrain_material;
-mod tools;
-mod ui;
-mod worldgen;
+//! Map editor. Everything lives in `lib.rs` so `src/bin/` can reuse it.
 
 fn main() {
-    app::run();
+    editor::app::run();
 }
