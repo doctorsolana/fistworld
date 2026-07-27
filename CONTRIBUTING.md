@@ -34,8 +34,19 @@ Current domains:
 - `client`: `terrain`, `props`, `water`, `render`, `ui`, `audio`, `camera_rts`, `perf_overlay`, `city`
 - `server`: `world` (tick, map state, navgrid, pathfinding), `physics`, `collision`, `net`, `player`,
   `persistence`, `telemetry`, `city`
-- `shared`: `terrain`, `map`, `city`, `building`, `props`, `protocol`, `components`, `spatial`, `physics`, `rng`
+- `shared`: `terrain`, `map`, `city`, `building`, `props`, `protocol`, `components`, `spatial`, `physics`, `rng`, `worldgen`
 - `editor`: `tools`, `ui`, `worldgen`, `city`, `camera`, `session`
+
+**Generated worlds are recipes, not data (the Valheim model).** A generated map stores
+`generated: (style, seed, half_extent, road strokes)` in `map.ron` — a few KB — and every
+binary rebuilds the identical terrain grid from it at load time via `shared::worldgen`
+(`GeneratedWorld::build_grid`). Surface paint is computed procedurally from the same formula
+(`TerrainGenerator::get_surface_weights`); `edits.ron` holds only sparse hand edits, which
+still layer on top (deltas over the generated base, baked weightmaps over the procedural
+paint). Never bake generated terrain into `edits.ron` — that was 644MB for an 8km map and
+scales quadratically. Rules for code in `shared::worldgen`: all randomness derives from the
+world seed via `splitmix64`, and any step that reads grid state mutated by an earlier step
+must be recorded in the recipe (see `FlattenStroke`) instead of recomputed.
 
 ## Cross-Crate Feature Workflow
 

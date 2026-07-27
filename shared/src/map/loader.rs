@@ -22,6 +22,9 @@ pub struct LoadedMap {
     pub edits: MapEditsDefinition,
     pub terrain_deltas_by_chunk: HashMap<ChunkCoord, TerrainDeltaData>,
     pub objects_by_chunk: HashMap<(i32, i32), Vec<ResolvedMapObject>>,
+    /// Road-distance mask rebuilt from the generated-world recipe; drives
+    /// procedural surface painting. `None` for hand-authored maps.
+    pub road_mask: Option<std::sync::Arc<crate::worldgen::RoadMask>>,
     pub content_hash: u64,
     pub map_dir: PathBuf,
 }
@@ -184,26 +187,47 @@ fn build_loaded_map(
 
     validate_object_scene_assets(&map_dir, &definition.map_id, &definition.objects)?;
 
-    let heightmap_path =
-        resolve_map_relative_file(&map_dir, &definition.map_id, &definition.terrain.heightmap)
-            .ok_or_else(|| {
-                format!(
-                    "Could not locate heightmap '{}' for map '{}'",
-                    definition.terrain.heightmap, definition.map_id
-                )
-            })?;
+    // Generated worlds rebuild their terrain from the seed recipe — the
+    // Valheim model. Hand-authored maps still decode a heightmap image.
+    let (heightmap, heightmap_bytes, road_mask) = if let Some(generated) = &definition.generated {
+        let started = std::time::Instant::now();
+        let heightmap =
+            generated.build_heightmap(definition.bounds, definition.terrain.water_level)?;
+        let road_mask = generated.build_road_mask().map(std::sync::Arc::new);
+        bevy::log::info!(
+            "Rebuilt '{}' terrain from seed {} ({}x{} grid) in {:.2}s",
+            definition.map_id,
+            generated.seed,
+            heightmap.width,
+            heightmap.height,
+            started.elapsed().as_secs_f32(),
+        );
+        // The recipe lives inside map.ron, so map_bytes already covers it
+        // for the content hash; there are no heightmap bytes to hash.
+        (heightmap, Vec::new(), road_mask)
+    } else {
+        let heightmap_path =
+            resolve_map_relative_file(&map_dir, &definition.map_id, &definition.terrain.heightmap)
+                .ok_or_else(|| {
+                    format!(
+                        "Could not locate heightmap '{}' for map '{}'",
+                        definition.terrain.heightmap, definition.map_id
+                    )
+                })?;
 
-    let heightmap_bytes = fs::read(&heightmap_path)
-        .map_err(|err| format!("Failed to read {}: {err}", heightmap_path.display()))?;
+        let heightmap_bytes = fs::read(&heightmap_path)
+            .map_err(|err| format!("Failed to read {}: {err}", heightmap_path.display()))?;
 
-    let heightmap = decode_heightmap(
-        &heightmap_path,
-        &heightmap_bytes,
-        definition.bounds,
-        definition.terrain.height_min,
-        definition.terrain.height_max,
-        definition.terrain.water_level,
-    )?;
+        let heightmap = decode_heightmap(
+            &heightmap_path,
+            &heightmap_bytes,
+            definition.bounds,
+            definition.terrain.height_min,
+            definition.terrain.height_max,
+            definition.terrain.water_level,
+        )?;
+        (heightmap, heightmap_bytes, None)
+    };
 
     if let Some(minimap_rel) = definition.terrain.minimap.as_deref() {
         let _ = resolve_map_relative_file(&map_dir, &definition.map_id, minimap_rel).ok_or_else(
@@ -229,6 +253,7 @@ fn build_loaded_map(
         edits,
         terrain_deltas_by_chunk,
         objects_by_chunk,
+        road_mask,
         content_hash,
         map_dir,
     })
@@ -389,6 +414,80 @@ fn decode_heightmap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Valheim-mode fidelity guarantee: a generated map loaded through
+    /// the normal loader must sample bit-for-bit like the generation grid,
+    /// including replayed road strokes — no PNG or baked deltas involved.
+    #[test]
+    fn loaded_generated_map_matches_generation_grid() {
+        use crate::worldgen::{GeneratedWorld, WorldStyle};
+        use bevy::prelude::Vec2;
+
+        let half = 512.0;
+        let base = GeneratedWorld {
+            style: WorldStyle::Showcase,
+            seed: 2026,
+            half_extent: half,
+            strokes: Vec::new(),
+        };
+        // Record a road stroke the way generation does: flatten the live grid.
+        let mut grid = base.build_grid();
+        let path: Vec<Vec2> = (0..10)
+            .map(|i| Vec2::new(-180.0 + i as f32 * 40.0, (i as f32 * 0.9).cos() * 50.0))
+            .collect();
+        let stroke = grid.flatten_along_path(&path, 7.0, 16.0).unwrap();
+        let recipe = GeneratedWorld {
+            strokes: vec![stroke],
+            ..base
+        };
+
+        let definition = MapDefinition {
+            map_id: "gen_roundtrip".to_string(),
+            bounds: MapBounds {
+                min: [-half, -half],
+                max: [half, half],
+            },
+            terrain: crate::map::MapTerrain {
+                heightmap: "height.png".to_string(), // ignored for generated maps
+                minimap: None,
+                water_level: Some(0.0),
+                height_min: -20.0,
+                height_max: 120.0,
+            },
+            generated: Some(recipe),
+            player_spawn: None,
+            objects: Vec::new(),
+            blockers: Vec::new(),
+        };
+
+        // No height.png, no edits.ron, no map dir contents — the recipe alone.
+        let loaded = load_map_from_parts(
+            Path::new("does_not_exist"),
+            &definition,
+            &MapEditsDefinition::default(),
+        )
+        .expect("generated map must load without any baked terrain files");
+
+        assert!(loaded.road_mask.is_some(), "road mask must rebuild from strokes");
+        for (x, z) in [
+            (0.0, 0.0),
+            (-180.0, 50.0),
+            (100.0, -37.5),
+            (505.0, 505.0),
+            (-511.0, 3.3),
+        ] {
+            let expected = grid.height(x, z);
+            let got = loaded.heightmap.sample_height(x, z);
+            // Not bit-compared: HeightmapData interpolates via a cached
+            // reciprocal, so off-lattice samples can differ by an ULP. What
+            // must be bit-exact is the rebuilt grid itself across binaries,
+            // which the worldgen determinism test covers.
+            assert!(
+                (expected - got).abs() < 1e-3,
+                "loader/generation divergence at ({x},{z}): {expected} vs {got}"
+            );
+        }
+    }
 
     #[test]
     fn objects_are_indexed_by_chunk_and_resolved_once() {

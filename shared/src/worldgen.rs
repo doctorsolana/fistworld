@@ -1,0 +1,957 @@
+//! Seed-based world generation — the Valheim model.
+//!
+//! A generated world is not shipped as data; it is shipped as a *recipe*
+//! ([`GeneratedWorld`]): a style, a seed, the map size, and the handful of
+//! road-flattening strokes whose beds depended on grid state at generation
+//! time. Everything else — coastline, mountains, rivers, beaches, lakes —
+//! is a pure function of the seed and is rebuilt identically at load time
+//! by every binary (client, server, editor) running this exact code.
+//!
+//! That turns a 644MB baked `edits.ron` into a few KB of RON, and it means
+//! map size no longer scales file size: an 8km and a 40km world are the
+//! same handful of numbers on disk.
+//!
+//! Height recipe (see Red Blob Games "terrain from noise" + Inigo Quilez
+//! domain warping):
+//!  - domain-warped fBm with amplitude tail [1, 1/2, 1/3, 1/4, 1/5]
+//!  - exponent redistribution (e^3) so terrain has valleys and peaks
+//!    instead of uniform bumps
+//!  - ridged noise blended in on a mountain mask for ranges
+//!  - island: square-bump distance mask sinks the map edge into ocean;
+//!    mainland: a warped directional gradient forms one coastline
+//!  - beach shelf: heights near sea level are compressed, producing wide
+//!    walkable beaches and shallow wading water
+//!  - rivers: meandering carved channels with monotonically descending
+//!    beds, guaranteed to reach the sea — planned from `raw_height` only,
+//!    so they are recomputable from the seed
+//!
+//! Determinism rules for anything that lives here:
+//!  - all randomness must come from [`splitmix64`]/[`rand01`] seeded from
+//!    the world seed — never from thread RNG or time
+//!  - any operation that reads grid state produced by an *earlier* mutation
+//!    must either be replayed in the same order or have its result stored
+//!    in the recipe ([`FlattenStroke`] stores its smoothed beds for exactly
+//!    this reason)
+
+use bevy::prelude::*;
+use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
+use serde::{Deserialize, Serialize};
+
+use crate::map::{HeightmapData, MapBounds};
+use crate::terrain::VERTEX_SPACING;
+
+pub const SEA_LEVEL: f32 = 0.0;
+
+// ============================================================================
+// The recipe
+// ============================================================================
+
+/// Everything needed to rebuild a generated world's terrain from scratch.
+/// Stored in `map.ron`; a few KB regardless of map size.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GeneratedWorld {
+    pub style: WorldStyle,
+    pub seed: u64,
+    /// Half the map edge length in metres. Must agree with the map bounds;
+    /// stored so the recipe is self-contained and the mismatch is detectable.
+    pub half_extent: f32,
+    /// Road corridors flattened into the terrain, in application order.
+    /// These are the ONLY part of generation that reads grid state (their
+    /// beds are smoothed from already-carved terrain), so they are recorded
+    /// rather than recomputed.
+    #[serde(default)]
+    pub strokes: Vec<FlattenStroke>,
+}
+
+impl GeneratedWorld {
+    /// Rebuild the full terrain grid: noise field → carve rivers → beach
+    /// shelf → replay road strokes. Deterministic; identical in every binary.
+    pub fn build_grid(&self) -> HeightGrid {
+        let field = HeightField::new(self.style, self.seed, self.half_extent);
+        let mut grid = HeightGrid::build(&field, self.half_extent);
+        for stroke in &self.strokes {
+            grid.apply_flatten(stroke);
+        }
+        grid
+    }
+
+    /// Rebuild the terrain and package it as the runtime sampling grid.
+    pub fn build_heightmap(
+        &self,
+        bounds: MapBounds,
+        water_level: Option<f32>,
+    ) -> Result<HeightmapData, String> {
+        let half_w = bounds.width() * 0.5;
+        let half_d = bounds.depth() * 0.5;
+        if (half_w - self.half_extent).abs() > 0.5 || (half_d - self.half_extent).abs() > 0.5 {
+            return Err(format!(
+                "generated world half_extent {} does not match map bounds {}x{}",
+                self.half_extent,
+                bounds.width(),
+                bounds.depth()
+            ));
+        }
+        let grid = self.build_grid();
+        Ok(grid.into_heightmap(bounds, water_level))
+    }
+
+    /// Rebuild the road-distance mask from the recorded strokes. `None` when
+    /// the world has no roads (island/mainland styles).
+    pub fn build_road_mask(&self) -> Option<RoadMask> {
+        if self.strokes.is_empty() {
+            return None;
+        }
+        let mut mask = RoadMask::new(self.half_extent, 4.0);
+        for stroke in &self.strokes {
+            let points: Vec<Vec2> = stroke.points.iter().map(|p| Vec2::new(p[0], p[1])).collect();
+            mask.stamp_path(&points, stroke.mask_influence);
+        }
+        Some(mask)
+    }
+}
+
+/// One recorded road-flattening pass: the polyline, the smoothed bed height
+/// at each point (captured at generation time), and the corridor widths.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FlattenStroke {
+    pub points: Vec<[f32; 2]>,
+    pub beds: Vec<f32>,
+    pub road_half: f32,
+    pub blend: f32,
+    /// Radius stamped into the road mask for surface painting (cobble +
+    /// dirt shoulder). Comfortably wider than the paint bands it feeds.
+    #[serde(default = "default_mask_influence")]
+    pub mask_influence: f32,
+}
+
+fn default_mask_influence() -> f32 {
+    26.0
+}
+
+// ============================================================================
+// Seeded noise helpers
+// ============================================================================
+
+pub fn splitmix64(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+pub fn rand01(state: &mut u64) -> f32 {
+    *state = splitmix64(*state);
+    ((*state >> 40) as f32) / ((1u64 << 24) as f32)
+}
+
+pub fn fbm(seed: u32, octaves: usize, frequency: f64) -> Fbm<Perlin> {
+    Fbm::<Perlin>::new(seed)
+        .set_octaves(octaves)
+        .set_frequency(frequency)
+        .set_lacunarity(2.05)
+        .set_persistence(0.5)
+}
+
+// ============================================================================
+// World styles
+// ============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorldStyle {
+    /// One large island ringed by ocean and beaches.
+    Island,
+    /// A mainland with one coastline, rivers, and highlands.
+    Mainland,
+    /// The showcase world: a mountain range, a great bay with beaches, an
+    /// offshore archipelago, inland lakes, rivers, a harbour village, and a
+    /// road network that winds through the valleys to connect it all.
+    Showcase,
+}
+
+impl WorldStyle {
+    pub fn label(&self) -> &'static str {
+        match self {
+            WorldStyle::Island => "Island",
+            WorldStyle::Mainland => "Mainland",
+            WorldStyle::Showcase => "Great Open World",
+        }
+    }
+}
+
+/// One offshore island: center, radius, peak height.
+#[derive(Clone, Copy)]
+pub struct IslandSeed {
+    pub center: Vec2,
+    pub radius: f32,
+    pub height: f32,
+}
+
+/// An inland basin pushed below sea level — renders as a lake against the
+/// global water plane.
+#[derive(Clone, Copy)]
+pub struct LakeSeed {
+    pub center: Vec2,
+    pub radius: f32,
+    pub depth: f32,
+}
+
+// ============================================================================
+// Height field: pure functions of the seed
+// ============================================================================
+
+pub struct HeightField {
+    pub style: WorldStyle,
+    pub half_extent: f32,
+    warp_x: Fbm<Perlin>,
+    warp_z: Fbm<Perlin>,
+    base: Fbm<Perlin>,
+    ridge: Fbm<Perlin>,
+    mountain_mask: Fbm<Perlin>,
+    coast_wobble: Fbm<Perlin>,
+    /// Mainland: unit direction pointing toward the ocean side.
+    pub coast_dir: Vec2,
+    pub rivers: Vec<Vec<Vec3>>, // polylines: (x, bed_height, z)
+    // --- Showcase-only shaping ---
+    /// Direction the mountain spine runs along, and its offset from center.
+    pub range_dir: Vec2,
+    pub range_offset: f32,
+    /// Center of the flat coastal plain where the village sits.
+    pub plains_center: Vec2,
+    pub islands: Vec<IslandSeed>,
+    pub lakes: Vec<LakeSeed>,
+}
+
+impl HeightField {
+    pub fn new(style: WorldStyle, seed: u64, half_extent: f32) -> Self {
+        let s = |n: u64| splitmix64(seed ^ n) as u32;
+        let rng = splitmix64(seed ^ 0xC0A5);
+        let coast_angle = ((rng >> 32) as f32 / u32::MAX as f32) * std::f32::consts::TAU;
+        let mut field = Self {
+            style,
+            half_extent,
+            warp_x: fbm(s(1), 4, 1.0 / 420.0),
+            warp_z: fbm(s(2), 4, 1.0 / 420.0),
+            base: fbm(s(3), 5, 1.0 / 300.0),
+            ridge: fbm(s(4), 4, 1.0 / 180.0),
+            mountain_mask: fbm(s(5), 3, 1.0 / 520.0),
+            coast_wobble: fbm(s(6), 3, 1.0 / 240.0),
+            coast_dir: Vec2::new(coast_angle.cos(), coast_angle.sin()),
+            rivers: Vec::new(),
+            range_dir: Vec2::X,
+            range_offset: 0.0,
+            plains_center: Vec2::ZERO,
+            islands: Vec::new(),
+            lakes: Vec::new(),
+        };
+
+        if style == WorldStyle::Showcase {
+            let mut rng = splitmix64(seed ^ 0x5AFE_C0DE);
+            // Mountain spine runs roughly perpendicular to the coast, set
+            // back inland so there is room for plains and beaches.
+            let range_angle =
+                coast_angle + std::f32::consts::FRAC_PI_2 + (rand01(&mut rng) - 0.5) * 0.7;
+            field.range_dir = Vec2::new(range_angle.cos(), range_angle.sin());
+            field.range_offset = (rand01(&mut rng) - 0.35) * half_extent * 0.5;
+            // Village plain: inland of the coast, away from the spine.
+            field.plains_center = -field.coast_dir * half_extent * 0.28
+                + Vec2::new(-field.coast_dir.y, field.coast_dir.x)
+                    * (rand01(&mut rng) - 0.5)
+                    * half_extent
+                    * 0.5;
+
+            // Archipelago: islands scattered out at sea beyond the coast.
+            let island_count = 4 + (rand01(&mut rng) * 4.0) as usize;
+            for _ in 0..island_count {
+                let out = half_extent * (0.62 + rand01(&mut rng) * 0.34);
+                let lateral = (rand01(&mut rng) - 0.5) * half_extent * 1.5;
+                let center = field.coast_dir * out
+                    + Vec2::new(-field.coast_dir.y, field.coast_dir.x) * lateral;
+                field.islands.push(IslandSeed {
+                    center,
+                    radius: half_extent * (0.05 + rand01(&mut rng) * 0.10),
+                    height: 8.0 + rand01(&mut rng) * 26.0,
+                });
+            }
+
+            // Inland lakes: basins dropped below the water plane.
+            let lake_count = 1 + (rand01(&mut rng) * 2.0) as usize;
+            for _ in 0..lake_count {
+                let angle = rand01(&mut rng) * std::f32::consts::TAU;
+                let dist = half_extent * (0.15 + rand01(&mut rng) * 0.35);
+                field.lakes.push(LakeSeed {
+                    center: -field.coast_dir * half_extent * 0.15
+                        + Vec2::new(angle.cos(), angle.sin()) * dist,
+                    radius: half_extent * (0.05 + rand01(&mut rng) * 0.06),
+                    depth: 5.0 + rand01(&mut rng) * 6.0,
+                });
+            }
+        }
+
+        field.rivers = field.plan_rivers(seed);
+        field
+    }
+
+    /// Raw (pre-river, pre-shelf) elevation in meters.
+    pub fn raw_height(&self, x: f32, z: f32) -> f32 {
+        // Domain warp: sample the noise field at an offset driven by more
+        // noise — turns blobby fBm into flowing, organic landforms.
+        let wx = self.warp_x.get([x as f64, z as f64]) as f32;
+        let wz = self.warp_z.get([x as f64, z as f64]) as f32;
+        let px = (x + wx * 90.0) as f64;
+        let pz = (z + wz * 90.0) as f64;
+
+        // Base rolling terrain, redistributed so mid-heights sink into
+        // valleys (Red Blob: pow(e, 3) with a small fudge factor).
+        let e = (self.base.get([px, pz]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
+        let base = (e * 1.2).powf(3.0).min(1.0);
+
+        // Ridged mountains, only where the mountain mask allows.
+        let ridge_raw = self.ridge.get([px, pz]) as f32;
+        let ridge = (1.0 - ridge_raw.abs()).powi(2);
+        let mask = ((self.mountain_mask.get([px, pz]) as f32 + 0.15) * 1.4).clamp(0.0, 1.0);
+        let mountains = ridge * mask * mask;
+
+        let height = base * 20.0 + mountains * 30.0;
+
+        if self.style == WorldStyle::Showcase {
+            return self.showcase_height(x, z, base, ridge);
+        }
+
+        // Shape against the sea.
+        let shape = match self.style {
+            WorldStyle::Island => {
+                // Square-bump distance mask: 1 at center, 0 at the border,
+                // with a wobbled radius so the coast isn't a perfect ring.
+                let nx = (x / self.half_extent).clamp(-1.0, 1.0);
+                let nz = (z / self.half_extent).clamp(-1.0, 1.0);
+                let d = 1.0 - (1.0 - nx * nx) * (1.0 - nz * nz);
+                let wobble = self.coast_wobble.get([x as f64, z as f64]) as f32 * 0.16;
+                1.0 - (d * 1.35 + wobble).clamp(0.0, 1.0)
+            }
+            // Showcase returns earlier; this arm keeps the match exhaustive.
+            WorldStyle::Mainland | WorldStyle::Showcase => {
+                // Signed distance to a wobbled coastline across the map.
+                let along = (Vec2::new(x, z).dot(self.coast_dir)) / self.half_extent;
+                let wobble = self.coast_wobble.get([x as f64, z as f64]) as f32 * 0.35;
+                // > 0 inland, < 0 out at sea.
+                (0.55 - along + wobble).clamp(0.0, 1.0).powf(0.65)
+            }
+        };
+
+        // Blend: interiors keep their height, coasts sink below sea level.
+        height * shape + (shape - 0.35) * 14.0
+    }
+
+    /// The showcase composition: coastal plains, a ridged mountain spine,
+    /// a great bay, an offshore archipelago, and inland lake basins.
+    fn showcase_height(&self, x: f32, z: f32, base: f32, ridge: f32) -> f32 {
+        let p = Vec2::new(x, z);
+        let half = self.half_extent;
+
+        // --- Coastline: land inland, ocean beyond, with a wide curved bay ---
+        let along = p.dot(self.coast_dir) / half;
+        let coast_wobble = self.coast_wobble.get([x as f64, z as f64]) as f32 * 0.30;
+        // Bay: a big smooth bite taken out of the coast.
+        let lateral = p.dot(Vec2::new(-self.coast_dir.y, self.coast_dir.x)) / half;
+        let bay = (-(lateral * lateral) / 0.18).exp() * 0.30;
+        let landness = (0.42 - along + coast_wobble - bay).clamp(-1.0, 1.0);
+
+        // --- Mountain spine: ridged noise inside a band along range_dir ---
+        let across_range =
+            (p.dot(Vec2::new(-self.range_dir.y, self.range_dir.x)) - self.range_offset) / half;
+        let spine_wobble = self.mountain_mask.get([x as f64 * 0.6, z as f64 * 0.6]) as f32 * 0.22;
+        let band = (-((across_range + spine_wobble) * (across_range + spine_wobble)) / 0.055).exp();
+        // Only build mountains on land, and taper them toward the coast.
+        let inland = landness.max(0.0).powf(0.6);
+        let spine = ridge.powf(1.35) * band * inland;
+
+        // --- Coastal plain around the village: flatten a soft disc ---
+        let plain_d = p.distance(self.plains_center) / (half * 0.22);
+        let plain_flat = (1.0 - plain_d.clamp(0.0, 1.0)).powf(1.6);
+
+        // Assemble the land surface.
+        let rolling = base * 16.0 + (1.0 - band) * base * 10.0;
+        let mut height = rolling + spine * 78.0;
+        // Flatten toward a gentle 3.5m shelf where the village sits.
+        height = height * (1.0 - plain_flat * 0.85) + 3.5 * plain_flat * 0.85;
+
+        // Sink everything seaward of the coastline.
+        height = height * landness.max(0.0).powf(0.75) + landness * 16.0;
+
+        // --- Offshore islands: radial bumps rising out of the sea floor ---
+        for island in &self.islands {
+            let d = p.distance(island.center) / island.radius;
+            if d < 1.6 {
+                let falloff = (1.0 - (d / 1.6).clamp(0.0, 1.0)).powf(2.0);
+                // Island tops get their own ridged detail so they aren't domes.
+                let detail = 0.75 + 0.25 * ridge;
+                height += island.height * falloff * detail;
+            }
+        }
+
+        // --- Inland lake basins: carve below the water plane ---
+        for lake in &self.lakes {
+            let d = p.distance(lake.center) / lake.radius;
+            if d < 1.5 {
+                let bowl = (1.0 - (d / 1.5).clamp(0.0, 1.0)).powf(1.5);
+                height -= (lake.depth + 4.0) * bowl;
+            }
+        }
+
+        height
+    }
+
+    /// Plan meandering rivers with monotonically descending beds that end
+    /// below sea level (mainland gets 2-3, island gets 0-1 short streams).
+    /// Reads only `raw_height`, so rivers are recomputable from the seed.
+    pub fn plan_rivers(&self, seed: u64) -> Vec<Vec<Vec3>> {
+        let mut rng = splitmix64(seed ^ 0x11FE);
+        let count = match self.style {
+            WorldStyle::Mainland => 2 + (rand01(&mut rng) * 2.0) as usize,
+            WorldStyle::Island => (rand01(&mut rng) * 2.0) as usize,
+            // Several rivers draining the spine toward the bay.
+            WorldStyle::Showcase => 3 + (rand01(&mut rng) * 3.0) as usize,
+        };
+
+        let mut rivers = Vec::new();
+        for _ in 0..count {
+            // Start high inland; flow toward the sea.
+            let interior = self.half_extent * 0.45;
+            let mut pos = match self.style {
+                WorldStyle::Mainland => {
+                    // Opposite the coast, offset laterally.
+                    let lateral = Vec2::new(-self.coast_dir.y, self.coast_dir.x);
+                    -self.coast_dir * interior
+                        + lateral * ((rand01(&mut rng) - 0.5) * self.half_extent * 1.2)
+                }
+                WorldStyle::Island => {
+                    let a = rand01(&mut rng) * std::f32::consts::TAU;
+                    Vec2::new(a.cos(), a.sin()) * self.half_extent * 0.25
+                }
+                WorldStyle::Showcase => {
+                    // Springs along the mountain spine.
+                    let across = Vec2::new(-self.range_dir.y, self.range_dir.x);
+                    across * self.range_offset
+                        + self.range_dir * ((rand01(&mut rng) - 0.5) * self.half_extent * 1.4)
+                }
+            };
+            let flow_dir = match self.style {
+                WorldStyle::Mainland | WorldStyle::Showcase => self.coast_dir,
+                WorldStyle::Island => pos.normalize_or(Vec2::X),
+            };
+
+            let start_height = (self.raw_height(pos.x, pos.y) - 1.5).max(SEA_LEVEL + 4.0);
+            let mut bed = start_height;
+            let mut points: Vec<Vec3> = vec![Vec3::new(pos.x, bed, pos.y)];
+            let meander_seed = rand01(&mut rng) * 100.0;
+
+            for step in 0..220 {
+                // Meander: base flow direction plus a slowly turning sine.
+                let wiggle = ((step as f32 * 0.11) + meander_seed).sin() * 0.85;
+                let lateral = Vec2::new(-flow_dir.y, flow_dir.x);
+                let dir = (flow_dir + lateral * wiggle * 0.55).normalize_or(flow_dir);
+                pos += dir * 9.0;
+                // The bed only ever descends; slope eases as it nears the sea.
+                let fall = if bed > SEA_LEVEL + 2.0 { 0.28 } else { 0.12 };
+                bed -= fall;
+                points.push(Vec3::new(pos.x, bed, pos.y));
+                if bed < SEA_LEVEL - 2.5
+                    || pos.x.abs() > self.half_extent * 1.02
+                    || pos.y.abs() > self.half_extent * 1.02
+                {
+                    break;
+                }
+            }
+            if points.len() > 8 {
+                rivers.push(points);
+            }
+        }
+        rivers
+    }
+}
+
+// ============================================================================
+// Height grid: the terrain cached on the 2m vertex lattice
+// ============================================================================
+
+/// Heights cached on the 2m terrain vertex grid: noise is evaluated once per
+/// vertex, rivers are carved directly into the grid, and every consumer
+/// (runtime sampling, paint, props, spawn) reads from here. Keeps generation
+/// at a few seconds instead of minutes of redundant noise evaluation.
+pub struct HeightGrid {
+    min: f32,
+    spacing: f32,
+    size: usize,
+    data: Vec<f32>,
+}
+
+impl HeightGrid {
+    pub fn build(field: &HeightField, half_extent: f32) -> Self {
+        let min = -half_extent;
+        let spacing = VERTEX_SPACING;
+        let size = ((half_extent * 2.0) / spacing) as usize + 1;
+        let mut data = vec![0.0f32; size * size];
+
+        for zi in 0..size {
+            for xi in 0..size {
+                let x = min + xi as f32 * spacing;
+                let z = min + zi as f32 * spacing;
+                data[zi * size + xi] = field.raw_height(x, z);
+            }
+        }
+
+        let mut grid = Self {
+            min,
+            spacing,
+            size,
+            data,
+        };
+        grid.carve_rivers(field);
+        grid.apply_beach_shelf();
+        grid
+    }
+
+    /// Stamp each river's descending bed into the grid.
+    fn carve_rivers(&mut self, field: &HeightField) {
+        const RIVER_HALF_WIDTH: f32 = 5.0;
+        const BANK_WIDTH: f32 = 16.0;
+        let influence = RIVER_HALF_WIDTH + BANK_WIDTH;
+
+        for river in &field.rivers {
+            for window in river.windows(2) {
+                let a = window[0];
+                let b = window[1];
+                let min_x = a.x.min(b.x) - influence;
+                let max_x = a.x.max(b.x) + influence;
+                let min_z = a.z.min(b.z) - influence;
+                let max_z = a.z.max(b.z) + influence;
+                let xi0 = (((min_x - self.min) / self.spacing).floor().max(0.0)) as usize;
+                let zi0 = (((min_z - self.min) / self.spacing).floor().max(0.0)) as usize;
+                let xi1 = ((((max_x - self.min) / self.spacing).ceil()) as usize).min(self.size - 1);
+                let zi1 = ((((max_z - self.min) / self.spacing).ceil()) as usize).min(self.size - 1);
+
+                let pa = Vec2::new(a.x, a.z);
+                let seg = Vec2::new(b.x, b.z) - pa;
+                let len_sq = seg.length_squared().max(1e-6);
+
+                for zi in zi0..=zi1 {
+                    for xi in xi0..=xi1 {
+                        let p = Vec2::new(
+                            self.min + xi as f32 * self.spacing,
+                            self.min + zi as f32 * self.spacing,
+                        );
+                        let t = ((p - pa).dot(seg) / len_sq).clamp(0.0, 1.0);
+                        let dist = p.distance(pa + seg * t);
+                        if dist >= influence {
+                            continue;
+                        }
+                        let bed = a.y + (b.y - a.y) * t;
+                        let carve = if dist <= RIVER_HALF_WIDTH {
+                            1.0
+                        } else {
+                            let s = (dist - RIVER_HALF_WIDTH) / BANK_WIDTH;
+                            1.0 - (s * s * (3.0 - 2.0 * s))
+                        };
+                        let idx = zi * self.size + xi;
+                        let h = self.data[idx];
+                        let target = bed + (h - bed) * (1.0 - carve);
+                        if target < h {
+                            self.data[idx] = target;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Compress heights around sea level: wide beaches + shallow shelf.
+    fn apply_beach_shelf(&mut self) {
+        const BAND: f32 = 3.2;
+        for h in self.data.iter_mut() {
+            if *h > SEA_LEVEL - BAND && *h < SEA_LEVEL + BAND {
+                let t = (*h - SEA_LEVEL) / BAND;
+                *h = SEA_LEVEL + t * t * t.signum() * BAND * 0.55;
+            }
+        }
+    }
+
+    pub fn height(&self, x: f32, z: f32) -> f32 {
+        let fx = ((x - self.min) / self.spacing).clamp(0.0, (self.size - 1) as f32);
+        let fz = ((z - self.min) / self.spacing).clamp(0.0, (self.size - 1) as f32);
+        let x0 = fx.floor() as usize;
+        let z0 = fz.floor() as usize;
+        let x1 = (x0 + 1).min(self.size - 1);
+        let z1 = (z0 + 1).min(self.size - 1);
+        let tx = fx - x0 as f32;
+        let tz = fz - z0 as f32;
+        let h00 = self.data[z0 * self.size + x0];
+        let h10 = self.data[z0 * self.size + x1];
+        let h01 = self.data[z1 * self.size + x0];
+        let h11 = self.data[z1 * self.size + x1];
+        (h00 * (1.0 - tx) + h10 * tx) * (1.0 - tz) + (h01 * (1.0 - tx) + h11 * tx) * tz
+    }
+
+    /// Flatten a corridor along a polyline toward its own smoothed profile:
+    /// the road bed follows the path's gentle slope instead of the raw
+    /// terrain, so vehicles can drive it. Returns the stroke (with the beds
+    /// it computed) so generation can record it into the recipe for replay.
+    pub fn flatten_along_path(
+        &mut self,
+        path: &[Vec2],
+        road_half: f32,
+        blend: f32,
+    ) -> Option<FlattenStroke> {
+        if path.len() < 2 {
+            return None;
+        }
+        // Bed height per path point, smoothed along the path. This reads the
+        // CURRENT grid (including earlier strokes), which is why the beds are
+        // stored in the stroke instead of recomputed at load.
+        let mut bed: Vec<f32> = path.iter().map(|p| self.height(p.x, p.y)).collect();
+        for _ in 0..14 {
+            let mut next = bed.clone();
+            for i in 1..bed.len() - 1 {
+                next[i] = (bed[i - 1] + bed[i] * 2.0 + bed[i + 1]) * 0.25;
+            }
+            bed = next;
+        }
+
+        let stroke = FlattenStroke {
+            points: path.iter().map(|p| [p.x, p.y]).collect(),
+            beds: bed,
+            road_half,
+            blend,
+            mask_influence: default_mask_influence(),
+        };
+        self.apply_flatten(&stroke);
+        Some(stroke)
+    }
+
+    /// Replay a recorded stroke: stamp the corridor toward its stored beds.
+    /// Identical math to the original application — replays are exact.
+    pub fn apply_flatten(&mut self, stroke: &FlattenStroke) {
+        if stroke.points.len() < 2 || stroke.beds.len() != stroke.points.len() {
+            return;
+        }
+        let influence = stroke.road_half + stroke.blend;
+        for (seg_idx, window) in stroke.points.windows(2).enumerate() {
+            let a = Vec2::new(window[0][0], window[0][1]);
+            let b = Vec2::new(window[1][0], window[1][1]);
+            let (ha, hb) = (stroke.beds[seg_idx], stroke.beds[seg_idx + 1]);
+            let min_x = a.x.min(b.x) - influence;
+            let max_x = a.x.max(b.x) + influence;
+            let min_z = a.y.min(b.y) - influence;
+            let max_z = a.y.max(b.y) + influence;
+            let xi0 = (((min_x - self.min) / self.spacing).floor().max(0.0)) as usize;
+            let zi0 = (((min_z - self.min) / self.spacing).floor().max(0.0)) as usize;
+            let xi1 = ((((max_x - self.min) / self.spacing).ceil()) as usize).min(self.size - 1);
+            let zi1 = ((((max_z - self.min) / self.spacing).ceil()) as usize).min(self.size - 1);
+            let seg = b - a;
+            let len_sq = seg.length_squared().max(1e-6);
+
+            for zi in zi0..=zi1 {
+                for xi in xi0..=xi1 {
+                    let p = Vec2::new(
+                        self.min + xi as f32 * self.spacing,
+                        self.min + zi as f32 * self.spacing,
+                    );
+                    let t = ((p - a).dot(seg) / len_sq).clamp(0.0, 1.0);
+                    let dist = p.distance(a + seg * t);
+                    if dist >= influence {
+                        continue;
+                    }
+                    let target = ha + (hb - ha) * t;
+                    let w = if dist <= stroke.road_half {
+                        1.0
+                    } else {
+                        let s = (dist - stroke.road_half) / stroke.blend;
+                        1.0 - (s * s * (3.0 - 2.0 * s))
+                    };
+                    let idx = zi * self.size + xi;
+                    self.data[idx] = self.data[idx] * (1.0 - w) + target * w;
+                }
+            }
+        }
+    }
+
+    pub fn slope(&self, x: f32, z: f32) -> f32 {
+        let step = self.spacing;
+        let dx = (self.height(x + step, z) - self.height(x - step, z)) / (2.0 * step);
+        let dz = (self.height(x, z + step) - self.height(x, z - step)) / (2.0 * step);
+        (dx * dx + dz * dz).sqrt()
+    }
+
+    /// (min, max) over the whole grid — recorded as terrain metadata.
+    pub fn height_range(&self) -> (f32, f32) {
+        let mut min = f32::MAX;
+        let mut max = f32::MIN;
+        for &h in &self.data {
+            min = min.min(h);
+            max = max.max(h);
+        }
+        (min, max)
+    }
+
+    /// Package the grid as the runtime sampling structure. The grid lattice
+    /// (min = -half_extent, 2m spacing, size = extent/spacing + 1) maps 1:1
+    /// onto [`HeightmapData`]'s bilinear indexing over the same bounds, so
+    /// samples are bit-identical between generation and runtime.
+    pub fn into_heightmap(self, bounds: MapBounds, water_level: Option<f32>) -> HeightmapData {
+        HeightmapData::new(
+            bounds,
+            self.size as u32,
+            self.size as u32,
+            self.data,
+            water_level,
+        )
+    }
+}
+
+// ============================================================================
+// Surface painting
+// ============================================================================
+
+/// Surface paint weights (grass, dirt, sand, cobble) from height, slope, and
+/// distance to the nearest road. The single formula shared by generation-time
+/// scatter decisions and runtime weightmap texturing.
+pub fn surface_weights_at(h: f32, slope: f32, road_distance: Option<f32>) -> [f32; 4] {
+    // Roads paint as cobblestone with a dirt shoulder.
+    if let Some(d) = road_distance {
+        if d < 9.0 {
+            return [0.0, 0.12, 0.0, 0.88];
+        } else if d < 15.0 {
+            let t = (d - 9.0) / 6.0;
+            return [0.25 * t, 0.55, 0.0, 0.45 * (1.0 - t)];
+        }
+    }
+
+    // Sand: beaches and the sea floor.
+    let sand = 1.0 - ((h - (SEA_LEVEL + 2.2)) / 1.2).clamp(0.0, 1.0);
+    // Rock (dirt layer): steep faces; cobble on the very steepest.
+    let rocky = ((slope - 0.55) / 0.5).clamp(0.0, 1.0);
+    let cobble = ((slope - 1.1) / 0.6).clamp(0.0, 1.0);
+
+    let sand = sand * (1.0 - rocky * 0.6);
+    let grass = (1.0 - sand - rocky).max(0.0);
+    let dirt = (rocky - cobble).max(0.0);
+    [grass, dirt, sand, cobble]
+}
+
+/// Quantize layer weights to the RGBA bytes the splat shader consumes.
+pub fn weights_to_bytes(weights: [f32; 4]) -> [u8; 4] {
+    let sum: f32 = weights.iter().map(|w| w.max(0.0)).sum();
+    if sum <= f32::EPSILON {
+        return [255, 0, 0, 0];
+    }
+    let mut bytes = [0u8; 4];
+    for (byte, weight) in bytes.iter_mut().zip(weights.iter()) {
+        *byte = ((weight.max(0.0) / sum) * 255.0).round() as u8;
+    }
+    // Fix rounding so the sum stays 255 (the shader renormalizes anyway).
+    let total: i32 = bytes.iter().map(|b| *b as i32).sum();
+    bytes[0] = (bytes[0] as i32 + (255 - total)).clamp(0, 255) as u8;
+    bytes
+}
+
+/// Grid-sampling convenience wrapper around [`surface_weights_at`].
+pub fn surface_weights(
+    grid: &HeightGrid,
+    x: f32,
+    z: f32,
+    h: f32,
+    roads: Option<&RoadMask>,
+) -> [f32; 4] {
+    surface_weights_at(h, grid.slope(x, z), roads.map(|r| r.distance(x, z)))
+}
+
+// ============================================================================
+// Road mask
+// ============================================================================
+
+/// Rasterized distance-to-nearest-road, used by painting and vegetation.
+pub struct RoadMask {
+    min: f32,
+    spacing: f32,
+    size: usize,
+    dist: Vec<f32>,
+}
+
+impl std::fmt::Debug for RoadMask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RoadMask")
+            .field("min", &self.min)
+            .field("spacing", &self.spacing)
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RoadMask {
+    pub fn new(half_extent: f32, spacing: f32) -> Self {
+        let size = ((half_extent * 2.0) / spacing) as usize + 1;
+        Self {
+            min: -half_extent,
+            spacing,
+            size,
+            dist: vec![f32::MAX; size * size],
+        }
+    }
+
+    pub fn stamp_path(&mut self, path: &[Vec2], influence: f32) {
+        for window in path.windows(2) {
+            let (a, b) = (window[0], window[1]);
+            let min_x = a.x.min(b.x) - influence;
+            let max_x = a.x.max(b.x) + influence;
+            let min_z = a.y.min(b.y) - influence;
+            let max_z = a.y.max(b.y) + influence;
+            let xi0 = (((min_x - self.min) / self.spacing).floor().max(0.0)) as usize;
+            let zi0 = (((min_z - self.min) / self.spacing).floor().max(0.0)) as usize;
+            let xi1 = ((((max_x - self.min) / self.spacing).ceil()) as usize).min(self.size - 1);
+            let zi1 = ((((max_z - self.min) / self.spacing).ceil()) as usize).min(self.size - 1);
+            let seg = b - a;
+            let len_sq = seg.length_squared().max(1e-6);
+            for zi in zi0..=zi1 {
+                for xi in xi0..=xi1 {
+                    let p = Vec2::new(
+                        self.min + xi as f32 * self.spacing,
+                        self.min + zi as f32 * self.spacing,
+                    );
+                    let t = ((p - a).dot(seg) / len_sq).clamp(0.0, 1.0);
+                    let d = p.distance(a + seg * t);
+                    let idx = zi * self.size + xi;
+                    if d < self.dist[idx] {
+                        self.dist[idx] = d;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn distance(&self, x: f32, z: f32) -> f32 {
+        let xi =
+            (((x - self.min) / self.spacing).round().clamp(0.0, (self.size - 1) as f32)) as usize;
+        let zi =
+            (((z - self.min) / self.spacing).round().clamp(0.0, (self.size - 1) as f32)) as usize;
+        self.dist[zi * self.size + xi]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn recipe(half: f32) -> GeneratedWorld {
+        GeneratedWorld {
+            style: WorldStyle::Showcase,
+            seed: 2026,
+            half_extent: half,
+            strokes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn same_seed_builds_identical_terrain() {
+        let def = recipe(700.0);
+        let a = def.build_grid();
+        let b = def.build_grid();
+        let mut checked = 0;
+        let mut z = -680.0;
+        while z < 680.0 {
+            let mut x = -680.0;
+            while x < 680.0 {
+                assert_eq!(a.height(x, z).to_bits(), b.height(x, z).to_bits());
+                checked += 1;
+                x += 97.0;
+            }
+            z += 97.0;
+        }
+        assert!(checked > 100);
+    }
+
+    #[test]
+    fn different_seed_builds_different_terrain() {
+        let a = recipe(700.0).build_grid();
+        let b = GeneratedWorld {
+            seed: 2027,
+            ..recipe(700.0)
+        }
+        .build_grid();
+        let mut differing = 0;
+        for i in 0..20 {
+            let p = -650.0 + i as f32 * 65.0;
+            if a.height(p, -p) != b.height(p, -p) {
+                differing += 1;
+            }
+        }
+        assert!(differing > 10);
+    }
+
+    #[test]
+    fn heightmap_matches_grid_exactly() {
+        let def = recipe(512.0);
+        let grid = def.build_grid();
+        let bounds = MapBounds {
+            min: [-512.0, -512.0],
+            max: [512.0, 512.0],
+        };
+        let heightmap = def.build_heightmap(bounds, Some(SEA_LEVEL)).unwrap();
+        // On-lattice and off-lattice points must agree: same bilinear basis.
+        for (x, z) in [
+            (0.0, 0.0),
+            (-512.0, -512.0),
+            (510.0, 510.0),
+            (123.4, -87.9),
+            (-3.7, 400.2),
+        ] {
+            let g = grid.height(x, z);
+            let h = heightmap.sample_height(x, z);
+            assert!(
+                (g - h).abs() < 1e-3,
+                "mismatch at ({x},{z}): grid {g} heightmap {h}"
+            );
+        }
+    }
+
+    #[test]
+    fn stroke_replay_is_exact() {
+        let def = recipe(512.0);
+        // Original: flatten applied live during generation.
+        let mut original = def.build_grid();
+        let path: Vec<Vec2> = (0..12)
+            .map(|i| Vec2::new(-200.0 + i as f32 * 35.0, (i as f32 * 0.7).sin() * 60.0))
+            .collect();
+        let stroke = original.flatten_along_path(&path, 7.0, 16.0).unwrap();
+
+        // Replay: same recipe with the stroke recorded.
+        let replayed = GeneratedWorld {
+            strokes: vec![stroke],
+            ..def
+        }
+        .build_grid();
+
+        for (x, z) in [(-200.0, 0.0), (0.0, 20.0), (150.0, -40.0), (185.0, 5.0)] {
+            assert_eq!(
+                original.height(x, z).to_bits(),
+                replayed.height(x, z).to_bits(),
+                "replay mismatch at ({x},{z})"
+            );
+        }
+    }
+
+    #[test]
+    fn recipe_serializes_small() {
+        let mut def = recipe(4096.0);
+        def.strokes = vec![FlattenStroke {
+            points: (0..40).map(|i| [i as f32 * 10.0, 0.0]).collect(),
+            beds: vec![3.0; 40],
+            road_half: 7.0,
+            blend: 16.0,
+            mask_influence: 26.0,
+        }];
+        let ron = ron::ser::to_string(&def).unwrap();
+        // The whole point: a world recipe is KBs, not hundreds of MBs.
+        assert!(ron.len() < 16_384, "recipe unexpectedly large: {}", ron.len());
+        let back: GeneratedWorld = ron::de::from_str(&ron).unwrap();
+        assert_eq!(back, def);
+    }
+}

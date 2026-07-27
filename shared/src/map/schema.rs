@@ -11,6 +11,11 @@ pub struct MapDefinition {
     pub map_id: String,
     pub bounds: MapBounds,
     pub terrain: MapTerrain,
+    /// Seed-based terrain recipe. When present, the terrain is rebuilt from
+    /// the seed at load time and `terrain.heightmap` is ignored — this is
+    /// what lets a gigantic world ship as a few KB of RON.
+    #[serde(default)]
+    pub generated: Option<crate::worldgen::GeneratedWorld>,
     #[serde(default)]
     pub player_spawn: Option<[f32; 3]>,
     #[serde(default)]
@@ -29,6 +34,21 @@ impl MapDefinition {
 
         if self.terrain.height_max < self.terrain.height_min {
             return Err("terrain.height_max must be >= terrain.height_min".to_string());
+        }
+
+        if let Some(generated) = &self.generated {
+            let half_w = self.bounds.width() * 0.5;
+            let half_d = self.bounds.depth() * 0.5;
+            if (half_w - generated.half_extent).abs() > 0.5
+                || (half_d - generated.half_extent).abs() > 0.5
+            {
+                return Err(format!(
+                    "generated.half_extent {} does not match bounds {}x{}",
+                    generated.half_extent,
+                    self.bounds.width(),
+                    self.bounds.depth()
+                ));
+            }
         }
 
         if let Some(spawn) = self.player_spawn {

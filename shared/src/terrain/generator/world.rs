@@ -84,6 +84,24 @@ impl TerrainGenerator {
 
     /// Returns [grass, dirt, sand, cobblestone].
     pub fn get_surface_weights(&self, x: f32, z: f32) -> [f32; 4] {
+        // Generated worlds paint procedurally from the same formula the
+        // generator used, so nothing needs baking: beaches from height,
+        // rock from slope, cobble along the replayed road mask.
+        if self.loaded_map.definition.generated.is_some() {
+            let h = self.get_height(x, z);
+            let step = super::constants::VERTEX_SPACING;
+            let hm = &self.loaded_map.heightmap;
+            let dx = (hm.sample_height(x + step, z) - hm.sample_height(x - step, z)) / (2.0 * step);
+            let dz = (hm.sample_height(x, z + step) - hm.sample_height(x, z - step)) / (2.0 * step);
+            let slope = (dx * dx + dz * dz).sqrt();
+            let road = self
+                .loaded_map
+                .road_mask
+                .as_deref()
+                .map(|mask| mask.distance(x, z));
+            return crate::worldgen::surface_weights_at(h, slope, road);
+        }
+
         match self.get_biome(x, z) {
             Biome::Desert => [0.02, 0.05, 0.93, 0.0],
             Biome::Grasslands => [0.85, 0.10, 0.05, 0.0],

@@ -559,6 +559,7 @@ fn reset_map_to_blank(
     session.map_definition.terrain.height_min = 0.0;
     session.map_definition.terrain.height_max = 0.0;
     session.map_definition.terrain.water_level = None;
+    session.map_definition.generated = None;
     session.map_definition.player_spawn = None;
     session.map_definition.objects.clear();
     session.map_definition.blockers.clear();

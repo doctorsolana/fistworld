@@ -163,8 +163,9 @@ OPTIONS:
     --seed <n>       Generation seed                                  [default: 2026]
     --size <m>       Map edge length in metres                        [default: 8192]
 
-NOTE: the map directory must exist and contain the shipped asset set (height.png etc).
-Copy an existing map directory to create a new one.
+NOTE: the map directory must exist and contain a loadable map.ron (copy an existing map
+directory to create a new one). Generated maps store a seed recipe in map.ron and rebuild
+terrain from it at load; height.png is only read by legacy hand-authored maps.
 "#
     );
 }
