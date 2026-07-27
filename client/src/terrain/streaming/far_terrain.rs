@@ -35,8 +35,8 @@ pub(crate) fn ensure_far_terrain_mesh(
         return;
     };
 
-    let origin = far_terrain_origin();
-    let spacing = far_terrain_spacing();
+    let origin = far_terrain_origin(&terrain);
+    let spacing = far_terrain_spacing(&terrain);
     let mesh = build_far_terrain_mesh(&terrain, origin, spacing, FAR_TERRAIN_RESOLUTION);
     let mesh_handle = meshes.add(mesh);
 
@@ -80,6 +80,7 @@ pub(crate) fn update_far_terrain_hole(
     mut far_query: Query<(&Mesh3d, &mut FarTerrainState), With<FarTerrain>>,
     player_query: AnchorPlayer,
     camera_query: AnchorCamera,
+    terrain: Res<WorldTerrain>,
     streaming: Res<TerrainStreamingState>,
     settings: Res<GraphicsSettings>,
     mut hole_task: ResMut<FarTerrainHoleTask>,
@@ -129,8 +130,8 @@ pub(crate) fn update_far_terrain_hole(
         center_chunk_origin.z + CHUNK_SIZE * 0.5,
     );
     let inner_half = (view_distance as f32 + 0.5) * CHUNK_SIZE + FAR_TERRAIN_INNER_BUFFER;
-    let origin = far_terrain_origin();
-    let spacing = far_terrain_spacing();
+    let origin = far_terrain_origin(&terrain);
+    let spacing = far_terrain_spacing(&terrain);
 
     hole_task.pending = Some(PendingHoleRebuild {
         center_cell,
@@ -147,11 +148,18 @@ pub(crate) fn update_far_terrain_hole(
     });
 }
 
-fn far_terrain_origin() -> Vec2 {
-    Vec2::new(-WORLD_RADIUS_METERS, -WORLD_RADIUS_METERS)
+/// Far-terrain extent follows the *actual* map bounds.
+///
+/// It used to use `WORLD_RADIUS_METERS`, a legacy 90-chunk constant. On any map larger
+/// than that the far mesh stopped short and the rest of the world rendered as empty void —
+/// an 8km map only got its middle ~5.7km covered.
+fn far_terrain_origin(terrain: &WorldTerrain) -> Vec2 {
+    let bounds = terrain.generator.active_map_bounds();
+    Vec2::new(bounds.min[0], bounds.min[1])
 }
 
-fn far_terrain_spacing() -> f32 {
-    let size = WORLD_RADIUS_METERS * 2.0;
+fn far_terrain_spacing(terrain: &WorldTerrain) -> f32 {
+    let bounds = terrain.generator.active_map_bounds();
+    let size = (bounds.max[0] - bounds.min[0]).max(bounds.max[1] - bounds.min[1]);
     size / (FAR_TERRAIN_RESOLUTION as f32 - 1.0)
 }
