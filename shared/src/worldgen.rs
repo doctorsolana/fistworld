@@ -375,8 +375,34 @@ impl HeightField {
         // Flatten toward a gentle 3.5m shelf where the village sits.
         height = height * (1.0 - plain_flat * 0.85) + 3.5 * plain_flat * 0.85;
 
-        // Sink everything seaward of the coastline.
-        height = height * landness.max(0.0).powf(0.75) + landness * 16.0;
+        // Sink everything seaward of the coastline. Depth is measured in
+        // absolute metres offshore rather than as a fraction of map size —
+        // the old normalized term (landness * 16) left kilometres of
+        // ankle-deep water on an 8km map, which read as a giant pale apron
+        // around every coast once the water shades by depth.
+        let inland = landness.max(0.0);
+        height = height * inland.powf(0.75) + inland * 16.0;
+        if landness < 0.0 {
+            let seaward_m = -landness * half;
+            // Wade band: a gentle shelf for the first ~60m (beaches,
+            // harbours), then the floor drops to open-ocean depth over the
+            // next ~250m.
+            let wade = (seaward_m / 60.0).min(1.0) * 4.0;
+            let drop_t = ((seaward_m - 60.0) / 250.0).clamp(0.0, 1.0);
+            let drop = drop_t * drop_t * (3.0 - 2.0 * drop_t) * 30.0;
+            // Islands rise from pedestals: keep the floor shallow around
+            // each island seed so the archipelago holds its beaches instead
+            // of drowning in the new deep water.
+            let mut pedestal = 0.0f32;
+            for island in &self.islands {
+                let d = p.distance(island.center) / island.radius;
+                if d < 2.2 {
+                    let s = (1.0 - (d / 2.2).clamp(0.0, 1.0)).powf(1.5);
+                    pedestal = pedestal.max(s);
+                }
+            }
+            height -= (wade + drop) * (1.0 - pedestal * 0.85);
+        }
 
         // --- Offshore islands: radial bumps rising out of the sea floor ---
         for island in &self.islands {
