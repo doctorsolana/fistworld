@@ -83,6 +83,7 @@ pub(crate) fn update_far_terrain_hole(
     terrain: Res<WorldTerrain>,
     streaming: Res<TerrainStreamingState>,
     settings: Res<GraphicsSettings>,
+    map_view: Res<crate::terrain::map_view::MapViewActive>,
     mut hole_task: ResMut<FarTerrainHoleTask>,
 ) {
     if !settings.far_terrain_enabled {
@@ -129,7 +130,13 @@ pub(crate) fn update_far_terrain_hole(
         center_chunk_origin.x + CHUNK_SIZE * 0.5,
         center_chunk_origin.z + CHUNK_SIZE * 0.5,
     );
-    let inner_half = (view_distance as f32 + 0.5) * CHUNK_SIZE + FAR_TERRAIN_INNER_BUFFER;
+    // In map view the streamed chunks are hidden, so cutting a hole for them would leave
+    // a void punched through the middle of the world.
+    let inner_half = if map_view.0 {
+        0.0
+    } else {
+        (view_distance as f32 + 0.5) * CHUNK_SIZE + FAR_TERRAIN_INNER_BUFFER
+    };
     let origin = far_terrain_origin(&terrain);
     let spacing = far_terrain_spacing(&terrain);
 

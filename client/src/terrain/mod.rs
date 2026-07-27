@@ -3,6 +3,7 @@
 //! Updated for Bevy 0.18
 
 mod chunks;
+pub mod map_view;
 mod debug;
 mod materials;
 mod mesh;
