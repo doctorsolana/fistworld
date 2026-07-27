@@ -246,13 +246,6 @@ pub fn generate_world(
     let field = HeightField::new(style, seed, half_extent);
     let mut grid = HeightGrid::build(&field, half_extent);
 
-    // Showcase: landmarks, pathfound roads, and the harbour village. This
-    // runs BEFORE the recipe is recorded because it beds roads into the
-    // terrain grid (and those strokes are part of the recipe).
-    let showcase = (style == WorldStyle::Showcase)
-        .then(|| build_showcase_content(&field, &mut grid, seed, half_extent));
-    let road_mask = showcase.as_ref().map(|content| &content.road_mask);
-
     // --- The recipe IS the terrain: nothing is baked ---
     // Heights and weightmaps used to be written per-chunk here (644MB of RON
     // for an 8km map, scaling quadratically). Now the definition stores the
@@ -274,26 +267,23 @@ pub fn generate_world(
         seed,
         generator_version: shared::worldgen::WORLDGEN_VERSION,
         half_extent,
-        strokes: showcase
-            .as_ref()
-            .map(|content| content.strokes.clone())
-            .unwrap_or_default(),
+        // Terrain only for now: no preset roads/village means no recorded
+        // flatten strokes. Settlement generation will come back as its own
+        // pass and record strokes again then.
+        strokes: Vec::new(),
     });
 
     // --- Vegetation + water + spawn ---
-    session.map_definition.objects = scatter_props(&grid, seed, half_extent, road_mask);
+    session.map_definition.objects = scatter_props(&grid, seed, half_extent, None);
     session.map_definition.terrain.water_level = Some(SEA_LEVEL);
     env_state.show_water = true;
     env_state.water_level = SEA_LEVEL;
 
-    if let Some(content) = showcase {
-        session.map_edits.roads = content.roads;
-        session.map_edits.plots = content.plots;
-        session.map_edits.spawn_markers = content.markers;
-        session.map_definition.player_spawn = Some(content.spawn);
-    } else {
-        session.map_definition.player_spawn = Some(pick_spawn(&grid, seed, half_extent));
-    }
+    // No preset content: the world starts as pure terrain.
+    session.map_edits.roads.clear();
+    session.map_edits.plots.clear();
+    session.map_edits.spawn_markers.clear();
+    session.map_definition.player_spawn = Some(pick_spawn(&grid, seed, half_extent));
 
     // --- Reload the live world from the generated data ---
     let loaded_map = load_map_from_parts(
@@ -398,10 +388,10 @@ mod tests {
     }
 
     #[test]
-    fn showcase_has_mountains_bay_islands_and_roads() {
+    fn showcase_has_mountains_bay_islands_and_lakes() {
         for seed in [11u64, 2024] {
             let field = HeightField::new(WorldStyle::Showcase, seed, 700.0);
-            let mut grid = HeightGrid::build(&field, 700.0);
+            let grid = HeightGrid::build(&field, 700.0);
             let (land, ocean, beach, max_h) = stats(&grid, 700.0);
             assert!(land > 0.20, "seed {seed}: land {land}");
             assert!(ocean > 0.10, "seed {seed}: ocean {ocean}");
@@ -417,34 +407,8 @@ mod tests {
                 .any(|island| grid.height(island.center.x, island.center.y) > SEA_LEVEL + 1.0);
             assert!(island_land, "seed {seed}: all islands submerged");
 
-            let content = build_showcase_content(&field, &mut grid, seed, 700.0);
-            assert!(
-                content.roads.len() >= 2,
-                "seed {seed}: only {} roads",
-                content.roads.len()
-            );
-            assert_eq!(content.plots.len(), 8, "seed {seed}: village plots");
-            assert!(content.markers.len() >= 4, "seed {seed}: landmarks");
-            assert!(
-                content.spawn[1] > SEA_LEVEL,
-                "seed {seed}: village spawn underwater"
-            );
-            // Roads must be drivable: gentle slope along the bedded corridor.
-            for road in &content.roads {
-                for window in road.points.windows(2) {
-                    let a = Vec2::new(window[0][0], window[0][1]);
-                    let b = Vec2::new(window[1][0], window[1][1]);
-                    let ha = grid.height(a.x, a.y);
-                    let hb = grid.height(b.x, b.y);
-                    let run = a.distance(b).max(1.0);
-                    let grade = (hb - ha).abs() / run;
-                    assert!(
-                        grade < 0.65,
-                        "seed {seed}: road grade {grade} over {run}m"
-                    );
-                    assert!(ha > SEA_LEVEL - 0.5, "seed {seed}: road underwater");
-                }
-            }
+            let spawn = pick_spawn(&grid, seed, 700.0);
+            assert!(spawn[1] > SEA_LEVEL, "seed {seed}: spawn underwater");
         }
     }
 
@@ -467,17 +431,8 @@ mod tests {
             (WorldStyle::Showcase, 11),
         ] {
             let field = HeightField::new(style, seed, HALF);
-            let mut grid = HeightGrid::build(&field, HALF);
-            // Showcase carries a road mask through to the scatter, so run the
-            // same pipeline the editor does.
-            let showcase = (style == WorldStyle::Showcase)
-                .then(|| build_showcase_content(&field, &mut grid, seed, HALF));
-            let props = scatter_props(
-                &grid,
-                seed,
-                HALF,
-                showcase.as_ref().map(|content| &content.road_mask),
-            );
+            let grid = HeightGrid::build(&field, HALF);
+            let props = scatter_props(&grid, seed, HALF, None);
             assert!(!props.is_empty(), "{style:?} seed {seed}: no props at all");
 
             // Land coverage per bucket, so ocean-only buckets are exempt.
@@ -548,38 +503,25 @@ mod tests {
         let half = 704.0;
         let field = HeightField::new(WorldStyle::Showcase, 2026, half);
         let noise_done = start.elapsed();
-        let mut grid = HeightGrid::build(&field, half);
+        let grid = HeightGrid::build(&field, half);
         let grid_done = start.elapsed();
-        let content = build_showcase_content(&field, &mut grid, 2026, half);
-        let roads_done = start.elapsed();
-        let props = scatter_props(&grid, 2026, half, Some(&content.road_mask));
+        let props = scatter_props(&grid, 2026, half, None);
         let props_done = start.elapsed();
         let (land, ocean, beach, max_h) = stats(&grid, half);
         println!(
-            "noise+rivers {:?} | grid {:?} | roads {:?} | props {:?}",
+            "noise+rivers {:?} | grid {:?} | props {:?}",
             noise_done,
             grid_done - noise_done,
-            roads_done - grid_done,
-            props_done - roads_done
+            props_done - grid_done
         );
         println!(
-            "land {:.0}% ocean {:.0}% beach {:.0}% peak {:.0}m | {} roads, {} plots, {} props",
+            "land {:.0}% ocean {:.0}% beach {:.0}% peak {:.0}m | {} props",
             land * 100.0,
             ocean * 100.0,
             beach * 100.0,
             max_h,
-            content.roads.len(),
-            content.plots.len(),
             props.len()
         );
-        for road in &content.roads {
-            let len: f32 = road
-                .points
-                .windows(2)
-                .map(|w| Vec2::new(w[0][0], w[0][1]).distance(Vec2::new(w[1][0], w[1][1])))
-                .sum();
-            println!("  road {:?}: {:.0}m, {} points", road.road_class, len, road.points.len());
-        }
     }
 
     #[test]
@@ -601,389 +543,5 @@ mod tests {
             }
         }
         let _ = (saw_sand, saw_grass); // presence depends on sample points
-    }
-}
-
-// ============================================================================
-// Showcase extras: landmarks, roads, village
-// ============================================================================
-
-/// A landmark the road network connects.
-struct Landmark {
-    name: &'static str,
-    pos: Vec2,
-    kind: shared::map::SpawnMarkerKind,
-}
-
-/// Find the flattest land near a target point (spiral search).
-fn find_flat_near(grid: &HeightGrid, target: Vec2, search: f32, min_h: f32, max_h: f32) -> Vec2 {
-    let mut best = target;
-    let mut best_score = f32::MAX;
-    let steps = 26;
-    for ring in 0..steps {
-        let r = search * (ring as f32 / steps as f32);
-        let samples = 8 + ring * 2;
-        for s in 0..samples {
-            let a = (s as f32 / samples as f32) * std::f32::consts::TAU;
-            let p = target + Vec2::new(a.cos(), a.sin()) * r;
-            let h = grid.height(p.x, p.y);
-            if h < min_h || h > max_h {
-                continue;
-            }
-            let score = grid.slope(p.x, p.y) * 10.0 + r / search;
-            if score < best_score {
-                best_score = score;
-                best = p;
-            }
-        }
-    }
-    best
-}
-
-/// A* over a coarse grid: roads prefer gentle ground and avoid water, so
-/// they naturally follow valleys and contour around mountains.
-fn find_road_path(grid: &HeightGrid, half_extent: f32, from: Vec2, to: Vec2) -> Option<Vec<Vec2>> {
-    use std::collections::BinaryHeap;
-
-    const CELL: f32 = 16.0;
-    let size = ((half_extent * 2.0) / CELL) as usize + 1;
-    let to_cell = |p: Vec2| -> (usize, usize) {
-        (
-            (((p.x + half_extent) / CELL).round().clamp(0.0, (size - 1) as f32)) as usize,
-            (((p.y + half_extent) / CELL).round().clamp(0.0, (size - 1) as f32)) as usize,
-        )
-    };
-    let to_world =
-        |cx: usize, cz: usize| Vec2::new(cx as f32 * CELL - half_extent, cz as f32 * CELL - half_extent);
-
-    let start = to_cell(from);
-    let goal = to_cell(to);
-
-    // Per-cell traversal cost (impassable = None).
-    let cell_cost = |cx: usize, cz: usize| -> Option<f32> {
-        let p = to_world(cx, cz);
-        let h = grid.height(p.x, p.y);
-        if h < SEA_LEVEL + 1.2 {
-            return None; // water / tidal flats
-        }
-        let slope = grid.slope(p.x, p.y);
-        if slope > 1.15 {
-            return None; // cliffs
-        }
-        Some(1.0 + slope * 14.0)
-    };
-
-    #[derive(PartialEq)]
-    struct Node(f32, usize, usize);
-    impl Eq for Node {}
-    impl Ord for Node {
-        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-            other.0.total_cmp(&self.0) // min-heap
-        }
-    }
-    impl PartialOrd for Node {
-        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-
-    let idx = |cx: usize, cz: usize| cz * size + cx;
-    let mut g = vec![f32::MAX; size * size];
-    let mut came: Vec<Option<(usize, usize)>> = vec![None; size * size];
-    let mut open = BinaryHeap::new();
-
-    g[idx(start.0, start.1)] = 0.0;
-    open.push(Node(0.0, start.0, start.1));
-
-    let heuristic = |cx: usize, cz: usize| {
-        let dx = cx as f32 - goal.0 as f32;
-        let dz = cz as f32 - goal.1 as f32;
-        (dx * dx + dz * dz).sqrt()
-    };
-
-    let mut found = false;
-    while let Some(Node(_, cx, cz)) = open.pop() {
-        if (cx, cz) == goal {
-            found = true;
-            break;
-        }
-        let current_g = g[idx(cx, cz)];
-        for (dx, dz) in [
-            (1i32, 0i32),
-            (-1, 0),
-            (0, 1),
-            (0, -1),
-            (1, 1),
-            (1, -1),
-            (-1, 1),
-            (-1, -1),
-        ] {
-            let nx = cx as i32 + dx;
-            let nz = cz as i32 + dz;
-            if nx < 0 || nz < 0 || nx >= size as i32 || nz >= size as i32 {
-                continue;
-            }
-            let (nx, nz) = (nx as usize, nz as usize);
-            let Some(cost) = cell_cost(nx, nz) else {
-                continue;
-            };
-            let diagonal = dx != 0 && dz != 0;
-            let step = if diagonal { 1.414 } else { 1.0 };
-            let tentative = current_g + cost * step;
-            if tentative < g[idx(nx, nz)] {
-                g[idx(nx, nz)] = tentative;
-                came[idx(nx, nz)] = Some((cx, cz));
-                open.push(Node(tentative + heuristic(nx, nz) * 1.05, nx, nz));
-            }
-        }
-    }
-    if !found {
-        return None;
-    }
-
-    // Walk the path back, then smooth it (Chaikin) so roads curve.
-    let mut cells = vec![goal];
-    let mut cur = goal;
-    while let Some(prev) = came[idx(cur.0, cur.1)] {
-        cells.push(prev);
-        cur = prev;
-        if cells.len() > size * size {
-            break;
-        }
-    }
-    cells.reverse();
-    let mut path: Vec<Vec2> = cells.iter().map(|(cx, cz)| to_world(*cx, *cz)).collect();
-    for _ in 0..2 {
-        path = chaikin(&path);
-    }
-    // Thin out dense points.
-    let mut thinned = Vec::with_capacity(path.len() / 2 + 2);
-    for (i, p) in path.iter().enumerate() {
-        if i == 0 || i == path.len() - 1 || thinned.last().map(|l: &Vec2| l.distance(*p) > 9.0).unwrap_or(true) {
-            thinned.push(*p);
-        }
-    }
-    (thinned.len() >= 2).then_some(thinned)
-}
-
-/// Corner-cutting smoothing.
-fn chaikin(points: &[Vec2]) -> Vec<Vec2> {
-    if points.len() < 3 {
-        return points.to_vec();
-    }
-    let mut out = Vec::with_capacity(points.len() * 2);
-    out.push(points[0]);
-    for window in points.windows(2) {
-        let (a, b) = (window[0], window[1]);
-        out.push(a * 0.75 + b * 0.25);
-        out.push(a * 0.25 + b * 0.75);
-    }
-    out.push(*points.last().expect("non-empty"));
-    out
-}
-
-/// Everything the showcase adds on top of the terrain.
-pub struct ShowcaseContent {
-    pub roads: Vec<shared::city::MapRoad>,
-    pub plots: Vec<shared::city::MapPlot>,
-    pub markers: Vec<shared::map::MapSpawnMarker>,
-    pub road_mask: RoadMask,
-    /// Road-flattening strokes in application order, recorded for the
-    /// world recipe so load-time terrain rebuilds replay them exactly.
-    pub strokes: Vec<FlattenStroke>,
-    pub spawn: [f32; 3],
-}
-
-/// Place landmarks, connect them with pathfound roads, bed the roads into
-/// the terrain, and lay out a harbour village.
-fn build_showcase_content(
-    field: &HeightField,
-    grid: &mut HeightGrid,
-    seed: u64,
-    half_extent: f32,
-) -> ShowcaseContent {
-    use shared::city::{MapPlot, MapRoad, PlotZone, RoadClass};
-    use shared::map::{MapSpawnMarker, SpawnMarkerKind};
-
-    let mut rng = splitmix64(seed ^ 0xB00C);
-    let lateral = Vec2::new(-field.coast_dir.y, field.coast_dir.x);
-
-    // --- Landmarks -------------------------------------------------------
-    let village = find_flat_near(grid, field.plains_center, half_extent * 0.25, 2.0, 9.0);
-    // Harbour: flat ground close to the water, out toward the bay.
-    let harbour_target = village + field.coast_dir * half_extent * 0.30;
-    let harbour = find_flat_near(grid, harbour_target, half_extent * 0.22, 1.6, 5.0);
-    // Mountain waypoint: high ground on the spine.
-    let mut peak = field.range_dir * (rand01(&mut rng) - 0.5) * half_extent
-        + Vec2::new(-field.range_dir.y, field.range_dir.x) * field.range_offset;
-    peak = find_flat_near(grid, peak, half_extent * 0.20, 18.0, 70.0);
-    // Lake shore camp.
-    let lake_camp = field
-        .lakes
-        .first()
-        .map(|lake| find_flat_near(grid, lake.center + Vec2::new(lake.radius * 1.3, 0.0), half_extent * 0.12, 1.8, 12.0))
-        .unwrap_or(village + lateral * half_extent * 0.3);
-    // Far outpost inland.
-    let outpost = find_flat_near(
-        grid,
-        village - field.coast_dir * half_extent * 0.45 + lateral * half_extent * 0.25,
-        half_extent * 0.22,
-        2.0,
-        22.0,
-    );
-
-    let landmarks = vec![
-        Landmark {
-            name: "Harbour",
-            pos: harbour,
-            kind: SpawnMarkerKind::Poi,
-        },
-        Landmark {
-            name: "Village",
-            pos: village,
-            kind: SpawnMarkerKind::Player,
-        },
-        Landmark {
-            name: "Mountain Pass",
-            pos: peak,
-            kind: SpawnMarkerKind::Poi,
-        },
-        Landmark {
-            name: "Lake Camp",
-            pos: lake_camp,
-            kind: SpawnMarkerKind::Poi,
-        },
-        Landmark {
-            name: "Outpost",
-            pos: outpost,
-            kind: SpawnMarkerKind::NpcGroup,
-        },
-    ];
-
-    // --- Road network: village is the hub --------------------------------
-    let mut roads: Vec<MapRoad> = Vec::new();
-    let mut road_mask = RoadMask::new(half_extent, 4.0);
-    let mut next_id = 1u64;
-
-    let connections: [(Vec2, Vec2, RoadClass); 4] = [
-        (village, harbour, RoadClass::Collector),
-        (village, peak, RoadClass::Local),
-        (village, lake_camp, RoadClass::Local),
-        (village, outpost, RoadClass::Collector),
-    ];
-
-    let mut road_paths: Vec<Vec<Vec2>> = Vec::new();
-    for (from, to, class) in connections {
-        let Some(path) = find_road_path(grid, half_extent, from, to) else {
-            continue;
-        };
-        road_mask.stamp_path(&path, 26.0);
-        roads.push(MapRoad {
-            id: next_id,
-            points: path.iter().map(|p| [p.x, p.y]).collect(),
-            width: class.default_width(),
-            road_class: class,
-            lane_count: class.default_lane_count(),
-            sidewalk_left: false,
-            sidewalk_right: false,
-            sidewalk_width: 0.0,
-            parking_left: false,
-            parking_right: false,
-            district: None,
-        });
-        next_id += 1;
-        road_paths.push(path);
-    }
-
-    // Bed the roads into the terrain: flatten a corridor along each path so
-    // vehicles can actually drive them. Each stroke is recorded (with the
-    // beds it computed from the grid at this moment) for load-time replay.
-    let mut strokes: Vec<FlattenStroke> = Vec::new();
-    for path in &road_paths {
-        if let Some(mut stroke) = grid.flatten_along_path(path, 7.0, 16.0) {
-            stroke.mask_influence = 26.0;
-            strokes.push(stroke);
-        }
-    }
-
-    // --- Village: a short main street with plots either side -------------
-    let street_dir = (harbour - village).normalize_or(field.coast_dir);
-    let street_a = village - street_dir * 55.0;
-    let street_b = village + street_dir * 55.0;
-    if let Some(mut stroke) = grid.flatten_along_path(&[street_a, street_b], 10.0, 26.0) {
-        stroke.mask_influence = 24.0;
-        strokes.push(stroke);
-    }
-    road_mask.stamp_path(&[street_a, street_b], 24.0);
-    roads.push(MapRoad {
-        id: next_id,
-        points: vec![[street_a.x, street_a.y], [street_b.x, street_b.y]],
-        width: RoadClass::Local.default_width(),
-        road_class: RoadClass::Local,
-        lane_count: RoadClass::Local.default_lane_count(),
-        sidewalk_left: true,
-        sidewalk_right: true,
-        sidewalk_width: RoadClass::Local.default_sidewalk_width(),
-        parking_left: false,
-        parking_right: false,
-        district: Some("village".to_string()),
-    });
-    let street_id = next_id;
-    next_id += 1;
-
-    let mut plots: Vec<MapPlot> = Vec::new();
-    let side = Vec2::new(-street_dir.y, street_dir.x);
-    let building_kinds = [
-        shared::city::CityBuildingKind::Multistory01,
-        shared::city::CityBuildingKind::Multistory03,
-        shared::city::CityBuildingKind::Multistory05,
-        shared::city::CityBuildingKind::Multistory07,
-    ];
-    for i in 0..8 {
-        let t = (i / 2) as f32 - 1.5;
-        let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
-        let center = village + street_dir * (t * 26.0) + side * (sign * 19.0);
-        plots.push(MapPlot {
-            id: next_id,
-            center: [center.x, center.y],
-            half_extents: [8.0, 8.0],
-            rotation_degrees: street_dir.y.atan2(street_dir.x).to_degrees(),
-            zone: PlotZone::Residential,
-            frontage_road_id: Some(street_id),
-            setback: 2.0,
-            driveway_side: None,
-            archetypes: Vec::new(),
-            building_kind: Some(building_kinds[(i as usize) % building_kinds.len()]),
-            tags: vec!["village".to_string()],
-        });
-        next_id += 1;
-    }
-
-    // --- Markers ---------------------------------------------------------
-    let markers = landmarks
-        .iter()
-        .enumerate()
-        .map(|(i, landmark)| MapSpawnMarker {
-            id: i as u64 + 1,
-            kind: landmark.kind,
-            position: [
-                landmark.pos.x,
-                grid.height(landmark.pos.x, landmark.pos.y) + 0.5,
-                landmark.pos.y,
-            ],
-            rotation_degrees: 0.0,
-            radius: if landmark.name == "Outpost" { 22.0 } else { 8.0 },
-        })
-        .collect();
-
-    let spawn = [village.x, grid.height(village.x, village.y) + 1.0, village.y];
-
-    ShowcaseContent {
-        roads,
-        plots,
-        markers,
-        road_mask,
-        strokes,
-        spawn,
     }
 }
