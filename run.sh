@@ -6,6 +6,10 @@ set -euo pipefail
 
 MODE=${1:-both}
 
+# Which map the server and client load. Defaults to the generated round world;
+# override with CITYSIM_MAP_ID=city_alpha ./run.sh for the legacy hand-authored map.
+export CITYSIM_MAP_ID="${CITYSIM_MAP_ID:-big_world}"
+
 SERVER_PID=""
 CLIENT1_PID=""
 CLIENT2_PID=""
