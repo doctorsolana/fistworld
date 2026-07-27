@@ -117,7 +117,6 @@ fn wire_game_systems(app: &mut App) {
             camera_rts::update_commander_camera,
             // Map view reads camera zoom, so it must follow the camera update.
             terrain::map_view::update_map_view_state,
-            terrain::map_view::apply_map_view_visibility,
             terrain::map_view::fade_fog_for_map_view,
         )
             .chain()

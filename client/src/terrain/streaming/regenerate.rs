@@ -229,6 +229,8 @@ pub(crate) fn process_chunk_tasks(
                     material: material.clone(),
                 },
                 TerrainMaterialLod { use_lite: false },
+                // Dithers this chunk into the far map mesh as the camera pulls back.
+                crate::terrain::map_view::detail_visibility_range(),
             ))
             .id();
         commands.entity(world_root).add_child(chunk_entity);

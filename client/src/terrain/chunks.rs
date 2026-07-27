@@ -33,6 +33,9 @@ pub struct FarTerrain;
 pub struct FarTerrainState {
     pub center_cell: IVec2,
     pub view_distance: i32,
+    /// True when the hole under the streamed chunks is currently filled (map view).
+    /// Part of the change detection: zooming in place must also trigger a recut.
+    pub hole_filled: bool,
 }
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]

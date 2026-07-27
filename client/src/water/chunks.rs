@@ -80,6 +80,9 @@ pub(super) fn spawn_water_chunks(
                 // casting from it creates a solid black moving shoreline.
                 NotShadowCaster,
                 WaterChunk,
+                // Fades with the terrain chunks; the far mesh bakes water colour into its
+                // vertices, so at map scale this surface is redundant detail.
+                crate::terrain::map_view::water_visibility_range(),
             ))
             .id();
         commands.entity(world_root).add_child(entity);

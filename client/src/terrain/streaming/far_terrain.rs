@@ -46,6 +46,7 @@ pub(crate) fn ensure_far_terrain_mesh(
             FarTerrainState {
                 center_cell: IVec2::new(i32::MIN, i32::MIN),
                 view_distance: -1,
+                hole_filled: false,
             },
             Mesh3d(mesh_handle),
             MeshMaterial3d(render_assets.far_mesh_material.clone()),
@@ -72,6 +73,7 @@ pub(crate) struct FarTerrainHoleTask {
 pub(crate) struct PendingHoleRebuild {
     center_cell: IVec2,
     view_distance: i32,
+    hole_filled: bool,
     task: Task<Vec<u32>>,
 }
 
@@ -83,7 +85,6 @@ pub(crate) fn update_far_terrain_hole(
     terrain: Res<WorldTerrain>,
     streaming: Res<TerrainStreamingState>,
     settings: Res<GraphicsSettings>,
-    map_view: Res<crate::terrain::map_view::MapViewActive>,
     mut hole_task: ResMut<FarTerrainHoleTask>,
 ) {
     if !settings.far_terrain_enabled {
@@ -110,18 +111,36 @@ pub(crate) fn update_far_terrain_hole(
         let Some(indices) = block_on(poll_once(&mut pending.task)) else {
             return;
         };
-        let (done_cell, done_view) = (pending.center_cell, pending.view_distance);
+        let (done_cell, done_view, done_filled) = (
+            pending.center_cell,
+            pending.view_distance,
+            pending.hole_filled,
+        );
         hole_task.pending = None;
         if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
             mesh.insert_indices(bevy::mesh::Indices::U32(indices));
         }
         state.center_cell = done_cell;
         state.view_distance = done_view;
+        state.hole_filled = done_filled;
         // Fall through: if the anchor moved while the task ran, queue the next
         // rebuild immediately below.
     }
 
-    if state.center_cell == center_cell && state.view_distance == view_distance {
+    // Fill the hole before the chunks start their dither-out, or the fade would reveal
+    // void instead of map underneath. Part of the change check: zooming in place has to
+    // trigger a recut just like panning does.
+    let zoom = camera_query
+        .iter()
+        .next()
+        .and_then(|(_, controller)| controller.map(|c| c.zoom))
+        .unwrap_or(0.0);
+    let hole_filled = zoom > crate::terrain::map_view::HOLE_FILL_ZOOM;
+
+    if state.center_cell == center_cell
+        && state.view_distance == view_distance
+        && state.hole_filled == hole_filled
+    {
         return;
     }
 
@@ -130,9 +149,7 @@ pub(crate) fn update_far_terrain_hole(
         center_chunk_origin.x + CHUNK_SIZE * 0.5,
         center_chunk_origin.z + CHUNK_SIZE * 0.5,
     );
-    // In map view the streamed chunks are hidden, so cutting a hole for them would leave
-    // a void punched through the middle of the world.
-    let inner_half = if map_view.0 {
+    let inner_half = if hole_filled {
         0.0
     } else {
         (view_distance as f32 + 0.5) * CHUNK_SIZE + FAR_TERRAIN_INNER_BUFFER
@@ -143,6 +160,7 @@ pub(crate) fn update_far_terrain_hole(
     hole_task.pending = Some(PendingHoleRebuild {
         center_cell,
         view_distance,
+        hole_filled,
         task: AsyncComputeTaskPool::get().spawn(async move {
             build_far_terrain_indices(
                 origin,

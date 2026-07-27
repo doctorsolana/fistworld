@@ -1,93 +1,82 @@
-//! Map view — what the world looks like when you pull back to realm scale.
+//! Map view — how the world degrades naturally into a map as the camera pulls back.
 //!
-//! Close up, terrain is streamed chunks using the splat shader with a separate water
-//! surface. Far out, the whole map is one low-resolution mesh with baked vertex colours.
-//! Both existing at once is the problem this module solves: the streamed square sat
-//! inside the far mesh looking obviously different — sharper, differently lit, with real
-//! water — so a zoomed-out view showed a patch of "real" world floating in a map.
+//! Close up, terrain is streamed chunks using the splat shader plus a separate water
+//! surface; far out, the whole map is one low-resolution vertex-coloured mesh. The wrong
+//! way to switch between them is a global visibility toggle: it is stateful (chunks that
+//! stream in *after* the flip get missed, which showed up as a square of high-detail
+//! water floating in the map), and it snaps the entire view at once.
 //!
-//! Past a zoom threshold the detailed layer is hidden entirely and only the far mesh
-//! draws, so the whole world reads at one consistent level of detail. It is also much
-//! cheaper: at realm scale the streamed chunks are sub-pixel detail nobody can see.
+//! Instead every detail chunk carries a [`VisibilityRange`], Bevy's per-entity distance
+//! fade with built-in dithered crossfade. Each chunk fades out individually as *its own*
+//! distance to the camera crosses the band, so the detail boundary is a soft radial
+//! gradient that tracks the camera — the Google Maps feel — and freshly streamed chunks
+//! are handled automatically because the range rides on the entity itself.
+//!
+//! The far mesh sits ~5cm below the detail chunks. Its cut-out hole must be filled
+//! *before* the chunks start fading (see `HOLE_FILL_ZOOM`), otherwise the dither
+//! reveals void instead of map.
 
+use bevy::camera::visibility::VisibilityRange;
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 
 use crate::camera_rts::CommanderCamera;
-use crate::terrain::TerrainChunk;
-use crate::water::WaterChunk;
 
-/// Camera distance at which the detailed layer stops being worth drawing.
+/// Camera distance at which detail chunks begin dithering into the far mesh.
+pub const DETAIL_FADE_START: f32 = 1_050.0;
+
+/// Camera distance at which detail chunks are fully gone and only the map remains.
+pub const DETAIL_FADE_END: f32 = 1_550.0;
+
+/// Zoom past which the far mesh stops cutting a hole under the streamed chunks.
 ///
-/// Below this the streamed chunks dominate the frame; above it they are a small
-/// high-detail island inside the far mesh, which reads as an inconsistency rather than
-/// as detail.
-const MAP_VIEW_ZOOM: f32 = 2_200.0;
+/// Deliberately below [`DETAIL_FADE_START`]: the far mesh must already be solid
+/// underneath before any chunk starts to dither out.
+pub const HOLE_FILL_ZOOM: f32 = 950.0;
 
-/// Zoom over which the transition happens, so fog fades rather than snapping.
-const MAP_VIEW_BLEND: f32 = 900.0;
-
-/// True when the camera is far enough out that the world should render as a map.
-#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MapViewActive(pub bool);
-
-/// How far into map view we are, `0.0..=1.0`.
-#[derive(Resource, Default, Debug, Clone, Copy)]
-pub struct MapViewBlend(pub f32);
-
-pub fn update_map_view_state(
-    cameras: Query<&CommanderCamera>,
-    mut active: ResMut<MapViewActive>,
-    mut blend: ResMut<MapViewBlend>,
-) {
-    let Ok(camera) = cameras.single() else {
-        return;
-    };
-
-    let t = ((camera.zoom - MAP_VIEW_ZOOM) / MAP_VIEW_BLEND).clamp(0.0, 1.0);
-    blend.0 = t;
-
-    // Switch the detailed layer off only once the blend has actually committed, so a
-    // camera hovering at the threshold does not flicker chunks on and off.
-    let next = t >= 1.0;
-    if active.0 != next {
-        active.0 = next;
+/// Distance fade for a streamed detail chunk (terrain or water).
+///
+/// `use_aabb` matters here: chunks are 64m slabs, and fading on the centre point would
+/// make a chunk under the screen edge pop earlier than one under the cursor.
+pub fn detail_visibility_range() -> VisibilityRange {
+    VisibilityRange {
+        start_margin: 0.0..0.0,
+        end_margin: DETAIL_FADE_START..DETAIL_FADE_END,
+        use_aabb: true,
     }
 }
 
-/// Hide the detailed terrain and water layers in map view.
-pub fn apply_map_view_visibility(
-    active: Res<MapViewActive>,
-    mut chunks: Query<&mut Visibility, (With<TerrainChunk>, Without<WaterChunk>)>,
-    mut water: Query<&mut Visibility, (With<WaterChunk>, Without<TerrainChunk>)>,
-) {
-    if !active.is_changed() {
+/// Distance fade for the water surface.
+///
+/// Deliberately earlier than the terrain band: the water mesh streams with its own
+/// (smaller) radius, so its edge is a hard chunk-shaped stair-step, and its saturated
+/// surface clashes with the far mesh's baked ocean. Melting it away first means the
+/// terrain fade happens over a consistent map underneath.
+pub fn water_visibility_range() -> VisibilityRange {
+    VisibilityRange {
+        start_margin: 0.0..0.0,
+        end_margin: 650.0..1_000.0,
+        use_aabb: true,
+    }
+}
+
+/// How far into map view the camera is, `0.0..=1.0`. Drives the fog fade.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct MapViewBlend(pub f32);
+
+pub fn update_map_view_state(cameras: Query<&CommanderCamera>, mut blend: ResMut<MapViewBlend>) {
+    let Ok(camera) = cameras.single() else {
         return;
-    }
-
-    let desired = if active.0 {
-        Visibility::Hidden
-    } else {
-        Visibility::Inherited
     };
-
-    for mut visibility in chunks.iter_mut() {
-        if *visibility != desired {
-            *visibility = desired;
-        }
-    }
-    for mut visibility in water.iter_mut() {
-        if *visibility != desired {
-            *visibility = desired;
-        }
-    }
+    blend.0 = ((camera.zoom - DETAIL_FADE_START) / (DETAIL_FADE_END - DETAIL_FADE_START))
+        .clamp(0.0, 1.0);
 }
 
 /// Fade distance fog out as the camera pulls back.
 ///
-/// Aerial haze sells depth at ground level, but at realm scale it is applied over
-/// kilometres and turns the entire map into a flat grey-brown wash. A map is meant to be
-/// legible, so the haze is dialled out exactly as the map view comes in.
+/// Aerial haze sells depth at ground level, but at map scale it is integrated over
+/// kilometres and turns the whole map into a grey-brown wash. A map is meant to be
+/// legible, so the haze is dialled out exactly as the detail chunks fade.
 pub fn fade_fog_for_map_view(blend: Res<MapViewBlend>, mut fog: Query<&mut DistanceFog>) {
     if !blend.is_changed() {
         return;
