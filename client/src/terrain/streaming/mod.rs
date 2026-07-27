@@ -120,7 +120,10 @@ pub struct TerrainDeltaState {
 // FAR TERRAIN SETTINGS (static low-res mesh)
 // =============================================================================
 
-const FAR_TERRAIN_RESOLUTION: usize = 257;
+// 513 puts a vertex every 16m on an 8km map. At 257 (32m) the baked
+// coastline was a visibly square staircase from mid zoom; 16m keeps the
+// one-time build and the async hole rebuilds cheap while halving the step.
+const FAR_TERRAIN_RESOLUTION: usize = 513;
 const FAR_TERRAIN_INNER_BUFFER: f32 = 0.0;
 const FAR_TERRAIN_Y_OFFSET: f32 = -0.05;
 

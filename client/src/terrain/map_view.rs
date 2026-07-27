@@ -48,14 +48,18 @@ pub fn detail_visibility_range() -> VisibilityRange {
 
 /// Distance fade for the water surface.
 ///
-/// Deliberately earlier than the terrain band: the water mesh streams with its own
-/// (smaller) radius, so its edge is a hard chunk-shaped stair-step, and its saturated
-/// surface clashes with the far mesh's baked ocean. Melting it away first means the
-/// terrain fade happens over a consistent map underneath.
+/// The SAME band as the terrain chunks, deliberately: the detail terrain includes
+/// the sea floor, so if the water melts away earlier there is a zoom band where
+/// bare sand floor dithers against the far mesh's baked ocean — every coastal
+/// chunk becomes a square patch flickering between "land" and "water" as the
+/// camera moves. Fading water and floor together keeps the coast reading as
+/// water on both sides of the crossfade. (Water rides the terrain chunk set —
+/// `LoadedChunks` — so their footprints already match; an earlier version had
+/// its own smaller radius, which is why this band used to be earlier.)
 pub fn water_visibility_range() -> VisibilityRange {
     VisibilityRange {
         start_margin: 0.0..0.0,
-        end_margin: 650.0..1_000.0,
+        end_margin: DETAIL_FADE_START..DETAIL_FADE_END,
         use_aabb: true,
     }
 }
