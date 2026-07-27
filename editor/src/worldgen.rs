@@ -272,6 +272,7 @@ pub fn generate_world(
     session.map_definition.generated = Some(GeneratedWorld {
         style,
         seed,
+        generator_version: shared::worldgen::WORLDGEN_VERSION,
         half_extent,
         strokes: showcase
             .as_ref()

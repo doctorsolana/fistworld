@@ -190,6 +190,17 @@ fn build_loaded_map(
     // Generated worlds rebuild their terrain from the seed recipe — the
     // Valheim model. Hand-authored maps still decode a heightmap image.
     let (heightmap, heightmap_bytes, road_mask) = if let Some(generated) = &definition.generated {
+        if generated.generator_version != crate::worldgen::WORLDGEN_VERSION {
+            bevy::log::error!(
+                "Map '{}' was generated with terrain formula v{} but this binary has v{}: \
+                 the rebuilt terrain WILL differ from the world that recipe described \
+                 (and from binaries built at the other version). Regenerate the map, or \
+                 rebuild all binaries at one version.",
+                definition.map_id,
+                generated.generator_version,
+                crate::worldgen::WORLDGEN_VERSION,
+            );
+        }
         let started = std::time::Instant::now();
         let heightmap =
             generated.build_heightmap(definition.bounds, definition.terrain.water_level)?;
@@ -427,6 +438,7 @@ mod tests {
         let base = GeneratedWorld {
             style: WorldStyle::Showcase,
             seed: 2026,
+            generator_version: crate::worldgen::WORLDGEN_VERSION,
             half_extent: half,
             strokes: Vec::new(),
         };
