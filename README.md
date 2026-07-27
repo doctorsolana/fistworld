@@ -62,7 +62,7 @@ Or manually:
 ```bash
 cargo run -p server --release     # terminal 1
 cargo run -p client --release     # terminal 2
-cargo run -p editor -- --map city_alpha
+cargo run -p editor -- --map big_world
 ```
 
 ### Visual capture

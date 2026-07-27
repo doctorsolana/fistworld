@@ -4,7 +4,7 @@ use std::path::{Component, Path};
 
 use crate::props::PropKind;
 
-pub const DEFAULT_MAP_ID: &str = "city_alpha";
+pub const DEFAULT_MAP_ID: &str = "big_world";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MapDefinition {
