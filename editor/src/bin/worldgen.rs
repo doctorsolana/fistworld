@@ -21,9 +21,10 @@ use editor::worldgen::{generate_world, WorldStyle};
 
 use shared::map::{
     load_map, map_definition_path, map_dir_for_id, save_map_definition_atomic,
-    save_map_edits_atomic, MapBounds,
+    save_map_edits_atomic, MapBounds, MapDefinition, MapTerrain,
 };
 use shared::terrain::WorldTerrain;
+use shared::worldgen::{GeneratedWorld, WORLDGEN_VERSION};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -80,16 +81,45 @@ fn run(map_id: &str, style: WorldStyle, seed: u64, size: f32) -> Result<(), Stri
     std::env::set_var("FISTFORCE_ASSET_PATH", &asset_root);
     let map_dir: PathBuf = PathBuf::from(&asset_root).join(map_dir_for_id(map_id));
 
+    let half = (size * 0.5).clamp(256.0, 65_536.0);
+
+    // A generated world needs no shipped files at all — just its recipe. If
+    // the map directory doesn't exist yet, seed it with a bare recipe
+    // definition; the loader rebuilds terrain from it and generate_world
+    // overwrites everything below with the real content.
     if !map_dir.exists() {
-        return Err(format!(
-            "map '{map_id}' does not exist at {} — copy an existing map directory first \
-             (it needs height.png and the texture set)",
-            map_dir.display()
-        ));
+        std::fs::create_dir_all(&map_dir)
+            .map_err(|err| format!("Failed to create {}: {err}", map_dir.display()))?;
+        let definition = MapDefinition {
+            map_id: map_id.to_string(),
+            bounds: MapBounds {
+                min: [-half, -half],
+                max: [half, half],
+            },
+            terrain: MapTerrain {
+                // Unused for generated maps; kept for the schema's sake.
+                heightmap: "height.png".to_string(),
+                minimap: None,
+                water_level: Some(0.0),
+                height_min: 0.0,
+                height_max: 0.0,
+            },
+            generated: Some(GeneratedWorld {
+                style,
+                seed,
+                generator_version: WORLDGEN_VERSION,
+                half_extent: half,
+                strokes: Vec::new(),
+            }),
+            player_spawn: None,
+            objects: Vec::new(),
+            blockers: Vec::new(),
+        };
+        save_map_definition_atomic(&map_definition_path(&map_dir), &definition)?;
+        println!("worldgen: created new map directory {}", map_dir.display());
     }
 
     let loaded = load_map(map_id)?;
-    let half = (size * 0.5).clamp(256.0, 65_536.0);
 
     let mut definition = loaded.definition.clone();
     definition.bounds = MapBounds {
@@ -163,8 +193,8 @@ OPTIONS:
     --seed <n>       Generation seed                                  [default: 2026]
     --size <m>       Map edge length in metres                        [default: 8192]
 
-NOTE: the map directory must exist and contain a loadable map.ron (copy an existing map
-directory to create a new one). Generated maps store a seed recipe in map.ron and rebuild
+If the map directory does not exist it is created from a bare seed recipe — a generated
+world needs no shipped files. Generated maps store the recipe in map.ron and rebuild
 terrain from it at load; height.png is only read by legacy hand-authored maps.
 "#
     );

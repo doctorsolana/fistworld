@@ -12,7 +12,7 @@
   ),
   terrain: (
     heightmap: "height.png",
-    minimap: Some("minimap.png"),
+    minimap: None,
     water_level: Some(0.0),
     height_min: -34.0,
     height_max: 72.356766,
