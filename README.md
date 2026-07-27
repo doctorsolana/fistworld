@@ -1,7 +1,9 @@
-# Top-Down Tactics (working title)
+# Fistworld
 
-A multiplayer top-down unit-tactics game built with **Rust** and **Bevy 0.18** — many units,
-formations, huge maps.
+A persistent-world multiplayer RTS built with **Rust** and **Bevy 0.18** — one seed-generated
+round world of continents and biomes, seamless zoom from a single soldier to the whole map,
+villages growing into cities, clans contesting the realm. Design: [`docs/WORLD-DESIGN.md`](docs/WORLD-DESIGN.md),
+engine architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 > **This repo was a first-person shooter (FistForce) until July 2026.** It is mid-conversion:
 > the FPS layers have been stripped out and the world/terrain/editor foundation kept. The unit
