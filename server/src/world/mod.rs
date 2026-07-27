@@ -12,5 +12,6 @@
 pub mod bootstrap;
 pub mod map_state;
 pub mod navgrid;
+pub mod regions;
 pub mod pathfinding;
 pub mod time;

@@ -12,15 +12,21 @@
 use bevy::prelude::*;
 
 use shared::components::{Player, PlayerPosition, PlayerRotation};
+use shared::region::RegionCoord;
 
 use crate::net::input::ClientInputs;
 
 /// Write each commander's replicated view state from its latest input message.
 pub fn sync_commander_views(
     inputs: Res<ClientInputs>,
-    mut commanders: Query<(&Player, &mut PlayerPosition, &mut PlayerRotation)>,
+    mut commanders: Query<(
+        &Player,
+        &mut PlayerPosition,
+        &mut PlayerRotation,
+        &mut RegionCoord,
+    )>,
 ) {
-    for (player, mut position, mut rotation) in commanders.iter_mut() {
+    for (player, mut position, mut rotation, mut region) in commanders.iter_mut() {
         let Some(input) = inputs.latest.get(&player.client_id) else {
             continue;
         };
@@ -35,6 +41,13 @@ pub fn sync_commander_views(
         }
         if rotation.0 != input.yaw {
             rotation.0 = input.yaw;
+        }
+
+        // Interest management reads this; leaving it stale would pin replication to
+        // wherever the commander first spawned.
+        let current = RegionCoord::from_world_pos(input.focus);
+        if *region != current {
+            *region = current;
         }
     }
 }

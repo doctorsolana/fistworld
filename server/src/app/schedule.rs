@@ -52,6 +52,8 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             collision::building_index::sync_building_spatial_index,
             collision::streaming::update_static_collider_streaming,
             world::navgrid::sync_obstacle_grid,
+            world::regions::tick_strategic_world,
+            world::regions::log_region_telemetry,
         )
             .chain()
             .in_set(FpsServerSet::WorldTick)
@@ -78,6 +80,9 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             player::roster::handle_player_roster_requests,
             net::input::handle_client_input_messages,
             player::commander::sync_commander_views,
+            world::regions::update_client_interest,
+            world::regions::apply_region_visibility,
+            world::regions::update_region_sim_levels,
         )
             .chain()
             .in_set(FpsServerSet::NetIngress)

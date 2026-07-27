@@ -9,6 +9,7 @@ pub mod player;
 pub mod player_profile;
 pub mod props;
 pub mod protocol;
+pub mod region;
 pub mod rng;
 pub mod spatial;
 pub mod structures;

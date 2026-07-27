@@ -3,7 +3,8 @@
 use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{
-    ControlledBy, Lifetime, MessageReceiver, MessageSender, NetworkTarget, RemoteId, Replicate,
+    ControlledBy, Lifetime, MessageReceiver, MessageSender, NetworkTarget, NetworkVisibility,
+    RemoteId, Replicate,
     ReplicationGroup, ReplicationMode,
 };
 
@@ -108,6 +109,10 @@ pub fn handle_player_name_submission(
             let _player_entity = commands
                 .spawn((
                     Player { client_id: peer_id },
+                    // Region tag + NetworkVisibility opt this entity into interest
+                    // management; without both it would replicate to everyone.
+                    shared::region::RegionCoord::from_world_pos(spawn_pos),
+                    NetworkVisibility,
                     PlayerPosition(spawn_pos),
                     PlayerRotation(spawn_rot),
                     progression,

@@ -17,6 +17,11 @@ pub struct PlayerInput {
     pub yaw: f32,
     /// World-space point the camera is centered on.
     pub focus: Vec3,
+    /// Roughly how far the camera can see from `focus`, in metres.
+    ///
+    /// The server turns this into an interest radius, so zooming out widens what gets
+    /// replicated instead of leaving the far half of the view empty.
+    pub view_radius: f32,
 }
 
 /// Message sent from client when they want to spawn.
@@ -120,6 +125,7 @@ mod tests {
         let input = PlayerInput {
             yaw: 1.2345,
             focus: Vec3::new(120.5, 8.25, -640.0),
+            view_radius: 1400.0,
         };
 
         let bytes = bincode::serialize(&input).unwrap();

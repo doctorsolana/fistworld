@@ -19,6 +19,10 @@ use shared::terrain::WorldTerrain;
 /// packet cannot strand the server's streaming anchor.
 const VIEW_HEARTBEAT_SECS: f32 = 0.25;
 
+/// Camera tilt at minimum and maximum zoom, in radians (0 = horizon, PI/2 = straight down).
+const TILT_CLOSE: f32 = 0.55;
+const TILT_FAR: f32 = 1.45;
+
 /// Network peer id of the local client, published on connect.
 ///
 /// Not read yet — it is the hook for "which units are mine" once unit ownership exists.
@@ -51,9 +55,14 @@ impl Default for CommanderCamera {
             focus: Vec3::ZERO,
             pan_speed: 120.0,
             zoom: 280.0,
-            zoom_min: 55.0,
-            zoom_max: 900.0,
-            zoom_speed: 22.0,
+            // Range spans "one character" to "see your realm". The old 55..900 window was
+            // sized for a squad-scale RTS; a persistent world with regions needs to pull
+            // back far enough to read territory.
+            zoom_min: 12.0,
+            zoom_max: 12_000.0,
+            // Proportional zoom: a fixed metres-per-notch step is unusable across three
+            // orders of magnitude — glacial when far out, jumpy when close in.
+            zoom_speed: 0.12,
             tilt: 0.92,
             look_sensitivity: 0.0022,
         }
@@ -106,8 +115,11 @@ pub fn update_commander_camera(
         scroll_lines += event.y * factor;
     }
     if scroll_lines.abs() > f32::EPSILON {
-        controller.zoom = (controller.zoom - scroll_lines * controller.zoom_speed)
-            .clamp(controller.zoom_min, controller.zoom_max);
+        // Multiplicative: each notch changes zoom by a constant *fraction*, so the felt
+        // speed is the same whether you are inspecting a soldier or looking at a realm.
+        let factor = (1.0 + controller.zoom_speed).powf(-scroll_lines);
+        controller.zoom =
+            (controller.zoom * factor).clamp(controller.zoom_min, controller.zoom_max);
     }
 
     let mut pan_input = Vec2::ZERO;
@@ -148,6 +160,13 @@ pub fn update_commander_camera(
         controller.focus.x = controller.focus.x.clamp(bounds.min[0], bounds.max[0]);
         controller.focus.z = controller.focus.z.clamp(bounds.min[1], bounds.max[1]);
     }
+
+    // Ease toward straight-down as the camera pulls back. A shallow angle is fine for
+    // watching a fight but turns into an unreadable smear of terrain at map scale.
+    let zoom_t = ((controller.zoom - controller.zoom_min)
+        / (controller.zoom_max - controller.zoom_min))
+        .clamp(0.0, 1.0);
+    controller.tilt = TILT_CLOSE + (TILT_FAR - TILT_CLOSE) * zoom_t.powf(0.45);
 
     apply_commander_transform(&mut transform, &controller, terrain.as_deref());
 }
@@ -283,6 +302,9 @@ pub fn send_commander_view(
     let view = PlayerInput {
         yaw: controller.yaw,
         focus: controller.focus,
+        // Ground covered by the view grows with camera distance; pad it so content exists
+        // slightly beyond the frame rather than popping in at the screen edge.
+        view_radius: controller.zoom * 1.35,
     };
 
     *heartbeat += time.delta_secs();

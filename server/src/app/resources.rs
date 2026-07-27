@@ -23,6 +23,9 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<player::index::PlayerEntityIndex>();
     app.init_resource::<SpatialObstacleGrid>();
     app.init_resource::<crate::world::navgrid::ObstacleGridState>();
+    app.init_resource::<crate::world::regions::RegionRegistry>();
+    app.init_resource::<crate::world::regions::ClientInterest>();
+    app.init_resource::<crate::world::regions::StrategicClock>();
     app.init_resource::<crate::world::pathfinding::PathfindingBudgetSettings>();
     app.init_resource::<collision::building_index::BuildingSpatialIndex>();
     app.init_resource::<collision::streaming::ColliderStreamingState>();

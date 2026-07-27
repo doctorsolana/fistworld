@@ -83,6 +83,7 @@ pub(crate) fn configure_bootstrap(app: &mut App) {
             world::time::spawn_world_time_once,
             world::map_state::spawn_cloud_seed_once,
             world::map_state::spawn_active_map_state_once,
+            world::regions::build_region_registry,
         )
             .run_if(server_is_started),
     );
