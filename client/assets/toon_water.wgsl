@@ -99,15 +99,20 @@ fn shore_lap_height(world_xz: vec2<f32>, shore_dist: f32, signed_depth: f32, tim
     // distance itself must stay out of the phase (its nearest-point jumps
     // sawtooth); bilinearly sampled terrain depth is smooth.
     let shore_zone = 1.0 - smoothstep(0.10, 0.80, shore_dist);
-    // Gentle along-shore wobble so the fronts undulate instead of tracing
-    // perfect depth contours.
-    let wobble = sin(dot(world_xz, vec2<f32>(0.11, 0.073)) + time * 0.30) * 0.55;
+    // Two incommensurate along-shore wobble octaves (~48m and ~120m) push
+    // neighbouring stretches of beach out of phase, so arrivals ripple down
+    // the coast instead of the whole shoreline surging in lockstep.
+    let wob_a = sin(dot(world_xz, vec2<f32>(0.11, 0.073)) + time * 0.26);
+    let wob_b = sin(dot(world_xz, vec2<f32>(-0.031, 0.042)) + time * 0.17 + 2.1);
+    let wobble = wob_a * 1.05 + wob_b * 1.35;
     // +time moves constant-phase crests toward smaller depth: shoreward.
-    let primary_phase = signed_depth * (TAU * 1.55) + time * (TAU / 9.0) + wobble;
-    let secondary_phase = signed_depth * (TAU * 3.05) + time * (TAU / 5.5) + 1.7 + wobble * 0.6;
+    let primary_phase = signed_depth * (TAU * 1.55) + time * (TAU / 12.0) + wobble;
+    // Second harmonic skews the waveform: fast run-up, lingering retreat.
+    let primary = sin(primary_phase) + 0.25 * sin(primary_phase * 2.0);
+    let secondary_phase = signed_depth * (TAU * 3.05) + time * (TAU / 7.5) + 1.7 + wobble * 0.6;
     // Shoaling: crests grow as the water thins, like real arriving waves.
-    let shoaling = 1.0 + (1.0 - clamp(signed_depth, 0.0, 1.0)) * 0.5;
-    return (sin(primary_phase) * 0.085 + sin(secondary_phase) * 0.022) * shoaling * shore_zone;
+    let shoaling = 1.0 + (1.0 - clamp(signed_depth, 0.0, 1.0)) * 0.45;
+    return (primary * 0.059 + sin(secondary_phase) * 0.017) * shoaling * shore_zone;
 }
 
 fn wave_height(world_xz: vec2<f32>, depth: f32, shore_dist: f32, signed_depth: f32, time: f32) -> f32 {
