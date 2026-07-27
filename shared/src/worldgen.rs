@@ -591,12 +591,24 @@ impl HeightGrid {
     }
 
     /// Compress heights around sea level: wide beaches + shallow shelf.
+    ///
+    /// The quadratic compression drives the slope to ZERO at the waterline,
+    /// which used to leave wide aprons of ground within centimetres of water
+    /// height — with the surface animating ±10cm, whole patches flickered
+    /// between land and water at close zoom. A small step across the
+    /// crossing gives the coast a crisp ~12cm bank instead: ground is always
+    /// decisively above the surface, or deeper than any wave crest below it.
+    /// The step must stay under the water mesh's shore overlap (0.18m) so
+    /// lap waves still have surface to run up the bank.
     fn apply_beach_shelf(&mut self) {
         const BAND: f32 = 3.2;
+        const WATERLINE_STEP: f32 = 0.12;
         for h in self.data.iter_mut() {
             if *h > SEA_LEVEL - BAND && *h < SEA_LEVEL + BAND {
                 let t = (*h - SEA_LEVEL) / BAND;
-                *h = SEA_LEVEL + t * t * t.signum() * BAND * 0.55;
+                *h = SEA_LEVEL
+                    + t * t * t.signum() * BAND * 0.55
+                    + t.signum() * WATERLINE_STEP;
             }
         }
     }
