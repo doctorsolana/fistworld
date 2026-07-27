@@ -99,7 +99,12 @@ impl TerrainGenerator {
                 .road_mask
                 .as_deref()
                 .map(|mask| mask.distance(x, z));
-            return crate::worldgen::surface_weights_at(h, slope, road);
+            let weights = crate::worldgen::surface_weights_at(h, slope, road);
+            if let Some(biomes) = self.loaded_map.biome_field.as_deref() {
+                let biome = biomes.biome(x, z, h, slope);
+                return crate::worldgen::biome_adjusted_weights(weights, biome);
+            }
+            return weights;
         }
 
         match self.get_biome(x, z) {

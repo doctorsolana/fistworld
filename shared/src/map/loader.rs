@@ -25,6 +25,10 @@ pub struct LoadedMap {
     /// Road-distance mask rebuilt from the generated-world recipe; drives
     /// procedural surface painting. `None` for hand-authored maps.
     pub road_mask: Option<std::sync::Arc<crate::worldgen::RoadMask>>,
+    /// Biome/resource sampler rebuilt from the recipe seed; drives painting,
+    /// the world map, and resource availability. `None` for hand-authored
+    /// maps.
+    pub biome_field: Option<std::sync::Arc<crate::worldgen::BiomeField>>,
     pub content_hash: u64,
     pub map_dir: PathBuf,
 }
@@ -189,7 +193,9 @@ fn build_loaded_map(
 
     // Generated worlds rebuild their terrain from the seed recipe — the
     // Valheim model. Hand-authored maps still decode a heightmap image.
-    let (heightmap, heightmap_bytes, road_mask) = if let Some(generated) = &definition.generated {
+    let (heightmap, heightmap_bytes, road_mask, biome_field) = if let Some(generated) =
+        &definition.generated
+    {
         if generated.generator_version != crate::worldgen::WORLDGEN_VERSION {
             bevy::log::error!(
                 "Map '{}' was generated with terrain formula v{} but this binary has v{}: \
@@ -205,6 +211,7 @@ fn build_loaded_map(
         let heightmap =
             generated.build_heightmap(definition.bounds, definition.terrain.water_level)?;
         let road_mask = generated.build_road_mask().map(std::sync::Arc::new);
+        let biome_field = Some(std::sync::Arc::new(generated.build_biome_field()));
         bevy::log::info!(
             "Rebuilt '{}' terrain from seed {} ({}x{} grid) in {:.2}s",
             definition.map_id,
@@ -215,7 +222,7 @@ fn build_loaded_map(
         );
         // The recipe lives inside map.ron, so map_bytes already covers it
         // for the content hash; there are no heightmap bytes to hash.
-        (heightmap, Vec::new(), road_mask)
+        (heightmap, Vec::new(), road_mask, biome_field)
     } else {
         let heightmap_path =
             resolve_map_relative_file(&map_dir, &definition.map_id, &definition.terrain.heightmap)
@@ -237,7 +244,7 @@ fn build_loaded_map(
             definition.terrain.height_max,
             definition.terrain.water_level,
         )?;
-        (heightmap, heightmap_bytes, None)
+        (heightmap, heightmap_bytes, None, None)
     };
 
     if let Some(minimap_rel) = definition.terrain.minimap.as_deref() {
@@ -265,6 +272,7 @@ fn build_loaded_map(
         terrain_deltas_by_chunk,
         objects_by_chunk,
         road_mask,
+        biome_field,
         content_hash,
         map_dir,
     })

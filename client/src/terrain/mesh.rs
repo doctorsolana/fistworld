@@ -123,7 +123,29 @@ pub(crate) fn build_far_terrain_mesh(
                     palette.sand.z,
                 ),
                 _ => {
-                    let grass = Vec3::new(palette.grass.x, palette.grass.y, palette.grass.z);
+                    // Biome tint so the zoomed-out map reads like the world's
+                    // resource layout (matches the minimap's colour language);
+                    // legacy maps without a biome field keep the plain grass.
+                    // BiomeField expects a gradient-magnitude slope (rise per
+                    // metre), not the shader's 1-normal.y measure.
+                    let gradient = (normal.x * normal.x + normal.z * normal.z).sqrt()
+                        / normal.y.max(0.01);
+                    let grass = match terrain
+                        .generator
+                        .loaded_map()
+                        .biome_field
+                        .as_deref()
+                        .map(|biomes| biomes.biome(world_x, world_z, height, gradient))
+                    {
+                        Some(shared::worldgen::WorldBiome::Forest) => Vec3::new(0.19, 0.38, 0.17),
+                        Some(shared::worldgen::WorldBiome::Highlands) => {
+                            Vec3::new(0.48, 0.42, 0.28)
+                        }
+                        Some(shared::worldgen::WorldBiome::Mountains) => {
+                            Vec3::new(0.52, 0.50, 0.47)
+                        }
+                        _ => Vec3::new(palette.grass.x, palette.grass.y, palette.grass.z),
+                    };
                     let rock = Vec3::new(palette.rock.x, palette.rock.y, palette.rock.z);
                     let rockiness = ((slope - 0.30) / 0.32).clamp(0.0, 1.0);
                     let base = grass.lerp(rock, rockiness);

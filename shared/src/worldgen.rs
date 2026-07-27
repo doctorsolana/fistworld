@@ -106,6 +106,12 @@ impl GeneratedWorld {
         Ok(grid.into_heightmap(bounds, water_level))
     }
 
+    /// Biome/resource sampler for this world — cheap to build (noise
+    /// tables only), deterministic from the seed.
+    pub fn build_biome_field(&self) -> BiomeField {
+        BiomeField::new(self.seed)
+    }
+
     /// Rebuild the road-distance mask from the recorded strokes. `None` when
     /// the world has no roads (island/mainland styles).
     pub fn build_road_mask(&self) -> Option<RoadMask> {
@@ -137,6 +143,131 @@ pub struct FlattenStroke {
 
 fn default_mask_influence() -> f32 {
     26.0
+}
+
+// ============================================================================
+// Biomes & resources
+// ============================================================================
+
+/// Land biome: decides resource availability and look. Availability is a
+/// weighting, never exclusive — every biome has some of everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorldBiome {
+    /// Open grassland: the farmland biome. Lone trees, flowers.
+    Meadows,
+    /// Dense woodland: the wood biome.
+    Forest,
+    /// Rocky hills and moors: the stone biome, iron-bearing.
+    Highlands,
+    /// High peaks: stone everywhere, the richest iron.
+    Mountains,
+}
+
+/// Relative resource availability at a point, 0..1 per resource.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ResourceProfile {
+    pub wood: f32,
+    pub stone: f32,
+    pub iron: f32,
+    pub farmland: f32,
+}
+
+impl WorldBiome {
+    /// Base availability per biome. Iron is further gated by veins — see
+    /// [`BiomeField::resources`] — which makes it rare and concentrated.
+    pub fn profile(self) -> ResourceProfile {
+        match self {
+            WorldBiome::Meadows => ResourceProfile {
+                wood: 0.25,
+                stone: 0.10,
+                iron: 0.02,
+                farmland: 0.90,
+            },
+            WorldBiome::Forest => ResourceProfile {
+                wood: 0.95,
+                stone: 0.20,
+                iron: 0.06,
+                farmland: 0.30,
+            },
+            WorldBiome::Highlands => ResourceProfile {
+                wood: 0.15,
+                stone: 0.85,
+                iron: 0.40,
+                farmland: 0.10,
+            },
+            WorldBiome::Mountains => ResourceProfile {
+                wood: 0.05,
+                stone: 1.00,
+                iron: 0.60,
+                farmland: 0.0,
+            },
+        }
+    }
+}
+
+/// Seeded biome/resource sampler, independent of the height grid so it can
+/// be rebuilt cheaply in every binary (the heightmap supplies height and
+/// slope at query time). Same seed → same biomes everywhere, forever.
+pub struct BiomeField {
+    zone: Fbm<Perlin>,
+    vein: Fbm<Perlin>,
+}
+
+impl std::fmt::Debug for BiomeField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BiomeField").finish_non_exhaustive()
+    }
+}
+
+impl BiomeField {
+    pub fn new(seed: u64) -> Self {
+        let s = |n: u64| splitmix64(seed ^ n) as u32;
+        Self {
+            // Biome patches a few hundred metres to ~2km across.
+            zone: fbm(s(9), 3, 1.0 / 1_100.0),
+            // Iron deposits: mid-frequency, thresholded hard in iron_vein().
+            vein: fbm(s(10), 2, 1.0 / 150.0),
+        }
+    }
+
+    /// The land biome at a point. Callers handle water themselves.
+    pub fn biome(&self, x: f32, z: f32, height: f32, slope: f32) -> WorldBiome {
+        if height > 40.0 || (height > 24.0 && slope > 0.55) {
+            return WorldBiome::Mountains;
+        }
+        if slope > 0.62 {
+            return WorldBiome::Highlands;
+        }
+        let zone = self.zone.get([x as f64, z as f64]) as f32;
+        if zone > 0.16 {
+            WorldBiome::Forest
+        } else if zone < -0.28 {
+            WorldBiome::Highlands
+        } else {
+            WorldBiome::Meadows
+        }
+    }
+
+    /// Iron deposit intensity 0..1: zero almost everywhere, rising steeply
+    /// inside sparse vein patches.
+    pub fn iron_vein(&self, x: f32, z: f32) -> f32 {
+        let v = self.vein.get([x as f64, z as f64]) as f32;
+        ((v - 0.28) / 0.50).clamp(0.0, 1.0)
+    }
+
+    /// Effective resource availability at a point: the biome's base profile
+    /// with iron gated by veins (rare, concentrated), stone scaled by how
+    /// rugged the ground actually is (rocky slopes and peaks quarry better
+    /// than flat moor), and everything zeroed in the water.
+    pub fn resources(&self, x: f32, z: f32, height: f32, slope: f32) -> ResourceProfile {
+        if height < SEA_LEVEL + 1.0 {
+            return ResourceProfile::default();
+        }
+        let mut profile = self.biome(x, z, height, slope).profile();
+        profile.iron *= 0.10 + 0.90 * self.iron_vein(x, z);
+        profile.stone *= 0.55 + 0.45 * (slope / 0.7).min(1.0);
+        profile
+    }
 }
 
 // ============================================================================
@@ -870,6 +1001,23 @@ pub fn weights_to_bytes(weights: [f32; 4]) -> [u8; 4] {
     bytes
 }
 
+/// Shift ground paint toward a biome's character: highlands and mountains
+/// read rockier, forests get leaf-litter mottling, meadows stay lush. Only
+/// moves weight from grass to the dirt/rock layer — sand, roads, and the
+/// slope-driven rock stay as computed.
+pub fn biome_adjusted_weights(mut weights: [f32; 4], biome: WorldBiome) -> [f32; 4] {
+    let shift = match biome {
+        WorldBiome::Meadows => 0.0,
+        WorldBiome::Forest => 0.12,
+        WorldBiome::Highlands => 0.38,
+        WorldBiome::Mountains => 0.25,
+    };
+    let moved = weights[0].min(shift);
+    weights[0] -= moved;
+    weights[1] += moved;
+    weights
+}
+
 /// Grid-sampling convenience wrapper around [`surface_weights_at`].
 pub fn surface_weights(
     grid: &HeightGrid,
@@ -1055,6 +1203,101 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn biomes_are_deterministic_and_iron_is_rare() {
+        let a = BiomeField::new(2026);
+        let b = BiomeField::new(2026);
+
+        let mut iron_sum = 0.0f32;
+        let mut wood_sum = 0.0f32;
+        let mut rich_iron_cells = 0u32;
+        let mut samples = 0u32;
+        let mut biome_counts = [0u32; 4];
+        for zi in 0..80 {
+            for xi in 0..80 {
+                let x = -3900.0 + xi as f32 * 97.0;
+                let z = -3900.0 + zi as f32 * 97.0;
+                // Flat mid-elevation land: biome comes from the zone noise.
+                let (h, slope) = (8.0, 0.1);
+                assert_eq!(a.biome(x, z, h, slope), b.biome(x, z, h, slope));
+
+                let r = a.resources(x, z, h, slope);
+                iron_sum += r.iron;
+                wood_sum += r.wood;
+                if r.iron > 0.25 {
+                    rich_iron_cells += 1;
+                }
+                samples += 1;
+                biome_counts[match a.biome(x, z, h, slope) {
+                    WorldBiome::Meadows => 0,
+                    WorldBiome::Forest => 1,
+                    WorldBiome::Highlands => 2,
+                    WorldBiome::Mountains => 3,
+                }] += 1;
+            }
+        }
+
+        // Iron is rare: far scarcer than wood on average, and rich deposits
+        // cover only a small fraction of the world.
+        assert!(iron_sum < wood_sum * 0.25, "iron {iron_sum} vs wood {wood_sum}");
+        let rich_frac = rich_iron_cells as f32 / samples as f32;
+        assert!(
+            rich_frac > 0.001 && rich_frac < 0.08,
+            "rich iron fraction {rich_frac}"
+        );
+
+        // All lowland biomes actually occur.
+        assert!(biome_counts[0] > 0, "no meadows");
+        assert!(biome_counts[1] > 0, "no forest");
+        assert!(biome_counts[2] > 0, "no highlands");
+
+        // Altitude forces mountains regardless of the zone noise.
+        assert_eq!(a.biome(0.0, 0.0, 55.0, 0.1), WorldBiome::Mountains);
+        // Water yields nothing.
+        assert_eq!(a.resources(0.0, 0.0, -3.0, 0.0), ResourceProfile::default());
+    }
+
+    /// World probe, not an assertion: lists iron-vein sites for a seed so a
+    /// human (or capture run) can go look at them.
+    /// `cargo test -p shared probe_vein_sites -- --ignored --nocapture`
+    #[test]
+    #[ignore = "world probe; run with --ignored --nocapture"]
+    fn probe_vein_sites() {
+        let def = GeneratedWorld {
+            style: WorldStyle::Showcase,
+            seed: 91,
+            generator_version: WORLDGEN_VERSION,
+            half_extent: 4096.0,
+            strokes: Vec::new(),
+        };
+        let grid = def.build_grid();
+        let biomes = def.build_biome_field();
+        let mut found = 0;
+        for zi in 0..205 {
+            for xi in 0..205 {
+                let x = -4080.0 + xi as f32 * 40.0;
+                let z = -4080.0 + zi as f32 * 40.0;
+                let h = grid.height(x, z);
+                if h < 2.0 {
+                    continue;
+                }
+                let s = grid.slope(x, z);
+                let vein = biomes.iron_vein(x, z);
+                let biome = biomes.biome(x, z, h, s);
+                if vein > 0.6
+                    && matches!(biome, WorldBiome::Highlands | WorldBiome::Mountains)
+                {
+                    println!("vein at ({x:.0},{z:.0}) h={h:.1} {biome:?} strength {vein:.2}");
+                    found += 1;
+                    if found >= 15 {
+                        return;
+                    }
+                }
+            }
+        }
+        println!("{found} vein sites listed");
     }
 
     #[test]

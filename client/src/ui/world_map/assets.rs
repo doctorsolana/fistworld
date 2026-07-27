@@ -1,6 +1,7 @@
 //! assets systems.
 
 use super::*;
+use shared::worldgen::WorldBiome;
 
 pub(super) fn ensure_map_texture(
     map_open: Res<MapOpen>,
@@ -34,6 +35,7 @@ fn build_live_map_image(
     let width = bounds.width();
     let depth = bounds.depth();
     let water_level = terrain.water_level();
+    let biome_field = terrain.generator.loaded_map().biome_field.clone();
 
     // Sample heights once; reuse for color + hillshade.
     let n = size as usize;
@@ -81,14 +83,34 @@ fn build_live_map_image(
                 let base = if above < 2.2 {
                     // Beach sand.
                     [0.82, 0.74, 0.54]
+                } else if let Some(biomes) = biome_field.as_deref() {
+                    // Biome-coloured land: the map is how you read where the
+                    // resources are. Iron veins show as rust specks.
+                    let world_x = min_x + (x as f32 / (size - 1) as f32) * width;
+                    let world_z = min_z + (y as f32 / (size - 1) as f32) * depth;
+                    let slope = (dx * dx + dz * dz).sqrt();
+                    let biome = biomes.biome(world_x, world_z, h, slope);
+                    let mut base = match biome {
+                        WorldBiome::Meadows => [0.48, 0.61, 0.30],
+                        WorldBiome::Forest => [0.21, 0.41, 0.19],
+                        WorldBiome::Highlands => [0.56, 0.49, 0.32],
+                        WorldBiome::Mountains => {
+                            lerp3([0.58, 0.56, 0.52], [0.78, 0.78, 0.80], (above - 28.0) / 18.0)
+                        }
+                    };
+                    if matches!(biome, WorldBiome::Highlands | WorldBiome::Mountains) {
+                        let vein = biomes.iron_vein(world_x, world_z);
+                        if vein > 0.55 {
+                            base = lerp3(base, [0.47, 0.25, 0.13], 0.65);
+                        }
+                    }
+                    base
                 } else if above < 14.0 {
-                    // Lowland to hill greens.
+                    // Legacy maps: elevation greens.
                     lerp3([0.32, 0.52, 0.26], [0.45, 0.58, 0.30], (above - 2.2) / 11.8)
                 } else if above < 28.0 {
-                    // High ground drying out.
                     lerp3([0.45, 0.58, 0.30], [0.52, 0.48, 0.38], (above - 14.0) / 14.0)
                 } else {
-                    // Rocky peaks.
                     lerp3([0.52, 0.48, 0.38], [0.72, 0.72, 0.74], (above - 28.0) / 15.0)
                 };
                 [base[0] * shade, base[1] * shade, base[2] * shade]

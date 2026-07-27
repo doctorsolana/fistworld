@@ -33,8 +33,13 @@ fn scatter_props(
     half_extent: f32,
     roads: Option<&RoadMask>,
 ) -> Vec<MapObjectSpawn> {
-    let forest_mask = fbm(splitmix64(seed ^ 77) as u32, 3, 1.0 / 260.0);
-    let meadow_mask = fbm(splitmix64(seed ^ 78) as u32, 3, 1.0 / 150.0);
+    // Vegetation follows the biome field — the same sampler the runtime
+    // uses for painting and the world map — so what you see growing IS the
+    // resource availability: dense trees where wood is high, rock fields
+    // where stone is high, ore-rock clusters on iron veins.
+    let biomes = shared::worldgen::BiomeField::new(seed);
+    // Within-forest clumping so woods have glades instead of uniform fill.
+    let clump_mask = fbm(splitmix64(seed ^ 77) as u32, 3, 1.0 / 90.0);
 
     const TREES_BROADLEAF: &[PropKind] = &[
         PropKind::Tree_01,
@@ -101,41 +106,89 @@ fn scatter_props(
         }
         let slope = grid.slope(x, z);
 
-        let forest = (forest_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
-        let meadow = (meadow_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
+        let biome = biomes.biome(x, z, h, slope);
+        let clump = (clump_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
         let roll = rand01(&mut rng);
 
+        use shared::worldgen::WorldBiome;
         let (kind, scale) = if slope > 0.85 {
-            // Steep ground: occasional rocks only.
+            // Cliffs: occasional rocks only, whatever the biome says.
             if roll < 0.12 {
-                (pick(ROCKS, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.7)
+                (pick(ROCKS, rand01(&mut rng)), 1.4 + rand01(&mut rng) * 1.4)
             } else {
                 return None;
             }
-        } else if forest > 0.62 && h > SEA_LEVEL + 2.0 && roll < (forest - 0.45) * 1.6 {
-            // Forest: pines up high, broadleaf low, bushes at the fringe.
-            let fringe = forest < 0.70;
-            if fringe && rand01(&mut rng) < 0.35 {
-                (pick(BUSHES, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.5)
-            } else if h > 16.0 {
-                (pick(TREES_PINE, rand01(&mut rng)), 0.85 + rand01(&mut rng) * 0.45)
-            } else {
-                (
-                    pick(TREES_BROADLEAF, rand01(&mut rng)),
-                    0.85 + rand01(&mut rng) * 0.45,
-                )
-            }
-        } else if meadow > 0.55 && forest < 0.6 && roll < 0.5 {
-            // Meadows: dense grass with sparse flowers.
-            if rand01(&mut rng) < 0.06 {
-                (pick(FLOWERS, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.4)
-            } else {
-                (PropKind::Env_Grass_Tall_04, 0.32 + rand01(&mut rng) * 0.16)
-            }
-        } else if roll < 0.02 {
-            (pick(ROCKS, rand01(&mut rng)), 0.5 + rand01(&mut rng) * 0.6)
         } else {
-            return None;
+            match biome {
+                WorldBiome::Forest => {
+                    // The wood biome: dense trees with clump-driven glades,
+                    // bushes at the clump fringes.
+                    if h > SEA_LEVEL + 2.0 && roll < 0.18 + clump * 0.50 {
+                        if clump < 0.35 && rand01(&mut rng) < 0.40 {
+                            (pick(BUSHES, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.5)
+                        } else if h > 16.0 {
+                            (pick(TREES_PINE, rand01(&mut rng)), 0.85 + rand01(&mut rng) * 0.45)
+                        } else {
+                            (
+                                pick(TREES_BROADLEAF, rand01(&mut rng)),
+                                0.85 + rand01(&mut rng) * 0.45,
+                            )
+                        }
+                    } else if roll > 0.97 {
+                        (pick(ROCKS, rand01(&mut rng)), 0.5 + rand01(&mut rng) * 0.5)
+                    } else {
+                        return None;
+                    }
+                }
+                WorldBiome::Meadows => {
+                    // The farmland biome: open grass, flowers, the odd lone
+                    // tree — visibly sparse in wood.
+                    if roll < 0.30 {
+                        if rand01(&mut rng) < 0.10 {
+                            (pick(FLOWERS, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.4)
+                        } else {
+                            (PropKind::Env_Grass_Tall_04, 0.32 + rand01(&mut rng) * 0.16)
+                        }
+                    } else if roll < 0.325 && h > SEA_LEVEL + 2.0 {
+                        (
+                            pick(TREES_BROADLEAF, rand01(&mut rng)),
+                            0.9 + rand01(&mut rng) * 0.4,
+                        )
+                    } else if roll > 0.995 {
+                        (pick(ROCKS, rand01(&mut rng)), 0.5 + rand01(&mut rng) * 0.5)
+                    } else {
+                        return None;
+                    }
+                }
+                WorldBiome::Highlands => {
+                    // The stone biome: rock fields, sparse pines. Iron veins
+                    // read as tight clusters of big dark boulders.
+                    let vein = biomes.iron_vein(x, z);
+                    if vein > 0.55 && roll < 0.45 {
+                        // Ore outcrop: boulder-sized so a deposit reads from
+                        // gameplay zoom (the rock assets are pebbles at 1.0).
+                        (PropKind::Rock_5, 3.6 + rand01(&mut rng) * 2.2)
+                    } else if roll < 0.12 {
+                        (pick(ROCKS, rand01(&mut rng)), 1.6 + rand01(&mut rng) * 1.6)
+                    } else if roll < 0.165 && h > SEA_LEVEL + 2.0 {
+                        (pick(TREES_PINE, rand01(&mut rng)), 0.75 + rand01(&mut rng) * 0.35)
+                    } else {
+                        return None;
+                    }
+                }
+                WorldBiome::Mountains => {
+                    let vein = biomes.iron_vein(x, z);
+                    if vein > 0.55 && roll < 0.50 {
+                        (PropKind::Rock_5, 4.0 + rand01(&mut rng) * 2.5)
+                    } else if roll < 0.14 {
+                        (pick(ROCKS, rand01(&mut rng)), 2.0 + rand01(&mut rng) * 1.8)
+                    } else if roll < 0.155 && h < 42.0 {
+                        (pick(TREES_PINE, rand01(&mut rng)), 0.7 + rand01(&mut rng) * 0.3)
+                    } else {
+                        return None;
+                    }
+                }
+            }
         };
 
         Some(MapObjectSpawn {
@@ -488,8 +541,11 @@ mod tests {
                 max_z
             );
             // Budget stays bounded: the thinning must not explode the count.
+            // The thinning targets the density budget via a strided estimate,
+            // so allow ~20% estimator noise above it.
+            let budget = (1_100.0 * (HALF * 2.0 / 1000.0).powi(2)) as usize;
             assert!(
-                props.len() < 9000,
+                props.len() < budget + budget / 5,
                 "{style:?} seed {seed}: {} props blows the budget",
                 props.len()
             );
