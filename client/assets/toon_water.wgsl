@@ -91,22 +91,30 @@ fn swell_motion_scale(depth: f32, shore_dist: f32) -> f32 {
     return depth_scale * mix(material.ring_params.w, 1.0, shore_scale);
 }
 
-fn shore_lap_height(world_xz: vec2<f32>, shore_dist: f32, time: f32) -> f32 {
-    // Shore distance is intentionally only a fade mask. Using it as phase
-    // input amplifies its cell-scale nearest-point changes into a sawtooth.
-    let shore_zone = 1.0 - smoothstep(0.12, 0.58, shore_dist);
-    let primary_dir = vec2<f32>(0.8192319, -0.5734623);
-    let secondary_dir = vec2<f32>(0.4472136, 0.8944272);
-    let primary_phase = dot(world_xz, primary_dir) * (TAU / 26.0) - time * (TAU / 11.0);
-    let secondary_phase = dot(world_xz, secondary_dir) * (TAU / 46.0) + time * (TAU / 17.0);
-    return (sin(primary_phase) * 0.095 + sin(secondary_phase) * 0.025) * shore_zone;
+fn shore_lap_height(world_xz: vec2<f32>, shore_dist: f32, signed_depth: f32, time: f32) -> f32 {
+    // Shore distance is only a fade mask; the PHASE rides the terrain depth
+    // under the surface. Depth contours run parallel to the coastline, so
+    // constant-phase crests form shore-parallel fronts that march toward
+    // land as time advances — whatever direction the beach faces. Shore
+    // distance itself must stay out of the phase (its nearest-point jumps
+    // sawtooth); bilinearly sampled terrain depth is smooth.
+    let shore_zone = 1.0 - smoothstep(0.10, 0.80, shore_dist);
+    // Gentle along-shore wobble so the fronts undulate instead of tracing
+    // perfect depth contours.
+    let wobble = sin(dot(world_xz, vec2<f32>(0.11, 0.073)) + time * 0.30) * 0.55;
+    // +time moves constant-phase crests toward smaller depth: shoreward.
+    let primary_phase = signed_depth * (TAU * 1.55) + time * (TAU / 9.0) + wobble;
+    let secondary_phase = signed_depth * (TAU * 3.05) + time * (TAU / 5.5) + 1.7 + wobble * 0.6;
+    // Shoaling: crests grow as the water thins, like real arriving waves.
+    let shoaling = 1.0 + (1.0 - clamp(signed_depth, 0.0, 1.0)) * 0.5;
+    return (sin(primary_phase) * 0.085 + sin(secondary_phase) * 0.022) * shoaling * shore_zone;
 }
 
-fn wave_height(world_xz: vec2<f32>, depth: f32, shore_dist: f32, time: f32) -> f32 {
+fn wave_height(world_xz: vec2<f32>, depth: f32, shore_dist: f32, signed_depth: f32, time: f32) -> f32 {
     let broad = swell_field(world_xz, time)
         * material.wave_params.x
         * swell_motion_scale(depth, shore_dist);
-    return broad + shore_lap_height(world_xz, shore_dist, time);
+    return broad + shore_lap_height(world_xz, shore_dist, signed_depth, time);
 }
 
 @vertex
@@ -133,12 +141,14 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
 #ifdef VERTEX_COLORS
     let depth = clamp(vertex.color.a, 0.0, 1.0);
     let shore_dist = clamp(vertex.color.g, 0.0, 1.0);
+    let signed_depth = vertex.color.b;
 #else
     let depth = 1.0;
     let shore_dist = 1.0;
+    let signed_depth = 1.0;
 #endif
     let wave_time = globals.time + material.wave_params.w;
-    world_pos.y += wave_height(world_pos.xz, depth, shore_dist, wave_time);
+    world_pos.y += wave_height(world_pos.xz, depth, shore_dist, signed_depth, wave_time);
 #ifdef VERTEX_NORMALS
     let swell_slope = swell_gradient(world_pos.xz, wave_time)
         * material.wave_params.x
@@ -195,7 +205,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let surface_displacement = swell_value
         * material.wave_params.x
         * swell_motion_scale(depth, shore_dist)
-        + shore_lap_height(in.world_position.xz, shore_dist, wave_time);
+        + shore_lap_height(in.world_position.xz, shore_dist, signed_depth, wave_time);
 
     // Soft-banded depth gradient: quantize a third of the way toward 3 bands
     // for the stylized "painted shelves of color" read.
@@ -238,10 +248,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let contact = (1.0 - smoothstep(0.018, 0.13, abs(shore_submersion)))
         * (1.0 - smoothstep(0.30, 0.62, shore_dist));
 
-    // Traveling foam lines: thin bands in shore-DISTANCE space (evenly
-    // spaced ~6m apart even on steep banks), drifting shoreward and
-    // breaking up in slow patches like arriving wavelets.
-    let band = fract(shore_dist * 4.5 + line_wobble * 0.05 + globals.time * 0.16);
+    // Traveling foam lines: thin bands in DEPTH space, so they follow the
+    // same shore-parallel contours as the lap crests, drifting shoreward
+    // and breaking up in slow patches like arriving wavelets.
+    let band = fract(depth * 3.4 + line_wobble * 0.05 + globals.time * 0.14);
     let line_core = smoothstep(0.34, 0.46, band) * (1.0 - smoothstep(0.54, 0.66, band));
     let breakup = smoothstep(
         0.2,
