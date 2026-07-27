@@ -3,6 +3,10 @@
 Decisions made 2026-07-27, before the simulation exists, because retrofitting any of them
 is expensive. If you are about to write simulation code, read this first.
 
+The companion document [WORLD-DESIGN.md](WORLD-DESIGN.md) describes what runs ON this
+architecture: settlements, goods, caravans, clans, and the player's climb from one guy
+to a realm — including the phased build order for those systems.
+
 ## The game
 
 Real-time strategy in a persistent multiplayer world. You start controlling a single
