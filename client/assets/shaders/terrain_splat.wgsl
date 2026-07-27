@@ -83,15 +83,22 @@ fn tiled_uv(world_uv: vec2<f32>, tile_size: f32) -> vec2<f32> {
     return world_uv / size;
 }
 
-// Keep these long-wave phases in sync with shore_lap_height in toon_water.wgsl.
-// Terrain only needs the displacement at the bank, where shore influence is full.
-fn shore_lap_height(world_xz: vec2<f32>, time: f32) -> f32 {
+// EXACT copy of the depth-phased wave in toon_water.wgsl's shore_lap_height —
+// the wet-sand memory below reconstructs which ground the waves covered, so
+// any drift between the two formulas shows up as wet patches out of sync with
+// the visible water. Terrain evaluates this only inside the ±0.14m waterline
+// strip, where the water's horizontal shore fade is ~1, so shore_zone is
+// taken as 1 and the phase comes from the point's own signed depth.
+fn shore_lap_height(world_xz: vec2<f32>, signed_depth: f32, time: f32) -> f32 {
     let tau = 6.28318530718;
-    let primary_dir = vec2<f32>(0.8192319, -0.5734623);
-    let secondary_dir = vec2<f32>(0.4472136, 0.8944272);
-    let primary_phase = dot(world_xz, primary_dir) * (tau / 26.0) - time * (tau / 11.0);
-    let secondary_phase = dot(world_xz, secondary_dir) * (tau / 46.0) + time * (tau / 17.0);
-    return sin(primary_phase) * 0.095 + sin(secondary_phase) * 0.025;
+    let wob_a = sin(dot(world_xz, vec2<f32>(0.11, 0.073)) + time * 0.26);
+    let wob_b = sin(dot(world_xz, vec2<f32>(-0.031, 0.042)) + time * 0.17 + 2.1);
+    let wobble = wob_a * 1.05 + wob_b * 1.35;
+    let primary_phase = signed_depth * (tau * 1.55) + time * (tau / 12.0) + wobble;
+    let primary = sin(primary_phase) + 0.25 * sin(primary_phase * 2.0);
+    let secondary_phase = signed_depth * (tau * 3.05) + time * (tau / 7.5) + 1.7 + wobble * 0.6;
+    let shoaling = 1.0 + (1.0 - clamp(signed_depth, 0.0, 1.0)) * 0.45;
+    return (primary * 0.059 + sin(secondary_phase) * 0.017) * shoaling;
 }
 
 // Reconstruct a short wetness history from the deterministic shore wave.
@@ -102,9 +109,10 @@ fn recent_shore_wetness(
     world_xz: vec2<f32>,
     terrain_y: f32,
     base_surface: f32,
+    signed_depth: f32,
     time: f32,
 ) -> f32 {
-    let current_surface = base_surface + shore_lap_height(world_xz, time);
+    let current_surface = base_surface + shore_lap_height(world_xz, signed_depth, time);
     let above_current_surface = terrain_y - current_surface;
 
     // Do not shade terrain that is still underwater. The narrow transition
@@ -121,7 +129,8 @@ fn recent_shore_wetness(
 
     for (var sample = 0u; sample < HISTORY_SAMPLES; sample++) {
         let age = f32(sample) * HISTORY_STEP_SECONDS;
-        let previous_surface = base_surface + shore_lap_height(world_xz, time - age);
+        let previous_surface =
+            base_surface + shore_lap_height(world_xz, signed_depth, time - age);
         let clearance = terrain_y - previous_surface;
         let was_covered = 1.0 - smoothstep(-0.004, 0.012, clearance);
         let remaining = max(1.0 - age / WET_LINGER_SECONDS, 0.0);
@@ -271,10 +280,15 @@ fn fragment(
             // The exposed damp strip follows the exact recent path of the
             // shore wave, then dries over five seconds after the water leaves.
             let wave_time = globals.time + water_params.z;
+            // Same signed-depth definition the water mesh bakes per vertex
+            // (WATER_DEPTH_FADE_METERS = 2.5), so both shaders phase their
+            // waves off the identical field.
+            let signed_depth = clamp((water_level - h) / 2.5, -1.0, 1.0);
             let wet = recent_shore_wetness(
                 pbr_input.world_position.xz,
                 h,
                 water_level + water_params.w,
+                signed_depth,
                 wave_time,
             );
             albedo *= mix(vec3<f32>(1.0), vec3<f32>(0.82, 0.85, 0.87), wet);
