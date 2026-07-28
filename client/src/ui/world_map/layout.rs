@@ -153,7 +153,7 @@ pub(super) fn spawn_map_ui(
                 panel.spawn((
                     Text::new("WORLD MAP"),
                     TextFont {
-                        font_size: 18.0,
+                        font_size: FontSize::Px(18.0),
                         ..default()
                     },
                     TextColor(TEXT_COLOR),

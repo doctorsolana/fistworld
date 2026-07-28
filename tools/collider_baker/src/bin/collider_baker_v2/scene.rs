@@ -1,8 +1,9 @@
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
+use bevy::world_serialization::WorldAsset;
 use bevy_mesh::VertexAttributeValues;
 
-pub(crate) fn collect_scene_vertices(scene: &mut Scene, meshes: &Assets<Mesh>) -> Vec<Vec3> {
+pub(crate) fn collect_scene_vertices(scene: &mut WorldAsset, meshes: &Assets<Mesh>) -> Vec<Vec3> {
     let mut out = Vec::new();
 
     let world = &mut scene.world;
@@ -31,7 +32,7 @@ pub(crate) fn collect_scene_vertices(scene: &mut Scene, meshes: &Assets<Mesh>) -
 }
 
 pub(crate) fn collect_scene_mesh(
-    scene: &mut Scene,
+    scene: &mut WorldAsset,
     meshes: &Assets<Mesh>,
 ) -> (Vec<Vec3>, Vec<[u32; 3]>) {
     let mut vertices = Vec::new();

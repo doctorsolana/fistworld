@@ -3,22 +3,21 @@
 use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{
-    ControlledBy, Lifetime, MessageReceiver, MessageSender, NetworkTarget, NetworkVisibility,
-    RemoteId, Replicate,
-    ReplicationGroup, ReplicationMode,
+    ControlledBy, Lifetime, MessageReceiver, MessageSender, NetworkTarget, RemoteId, Replicate,
 };
 
 use shared::components::{Player, PlayerPosition, PlayerProgression, PlayerRotation};
 use shared::physics::ground_clearance_center;
 use shared::player::SPAWN_POSITION;
 use shared::player_profile::PlayerProfile;
-use shared::protocol::{NameRejectionReason, NameSubmissionResult, ReliableChannel, SubmitPlayerName};
+use shared::protocol::{
+    DevStatus, NameRejectionReason, NameSubmissionResult, ReliableChannel, SubmitPlayerName,
+};
 use shared::terrain::WorldTerrain;
 
 use crate::persistence::profiles::PlayerProfiles;
 use crate::player::roster_cache::PlayerRosterCache;
-
-const PLAYER_REPLICATION_PRIORITY: f32 = 20.0;
+use crate::world::dev::DevMode;
 
 fn resolve_map_spawn_position(terrain: &WorldTerrain) -> Vec3 {
     if let Some(spawn) = terrain.generator.loaded_map().definition.player_spawn {
@@ -45,11 +44,15 @@ pub fn handle_player_name_submission(
             &RemoteId,
             &mut MessageReceiver<SubmitPlayerName>,
             &mut MessageSender<NameSubmissionResult>,
+            &mut MessageSender<DevStatus>,
         ),
         With<ClientOf>,
     >,
+    dev: Res<DevMode>,
 ) {
-    for (client_entity, remote_id, mut receiver, mut sender) in client_links.iter_mut() {
+    for (client_entity, remote_id, mut receiver, mut sender, mut dev_sender) in
+        client_links.iter_mut()
+    {
         let peer_id = remote_id.0;
 
         if profiles.peer_to_name.contains_key(&peer_id) {
@@ -109,15 +112,16 @@ pub fn handle_player_name_submission(
             let _player_entity = commands
                 .spawn((
                     Player { client_id: peer_id },
-                    // Region tag + NetworkVisibility opt this entity into interest
-                    // management; without both it would replicate to everyone.
+                    // The region tag opts this entity into interest management:
+                    // `apply_region_visibility` hides it from clients whose interest
+                    // does not cover its region. In lightyear 0.28 replicated entities
+                    // are visible to everyone by default, so the visibility pass must
+                    // run before the entity leaks world-wide.
                     shared::region::RegionCoord::from_world_pos(spawn_pos),
-                    NetworkVisibility,
                     PlayerPosition(spawn_pos),
                     PlayerRotation(spawn_rot),
                     progression,
-                    ReplicationGroup::new_from_entity().set_priority(PLAYER_REPLICATION_PRIORITY),
-                    Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
+                    Replicate::to_clients(NetworkTarget::All),
                     ControlledBy {
                         owner: client_entity,
                         lifetime: Lifetime::default(),
@@ -125,13 +129,13 @@ pub fn handle_player_name_submission(
                 ))
                 .id();
 
-
             profiles.peer_to_name.insert(peer_id, name_lower.clone());
             profiles.name_to_peer.insert(name_lower.clone(), peer_id);
             roster_cache.upsert_profile(&profile);
             profiles.profiles.insert(name_lower, profile);
 
             sender.send::<ReliableChannel>(NameSubmissionResult::Accepted { profile_loaded });
+            dev_sender.send::<ReliableChannel>(DevStatus { god: dev.0 });
             info!("Player '{}' spawned successfully for {:?}", name, peer_id);
         }
     }

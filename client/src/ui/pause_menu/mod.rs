@@ -37,12 +37,7 @@ impl Plugin for PauseMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PauseMenuState>();
         app.init_resource::<PauseMenuOpen>();
-        app.add_systems(
-            Update,
-            sync_pause_menu_cursor
-                .run_if(pause_menu_open)
-                .after(crate::render::systems::apply_cursor_grab),
-        );
+        app.add_systems(Update, sync_pause_menu_cursor.run_if(pause_menu_open));
         app.add_systems(Update, spawn_pause_menu.run_if(pause_menu_open));
         app.add_systems(
             Update,

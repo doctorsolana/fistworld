@@ -148,9 +148,6 @@ pub(super) fn desert_atmosphere_settings_perf() -> AtmosphereSettings {
         // Smaller max distance - don't need aerial perspective past 10km
         aerial_view_lut_max_distance: 1.0e4,
 
-        // 1 unit = 1 meter in our world
-        scene_units_to_m: 1.0,
-
         // Fallback cap used in some paths
         sky_max_samples: 8,
 
@@ -172,7 +169,8 @@ pub(super) fn default_bloom_settings() -> Bloom {
 /// Blend atmosphere for clear midday skies and dusty sunsets.
 pub fn update_atmosphere(
     world_time_query: Query<&shared::components::WorldTime>,
-    mut atmosphere_query: Query<&mut Atmosphere, With<Camera3d>>,
+    // The atmosphere is its own entity since bevy 0.19, no longer on the camera.
+    mut atmosphere_query: Query<&mut Atmosphere>,
     mut media_assets: ResMut<Assets<ScatteringMedium>>,
     mut media: ResMut<AtmosphereMedia>,
     time: Res<Time>,
@@ -195,10 +193,20 @@ pub fn update_atmosphere(
     let dust_factor = 1.0 - smoothstep(0.15, 0.65, sun_height);
 
     let blended = blend_atmosphere(media.clear, media.dusty, dust_factor);
-    atmosphere.bottom_radius = blended.bottom_radius;
-    atmosphere.top_radius = blended.top_radius;
-    atmosphere.ground_albedo = blended.ground_albedo;
-    atmosphere.medium = media.active_medium.clone();
+    // Only deref-mut on real change so change detection stays quiet on
+    // plateaus. The radii are identical in both presets, so they never move —
+    // which is what keeps the spawn-time planet-center anchor (setup.rs:
+    // -bottom_radius on Y) valid without a per-frame transform sync.
+    if atmosphere.inner_radius != blended.bottom_radius
+        || atmosphere.outer_radius != blended.top_radius
+        || atmosphere.ground_albedo != blended.ground_albedo
+        || atmosphere.medium != media.active_medium
+    {
+        atmosphere.inner_radius = blended.bottom_radius;
+        atmosphere.outer_radius = blended.top_radius;
+        atmosphere.ground_albedo = blended.ground_albedo;
+        atmosphere.medium = media.active_medium.clone();
+    }
 
     const ATMOSPHERE_REBUILD_INTERVAL: f32 = 0.35;
     const ATMOSPHERE_BLEND_EPS: f32 = 0.03;
@@ -208,7 +216,7 @@ pub fn update_atmosphere(
     let allow_rebuild = *rebuild_timer >= ATMOSPHERE_REBUILD_INTERVAL || media.last_blend < 0.0;
 
     if needs_rebuild && allow_rebuild {
-        if let Some(medium) = media_assets.get_mut(&media.active_medium) {
+        if let Some(mut medium) = media_assets.get_mut(&media.active_medium) {
             *medium = scattering_medium_from_preset(blended, "dynamic_atmosphere");
         }
         media.last_blend = dust_factor;

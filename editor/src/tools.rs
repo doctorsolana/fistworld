@@ -118,7 +118,7 @@ pub fn setup_editor_scene(
         EditorSunLight,
         DirectionalLight {
             illuminance: 24_000.0,
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             ..default()
         },
         CascadeShadowConfigBuilder {
@@ -135,7 +135,7 @@ pub fn setup_editor_scene(
         EditorFillLight,
         DirectionalLight {
             illuminance: 900.0,
-            shadows_enabled: false,
+            shadow_maps_enabled: false,
             color: Color::srgb(0.80, 0.87, 0.96),
             ..default()
         },
@@ -455,7 +455,9 @@ fn apply_map_resize(
         .map_edits
         .terrain_weightmaps
         .retain(|chunk| chunk_center_in(&chunk.coord));
-    session.paint_weights.retain(|coord, _| chunk_center_in(coord));
+    session
+        .paint_weights
+        .retain(|coord, _| chunk_center_in(coord));
     session
         .map_edits
         .spawn_markers
@@ -616,7 +618,7 @@ pub fn sync_editor_terrain_water(
         Vec4::ZERO
     };
     for entry in registry.entries.values() {
-        if let Some(material) = terrain_materials.get_mut(&entry.material) {
+        if let Some(mut material) = terrain_materials.get_mut(&entry.material) {
             material.extension.water_params = params;
         }
     }
@@ -1470,7 +1472,7 @@ pub fn update_prop_preview_visual(
         let entity = commands
             .spawn((
                 Name::new(format!("PropPreview({})", ui_state.selected_asset_label())),
-                SceneRoot(asset_server.load(scene_path.clone())),
+                WorldAssetRoot(asset_server.load(scene_path.clone())),
                 preview_transform,
                 EditorPropPreviewVisual,
             ))
@@ -1511,8 +1513,7 @@ fn apply_snapshot(
         &snapshot.map_definition,
         &snapshot.map_edits,
     )?;
-    let bounds_changed = session.map_definition.bounds.min
-        != snapshot.map_definition.bounds.min
+    let bounds_changed = session.map_definition.bounds.min != snapshot.map_definition.bounds.min
         || session.map_definition.bounds.max != snapshot.map_definition.bounds.max;
     session.map_definition = snapshot.map_definition;
     session.map_edits = snapshot.map_edits;
@@ -1740,7 +1741,7 @@ fn regenerate_chunk_mesh(
     let Some(entry) = registry.entries.get(&coord) else {
         return;
     };
-    let Some(mesh) = meshes.get_mut(&entry.mesh) else {
+    let Some(mut mesh) = meshes.get_mut(&entry.mesh) else {
         return;
     };
 
@@ -1759,7 +1760,7 @@ fn refresh_terrain_weightmap(
     let Some(entry) = registry.entries.get(&coord) else {
         return;
     };
-    let Some(image) = images.get_mut(&entry.weightmap) else {
+    let Some(mut image) = images.get_mut(&entry.weightmap) else {
         return;
     };
     let resolved;
@@ -1773,12 +1774,15 @@ fn refresh_terrain_weightmap(
         );
         &resolved
     };
-    update_weightmap_image(image, weights);
+    update_weightmap_image(&mut image, weights);
     // Modifying an Image asset makes the renderer create a NEW GPU texture,
     // but material bind groups are only rebuilt on MATERIAL asset events —
     // without this poke the chunk keeps rendering the old texture until
-    // restart.
-    terrain_materials.get_mut(&entry.material);
+    // restart. AssetMut only fires Modified on real mutable access, so
+    // into_inner() is needed to mark the material modified.
+    if let Some(material) = terrain_materials.get_mut(&entry.material) {
+        material.into_inner();
+    }
 }
 
 fn terrain_layer_display_name(layer: TerrainLayer) -> &'static str {
@@ -1820,7 +1824,7 @@ fn spawn_prop_visuals(
         if let Some(scene_path) = object.resolved_scene_path() {
             commands.spawn((
                 Name::new(format!("Prop({})", object.kind)),
-                SceneRoot(asset_server.load(scene_path)),
+                WorldAssetRoot(asset_server.load(scene_path)),
                 transform,
                 EditorPropVisual,
                 index,

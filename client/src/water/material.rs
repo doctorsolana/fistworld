@@ -138,7 +138,7 @@ pub(super) fn sync_water_wave_clock(
     let offset =
         (world_time.ocean_seconds - local + half_loop).rem_euclid(OCEAN_LOOP_SECONDS) - half_loop;
 
-    if let Some(material) = materials.get_mut(&render_assets.material) {
+    if let Some(mut material) = materials.get_mut(&render_assets.material) {
         material.uniform.wave_params.w = offset;
         sync.world_time_entity = Some(world_time_entity);
     }
@@ -170,7 +170,7 @@ pub(super) fn update_water_sun_dir(
     if material.uniform.sun_params.distance_squared(target) < 1e-4 {
         return;
     }
-    if let Some(material) = materials.get_mut(&render_assets.material) {
+    if let Some(mut material) = materials.get_mut(&render_assets.material) {
         material.uniform.sun_params = target;
     }
 }
@@ -206,7 +206,7 @@ pub(super) fn update_water_cull_mode(
     if material.double_sided == wants_double_sided {
         return;
     }
-    if let Some(material) = materials.get_mut(&render_assets.material) {
+    if let Some(mut material) = materials.get_mut(&render_assets.material) {
         material.double_sided = wants_double_sided;
     }
 }

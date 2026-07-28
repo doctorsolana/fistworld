@@ -15,12 +15,12 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 use lightyear::prelude::*;
 
-
 use shared::protocol::{ReliableChannel, SetTimeOfDay, TimeOfDayPreset};
 
 use crate::input::InputState;
 use crate::render::systems::{CloudCover, CloudCoverMode, CloudCoverOverride};
 use crate::states::GameState;
+use crate::ui::hud::{GodCapability, HudMode};
 use crate::ui::modal::{handle_backdrop_pressed, spawn_modal, sync_modal_cursor, ModalLayout};
 use crate::ui::styles::{
     button_style, button_text_style, ACCENT_COLOR, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED,
@@ -53,8 +53,7 @@ impl Plugin for DebugTimeMenuPlugin {
             Update,
             sync_debug_menu_open_state
                 .run_if(in_state(GameState::Playing))
-                .after(toggle_debug_time_menu)
-                .after(crate::render::systems::apply_cursor_grab),
+                .after(toggle_debug_time_menu),
         );
         app.add_systems(
             Update,

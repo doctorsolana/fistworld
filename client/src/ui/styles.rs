@@ -40,7 +40,7 @@ pub(crate) fn button_style() -> Node {
 /// Standard button text style
 pub(crate) fn button_text_style() -> TextFont {
     TextFont {
-        font_size: 22.0,
+        font_size: FontSize::Px(22.0),
         ..default()
     }
 }
@@ -48,7 +48,7 @@ pub(crate) fn button_text_style() -> TextFont {
 /// Title text style
 pub(crate) fn title_text_style() -> TextFont {
     TextFont {
-        font_size: 72.0,
+        font_size: FontSize::Px(72.0),
         ..default()
     }
 }
@@ -57,7 +57,7 @@ pub(crate) fn title_text_style() -> TextFont {
 #[allow(dead_code)]
 pub(crate) fn subtitle_text_style() -> TextFont {
     TextFont {
-        font_size: 18.0,
+        font_size: FontSize::Px(18.0),
         ..default()
     }
 }

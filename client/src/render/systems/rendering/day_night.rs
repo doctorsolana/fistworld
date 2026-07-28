@@ -1,8 +1,8 @@
 //! day night systems.
 
 use super::atmosphere::AtmospherePreset;
-use super::clouds::CLOUD_SUN_YAW_OFFSET;
 use super::*;
+use crate::terrain::map_view::MapViewBlend;
 
 /// Update sun, ambient light, and sky color based on replicated WorldTime.
 /// Creates beautiful sunrise/sunset transitions.
@@ -17,11 +17,14 @@ pub fn update_day_night_cycle(
         (With<FillLight>, Without<SunLight>, Without<Camera3d>),
     >,
     mut fog_query: Query<&mut DistanceFog, With<Camera3d>>,
+    mut atmosphere_settings_query: Query<&mut AtmosphereSettings, With<Camera3d>>,
     mut atmosphere_light_query: Query<&mut AtmosphereEnvironmentMapLight, With<Camera3d>>,
     mut ambient: ResMut<GlobalAmbientLight>,
     settings: Res<GraphicsSettings>,
+    map_blend: Res<MapViewBlend>,
     time: Res<Time>,
     mut debug_timer: Local<f32>,
+    mut last_fog_key: Local<Option<(f32, f32, f32, f32)>>,
 ) {
     *debug_timer += time.delta_secs();
     let should_log = *debug_timer > 3.0;
@@ -44,28 +47,32 @@ pub fn update_day_night_cycle(
     let t = world_time.normalized_time();
 
     // =========================================================================
-    // SUN POSITION - Rotates around the world (rises in east, sets in west)
+    // SUN POSITION - East-west great-circle arc (rises in east, sets in west)
     // =========================================================================
     // IMPORTANT: we want elevation = -1 at midnight, 0 at sunrise/sunset, +1 at noon.
     let phase = t * std::f32::consts::TAU;
     let elevation = -phase.cos(); // [-1, 1]
 
-    // Sunrise at t=0.25 should come from +X (east) -> rays point toward -X.
-    let azimuth = phase - std::f32::consts::PI;
+    // Arc angle: 0 = sunrise, PI/2 = noon, PI = sunset; below horizon at night.
+    let a = phase - std::f32::consts::FRAC_PI_2;
 
-    // Convert elevation factor to an angle. Cap the max elevation at ~61°:
-    // a near-overhead noon sun (the old 81°) lights the world like an
-    // operating theater — rooftops blasted, faces and walls in the dark. A
-    // capped sun keeps direction and modeling on vertical surfaces all day
-    // (this is what most outdoor games do; real midday sun rarely exceeds
-    // ~60-70° at temperate latitudes anyway).
-    let elev_angle = elevation.clamp(-1.0, 1.0) * std::f32::consts::FRAC_PI_2 * 0.68;
-    let cos_e = elev_angle.cos();
-    let sin_e = elev_angle.sin();
+    // Cap the max elevation at ~61°: a near-overhead noon sun (the old 81°)
+    // lights the world like an operating theater — rooftops blasted, faces and
+    // walls in the dark. A capped sun keeps direction and modeling on vertical
+    // surfaces all day (this is what most outdoor games do; real midday sun
+    // rarely exceeds ~60-70° at temperate latitudes anyway).
+    let max_elev = std::f32::consts::FRAC_PI_2 * 0.68;
+    let noon_dir = Vec3::new(0.0, max_elev.sin(), -max_elev.cos());
+
+    // Unit great circle from +X (east horizon) through noon_dir (high noon,
+    // bowed toward -Z) to -X (west horizon): the sun's bearing swings E->N->W
+    // across daylight instead of spinning the full compass. sin(a) ==
+    // elevation, so every intensity curve keyed on `elevation` behaves exactly
+    // as before the arc.
+    let sun_pos = a.cos() * Vec3::X + a.sin() * noon_dir;
 
     // Direction the light rays travel (from sun -> world). y is negative when sun is above horizon.
-    let sun_dir =
-        Vec3::new(azimuth.sin() * cos_e, -sin_e, azimuth.cos() * cos_e).normalize_or_zero();
+    let sun_dir = -sun_pos;
 
     // =========================================================================
     // SUN INTENSITY
@@ -93,10 +100,15 @@ pub fn update_day_night_cycle(
     let sun_color = lerp_color(neutral_sun_color, warm_sun_color, dust_factor);
 
     // Bevy directional light points along -Z (forward). Rotate -Z to match sun_dir.
+    let sun_rotation = Quat::from_rotation_arc(Vec3::NEG_Z, sun_dir);
     for (mut sun_light, mut sun_transform) in sun_query.iter_mut() {
-        sun_transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, sun_dir);
-        sun_light.color = sun_color;
-        sun_light.illuminance = sun_illuminance;
+        if sun_transform.rotation != sun_rotation {
+            sun_transform.rotation = sun_rotation;
+        }
+        if sun_light.color != sun_color || sun_light.illuminance != sun_illuminance {
+            sun_light.color = sun_color;
+            sun_light.illuminance = sun_illuminance;
+        }
     }
 
     // =========================================================================
@@ -110,10 +122,16 @@ pub fn update_day_night_cycle(
     let fill_illuminance =
         (lerp_f32(60.0, 11_000.0, day_factor) + 900.0 * twilight_factor) * lighting_boost;
     let fill_dir = Vec3::new(-sun_dir.x, -0.35, -sun_dir.z).normalize_or_zero();
+    let fill_rotation = Quat::from_rotation_arc(Vec3::NEG_Z, fill_dir);
+    let fill_color = Color::srgb(0.60, 0.72, 0.95);
     for (mut fill_light, mut fill_transform) in fill_query.iter_mut() {
-        fill_transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, fill_dir);
-        fill_light.color = Color::srgb(0.60, 0.72, 0.95);
-        fill_light.illuminance = fill_illuminance;
+        if fill_transform.rotation != fill_rotation {
+            fill_transform.rotation = fill_rotation;
+        }
+        if fill_light.color != fill_color || fill_light.illuminance != fill_illuminance {
+            fill_light.color = fill_color;
+            fill_light.illuminance = fill_illuminance;
+        }
     }
 
     // =========================================================================
@@ -127,7 +145,7 @@ pub fn update_day_night_cycle(
     let twilight_ambient_color = Color::srgb(0.50, 0.49, 0.45);
     let night_ambient_color = Color::srgb(0.06, 0.09, 0.16);
     let base_ambient_color = lerp_color(night_ambient_color, day_ambient_color, day_factor);
-    ambient.color = lerp_color(
+    let ambient_color = lerp_color(
         base_ambient_color,
         twilight_ambient_color,
         twilight_factor * 0.55,
@@ -136,48 +154,88 @@ pub fn update_day_night_cycle(
     // register; the old ~39 peak was ~1% of that (pitch-black shadows, the
     // "hospital light" contrast). ~2600 at noon puts shadowed sides at a
     // readable ~1:4 ratio against sunlit surfaces, like a clear real sky.
-    ambient.brightness = (16.0 + 2600.0 * day_factor + 600.0 * twilight_factor) * lighting_boost;
-
-    for mut atmosphere_light in atmosphere_light_query.iter_mut() {
-        atmosphere_light.intensity = if settings.atmosphere_enabled {
-            (1.4 + 0.45 * twilight_factor) * lighting_boost
-        } else {
-            0.0
-        };
+    let ambient_brightness =
+        (16.0 + 2600.0 * day_factor + 600.0 * twilight_factor) * lighting_boost;
+    if ambient.color != ambient_color || ambient.brightness != ambient_brightness {
+        ambient.color = ambient_color;
+        ambient.brightness = ambient_brightness;
     }
 
-    let (clear_fog_color, dusty_fog_color, night_fog_color) = (
-        Color::srgba(0.50, 0.60, 0.70, 0.10),
-        Color::srgba(0.72, 0.67, 0.56, 0.20),
-        Color::srgba(0.05, 0.08, 0.14, 0.26),
-    );
-    let day_fog_color = lerp_color(clear_fog_color, dusty_fog_color, dust_factor);
-    let fog_color = lerp_color(night_fog_color, day_fog_color, day_factor);
-    let visibility = (lerp_f32(320.0, 1050.0, day_factor) * lerp_f32(1.0, 0.68, dust_factor))
-        .max(520.0 * twilight_factor);
-    let fog_light_factor = (day_factor * dust_factor + 0.35 * twilight_factor).clamp(0.0, 1.0);
-    let fog_sky_factor = (day_factor + 0.35 * twilight_factor).clamp(0.0, 1.0);
-    let extinction = lerp_color(
-        Color::srgb(0.26, 0.34, 0.48),
-        Color::srgb(0.56, 0.54, 0.48),
-        fog_light_factor,
-    );
-    let inscattering = lerp_color(
-        Color::srgb(0.12, 0.16, 0.27),
-        Color::srgb(0.82, 0.78, 0.68),
-        fog_sky_factor,
-    );
+    let atmosphere_intensity = if settings.atmosphere_enabled {
+        (1.4 + 0.45 * twilight_factor) * lighting_boost
+    } else {
+        0.0
+    };
+    for mut atmosphere_light in atmosphere_light_query.iter_mut() {
+        if atmosphere_light.intensity != atmosphere_intensity {
+            atmosphere_light.intensity = atmosphere_intensity;
+        }
+    }
 
-    for mut fog in fog_query.iter_mut() {
-        fog.color = fog_color;
-        fog.directional_light_color = lerp_color(
+    // Single writer for DistanceFog: the map-view fade is folded in here rather
+    // than living in a second unordered system racing over the same component.
+    // Aerial haze sells depth at ground level, but at map scale it is
+    // integrated over kilometres and turns the whole map into a grey-brown
+    // wash; dial it out (alpha down, visibility up) exactly as the detail
+    // chunks fade so the map stays legible.
+    let map_clear = 1.0 - map_blend.0;
+    // Fog is a pure function of these four factors; skip the write (and its
+    // change-detection ripple) while they sit on their plateaus.
+    let fog_key = (day_factor, dust_factor, twilight_factor, map_clear);
+    if *last_fog_key != Some(fog_key) {
+        *last_fog_key = Some(fog_key);
+
+        // Physical aerial perspective integrates kilometres of air at map zoom and
+        // shrouds the whole map (the LUT saturates at its max distance, so lowering
+        // that distance caps the veil). Ground level keeps the full 10 km depth cue;
+        // map view clamps it right down, mirroring the DistanceFog fade below.
+        let aerial_max = lerp_f32(10_000.0, 1_500.0, map_blend.0);
+        for mut atmo_settings in atmosphere_settings_query.iter_mut() {
+            if atmo_settings.aerial_view_lut_max_distance != aerial_max {
+                atmo_settings.aerial_view_lut_max_distance = aerial_max;
+            }
+        }
+
+        let (clear_fog_color, dusty_fog_color, night_fog_color) = (
+            Color::srgba(0.50, 0.60, 0.70, 0.10),
+            Color::srgba(0.72, 0.67, 0.56, 0.20),
+            Color::srgba(0.05, 0.08, 0.14, 0.26),
+        );
+        let day_fog_color = lerp_color(clear_fog_color, dusty_fog_color, dust_factor);
+        let mut fog_color = lerp_color(night_fog_color, day_fog_color, day_factor);
+        fog_color.set_alpha(fog_color.alpha() * map_clear);
+        let visibility = (lerp_f32(320.0, 1050.0, day_factor) * lerp_f32(1.0, 0.68, dust_factor))
+            .max(520.0 * twilight_factor);
+        let fog_light_factor =
+            (day_factor * dust_factor + 0.35 * twilight_factor).clamp(0.0, 1.0);
+        let fog_sky_factor = (day_factor + 0.35 * twilight_factor).clamp(0.0, 1.0);
+        let extinction = lerp_color(
+            Color::srgb(0.26, 0.34, 0.48),
+            Color::srgb(0.56, 0.54, 0.48),
+            fog_light_factor,
+        );
+        let inscattering = lerp_color(
+            Color::srgb(0.12, 0.16, 0.27),
+            Color::srgb(0.82, 0.78, 0.68),
+            fog_sky_factor,
+        );
+        let mut directional_light_color = lerp_color(
             Color::srgba(0.08, 0.12, 0.2, 0.04),
             Color::srgba(1.0, 0.86, 0.62, 0.24),
             fog_light_factor,
         );
-        fog.directional_light_exponent = lerp_f32(18.0, 34.0, day_factor);
-        fog.falloff =
-            FogFalloff::from_visibility_colors(visibility.max(80.0), extinction, inscattering);
+        directional_light_color.set_alpha(directional_light_color.alpha() * map_clear);
+
+        for mut fog in fog_query.iter_mut() {
+            fog.color = fog_color;
+            fog.directional_light_color = directional_light_color;
+            fog.directional_light_exponent = lerp_f32(18.0, 34.0, day_factor);
+            fog.falloff = FogFalloff::from_visibility_colors(
+                visibility.max(80.0) / map_clear.max(0.02),
+                extinction,
+                inscattering,
+            );
+        }
     }
 }
 
@@ -233,12 +291,4 @@ pub(super) fn blend_atmosphere(
 pub(super) fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
-}
-
-pub(super) fn sun_yaw_from_phase(phase: f32) -> f32 {
-    // Same azimuth logic as update_day_night_cycle (sunrise at +X).
-    let azimuth = phase - std::f32::consts::PI;
-    // Sunlight direction (sun -> world); rotate sky toward actual sun position.
-    let sun_dir = Vec3::new(azimuth.sin(), 0.0, azimuth.cos()).normalize_or_zero();
-    sun_dir.x.atan2(sun_dir.z) + CLOUD_SUN_YAW_OFFSET
 }

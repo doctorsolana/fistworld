@@ -83,7 +83,7 @@ pub(super) fn spawn_pause_menu(
                             col.spawn((
                                 Text::new("Press ESC to resume"),
                                 TextFont {
-                                    font_size: 14.0,
+                                    font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
                                 TextColor(TEXT_MUTED),

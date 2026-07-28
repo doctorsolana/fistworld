@@ -90,7 +90,7 @@ pub(super) fn spawn_main_menu(
                     ip_section.spawn((
                         Text::new("SERVER IP"),
                         TextFont {
-                            font_size: 14.0,
+                            font_size: FontSize::Px(14.0),
                             ..default()
                         },
                         TextColor(TEXT_MUTED),
@@ -124,7 +124,7 @@ pub(super) fn spawn_main_menu(
                                 IpTextDisplay,
                                 Text::new(format!("{}:{}", server_address.ip, server_address.port)),
                                 TextFont {
-                                    font_size: 20.0,
+                                    font_size: FontSize::Px(20.0),
                                     ..default()
                                 },
                                 TextColor(TEXT_COLOR),
@@ -140,7 +140,7 @@ pub(super) fn spawn_main_menu(
                     ip_section.spawn((
                         Text::new("Click to edit • Ctrl+V to paste • Select preset below"),
                         TextFont {
-                            font_size: 12.0,
+                            font_size: FontSize::Px(12.0),
                             ..default()
                         },
                         TextColor(TEXT_MUTED),
@@ -171,7 +171,7 @@ pub(super) fn spawn_main_menu(
             parent.spawn((
                 Text::new("v0.1.0 | Bevy + Lightyear"),
                 TextFont {
-                    font_size: 14.0,
+                    font_size: FontSize::Px(14.0),
                     ..default()
                 },
                 TextColor(TEXT_MUTED),
@@ -206,7 +206,7 @@ pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, ac
             btn.spawn((
                 Text::new(text),
                 TextFont {
-                    font_size: 22.0,
+                    font_size: FontSize::Px(22.0),
                     ..default()
                 },
                 TextColor(TEXT_COLOR),

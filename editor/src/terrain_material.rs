@@ -93,13 +93,13 @@ pub fn configure_editor_terrain_arrays(
     }
 
     configure_array_image(
-        images
+        &mut images
             .get_mut(&assets.albedo_array)
             .expect("albedo array was checked above"),
         "editor_terrain_albedo_array",
     );
     configure_array_image(
-        images
+        &mut images
             .get_mut(&assets.normal_array)
             .expect("normal array was checked above"),
         "editor_terrain_normal_array",

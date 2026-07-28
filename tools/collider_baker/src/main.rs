@@ -11,10 +11,11 @@ use std::path::PathBuf;
 use bevy::app::AppExit;
 use bevy::asset::RecursiveDependencyLoadState;
 use bevy::prelude::*;
+use bevy::world_serialization::WorldAsset;
 use bevy_mesh::VertexAttributeValues;
 
-use bevy_rapier3d::parry::transformation::try_convex_hull;
-use bevy_rapier3d::rapier::na::Point3;
+use parry3d::na::Point3;
+use parry3d::transformation::try_convex_hull;
 
 use serde::Deserialize;
 use shared::building::{BuildingType, ALL_BUILDING_TYPES};
@@ -78,7 +79,7 @@ struct BakeConfig {
 struct BakeState {
     manifest: ColliderManifest,
     // kind_id -> scene handle
-    handles: HashMap<String, Handle<Scene>>,
+    handles: HashMap<String, Handle<WorldAsset>>,
     started: bool,
 }
 
@@ -184,7 +185,7 @@ fn start_bake(mut commands: Commands, config: Res<BakeConfig>, asset_server: Res
             );
         }
 
-        let handle: Handle<Scene> = asset_server.load(entry.gltf_path.clone());
+        let handle: Handle<WorldAsset> = asset_server.load(entry.gltf_path.clone());
         handles.insert(entry.kind.clone(), handle);
     }
 
@@ -200,7 +201,7 @@ fn poll_and_bake(
     config: Res<BakeConfig>,
     state: Option<ResMut<BakeState>>,
     asset_server: Res<AssetServer>,
-    mut scenes: ResMut<Assets<Scene>>,
+    mut scenes: ResMut<Assets<WorldAsset>>,
     meshes: Res<Assets<Mesh>>,
     mut app_exit: MessageWriter<AppExit>,
 ) {
@@ -247,11 +248,11 @@ fn poll_and_bake(
             .get(&entry.kind)
             .unwrap_or_else(|| panic!("Missing handle for {}", entry.kind));
 
-        let Some(scene) = scenes.get_mut(handle) else {
+        let Some(mut scene) = scenes.get_mut(handle) else {
             panic!("Scene asset not available for kind {}", entry.kind);
         };
 
-        let mut vertices = collect_scene_vertices(scene, &meshes);
+        let mut vertices = collect_scene_vertices(&mut scene, &meshes);
         if vertices.is_empty() {
             panic!(
                 "No vertices found for kind {} (path {})",
@@ -329,7 +330,7 @@ fn poll_and_bake(
     app_exit.write(AppExit::Success);
 }
 
-fn collect_scene_vertices(scene: &mut Scene, meshes: &Assets<Mesh>) -> Vec<Vec3> {
+fn collect_scene_vertices(scene: &mut WorldAsset, meshes: &Assets<Mesh>) -> Vec<Vec3> {
     let mut out = Vec::new();
 
     let world = &mut scene.world;

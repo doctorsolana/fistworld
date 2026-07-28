@@ -4,8 +4,8 @@ use bevy::image::{
 };
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
-use bevy::render::render_resource::ShaderType;
 use bevy::reflect::TypePath;
+use bevy::render::render_resource::ShaderType;
 use bevy::render::render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension};
 use bevy::shader::ShaderRef;
 use shared::components::WorldTime;
@@ -185,7 +185,7 @@ pub(super) fn build_terrain_texture_arrays(
     let Some(sources) = sources else { return };
 
     {
-        let Some(albedo) = images.get_mut(&sources.albedo_array) else {
+        let Some(mut albedo) = images.get_mut(&sources.albedo_array) else {
             return;
         };
         albedo.sampler = repeat_sampler();
@@ -196,7 +196,7 @@ pub(super) fn build_terrain_texture_arrays(
         });
     }
     {
-        let Some(normal) = images.get_mut(&sources.normal_array) else {
+        let Some(mut normal) = images.get_mut(&sources.normal_array) else {
             return;
         };
         normal.sampler = repeat_sampler();
@@ -275,7 +275,7 @@ pub(super) fn sync_terrain_water_clock(
         if !clock_changed && !change.is_added() {
             continue;
         }
-        let Some(material) = materials.get_mut(&chunk.material) else {
+        let Some(mut material) = materials.get_mut(&chunk.material) else {
             continue;
         };
         material.extension.water_params.z = sync.offset;

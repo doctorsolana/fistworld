@@ -121,9 +121,19 @@ pub fn editor_ui_panel(
 
     apply_editor_style(ctx);
 
-    egui::TopBottomPanel::top("editor_top_bar")
+    // egui 0.35: Panel::show takes &mut Ui, not &Context, so panels need an
+    // explicit background root Ui spanning the viewport.
+    let mut root = egui::Ui::new(
+        ctx.clone(),
+        "editor_root".into(),
+        egui::UiBuilder::new()
+            .layer_id(egui::LayerId::background())
+            .max_rect(ctx.viewport_rect()),
+    );
+
+    egui::Panel::top("editor_top_bar")
         .frame(editor_bar_frame())
-        .show(ctx, |ui| {
+        .show(&mut root, |ui| {
             // --- Menu bar ---
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -171,15 +181,15 @@ pub fn editor_ui_panel(
                             ui_state.pending_generate = Some(crate::worldgen::WorldStyle::Island);
                         }
                         if ui.button("Mainland…").clicked() {
-                            ui_state.pending_generate =
-                                Some(crate::worldgen::WorldStyle::Mainland);
+                            ui_state.pending_generate = Some(crate::worldgen::WorldStyle::Mainland);
                         }
                         ui.separator();
                         if ui.button("Great Open World…").clicked() {
-                            ui_state.pending_generate =
-                                Some(crate::worldgen::WorldStyle::Showcase);
+                            ui_state.pending_generate = Some(crate::worldgen::WorldStyle::Showcase);
                         }
-                        ui.small("Mountains, bay, islands, lakes, rivers,\nroads and a harbour village.");
+                        ui.small(
+                            "Mountains, bay, islands, lakes, rivers,\nroads and a harbour village.",
+                        );
                     });
                     ui.separator();
                     ui.menu_button("Map Size", |ui| {
@@ -197,8 +207,7 @@ pub fn editor_ui_panel(
                         }
                         ui.separator();
                         if ui.button("Custom…").clicked() {
-                            ui_state.custom_map_size =
-                                session.map_definition.bounds.max[0] * 2.0;
+                            ui_state.custom_map_size = session.map_definition.bounds.max[0] * 2.0;
                             ui_state.show_custom_size = true;
                         }
                     });
@@ -240,20 +249,20 @@ pub fn editor_ui_panel(
             });
         });
 
-    egui::SidePanel::left("editor_tool_nav")
+    egui::Panel::left("editor_tool_nav")
         .resizable(false)
-        .exact_width(250.0)
+        .exact_size(250.0)
         .frame(editor_panel_frame())
-        .show(ctx, |ui| {
+        .show(&mut root, |ui| {
             draw_tool_palette(ui, &mut ui_state);
         });
 
-    egui::SidePanel::right("editor_inspector")
+    egui::Panel::right("editor_inspector")
         .resizable(true)
-        .default_width(430.0)
-        .min_width(360.0)
+        .default_size(430.0)
+        .min_size(360.0)
         .frame(editor_panel_frame())
-        .show(ctx, |ui| {
+        .show(&mut root, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -310,10 +319,10 @@ pub fn editor_ui_panel(
                 });
         });
 
-    egui::TopBottomPanel::bottom("editor_status_bar")
-        .exact_height(34.0)
+    egui::Panel::bottom("editor_status_bar")
+        .exact_size(34.0)
         .frame(editor_bar_frame())
-        .show(ctx, |ui| {
+        .show(&mut root, |ui| {
             ui.horizontal_centered(|ui| {
                 let cursor = cursor_hit
                     .0
@@ -488,12 +497,12 @@ pub fn editor_ui_panel(
         ui_state.show_exit_confirm = keep_open;
     }
 
-    ui_state.pointer_over_ui = ctx.wants_pointer_input() || ctx.is_pointer_over_area();
-    ui_state.keyboard_captured = ctx.wants_keyboard_input();
+    ui_state.pointer_over_ui = ctx.egui_wants_pointer_input() || ctx.is_pointer_over_egui();
+    ui_state.keyboard_captured = ctx.egui_wants_keyboard_input();
 }
 
 fn apply_editor_style(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     style.spacing.item_spacing = egui::vec2(8.0, 7.0);
     style.spacing.button_padding = egui::vec2(10.0, 6.0);
     style.visuals = egui::Visuals::dark();
@@ -508,7 +517,7 @@ fn apply_editor_style(ctx: &egui::Context) {
     style.visuals.widgets.hovered.fg_stroke.color = egui::Color32::WHITE;
     style.visuals.selection.bg_fill = egui::Color32::from_rgb(72, 118, 136);
     style.visuals.selection.stroke.color = egui::Color32::from_rgb(236, 244, 242);
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }
 
 fn editor_bar_frame() -> egui::Frame {

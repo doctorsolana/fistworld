@@ -84,6 +84,9 @@ pub(super) fn apply_foliage_materials(
         let mut stack = vec![root];
         let mut updated_any = false;
         let mut saw_material = false;
+        // A subtree member whose material asset has not loaded yet: the whole root
+        // must be retried next frame, even if siblings were processed.
+        let mut deferred = false;
 
         while let Some(entity) = stack.pop() {
             // Already wind-converted (e.g. after a cutout-setting refresh):
@@ -95,7 +98,7 @@ pub(super) fn apply_foliage_materials(
             if let Ok(handle) = materials_q.get(entity) {
                 let id = handle.0.id();
                 if !cache.processed.contains(&id) {
-                    if let Some(material) = materials.get_mut(&handle.0) {
+                    if let Some(mut material) = materials.get_mut(&handle.0) {
                         saw_material = true;
                         let mut updated_material = false;
 
@@ -134,11 +137,30 @@ pub(super) fn apply_foliage_materials(
                 // gets the root-to-tip color ramp (drives the gust sheen).
                 if swayable {
                     if let Ok(mesh_handle) = mesh_q.get(entity) {
+                        // The base material may still be loading — since 0.19 the
+                        // renderable `/std` sub-asset lands after the glTF itself.
+                        // Converting before it exists would clone a default-white
+                        // base into the cached wind material and poison every
+                        // later instance of this tree kind. Leave the marker and
+                        // retry next frame instead.
+                        if !cache.wind_materials.contains_key(&handle.0.id())
+                            && materials.get(&handle.0).is_none()
+                        {
+                            deferred = true;
+                            if let Ok(children) = children_q.get(entity) {
+                                for child in children.iter() {
+                                    stack.push(child);
+                                }
+                            }
+                            continue;
+                        }
                         saw_material = true;
 
                         if grass {
                             // Ramp-bake every mesh this entity can display
-                            // (all LODs, so the gradient doesn't pop).
+                            // (all LODs, so the gradient doesn't pop). Only mark a
+                            // mesh ramped once it actually baked — a not-yet-loaded
+                            // mesh must be retried, not remembered as done.
                             let mut mesh_handles = vec![mesh_handle.0.clone()];
                             if let Ok(lods) = tree_lods_q.get(entity) {
                                 mesh_handles.push(lods.lod0.clone());
@@ -147,9 +169,10 @@ pub(super) fn apply_foliage_materials(
                                 }
                             }
                             for mh in &mesh_handles {
-                                if cache.ramped_meshes.insert(mh.id()) {
-                                    if let Some(mesh) = meshes.get_mut(mh) {
-                                        bake_foliage_color_ramp(mesh);
+                                if !cache.ramped_meshes.contains(&mh.id()) {
+                                    if let Some(mut mesh) = meshes.get_mut(mh) {
+                                        bake_foliage_color_ramp(&mut mesh);
+                                        cache.ramped_meshes.insert(mh.id());
                                     }
                                 }
                             }
@@ -160,7 +183,9 @@ pub(super) fn apply_foliage_materials(
                         {
                             existing.clone()
                         } else {
-                            let mut base = materials.get(&handle.0).cloned().unwrap_or_default();
+                            let Some(mut base) = materials.get(&handle.0).cloned() else {
+                                continue;
+                            };
                             flatten_base(&mut base);
                             let params = meshes
                                 .get(&mesh_handle.0)
@@ -197,7 +222,7 @@ pub(super) fn apply_foliage_materials(
             }
         }
 
-        if updated_any || saw_material {
+        if (updated_any || saw_material) && !deferred {
             commands.entity(root).remove::<NeedsFoliageMaterials>();
         }
     }

@@ -42,7 +42,7 @@ pub(super) fn spawn_dropdown(parent: &mut ChildSpawnerCommands<'_>, presets: &Se
                         DropdownText,
                         Text::new(selected_name),
                         TextFont {
-                            font_size: 16.0,
+                            font_size: FontSize::Px(16.0),
                             ..default()
                         },
                         TextColor(TEXT_COLOR),
@@ -52,7 +52,7 @@ pub(super) fn spawn_dropdown(parent: &mut ChildSpawnerCommands<'_>, presets: &Se
                     toggle.spawn((
                         Text::new("▼"),
                         TextFont {
-                            font_size: 12.0,
+                            font_size: FontSize::Px(12.0),
                             ..default()
                         },
                         TextColor(TEXT_MUTED),
@@ -101,7 +101,7 @@ pub(super) fn spawn_dropdown(parent: &mut ChildSpawnerCommands<'_>, presets: &Se
                                 option.spawn((
                                     Text::new(&entry.name),
                                     TextFont {
-                                        font_size: 15.0,
+                                        font_size: FontSize::Px(15.0),
                                         ..default()
                                     },
                                     TextColor(if is_selected {

@@ -68,9 +68,14 @@ fn wire_common_systems(app: &mut App) {
     app.add_systems(
         Update,
         (
-            game_systems::update_day_night_cycle,
+            // Sole DistanceFog writer; folds in the map-view fade, so it must
+            // see this frame's MapViewBlend.
+            game_systems::update_day_night_cycle
+                .after(terrain::map_view::update_map_view_state),
             game_systems::update_atmosphere,
             game_systems::apply_graphics_settings,
+            game_systems::sync_shadow_cascades_to_zoom,
+            crate::render::shadow_cull::gate_prop_shadow_casters,
         )
             .run_if(in_state(GameState::Playing)),
     );
@@ -117,7 +122,6 @@ fn wire_game_systems(app: &mut App) {
             camera_rts::update_commander_camera,
             // Map view reads camera zoom, so it must follow the camera update.
             terrain::map_view::update_map_view_state,
-            terrain::map_view::fade_fog_for_map_view,
         )
             .chain()
             .run_if(in_state(GameState::Playing)),

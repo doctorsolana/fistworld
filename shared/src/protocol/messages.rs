@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-
 /// Commander view state sent from client to server each tick.
 ///
 /// The commander has no body: the client owns the camera, and the server only needs to
@@ -52,6 +51,26 @@ impl TimeOfDayPreset {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct SetTimeOfDay {
     pub preset: TimeOfDayPreset,
+}
+
+/// Client -> Server: privileged god-mode commands.
+///
+/// The server drops these unless the sender's connection has god capability (granted via
+/// [`DevStatus`] when the server runs in dev mode). One enum so future god tools (spawn
+/// settlement, teleport, grant coin) extend the protocol without new message plumbing.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub enum DevCommand {
+    /// Set the simulation speed multiplier: 0 = paused, 1 = real time.
+    SetTimeWarp(f32),
+}
+
+/// Server -> Client: whether this connection may use god mode.
+///
+/// Sent once after the player's name is accepted. Purely capability discovery for the
+/// client UI — every [`DevCommand`] is still validated server-side.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct DevStatus {
+    pub god: bool,
 }
 
 /// What the bullet impacted (used for visuals/debug).
@@ -134,5 +153,23 @@ mod tests {
         assert_eq!(decoded, input);
     }
 
+    #[test]
+    fn dev_command_roundtrips() {
+        let command = DevCommand::SetTimeWarp(64.0);
 
+        let bytes = bincode::serialize(&command).unwrap();
+        let decoded: DevCommand = bincode::deserialize(&bytes).unwrap();
+
+        assert_eq!(decoded, command);
+    }
+
+    #[test]
+    fn dev_status_roundtrips() {
+        let status = DevStatus { god: true };
+
+        let bytes = bincode::serialize(&status).unwrap();
+        let decoded: DevStatus = bincode::deserialize(&bytes).unwrap();
+
+        assert_eq!(decoded, status);
+    }
 }

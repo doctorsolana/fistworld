@@ -1,7 +1,7 @@
 //! Replicated world map metadata resources.
 
 use bevy::prelude::*;
-use lightyear::prelude::{NetworkTarget, Replicate, ReplicationMode};
+use lightyear::prelude::{NetworkTarget, Replicate};
 
 use shared::components::{ActiveMapState, CloudSeed};
 use shared::terrain::{WorldTerrain, WORLD_SEED};
@@ -24,7 +24,7 @@ pub fn spawn_cloud_seed_once(mut commands: Commands, spawned: Option<Res<CloudSe
     let seed = (WORLD_SEED as u64) ^ 0xC10D_5EED_F00D_BA5Eu64;
     commands.spawn((
         CloudSeed { seed },
-        Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
+        Replicate::to_clients(NetworkTarget::All),
     ));
 
     info!("Spawned CloudSeed (sky/cloud seed) replicated to all clients");
@@ -49,10 +49,7 @@ pub fn spawn_active_map_state_once(
         content_hash: terrain.generator.active_map_content_hash(),
     };
 
-    commands.spawn((
-        map_state,
-        Replicate::new(ReplicationMode::SingleServer(NetworkTarget::All)),
-    ));
+    commands.spawn((map_state, Replicate::to_clients(NetworkTarget::All)));
 
     info!(
         "Spawned ActiveMapState map_id={} bounds=({:.1},{:.1})..({:.1},{:.1}) hash={:016x}",

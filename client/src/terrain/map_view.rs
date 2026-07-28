@@ -17,7 +17,6 @@
 //! reveals void instead of map.
 
 use bevy::camera::visibility::VisibilityRange;
-use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 
 use crate::camera_rts::CommanderCamera;
@@ -64,41 +63,21 @@ pub fn water_visibility_range() -> VisibilityRange {
     }
 }
 
-/// How far into map view the camera is, `0.0..=1.0`. Drives the fog fade.
-#[derive(Resource, Default, Debug, Clone, Copy)]
+/// How far into map view the camera is, `0.0..=1.0`.
+///
+/// The single fog writer (`update_day_night_cycle`) reads this to dial the
+/// aerial haze out at map scale; a second system writing `DistanceFog` here
+/// would race it (unordered double-writes made the winner scheduler-dependent).
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
 pub struct MapViewBlend(pub f32);
 
 pub fn update_map_view_state(cameras: Query<&CommanderCamera>, mut blend: ResMut<MapViewBlend>) {
     let Ok(camera) = cameras.single() else {
         return;
     };
-    blend.0 = ((camera.zoom - DETAIL_FADE_START) / (DETAIL_FADE_END - DETAIL_FADE_START))
+    let next = ((camera.zoom - DETAIL_FADE_START) / (DETAIL_FADE_END - DETAIL_FADE_START))
         .clamp(0.0, 1.0);
-}
-
-/// Fade distance fog out as the camera pulls back.
-///
-/// Aerial haze sells depth at ground level, but at map scale it is integrated over
-/// kilometres and turns the whole map into a grey-brown wash. A map is meant to be
-/// legible, so the haze is dialled out exactly as the detail chunks fade.
-pub fn fade_fog_for_map_view(blend: Res<MapViewBlend>, mut fog: Query<&mut DistanceFog>) {
-    if !blend.is_changed() {
-        return;
-    }
-
-    let clear = 1.0 - blend.0;
-    for mut fog in fog.iter_mut() {
-        fog.color.set_alpha(FOG_BASE_ALPHA * clear);
-        // Rebuilt from the authored values every time rather than scaled in place —
-        // multiplying the live value would compound each frame and drive fog to zero.
-        fog.falloff = FogFalloff::from_visibility_colors(
-            FOG_VISIBILITY_METERS / clear.max(0.02),
-            Color::srgb(0.70, 0.80, 0.90),
-            Color::srgb(0.88, 0.92, 0.96),
-        );
+    if blend.0 != next {
+        blend.0 = next;
     }
 }
-
-/// Fog values authored for ground level; map view scales down from these.
-const FOG_BASE_ALPHA: f32 = 0.05;
-const FOG_VISIBILITY_METERS: f32 = 2_000.0;

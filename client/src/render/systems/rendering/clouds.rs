@@ -1,21 +1,35 @@
 //! clouds systems.
 
-use super::day_night::{lerp_color, lerp_f32, smoothstep, sun_yaw_from_phase};
+use super::day_night::{lerp_color, lerp_f32, smoothstep};
 use super::*;
 use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
 
 const CLOUD_TEXTURE_PATH: &str = "sky_10_2k/sky_10_2k.png";
 const CLOUD_LAYER_RADII: [f32; 1] = [1900.0];
 const CLOUD_LAYER_SPEEDS: [Vec2; 1] = [Vec2::new(0.0006, 0.0)];
-// Sky dome texture includes a baked-in sun. Keep it visible for now.
-// If you want to remove the baked sun, the texture itself must be edited.
+// Sky dome texture includes a prominent baked-in sun + sunset glow. The dome
+// must therefore NOT track the real sun's azimuth (a yaw-coupled dome reads as
+// a second sun orbiting the camera); the atmosphere + SunDisk own the sun, and
+// the dome only drifts slowly so its glow reads as distant cloud movement.
 const CLOUD_LAYER_ALPHAS: [f32; 1] = [0.3];
 const CLOUD_LAYER_UV_SCALES: [Vec2; 1] = [Vec2::splat(1.0)];
 const CLOUD_LAYER_UV_ROTATIONS: [f32; 1] = [0.0];
 const CLOUD_LAYER_YAW_OFFSETS: [f32; 1] = [0.0];
-pub(super) const CLOUD_SUN_YAW_OFFSET: f32 =
+// Authored resting orientation of the dome texture (kept from the old
+// sun-aligned calibration so the pretty band starts in the same place).
+const CLOUD_BASE_YAW: f32 =
     std::f32::consts::PI + std::f32::consts::FRAC_PI_2 + (170.0_f32.to_radians());
+// 0.5 deg/min of wall-clock time: slow enough to read as weather, not a body
+// orbiting the camera. Client-local on purpose — the dome is cosmetic, like
+// the cloud-card drift velocities.
+const CLOUD_YAW_DRIFT_RATE: f32 = 0.5_f32.to_radians() / 60.0;
 const CLOUD_BASE_PITCH: f32 = -std::f32::consts::FRAC_PI_2;
+
+/// Yaw of the cloud dome and card ring: fixed base orientation plus a slow
+/// constant drift, deliberately independent of the sun.
+fn cloud_drift_yaw(elapsed_secs: f32) -> f32 {
+    CLOUD_BASE_YAW + CLOUD_YAW_DRIFT_RATE * elapsed_secs
+}
 
 const CLOUD_CARD_COUNT: usize = 18;
 const CLOUD_CARD_RADIUS: f32 = 650.0;
@@ -275,7 +289,7 @@ pub fn apply_cloud_texture_sampler(
         return;
     }
 
-    let Some(image) = images.get_mut(&cloud_assets.texture) else {
+    let Some(mut image) = images.get_mut(&cloud_assets.texture) else {
         return;
     };
 
@@ -354,6 +368,7 @@ pub fn update_cloud_layers(
     camera: Query<&GlobalTransform, With<Camera3d>>,
     cover: Res<CloudCover>,
     settings: Res<GraphicsSettings>,
+    map_blend: Res<crate::terrain::map_view::MapViewBlend>,
     mut layers: Query<(
         &mut CloudLayer,
         &MeshMaterial3d<StandardMaterial>,
@@ -377,12 +392,16 @@ pub fn update_cloud_layers(
 
     let phase = t * std::f32::consts::TAU;
     let elevation = -phase.cos();
-    let sun_yaw = sun_yaw_from_phase(phase);
+    let drift_yaw = cloud_drift_yaw(time.elapsed_secs());
     let day_factor = smoothstep(-0.05, 0.15, elevation);
     let twilight = 1.0 - smoothstep(0.12, 0.35, elevation.max(0.0));
     let base_tint = lerp_color(CLOUD_NIGHT_TINT, CLOUD_DAY_TINT, day_factor);
     let tint = lerp_color(base_tint, CLOUD_SUNSET_TINT, twilight);
-    let visibility = (0.2 + 0.8 * day_factor) * cover.current;
+    // The dome is a camera-centered translucent sphere: at map zoom the whole
+    // world is seen through its lower hemisphere, which reads as a grey veil
+    // over the map. Fade the layer out with the map-view blend — the camera is
+    // conceptually above the weather up there.
+    let visibility = (0.2 + 0.8 * day_factor) * cover.current * (1.0 - map_blend.0);
 
     // Check if tint/visibility actually changed (avoid GPU re-upload when steady)
     let tint_rgba = tint.to_srgba();
@@ -395,10 +414,15 @@ pub fn update_cloud_layers(
     });
 
     for (mut layer, material_handle, mut transform) in layers.iter_mut() {
-        // Keep clouds centered on the camera.
-        transform.translation = camera_tf.translation();
-        transform.rotation = Quat::from_rotation_y(sun_yaw + layer.yaw_offset)
+        // Keep clouds centered on the camera (scale stays the authored radius,
+        // so the dome never deforms however far the camera zooms out).
+        let translation = camera_tf.translation();
+        let rotation = Quat::from_rotation_y(drift_yaw + layer.yaw_offset)
             * Quat::from_rotation_x(CLOUD_BASE_PITCH);
+        if transform.translation != translation || transform.rotation != rotation {
+            transform.translation = translation;
+            transform.rotation = rotation;
+        }
 
         // Scroll UVs slowly for parallax.
         let delta = layer.uv_speed * time.delta_secs();
@@ -408,7 +432,7 @@ pub fn update_cloud_layers(
         );
 
         // Only mutate material when tint/visibility changed or UV scrolled
-        if let Some(material) = materials.get_mut(&material_handle.0) {
+        if let Some(mut material) = materials.get_mut(&material_handle.0) {
             material.uv_transform = bevy::math::Affine2::from_scale_angle_translation(
                 layer.uv_scale,
                 layer.uv_rotation,
@@ -434,6 +458,7 @@ pub fn update_cloud_cards(
     camera: Query<&GlobalTransform, With<Camera3d>>,
     cover: Res<CloudCover>,
     settings: Res<GraphicsSettings>,
+    map_blend: Res<crate::terrain::map_view::MapViewBlend>,
     mut cards: Query<(
         &mut CloudCard,
         &mut Transform,
@@ -460,8 +485,9 @@ pub fn update_cloud_cards(
     let twilight = 1.0 - smoothstep(0.12, 0.35, elevation.max(0.0));
     let base_tint = lerp_color(CLOUD_NIGHT_TINT, CLOUD_DAY_TINT, day_factor);
     let tint = lerp_color(base_tint, CLOUD_SUNSET_TINT, twilight);
-    let visibility = (0.2 + 0.8 * day_factor) * cover.current;
-    let sun_yaw = sun_yaw_from_phase(phase);
+    // Mirrors the dome fade in update_cloud_layers — see the comment there.
+    let visibility = (0.2 + 0.8 * day_factor) * cover.current * (1.0 - map_blend.0);
+    let drift_yaw = cloud_drift_yaw(time.elapsed_secs());
 
     // Check if tint actually changed (reuse cache from update_cloud_layers)
     let tint_rgba = tint.to_srgba();
@@ -490,13 +516,16 @@ pub fn update_cloud_cards(
             card.offset.z = CLOUD_CARD_RADIUS;
         }
 
-        let rotated = Quat::from_rotation_y(sun_yaw) * Vec3::new(card.offset.x, 0.0, card.offset.z);
-        transform.translation =
-            camera_tf.translation() + Vec3::new(rotated.x, card.offset.y, rotated.z);
+        let rotated =
+            Quat::from_rotation_y(drift_yaw) * Vec3::new(card.offset.x, 0.0, card.offset.z);
+        let translation = camera_tf.translation() + Vec3::new(rotated.x, card.offset.y, rotated.z);
+        if transform.translation != translation {
+            transform.translation = translation;
+        }
 
         // Only mutate material when tint/visibility actually changed
         if tint_changed {
-            if let Some(material) = materials.get_mut(&material_handle.0) {
+            if let Some(mut material) = materials.get_mut(&material_handle.0) {
                 material.base_color =
                     color_with_alpha(tint, (card.base_alpha * visibility).clamp(0.0, 1.0));
             }

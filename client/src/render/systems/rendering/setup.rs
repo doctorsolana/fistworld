@@ -55,6 +55,25 @@ pub fn setup_rendering(
     let color_grading =
         super::settings::default_color_grading(settings.grade_exposure.clamp(-2.0, 2.0));
 
+    // Clear blue atmosphere (dust tint only near sunrise/sunset). Since bevy 0.19 the
+    // atmosphere is its own entity (the camera picks up the nearest one), and its
+    // GlobalTransform is the PLANET CENTER. Sea level (y = 0) must sit on the planet
+    // surface, so the center goes one bottom_radius straight down — an identity
+    // transform would put the planet center in the middle of the map, snapping the
+    // sky's up-axis to `normalize(camera_pos)` and anchoring every scattering
+    // feature to the map origin. Both presets share bottom_radius (the per-frame
+    // blend never moves it), so this anchor is fixed at spawn. AtmosphereSettings
+    // stays on the camera below and is what enables the effect per view.
+    commands.spawn((
+        Atmosphere {
+            inner_radius: clear_preset.bottom_radius,
+            outer_radius: clear_preset.top_radius,
+            ground_albedo: clear_preset.ground_albedo,
+            medium: active_medium,
+        },
+        Transform::from_xyz(0.0, -clear_preset.bottom_radius, 0.0),
+    ));
+
     let mut camera = commands.spawn((
         Camera3d::default(),
         Hdr,
@@ -66,13 +85,6 @@ pub fn setup_rendering(
         Exposure::SUNLIGHT,
         // Color grading for midtone lift (pleasant readability)
         color_grading,
-        // Clear blue atmosphere (dust tint only near sunrise/sunset).
-        Atmosphere {
-            bottom_radius: clear_preset.bottom_radius,
-            top_radius: clear_preset.top_radius,
-            ground_albedo: clear_preset.ground_albedo,
-            medium: active_medium,
-        },
         // Atmosphere settings (perf-tuned LUT sizes/samples).
         desert_atmosphere_settings_perf(),
         // Bloom for that blazing desert sun glow

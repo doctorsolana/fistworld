@@ -43,7 +43,7 @@ pub(super) fn spawn_graphics_panel(
             panel.spawn((
                 Text::new("GRAPHICS"),
                 TextFont {
-                    font_size: 26.0,
+                    font_size: FontSize::Px(26.0),
                     ..default()
                 },
                 TextColor(ACCENT_COLOR),
@@ -57,7 +57,7 @@ pub(super) fn spawn_graphics_panel(
             panel.spawn((
                 Text::new("Toggle/adjust to fix flickering or brightness"),
                 TextFont {
-                    font_size: 12.0,
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
                 TextColor(TEXT_MUTED),
@@ -190,6 +190,7 @@ pub(super) fn tonemapping_label(tonemapping: Tonemapping) -> &'static str {
         Tonemapping::ReinhardLuminance => "Reinhard Lum",
         Tonemapping::TonyMcMapface => "Tony",
         Tonemapping::SomewhatBoringDisplayTransform => "SBDT",
+        Tonemapping::KhronosPbrNeutral => "Khronos PBR",
         Tonemapping::None => "None",
     }
 }
@@ -214,7 +215,7 @@ pub(super) fn spawn_toggle(
             row.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: 18.0,
+                    font_size: FontSize::Px(18.0),
                     ..default()
                 },
                 TextColor(TEXT_COLOR),
@@ -249,7 +250,7 @@ pub(super) fn spawn_toggle(
                     ToggleText(toggle),
                     Text::new(text),
                     TextFont {
-                        font_size: 14.0,
+                        font_size: FontSize::Px(14.0),
                         ..default()
                     },
                     TextColor(TEXT_COLOR),
@@ -278,7 +279,7 @@ pub(super) fn spawn_slider(
             row.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: 18.0,
+                    font_size: FontSize::Px(18.0),
                     ..default()
                 },
                 TextColor(TEXT_COLOR),
@@ -315,7 +316,7 @@ pub(super) fn spawn_slider(
                         btn.spawn((
                             Text::new("-"),
                             TextFont {
-                                font_size: 18.0,
+                                font_size: FontSize::Px(18.0),
                                 ..default()
                             },
                             TextColor(TEXT_COLOR),
@@ -327,7 +328,7 @@ pub(super) fn spawn_slider(
                     SliderValueText(control),
                     Text::new(value),
                     TextFont {
-                        font_size: 14.0,
+                        font_size: FontSize::Px(14.0),
                         ..default()
                     },
                     TextColor(TEXT_COLOR),
@@ -357,7 +358,7 @@ pub(super) fn spawn_slider(
                         btn.spawn((
                             Text::new("+"),
                             TextFont {
-                                font_size: 18.0,
+                                font_size: FontSize::Px(18.0),
                                 ..default()
                             },
                             TextColor(TEXT_COLOR),
@@ -392,7 +393,7 @@ pub(super) fn spawn_controls_panel(
             panel.spawn((
                 Text::new("CONTROLS"),
                 TextFont {
-                    font_size: 26.0,
+                    font_size: FontSize::Px(26.0),
                     ..default()
                 },
                 TextColor(ACCENT_COLOR),
@@ -406,7 +407,7 @@ pub(super) fn spawn_controls_panel(
             panel.spawn((
                 Text::new("Adjust input settings"),
                 TextFont {
-                    font_size: 12.0,
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
                 TextColor(TEXT_MUTED),
@@ -446,7 +447,7 @@ pub(super) fn spawn_input_slider(
             row.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: 18.0,
+                    font_size: FontSize::Px(18.0),
                     ..default()
                 },
                 TextColor(TEXT_COLOR),
@@ -483,7 +484,7 @@ pub(super) fn spawn_input_slider(
                         btn.spawn((
                             Text::new("-"),
                             TextFont {
-                                font_size: 18.0,
+                                font_size: FontSize::Px(18.0),
                                 ..default()
                             },
                             TextColor(TEXT_COLOR),
@@ -495,7 +496,7 @@ pub(super) fn spawn_input_slider(
                     InputSliderValueText(control),
                     Text::new(value),
                     TextFont {
-                        font_size: 14.0,
+                        font_size: FontSize::Px(14.0),
                         ..default()
                     },
                     TextColor(TEXT_COLOR),
@@ -525,7 +526,7 @@ pub(super) fn spawn_input_slider(
                         btn.spawn((
                             Text::new("+"),
                             TextFont {
-                                font_size: 18.0,
+                                font_size: FontSize::Px(18.0),
                                 ..default()
                             },
                             TextColor(TEXT_COLOR),

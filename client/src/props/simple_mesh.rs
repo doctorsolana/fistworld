@@ -1,4 +1,4 @@
-use bevy::gltf::{Gltf, GltfMesh, GltfNode};
+use bevy::gltf::{Gltf, GltfMaterial, GltfMesh, GltfNode};
 use bevy::prelude::*;
 use shared::props::PropKind;
 use std::collections::HashMap;
@@ -25,6 +25,7 @@ struct SimplePropMeshTemplate {
 
 pub(crate) fn try_spawn_simple_prop_mesh(
     commands: &mut Commands,
+    asset_server: &AssetServer,
     root: Entity,
     kind: PropKind,
     prop_assets: &PropAssets,
@@ -43,9 +44,14 @@ pub(crate) fn try_spawn_simple_prop_mesh(
         };
     }
 
-    let Some(template) =
-        resolve_simple_prop_mesh(kind, prop_assets, gltfs, gltf_nodes, gltf_meshes)
-    else {
+    let Some(template) = resolve_simple_prop_mesh(
+        kind,
+        asset_server,
+        prop_assets,
+        gltfs,
+        gltf_nodes,
+        gltf_meshes,
+    ) else {
         return false;
     };
 
@@ -66,6 +72,7 @@ pub(crate) fn try_spawn_simple_prop_mesh(
 
 fn resolve_simple_prop_mesh(
     kind: PropKind,
+    asset_server: &AssetServer,
     prop_assets: &PropAssets,
     gltfs: Option<&Assets<Gltf>>,
     gltf_nodes: Option<&Assets<GltfNode>>,
@@ -96,7 +103,11 @@ fn resolve_simple_prop_mesh(
     }
 
     let primitive = &mesh.primitives[0];
-    let Some(material) = primitive.material.clone() else {
+    let Some(material) = primitive
+        .material
+        .as_ref()
+        .and_then(|material| gltf_material_std_handle(asset_server, material))
+    else {
         return Some(None);
     };
 
@@ -105,6 +116,22 @@ fn resolve_simple_prop_mesh(
         material,
         transform: node.transform,
     }))
+}
+
+/// Resolve the `StandardMaterial` counterpart of a glTF material sub-asset.
+///
+/// Since bevy 0.19 glTF materials load as [`GltfMaterial`] (raw glTF data, not
+/// renderable). While `PbrPlugin::gltf_enable_standard_materials` is on (the default), a
+/// `StandardMaterial` is built for each of them under the same asset path with a `/std`
+/// label suffix, which is what `MeshMaterial3d` needs.
+fn gltf_material_std_handle(
+    asset_server: &AssetServer,
+    material: &Handle<GltfMaterial>,
+) -> Option<Handle<StandardMaterial>> {
+    let path = material.path()?;
+    let label = path.label()?;
+    let std_path = path.clone().with_label(format!("{label}/std"));
+    Some(asset_server.load(std_path))
 }
 
 fn spawn_simple_prop_mesh(

@@ -14,6 +14,45 @@ pub struct WorldTime {
     pub night_duration: f32,
     /// Independent looping clock for deterministic water motion.
     pub ocean_seconds: f32,
+    /// World calendar: how many full cycles have elapsed since the world began.
+    ///
+    /// Starts at day 0 and only ever counts up — debug jumps within a cycle
+    /// (`set_normalized_time`) reposition the clock without touching the calendar.
+    pub day: u32,
+}
+
+/// Simulation speed multiplier, on the same singleton entity as [`WorldTime`].
+///
+/// Server-authoritative and mutated only through dev commands; replicated so every
+/// client's HUD can show the current speed. 1.0 = real time, 0.0 = paused. Warping
+/// scales both the day/night clock and the strategic tick so the world stays
+/// internally consistent while fast-forwarded.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TimeWarp(pub f32);
+
+impl TimeWarp {
+    /// Upper bound keeps a warped strategic tick from starving the fixed schedule.
+    pub const MAX_FACTOR: f32 = 1000.0;
+    /// Smallest running speed: below this a per-tick dt (warp/60) is small enough to be
+    /// absorbed by f32 addition into `seconds_in_cycle`, silently freezing the clock.
+    /// Exact 0 stays valid as an explicit pause.
+    pub const MIN_FACTOR: f32 = 0.1;
+
+    pub fn clamped(factor: f32) -> Self {
+        if !factor.is_finite() {
+            return Self(1.0);
+        }
+        if factor <= 0.0 {
+            return Self(0.0);
+        }
+        Self(factor.clamp(Self::MIN_FACTOR, Self::MAX_FACTOR))
+    }
+}
+
+impl Default for TimeWarp {
+    fn default() -> Self {
+        Self(1.0)
+    }
 }
 
 /// Server-authoritative seed for sky/cloud generation (replicated to clients).
@@ -45,6 +84,7 @@ impl WorldTime {
             day_duration,
             night_duration,
             ocean_seconds: 0.0,
+            day: 0,
         };
         wt.wrap();
         wt
@@ -80,10 +120,23 @@ impl WorldTime {
         ((self.seconds_in_cycle - self.day_duration) / self.night_duration).clamp(0.0, 1.0)
     }
 
-    pub fn advance(&mut self, dt: f32) {
-        let dt = dt.max(0.0);
-        self.seconds_in_cycle += dt;
-        self.ocean_seconds = crate::water::advance_ocean_seconds(self.ocean_seconds, dt);
+    /// `world_dt` drives the day/night clock and calendar (warp-scaled by the server).
+    /// `real_dt` drives `ocean_seconds`, which must stay wall-clock: clients latch its
+    /// phase once per replicated entity and then advance their shader clocks locally at
+    /// 1x, so a warped ocean clock would permanently desync wave/wet-sand phase.
+    pub fn advance(&mut self, world_dt: f32, real_dt: f32) {
+        let world_dt = world_dt.max(0.0);
+        self.seconds_in_cycle += world_dt;
+        self.ocean_seconds =
+            crate::water::advance_ocean_seconds(self.ocean_seconds, real_dt.max(0.0));
+        // Only real elapsed time turns the calendar; wrap() alone stays day-neutral so
+        // debug clock jumps can't fabricate history.
+        let cycle = self.cycle_duration();
+        if cycle > 0.0 && self.seconds_in_cycle >= cycle {
+            self.day = self
+                .day
+                .saturating_add((self.seconds_in_cycle / cycle) as u32);
+        }
         self.wrap();
     }
 
@@ -138,6 +191,9 @@ impl WorldTime {
     }
 
     /// Set the world clock using a normalized time (0.0-1.0).
+    ///
+    /// Deliberately leaves `day` untouched: this is a debug reposition within the
+    /// current day, not the passage of time.
     pub fn set_normalized_time(&mut self, normalized: f32) {
         let cycle = self.cycle_duration();
         if cycle <= 0.0 {
@@ -162,5 +218,70 @@ impl WorldTime {
 
         self.seconds_in_cycle = cycle_pos * cycle;
         self.wrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn world_starts_on_day_zero() {
+        assert_eq!(WorldTime::new_default().day, 0);
+    }
+
+    #[test]
+    fn advancing_past_cycle_end_turns_the_calendar() {
+        let mut wt = WorldTime::new(100.0, 20.0, 0.0);
+
+        wt.advance(119.0, 119.0);
+        assert_eq!(wt.day, 0);
+
+        wt.advance(2.0, 2.0);
+        assert_eq!(wt.day, 1);
+        assert!((wt.seconds_in_cycle - 1.0).abs() < 1e-3);
+
+        // One warped step spanning several cycles must count every one of them.
+        wt.advance(360.0, 360.0);
+        assert_eq!(wt.day, 4);
+    }
+
+    #[test]
+    fn debug_clock_jumps_do_not_change_the_day() {
+        let mut wt = WorldTime::new(100.0, 20.0, 90.0);
+        wt.advance(40.0, 40.0);
+        assert_eq!(wt.day, 1);
+
+        wt.set_normalized_time(0.1);
+        wt.set_normalized_time(0.9);
+        assert_eq!(wt.day, 1);
+    }
+
+    #[test]
+    fn ocean_clock_ignores_the_warped_delta() {
+        let mut warped = WorldTime::new(100.0, 20.0, 0.0);
+        let mut real = WorldTime::new(100.0, 20.0, 0.0);
+
+        warped.advance(1000.0, 1.0);
+        real.advance(1.0, 1.0);
+
+        assert_eq!(warped.ocean_seconds, real.ocean_seconds);
+
+        // Pause: the calendar freezes, the ocean keeps wall-clock time.
+        let before = warped.seconds_in_cycle;
+        warped.advance(0.0, 5.0);
+        assert_eq!(warped.seconds_in_cycle, before);
+        assert!(warped.ocean_seconds > real.ocean_seconds);
+    }
+
+    #[test]
+    fn warp_clamping_pins_pause_and_floors_tiny_factors() {
+        assert_eq!(TimeWarp::clamped(0.0).0, 0.0);
+        assert_eq!(TimeWarp::clamped(-5.0).0, 0.0);
+        assert_eq!(TimeWarp::clamped(0.01).0, TimeWarp::MIN_FACTOR);
+        assert_eq!(TimeWarp::clamped(1.0).0, 1.0);
+        assert_eq!(TimeWarp::clamped(5000.0).0, TimeWarp::MAX_FACTOR);
+        assert_eq!(TimeWarp::clamped(f32::NAN).0, 1.0);
+        assert_eq!(TimeWarp::clamped(f32::INFINITY).0, 1.0);
     }
 }

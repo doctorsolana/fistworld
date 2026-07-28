@@ -16,29 +16,32 @@ pub use clouds::{
 };
 pub use day_night::update_day_night_cycle;
 pub use scaled_target::sync_scene_render_target;
-pub use settings::{apply_graphics_settings, GraphicsSettings, InputSettings, LAUNCHER_RESOLUTION};
+pub use settings::{
+    apply_graphics_settings, sync_shadow_cascades_to_zoom, GraphicsSettings, InputSettings,
+    LAUNCHER_RESOLUTION,
+};
 pub use setup::setup_rendering;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::audio::SpatialListener;
-use bevy::camera::Exposure;
+use bevy::camera::{Exposure, Hdr};
 use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
+use bevy::light::atmosphere::{Falloff, PhaseFunction, ScatteringMedium, ScatteringTerm};
 use bevy::light::{
-    light_consts::lux, AtmosphereEnvironmentMapLight, CascadeShadowConfig,
+    light_consts::lux, Atmosphere, AtmosphereEnvironmentMapLight, CascadeShadowConfig,
     CascadeShadowConfigBuilder, DirectionalLightShadowMap, NotShadowCaster, ShadowFilteringMethod,
 };
 use bevy::math::primitives::Plane3d;
 use bevy::pbr::{
-    Atmosphere, AtmosphereMode, AtmosphereSettings, DistanceFog, Falloff, FogFalloff,
-    PhaseFunction, ScatteringMedium, ScatteringTerm, ScreenSpaceAmbientOcclusion,
+    AtmosphereMode, AtmosphereSettings, DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion,
     ScreenSpaceAmbientOcclusionQualityLevel,
 };
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection, Hdr, Msaa};
+use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection, Msaa};
 use bevy::ui::UiScale;
 use bevy::window::{PresentMode, PrimaryWindow};
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};

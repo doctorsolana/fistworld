@@ -117,7 +117,7 @@ pub(crate) fn update_far_terrain_hole(
             pending.hole_filled,
         );
         hole_task.pending = None;
-        if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
+        if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
             mesh.insert_indices(bevy::mesh::Indices::U32(indices));
         }
         state.center_cell = done_cell;

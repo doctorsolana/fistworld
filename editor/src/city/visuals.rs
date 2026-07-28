@@ -427,7 +427,7 @@ fn spawn_authored_city_visuals(
         let ground_y = world.get_height(footprint.center.x, footprint.center.y);
         commands.spawn((
             Name::new(format!("PlotBuilding({}:{})", plot.id, kind.display_name())),
-            SceneRoot(scene),
+            WorldAssetRoot(scene),
             plot_building_scene_transform(plot, kind, ground_y),
             GlobalTransform::default(),
             Visibility::Inherited,

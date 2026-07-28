@@ -10,7 +10,6 @@ use lightyear::link::LinkSystems;
 use crate::collision;
 use crate::net;
 use crate::persistence;
-use crate::physics;
 use crate::player;
 use crate::telemetry;
 use crate::world;
@@ -24,7 +23,6 @@ pub(crate) fn configure_fixed_schedule(app: &mut App) {
 #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
 enum FpsServerSet {
     WorldTick,
-    PhysicsWorld,
     NetIngress,
     Indices,
     Persistence,
@@ -35,7 +33,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         FixedUpdate,
         (
             FpsServerSet::WorldTick,
-            FpsServerSet::PhysicsWorld,
             FpsServerSet::NetIngress,
             FpsServerSet::Indices,
             FpsServerSet::Persistence,
@@ -47,6 +44,7 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         FixedUpdate,
         (
             world::time::handle_set_time_of_day,
+            world::dev::handle_dev_commands,
             world::time::update_world_time,
             crate::city::buildings::sync_authored_plot_buildings,
             collision::building_index::sync_building_spatial_index,
@@ -57,18 +55,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         )
             .chain()
             .in_set(FpsServerSet::WorldTick)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
-        (
-            physics::terrain_colliders::sync_terrain_colliders,
-            physics::static_world_colliders::sync_static_prop_colliders,
-            physics::static_world_colliders::sync_static_building_colliders,
-        )
-            .chain()
-            .in_set(FpsServerSet::PhysicsWorld)
             .run_if(server_is_started),
     );
 
@@ -91,9 +77,7 @@ fn configure_fps_fixed_schedule(app: &mut App) {
 
     app.add_systems(
         FixedUpdate,
-        (
-            player::index::sync_player_entity_index,
-        )
+        (player::index::sync_player_entity_index,)
             .chain()
             .in_set(FpsServerSet::Indices)
             .run_if(server_is_started),
@@ -118,7 +102,7 @@ fn configure_fps_fixed_schedule(app: &mut App) {
                 .before(world::time::handle_set_time_of_day),
             // Phase brackets anchor on SystemSets, not individual systems, so that
             // deleting any single gameplay system cannot silently skew the timings.
-            telemetry::perf::handle_perf_core_phase_end.after(FpsServerSet::PhysicsWorld),
+            telemetry::perf::handle_perf_core_phase_end.after(FpsServerSet::WorldTick),
             telemetry::perf::update_server_perf_log.after(FpsServerSet::Persistence),
             telemetry::network::sample_replication_change_pressure.after(FpsServerSet::Persistence),
         )

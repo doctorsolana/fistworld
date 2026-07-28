@@ -9,6 +9,10 @@ MODE=${1:-both}
 # Which map the server and client load; big_world is the generated round world.
 export CITYSIM_MAP_ID="${CITYSIM_MAP_ID:-big_world}"
 
+# Local servers run with god commands enabled; production config (fly.toml) never
+# sets this, and an explicitly exported value wins.
+export FISTWORLD_DEV="${FISTWORLD_DEV:-1}"
+
 SERVER_PID=""
 CLIENT1_PID=""
 CLIENT2_PID=""

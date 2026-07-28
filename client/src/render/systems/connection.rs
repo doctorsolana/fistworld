@@ -87,25 +87,13 @@ pub fn handle_start_connection(
             .expect("Failed to create netcode client"),
             // IMPORTANT: enable replication receive on this client.
             // Without this, the client will never receive `WorldTime` / `Player` / `Vehicle` / etc.
-            ReplicationReceiver::default(),
+            // A unit marker since lightyear 0.28.
+            ReplicationReceiver,
         ))
         .id();
 
-    // Add Client -> Server message senders (split to avoid tuple size limit)
-    commands.entity(client_entity).insert((
-        MessageSender::<shared::protocol::PlayerInput>::default(),
-        MessageSender::<shared::protocol::SetTimeOfDay>::default(),
-        // Player name submission
-        MessageSender::<shared::protocol::SubmitPlayerName>::default(),
-        MessageSender::<shared::protocol::RequestPlayerRoster>::default(),
-    ));
-
-    // Add server -> client message receivers (split to avoid tuple size limit)
-    commands.entity(client_entity).insert((
-        // Name submission response
-        MessageReceiver::<shared::protocol::NameSubmissionResult>::default(),
-        MessageReceiver::<shared::protocol::PlayerRoster>::default(),
-    ));
+    // MessageSender/MessageReceiver for every registered message are auto-inserted
+    // as required components of `Client` (lightyear 0.28) — no manual inserts needed.
 
     // Trigger the Connect event to actually initiate the connection
     commands.trigger(Connect {
@@ -149,34 +137,6 @@ pub fn update_connection_status(
 }
 
 // =============================================================================
-// CURSOR
-// =============================================================================
-
-/// Grab cursor for FPS controls
-pub fn apply_cursor_grab(
-    windows: Query<Entity, With<PrimaryWindow>>,
-    mut cursor_opts: Query<&mut CursorOptions>,
-    mouse_button: Res<ButtonInput<MouseButton>>,
-    input_state: Res<crate::input::InputState>,
-) {
-    // Don't grab cursor when any UI is open
-    if input_state.ui_blocking() {
-        return;
-    }
-
-    let Ok(window_entity) = windows.single() else {
-        return;
-    };
-
-    if mouse_button.just_pressed(MouseButton::Left) {
-        if let Ok(mut cursor) = cursor_opts.get_mut(window_entity) {
-            cursor.grab_mode = CursorGrabMode::Locked;
-            cursor.visible = false;
-        }
-    }
-}
-
-// =============================================================================
 // MENU TRANSITIONS
 // =============================================================================
 
@@ -205,8 +165,6 @@ pub fn cleanup_enter_main_menu(
     for entity in players.iter() {
         commands.entity(entity).despawn();
     }
-
-
 
     // Clean up particles
     for entity in particles.iter() {

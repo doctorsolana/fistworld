@@ -50,7 +50,7 @@ pub fn spawn_city_plot_buildings(
         let building_entity = commands
             .spawn((
                 Name::new(format!("CityBuilding({}:{})", plot.id, spec.display_name)),
-                SceneRoot(asset_server.load(spec.scene_path)),
+                WorldAssetRoot(asset_server.load(spec.scene_path)),
                 plot_building_scene_transform(plot, kind, ground_y),
                 GlobalTransform::default(),
                 Visibility::Inherited,
@@ -101,8 +101,8 @@ pub fn warm_city_building_materials(
                 continue;
             }
 
-            if let Some(material) = materials.get_mut(&mesh_material.0) {
-                warm_city_material(material);
+            if let Some(mut material) = materials.get_mut(&mesh_material.0) {
+                warm_city_material(&mut material);
             }
         }
 

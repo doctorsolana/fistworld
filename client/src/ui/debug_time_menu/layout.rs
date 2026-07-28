@@ -28,7 +28,7 @@ pub(super) fn spawn_debug_time_menu(
         panel.spawn((
             Text::new("DEBUG TIME"),
             TextFont {
-                font_size: 26.0,
+                font_size: FontSize::Px(26.0),
                 ..default()
             },
             TextColor(ACCENT_COLOR),
@@ -41,7 +41,7 @@ pub(super) fn spawn_debug_time_menu(
         panel.spawn((
             Text::new("Set server time of day"),
             TextFont {
-                font_size: 12.0,
+                font_size: FontSize::Px(12.0),
                 ..default()
             },
             TextColor(TEXT_MUTED),
@@ -59,7 +59,7 @@ pub(super) fn spawn_debug_time_menu(
         panel.spawn((
             Text::new("Debug fly: WASD + Space/Ctrl, Shift = fast"),
             TextFont {
-                font_size: 12.0,
+                font_size: FontSize::Px(12.0),
                 ..default()
             },
             TextColor(TEXT_MUTED),
@@ -74,7 +74,7 @@ pub(super) fn spawn_debug_time_menu(
         panel.spawn((
             Text::new("Cloud cover test"),
             TextFont {
-                font_size: 12.0,
+                font_size: FontSize::Px(12.0),
                 ..default()
             },
             TextColor(TEXT_MUTED),
@@ -91,7 +91,7 @@ pub(super) fn spawn_debug_time_menu(
         panel.spawn((
             Text::new("Performance debug"),
             TextFont {
-                font_size: 12.0,
+                font_size: FontSize::Px(12.0),
                 ..default()
             },
             TextColor(TEXT_MUTED),
@@ -108,7 +108,7 @@ pub(super) fn spawn_debug_time_menu(
         panel.spawn((
             Text::new("Player character"),
             TextFont {
-                font_size: 12.0,
+                font_size: FontSize::Px(12.0),
                 ..default()
             },
             TextColor(TEXT_MUTED),
@@ -121,7 +121,7 @@ pub(super) fn spawn_debug_time_menu(
         panel.spawn((
             Text::new("NPC debug"),
             TextFont {
-                font_size: 12.0,
+                font_size: FontSize::Px(12.0),
                 ..default()
             },
             TextColor(TEXT_MUTED),
@@ -130,7 +130,6 @@ pub(super) fn spawn_debug_time_menu(
                 ..default()
             },
         ));
-
 
         panel
             .spawn((

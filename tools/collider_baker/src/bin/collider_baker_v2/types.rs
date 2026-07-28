@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use bevy::prelude::*;
+use bevy::world_serialization::WorldAsset;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -42,6 +43,6 @@ pub(crate) struct BakeConfig {
 #[derive(Resource)]
 pub(crate) struct BakeState {
     pub(crate) manifest: ColliderManifest,
-    pub(crate) handles: HashMap<String, Handle<Scene>>,
+    pub(crate) handles: HashMap<String, Handle<WorldAsset>>,
     pub(crate) started: bool,
 }

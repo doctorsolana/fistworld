@@ -50,11 +50,17 @@ pub struct CommanderCamera {
 
 impl Default for CommanderCamera {
     fn default() -> Self {
+        // Test hook: perf runs need a reproducible zoom without input automation.
+        let start_zoom = std::env::var("FISTFORCE_START_ZOOM")
+            .ok()
+            .and_then(|raw| raw.parse::<f32>().ok())
+            .filter(|z| z.is_finite())
+            .unwrap_or(280.0);
         Self {
             yaw: -0.45,
             focus: Vec3::ZERO,
             pan_speed: 120.0,
-            zoom: 280.0,
+            zoom: start_zoom,
             // Range spans "one character" to "see your realm". The old 55..900 window was
             // sized for a squad-scale RTS; a persistent world with regions needs to pull
             // back far enough to read territory.

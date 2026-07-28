@@ -1,10 +1,10 @@
 //! Direct segment/ray queries against terrain, props and buildings.
 //!
 //! These query `WorldTerrain` / prop / building data directly, so they work at any
-//! distance — unlike `physics::queries::cast_world_impact`, which only sees terrain
-//! colliders that have actually been streamed in around an anchor. For a top-down
-//! game whose camera can pan far from any unit, the direct-query version is the more
-//! useful of the two. Rescued from the deleted combat module for line-of-sight work.
+//! distance — no dependency on physics colliders being streamed in around an anchor
+//! (the rapier-based variant was removed with the physics engine). For a top-down
+//! game whose camera can pan far from any unit, direct queries are the right shape.
+//! Rescued from the deleted combat module for line-of-sight work.
 
 #![allow(dead_code)]
 
@@ -125,7 +125,6 @@ fn ray_obb_intersection(
 
     Some((hit_world, normal_world))
 }
-
 
 /// Segment vs terrain heightfield intersection.
 /// Returns (distance_along_segment, hit_point, hit_normal) for the nearest hit.

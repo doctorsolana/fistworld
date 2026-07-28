@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use bevy_rapier3d::parry::transformation::vhacd::VHACDParameters;
+use parry3d::transformation::vhacd::VHACDParameters;
 
 pub(crate) fn vhacd_params_for_mesh(triangle_count: usize) -> VHACDParameters {
     let (

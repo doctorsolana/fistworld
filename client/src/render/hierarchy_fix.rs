@@ -107,7 +107,7 @@ pub fn update_b0004_global_trace(
     has_visibility: Query<(), With<Visibility>>,
     has_inherited_visibility: Query<(), With<InheritedVisibility>>,
     has_node: Query<(), With<Node>>,
-    has_scene_root: Query<(), With<SceneRoot>>,
+    has_scene_root: Query<(), With<WorldAssetRoot>>,
     mut enabled: Local<Option<bool>>,
     mut reported: Local<HashSet<(Entity, Entity)>>,
 ) {

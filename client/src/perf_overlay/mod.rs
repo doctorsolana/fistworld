@@ -241,7 +241,7 @@ pub fn spawn_debug_overlay(mut commands: Commands) {
                 FpsText,
                 Text::new("FPS: --"),
                 TextFont {
-                    font_size: 16.0,
+                    font_size: FontSize::Px(16.0),
                     ..default()
                 },
                 TextColor(Color::srgb(0.0, 1.0, 0.0)), // Green text
@@ -252,7 +252,7 @@ pub fn spawn_debug_overlay(mut commands: Commands) {
                 PerfStatsText,
                 Text::new("Perf: --"),
                 TextFont {
-                    font_size: 12.0,
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
                 TextColor(Color::srgb(0.85, 0.85, 0.85)),
@@ -262,7 +262,7 @@ pub fn spawn_debug_overlay(mut commands: Commands) {
             parent.spawn((
                 Text::new("[F3] Perf Overlay  |  [F4] Gizmos"),
                 TextFont {
-                    font_size: 12.0,
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
                 TextColor(Color::srgb(0.7, 0.7, 0.7)),
@@ -296,6 +296,7 @@ pub fn update_debug_overlay(
     mut counts_b: ParamSet<(
         Query<(), With<crate::render::systems::CloudLayer>>,
         Query<(), With<crate::render::systems::CloudCard>>,
+        Query<&crate::camera_rts::CommanderCamera>,
     )>,
 ) {
     // Show/hide overlay based on debug mode
@@ -379,6 +380,13 @@ pub fn update_debug_overlay(
         for p in counts_a.p2().iter() {
             let center = ChunkCoord::from_world_pos(p.0);
             collider_chunks.extend(center.chunks_in_radius(collider_chunk_radius));
+        }
+        // Camera state first: bug reports lead with "at zoom X near (x, z)".
+        if let Ok(cam) = counts_b.p2().single() {
+            lines.push_str(&format!(
+                "Camera: zoom {:.0}m | tilt {:.2} | focus ({:.0}, {:.0})\n",
+                cam.zoom, cam.tilt, cam.focus.x, cam.focus.z,
+            ));
         }
         lines.push_str(&format!(
             "Gizmos: {}\nEntities: {:.0}\nChunks: {}\nProps: {}\nSand particles: {}\nCollider chunks: {}\nCollidable props: {} (baked kinds: {})\nCloud layers: {} | Cloud cards: {}\nFrame ms p50/p95/p99: {:.2}/{:.2}/{:.2}\nHitches > {:.1}ms (window): {}\nAssets: meshes {} | materials {} | images {}\n",

@@ -4,10 +4,11 @@ use std::fs;
 use bevy::app::AppExit;
 use bevy::asset::RecursiveDependencyLoadState;
 use bevy::prelude::*;
+use bevy::world_serialization::WorldAsset;
 
-use bevy_rapier3d::parry::transformation::try_convex_hull;
-use bevy_rapier3d::parry::transformation::vhacd::VHACD;
-use bevy_rapier3d::rapier::na::Point3;
+use parry3d::na::Point3;
+use parry3d::transformation::try_convex_hull;
+use parry3d::transformation::vhacd::VHACD;
 
 use shared::building::{BuildingType, ALL_BUILDING_TYPES};
 use shared::colliders::{BakedCollider, BakedColliderDb};
@@ -84,7 +85,7 @@ pub(crate) fn start_bake(
             );
         }
 
-        let handle: Handle<Scene> = asset_server.load(entry.gltf_path.clone());
+        let handle: Handle<WorldAsset> = asset_server.load(entry.gltf_path.clone());
         handles.insert(entry.kind.clone(), handle);
     }
 
@@ -100,7 +101,7 @@ pub(crate) fn poll_and_bake(
     config: Res<BakeConfig>,
     state: Option<ResMut<BakeState>>,
     asset_server: Res<AssetServer>,
-    mut scenes: ResMut<Assets<Scene>>,
+    mut scenes: ResMut<Assets<WorldAsset>>,
     meshes: Res<Assets<Mesh>>,
     mut app_exit: MessageWriter<AppExit>,
 ) {
@@ -138,13 +139,13 @@ pub(crate) fn poll_and_bake(
             .get(&entry.kind)
             .unwrap_or_else(|| panic!("Missing handle for {}", entry.kind));
 
-        let Some(scene) = scenes.get_mut(handle) else {
+        let Some(mut scene) = scenes.get_mut(handle) else {
             panic!("Scene asset not available for kind {}", entry.kind);
         };
 
         match entry.mode {
             ColliderMode::ConvexHull => {
-                let mut vertices = collect_scene_vertices(scene, &meshes);
+                let mut vertices = collect_scene_vertices(&mut scene, &meshes);
                 if vertices.is_empty() {
                     panic!(
                         "No vertices found for kind {} (path {})",
@@ -206,7 +207,7 @@ pub(crate) fn poll_and_bake(
                     );
                 }
 
-                let (verts, indices) = collect_scene_mesh(scene, &meshes);
+                let (verts, indices) = collect_scene_mesh(&mut scene, &meshes);
                 if verts.is_empty() || indices.is_empty() {
                     panic!(
                         "No triangles found for kind {} (path {})",

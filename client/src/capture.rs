@@ -18,8 +18,8 @@ use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use shared::components::WorldTime;
 
 use crate::camera_rts::CommanderCamera;
-use crate::terrain::LoadedChunks;
 use crate::states::GameState;
+use crate::terrain::LoadedChunks;
 
 /// One camera placement to photograph.
 #[derive(Debug, Clone)]
@@ -67,14 +67,23 @@ pub struct CaptureConfig {
 #[derive(Resource, Debug)]
 enum CaptureState {
     /// Letting the world stream in before the first shot.
-    Warmup { frames_left: u32 },
+    Warmup {
+        frames_left: u32,
+    },
     /// Camera moved, waiting for the world to settle at the new location.
-    Settling { shot: usize, frames_left: u32 },
+    Settling {
+        shot: usize,
+        frames_left: u32,
+    },
     /// Screenshot requested; waiting for the file to actually exist on disk.
     ///
     /// This is the latch that matters: the render-to-disk round trip is async, so
     /// exiting on a frame count instead races the writer and truncates the last image.
-    AwaitingFile { shot: usize, path: PathBuf, frames_waited: u32 },
+    AwaitingFile {
+        shot: usize,
+        path: PathBuf,
+        frames_waited: u32,
+    },
     Done,
 }
 
@@ -116,6 +125,7 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         day_duration: 600.0,
         night_duration: 300.0,
         ocean_seconds: 0.0,
+        day: 0,
     });
 
     info!("capture: entering world offline (no server)");
@@ -143,7 +153,10 @@ fn drive_capture(
                 *frames_left -= 1;
                 return;
             }
-            info!("capture: warmup complete, {} shot(s) queued", config.shots.len());
+            info!(
+                "capture: warmup complete, {} shot(s) queued",
+                config.shots.len()
+            );
             *state = CaptureState::Settling {
                 shot: 0,
                 frames_left: config.settle_frames,
@@ -192,7 +205,9 @@ fn drive_capture(
         } => {
             // Latch on the file existing rather than a frame count, so a slow write
             // cannot leave us with a truncated PNG.
-            let written = std::fs::metadata(&*path).map(|m| m.len() > 0).unwrap_or(false);
+            let written = std::fs::metadata(&*path)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false);
             *frames_waited += 1;
 
             if !written {
@@ -255,7 +270,11 @@ fn normalized_to_seconds(normalized: f32, time: &WorldTime) -> f32 {
         day_progress * time.day_duration
     } else {
         // Night wraps through midnight: 0.75..1.0 then 0.0..0.25.
-        let night_progress = if n >= 0.75 { (n - 0.75) / 0.5 } else { (n + 0.25) / 0.5 };
+        let night_progress = if n >= 0.75 {
+            (n - 0.75) / 0.5
+        } else {
+            (n + 0.25) / 0.5
+        };
         time.day_duration + night_progress * time.night_duration
     }
 }
@@ -270,6 +289,7 @@ mod tests {
             day_duration: 600.0,
             night_duration: 300.0,
             ocean_seconds: 0.0,
+            day: 0,
         }
     }
 

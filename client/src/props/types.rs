@@ -110,7 +110,7 @@ impl Default for BuildZoneChunkIndex {
 /// Handles to loaded prop assets.
 #[derive(Resource)]
 pub struct PropAssets {
-    pub scenes: HashMap<PropKind, Handle<Scene>>,
+    pub scenes: HashMap<PropKind, Handle<WorldAsset>>,
     pub gltfs: HashMap<PropKind, Handle<Gltf>>,
     pub tree_meshes: HashMap<PropKind, TreeMeshSet>,
 }

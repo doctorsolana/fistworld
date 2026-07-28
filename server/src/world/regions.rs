@@ -11,7 +11,7 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
-use shared::components::{Player, PlayerPosition};
+use shared::components::{Player, PlayerPosition, TimeWarp};
 use shared::region::{RegionCoord, SimLevel, REGION_SIZE};
 use shared::terrain::WorldTerrain;
 
@@ -93,8 +93,9 @@ impl RegionRegistry {
 
 /// Regions each connected client is interested in.
 ///
-/// Keyed by the client's `ReplicationSender` entity, which is what lightyear's visibility
-/// API expects — not the peer id and not the commander entity.
+/// Keyed by the client's link entity (the one carrying `ReplicationSender`), which is
+/// what lightyear's visibility API expects — not the peer id and not the commander
+/// entity.
 #[derive(Resource, Default)]
 pub struct ClientInterest {
     by_client: HashMap<Entity, HashSet<RegionCoord>>,
@@ -180,29 +181,53 @@ pub fn update_client_interest(
 /// Replaces blanket `NetworkTarget::All` replication: an entity is only sent to clients
 /// whose interest covers its region. Entities without a `RegionCoord` are unaffected and
 /// keep replicating globally, which is what world-level state (time, map state) wants.
+///
+/// lightyear 0.28 inverted the defaults: a replicated entity is visible to every client
+/// until `lose_visibility` is called, and per-pair visibility can no longer be read back
+/// from `ReplicationState`. So this system keeps its own record of the last state it
+/// applied per (entity, sender) pair. The first time a pair is seen — entity just
+/// spawned, or client just connected — visibility is set explicitly in both directions,
+/// otherwise an uninterested client would receive the entity until it first crossed an
+/// interest boundary.
 pub fn apply_region_visibility(
+    mut commands: Commands,
     interest: Res<ClientInterest>,
-    mut replicated: Query<(&RegionCoord, &mut ReplicationState), With<NetworkVisibility>>,
+    replicated: Query<(Entity, &RegionCoord), With<Replicate>>,
+    mut applied: Local<HashMap<Entity, HashMap<Entity, bool>>>,
 ) {
-    for (coord, mut state) in replicated.iter_mut() {
+    // Drop state for despawned entities and disconnected clients so the record cannot
+    // grow without bound (and so a reconnecting client is treated as a fresh pair).
+    applied.retain(|entity, _| replicated.contains(*entity));
+    for senders in applied.values_mut() {
+        senders.retain(|sender, _| interest.by_client.contains_key(sender));
+    }
+
+    for (entity, coord) in replicated.iter() {
+        let entity_state = applied.entry(entity).or_default();
+
         for (client, regions) in interest.by_client.iter() {
-            let was_visible = state.is_visible(*client);
             let inside = regions.contains(coord);
 
-            // Widen the boundary for entities already visible so a camera hovering on a
-            // region edge does not thrash spawn/despawn on the client.
-            let should_be_visible = if was_visible {
-                regions
+            let should_be_visible = match entity_state.get(client) {
+                // First sighting of this (entity, sender) pair: set both states
+                // explicitly to override the visible-by-default spawn state.
+                None => inside,
+                // Widen the boundary for entities already visible so a camera hovering
+                // on a region edge does not thrash spawn/despawn on the client.
+                Some(true) => regions
                     .iter()
-                    .any(|r| r.ring_distance(*coord) <= INTEREST_EXIT_MARGIN_RINGS)
-            } else {
-                inside
+                    .any(|r| r.ring_distance(*coord) <= INTEREST_EXIT_MARGIN_RINGS),
+                Some(false) => inside,
             };
 
-            match (was_visible, should_be_visible) {
-                (false, true) => state.gain_visibility(*client),
-                (true, false) => state.lose_visibility(*client),
-                _ => {}
+            let changed = entity_state.get(client) != Some(&should_be_visible);
+            if changed {
+                if should_be_visible {
+                    commands.gain_visibility(entity, *client);
+                } else {
+                    commands.lose_visibility(entity, *client);
+                }
+                entity_state.insert(*client, should_be_visible);
             }
         }
     }
@@ -262,10 +287,12 @@ impl Default for StrategicClock {
 /// looking. `last_tick_micros` exists so that constraint is measured, not assumed.
 pub fn tick_strategic_world(
     time: Res<Time>,
+    warp: Query<&TimeWarp>,
     mut clock: ResMut<StrategicClock>,
     mut registry: ResMut<RegionRegistry>,
 ) {
-    clock.accumulator += time.delta_secs_f64();
+    let factor = warp.iter().next().map(|w| w.0).unwrap_or(1.0);
+    clock.accumulator += time.delta_secs_f64() * factor as f64;
     if clock.accumulator < clock.interval {
         return;
     }
@@ -284,10 +311,21 @@ pub fn tick_strategic_world(
 }
 
 /// Periodic report so the "strategic tick stays cheap at world scale" claim is checkable.
-pub fn log_region_telemetry(registry: Res<RegionRegistry>, clock: Res<StrategicClock>) {
+pub fn log_region_telemetry(
+    registry: Res<RegionRegistry>,
+    clock: Res<StrategicClock>,
+    time: Res<Time>,
+    mut last_log_secs: Local<f64>,
+) {
     if clock.ticks == 0 || clock.ticks % 30 != 0 {
         return;
     }
+    // Strategic ticks outrun real time under warp; floor the log rate in real seconds.
+    let now = time.elapsed_secs_f64();
+    if now - *last_log_secs < 30.0 {
+        return;
+    }
+    *last_log_secs = now;
     info!(
         "Regions: {} total, {} tactical | strategic tick {}us",
         registry.len(),
@@ -315,9 +353,10 @@ mod tests {
         let mut registry = registry_with(&[watched, empty]);
 
         let mut interest = ClientInterest::default();
-        interest
-            .by_client
-            .insert(Entity::from_raw_u32(1).unwrap(), HashSet::from_iter([watched]));
+        interest.by_client.insert(
+            Entity::from_raw_u32(1).unwrap(),
+            HashSet::from_iter([watched]),
+        );
 
         // Exercised directly rather than through a World, so the promotion rule is
         // testable without standing up a full app.

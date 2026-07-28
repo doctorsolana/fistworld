@@ -7,14 +7,18 @@ use std::time::Duration;
 
 use shared::components::{Player, PlayerPosition, PlayerProgression, PlayerRotation};
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
-use shared::protocol::{NameSubmissionResult, PlayerInput, PlayerRoster, RequestPlayerRoster, SetTimeOfDay, SubmitPlayerName};
 
 use crate::net::input::ClientInputs;
 use crate::persistence::io_queue::{ProfileIoQueue, SavePriority};
 use crate::persistence::profiles::PlayerProfiles;
 use crate::player::roster_cache::PlayerRosterCache;
 
-fn configured_replication_send_interval() -> Duration {
+/// Replication send interval, applied app-wide via `ReplicationMetadata`.
+///
+/// lightyear 0.28 made the interval a global resource shared by all senders, so this can
+/// no longer vary per client. The old `CITYSIM_REPLICATION_SEND_MODE` knob is gone with
+/// it: the SinceLastAck/SinceLastSend distinction no longer exists.
+pub fn configured_replication_send_interval() -> Duration {
     const DEFAULT_MS: u64 = 33;
     let ms = std::env::var("CITYSIM_REPLICATION_SEND_INTERVAL_MS")
         .ok()
@@ -24,19 +28,13 @@ fn configured_replication_send_interval() -> Duration {
     Duration::from_millis(ms)
 }
 
-fn configured_replication_send_mode() -> SendUpdatesMode {
-    match std::env::var("CITYSIM_REPLICATION_SEND_MODE") {
-        Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
-            "ack" | "since_last_ack" => SendUpdatesMode::SinceLastAck,
-            "send" | "since_last_send" => SendUpdatesMode::SinceLastSend,
-            _ => SendUpdatesMode::SinceLastAck,
-        },
-        Err(_) => SendUpdatesMode::SinceLastAck,
-    }
-}
-
-/// Handle new client connections - setup message channels.
+/// Handle new client connections - enable replication to the new link.
 /// Player spawning happens in `handle_player_name_submission` after name validation.
+///
+/// Message channels need no setup here: since lightyear 0.28 every registered message's
+/// `MessageSender`/`MessageReceiver` is a required component of `ClientOf` and appears on
+/// the link entity automatically (re-inserting them here would overwrite buffers and drop
+/// messages received between link creation and `Connected`).
 pub fn handle_connections(
     mut commands: Commands,
     new_clients: Query<(Entity, &RemoteId), Added<Connected>>,
@@ -47,33 +45,12 @@ pub fn handle_connections(
             continue;
         }
 
-        let peer_id = remote_id.0;
         info!(
             "Client connected: {:?} - awaiting player name submission",
-            peer_id
+            remote_id.0
         );
 
-        let replication_interval = configured_replication_send_interval();
-        let replication_mode = configured_replication_send_mode();
-        info!(
-            "Replication sender config for {:?}: interval={}ms mode={:?}",
-            peer_id,
-            replication_interval.as_millis(),
-            replication_mode
-        );
-
-        commands.entity(client_entity).insert((
-            ReplicationSender::new(replication_interval, replication_mode, false),
-            MessageReceiver::<PlayerInput>::default(),
-            MessageReceiver::<SetTimeOfDay>::default(),
-            MessageReceiver::<SubmitPlayerName>::default(),
-            MessageReceiver::<RequestPlayerRoster>::default(),
-        ));
-
-        commands.entity(client_entity).insert((
-            MessageSender::<NameSubmissionResult>::default(),
-            MessageSender::<PlayerRoster>::default(),
-        ));
+        commands.entity(client_entity).insert(ReplicationSender);
     }
 }
 
@@ -141,8 +118,7 @@ pub fn handle_disconnections(
         }
     }
 
-    let Some((_player_entity, pos, rot, progression)) = found_player
-    else {
+    let Some((_player_entity, pos, rot, progression)) = found_player else {
         warn!(
             "Player entity not found for disconnected peer {:?} - state not saved!",
             peer_id
@@ -186,7 +162,6 @@ pub fn handle_disconnections(
         "Queued disconnect save for player '{}' (job {})",
         name_lower, job_id
     );
-
 
     profiles.peer_to_name.remove(&peer_id);
     profiles.name_to_peer.remove(&name_lower);

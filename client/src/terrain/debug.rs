@@ -125,7 +125,7 @@ pub(super) fn track_asset_activity(
     mut mesh_events: MessageReader<AssetEvent<Mesh>>,
     mut image_events: MessageReader<AssetEvent<Image>>,
     mut material_events: MessageReader<AssetEvent<StandardMaterial>>,
-    mut scene_events: MessageReader<AssetEvent<Scene>>,
+    mut scene_events: MessageReader<AssetEvent<WorldAsset>>,
 ) {
     if !perf_config.detailed_hitches || !debug_perf.render_diag_logging {
         return;
@@ -237,7 +237,7 @@ pub(super) fn log_perf_hitch_stats(
     std_materials: Res<Assets<StandardMaterial>>,
     terrain_materials: Res<Assets<TerrainSplatMaterial>>,
     images: Res<Assets<Image>>,
-    scenes: Res<Assets<Scene>>,
+    scenes: Res<Assets<WorldAsset>>,
     loaded_chunks: Res<super::chunks::LoadedChunks>,
     loaded_prop_chunks: Res<crate::props::LoadedPropChunks>,
     prop_roots: Query<(), With<crate::props::EnvironmentProp>>,

@@ -15,8 +15,14 @@ pub(super) fn toggle_debug_time_menu(
     game_state: Res<State<GameState>>,
     mut open: ResMut<DebugTimeMenuOpen>,
     input_state: Res<InputState>,
+    god: Res<GodCapability>,
+    hud_mode: Res<HudMode>,
 ) {
     if game_state.get() != &GameState::Playing {
+        return;
+    }
+    // Dev tools require the server-granted god capability and the HUD in god mode.
+    if !god.0 || *hud_mode != HudMode::God {
         return;
     }
     if input_state.inventory_open || input_state.pause_menu_open || input_state.map_open {

@@ -39,7 +39,7 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
                                 | WgpuFeatures::PIPELINE_STATISTICS_QUERY,
                         );
                     }
-                    settings
+                    Box::new(settings)
                 }),
                 ..default()
             })
@@ -114,6 +114,7 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
     app.add_plugins(ui::PauseMenuPlugin);
     app.add_plugins(ui::NameEntryPlugin);
     app.add_plugins(ui::DebugTimeMenuPlugin);
+    app.add_plugins(ui::HudPlugin);
 
     app.add_plugins(ui::WorldMapPlugin);
     app.add_plugins(audio::GameAudioPlugin);

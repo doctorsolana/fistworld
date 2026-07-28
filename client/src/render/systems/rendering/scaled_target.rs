@@ -55,7 +55,7 @@ pub(super) fn setup_scene_render_target(
     let image = images.add(Image::new_target_texture(
         extent.width,
         extent.height,
-        TextureFormat::bevy_default(),
+        TextureFormat::Rgba8UnormSrgb,
         None,
     ));
 
@@ -116,7 +116,7 @@ pub fn sync_scene_render_target(
         return;
     }
 
-    let Some(image) = images.get_mut(&target.image) else {
+    let Some(mut image) = images.get_mut(&target.image) else {
         return;
     };
     if image.width() != desired.width || image.height() != desired.height {

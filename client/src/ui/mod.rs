@@ -1,6 +1,7 @@
 //! UI module
 
 pub mod debug_time_menu;
+pub mod hud;
 pub mod main_menu;
 pub mod modal;
 pub mod name_entry;
@@ -9,6 +10,7 @@ pub mod styles;
 pub mod world_map;
 
 pub use debug_time_menu::{DebugPerfSettings, DebugTimeMenuPlugin};
+pub use hud::HudPlugin;
 pub use main_menu::MainMenuPlugin;
 pub use main_menu::ServerAddress;
 pub use name_entry::NameEntryPlugin;

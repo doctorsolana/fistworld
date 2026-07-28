@@ -3,7 +3,7 @@ use lightyear::prelude::*;
 
 use crate::components::{
     ActiveMapState, CloudSeed, Health, Player, PlayerPosition, PlayerProgression, PlayerRotation,
-    WorldTime,
+    TimeWarp, WorldTime,
 };
 use crate::terrain::TerrainDeltaChunk;
 
@@ -14,27 +14,25 @@ pub struct ProtocolPlugin;
 impl Plugin for ProtocolPlugin {
     fn build(&self, app: &mut App) {
         // === PLAYER COMPONENTS ===
-        app.register_component::<Player>().add_prediction();
-        app.register_component::<PlayerPosition>().add_prediction();
-        app.register_component::<PlayerRotation>().add_prediction();
-        app.register_component::<PlayerProgression>()
-            .add_prediction();
-
-
+        // No .predict(): nothing spawns PredictionTarget or queries Predicted, so
+        // prediction registration would be dead weight (lightyear 0.28 requires
+        // PredictionTarget on entities for it to do anything at all).
+        app.component::<Player>().replicate();
+        app.component::<PlayerPosition>().replicate();
+        app.component::<PlayerRotation>().replicate();
+        app.component::<PlayerProgression>().replicate();
 
         // === HEALTH ===
-        app.register_component::<Health>().add_prediction();
+        app.component::<Health>().replicate();
 
         // === WORLD COMPONENTS ===
-        app.register_component::<WorldTime>().add_prediction();
-        app.register_component::<CloudSeed>().add_prediction();
-        app.register_component::<ActiveMapState>().add_prediction();
-
+        app.component::<WorldTime>().replicate();
+        app.component::<TimeWarp>().replicate();
+        app.component::<CloudSeed>().replicate();
+        app.component::<ActiveMapState>().replicate();
 
         // === TERRAIN DELTA CHUNKS ===
-        app.register_component::<TerrainDeltaChunk>()
-            .add_prediction();
-
+        app.component::<TerrainDeltaChunk>().replicate();
 
         // === MESSAGES ===
         // Client -> Server
@@ -46,11 +44,15 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<RequestPlayerRoster>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<DevCommand>()
+            .add_direction(NetworkDirection::ClientToServer);
 
         // Server -> Client
         app.register_message::<NameSubmissionResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<PlayerRoster>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<DevStatus>()
             .add_direction(NetworkDirection::ServerToClient);
 
         // === CHANNELS ===
@@ -67,6 +69,5 @@ impl Plugin for ProtocolPlugin {
         })
         // High-frequency input: client -> server only
         .add_direction(NetworkDirection::ClientToServer);
-
     }
 }

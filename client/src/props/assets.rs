@@ -65,7 +65,9 @@ pub(super) fn load_prop_assets(mut commands: Commands, asset_server: Res<AssetSe
             let mesh1 = labels
                 .lod1_label
                 .map(|label| asset_server.load(format!("{base}#{label}")));
-            let material = asset_server.load(format!("{base}#{}", labels.material_label));
+            // bevy 0.19: the bare material label is a GltfMaterial (raw data); the
+            // renderable StandardMaterial lives under the same label with a /std suffix.
+            let material = asset_server.load(format!("{base}#{}/std", labels.material_label));
             tree_meshes.insert(
                 kind,
                 TreeMeshSet {

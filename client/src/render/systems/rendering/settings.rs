@@ -3,6 +3,8 @@
 use super::atmosphere::default_bloom_settings;
 use super::clouds::{CloudCard, CloudLayer};
 use super::*;
+use crate::camera_rts::CommanderCamera;
+use bevy::pbr::ContactShadows;
 
 /// Directional-shadow quality tier. Drives cascade count, cascade range, and
 /// shadow map resolution together so they stay coherent.
@@ -47,33 +49,42 @@ impl ShadowQuality {
         }
     }
 
-    /// Cascade layout. Every cascade re-renders the scene into a shadow map each
-    /// frame, so fewer/shorter cascades are the main shadow cost lever.
+    /// Floor for the zoom-scaled cascade span, in metres of view distance.
+    /// Also the span used at spawn, before the zoom sync has run.
+    fn base_distance(self) -> f32 {
+        match self {
+            ShadowQuality::Low => 48.0,
+            ShadowQuality::Medium => 80.0,
+            ShadowQuality::High => 120.0,
+        }
+    }
+
+    /// Cascade layout at the base distance. `sync_shadow_cascades_to_zoom`
+    /// replaces this with a zoom-scaled span once the camera exists.
     pub fn build_cascades(self) -> CascadeShadowConfig {
-        let builder = match self {
-            ShadowQuality::Low => CascadeShadowConfigBuilder {
-                num_cascades: 2,
-                maximum_distance: 48.0,
-                first_cascade_far_bound: 12.0,
-                overlap_proportion: 0.2,
-                ..Default::default()
-            },
-            ShadowQuality::Medium => CascadeShadowConfigBuilder {
-                num_cascades: 2,
-                maximum_distance: 80.0,
-                first_cascade_far_bound: 14.0,
-                overlap_proportion: 0.2,
-                ..Default::default()
-            },
-            ShadowQuality::High => CascadeShadowConfigBuilder {
-                num_cascades: 3,
-                maximum_distance: 120.0,
-                first_cascade_far_bound: 10.0,
-                overlap_proportion: 0.22,
-                ..Default::default()
-            },
+        self.build_cascades_for(self.base_distance())
+    }
+
+    /// Cascade layout covering `maximum_distance` metres of view. Every cascade
+    /// re-renders the scene into a shadow map each frame, so the cascade count
+    /// stays a per-quality constant and only the covered span stretches; the
+    /// first cascade bound scales with the span to keep the split ratios.
+    fn build_cascades_for(self, maximum_distance: f32) -> CascadeShadowConfig {
+        let (num_cascades, base_first_bound, overlap_proportion) = match self {
+            ShadowQuality::Low => (2, 12.0, 0.2),
+            ShadowQuality::Medium => (2, 14.0, 0.2),
+            ShadowQuality::High => (3, 10.0, 0.22),
         };
-        builder.build()
+        let maximum_distance = maximum_distance.max(self.base_distance());
+        CascadeShadowConfigBuilder {
+            num_cascades,
+            maximum_distance,
+            first_cascade_far_bound: base_first_bound
+                * (maximum_distance / self.base_distance()),
+            overlap_proportion,
+            ..Default::default()
+        }
+        .build()
     }
 }
 
@@ -218,13 +229,14 @@ pub fn apply_graphics_settings(
             Entity,
             Option<&mut Bloom>,
             Option<&ScreenSpaceAmbientOcclusion>,
+            Has<ContactShadows>,
             &mut ColorGrading,
             &mut Tonemapping,
             &mut AtmosphereEnvironmentMapLight,
         ),
         With<Camera3d>,
     >,
-    mut sun_query: Query<(Entity, &mut DirectionalLight), With<SunLight>>,
+    mut sun_query: Query<&mut DirectionalLight, With<SunLight>>,
     mut clouds: Query<&mut Visibility, Or<(With<CloudLayer>, With<CloudCard>)>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut ui_scale: ResMut<UiScale>,
@@ -252,8 +264,15 @@ pub fn apply_graphics_settings(
     );
 
     // Toggle bloom component (avoid running the bloom pass when disabled).
-    for (entity, bloom_opt, ssao_opt, mut color_grading, mut tonemapping, mut atmosphere_light) in
-        camera_query.iter_mut()
+    for (
+        entity,
+        bloom_opt,
+        ssao_opt,
+        has_contact_shadows,
+        mut color_grading,
+        mut tonemapping,
+        mut atmosphere_light,
+    ) in camera_query.iter_mut()
     {
         let has_bloom = bloom_opt.is_some();
         if settings.bloom_enabled {
@@ -268,7 +287,8 @@ pub fn apply_graphics_settings(
 
         // Toggle SSAO. Removing the component alone is not enough: SSAO's
         // required DepthPrepass/NormalPrepass components stay behind and keep
-        // costing a full extra geometry pass, so strip those too.
+        // costing a full extra geometry pass, so strip those too. DepthPrepass
+        // is shared with ContactShadows and may only go when both are off.
         if settings.ssao_enabled {
             if ssao_opt.is_none() {
                 commands.entity(entity).insert(default_ssao_settings());
@@ -276,7 +296,22 @@ pub fn apply_graphics_settings(
         } else if ssao_opt.is_some() {
             commands
                 .entity(entity)
-                .remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass)>();
+                .remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass)>();
+            if !settings.shadows_enabled {
+                commands.entity(entity).remove::<DepthPrepass>();
+            }
+        }
+
+        // Contact shadows are deliberately NOT enabled: the 0.19 contact-shadow
+        // view-layout variant breaks the custom wind-foliage/toon ExtendedMaterial
+        // shaders (foliage renders base-white — verified by bisect 2026-07-28).
+        // Revisit once those shaders handle the variant. The removal branch cleans
+        // up if one was ever inserted.
+        if has_contact_shadows {
+            commands.entity(entity).remove::<ContactShadows>();
+            if !settings.ssao_enabled && !settings.shadows_enabled {
+                commands.entity(entity).remove::<DepthPrepass>();
+            }
         }
 
         *tonemapping = settings.tonemapping;
@@ -291,16 +326,19 @@ pub fn apply_graphics_settings(
         };
     }
 
-    // Toggle shadows + apply cascade quality on the sun light.
+    // Toggle shadows on the sun light. Cascade config is owned by
+    // sync_shadow_cascades_to_zoom, which also reacts to quality changes.
     let desired_map_size = settings.shadow_quality.shadow_map_size();
     if shadow_map.size != desired_map_size {
         shadow_map.size = desired_map_size;
     }
-    for (sun_entity, mut sun_light) in sun_query.iter_mut() {
-        sun_light.shadows_enabled = settings.shadows_enabled;
-        commands
-            .entity(sun_entity)
-            .insert(settings.shadow_quality.build_cascades());
+    for mut sun_light in sun_query.iter_mut() {
+        sun_light.shadow_maps_enabled = settings.shadows_enabled;
+        // Keep contact_shadows_enabled at its false default — see the camera-side
+        // note about the wind/toon shader incompatibility.
+        if sun_light.contact_shadows_enabled {
+            sun_light.contact_shadows_enabled = false;
+        }
     }
 
     let cloud_visibility = if settings.clouds_enabled {
@@ -342,4 +380,61 @@ pub fn apply_graphics_settings(
             ui_scale.0
         );
     }
+}
+
+/// Cascade span per metre of camera zoom. The camera looks down at the focus
+/// from `zoom` metres away, so visible ground spans roughly `zoom..2.5*zoom`
+/// of view distance.
+const SHADOW_DISTANCE_PER_ZOOM: f32 = 2.5;
+/// Caps the span at "whole map from max zoom" (8 km world seen from 12 km).
+/// Far-zoom texels get coarse (metres) — acceptable for terrain relief, while
+/// prop casters are culled by zoom instead (see `render::shadow_cull`), which
+/// is also what keeps the shadow passes affordable at map scale.
+const SHADOW_DISTANCE_MAX: f32 = 16_000.0;
+/// Geometric ratio between zoom bands. Cascades are only rebuilt when the zoom
+/// crosses into a new band.
+const SHADOW_ZOOM_BAND_RATIO: f32 = 1.5;
+/// Hysteresis in band units. Must exceed 0.5 (the midpoint where a freshly
+/// entered band would otherwise flip straight back).
+const SHADOW_ZOOM_BAND_STICKINESS: f32 = 0.65;
+
+/// Stretch the sun's cascade span to follow camera zoom (12 m..12 km), so
+/// shadows exist at RTS zoom instead of stopping at the FPS-era 48-120 m.
+///
+/// Rebuilding CascadeShadowConfig re-fits every shadow map, so zoom is
+/// quantized into geometric bands with hysteresis and the config is only
+/// rebuilt on a band change (or when the quality setting / sun entity change).
+pub fn sync_shadow_cascades_to_zoom(
+    mut commands: Commands,
+    settings: Res<GraphicsSettings>,
+    cameras: Query<&CommanderCamera>,
+    suns: Query<Entity, With<SunLight>>,
+    mut applied: Local<Option<(Entity, ShadowQuality, i32)>>,
+) {
+    let Ok(camera) = cameras.single() else {
+        return;
+    };
+    let Ok(sun) = suns.single() else {
+        return;
+    };
+
+    let quality = settings.shadow_quality;
+    let base = quality.base_distance();
+    let desired = (camera.zoom * SHADOW_DISTANCE_PER_ZOOM).clamp(base, SHADOW_DISTANCE_MAX);
+    // Continuous band position: geometric steps of the band ratio above base.
+    let band_pos = (desired / base).ln() / SHADOW_ZOOM_BAND_RATIO.ln();
+
+    if let Some((entity, applied_quality, band)) = *applied {
+        let same_target = entity == sun && applied_quality == quality;
+        if same_target && (band_pos - band as f32).abs() <= SHADOW_ZOOM_BAND_STICKINESS {
+            return;
+        }
+    }
+
+    let band = band_pos.round() as i32;
+    *applied = Some((sun, quality, band));
+    let distance = (base * SHADOW_ZOOM_BAND_RATIO.powi(band)).min(SHADOW_DISTANCE_MAX);
+    commands
+        .entity(sun)
+        .insert(quality.build_cascades_for(distance));
 }

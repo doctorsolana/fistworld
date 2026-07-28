@@ -10,10 +10,9 @@ members = [
 ]
 
 [workspace.dependencies]
-bevy = { version = "0.18.1", features = ["vorbis", "jpeg", "ktx2"] }
-lightyear = { version = "0.26", features = ["udp", "netcode"] }
+bevy = { version = "0.19.0", features = ["vorbis", "jpeg", "ktx2"] }
+lightyear = { version = "0.28", features = ["udp", "netcode"] }
 serde = { version = "1.0", features = ["derive"] }
-bevy_rapier3d = "0.33.0"
 noise = "0.9"
 rand = "0.8"
 ron = "0.8"

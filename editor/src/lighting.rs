@@ -64,7 +64,7 @@ pub fn apply_editor_environment(
     sun_transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, sun_dir);
     sun_light.color = lerp_color(Color::WHITE, Color::srgb(1.0, 0.93, 0.84), dust_factor);
     sun_light.illuminance = lerp_f32(1_500.0, 24_000.0, sun_height.powf(0.65)) * day_factor;
-    sun_light.shadows_enabled = day_factor > 0.02;
+    sun_light.shadow_maps_enabled = day_factor > 0.02;
 
     fill_transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, fill_dir);
     fill_light.color = lerp_color(

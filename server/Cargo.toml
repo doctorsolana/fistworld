@@ -8,4 +8,3 @@ bevy = { workspace = true }
 lightyear = { workspace = true }
 shared = { path = "../shared" }
 bincode = "1.3"
-bevy_rapier3d = { workspace = true }

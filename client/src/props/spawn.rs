@@ -289,6 +289,7 @@ fn spawn_prop_instance(
         } else {
             let spawned_simple = try_spawn_simple_prop_mesh(
                 commands,
+                asset_server,
                 prop,
                 kind,
                 assets,
@@ -303,7 +304,7 @@ fn spawn_prop_instance(
                     .get(&kind)
                     .cloned()
                     .unwrap_or_else(|| asset_server.load(spawn.scene_path.clone()));
-                commands.entity(prop).insert(SceneRoot(scene));
+                commands.entity(prop).insert(WorldAssetRoot(scene));
             }
         }
         if needs_foliage_materials(kind) {
@@ -311,7 +312,7 @@ fn spawn_prop_instance(
         }
     } else {
         let scene = asset_server.load(spawn.scene_path.clone());
-        commands.entity(prop).insert(SceneRoot(scene));
+        commands.entity(prop).insert(WorldAssetRoot(scene));
     }
 
     commands.entity(world_root).add_child(prop);
@@ -397,9 +398,9 @@ fn prop_stream_radius_chunks(settings: &GraphicsSettings, camera_distance: f32) 
     // Ground covered by the view is roughly the camera distance again; pad it so props
     // exist slightly beyond the frame rather than popping in at the edge.
     let visible_ground_radius = (camera_distance * 1.35).max(180.0);
-    let default_radius =
-        ((visible_ground_radius * settings.prop_render_multiplier.max(0.25)) / CHUNK_SIZE).ceil()
-            as i32;
+    let default_radius = ((visible_ground_radius * settings.prop_render_multiplier.max(0.25))
+        / CHUNK_SIZE)
+        .ceil() as i32;
 
     configured
         .unwrap_or(default_radius)

@@ -9,7 +9,6 @@ use shared::terrain::WorldTerrain;
 use crate::collision;
 use crate::net;
 use crate::persistence;
-use crate::physics;
 use crate::player;
 use crate::telemetry;
 
@@ -27,11 +26,9 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<crate::world::regions::ClientInterest>();
     app.init_resource::<crate::world::regions::StrategicClock>();
     app.init_resource::<crate::world::pathfinding::PathfindingBudgetSettings>();
+    app.init_resource::<crate::world::dev::DevMode>();
     app.init_resource::<collision::building_index::BuildingSpatialIndex>();
     app.init_resource::<collision::streaming::ColliderStreamingState>();
-    app.init_resource::<physics::terrain_colliders::TerrainColliderSettings>();
-    app.init_resource::<physics::terrain_colliders::TerrainColliderRegistry>();
-    app.init_resource::<physics::static_world_colliders::StaticWorldColliderRegistry>();
     app.insert_resource(persistence::profiles::PlayerProfiles::new(
         profile_storage_dir.clone(),
     ));

@@ -104,9 +104,11 @@ pub fn handle_backdrop_pressed<B: Component>(
     false
 }
 
+/// RTS invariant: the OS cursor stays free and visible in gameplay whether or not a
+/// modal is open, so this only ever releases.
 pub fn sync_modal_cursor(
-    open: bool,
-    input_state: &InputState,
+    _open: bool,
+    _input_state: &InputState,
     windows: &Query<Entity, With<PrimaryWindow>>,
     cursor_opts: &mut Query<&mut CursorOptions>,
 ) {
@@ -114,12 +116,7 @@ pub fn sync_modal_cursor(
         return;
     };
     if let Ok(mut cursor) = cursor_opts.get_mut(window_entity) {
-        if open {
-            cursor.grab_mode = CursorGrabMode::None;
-            cursor.visible = true;
-        } else if !input_state.ui_blocking() {
-            cursor.grab_mode = CursorGrabMode::Locked;
-            cursor.visible = false;
-        }
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
     }
 }

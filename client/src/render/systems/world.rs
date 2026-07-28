@@ -50,7 +50,7 @@ pub fn spawn_world(
                 // Overwritten every frame by the day/night cycle; keep the
                 // initial value consistent with its noon output.
                 illuminance: lux::DIRECT_SUNLIGHT,
-                shadows_enabled: settings.shadows_enabled,
+                shadow_maps_enabled: settings.shadows_enabled,
                 color: Color::srgb(1.0, 0.97, 0.9),
                 ..default()
             },
@@ -73,7 +73,7 @@ pub fn spawn_world(
             FillLight,
             DirectionalLight {
                 illuminance: 0.0, // Driven by day/night cycle
-                shadows_enabled: false,
+                shadow_maps_enabled: false,
                 color: Color::srgb(0.62, 0.72, 0.92),
                 ..default()
             },

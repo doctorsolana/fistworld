@@ -36,7 +36,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                     })
                     .insert(Text::new("Enter Player Name"))
                     .insert(TextFont {
-                        font_size: 32.0,
+                        font_size: FontSize::Px(32.0),
                         ..default()
                     })
                     .insert(TextColor(TEXT_COLOR));
@@ -52,7 +52,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                         input_col
                             .spawn(Text::new("Name:"))
                             .insert(TextFont {
-                                font_size: 18.0,
+                                font_size: FontSize::Px(18.0),
                                 ..default()
                             })
                             .insert(TextColor(TEXT_COLOR));
@@ -73,7 +73,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                                     .spawn(NameInputDisplay)
                                     .insert(Text::new(""))
                                     .insert(TextFont {
-                                        font_size: 18.0,
+                                        font_size: FontSize::Px(18.0),
                                         ..default()
                                     })
                                     .insert(TextColor(TEXT_COLOR));
@@ -83,7 +83,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                         input_col
                             .spawn(Text::new("3-16 characters, alphanumeric only"))
                             .insert(TextFont {
-                                font_size: 12.0,
+                                font_size: FontSize::Px(12.0),
                                 ..default()
                             })
                             .insert(TextColor(Color::srgba(0.7, 0.7, 0.7, 0.8)));
@@ -94,7 +94,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                     .spawn(ErrorMessageText)
                     .insert(Text::new(""))
                     .insert(TextFont {
-                        font_size: 14.0,
+                        font_size: FontSize::Px(14.0),
                         ..default()
                     })
                     .insert(TextColor(ERROR_COLOR))
@@ -122,7 +122,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                     .with_children(|btn| {
                         btn.spawn(Text::new("Join Game"))
                             .insert(TextFont {
-                                font_size: 20.0,
+                                font_size: FontSize::Px(20.0),
                                 ..default()
                             })
                             .insert(TextColor(TEXT_COLOR));

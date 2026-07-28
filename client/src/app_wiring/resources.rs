@@ -23,4 +23,5 @@ pub fn setup_resources(app: &mut App) {
 
     // Input resource
     app.init_resource::<input::InputState>();
+    app.init_resource::<crate::render::shadow_cull::PropShadowGate>();
 }

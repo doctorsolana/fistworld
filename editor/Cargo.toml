@@ -16,5 +16,5 @@ bevy = { workspace = true }
 shared = { path = "../shared" }
 serde = { workspace = true }
 ron = { workspace = true }
-bevy_egui = "0.39"
+bevy_egui = "0.41"
 noise = { workspace = true }
