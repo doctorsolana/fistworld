@@ -123,6 +123,7 @@ pub(crate) fn update_tree_lod_visibility(
     >,
     mut elapsed: Local<f32>,
     mut last_player_pos: Local<Option<Vec3>>,
+    mut shadows_zoomed_off: Local<bool>,
 ) {
     let Some(anchor_pos) = streaming_anchor(&player, &camera) else {
         return;
@@ -143,7 +144,32 @@ pub(crate) fn update_tree_lod_visibility(
 
     let prop_multiplier = settings.prop_render_multiplier;
     let max_prop_distance = settings.view_distance as f32 * CHUNK_SIZE;
-    let shadow_cutoff = TREE_SHADOW_MAX_DISTANCE * prop_multiplier;
+
+    // Cutoff radius follows camera zoom so the whole visible field shadows;
+    // past TREE_SHADOW_OFF_ZOOM the trees stop casting altogether (zoom-level
+    // hysteresis via *shadows_zoomed_off*, per-tree hysteresis further down).
+    let zoom = camera
+        .iter()
+        .next()
+        .and_then(|(_, controller)| controller)
+        .map(|controller| controller.zoom);
+    let shadow_cutoff = match zoom {
+        Some(zoom) => {
+            if zoom > TREE_SHADOW_OFF_ZOOM {
+                *shadows_zoomed_off = true;
+            } else if zoom < TREE_SHADOW_RESUME_ZOOM {
+                *shadows_zoomed_off = false;
+            }
+            if *shadows_zoomed_off {
+                0.0
+            } else {
+                (zoom * TREE_SHADOW_PER_ZOOM)
+                    .clamp(TREE_SHADOW_MAX_DISTANCE, TREE_SHADOW_RADIUS_CAP)
+                    * prop_multiplier
+            }
+        }
+        None => TREE_SHADOW_MAX_DISTANCE * prop_multiplier,
+    };
     let shadow_cutoff_far = shadow_cutoff + TREE_LOD_HYSTERESIS;
     let shadow_cutoff_near = (shadow_cutoff - TREE_LOD_HYSTERESIS).max(0.0);
     let shadow_cutoff_far_sq = shadow_cutoff_far * shadow_cutoff_far;
@@ -218,6 +244,8 @@ pub(crate) fn update_tree_lod_visibility(
 
         // Distance-based shadow cutoff (with hysteresis), independent of LOD1
         // availability so kinds without a low-poly mesh still stop casting.
+        // LOD1 trees cast too: at the zooms where LOD1 is active, a low-poly
+        // silhouette in the cascade is indistinguishable from the full mesh.
         let within_shadow_range = if current_state.casts_shadows {
             distance_sq <= shadow_cutoff_far_sq
         } else {
@@ -225,8 +253,7 @@ pub(crate) fn update_tree_lod_visibility(
         };
         let desired_casts_shadows = tuning.casts_shadows
             && within_shadow_range
-            && !matches!(desired_active_lod, TreeActiveLod::Hidden)
-            && !matches!(desired_active_lod, TreeActiveLod::Lod1);
+            && !matches!(desired_active_lod, TreeActiveLod::Hidden);
 
         if current_state.active_lod == desired_active_lod
             && current_state.casts_shadows == desired_casts_shadows

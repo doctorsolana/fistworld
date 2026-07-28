@@ -11,6 +11,7 @@ pub(crate) fn apply_prop_render_tuning(
     tunings: Query<&PropRenderTuning>,
     prop_kinds: Query<&PropKindTag>,
     prop_roots: Query<(), With<EnvironmentProp>>,
+    tree_lod_roots: Query<(), With<TreeLodMeshHandles>>,
     children_q: Query<&Children>,
     mut lod_presence_q: Query<&mut PropLodPresence>,
     names: Query<&Name>,
@@ -40,7 +41,13 @@ pub(crate) fn apply_prop_render_tuning(
         let root_kind = root
             .and_then(|entity| prop_kinds.get(entity).ok())
             .map(|kind| kind.0);
-        let is_tree = root_kind.map(is_tree_kind).unwrap_or(false);
+        // "Tree defaults" (no VisibilityRange; the tree LOD system owns
+        // visibility + shadows) only apply when the root actually IS managed by
+        // that system. Pines are tree kinds but spawn as multi-primitive scenes
+        // without TreeLodMeshHandles — routing them here left them exempt from
+        // every distance/shadow rule (rendered + casting at any zoom).
+        let is_tree = root_kind.map(is_tree_kind).unwrap_or(false)
+            && root.is_some_and(|entity| tree_lod_roots.contains(entity));
         let mut presence_changed = false;
         let mut presence = PropLodPresence::default();
         if let Some(root) = root {

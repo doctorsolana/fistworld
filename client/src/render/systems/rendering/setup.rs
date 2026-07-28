@@ -132,8 +132,14 @@ pub fn setup_rendering(
                 Color::srgb(0.88, 0.92, 0.96),
             ),
         },
-        // Keep the quality-focused default explicit so future tuning does not fall back to blockier PCF.
-        ShadowFilteringMethod::Gaussian,
+        // Gaussian samples a wide PCF kernel per fragment per cascade — measured
+        // ~half the frame at RTS zooms. Hardware2x2 is the ablation hook; the
+        // default stays Gaussian until the measurement verdict is in.
+        if std::env::var("FISTFORCE_SHADOW_FILTER").is_ok_and(|v| v == "hw") {
+            ShadowFilteringMethod::Hardware2x2
+        } else {
+            ShadowFilteringMethod::Gaussian
+        },
     ));
     // SSAO is opt-in: a fullscreen AO pass plus a depth/normal prepass is a
     // heavy default on integrated GPUs.

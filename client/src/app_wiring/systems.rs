@@ -75,7 +75,6 @@ fn wire_common_systems(app: &mut App) {
             game_systems::update_atmosphere,
             game_systems::apply_graphics_settings,
             game_systems::sync_shadow_cascades_to_zoom,
-            crate::render::shadow_cull::gate_prop_shadow_casters,
         )
             .run_if(in_state(GameState::Playing)),
     );

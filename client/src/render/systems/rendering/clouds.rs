@@ -58,6 +58,10 @@ pub struct CloudLayer {
     pub uv_rotation: f32,
     pub yaw_offset: f32,
     pub alpha: f32,
+    /// UV offset at the last material write. Scroll accumulates every frame,
+    /// but the material (and its GPU re-prepare) only updates once the drift
+    /// exceeds a visible threshold.
+    pub uv_offset_written: Vec2,
 }
 
 #[derive(Resource)]
@@ -163,6 +167,7 @@ pub(super) fn setup_cloud_layers(
                 uv_rotation: CLOUD_LAYER_UV_ROTATIONS[i],
                 yaw_offset: CLOUD_LAYER_YAW_OFFSETS[i],
                 alpha,
+                uv_offset_written: Vec2::ZERO,
             },
             NotShadowCaster,
             Mesh3d(cloud_mesh.clone()),
@@ -431,16 +436,22 @@ pub fn update_cloud_layers(
             (layer.uv_offset.y + delta.y).rem_euclid(1.0),
         );
 
-        // Only mutate material when tint/visibility changed or UV scrolled
-        if let Some(mut material) = materials.get_mut(&material_handle.0) {
-            material.uv_transform = bevy::math::Affine2::from_scale_angle_translation(
-                layer.uv_scale,
-                layer.uv_rotation,
-                layer.uv_offset,
-            );
-            if tint_changed {
-                material.base_color =
-                    color_with_alpha(tint, (layer.alpha * visibility).clamp(0.0, 1.0));
+        // Every material touch re-prepares it on the GPU, so the slow UV drift
+        // batches into steps below visible size (~1 texel at dome scale) instead
+        // of writing every frame.
+        let scroll_due = (layer.uv_offset - layer.uv_offset_written).length() > 0.0015;
+        if tint_changed || scroll_due {
+            if let Some(mut material) = materials.get_mut(&material_handle.0) {
+                material.uv_transform = bevy::math::Affine2::from_scale_angle_translation(
+                    layer.uv_scale,
+                    layer.uv_rotation,
+                    layer.uv_offset,
+                );
+                layer.uv_offset_written = layer.uv_offset;
+                if tint_changed {
+                    material.base_color =
+                        color_with_alpha(tint, (layer.alpha * visibility).clamp(0.0, 1.0));
+                }
             }
         }
     }

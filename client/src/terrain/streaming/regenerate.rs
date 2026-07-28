@@ -233,6 +233,13 @@ pub(crate) fn process_chunk_tasks(
                 crate::terrain::map_view::detail_visibility_range(),
             ))
             .id();
+        // Ablation hook: terrain-chunk shadow casting is the prime suspect for
+        // the mid-zoom shadow-pass cost (~5M verts x cascades).
+        if std::env::var("FISTFORCE_TERRAIN_SHADOWS").is_ok_and(|v| v == "0") {
+            commands
+                .entity(chunk_entity)
+                .insert(bevy::light::NotShadowCaster);
+        }
         commands.entity(world_root).add_child(chunk_entity);
 
         paint_state.weightmaps.insert(result.coord, weightmap);

@@ -29,9 +29,11 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
                         ..default()
                     };
                     // Metal counter sample buffers can fail on macOS under heavy diagnostics usage.
-                    // Disable GPU timestamp / pipeline stats queries to avoid device loss.
+                    // Disable GPU timestamp / pipeline stats queries to avoid device loss —
+                    // EXCEPT during an explicit render-diag profiling run, which needs
+                    // elapsed_gpu numbers and accepts the (rare) device-loss risk.
                     #[cfg(target_os = "macos")]
-                    {
+                    if !crate::profiling::env_flag("FISTFORCE_RENDER_DIAG") {
                         settings.disabled_features = Some(
                             WgpuFeatures::TIMESTAMP_QUERY
                                 | WgpuFeatures::TIMESTAMP_QUERY_INSIDE_PASSES
@@ -69,9 +71,12 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
         info!("System information diagnostics enabled");
     }
     if profiling::env_flag("FISTFORCE_LOG_DIAGNOSTICS") {
-        app.add_plugins(LogDiagnosticsPlugin {
-            wait_duration: std::time::Duration::from_secs(2),
-            filter: Some(
+        // With render diagnostics on, log everything — the render/*/elapsed_cpu
+        // paths are the whole point of a headless profiling run.
+        let filter = if render_diag_enabled {
+            None
+        } else {
+            Some(
                 [
                     FrameTimeDiagnosticsPlugin::FRAME_TIME,
                     FrameTimeDiagnosticsPlugin::FPS,
@@ -81,7 +86,11 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
                 ]
                 .into_iter()
                 .collect(),
-            ),
+            )
+        };
+        app.add_plugins(LogDiagnosticsPlugin {
+            wait_duration: std::time::Duration::from_secs(2),
+            filter,
             ..default()
         });
         info!("Bevy log diagnostics enabled");

@@ -29,7 +29,7 @@ pub fn spawn_world(
         return;
     }
 
-    let root = commands
+    let _root = commands
         // IMPORTANT: this is the parent of terrain chunks / props / lights.
         // It must have GlobalTransform or Bevy will emit B0004 warnings for children.
         .spawn((
@@ -65,7 +65,11 @@ pub fn spawn_world(
             Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.7, 0.3, 0.0)),
         ))
         .id();
-    commands.entity(root).add_child(sun_light_entity);
+    // Deliberately NOT a child of the world root: the sun's rotation changes
+    // every frame, and a per-frame-dirty child keeps the root's whole subtree
+    // (every prop and chunk) out of bevy's static-transform fast path.
+    // Cleanup lives in cleanup_enter_main_menu alongside the root despawn.
+    let _ = sun_light_entity;
 
     // --- Fill light (shadow lift / readability) ---
     let fill_light_entity = commands
@@ -80,7 +84,8 @@ pub fn spawn_world(
             Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.5, -0.5, 0.0)),
         ))
         .id();
-    commands.entity(root).add_child(fill_light_entity);
+    // Top-level for the same static-subtree reason as the sun.
+    let _ = fill_light_entity;
 
     commands.insert_resource(GlobalAmbientLight {
         color: Color::srgb(0.46, 0.55, 0.68),

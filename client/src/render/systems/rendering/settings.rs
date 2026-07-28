@@ -176,18 +176,32 @@ pub fn default_ssao_settings() -> ScreenSpaceAmbientOcclusion {
 
 impl Default for GraphicsSettings {
     fn default() -> Self {
+        // Test hooks: headless profiling runs ablate one subsystem at a time
+        // without input automation. Absent vars leave the shipped defaults.
+        let env_bool = |name: &str, default: bool| -> bool {
+            std::env::var(name)
+                .ok()
+                .map(|raw| raw == "1" || raw.eq_ignore_ascii_case("true"))
+                .unwrap_or(default)
+        };
+        let render_scale = std::env::var("FISTFORCE_RENDER_SCALE")
+            .ok()
+            .and_then(|raw| raw.parse::<f32>().ok())
+            .filter(|s| s.is_finite())
+            .map(|s| s.clamp(0.2, 1.0))
+            .unwrap_or(0.75);
         Self {
-            render_scale: 0.75,
+            render_scale,
             ssao_enabled: false,
             shadow_quality: ShadowQuality::Medium,
             foliage_cutout_enabled: true,
             bloom_enabled: true,
-            shadows_enabled: true,
-            atmosphere_enabled: true,
-            clouds_enabled: true,
+            shadows_enabled: env_bool("FISTFORCE_SHADOWS", true),
+            atmosphere_enabled: env_bool("FISTFORCE_ATMOSPHERE", true),
+            clouds_enabled: env_bool("FISTFORCE_CLOUDS", true),
             far_terrain_enabled: true,
-            props_enabled: true,
-            vsync_enabled: true,
+            props_enabled: env_bool("FISTFORCE_PROPS", true),
+            vsync_enabled: env_bool("FISTFORCE_VSYNC", true),
             fullscreen_enabled: false,
             tonemapping: Tonemapping::AgX,
             grade_exposure: 0.2,

@@ -146,6 +146,14 @@ pub fn cleanup_enter_main_menu(
     windows: Query<Entity, With<PrimaryWindow>>,
     mut cursor_opts: Query<&mut CursorOptions>,
     world_roots: Query<Entity, With<ClientWorldRoot>>,
+    // Top-level since the static-subtree fix — despawned here, not via the root.
+    lights: Query<
+        Entity,
+        Or<(
+            With<super::rendering::SunLight>,
+            With<super::rendering::FillLight>,
+        )>,
+    >,
     players: Query<Entity, With<Player>>,
     particles: Query<Entity, With<SandParticle>>,
     mut loaded_chunks: ResMut<LoadedChunks>,
@@ -160,6 +168,9 @@ pub fn cleanup_enter_main_menu(
 
     for root in world_roots.iter() {
         commands.entity(root).despawn();
+    }
+    for light in lights.iter() {
+        commands.entity(light).despawn();
     }
 
     for entity in players.iter() {
