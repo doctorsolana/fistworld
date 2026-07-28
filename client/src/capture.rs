@@ -127,6 +127,23 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         ocean_seconds: 0.0,
         day: 0,
     });
+    // Same stand-in for CloudSeed — the cloud plane waits for it. Fixed seed so
+    // shots are reproducible; FISTFORCE_CAPTURE_CLOUDS=clear|cloudy overrides
+    // the weather roll for guaranteed cloud coverage in verification shots.
+    commands.spawn(shared::components::CloudSeed { seed: 7 });
+    match std::env::var("FISTFORCE_CAPTURE_CLOUDS").as_deref() {
+        Ok("cloudy") => {
+            commands.insert_resource(crate::render::systems::CloudCoverOverride {
+                mode: crate::render::systems::CloudCoverMode::Cloudy,
+            });
+        }
+        Ok("clear") => {
+            commands.insert_resource(crate::render::systems::CloudCoverOverride {
+                mode: crate::render::systems::CloudCoverMode::Clear,
+            });
+        }
+        _ => {}
+    }
 
     info!("capture: entering world offline (no server)");
 }

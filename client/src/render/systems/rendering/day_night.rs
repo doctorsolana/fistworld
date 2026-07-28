@@ -154,8 +154,11 @@ pub fn update_day_night_cycle(
     // register; the old ~39 peak was ~1% of that (pitch-black shadows, the
     // "hospital light" contrast). ~2600 at noon puts shadowed sides at a
     // readable ~1:4 ratio against sunlit surfaces, like a clear real sky.
+    // 140 floor = moonlight stand-in: the world must stay readable at night
+    // (16 was below what the exposure registers — pitch-black land made even
+    // near-invisible clouds the only thing on screen).
     let ambient_brightness =
-        (16.0 + 2600.0 * day_factor + 600.0 * twilight_factor) * lighting_boost;
+        (140.0 + 2470.0 * day_factor + 600.0 * twilight_factor) * lighting_boost;
     if ambient.color != ambient_color || ambient.brightness != ambient_brightness {
         ambient.color = ambient_color;
         ambient.brightness = ambient_brightness;

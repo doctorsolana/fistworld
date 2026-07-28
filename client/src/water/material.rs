@@ -48,6 +48,11 @@ pub struct ToonWaterUniform {
     /// Interaction ripples: xy = world xz, z = spawn time, w = strength
     /// (0 = slot empty). The shader animates each ring from its spawn time.
     pub ripples: [Vec4; 8],
+    /// Cloud shadow field: x coverage, y inv world scale, zw wind offset.
+    pub clouds_a: Vec4,
+    /// Cloud shadow field: xy sun projection (sun_dir.xz / sun_dir.y),
+    /// z shadow strength, w seed phase.
+    pub clouds_b: Vec4,
 }
 
 impl Material for ToonWaterMaterial {
@@ -100,6 +105,10 @@ pub(super) fn setup_water_assets(
             // Overwritten every frame the sun moves appreciably.
             sun_params: Vec4::new(0.35, 0.75, 0.30, 1.1),
             ripples: [Vec4::new(0.0, 0.0, -100.0, 0.0); 8],
+            // Cloud shadows start off (strength 0 = shade 1.0 exactly);
+            // sync_cloud_shadow_params owns these fields at runtime.
+            clouds_a: Vec4::ZERO,
+            clouds_b: Vec4::ZERO,
         },
         alpha_mode: AlphaMode::Blend,
         double_sided: false,

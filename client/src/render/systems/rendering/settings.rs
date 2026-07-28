@@ -1,7 +1,8 @@
 //! settings systems.
 
 use super::atmosphere::default_bloom_settings;
-use super::clouds::{CloudCard, CloudLayer};
+use super::cloud_layer::CloudLayerPlane;
+use super::clouds::CloudLayer;
 use super::*;
 use crate::camera_rts::CommanderCamera;
 use bevy::pbr::ContactShadows;
@@ -251,7 +252,7 @@ pub fn apply_graphics_settings(
         With<Camera3d>,
     >,
     mut sun_query: Query<&mut DirectionalLight, With<SunLight>>,
-    mut clouds: Query<&mut Visibility, Or<(With<CloudLayer>, With<CloudCard>)>>,
+    mut clouds: Query<&mut Visibility, Or<(With<CloudLayer>, With<CloudLayerPlane>)>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut ui_scale: ResMut<UiScale>,
 ) {

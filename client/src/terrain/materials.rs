@@ -82,6 +82,10 @@ pub fn stylized_palette() -> TerrainPalette {
         // Bands span 0..90m of height, with a little texture break-up so large flat areas
         // are not perfectly uniform (which reads as untextured rather than stylised).
         bands: Vec4::new(0.0, 90.0, 0.18, 0.0),
+        // Cloud shadows start off (strength 0 = shade 1.0 exactly);
+        // sync_cloud_shadow_params owns these fields at runtime.
+        clouds_a: Vec4::ZERO,
+        clouds_b: Vec4::ZERO,
     }
 }
 
@@ -94,6 +98,13 @@ pub struct TerrainPalette {
     pub rock: Vec4,
     pub stylize: Vec4,
     pub bands: Vec4,
+    /// Cloud shadow field: x coverage, y inv world scale, zw wind offset.
+    /// Lives in the palette (binding 124) because a new binding would overrun
+    /// the Metal buffer limit documented on `TerrainSplatExtension::palette`.
+    pub clouds_a: Vec4,
+    /// Cloud shadow field: xy sun projection (sun_dir.xz / sun_dir.y),
+    /// z shadow strength, w seed phase.
+    pub clouds_b: Vec4,
 }
 
 /// Terrain water uniform from a generator's loaded map.

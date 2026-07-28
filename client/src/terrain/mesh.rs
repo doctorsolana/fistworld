@@ -113,6 +113,16 @@ pub(crate) fn build_far_terrain_mesh(
                     // Depth shading gives shallows and deep ocean distinct reads, which is
                     // most of what makes a coastline legible from far away.
                     let depth = (level - height).clamp(0.0, 40.0) / 40.0;
+                    // Force full deep in the outer rim so the mesh's edge lands
+                    // exactly on the infinite-ocean skirt color — otherwise the
+                    // map boundary ghosts as a lighter square in the endless sea.
+                    let bounds = terrain.generator.active_map_bounds();
+                    let dist_to_edge = (world_x - bounds.min[0])
+                        .min(bounds.max[0] - world_x)
+                        .min(world_z - bounds.min[1])
+                        .min(bounds.max[1] - world_z);
+                    let rim = 1.0 - (dist_to_edge / 600.0).clamp(0.0, 1.0);
+                    let depth = depth.max(rim);
                     let shallow = Vec3::new(0.52, 0.72, 0.80);
                     let deep = Vec3::new(0.14, 0.26, 0.45);
                     shallow.lerp(deep, depth.powf(0.55))

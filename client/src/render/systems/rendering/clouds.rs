@@ -2,7 +2,6 @@
 
 use super::day_night::{lerp_color, lerp_f32, smoothstep};
 use super::*;
-use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
 
 const CLOUD_TEXTURE_PATH: &str = "sky_10_2k/sky_10_2k.png";
 const CLOUD_LAYER_RADII: [f32; 1] = [1900.0];
@@ -31,16 +30,6 @@ fn cloud_drift_yaw(elapsed_secs: f32) -> f32 {
     CLOUD_BASE_YAW + CLOUD_YAW_DRIFT_RATE * elapsed_secs
 }
 
-const CLOUD_CARD_COUNT: usize = 18;
-const CLOUD_CARD_RADIUS: f32 = 650.0;
-const CLOUD_CARD_MIN_HEIGHT: f32 = 160.0;
-const CLOUD_CARD_MAX_HEIGHT: f32 = 260.0;
-const CLOUD_CARD_MIN_SCALE: f32 = 180.0;
-const CLOUD_CARD_MAX_SCALE: f32 = 320.0;
-const CLOUD_CARD_MIN_SPEED: f32 = 0.4;
-const CLOUD_CARD_MAX_SPEED: f32 = 0.9;
-const CLOUD_CARD_TEXTURE_SIZE: u32 = 512;
-
 const CLOUD_DAY_TINT: Color = Color::srgb(0.86, 0.92, 1.0);
 const CLOUD_SUNSET_TINT: Color = Color::srgb(1.0, 0.74, 0.55);
 const CLOUD_NIGHT_TINT: Color = Color::srgb(0.25, 0.3, 0.4);
@@ -48,7 +37,7 @@ const CLOUD_NIGHT_TINT: Color = Color::srgb(0.25, 0.3, 0.4);
 const CLOUD_COVER_SEGMENT_SECS: f32 = 180.0;
 const CLOUD_COVER_LERP_SPEED: f32 = 0.08;
 const CLOUD_COVER_CLEAR_RANGE: (f32, f32) = (0.0, 0.25);
-const CLOUD_COVER_CLOUDY_RANGE: (f32, f32) = (0.55, 1.0);
+const CLOUD_COVER_CLOUDY_RANGE: (f32, f32) = (0.45, 0.68);
 
 #[derive(Component, Clone, Copy)]
 pub struct CloudLayer {
@@ -108,22 +97,6 @@ impl Default for CloudCover {
     }
 }
 
-#[derive(Component, Clone, Copy)]
-pub struct CloudCard {
-    pub offset: Vec3,
-    pub velocity: Vec3,
-    pub base_alpha: f32,
-}
-
-#[derive(Resource)]
-pub struct CloudCardsSpawned;
-
-#[derive(Resource)]
-pub struct PendingCloudCardTexture {
-    pub seed: u64,
-    pub task: Task<Image>,
-}
-
 /// Cached cloud tint/visibility to avoid per-frame material mutations.
 /// Only mutate GPU materials when the visual actually changes.
 #[derive(Resource, Default)]
@@ -180,102 +153,7 @@ pub(super) fn setup_cloud_layers(
     }
 }
 
-/// Spawn deterministic cloud cards once we receive the server seed.
-pub fn spawn_cloud_cards(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut images: ResMut<Assets<Image>>,
-    seed_query: Query<&shared::components::CloudSeed>,
-    spawned: Option<Res<CloudCardsSpawned>>,
-    pending_texture: Option<ResMut<PendingCloudCardTexture>>,
-    settings: Res<GraphicsSettings>,
-) {
-    if spawned.is_some() {
-        return;
-    }
-    if !settings.clouds_enabled {
-        return;
-    }
-
-    let Some(seed) = seed_query.iter().next().map(|s| s.seed) else {
-        return;
-    };
-
-    let Some(card_texture_image) =
-        poll_or_start_cloud_card_texture(seed, pending_texture, &mut commands)
-    else {
-        return;
-    };
-
-    commands.remove_resource::<PendingCloudCardTexture>();
-    commands.insert_resource(CloudCardsSpawned);
-
-    let cloud_texture = images.add(card_texture_image);
-    let cloud_mesh = meshes.add(Plane3d::default());
-
-    let mut rng = StdRng::seed_from_u64(seed);
-    for _ in 0..CLOUD_CARD_COUNT {
-        let angle = rng.gen_range(0.0..std::f32::consts::TAU);
-        let radius = rng.gen_range(CLOUD_CARD_RADIUS * 0.35..CLOUD_CARD_RADIUS);
-        let height = rng.gen_range(CLOUD_CARD_MIN_HEIGHT..CLOUD_CARD_MAX_HEIGHT);
-        let offset = Vec3::new(angle.cos() * radius, height, angle.sin() * radius);
-
-        let drift_angle = rng.gen_range(0.0..std::f32::consts::TAU);
-        let speed = rng.gen_range(CLOUD_CARD_MIN_SPEED..CLOUD_CARD_MAX_SPEED);
-        let velocity = Vec3::new(drift_angle.cos() * speed, 0.0, drift_angle.sin() * speed);
-
-        let scale = rng.gen_range(CLOUD_CARD_MIN_SCALE..CLOUD_CARD_MAX_SCALE);
-        let base_alpha = rng.gen_range(0.18..0.32);
-
-        let material = materials.add(StandardMaterial {
-            base_color: color_with_alpha(CLOUD_DAY_TINT, base_alpha),
-            base_color_texture: Some(cloud_texture.clone()),
-            unlit: true,
-            alpha_mode: AlphaMode::Blend,
-            cull_mode: None,
-            perceptual_roughness: 1.0,
-            metallic: 0.0,
-            ..default()
-        });
-
-        commands.spawn((
-            CloudCard {
-                offset,
-                velocity,
-                base_alpha,
-            },
-            NotShadowCaster,
-            Mesh3d(cloud_mesh.clone()),
-            MeshMaterial3d(material),
-            Transform::from_translation(offset).with_scale(Vec3::new(scale, 1.0, scale)),
-            GlobalTransform::default(),
-            Visibility::default(),
-            InheritedVisibility::default(),
-        ));
-    }
-}
-
-fn poll_or_start_cloud_card_texture(
-    seed: u64,
-    pending_texture: Option<ResMut<PendingCloudCardTexture>>,
-    commands: &mut Commands,
-) -> Option<Image> {
-    if let Some(mut pending_texture) = pending_texture {
-        if pending_texture.seed != seed {
-            commands.remove_resource::<PendingCloudCardTexture>();
-            return None;
-        }
-        return block_on(poll_once(&mut pending_texture.task));
-    }
-
-    let task = AsyncComputeTaskPool::get()
-        .spawn(async move { generate_cloud_card_texture(seed, CLOUD_CARD_TEXTURE_SIZE) });
-    commands.insert_resource(PendingCloudCardTexture { seed, task });
-    None
-}
-
-fn hash_to_unit(seed: u64, salt: u64) -> f32 {
+pub(super) fn hash_to_unit(seed: u64, salt: u64) -> f32 {
     let mut x = seed ^ salt;
     x ^= x >> 30;
     x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -337,7 +215,9 @@ pub fn update_cloud_cover(
         }
         CloudCoverMode::Cloudy => {
             cover.segment = segment;
-            cover.target = 1.0;
+            // Deliberately never full overcast: an RTS must keep the world
+            // readable under the weather, so "cloudy" tops out below blanket.
+            cover.target = CLOUD_COVER_CLOUDY_RANGE.1;
         }
         CloudCoverMode::Auto => {
             if cover.segment != segment {
@@ -462,141 +342,7 @@ pub fn update_cloud_layers(
     }
 }
 
-/// Update cloud card motion and tinting.
-pub fn update_cloud_cards(
-    time: Res<Time>,
-    world_time_query: Query<&shared::components::WorldTime>,
-    camera: Query<&GlobalTransform, With<Camera3d>>,
-    cover: Res<CloudCover>,
-    settings: Res<GraphicsSettings>,
-    map_blend: Res<crate::terrain::map_view::MapViewBlend>,
-    mut cards: Query<(
-        &mut CloudCard,
-        &mut Transform,
-        &MeshMaterial3d<StandardMaterial>,
-    )>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    cache: Res<CloudMaterialCache>,
-) {
-    if !settings.clouds_enabled {
-        return;
-    }
-    let Ok(camera_tf) = camera.single() else {
-        return;
-    };
-
-    let t = world_time_query
-        .iter()
-        .next()
-        .map(|wt| wt.normalized_time())
-        .unwrap_or(0.5);
-    let phase = t * std::f32::consts::TAU;
-    let elevation = -phase.cos();
-    let day_factor = smoothstep(-0.05, 0.15, elevation);
-    let twilight = 1.0 - smoothstep(0.12, 0.35, elevation.max(0.0));
-    let base_tint = lerp_color(CLOUD_NIGHT_TINT, CLOUD_DAY_TINT, day_factor);
-    let tint = lerp_color(base_tint, CLOUD_SUNSET_TINT, twilight);
-    // Mirrors the dome fade in update_cloud_layers — see the comment there.
-    let visibility = (0.2 + 0.8 * day_factor) * cover.current * (1.0 - map_blend.0);
-    let drift_yaw = cloud_drift_yaw(time.elapsed_secs());
-
-    // Check if tint actually changed (reuse cache from update_cloud_layers)
-    let tint_rgba = tint.to_srgba();
-    let tint_arr = [tint_rgba.red, tint_rgba.green, tint_rgba.blue];
-    let tint_changed = cache.last_tint.is_none_or(|prev| {
-        (prev[0] - tint_arr[0]).abs() > 0.005
-            || (prev[1] - tint_arr[1]).abs() > 0.005
-            || (prev[2] - tint_arr[2]).abs() > 0.005
-            || (cache.last_visibility - visibility).abs() > 0.005
-    });
-
-    let dt = time.delta_secs();
-    for (mut card, mut transform, material_handle) in cards.iter_mut() {
-        let velocity = card.velocity;
-        card.offset += velocity * dt;
-
-        // Wrap within a square to keep cards around the player.
-        if card.offset.x > CLOUD_CARD_RADIUS {
-            card.offset.x = -CLOUD_CARD_RADIUS;
-        } else if card.offset.x < -CLOUD_CARD_RADIUS {
-            card.offset.x = CLOUD_CARD_RADIUS;
-        }
-        if card.offset.z > CLOUD_CARD_RADIUS {
-            card.offset.z = -CLOUD_CARD_RADIUS;
-        } else if card.offset.z < -CLOUD_CARD_RADIUS {
-            card.offset.z = CLOUD_CARD_RADIUS;
-        }
-
-        let rotated =
-            Quat::from_rotation_y(drift_yaw) * Vec3::new(card.offset.x, 0.0, card.offset.z);
-        let translation = camera_tf.translation() + Vec3::new(rotated.x, card.offset.y, rotated.z);
-        if transform.translation != translation {
-            transform.translation = translation;
-        }
-
-        // Only mutate material when tint/visibility actually changed
-        if tint_changed {
-            if let Some(mut material) = materials.get_mut(&material_handle.0) {
-                material.base_color =
-                    color_with_alpha(tint, (card.base_alpha * visibility).clamp(0.0, 1.0));
-            }
-        }
-    }
-}
-
 fn color_with_alpha(color: Color, alpha: f32) -> Color {
     let rgba = color.to_srgba();
     Color::srgba(rgba.red, rgba.green, rgba.blue, alpha)
-}
-
-fn generate_cloud_card_texture(seed: u64, size: u32) -> Image {
-    let fbm: Fbm<Perlin> = Fbm::new((seed as u32).wrapping_add(777))
-        .set_octaves(4)
-        .set_frequency(1.6)
-        .set_persistence(0.55);
-
-    let mut data = Vec::with_capacity((size * size * 4) as usize);
-
-    for y in 0..size {
-        for x in 0..size {
-            let nx = x as f32 / size as f32 * 2.0 - 1.0;
-            let ny = y as f32 / size as f32 * 2.0 - 1.0;
-            let r = (nx * nx + ny * ny).sqrt();
-
-            let noise = fbm.get([nx as f64 * 1.8, ny as f64 * 1.8]) as f32 * 0.5 + 0.5;
-            let puff = smoothstep(0.35, 0.65, noise);
-            let edge_falloff = 1.0 - smoothstep(0.55, 1.0, r);
-            let alpha = (puff * edge_falloff).powf(1.1).clamp(0.0, 1.0);
-            let a = (alpha * 255.0) as u8;
-
-            data.push(255);
-            data.push(255);
-            data.push(255);
-            data.push(a);
-        }
-    }
-
-    let mut image = Image::new(
-        Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::ClampToEdge,
-        address_mode_v: ImageAddressMode::ClampToEdge,
-        address_mode_w: ImageAddressMode::ClampToEdge,
-        mag_filter: ImageFilterMode::Linear,
-        min_filter: ImageFilterMode::Linear,
-        mipmap_filter: ImageFilterMode::Linear,
-        ..default()
-    });
-
-    image
 }

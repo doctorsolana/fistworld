@@ -5,6 +5,7 @@ use super::*;
 pub(crate) fn ensure_far_terrain_mesh(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     render_assets: Option<Res<TerrainRenderAssets>>,
     world_root_query: Query<Entity, With<ClientWorldRoot>>,
     terrain: Res<WorldTerrain>,
@@ -57,7 +58,44 @@ pub(crate) fn ensure_far_terrain_mesh(
         .id();
 
     commands.entity(world_root).add_child(entity);
+
+    // Infinite-ocean skirt: a flat deep-water sheet far past the map bounds so
+    // the square world reads as an island in an endless sea instead of a tile
+    // floating on the backdrop. Sits below the far mesh's deepest ocean floor,
+    // so inside the map it is always occluded; only the beyond-the-edge ring
+    // shows. Deep color matches build_far_terrain_mesh's depth ramp.
+    let water_level = terrain
+        .generator
+        .loaded_map()
+        .heightmap
+        .water_level
+        .unwrap_or(0.0);
+    // linear_rgb, not srgb: build_far_terrain_mesh writes these numbers as raw
+    // vertex floats (linear), so the skirt must run the same numeric path or
+    // the seam shows as a color-space mismatch.
+    let skirt_material = materials.add(StandardMaterial {
+        base_color: Color::linear_rgb(0.14, 0.26, 0.45),
+        perceptual_roughness: 0.98,
+        metallic: 0.0,
+        reflectance: 0.08,
+        ..default()
+    });
+    let skirt = commands
+        .spawn((
+            OceanSkirt,
+            Mesh3d(meshes.add(Plane3d::default().mesh().size(100_000.0, 100_000.0))),
+            MeshMaterial3d(skirt_material),
+            Transform::from_translation(Vec3::new(0.0, water_level - 50.0, 0.0)),
+            Visibility::Visible,
+            NotShadowCaster,
+        ))
+        .id();
+    commands.entity(world_root).add_child(skirt);
 }
+
+/// Marker for the endless-sea sheet outside the map bounds.
+#[derive(Component)]
+pub struct OceanSkirt;
 
 /// In-flight async rebuild of the far-terrain hole index buffer.
 ///

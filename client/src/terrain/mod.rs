@@ -18,6 +18,8 @@ use shared::terrain::WorldTerrain;
 
 pub use chunks::{LoadedChunks, TerrainChunk, TerrainUpdateSet};
 pub use debug::PerfHitchStats;
+// Cloud-shadow sync writes the palette's cloud fields into chunk materials.
+pub use materials::TerrainSplatMaterial;
 
 /// Plugin for terrain rendering.
 pub struct TerrainPlugin;

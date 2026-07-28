@@ -3,6 +3,8 @@
 //! Atmosphere, day/night cycle, and camera setup.
 
 pub mod atmosphere;
+pub mod cloud_layer;
+pub mod cloud_shadows;
 pub mod clouds;
 pub mod day_night;
 pub mod scaled_target;
@@ -10,9 +12,11 @@ pub mod settings;
 pub mod setup;
 
 pub use atmosphere::update_atmosphere;
+pub use cloud_layer::{spawn_cloud_plane, update_cloud_plane, CloudLayerMaterial, CloudLayerPlane};
+pub use cloud_shadows::sync_cloud_shadow_params;
 pub use clouds::{
-    apply_cloud_texture_sampler, spawn_cloud_cards, update_cloud_cards, update_cloud_cover,
-    update_cloud_layers, CloudCard, CloudCover, CloudCoverMode, CloudCoverOverride, CloudLayer,
+    apply_cloud_texture_sampler, update_cloud_cover, update_cloud_layers, CloudCover,
+    CloudCoverMode, CloudCoverOverride, CloudLayer,
 };
 pub use day_night::update_day_night_cycle;
 pub use scaled_target::sync_scene_render_target;
@@ -22,7 +26,6 @@ pub use settings::{
 };
 pub use setup::setup_rendering;
 
-use bevy::asset::RenderAssetUsages;
 use bevy::audio::SpatialListener;
 use bevy::camera::{Exposure, Hdr};
 use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
@@ -40,13 +43,10 @@ use bevy::pbr::{
 };
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::render_resource::Extent3d;
 use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection, Msaa};
 use bevy::ui::UiScale;
 use bevy::window::{PresentMode, PrimaryWindow};
-use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
 
 // =============================================================================
 // COMPONENTS

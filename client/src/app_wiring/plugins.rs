@@ -113,6 +113,7 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
     // Terrain generation and rendering
     app.add_plugins(terrain::TerrainPlugin);
     app.add_plugins(water::WaterPlugin);
+    app.add_plugins(bevy::pbr::MaterialPlugin::<game_systems::CloudLayerMaterial>::default());
     app.add_plugins(city::CityPlugin);
 
     // Environmental props (rocks, trees, etc.)

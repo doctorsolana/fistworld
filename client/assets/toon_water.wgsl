@@ -26,6 +26,10 @@ struct ToonWaterUniform {
     // Interaction ripples: xy = world xz, z = spawn time, w = strength
     // (0 = slot empty). Rings expand + fade entirely in-shader.
     ripples: array<vec4<f32>, 8>,
+    // x: cloud coverage, y: inv world scale, zw: wind offset (world units).
+    clouds_a: vec4<f32>,
+    // xy: sun projection (sun_dir.xz / sun_dir.y), z: shadow strength, w: seed phase.
+    clouds_b: vec4<f32>,
 };
 
 @group(3) @binding(0) var<uniform> material: ToonWaterUniform;
@@ -56,6 +60,62 @@ fn wave_gradient(p: vec2<f32>, time: f32, freq: f32, speed: f32) -> vec2<f32> {
 fn hash12(p: vec2<f32>) -> f32 {
     let h = dot(p, vec2<f32>(127.1, 311.7));
     return fract(sin(h) * 43758.5453);
+}
+
+// Altitude of the procedural cloud field the shadows are projected from.
+const CLOUD_LAYER_HEIGHT: f32 = 350.0;
+
+// === Cloud field (EXACT copy in terrain_splat.wgsl / toon_water.wgsl / cloud_layer.wgsl — keep in sync) ===
+fn cloud_hash(p: vec2<f32>) -> f32 {
+    return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
+}
+fn cloud_vnoise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(cloud_hash(i), cloud_hash(i + vec2<f32>(1.0, 0.0)), u.x),
+        mix(cloud_hash(i + vec2<f32>(0.0, 1.0)), cloud_hash(i + vec2<f32>(1.0, 1.0)), u.x),
+        u.y,
+    );
+}
+// Rotation + ~2x lacunarity in one matrix kills axis-aligned streaking.
+const CLOUD_M: mat2x2<f32> = mat2x2<f32>(vec2<f32>(1.6, -1.2), vec2<f32>(1.2, 1.6));
+fn cloud_fbm(p_in: vec2<f32>) -> f32 {
+    var p = p_in;
+    var amp = 0.55;
+    var sum = 0.0;
+    var norm = 0.0;
+    for (var i = 0; i < 4; i++) {
+        sum += amp * cloud_vnoise(p);
+        norm += amp;
+        amp *= 0.55;
+        p = CLOUD_M * p;
+    }
+    return sum / norm;
+}
+fn cloud_ridge(p_in: vec2<f32>) -> f32 {
+    var p = p_in;
+    var amp = 0.8;
+    var sum = 0.0;
+    var norm = 0.0;
+    for (var i = 0; i < 4; i++) {
+        sum += amp * abs(cloud_vnoise(p) * 2.0 - 1.0);
+        norm += amp;
+        amp *= 0.7;
+        p = CLOUD_M * p;
+    }
+    return sum / norm;
+}
+// Density 0..1 at a world XZ position. params_a: (coverage 0..1, inv world scale, wind_offset.x, wind_offset.y)
+fn cloud_density(world_xz: vec2<f32>, params_a: vec4<f32>, seed_phase: f32) -> f32 {
+    let p0 = (world_xz + params_a.zw) * params_a.y + vec2<f32>(seed_phase, seed_phase * 1.73);
+    let q = vec2<f32>(cloud_fbm(p0 * 0.5), cloud_fbm(p0 * 0.5 + vec2<f32>(5.2, 1.3)));
+    let p = p0 + 0.9 * (q - vec2<f32>(0.5, 0.5));
+    let shape = cloud_fbm(p) * cloud_ridge(p * 0.9) * 2.4;
+    let cover = clamp(params_a.x, 0.0, 1.0);
+    let thresh = mix(0.78, 0.34, cover);
+    return smoothstep(thresh, thresh + 0.28, shape);
 }
 
 fn swell_field(world_xz: vec2<f32>, time: f32) -> f32 {
@@ -353,6 +413,21 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Foam pushes toward opaque so the white shore lines read solid instead
     // of washing out over the seabed.
     alpha = clamp(alpha + min(glint, 1.0) * 0.25 + foam_mask * 0.5, 0.0, 1.0);
+
+    // Cloud shadows: same sun-projected field the terrain samples, so shade
+    // bands cross the waterline without a seam. Multiplied after the glint
+    // add so sparkle dies under cloud cover too. Strength (clouds_b.z) is 0
+    // when clouds are disabled or the sky is clear, making shade exactly 1.0.
+    let cloud_shadow_xz = in.world_position.xz
+        - (CLOUD_LAYER_HEIGHT - in.world_position.y) * material.clouds_b.xy;
+    let cloud_shade = 1.0
+        - material.clouds_b.z
+            * smoothstep(
+                0.15,
+                0.75,
+                cloud_density(cloud_shadow_xz, material.clouds_a, material.clouds_b.w),
+            );
+    color_rgb *= cloud_shade;
 
     return vec4<f32>(color_rgb, alpha);
 }

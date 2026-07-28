@@ -84,10 +84,18 @@ fn wire_common_systems(app: &mut App) {
             game_systems::apply_cloud_texture_sampler,
             game_systems::update_cloud_cover,
             game_systems::update_cloud_layers,
-            game_systems::spawn_cloud_cards,
-            game_systems::update_cloud_cards,
+            game_systems::spawn_cloud_plane,
+            game_systems::update_cloud_plane,
         )
             .chain()
+            .run_if(in_state(GameState::Playing)),
+    );
+    app.add_systems(
+        Update,
+        // After the day/night cycle so the sun transform the shadow
+        // projection reads is current-frame.
+        game_systems::sync_cloud_shadow_params
+            .after(game_systems::update_day_night_cycle)
             .run_if(in_state(GameState::Playing)),
     );
 }
