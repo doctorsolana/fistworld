@@ -71,10 +71,11 @@ pub struct ActiveMapState {
 }
 
 impl WorldTime {
-    /// 20 minutes of daylight.
-    pub const DEFAULT_DAY_DURATION: f32 = 20.0 * 60.0;
-    /// 7 minutes of night (shorter nights).
-    pub const DEFAULT_NIGHT_DURATION: f32 = 7.0 * 60.0;
+    /// 24 minutes of daylight: afternoons linger, so the sun sets a full four
+    /// real minutes later than the old 20-minute day.
+    pub const DEFAULT_DAY_DURATION: f32 = 24.0 * 60.0;
+    /// 4 minutes of night — a moonlit interlude, not a second shift.
+    pub const DEFAULT_NIGHT_DURATION: f32 = 4.0 * 60.0;
     /// Start early morning (near sunrise).
     pub const DEFAULT_START_SECONDS_IN_DAY: f32 = 30.0;
 
