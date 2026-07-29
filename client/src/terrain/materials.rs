@@ -152,20 +152,14 @@ pub(super) fn setup_terrain_render_assets(
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let albedo_array: Handle<Image> = asset_server.load_with_settings(
-        "textures/terrain/optimized_1k/terrain_albedo_array.ktx2",
-        |settings: &mut ImageLoaderSettings| {
+    let albedo_array: Handle<Image> = asset_server.load_builder().with_settings(|settings: &mut ImageLoaderSettings| {
             settings.is_srgb = true;
             settings.sampler = repeat_sampler();
-        },
-    );
-    let normal_array: Handle<Image> = asset_server.load_with_settings(
-        "textures/terrain/optimized_1k/terrain_normal_array.ktx2",
-        |settings: &mut ImageLoaderSettings| {
+        }).load("textures/terrain/optimized_1k/terrain_albedo_array.ktx2");
+    let normal_array: Handle<Image> = asset_server.load_builder().with_settings(|settings: &mut ImageLoaderSettings| {
             settings.is_srgb = false;
             settings.sampler = repeat_sampler();
-        },
-    );
+        }).load("textures/terrain/optimized_1k/terrain_normal_array.ktx2");
 
     let far_mesh_material = materials.add(StandardMaterial {
         // Far mesh uses vertex colors for biome tinting; keep base color white.

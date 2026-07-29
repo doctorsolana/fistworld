@@ -626,10 +626,10 @@ fn load_repeating_texture(
     path: &'static str,
     is_srgb: bool,
 ) -> Handle<Image> {
-    asset_server.load_with_settings(path, move |settings: &mut ImageLoaderSettings| {
+    asset_server.load_builder().with_settings(move |settings: &mut ImageLoaderSettings| {
         settings.is_srgb = is_srgb;
         settings.sampler = repeat_sampler();
-    })
+    }).load(path)
 }
 
 fn repeat_sampler() -> ImageSampler {

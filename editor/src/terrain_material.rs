@@ -57,20 +57,14 @@ pub struct EditorTerrainTextureAssets {
 impl FromWorld for EditorTerrainTextureAssets {
     fn from_world(world: &mut World) -> Self {
         let asset_server = world.resource::<AssetServer>().clone();
-        let albedo_array = asset_server.load_with_settings(
-            "textures/terrain/optimized_1k/terrain_albedo_array.ktx2",
-            |settings: &mut ImageLoaderSettings| {
+        let albedo_array = asset_server.load_builder().with_settings(|settings: &mut ImageLoaderSettings| {
                 settings.is_srgb = true;
                 settings.sampler = repeating_sampler();
-            },
-        );
-        let normal_array = asset_server.load_with_settings(
-            "textures/terrain/optimized_1k/terrain_normal_array.ktx2",
-            |settings: &mut ImageLoaderSettings| {
+            }).load("textures/terrain/optimized_1k/terrain_albedo_array.ktx2");
+        let normal_array = asset_server.load_builder().with_settings(|settings: &mut ImageLoaderSettings| {
                 settings.is_srgb = false;
                 settings.sampler = repeating_sampler();
-            },
-        );
+            }).load("textures/terrain/optimized_1k/terrain_normal_array.ktx2");
 
         Self {
             albedo_array,
