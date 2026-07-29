@@ -21,6 +21,12 @@ one persistent, always-simulating multiplayer world.
    move on actual caravans that can be watched, escorted, or robbed. The biome
    resource field (`shared::worldgen::BiomeField`) is the ground truth for
    what can be produced where.
+   Surface truth is shared code, never pixels: heights/water, biomes, and
+   surface bands (grass/sand/rock, `surface_weights_at`) are pure seed-derived
+   functions in the shared crate, so "can I farm here" / "is this buildable
+   shoreline" are server-validated queries that agree bit-for-bit with what
+   the client renders. Editor-painted surface edits are cosmetic only and
+   must never gate gameplay.
 3. **Statistical at distance, concrete when observed.** Per ARCHITECTURE.md:
    the strategic layer moves numbers (stocks, populations, caravan positions);
    the tactical layer spawns real units only inside someone's view bubble.
