@@ -313,7 +313,7 @@ pub(super) fn handle_slider_steps(
                     let current_idx = steps
                         .iter()
                         .position(|&x| (x - settings.grade_exposure).abs() < 0.05)
-                        .unwrap_or(13); // Default to ~0.3 if not found
+                        .unwrap_or(12); // Fall back near the 0.2 default
 
                     let new_idx = if step.delta > 0 {
                         (current_idx + 1).min(steps.len() - 1)

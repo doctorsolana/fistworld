@@ -74,7 +74,6 @@ pub(super) fn spawn_graphics_panel(
                 GraphicsToggle::Bloom,
                 settings.bloom_enabled,
             );
-            spawn_toggle(panel, "SSAO", GraphicsToggle::Ssao, settings.ssao_enabled);
             spawn_toggle(
                 panel,
                 "Shadows",
@@ -95,18 +94,6 @@ pub(super) fn spawn_graphics_panel(
             );
             spawn_toggle(
                 panel,
-                "Far Terrain",
-                GraphicsToggle::FarTerrain,
-                settings.far_terrain_enabled,
-            );
-            spawn_toggle(
-                panel,
-                "Props",
-                GraphicsToggle::Props,
-                settings.props_enabled,
-            );
-            spawn_toggle(
-                panel,
                 "VSync",
                 GraphicsToggle::Vsync,
                 settings.vsync_enabled,
@@ -116,12 +103,6 @@ pub(super) fn spawn_graphics_panel(
                 "Fullscreen",
                 GraphicsToggle::Fullscreen,
                 settings.fullscreen_enabled,
-            );
-            spawn_toggle(
-                panel,
-                "Foliage Cutout",
-                GraphicsToggle::FoliageCutout,
-                settings.foliage_cutout_enabled,
             );
 
             // Separator
@@ -150,21 +131,9 @@ pub(super) fn spawn_graphics_panel(
             );
             spawn_slider(
                 panel,
-                "Tone Map",
-                SliderControl::Tonemapping,
-                tonemapping_label(settings.tonemapping),
-            );
-            spawn_slider(
-                panel,
                 "Exposure",
                 SliderControl::Exposure,
                 &format!("{:+.1} EV", settings.grade_exposure),
-            );
-            spawn_slider(
-                panel,
-                "Lighting",
-                SliderControl::LightingBoost,
-                &format!("{:.0}%", settings.lighting_boost * 100.0),
             );
             spawn_slider(
                 panel,

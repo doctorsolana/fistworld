@@ -36,3 +36,4 @@ server_data/
 # Windows cross-compilation (WSL-specific)
 windows_build/
 BUILD_WINDOWS.md
+client_data/

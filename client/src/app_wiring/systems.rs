@@ -74,7 +74,9 @@ fn wire_common_systems(app: &mut App) {
                 .after(terrain::map_view::update_map_view_state),
             game_systems::update_atmosphere,
             game_systems::apply_graphics_settings,
+            game_systems::sync_atmosphere_enabled,
             game_systems::sync_shadow_cascades_to_zoom,
+            game_systems::save_graphics_settings,
         )
             .run_if(in_state(GameState::Playing)),
     );

@@ -88,6 +88,8 @@ enum CaptureState {
 }
 
 pub fn run(config: CaptureConfig) {
+    // Captures must not inherit the user's saved settings file.
+    std::env::set_var("FISTFORCE_NO_SETTINGS_FILE", "1");
     if let Err(e) = std::fs::create_dir_all(&config.out_dir) {
         eprintln!(
             "capture: cannot create output dir {}: {e}",

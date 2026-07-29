@@ -166,6 +166,53 @@ pub(super) fn default_bloom_settings() -> Bloom {
     }
 }
 
+/// Make the atmosphere toggle honest: OFF despawns the Atmosphere entity and
+/// strips the camera's AtmosphereSettings, removing the sky/LUT cost entirely
+/// (the old toggle only zeroed the IBL, darkening the scene while still paying
+/// full price). ON restores both from the stored presets.
+pub fn sync_atmosphere_enabled(
+    mut commands: Commands,
+    settings: Res<GraphicsSettings>,
+    media: Res<AtmosphereMedia>,
+    atmospheres: Query<Entity, With<Atmosphere>>,
+    cameras: Query<(Entity, Has<AtmosphereSettings>), With<Camera3d>>,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+    if settings.atmosphere_enabled {
+        if atmospheres.is_empty() {
+            let clear = media.clear;
+            commands.spawn((
+                Atmosphere {
+                    inner_radius: clear.bottom_radius,
+                    outer_radius: clear.top_radius,
+                    ground_albedo: clear.ground_albedo,
+                    medium: media.active_medium.clone(),
+                },
+                // Planet center one bottom_radius down — see setup.rs.
+                Transform::from_xyz(0.0, -clear.bottom_radius, 0.0),
+            ));
+        }
+        for (camera, has_settings) in cameras.iter() {
+            if !has_settings {
+                commands
+                    .entity(camera)
+                    .insert(desert_atmosphere_settings_perf());
+            }
+        }
+    } else {
+        for entity in atmospheres.iter() {
+            commands.entity(entity).despawn();
+        }
+        for (camera, has_settings) in cameras.iter() {
+            if has_settings {
+                commands.entity(camera).remove::<AtmosphereSettings>();
+            }
+        }
+    }
+}
+
 /// Blend atmosphere for clear midday skies and dusty sunsets.
 pub fn update_atmosphere(
     world_time_query: Query<&shared::components::WorldTime>,

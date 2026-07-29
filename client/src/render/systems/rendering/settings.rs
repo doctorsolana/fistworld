@@ -9,7 +9,7 @@ use bevy::pbr::ContactShadows;
 
 /// Directional-shadow quality tier. Drives cascade count, cascade range, and
 /// shadow map resolution together so they stay coherent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ShadowQuality {
     Low,
     Medium,
@@ -91,7 +91,10 @@ impl ShadowQuality {
 
 /// Runtime-toggleable graphics settings for troubleshooting and optimization.
 /// Players can adjust these in the pause menu to fix flickering or improve FPS.
-#[derive(Resource, Clone)]
+/// Persisted to [`SETTINGS_FILE`]; unknown/missing fields fall back to the
+/// (env-aware) defaults so old files survive new fields.
+#[derive(Resource, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct GraphicsSettings {
     /// 3D resolution scale. The scene renders into an offscreen target of
     /// `window_physical_size * render_scale` and is upscaled to the window, so
@@ -113,8 +116,11 @@ pub struct GraphicsSettings {
     pub props_enabled: bool,
     pub vsync_enabled: bool,
     pub fullscreen_enabled: bool,
+    /// Dev-only (no UI): grade + lighting are tuned for AgX. Not persisted.
+    #[serde(skip, default = "default_tonemapping")]
     pub tonemapping: Tonemapping,
-    /// Color grading exposure offset (EV). Range: -2.0..2.0. Default: 0.20.
+    /// Color grading exposure offset (EV). Range: -1.0..2.0 (matches the
+    /// pause-menu steps). Default: 0.20.
     pub grade_exposure: f32,
     /// View distance in chunks (1 chunk = 64m). Range: 2-16. Default: 8 (512m).
     pub view_distance: i32,
@@ -175,41 +181,120 @@ pub fn default_ssao_settings() -> ScreenSpaceAmbientOcclusion {
     }
 }
 
+fn default_tonemapping() -> Tonemapping {
+    Tonemapping::AgX
+}
+
+/// User settings file (RON). Env test hooks override whatever it says.
+pub const SETTINGS_FILE: &str = "client_data/settings.ron";
+
 impl Default for GraphicsSettings {
     fn default() -> Self {
-        // Test hooks: headless profiling runs ablate one subsystem at a time
-        // without input automation. Absent vars leave the shipped defaults.
-        let env_bool = |name: &str, default: bool| -> bool {
-            std::env::var(name)
-                .ok()
-                .map(|raw| raw == "1" || raw.eq_ignore_ascii_case("true"))
-                .unwrap_or(default)
-        };
-        let render_scale = std::env::var("FISTFORCE_RENDER_SCALE")
-            .ok()
-            .and_then(|raw| raw.parse::<f32>().ok())
-            .filter(|s| s.is_finite())
-            .map(|s| s.clamp(0.2, 1.0))
-            .unwrap_or(0.75);
-        Self {
-            render_scale,
+        let mut settings = Self {
+            render_scale: 0.75,
             ssao_enabled: false,
             shadow_quality: ShadowQuality::Medium,
             foliage_cutout_enabled: true,
             bloom_enabled: true,
-            shadows_enabled: env_bool("FISTFORCE_SHADOWS", true),
-            atmosphere_enabled: env_bool("FISTFORCE_ATMOSPHERE", true),
-            clouds_enabled: env_bool("FISTFORCE_CLOUDS", true),
+            shadows_enabled: true,
+            atmosphere_enabled: true,
+            clouds_enabled: true,
             far_terrain_enabled: true,
-            props_enabled: env_bool("FISTFORCE_PROPS", true),
-            vsync_enabled: env_bool("FISTFORCE_VSYNC", true),
-            fullscreen_enabled: false,
-            tonemapping: Tonemapping::AgX,
+            props_enabled: true,
+            vsync_enabled: true,
+            // Fullscreen-on-play is the shipped default; the toggle persists
+            // the player's preference from there.
+            fullscreen_enabled: true,
+            tonemapping: default_tonemapping(),
             grade_exposure: 0.2,
             view_distance: 8,
             prop_render_multiplier: 1.0,
             lighting_boost: 1.0,
+        };
+        settings.apply_env_overrides();
+        settings
+    }
+}
+
+impl GraphicsSettings {
+    /// Test hooks: headless profiling runs ablate one subsystem at a time
+    /// without input automation. Absent vars leave the current values, so
+    /// these apply cleanly on top of the settings file too (env wins).
+    fn apply_env_overrides(&mut self) {
+        let env_bool = |name: &str, current: bool| -> bool {
+            std::env::var(name)
+                .ok()
+                .map(|raw| raw == "1" || raw.eq_ignore_ascii_case("true"))
+                .unwrap_or(current)
+        };
+        if let Some(scale) = std::env::var("FISTFORCE_RENDER_SCALE")
+            .ok()
+            .and_then(|raw| raw.parse::<f32>().ok())
+            .filter(|s| s.is_finite())
+        {
+            // Floor matches scaled_target_extent's clamp so the resource
+            // never claims a scale the target refuses to render at.
+            self.render_scale = scale.clamp(0.5, 1.0);
         }
+        self.shadows_enabled = env_bool("FISTFORCE_SHADOWS", self.shadows_enabled);
+        self.atmosphere_enabled = env_bool("FISTFORCE_ATMOSPHERE", self.atmosphere_enabled);
+        self.clouds_enabled = env_bool("FISTFORCE_CLOUDS", self.clouds_enabled);
+        self.props_enabled = env_bool("FISTFORCE_PROPS", self.props_enabled);
+        self.vsync_enabled = env_bool("FISTFORCE_VSYNC", self.vsync_enabled);
+    }
+
+    /// Settings for this run: the saved file (if any) under the env overrides.
+    /// FISTFORCE_NO_SETTINGS_FILE skips the file for reproducible captures.
+    pub fn load_or_default() -> Self {
+        if std::env::var("FISTFORCE_NO_SETTINGS_FILE").is_ok() {
+            return Self::default();
+        }
+        let mut settings = std::fs::read_to_string(SETTINGS_FILE)
+            .ok()
+            .and_then(|text| match ron::from_str::<GraphicsSettings>(&text) {
+                Ok(parsed) => Some(parsed),
+                Err(err) => {
+                    warn!("Ignoring malformed {SETTINGS_FILE}: {err}");
+                    None
+                }
+            })
+            .unwrap_or_default();
+        settings.apply_env_overrides();
+        settings
+    }
+}
+
+/// Persist settings ~a second after the last change, so slider drags don't
+/// write a file per step.
+pub fn save_graphics_settings(
+    settings: Res<GraphicsSettings>,
+    time: Res<Time>,
+    mut deadline: Local<Option<f32>>,
+) {
+    if settings.is_changed() && !settings.is_added() {
+        *deadline = Some(time.elapsed_secs() + 1.0);
+    }
+    let Some(due) = *deadline else {
+        return;
+    };
+    if time.elapsed_secs() < due {
+        return;
+    }
+    *deadline = None;
+    let serialized =
+        match ron::ser::to_string_pretty(&*settings, ron::ser::PrettyConfig::default()) {
+            Ok(text) => text,
+            Err(err) => {
+                warn!("Could not serialize graphics settings: {err}");
+                return;
+            }
+        };
+    if let Some(parent) = std::path::Path::new(SETTINGS_FILE).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::write(SETTINGS_FILE, serialized) {
+        Ok(()) => info!("Saved graphics settings to {SETTINGS_FILE}"),
+        Err(err) => warn!("Could not write {SETTINGS_FILE}: {err}"),
     }
 }
 
@@ -247,13 +332,13 @@ pub fn apply_graphics_settings(
             Has<ContactShadows>,
             &mut ColorGrading,
             &mut Tonemapping,
-            &mut AtmosphereEnvironmentMapLight,
         ),
         With<Camera3d>,
     >,
     mut sun_query: Query<&mut DirectionalLight, With<SunLight>>,
     mut clouds: Query<&mut Visibility, Or<(With<CloudLayer>, With<CloudLayerPlane>)>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    monitors: Query<&bevy::window::Monitor, With<bevy::window::PrimaryMonitor>>,
     mut ui_scale: ResMut<UiScale>,
 ) {
     // Only run when settings actually changed
@@ -286,7 +371,6 @@ pub fn apply_graphics_settings(
         has_contact_shadows,
         mut color_grading,
         mut tonemapping,
-        mut atmosphere_light,
     ) in camera_query.iter_mut()
     {
         let has_bloom = bloom_opt.is_some();
@@ -302,8 +386,11 @@ pub fn apply_graphics_settings(
 
         // Toggle SSAO. Removing the component alone is not enough: SSAO's
         // required DepthPrepass/NormalPrepass components stay behind and keep
-        // costing a full extra geometry pass, so strip those too. DepthPrepass
-        // is shared with ContactShadows and may only go when both are off.
+        // costing a full extra geometry pass, so strip both unconditionally —
+        // SSAO is their only remaining consumer (directional shadow maps never
+        // needed the camera prepass; the old shadows_enabled condition was a
+        // leftover from the removed ContactShadows experiment and stranded a
+        // permanent DepthPrepass after any SSAO on->off toggle).
         if settings.ssao_enabled {
             if ssao_opt.is_none() {
                 commands.entity(entity).insert(default_ssao_settings());
@@ -311,10 +398,7 @@ pub fn apply_graphics_settings(
         } else if ssao_opt.is_some() {
             commands
                 .entity(entity)
-                .remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass)>();
-            if !settings.shadows_enabled {
-                commands.entity(entity).remove::<DepthPrepass>();
-            }
+                .remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass, DepthPrepass)>();
         }
 
         // Contact shadows are deliberately NOT enabled: the 0.19 contact-shadow
@@ -324,21 +408,14 @@ pub fn apply_graphics_settings(
         // up if one was ever inserted.
         if has_contact_shadows {
             commands.entity(entity).remove::<ContactShadows>();
-            if !settings.ssao_enabled && !settings.shadows_enabled {
-                commands.entity(entity).remove::<DepthPrepass>();
-            }
         }
 
         *tonemapping = settings.tonemapping;
         *color_grading = default_color_grading(settings.grade_exposure.clamp(-2.0, 2.0));
 
-        // Toggle atmosphere environment map intensity
-        let lighting_boost = settings.lighting_boost.clamp(0.5, 4.0);
-        atmosphere_light.intensity = if settings.atmosphere_enabled {
-            1.0 * lighting_boost
-        } else {
-            0.0
-        };
+        // NOTE: AtmosphereEnvironmentMapLight.intensity is owned solely by
+        // update_day_night_cycle (which respects atmosphere_enabled); a second
+        // writer here used to fight it, unordered.
     }
 
     // Toggle shadows on the sun light. Cascade config is owned by
@@ -365,17 +442,29 @@ pub fn apply_graphics_settings(
         *vis = cloud_visibility;
     }
 
-    // Apply vsync (present mode) for the primary window.
+    // Apply vsync (present mode) and the fullscreen preference.
+    let monitor = monitors.iter().next();
     for mut window in windows.iter_mut() {
-        #[cfg(target_os = "macos")]
-        {
-            let base_scale = window.resolution.base_scale_factor();
-            window.resolution.set_scale_factor_override(Some(1.0));
-            ui_scale.0 = base_scale;
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            ui_scale.0 = 1.0;
+        let wants_fullscreen = settings.fullscreen_enabled;
+        let is_fullscreen = !matches!(window.mode, WindowMode::Windowed);
+        if wants_fullscreen != is_fullscreen {
+            crate::app_wiring::apply_window_mode(
+                &mut window,
+                &mut ui_scale,
+                monitor,
+                wants_fullscreen,
+            );
+        } else {
+            #[cfg(target_os = "macos")]
+            {
+                let base_scale = window.resolution.base_scale_factor();
+                window.resolution.set_scale_factor_override(Some(1.0));
+                ui_scale.0 = base_scale;
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                ui_scale.0 = 1.0;
+            }
         }
         window.present_mode = if settings.vsync_enabled {
             PresentMode::AutoVsync
@@ -452,4 +541,36 @@ pub fn sync_shadow_cascades_to_zoom(
     commands
         .entity(sun)
         .insert(quality.build_cascades_for(distance));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_roundtrip_through_ron() {
+        let settings = GraphicsSettings {
+            render_scale: 0.6,
+            fullscreen_enabled: false,
+            view_distance: 12,
+            ..Default::default()
+        };
+        let text = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())
+            .expect("serialize");
+        let parsed: GraphicsSettings = ron::from_str(&text).expect("parse");
+        assert_eq!(parsed.render_scale, 0.6);
+        assert!(!parsed.fullscreen_enabled);
+        assert_eq!(parsed.view_distance, 12);
+        // Skipped field falls back to the pinned default.
+        assert_eq!(parsed.tonemapping, Tonemapping::AgX);
+    }
+
+    #[test]
+    fn old_settings_files_survive_new_fields() {
+        // A minimal file (as if written before most fields existed) must parse
+        // with defaults filling the gaps.
+        let parsed: GraphicsSettings = ron::from_str("(render_scale: 0.55)").expect("parse");
+        assert_eq!(parsed.render_scale, 0.55);
+        assert!(parsed.shadows_enabled);
+    }
 }

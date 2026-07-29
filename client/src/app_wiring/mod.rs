@@ -7,6 +7,7 @@ pub mod systems;
 pub mod window;
 
 pub use plugins::setup_plugins;
+pub(crate) use window::apply_window_mode;
 pub use resources::setup_resources;
 pub use systems::setup_systems;
 
