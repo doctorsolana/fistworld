@@ -36,8 +36,8 @@ const CLOUD_NIGHT_TINT: Color = Color::srgb(0.25, 0.3, 0.4);
 
 const CLOUD_COVER_SEGMENT_SECS: f32 = 180.0;
 const CLOUD_COVER_LERP_SPEED: f32 = 0.08;
-const CLOUD_COVER_CLEAR_RANGE: (f32, f32) = (0.0, 0.25);
-const CLOUD_COVER_CLOUDY_RANGE: (f32, f32) = (0.45, 0.68);
+const CLOUD_COVER_CLEAR_RANGE: (f32, f32) = (0.0, 0.15);
+const CLOUD_COVER_CLOUDY_RANGE: (f32, f32) = (0.30, 0.50);
 
 #[derive(Component, Clone, Copy)]
 pub struct CloudLayer {
@@ -206,7 +206,11 @@ pub fn update_cloud_cover(
     };
     let seed = seed_query.iter().next().map(|s| s.seed).unwrap_or(0);
 
-    let seconds = world_time.seconds_in_cycle.max(0.0);
+    // Absolute calendar seconds, not time-of-day: weather segments must not
+    // replay the same pattern every day.
+    let seconds = (world_time.day as f32 * world_time.cycle_duration()
+        + world_time.seconds_in_cycle.max(0.0))
+    .max(0.0);
     let segment = (seconds / CLOUD_COVER_SEGMENT_SECS).floor() as i64;
     match override_mode.mode {
         CloudCoverMode::Clear => {
@@ -227,7 +231,9 @@ pub fn update_cloud_cover(
                 let phase = t * std::f32::consts::TAU;
                 let elevation = -phase.cos();
                 let dawn_dusk = 1.0 - smoothstep(0.25, 0.6, elevation.abs());
-                let cloudy_chance = lerp_f32(0.4, 0.65, dawn_dusk);
+                // Cloudy spells are a fairly rare event — the default sky is
+                // the sparse "forced clear" look; weather is the exception.
+                let cloudy_chance = lerp_f32(0.12, 0.22, dawn_dusk);
 
                 let pick = hash_to_unit(seed, segment as u64);
                 let roll = hash_to_unit(seed ^ 0x9E37_79B9_7F4A_7C15, segment as u64);
