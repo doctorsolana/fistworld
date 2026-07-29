@@ -172,7 +172,7 @@ fn shore_lap_height(world_xz: vec2<f32>, shore_dist: f32, signed_depth: f32, tim
     let secondary_phase = signed_depth * (TAU * 3.05) + time * (TAU / 7.5) + 1.7 + wobble * 0.6;
     // Shoaling: crests grow as the water thins, like real arriving waves.
     let shoaling = 1.0 + (1.0 - clamp(signed_depth, 0.0, 1.0)) * 0.45;
-    return (primary * 0.059 + sin(secondary_phase) * 0.017) * shoaling * shore_zone;
+    return (primary * 0.085 + sin(secondary_phase) * 0.024) * shoaling * shore_zone;
 }
 
 fn wave_height(world_xz: vec2<f32>, depth: f32, shore_dist: f32, signed_depth: f32, time: f32) -> f32 {

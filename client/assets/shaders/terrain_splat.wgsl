@@ -102,7 +102,7 @@ fn shore_lap_height(world_xz: vec2<f32>, signed_depth: f32, time: f32) -> f32 {
     let primary = sin(primary_phase) + 0.25 * sin(primary_phase * 2.0);
     let secondary_phase = signed_depth * (tau * 3.05) + time * (tau / 7.5) + 1.7 + wobble * 0.6;
     let shoaling = 1.0 + (1.0 - clamp(signed_depth, 0.0, 1.0)) * 0.45;
-    return (primary * 0.059 + sin(secondary_phase) * 0.017) * shoaling;
+    return (primary * 0.085 + sin(secondary_phase) * 0.024) * shoaling;
 }
 
 // Altitude of the procedural cloud field the shadows are projected from.
