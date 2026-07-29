@@ -1025,8 +1025,11 @@ pub fn surface_weights_at(h: f32, slope: f32, road_distance: Option<f32>) -> [f3
         }
     }
 
-    // Sand: beaches and the sea floor.
-    let sand = 1.0 - ((h - (SEA_LEVEL + 2.2)) / 1.2).clamp(0.0, 1.0);
+    // Sand: the sea floor and a narrow ribbon at the waterline. Deliberately
+    // tight — the coastal lift ramp parks kilometre-wide flats at 1-3m
+    // elevation, and a generous band painted them as island-sized beaches.
+    // Real beaches end ~a metre above the tide line; low flats are grassland.
+    let sand = 1.0 - ((h - (SEA_LEVEL + 0.5)) / 0.7).clamp(0.0, 1.0);
     // Rock (dirt layer): steep faces; cobble on the very steepest.
     let rocky = ((slope - 0.55) / 0.5).clamp(0.0, 1.0);
     let cobble = ((slope - 1.1) / 0.6).clamp(0.0, 1.0);

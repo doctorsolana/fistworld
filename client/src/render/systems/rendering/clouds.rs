@@ -89,9 +89,12 @@ pub struct CloudCover {
 
 impl Default for CloudCover {
     fn default() -> Self {
+        // Start near-clear: the lerp toward the rolled weather is slow
+        // (~90s), and joining the world under a dissolving cloud blanket
+        // read as a rendering glitch rather than weather.
         Self {
-            current: 1.0,
-            target: 1.0,
+            current: 0.12,
+            target: 0.12,
             segment: -1,
         }
     }
