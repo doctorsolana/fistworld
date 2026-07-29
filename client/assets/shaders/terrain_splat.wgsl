@@ -68,6 +68,10 @@ struct TerrainPalette {
     // x: anchor time (client seconds), z: wind drift speed (client-time
     // units), yw: sun-projection velocity — both extrapolated in-shader.
     clouds_c: vec4<f32>,
+    // x: map half extent (m), y: climate seed phase, zw: reserved.
+    climate: vec4<f32>,
+    // xy: storm center at the wind anchor, z: storminess, w: reserved.
+    storm: vec4<f32>,
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(124) var<uniform> palette: TerrainPalette;
 
@@ -110,6 +114,25 @@ fn shore_lap_height(world_xz: vec2<f32>, signed_depth: f32, time: f32) -> f32 {
 
 // Altitude of the procedural cloud field the shadows are projected from.
 const CLOUD_LAYER_HEIGHT: f32 = 350.0;
+
+// === Climate bands (EXACT mirror of shared/worldgen.rs climate_at + copy in wind_foliage.wgsl — keep all in sync) ===
+// Signed hemispheres: north (-z) freezes, south (+z) scorches into desert.
+fn climate_lat_wobble(x: f32, phase: f32) -> f32 {
+    return 0.045 * sin(x * 0.0039 + phase) + 0.022 * sin(x * 0.0127 + phase * 2.7);
+}
+// Returns (snow, frost, dry), each 0..1. params: x = half extent, y = phase.
+fn climate_at(world_x: f32, world_z: f32, height: f32, params: vec4<f32>) -> vec3<f32> {
+    let half = max(params.x, 1.0);
+    let wobble = climate_lat_wobble(world_x, params.y);
+    let north_lat = max(-world_z / half + wobble, 0.0);
+    let south_lat = max(world_z / half + wobble, 0.0);
+    let alt_push = min(max(height, 0.0) * 0.004, 0.30);
+    let eff = north_lat + alt_push;
+    let snow = smoothstep(0.68, 0.78, eff);
+    let frost = smoothstep(0.58, 0.68, eff);
+    let dry = smoothstep(0.35, 0.70, south_lat - alt_push) * (1.0 - frost);
+    return vec3<f32>(snow, frost, dry);
+}
 
 // === Cloud field (EXACT copy in terrain_splat.wgsl / toon_water.wgsl / cloud_layer.wgsl — keep in sync) ===
 fn cloud_hash(p: vec2<f32>) -> f32 {
@@ -162,6 +185,23 @@ fn cloud_density(world_xz: vec2<f32>, params_a: vec4<f32>, seed_phase: f32) -> f
     let cover = clamp(params_a.x, 0.0, 1.0);
     let thresh = mix(0.78, 0.34, cover);
     return smoothstep(thresh, thresh + 0.28, shape);
+}
+
+// === Storm cells (EXACT copy in terrain_splat.wgsl / toon_water.wgsl / cloud_layer.wgsl — keep in sync) ===
+// ONE storm system per map: a ~2km ragged disc around a drifting center
+// (storm.xy = center at the wind anchor, storm.z = storminess). The caller
+// extrapolates the center with the cloud drift so motion is frame-smooth.
+// Radii must match STORM_EDGE_RADIUS in clouds.rs.
+fn storm_cell(world_xz: vec2<f32>, center: vec2<f32>, storminess: f32) -> f32 {
+    if (storminess < 0.01) {
+        return 0.0;
+    }
+    let rel = world_xz - center;
+    // Ragged edge: the disc radius wobbles with the cloud fbm so the squall
+    // front reads as weather, not a stamped circle.
+    let rag = cloud_fbm(rel * (1.0 / 700.0));
+    let d = length(rel) * (0.80 + 0.45 * rag);
+    return smoothstep(1300.0, 520.0, d) * storminess;
 }
 
 // Reconstruct a short wetness history from the deterministic shore wave.
@@ -335,6 +375,42 @@ fn fragment(
             albedo = mix(albedo, flat_albedo, stylize);
         }
 
+        // --- Climate: snowy north, frosted approach, desert south ---
+        {
+            let climate = climate_at(
+                pbr_input.world_position.x,
+                pbr_input.world_position.z,
+                pbr_input.world_position.y,
+                palette.climate,
+            );
+            // Snow belongs to land: fade out below the waterline so polar sea
+            // floors stay sea floors.
+            // Gate on the map's REAL waterline (water_params.x; zero when
+            // water is disabled) — a hardcoded y band snows sea floors on
+            // any map whose water level isn't ~0.
+            let waterline = water_params.x * step(0.5, water_params.y);
+            let above_water =
+                smoothstep(waterline - 1.0, waterline + 0.3, pbr_input.world_position.y);
+            let frost = climate.y * above_water;
+            let snow = climate.x * above_water;
+            // Frost first: cold, pale, desaturated ground leading the snowline.
+            let frost_tone = mix(albedo, vec3<f32>(0.62, 0.66, 0.70), 0.55);
+            albedo = mix(albedo, frost_tone, frost * (1.0 - snow));
+            // Snow: near-white with a cool shadow tint; steep faces shed it and
+            // read as rock, which is what keeps polar cliffs legible.
+            let world_normal_c = normalize(pbr_input.world_normal);
+            let slope_c = 1.0 - clamp(world_normal_c.y, 0.0, 1.0);
+            let snow_keep = 1.0 - smoothstep(0.35, 0.65, slope_c);
+            albedo = mix(albedo, vec3<f32>(0.87, 0.91, 0.97), snow * snow_keep);
+            // Desert south: sun-scorched savanna yellowing first, then the
+            // deep south settles toward true sand (quadratic so the
+            // transition belt stays grassy-gold, not instantly a dune sea).
+            // Mirror the tones in terrain/mesh.rs + world_map/assets.rs.
+            let dry = climate.z * above_water;
+            albedo = mix(albedo, albedo * vec3<f32>(1.14, 1.05, 0.72), dry);
+            albedo = mix(albedo, vec3<f32>(0.82, 0.72, 0.50), dry * dry * 0.55);
+        }
+
         // --- Water interaction ---
         if (water_params.y > 0.5) {
             let water_level = water_params.x;
@@ -454,14 +530,43 @@ fn fragment(
             palette.clouds_a.xy,
             palette.clouds_a.zw + vec2<f32>(0.86, 0.5) * cloud_drift,
         );
+        // THE storm: locally near-solid cloud (deeper shadow field) plus a
+        // rain darkening at the fragment itself — rain falls straight down,
+        // so the ground effect is NOT sun-projected. The center drifts at
+        // 0.55x the wind (STORM_DRIFT_FACTOR), extrapolated like the wind.
+        let storminess = palette.storm.z;
+        let storm_center = palette.storm.xy
+            + vec2<f32>(0.86, 0.5) * (0.55 * cloud_drift);
+        let storm_at_cloud = storm_cell(cloud_shadow_xz, storm_center, storminess);
+        let storm_params = vec4<f32>(
+            min(cloud_params.x + storm_at_cloud * 0.9, 1.0),
+            cloud_params.yzw,
+        );
         let cloud_shade = 1.0
             - palette.clouds_b.z
                 * smoothstep(
                     0.22,
                     0.62,
-                    cloud_density(cloud_shadow_xz, cloud_params, palette.clouds_b.w),
+                    cloud_density(cloud_shadow_xz, storm_params, palette.clouds_b.w),
                 );
-        out.color = vec4<f32>(out.color.rgb * cloud_shade, out.color.a);
+        let ground_storm = storm_cell(
+            pbr_input.world_position.xz,
+            storm_center,
+            storminess,
+        );
+        // Rain: fine noise streaming with the wind reads as squall sheets
+        // sweeping the ground under the storm.
+        let rain_n = cloud_vnoise(
+            (pbr_input.world_position.xz
+                - vec2<f32>(0.86, 0.5) * (globals.time * 42.0))
+                * (1.0 / 55.0),
+        );
+        var shaded = out.color.rgb * cloud_shade
+            * (1.0 - ground_storm * (0.36 + 0.14 * rain_n));
+        // Rain-soaked ground desaturates toward slate.
+        let storm_gray = dot(shaded, vec3<f32>(0.299, 0.587, 0.114));
+        shaded = mix(shaded, vec3<f32>(storm_gray) * vec3<f32>(0.92, 0.96, 1.05), ground_storm * 0.5);
+        out.color = vec4<f32>(shaded, out.color.a);
     } else {
         out.color = pbr_input.material.base_color;
     }

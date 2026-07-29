@@ -166,6 +166,42 @@ pub(crate) fn build_far_terrain_mesh(
                 }
             };
 
+            // Climate tint mirrors the splat shader (shared function, so the
+            // seam between detail chunks and the far mesh agrees).
+            let color = {
+                let seed = terrain
+                    .generator
+                    .loaded_map()
+                    .definition
+                    .generated
+                    .as_ref()
+                    .map(|g| g.seed)
+                    .unwrap_or(0);
+                let bounds = terrain.generator.active_map_bounds();
+                let half = (bounds.max[0] - bounds.min[0]) * 0.5;
+                let climate =
+                    shared::worldgen::climate_at(seed, world_x, world_z, height, half);
+                let underwater = matches!(water_level, Some(level) if height <= level);
+                if underwater {
+                    color
+                } else {
+                    let frost_tone = color.lerp(Vec3::new(0.62, 0.66, 0.70), 0.55);
+                    let mut c = color.lerp(frost_tone, climate.frost * (1.0 - climate.snow));
+                    // smoothstep(0.35, 0.65) — must match terrain_splat.wgsl
+                    // or the detail/far seam shows a snow step on hillsides.
+                    let t = ((slope - 0.35) / 0.30).clamp(0.0, 1.0);
+                    let snow_keep = 1.0 - t * t * (3.0 - 2.0 * t);
+                    c = c.lerp(Vec3::new(0.87, 0.91, 0.97), climate.snow * snow_keep);
+                    // Desert south (mirrors terrain_splat.wgsl): savanna
+                    // yellowing, then quadratically toward sand.
+                    c = c.lerp(c * Vec3::new(1.14, 1.05, 0.72), climate.dry);
+                    c.lerp(
+                        Vec3::new(0.82, 0.72, 0.50),
+                        climate.dry * climate.dry * 0.55,
+                    )
+                }
+            };
+
             colors.push([color.x, color.y, color.z, 1.0]);
         }
     }

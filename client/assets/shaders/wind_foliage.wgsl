@@ -14,9 +14,18 @@
 
 #import bevy_pbr::{
     mesh_functions,
-    forward_io::{Vertex, VertexOutput},
+    forward_io::{Vertex, VertexOutput, FragmentOutput},
+    pbr_fragment::pbr_input_from_standard_material,
+    pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
     view_transformations::position_world_to_clip,
 }
+
+// Custom fragments must re-apply the LOD crossfade dither StandardMaterial's
+// own fragment would have run — without it, foliage pops at range ends and
+// double-draws during LOD0/LOD1 crossfade.
+#ifdef VISIBILITY_RANGE_DITHER
+#import bevy_pbr::pbr_functions::visibility_range_dither;
+#endif
 #import bevy_render::globals::Globals
 
 @group(0) @binding(11) var<uniform> globals: Globals;
@@ -30,7 +39,8 @@ struct WindParams {
 };
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> wind: WindParams;
-// x: per-instance height jitter fraction, yzw: reserved.
+// x: per-instance height jitter fraction, y: height stretch,
+// z: map half extent (m), w: climate seed phase.
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> wind_extra: vec4<f32>;
 
 @vertex
@@ -146,5 +156,47 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
         vertex_no_morph.instance_index, mesh_world_from_local[3]);
 #endif
 
+    return out;
+}
+
+// Fragment: StandardMaterial shading with a climate frost tint on the base
+// color. Canopy color lives in the material texture (NOT vertex colors), so
+// the tint must land here. Compact mirror of shared/worldgen.rs climate_at
+// (wind_extra.z = half extent, .w = phase; constants in sync with
+// terrain_splat.wgsl).
+@fragment
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+#ifdef VISIBILITY_RANGE_DITHER
+    visibility_range_dither(in.position, in.visibility_range_dither);
+#endif
+
+    var pbr_input = pbr_input_from_standard_material(in, is_front);
+
+    let half = max(wind_extra.z, 1.0);
+    let wobble = 0.045 * sin(in.world_position.x * 0.0039 + wind_extra.w)
+        + 0.022 * sin(in.world_position.x * 0.0127 + wind_extra.w * 2.7);
+    // Signed hemispheres: north (-z) freezes, south (+z) scorches.
+    let north_lat = max(-in.world_position.z / half + wobble, 0.0);
+    let south_lat = max(in.world_position.z / half + wobble, 0.0);
+    let alt_push = min(max(in.world_position.y, 0.0) * 0.004, 0.30);
+    let eff = north_lat + alt_push;
+    let snow = smoothstep(0.68, 0.78, eff);
+    let frost = smoothstep(0.58, 0.68, eff);
+    let dry = smoothstep(0.35, 0.70, south_lat - alt_push) * (1.0 - frost);
+    // Frost silvers the foliage; full snow dusts it toward white but keeps
+    // enough of the base hue that species stay distinguishable.
+    var rgb = pbr_input.material.base_color.rgb;
+    let frost_tone = mix(rgb, vec3<f32>(0.72, 0.76, 0.82), 0.45);
+    rgb = mix(rgb, frost_tone, frost * 0.7);
+    rgb = mix(rgb, vec3<f32>(0.86, 0.90, 0.96), snow * 0.55);
+    // Desert scorch: canopies dry toward olive-khaki scrub in the south.
+    rgb = mix(rgb, vec3<f32>(0.60, 0.55, 0.32), dry * 0.55);
+    pbr_input.material.base_color = vec4<f32>(rgb, pbr_input.material.base_color.a);
+
+    pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
+
+    var out: FragmentOutput;
+    out.color = apply_pbr_lighting(pbr_input);
+    out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

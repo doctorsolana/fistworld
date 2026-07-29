@@ -149,8 +149,11 @@ pub fn setup_rendering(
     // Keep this out of the large tuple to avoid tuple-size bundle limits.
 
     setup_cloud_layers(&mut commands, &asset_server, &mut meshes, &mut materials);
-    commands.insert_resource(CloudCover::default());
-    commands.insert_resource(CloudCoverOverride::default());
+    // init (not insert): the capture harness pre-seeds forced weather in its own
+    // Startup system, and a blind insert here clobbers it (flush order between
+    // unordered Startup systems put this one last).
+    commands.init_resource::<CloudCover>();
+    commands.init_resource::<CloudCoverOverride>();
     commands.insert_resource(CloudMaterialCache::default());
 
     info!("Client rendering initialized with clear sky + dusty sunsets");

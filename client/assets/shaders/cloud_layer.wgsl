@@ -20,6 +20,8 @@ struct CloudLayerUniform {
     sun_dir: vec4<f32>,
     tint_lit: vec4<f32>,
     tint_shadow: vec4<f32>,
+    // xy: storm center at the wind anchor, z: storminess, w: reserved.
+    storm: vec4<f32>,
 };
 
 @group(3) @binding(0) var<uniform> material: CloudLayerUniform;
@@ -77,6 +79,23 @@ fn cloud_density(world_xz: vec2<f32>, params_a: vec4<f32>, seed_phase: f32) -> f
     return smoothstep(thresh, thresh + 0.28, shape);
 }
 
+// === Storm cells (EXACT copy in terrain_splat.wgsl / toon_water.wgsl / cloud_layer.wgsl — keep in sync) ===
+// ONE storm system per map: a ~2km ragged disc around a drifting center
+// (storm.xy = center at the wind anchor, storm.z = storminess). The caller
+// extrapolates the center with the cloud drift so motion is frame-smooth.
+// Radii must match STORM_EDGE_RADIUS in clouds.rs.
+fn storm_cell(world_xz: vec2<f32>, center: vec2<f32>, storminess: f32) -> f32 {
+    if (storminess < 0.01) {
+        return 0.0;
+    }
+    let rel = world_xz - center;
+    // Ragged edge: the disc radius wobbles with the cloud fbm so the squall
+    // front reads as weather, not a stamped circle.
+    let rag = cloud_fbm(rel * (1.0 / 700.0));
+    let d = length(rel) * (0.80 + 0.45 * rag);
+    return smoothstep(1300.0, 520.0, d) * storminess;
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Extrapolate the wind past the anchored offset so drift is frame-smooth
@@ -90,7 +109,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let seed_phase = material.params_b.x;
     let world_xz = in.world_position.xz;
 
-    let density = cloud_density(world_xz, params_a, seed_phase);
+    // THE storm locally thickens the deck into a dark ragged disc.
+    let storm_center = material.storm.xy + vec2<f32>(0.86, 0.5) * (0.55 * cloud_drift);
+    let storm = storm_cell(world_xz, storm_center, material.storm.z);
+    let params_a_storm = vec4<f32>(min(params_a.x + storm * 0.95, 1.0), params_a.yzw);
+    let density = cloud_density(world_xz, params_a_storm, seed_phase);
 
     // Parallax upper deck: 2x blob size, slower wind rotated ~15 deg, fixed
     // offset so it never lines up with the main deck. Alpha shaping only.
@@ -116,6 +139,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let half_lambert = dot(n, -material.sun_dir.xyz) * 0.5 + 0.5;
 
     var col = mix(material.tint_shadow.rgb, material.tint_lit.rgb * brightness, half_lambert);
+    // Storm masses go slate and brooding.
+    col = mix(col, vec3<f32>(0.19, 0.21, 0.26), smoothstep(0.0, 0.7, storm) * 0.95);
     // Rim brighten just inside the silhouette.
     col += vec3<f32>(0.15 * (smoothstep(0.0, 0.3, density) - smoothstep(0.3, 0.7, density)));
 
@@ -130,5 +155,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // cores, so masses read as bodies instead of washes.
     let body = pow(shape, 1.25);
     let alpha = clamp(body * material.params_b.w * crossing_fade * night_fade, 0.0, 1.0);
-    return vec4<f32>(col, alpha);
+    // The storm deck is nearly opaque — a translucent dark cloud blends
+    // toward whatever ground is under it (snow washed it to pale lavender)
+    // and stops reading as a storm at all.
+    let alpha_storm = clamp(alpha * (1.0 + storm * 1.2), 0.0, 0.96);
+    return vec4<f32>(col, alpha_storm);
 }

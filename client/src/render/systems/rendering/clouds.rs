@@ -38,6 +38,10 @@ const CLOUD_COVER_SEGMENT_SECS: f32 = 180.0;
 const CLOUD_COVER_LERP_SPEED: f32 = 0.08;
 const CLOUD_COVER_CLEAR_RANGE: (f32, f32) = (0.0, 0.15);
 const CLOUD_COVER_CLOUDY_RANGE: (f32, f32) = (0.30, 0.50);
+/// Base (between-cells) cover while a storm system is on the map: the drama
+/// lives in the drifting cells, so the sky between them stays broken, not
+/// blanketed — the world must remain readable even mid-storm.
+const CLOUD_COVER_STORM_BASE: (f32, f32) = (0.18, 0.30);
 
 #[derive(Component, Clone, Copy)]
 pub struct CloudLayer {
@@ -65,6 +69,8 @@ pub enum CloudCoverMode {
     Auto,
     Clear,
     Cloudy,
+    /// Dev/capture override: a full storm system overhead.
+    Storm,
 }
 
 #[derive(Resource, Clone, Copy, Debug)]
@@ -84,6 +90,10 @@ impl Default for CloudCoverOverride {
 pub struct CloudCover {
     pub current: f32,
     pub target: f32,
+    /// Storm-system strength 0..1: gates the drifting storm cells that
+    /// locally thicken cloud and rain-darken the ground.
+    pub storminess: f32,
+    pub storm_target: f32,
     pub segment: i64,
 }
 
@@ -95,6 +105,28 @@ impl Default for CloudCover {
         Self {
             current: 0.12,
             target: 0.12,
+            storminess: 0.0,
+            storm_target: 0.0,
+            segment: -1,
+        }
+    }
+}
+
+impl CloudCover {
+    /// Fully-settled state for a forced weather mode: captures and the god-mode
+    /// FORCE buttons want the look NOW, not after the ~90s natural transition.
+    pub fn snapped(mode: CloudCoverMode) -> Self {
+        let (cover, storm) = match mode {
+            CloudCoverMode::Auto => return Self::default(),
+            CloudCoverMode::Clear => (0.0, 0.0),
+            CloudCoverMode::Cloudy => (CLOUD_COVER_CLOUDY_RANGE.1, 0.0),
+            CloudCoverMode::Storm => (CLOUD_COVER_STORM_BASE.1, 1.0),
+        };
+        Self {
+            current: cover,
+            target: cover,
+            storminess: storm,
+            storm_target: storm,
             segment: -1,
         }
     }
@@ -198,6 +230,46 @@ pub(super) fn cloud_wind_state(abs_seconds: f32, seed_phase: f32) -> (Vec2, f32)
     (CLOUD_WIND_BEARING * integral, speed)
 }
 
+/// How much slower THE storm system drifts than the clouds streaming through
+/// it. Must match the extrapolation factor in the shaders' storm callers.
+pub(super) const STORM_DRIFT_FACTOR: f32 = 0.55;
+/// Outer radius of the storm disc (m). Must match `storm_cell` in the shaders.
+pub(super) const STORM_EDGE_RADIUS: f32 = 1300.0;
+/// The storm center is reflected inside +/- this fraction of the half extent,
+/// so a storm is ALWAYS somewhere on the map — the drift is slow (~1.7 m/s),
+/// and a wrapped-off-map storm would leave FORCE STORM showing nothing for
+/// tens of minutes.
+const STORM_TRACK_LIMIT_FRAC: f32 = 0.85;
+
+/// Center of THE storm system — one per map, by design: a concentrated squall
+/// that drifts over the land, not a field of cells. Deterministic in
+/// (seed phase, absolute world seconds), so every client sees the same storm
+/// in the same place. Drifts at [`STORM_DRIFT_FACTOR`]x the cloud wind plus a
+/// slow crosswind meander (amplitude/rate kept small enough that the ~1 Hz
+/// anchor writes never step visibly). The track REFLECTS off the map bounds
+/// (triangle fold) instead of wrapping: continuous position, no teleport, and
+/// the storm never leaves the playfield.
+pub(super) fn storm_center(seed_phase: f32, abs_seconds: f32, half_extent: f32) -> Vec2 {
+    let (wind_offset, _) = cloud_wind_state(abs_seconds, seed_phase);
+    // Float-only spawn hash: derived from the same seed phase the shaders
+    // already carry, so no extra plumbing.
+    let h = |k: f32| ((seed_phase * k).sin() * 43758.5453).fract();
+    let spawn = Vec2::new(
+        (h(12.9898) - 0.5) * 1.6 * half_extent,
+        (h(78.233) - 0.5) * 1.6 * half_extent,
+    );
+    let perp = Vec2::new(-CLOUD_WIND_BEARING.y, CLOUD_WIND_BEARING.x);
+    let meander = perp * (400.0 * (abs_seconds * 0.002 + seed_phase).sin());
+    let pos = spawn + wind_offset * STORM_DRIFT_FACTOR + meander;
+    let limit = half_extent * STORM_TRACK_LIMIT_FRAC;
+    let reflect = |v: f32| {
+        let u = (v + limit).rem_euclid(4.0 * limit);
+        let folded = if u <= 2.0 * limit { u } else { 4.0 * limit - u };
+        folded - limit
+    };
+    Vec2::new(reflect(pos.x), reflect(pos.y))
+}
+
 pub(super) fn hash_to_unit(seed: u64, salt: u64) -> f32 {
     let mut x = seed ^ salt;
     x ^= x >> 30;
@@ -240,12 +312,12 @@ pub fn update_cloud_cover(
     world_time_query: Query<&shared::components::WorldTime>,
     seed_query: Query<&shared::components::CloudSeed>,
     override_mode: Res<CloudCoverOverride>,
-    settings: Res<GraphicsSettings>,
     mut cover: ResMut<CloudCover>,
 ) {
-    if !settings.clouds_enabled {
-        return;
-    }
+    // Deliberately NOT gated on clouds_enabled: the weather state must keep
+    // evolving while clouds are switched off (the GPU pushes gate the
+    // visuals), or storminess freezes at its last value and the rain
+    // darkening would come back stale when clouds are re-enabled.
     let Some(world_time) = world_time_query.iter().next() else {
         return;
     };
@@ -261,12 +333,19 @@ pub fn update_cloud_cover(
         CloudCoverMode::Clear => {
             cover.segment = segment;
             cover.target = 0.0;
+            cover.storm_target = 0.0;
         }
         CloudCoverMode::Cloudy => {
             cover.segment = segment;
             // Deliberately never full overcast: an RTS must keep the world
             // readable under the weather, so "cloudy" tops out below blanket.
             cover.target = CLOUD_COVER_CLOUDY_RANGE.1;
+            cover.storm_target = 0.0;
+        }
+        CloudCoverMode::Storm => {
+            cover.segment = segment;
+            cover.target = CLOUD_COVER_STORM_BASE.1;
+            cover.storm_target = 1.0;
         }
         CloudCoverMode::Auto => {
             if cover.segment != segment {
@@ -281,10 +360,24 @@ pub fn update_cloud_cover(
                 let pick = hash_to_unit(seed, segment as u64);
                 let roll = hash_to_unit(seed ^ 0x9E37_79B9_7F4A_7C15, segment as u64);
 
-                cover.target = if pick < cloudy_chance {
-                    lerp_f32(CLOUD_COVER_CLOUDY_RANGE.0, CLOUD_COVER_CLOUDY_RANGE.1, roll)
+                if pick < cloudy_chance {
+                    cover.target =
+                        lerp_f32(CLOUD_COVER_CLOUDY_RANGE.0, CLOUD_COVER_CLOUDY_RANGE.1, roll);
+                    // A cloudy spell sometimes carries a storm system.
+                    let storm_roll = hash_to_unit(seed ^ 0x5708_11ED, segment as u64);
+                    if storm_roll < 0.35 {
+                        cover.storm_target =
+                            0.6 + 0.4 * hash_to_unit(seed ^ 0x5708_22EE, segment as u64);
+                        // Storm sky: broken cover between the cells, not a blanket.
+                        cover.target =
+                            lerp_f32(CLOUD_COVER_STORM_BASE.0, CLOUD_COVER_STORM_BASE.1, roll);
+                    } else {
+                        cover.storm_target = 0.0;
+                    }
                 } else {
-                    lerp_f32(CLOUD_COVER_CLEAR_RANGE.0, CLOUD_COVER_CLEAR_RANGE.1, roll)
+                    cover.target =
+                        lerp_f32(CLOUD_COVER_CLEAR_RANGE.0, CLOUD_COVER_CLEAR_RANGE.1, roll);
+                    cover.storm_target = 0.0;
                 };
             }
         }
@@ -293,6 +386,7 @@ pub fn update_cloud_cover(
     let dt = time.delta_secs().max(0.0);
     let blend = 1.0 - (-CLOUD_COVER_LERP_SPEED * dt).exp();
     cover.current = lerp_f32(cover.current, cover.target, blend).clamp(0.0, 1.0);
+    cover.storminess = lerp_f32(cover.storminess, cover.storm_target, blend).clamp(0.0, 1.0);
 }
 
 /// Scroll cloud layers and tint them by sun height.
@@ -393,4 +487,27 @@ pub fn update_cloud_layers(
 fn color_with_alpha(color: Color, alpha: f32) -> Color {
     let rgba = color.to_srgba();
     Color::srgba(rgba.red, rgba.green, rgba.blue, alpha)
+}
+
+#[cfg(test)]
+mod storm_tests {
+    use super::*;
+
+    /// The storm must always be ON the map (FORCE STORM shows a storm now,
+    /// not in twenty minutes), and the track must be continuous — the
+    /// reflect fold must never jump the center between nearby timestamps.
+    #[test]
+    fn storm_center_stays_on_map_and_moves_continuously() {
+        let seed_phase = hash_to_unit(7, 0) * 37.0;
+        let half = 4096.0;
+        let mut prev = storm_center(seed_phase, 0.0, half);
+        println!("capture-seed storm center @225s: {:?}", storm_center(seed_phase, 225.0, half));
+        for i in 1..20_000 {
+            let t = i as f32 * 1.0;
+            let c = storm_center(seed_phase, t, half);
+            assert!(c.x.abs() <= half && c.y.abs() <= half, "off map at {t}: {c:?}");
+            assert!(c.distance(prev) < 8.0, "teleport at {t}: {prev:?} -> {c:?}");
+            prev = c;
+        }
+    }
 }

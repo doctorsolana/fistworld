@@ -87,6 +87,7 @@ pub(super) fn spawn_debug_time_menu(
         spawn_cloud_cover_button(panel, "AUTO CLOUDS", CloudCoverMode::Auto);
         spawn_cloud_cover_button(panel, "FORCE CLEAR", CloudCoverMode::Clear);
         spawn_cloud_cover_button(panel, "FORCE CLOUDY", CloudCoverMode::Cloudy);
+        spawn_cloud_cover_button(panel, "FORCE STORM", CloudCoverMode::Storm);
 
         panel.spawn((
             Text::new("Performance debug"),

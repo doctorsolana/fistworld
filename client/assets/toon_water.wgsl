@@ -33,6 +33,10 @@ struct ToonWaterUniform {
     // x: anchor time (client seconds), z: wind drift speed (client-time
     // units), yw: sun-projection velocity — both extrapolated in-shader.
     clouds_c: vec4<f32>,
+    // Reserved (water skips snow); mirrors the terrain palette lane.
+    climate: vec4<f32>,
+    // xy: storm center at the wind anchor, z: storminess, w: reserved.
+    storm: vec4<f32>,
 };
 
 @group(3) @binding(0) var<uniform> material: ToonWaterUniform;
@@ -119,6 +123,23 @@ fn cloud_density(world_xz: vec2<f32>, params_a: vec4<f32>, seed_phase: f32) -> f
     let cover = clamp(params_a.x, 0.0, 1.0);
     let thresh = mix(0.78, 0.34, cover);
     return smoothstep(thresh, thresh + 0.28, shape);
+}
+
+// === Storm cells (EXACT copy in terrain_splat.wgsl / toon_water.wgsl / cloud_layer.wgsl — keep in sync) ===
+// ONE storm system per map: a ~2km ragged disc around a drifting center
+// (storm.xy = center at the wind anchor, storm.z = storminess). The caller
+// extrapolates the center with the cloud drift so motion is frame-smooth.
+// Radii must match STORM_EDGE_RADIUS in clouds.rs.
+fn storm_cell(world_xz: vec2<f32>, center: vec2<f32>, storminess: f32) -> f32 {
+    if (storminess < 0.01) {
+        return 0.0;
+    }
+    let rel = world_xz - center;
+    // Ragged edge: the disc radius wobbles with the cloud fbm so the squall
+    // front reads as weather, not a stamped circle.
+    let rag = cloud_fbm(rel * (1.0 / 700.0));
+    let d = length(rel) * (0.80 + 0.45 * rag);
+    return smoothstep(1300.0, 520.0, d) * storminess;
 }
 
 fn swell_field(world_xz: vec2<f32>, time: f32) -> f32 {
@@ -434,13 +455,22 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         material.clouds_a.xy,
         material.clouds_a.zw + vec2<f32>(0.86, 0.5) * cloud_drift,
     );
-    let cloud_shade = 1.0
+    let storminess = material.storm.z;
+    let storm_center = material.storm.xy + vec2<f32>(0.86, 0.5) * (0.55 * cloud_drift);
+    let storm_at_cloud = storm_cell(cloud_shadow_xz, storm_center, storminess);
+    let storm_params = vec4<f32>(
+        min(cloud_params.x + storm_at_cloud * 0.9, 1.0),
+        cloud_params.yzw,
+    );
+    let cloud_shade = (1.0
         - material.clouds_b.z
             * smoothstep(
                 0.22,
                 0.62,
-                cloud_density(cloud_shadow_xz, cloud_params, material.clouds_b.w),
-            );
+                cloud_density(cloud_shadow_xz, storm_params, material.clouds_b.w),
+            ))
+        * (1.0
+            - storm_cell(in.world_position.xz, storm_center, storminess) * 0.30);
     // Night: the water is unlit-custom, so scene lights can't darken it —
     // derive night from the synced sun elevation instead and pull toward a
     // dark blue of itself (matching the moonlit land).

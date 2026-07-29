@@ -27,6 +27,23 @@ one persistent, always-simulating multiplayer world.
    shoreline" are server-validated queries that agree bit-for-bit with what
    the client renders. Editor-painted surface edits are cosmetic only and
    must never gate gameplay.
+   Climate is part of that surface truth (`shared::worldgen::climate_at`):
+   signed latitude bands with deliberately asymmetric hemispheres — the
+   north (-z, top of the map) freezes through a frost fringe into snow, the
+   south (+z) scorches through savanna into sand desert, and an altitude
+   lapse snow-caps mountains and keeps desert off southern peaks. Farmland
+   dies under snow and in deep desert and thins in frost and savanna, so the
+   temperate midlands are structurally the breadbasket while BOTH poles must
+   import food (the north exports timber/stone; the desert south is the
+   future home of exotics — glass, spice, salt): geography itself creates
+   the trade gradients that caravans (§3) exist to arbitrage. The same function tints terrain, trees, far mesh, and minimap,
+   so what you see IS the rule. Weather rides on top as ONE deterministic
+   storm system: a concentrated ~2km squall (dark, near-opaque cloud disc,
+   rain-dimmed ground beneath) whose center drifts with the wind and
+   reflects off the map bounds, so a storm is always somewhere on the
+   playfield while the rest of the sky stays broken and readable. Identical
+   on every client, cosmetic for now, but positioned so later mechanics
+   (slowed caravans, delayed sailing) can read the exact same field.
 3. **Statistical at distance, concrete when observed.** Per ARCHITECTURE.md:
    the strategic layer moves numbers (stocks, populations, caravan positions);
    the tactical layer spawns real units only inside someone's view bubble.

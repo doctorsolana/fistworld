@@ -15,6 +15,7 @@ use crate::water::chunks::WaterRenderAssets;
 use crate::water::material::ToonWaterMaterial;
 use bevy::math::Vec4Swizzles;
 use shared::components::{CloudSeed, WorldTime};
+use shared::terrain::WorldTerrain;
 
 /// Dominant cloud blob scale: the shaders sample the field at world_xz * this.
 const CLOUD_FIELD_INV_SCALE: f32 = 1.0 / 190.0;
@@ -55,7 +56,7 @@ fn hash_to_unit(seed: u64, salt: u64) -> f32 {
 /// refreshed at the anchor rate).
 #[derive(Default)]
 pub struct CloudShadowParams {
-    written: Option<(Vec4, Vec4, Vec4)>,
+    written: Option<(Vec4, Vec4, Vec4, Vec4)>,
     prev_sun_proj: Option<(Vec2, f32)>,
 }
 
@@ -74,6 +75,7 @@ pub fn sync_cloud_shadow_params(
     sun_query: Query<&Transform, With<SunLight>>,
     chunks: Query<(&TerrainChunk, Ref<TerrainChunk>)>,
     water_assets: Option<Res<WaterRenderAssets>>,
+    terrain: Option<Res<WorldTerrain>>,
     mut terrain_materials: ResMut<Assets<TerrainSplatMaterial>>,
     mut water_materials: ResMut<Assets<ToonWaterMaterial>>,
     mut state: Local<CloudShadowParams>,
@@ -143,10 +145,43 @@ pub fn sync_cloud_shadow_params(
         None => Vec2::ZERO,
     };
     let clouds_c = Vec4::new(anchor_time, sun_proj_vel.x, speed_client, sun_proj_vel.y);
+    // Static per map: half extent + the world-seed climate phase (NOT the
+    // cloud seed — climate is terrain, identical across sessions).
+    let half_extent = terrain
+        .as_ref()
+        .map(|terrain| {
+            let bounds = terrain.generator.active_map_bounds();
+            (bounds.max[0] - bounds.min[0]) * 0.5
+        })
+        .unwrap_or(4096.0);
+    let climate_phase = terrain
+        .as_ref()
+        .and_then(|terrain| {
+            terrain
+                .generator
+                .loaded_map()
+                .definition
+                .generated
+                .as_ref()
+                .map(|g| shared::worldgen::climate_phase(g.seed))
+        })
+        .unwrap_or(0.0);
+    let climate = Vec4::new(half_extent, climate_phase, 0.0, 0.0);
+    // THE storm system: center anchored at this write (shaders extrapolate it
+    // with the cloud drift), strength zeroed with clouds disabled so both the
+    // rain darkening AND its per-fragment fbm cost vanish with the sky
+    // (storm_cell early-outs on storminess < 0.01).
+    let storminess = if settings.clouds_enabled {
+        cover.storminess
+    } else {
+        0.0
+    };
+    let storm_anchor = super::clouds::storm_center(seed_phase, abs_seconds, half_extent);
+    let storm = Vec4::new(storm_anchor.x, storm_anchor.y, storminess, 0.0);
 
     let write_due = match state.written {
         None => true,
-        Some((a, b, c)) => {
+        Some((a, b, c, s)) => {
             (clouds_a.x - a.x).abs() > COVERAGE_WRITE_STEP
                 || clouds_b.xy().distance_squared(b.xy())
                     > SUN_PROJ_WRITE_STEP * SUN_PROJ_WRITE_STEP
@@ -154,6 +189,9 @@ pub fn sync_cloud_shadow_params(
                 || clouds_b.w != b.w
                 || anchor_time - c.x > ANCHOR_REFRESH_SECS
                 || (speed_client - c.z).abs() > SPEED_WRITE_STEP
+                // Storminess normally rides the anchor cadence (slow lerp),
+                // but a settings toggle zeroes it instantly — write through.
+                || (storm.z - s.z).abs() > STRENGTH_WRITE_STEP
         }
     };
 
@@ -165,6 +203,8 @@ pub fn sync_cloud_shadow_params(
             material.extension.palette.clouds_a = clouds_a;
             material.extension.palette.clouds_b = clouds_b;
             material.extension.palette.clouds_c = clouds_c;
+            material.extension.palette.climate = climate;
+            material.extension.palette.storm = storm;
         }
     }
 
@@ -174,9 +214,11 @@ pub fn sync_cloud_shadow_params(
                 material.uniform.clouds_a = clouds_a;
                 material.uniform.clouds_b = clouds_b;
                 material.uniform.clouds_c = clouds_c;
+                material.uniform.climate = climate;
+                material.uniform.storm = storm;
             }
         }
-        state.written = Some((clouds_a, clouds_b, clouds_c));
+        state.written = Some((clouds_a, clouds_b, clouds_c, storm));
         state.prev_sun_proj = Some((sun_proj, anchor_time));
     }
 }

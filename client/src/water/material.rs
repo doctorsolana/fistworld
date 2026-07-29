@@ -55,6 +55,11 @@ pub struct ToonWaterUniform {
     pub clouds_b: Vec4,
     /// x: anchor time (client seconds), z: drift speed (client-time units).
     pub clouds_c: Vec4,
+    /// Reserved (water skips snow); mirrors the terrain palette lane.
+    pub climate: Vec4,
+    /// THE storm system: xy = center at the wind anchor, z = storminess
+    /// (0 while clouds are disabled), w: reserved.
+    pub storm: Vec4,
 }
 
 impl Material for ToonWaterMaterial {
@@ -112,6 +117,8 @@ pub(super) fn setup_water_assets(
             clouds_a: Vec4::ZERO,
             clouds_b: Vec4::ZERO,
             clouds_c: Vec4::ZERO,
+            climate: Vec4::ZERO,
+            storm: Vec4::new(1.0e8, 1.0e8, 0.0, 0.0),
         },
         alpha_mode: AlphaMode::Blend,
         double_sided: false,

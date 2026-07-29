@@ -16,13 +16,18 @@ pub struct WindExtension {
     pub params: Vec4,
     /// x: per-instance height jitter fraction (grass gets ±25% so identical
     /// tufts come out ragged), y: base height stretch (grass grows ~30%
-    /// taller and slimmer, BotW-style), zw: reserved.
+    /// taller and slimmer, BotW-style), z: map half extent (m), w: climate
+    /// seed phase — both for the frost tint (see wind_foliage.wgsl).
     #[uniform(101)]
     pub extra: Vec4,
 }
 
 impl MaterialExtension for WindExtension {
     fn vertex_shader() -> ShaderRef {
+        "shaders/wind_foliage.wgsl".into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
         "shaders/wind_foliage.wgsl".into()
     }
 }

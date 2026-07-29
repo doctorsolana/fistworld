@@ -133,18 +133,19 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
     // shots are reproducible; FISTFORCE_CAPTURE_CLOUDS=clear|cloudy overrides
     // the weather roll for guaranteed cloud coverage in verification shots.
     commands.spawn(shared::components::CloudSeed { seed: 7 });
-    match std::env::var("FISTFORCE_CAPTURE_CLOUDS").as_deref() {
-        Ok("cloudy") => {
-            commands.insert_resource(crate::render::systems::CloudCoverOverride {
-                mode: crate::render::systems::CloudCoverMode::Cloudy,
-            });
+    if let Ok(forced) = std::env::var("FISTFORCE_CAPTURE_CLOUDS") {
+        use crate::render::systems::{CloudCover, CloudCoverMode, CloudCoverOverride};
+        let mode = match forced.as_str() {
+            "cloudy" => Some(CloudCoverMode::Cloudy),
+            "clear" => Some(CloudCoverMode::Clear),
+            "storm" => Some(CloudCoverMode::Storm),
+            _ => None,
+        };
+        if let Some(mode) = mode {
+            commands.insert_resource(CloudCoverOverride { mode });
+            // Snap: a capture's few warmup seconds can't ride the ~90s lerp.
+            commands.insert_resource(CloudCover::snapped(mode));
         }
-        Ok("clear") => {
-            commands.insert_resource(crate::render::systems::CloudCoverOverride {
-                mode: crate::render::systems::CloudCoverMode::Clear,
-            });
-        }
-        _ => {}
     }
 
     info!("capture: entering world offline (no server)");
@@ -318,9 +319,13 @@ mod tests {
         }
     }
 
+    /// Display noon is NOT mid-day-portion since the summer clock (sunrise
+    /// 06:00, sunset 22:00): it lands at the clock's fraction of daylight.
     #[test]
-    fn noon_lands_in_the_middle_of_the_day_portion() {
+    fn noon_lands_at_the_summer_clock_fraction_of_daylight() {
         let t = probe();
-        assert!((normalized_to_seconds(0.5, &t) - t.day_duration / 2.0).abs() < 1e-3);
+        let frac = (0.5 - WorldTime::SUNRISE_NORMALIZED)
+            / (WorldTime::SUNSET_NORMALIZED - WorldTime::SUNRISE_NORMALIZED);
+        assert!((normalized_to_seconds(0.5, &t) - t.day_duration * frac).abs() < 1e-3);
     }
 }

@@ -68,7 +68,27 @@ pub(super) fn apply_foliage_materials(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut wind_materials: ResMut<Assets<WindFoliageMaterial>>,
     mut cache: ResMut<FoliageMaterialCache>,
+    terrain: Option<Res<shared::terrain::WorldTerrain>>,
 ) {
+    // Climate params for the frost tint (see wind_foliage.wgsl / worldgen.rs).
+    let (climate_half, climate_phase) = terrain
+        .as_ref()
+        .map(|terrain| {
+            let bounds = terrain.generator.active_map_bounds();
+            let seed = terrain
+                .generator
+                .loaded_map()
+                .definition
+                .generated
+                .as_ref()
+                .map(|g| g.seed)
+                .unwrap_or(0);
+            (
+                (bounds.max[0] - bounds.min[0]) * 0.5,
+                shared::worldgen::climate_phase(seed),
+            )
+        })
+        .unwrap_or((4096.0, 0.0));
     let target_alpha = if settings.foliage_cutout_enabled {
         AlphaMode::Mask(0.5)
     } else {
@@ -197,7 +217,12 @@ pub(super) fn apply_foliage_materials(
                                 base,
                                 extension: WindExtension {
                                     params,
-                                    extra: Vec4::new(height_jitter, height_stretch, 0.0, 0.0),
+                                    extra: Vec4::new(
+                                        height_jitter,
+                                        height_stretch,
+                                        climate_half,
+                                        climate_phase,
+                                    ),
                                 },
                             });
                             cache

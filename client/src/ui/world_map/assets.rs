@@ -36,6 +36,14 @@ fn build_live_map_image(
     let depth = bounds.depth();
     let water_level = terrain.water_level();
     let biome_field = terrain.generator.loaded_map().biome_field.clone();
+    let climate_seed = terrain
+        .generator
+        .loaded_map()
+        .definition
+        .generated
+        .as_ref()
+        .map(|g| g.seed)
+        .unwrap_or(0);
 
     // Sample heights once; reuse for color + hillshade.
     let n = size as usize;
@@ -112,6 +120,36 @@ fn build_live_map_image(
                     lerp3([0.45, 0.58, 0.30], [0.52, 0.48, 0.38], (above - 14.0) / 14.0)
                 } else {
                     lerp3([0.52, 0.48, 0.38], [0.72, 0.72, 0.74], (above - 28.0) / 15.0)
+                };
+                // Climate tint via the shared function so the map matches the
+                // world (snowy poles, dry equator strip).
+                let base = {
+                    let world_x = min_x + (x as f32 / (size - 1) as f32) * width;
+                    let world_z = min_z + (y as f32 / (size - 1) as f32) * depth;
+                    let climate =
+                        shared::worldgen::climate_at(climate_seed, world_x, world_z, h, width * 0.5);
+                    let frosted = lerp3(base, [0.62, 0.66, 0.70], climate.frost * 0.55);
+                    let snowed = lerp3(
+                        frosted,
+                        [0.88, 0.91, 0.96],
+                        climate.snow * (1.0 - ((dx * dx + dz * dz).sqrt() * 1.4).clamp(0.0, 0.8)),
+                    );
+                    // Desert south (mirrors terrain_splat.wgsl): savanna
+                    // yellowing, then quadratically toward sand.
+                    let scorched = lerp3(
+                        snowed,
+                        [
+                            snowed[0] * 1.14,
+                            snowed[1] * 1.05,
+                            snowed[2] * 0.72,
+                        ],
+                        climate.dry,
+                    );
+                    lerp3(
+                        scorched,
+                        [0.82, 0.72, 0.50],
+                        climate.dry * climate.dry * 0.55,
+                    )
                 };
                 [base[0] * shade, base[1] * shade, base[2] * shade]
             };

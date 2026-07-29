@@ -87,6 +87,13 @@ pub fn stylized_palette() -> TerrainPalette {
         clouds_a: Vec4::ZERO,
         clouds_b: Vec4::ZERO,
         clouds_c: Vec4::ZERO,
+        // Half extent must default SANE, not zero: a zero half extent makes
+        // the shader read |z| metres as latitude — every chunk flashes full
+        // snow/desert for any frame that renders before the first
+        // sync_cloud_shadow_params write lands.
+        climate: Vec4::new(4096.0, 0.0, 0.0, 0.0),
+        // Storm center parked far off-world, strength 0.
+        storm: Vec4::new(1.0e8, 1.0e8, 0.0, 0.0),
     }
 }
 
@@ -109,6 +116,14 @@ pub struct TerrainPalette {
     /// x: anchor time (client seconds), z: drift speed in client secs
     /// (world speed x warp); shaders extrapolate wind past the anchor.
     pub clouds_c: Vec4,
+    /// x: map half extent (m), y: climate seed phase, zw: reserved. Static
+    /// per map; pushed by sync_cloud_shadow_params alongside the cloud lanes.
+    pub climate: Vec4,
+    /// THE storm system (one per map): xy = cell center at the wind anchor
+    /// (shaders extrapolate it with the cloud drift), z = storminess 0..1
+    /// (0 whenever clouds are disabled — the rain must vanish with its sky),
+    /// w: reserved. Live per frame-ish; pushed by sync_cloud_shadow_params.
+    pub storm: Vec4,
 }
 
 /// Terrain water uniform from a generator's loaded map.

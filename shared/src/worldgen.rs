@@ -109,7 +109,7 @@ impl GeneratedWorld {
     /// Biome/resource sampler for this world — cheap to build (noise
     /// tables only), deterministic from the seed.
     pub fn build_biome_field(&self) -> BiomeField {
-        BiomeField::new(self.seed)
+        BiomeField::new_with_extent(self.seed, self.half_extent)
     }
 
     /// Rebuild the road-distance mask from the recorded strokes. `None` when
@@ -211,6 +211,8 @@ impl WorldBiome {
 pub struct BiomeField {
     zone: Fbm<Perlin>,
     vein: Fbm<Perlin>,
+    half_extent: f32,
+    climate_phase: f32,
 }
 
 impl std::fmt::Debug for BiomeField {
@@ -220,13 +222,21 @@ impl std::fmt::Debug for BiomeField {
 }
 
 impl BiomeField {
+    /// Half extent defaults to 4096m; prefer [`Self::new_with_extent`] so the
+    /// climate bands scale with the actual map.
     pub fn new(seed: u64) -> Self {
+        Self::new_with_extent(seed, 4096.0)
+    }
+
+    pub fn new_with_extent(seed: u64, half_extent: f32) -> Self {
         let s = |n: u64| splitmix64(seed ^ n) as u32;
         Self {
             // Biome patches a few hundred metres to ~2km across.
             zone: fbm(s(9), 3, 1.0 / 1_100.0),
             // Iron deposits: mid-frequency, thresholded hard in iron_vein().
             vein: fbm(s(10), 2, 1.0 / 150.0),
+            half_extent,
+            climate_phase: climate_phase(seed),
         }
     }
 
@@ -266,6 +276,20 @@ impl BiomeField {
         let mut profile = self.biome(x, z, height, slope).profile();
         profile.iron *= 0.10 + 0.90 * self.iron_vein(x, z);
         profile.stone *= 0.55 + 0.45 * (slope / 0.7).min(1.0);
+        // Climate is the economic gradient: crops fail in the frozen north
+        // and wither in the desert south, wood thins at both extremes — the
+        // temperate middle is the breadbasket, and both poles must trade for
+        // food. (Pillar 2: what you see is what the simulation enforces; the
+        // visuals sample the same fn.)
+        let climate =
+            climate_at_with_phase(self.climate_phase, x, z, height, self.half_extent);
+        profile.farmland *= (1.0 - climate.frost).max(0.0) * (1.0 - climate.snow);
+        profile.wood *= 1.0 - climate.snow * 0.45;
+        profile.stone = (profile.stone * (1.0 + climate.frost * 0.20)).min(1.0);
+        // Desert: the transition band is thirsty-but-farmable savanna; deep
+        // desert grows almost nothing and trees give way to scrub.
+        profile.farmland *= (1.0 - climate.dry * 0.9).max(0.0);
+        profile.wood *= 1.0 - climate.dry * 0.65;
         profile
     }
 }
@@ -284,6 +308,99 @@ pub fn splitmix64(mut value: u64) -> u64 {
 pub fn rand01(state: &mut u64) -> f32 {
     *state = splitmix64(*state);
     ((*state >> 40) as f32) / ((1u64 << 24) as f32)
+}
+
+// ============================================================================
+// Climate: signed latitude bands (snowy NORTH, temperate middle, desert SOUTH)
+// ============================================================================
+//
+// One pure function of (seed, position, height) — the same contract as the
+// surface bands: shaders, the far mesh, the minimap, biome resources, and
+// future placement queries (`can_farm`) all sample it, so what the player
+// sees IS what the simulation enforces. The wgsl mirror in terrain_splat /
+// wind_foliage duplicates the math with the seed phase passed as a uniform;
+// any constant change here must be mirrored there (EXACT-copy convention).
+//
+// The hemispheres are deliberately asymmetric (two snowy poles read as
+// boring): north (-z, top of the minimap) freezes, south (+z) scorches into
+// desert. The fertile middle is structurally the breadbasket between them.
+
+/// Northern latitude (0 = map middle, 1 = north edge) where the snow band
+/// begins at sea level.
+pub const CLIMATE_SNOW_LAT: f32 = 0.68;
+/// Width of the snow blend band in latitude units.
+pub const CLIMATE_SNOW_BAND: f32 = 0.10;
+/// Frost (pale, cold-desaturated ground) leads the snowline by this much.
+pub const CLIMATE_FROST_LEAD: f32 = 0.10;
+/// Altitude cools: latitude offset per metre (pushes snow south, desert back).
+pub const CLIMATE_ALT_LAT_PER_M: f32 = 0.004;
+/// Southern latitude (0 = map middle, 1 = south edge) where desert begins.
+pub const CLIMATE_DESERT_LAT: f32 = 0.35;
+/// Width of the desert blend band in southern-latitude units.
+pub const CLIMATE_DESERT_BAND: f32 = 0.35;
+
+/// Seed-derived phase for the snowline wobble (mirrored to shaders).
+pub fn climate_phase(seed: u64) -> f32 {
+    let mut state = seed ^ 0xC11A_7E00;
+    rand01(&mut state) * std::f32::consts::TAU
+}
+
+/// East-west wobble of the snowline so climate bands meander instead of
+/// running as ruler lines. Two incommensurate waves, ~1.6km and ~0.5km.
+fn climate_lat_wobble(x: f32, phase: f32) -> f32 {
+    0.045 * (x * 0.0039 + phase).sin() + 0.022 * (x * 0.0127 + phase * 2.7).sin()
+}
+
+/// Climate factors at a world position. All in 0..1:
+/// - `snow`: 1 = full snow cover (northern pole)
+/// - `frost`: 1 = cold pale ground (leads and includes the snow zone)
+/// - `dry`: 1 = full southern desert
+pub struct ClimateSample {
+    pub snow: f32,
+    pub frost: f32,
+    pub dry: f32,
+}
+
+pub fn climate_at(seed: u64, x: f32, z: f32, height: f32, half_extent: f32) -> ClimateSample {
+    let phase = climate_phase(seed);
+    climate_at_with_phase(phase, x, z, height, half_extent)
+}
+
+/// Split out so per-vertex/per-pixel callers hoist the phase computation.
+pub fn climate_at_with_phase(
+    phase: f32,
+    x: f32,
+    z: f32,
+    height: f32,
+    half_extent: f32,
+) -> ClimateSample {
+    let half = half_extent.max(1.0);
+    let wobble = climate_lat_wobble(x, phase);
+    // Signed hemispheres: north (-z) freezes, south (+z) scorches.
+    let north_lat = (-z / half + wobble).max(0.0);
+    let south_lat = (z / half + wobble).max(0.0);
+    // Altitude cools: high ground snows below the nominal snow latitude (and
+    // pushes desert back off southern peaks), capped so temperate mountains
+    // frost rather than fully whiting out.
+    let alt_push = (height.max(0.0) * CLIMATE_ALT_LAT_PER_M).min(0.30);
+    let effective_lat = north_lat + alt_push;
+
+    let snow_start = CLIMATE_SNOW_LAT;
+    let snow = smoothstep01(
+        (effective_lat - snow_start) / CLIMATE_SNOW_BAND,
+    );
+    let frost = smoothstep01(
+        (effective_lat - (snow_start - CLIMATE_FROST_LEAD)) / CLIMATE_SNOW_BAND,
+    );
+    let dry = smoothstep01(
+        (south_lat - alt_push - CLIMATE_DESERT_LAT) / CLIMATE_DESERT_BAND,
+    ) * (1.0 - frost);
+    ClimateSample { snow, frost, dry }
+}
+
+fn smoothstep01(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 pub fn fbm(seed: u32, octaves: usize, frequency: f64) -> Fbm<Perlin> {
@@ -1396,5 +1513,48 @@ mod tests {
         assert!(ron.len() < 16_384, "recipe unexpectedly large: {}", ron.len());
         let back: GeneratedWorld = ron::de::from_str(&ron).unwrap();
         assert_eq!(back, def);
+    }
+}
+
+#[cfg(test)]
+mod climate_tests {
+    use super::*;
+
+    #[test]
+    fn climate_bands_behave() {
+        let seed = 42;
+        let half = 4096.0;
+        // Map middle: temperate — no snow, no meaningful desert.
+        let eq = climate_at(seed, 0.0, 0.0, 5.0, half);
+        assert_eq!(eq.snow, 0.0);
+        assert!(eq.dry < 0.1, "middle dry {}", eq.dry);
+        // North pole (-z, top of the minimap): full snow and frost.
+        let north = climate_at(seed, 0.0, -4000.0, 5.0, half);
+        assert!(north.snow > 0.95, "north snow {}", north.snow);
+        assert!(north.frost > 0.95);
+        assert_eq!(north.dry, 0.0);
+        // South pole (+z): full desert, never snow.
+        let south = climate_at(seed, 0.0, 4000.0, 5.0, half);
+        assert!(south.dry > 0.95, "south dry {}", south.dry);
+        assert_eq!(south.snow, 0.0);
+        // Mid-north temperate: neither snow nor desert.
+        let mid = climate_at(seed, 0.0, -1600.0, 5.0, half);
+        assert_eq!(mid.snow, 0.0);
+        assert!(mid.dry < 0.05);
+        // Altitude cools: a 60m peak at mid-north latitude frosts sooner...
+        let peak = climate_at(seed, 0.0, -1600.0, 60.0, half);
+        assert!(peak.frost > mid.frost);
+        // ...and pushes the desert back off southern high ground.
+        let desert_edge = climate_at(seed, 0.0, 2600.0, 5.0, half);
+        let desert_peak = climate_at(seed, 0.0, 2600.0, 60.0, half);
+        assert!(desert_peak.dry < desert_edge.dry);
+        // Band edges wobble along x: sample the frost band at several
+        // meridians and require a real spread (a single pair can straddle a
+        // wobble node and pass by float dust).
+        let spread = [-3000.0_f32, -1500.0, 0.0, 1500.0, 3000.0]
+            .iter()
+            .map(|&x| climate_at(seed, x, -2540.0, 5.0, half).frost)
+            .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        assert!(spread.1 - spread.0 > 0.01, "frost line should wobble: {spread:?}");
     }
 }

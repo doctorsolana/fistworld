@@ -98,18 +98,12 @@ pub(super) fn handle_debug_menu_interactions(
 
                 if let Some(CloudCoverButton(mode)) = cover_button {
                     cover_override.mode = *mode;
-                    match mode {
-                        CloudCoverMode::Auto => {
-                            cover.segment = -1;
-                        }
-                        CloudCoverMode::Clear => {
-                            cover.current = 0.0;
-                            cover.target = 0.0;
-                        }
-                        CloudCoverMode::Cloudy => {
-                            cover.current = 1.0;
-                            cover.target = 1.0;
-                        }
+                    if *mode == CloudCoverMode::Auto {
+                        // Resume natural weather from the CURRENT sky — a
+                        // snap back to the default cover would pop.
+                        cover.segment = -1;
+                    } else {
+                        *cover = crate::render::systems::CloudCover::snapped(*mode);
                     }
                     continue;
                 }

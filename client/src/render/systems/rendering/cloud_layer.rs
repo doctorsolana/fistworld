@@ -64,6 +64,9 @@ pub struct CloudLayerUniform {
     pub sun_dir: Vec4,
     pub tint_lit: Vec4,
     pub tint_shadow: Vec4,
+    /// THE storm system: xy = center at the wind anchor (extrapolated in the
+    /// shader with the cloud drift), z = storminess 0..1, w: reserved.
+    pub storm: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -123,11 +126,14 @@ pub fn spawn_cloud_plane(
     let seed_phase = hash_to_unit(seed, 0) * 37.0;
     let material = materials.add(CloudLayerMaterial {
         uniform: CloudLayerUniform {
-            params_a: Vec4::new(1.0, CLOUD_FIELD_INV_SCALE, 0.0, 0.0),
+            // Coverage matches CloudCover's default so the pre-first-update
+            // frame isn't a full deck.
+            params_a: Vec4::new(0.12, CLOUD_FIELD_INV_SCALE, 0.0, 0.0),
             params_b: Vec4::new(seed_phase, 1.0, 0.0, CLOUD_ALPHA_SCALE),
             sun_dir: Vec4::new(0.0, -1.0, 0.0, 0.0),
             tint_lit: color_vec4(CLOUD_PLANE_DAY_LIT),
             tint_shadow: color_vec4(CLOUD_PLANE_DAY_SHADOW),
+            storm: Vec4::new(1.0e8, 1.0e8, 0.0, 0.0),
         },
     });
 
@@ -157,6 +163,7 @@ pub struct CloudPlaneCache {
     sun_dir: Vec4,
     tint_lit: Vec4,
     tint_shadow: Vec4,
+    storm: Vec4,
 }
 
 /// Follow the camera in XZ and push coverage/wind/tint params.
@@ -168,6 +175,7 @@ pub fn update_cloud_plane(
     sun: Query<&GlobalTransform, With<SunLight>>,
     cover: Res<CloudCover>,
     settings: Res<GraphicsSettings>,
+    terrain: Option<Res<shared::terrain::WorldTerrain>>,
     mut plane: Query<(&mut Transform, &MeshMaterial3d<CloudLayerMaterial>), With<CloudLayerPlane>>,
     mut materials: ResMut<Assets<CloudLayerMaterial>>,
     mut cache: Local<CloudPlaneCache>,
@@ -226,6 +234,19 @@ pub fn update_cloud_plane(
         CLOUD_PLANE_SUNSET_SHADOW,
         twilight,
     ));
+    // THE storm system: same center the terrain/water shaders anchor on
+    // (clouds.rs::storm_center is the single source), strength zeroed with
+    // clouds disabled by the system's own enabled gate above.
+    let half_extent = terrain
+        .as_ref()
+        .map(|t| {
+            let b = t.generator.active_map_bounds();
+            (b.max[0] - b.min[0]) * 0.5
+        })
+        .unwrap_or(4096.0);
+    let storm_anchor =
+        super::clouds::storm_center(seed_phase, world_seconds, half_extent);
+    let storm = Vec4::new(storm_anchor.x, storm_anchor.y, cover.storminess, 0.0);
 
     let sun_dir = sun
         .single()
@@ -242,7 +263,8 @@ pub fn update_cloud_plane(
         || (cache.day_factor - day_factor).abs() > PARAM_EPSILON
         || cache.sun_dir.distance_squared(sun_dir) > 1e-4
         || (cache.tint_lit - tint_lit).abs().max_element() > PARAM_EPSILON
-        || (cache.tint_shadow - tint_shadow).abs().max_element() > PARAM_EPSILON;
+        || (cache.tint_shadow - tint_shadow).abs().max_element() > PARAM_EPSILON
+        || (cache.storm.z - storm.z).abs() > PARAM_EPSILON;
     if !dirty {
         return;
     }
@@ -264,6 +286,7 @@ pub fn update_cloud_plane(
     material.uniform.sun_dir = Vec4::new(sun_dir.x, sun_dir.y, sun_dir.z, speed_client);
     material.uniform.tint_lit = tint_lit;
     material.uniform.tint_shadow = tint_shadow;
+    material.uniform.storm = storm;
 
     cache.written = true;
     cache.wind_offset = wind_offset;
@@ -274,6 +297,7 @@ pub fn update_cloud_plane(
     cache.sun_dir = sun_dir;
     cache.tint_lit = tint_lit;
     cache.tint_shadow = tint_shadow;
+    cache.storm = storm;
 }
 
 fn color_vec4(color: Color) -> Vec4 {
