@@ -37,3 +37,6 @@ server_data/
 windows_build/
 BUILD_WINDOWS.md
 client_data/
+
+# Asset-creation working files: renders are regenerable Blender output (~21MB+).
+asset_creation/renders/

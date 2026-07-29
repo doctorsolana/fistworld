@@ -23,14 +23,6 @@ pub struct PlayerProgression {
     pub intelligence: u32,
 }
 
-/// Which player character model to use on the client.
-#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub enum PlayerCharacter {
-    #[default]
-    Oilman,
-    Base,
-}
-
 /// Player position component - replicated across network.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct PlayerPosition(pub Vec3);
