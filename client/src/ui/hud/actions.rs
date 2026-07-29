@@ -58,33 +58,10 @@ pub(super) fn handle_warp_buttons(
     }
 }
 
-/// Outfit swatches update the locally selected outfit; truth for a SPAWNED
-/// hero is its replicated `HeroOutfit`, this only affects the next spawn.
-pub(super) fn handle_outfit_buttons(
-    mut selected: ResMut<crate::hero::control::SelectedOutfit>,
-    hair: Query<(&Interaction, &HairButton), Changed<Interaction>>,
-    shorts: Query<(&Interaction, &ShortsButton), Changed<Interaction>>,
-    shirt: Query<&Interaction, (With<ShirtToggleButton>, Changed<Interaction>)>,
-) {
-    for (interaction, HairButton(index)) in hair.iter() {
-        if *interaction == Interaction::Pressed {
-            selected.0.hair = *index;
-        }
-    }
-    for (interaction, ShortsButton(index)) in shorts.iter() {
-        if *interaction == Interaction::Pressed {
-            selected.0.shorts = *index;
-        }
-    }
-    for interaction in shirt.iter() {
-        if *interaction == Interaction::Pressed {
-            selected.0.shirt = !selected.0.shirt;
-        }
-    }
-}
-
-/// Arm (or cancel) click-to-place. Dead while a hero exists — one per player.
+/// SPAWN HERO opens the character creator (the modal owns outfit choice and
+/// arms placement on PLACE). Dead while a hero exists — one per player.
 pub(super) fn handle_spawn_hero_button(
+    mut creator: ResMut<crate::ui::hero_creator::HeroCreatorOpen>,
     mut arm: ResMut<crate::hero::control::HeroSpawnArm>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
     heroes: Query<&shared::components::Hero>,
@@ -101,6 +78,8 @@ pub(super) fn handle_spawn_hero_button(
             arm.0 = false;
             continue;
         }
-        arm.0 = !arm.0;
+        // An armed placement reopens the creator instead of toggling blind.
+        arm.0 = false;
+        creator.0 = true;
     }
 }

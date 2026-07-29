@@ -211,51 +211,6 @@ fn spawn_hero_section(panel: &mut ChildSpawnerCommands<'_>) {
         },
     ));
 
-    // Hair: two rows of three so the panel stays narrow.
-    for chunk in shared::components::HERO_HAIR_LABELS
-        .iter()
-        .enumerate()
-        .collect::<Vec<_>>()
-        .chunks(3)
-    {
-        let chunk = chunk.to_vec();
-        panel
-            .spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(4.0),
-                ..default()
-            })
-            .with_children(|row| {
-                for (index, label) in chunk {
-                    spawn_outfit_button(row, label, 52.0, HairButton(index as u8));
-                }
-            });
-    }
-
-    panel
-        .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(4.0),
-            margin: UiRect::top(Val::Px(2.0)),
-            ..default()
-        })
-        .with_children(|row| {
-            for (index, label) in shared::components::HERO_SHORTS_LABELS.iter().enumerate() {
-                spawn_outfit_button(row, label, 52.0, ShortsButton(index as u8));
-            }
-        });
-
-    panel
-        .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(4.0),
-            margin: UiRect::top(Val::Px(2.0)),
-            ..default()
-        })
-        .with_children(|row| {
-            spawn_outfit_button(row, "SHIRT", 52.0, ShirtToggleButton);
-        });
-
     panel
         .spawn((
             SpawnHeroButton,
@@ -278,40 +233,6 @@ fn spawn_hero_section(panel: &mut ChildSpawnerCommands<'_>) {
                 Text::new("SPAWN HERO"),
                 TextFont {
                     font_size: FontSize::Px(12.0),
-                    ..default()
-                },
-                TextColor(TEXT_COLOR),
-            ));
-        });
-}
-
-fn spawn_outfit_button(
-    parent: &mut ChildSpawnerCommands<'_>,
-    text: &str,
-    width: f32,
-    marker: impl Component,
-) {
-    parent
-        .spawn((
-            Button,
-            marker,
-            Node {
-                width: Val::Px(width),
-                height: Val::Px(22.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::from(BUTTON_BORDER),
-        ))
-        .with_children(|btn| {
-            btn.spawn((
-                Text::new(text),
-                TextFont {
-                    font_size: FontSize::Px(10.0),
                     ..default()
                 },
                 TextColor(TEXT_COLOR),

@@ -63,6 +63,21 @@ pub struct HeroVisual {
     speed: f32,
 }
 
+impl HeroVisual {
+    /// A rig that should always animate at full walk speed (the character
+    /// creator preview walks in place on its turntable).
+    pub fn walking_in_place() -> Self {
+        Self {
+            speed: HERO_MOVE_SPEED,
+        }
+    }
+}
+
+/// A local, non-replicated character rig (the creator preview). Shares the
+/// hero dressing/animation systems but has no server-side existence.
+#[derive(Component)]
+pub struct HeroPreviewRig;
+
 /// Marks a hero whose wardrobe matches its replicated outfit.
 #[derive(Component)]
 struct HeroDressed;
@@ -78,6 +93,30 @@ struct HeroSceneRoot;
 struct HeroAnim {
     player: Entity,
     walk: AnimationNodeIndex,
+}
+
+/// Spawn the (hidden-until-dressed) character scene under a rig root.
+/// Shared by replicated heroes and the creator's preview rig.
+pub(crate) fn spawn_character_scene_child(
+    root: &mut ChildSpawnerCommands<'_>,
+    asset_server: &AssetServer,
+    assets: &mut HeroAssets,
+) {
+    let scene = assets
+        .scene
+        .get_or_insert_with(|| asset_server.load(format!("{HERO_GLB}#Scene0")))
+        .clone();
+    assets
+        .gltf
+        .get_or_insert_with(|| asset_server.load(HERO_GLB));
+    root.spawn((
+        HeroSceneRoot,
+        Transform::IDENTITY,
+        GlobalTransform::default(),
+        Visibility::Hidden,
+        InheritedVisibility::default(),
+        WorldAssetRoot(scene),
+    ));
 }
 
 /// Give newly replicated heroes a transform + the character scene.
@@ -96,14 +135,6 @@ fn attach_hero_visuals(
     >,
 ) {
     for (entity, pos, rot) in heroes.iter() {
-        let scene = assets
-            .scene
-            .get_or_insert_with(|| asset_server.load(format!("{HERO_GLB}#Scene0")))
-            .clone();
-        assets
-            .gltf
-            .get_or_insert_with(|| asset_server.load(HERO_GLB));
-
         let yaw = rot.map(|r| r.0).unwrap_or(0.0);
         commands
             .entity(entity)
@@ -115,14 +146,7 @@ fn attach_hero_visuals(
                 HeroVisual { speed: 0.0 },
             ))
             .with_children(|root| {
-                root.spawn((
-                    HeroSceneRoot,
-                    Transform::IDENTITY,
-                    GlobalTransform::default(),
-                    Visibility::Hidden,
-                    InheritedVisibility::default(),
-                    WorldAssetRoot(scene),
-                ));
+                spawn_character_scene_child(root, &asset_server, &mut assets);
             });
         info!("Hero visuals attached for {entity:?}");
     }
@@ -210,8 +234,8 @@ fn setup_hero_animation(
     mut graphs: ResMut<Assets<AnimationGraph>>,
     mut players: Query<(Entity, &mut AnimationPlayer), Without<AnimationGraphHandle>>,
     parents: Query<&ChildOf>,
-    heroes: Query<(), With<Hero>>,
-    hero_roots: Query<Entity, (With<Hero>, Without<HeroAnim>)>,
+    heroes: Query<(), Or<(With<Hero>, With<HeroPreviewRig>)>>,
+    hero_roots: Query<Entity, (Or<(With<Hero>, With<HeroPreviewRig>)>, Without<HeroAnim>)>,
 ) {
     if players.is_empty() {
         return;

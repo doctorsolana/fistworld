@@ -18,10 +18,16 @@ pub struct InputState {
     pub map_open: bool,
     /// True when debug time menu is open.
     pub debug_menu_open: bool,
+    /// True when the hero creator modal is open.
+    pub hero_creator_open: bool,
 }
 
 impl InputState {
     pub(crate) fn ui_blocking(&self) -> bool {
-        self.inventory_open || self.pause_menu_open || self.map_open || self.debug_menu_open
+        self.inventory_open
+            || self.pause_menu_open
+            || self.map_open
+            || self.debug_menu_open
+            || self.hero_creator_open
     }
 }

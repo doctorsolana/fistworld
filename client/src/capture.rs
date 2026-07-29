@@ -148,6 +148,12 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         }
     }
 
+    // FISTFORCE_CAPTURE_HERO_CREATOR=1: open the character-creator modal so
+    // captures can verify the live preview + selector UI without a server.
+    if std::env::var("FISTFORCE_CAPTURE_HERO_CREATOR").is_ok_and(|v| v == "1") {
+        commands.insert_resource(crate::ui::hero_creator::HeroCreatorOpen(true));
+    }
+
     info!("capture: entering world offline (no server)");
 }
 
