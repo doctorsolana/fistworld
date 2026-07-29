@@ -15,7 +15,7 @@ use crate::hero::control::{HeroSpawnArm, SelectedOutfit};
 use crate::hero::{spawn_character_scene_child, HeroPreviewRig, HeroVisual};
 use crate::input::InputState;
 use crate::states::GameState;
-use crate::ui::modal::{handle_backdrop_pressed, spawn_modal, ModalLayout};
+use crate::ui::modal::handle_backdrop_pressed;
 use crate::ui::styles::{
     ACCENT_COLOR, BUTTON_BORDER, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, TEXT_COLOR,
     TEXT_MUTED,
@@ -30,7 +30,7 @@ const DIORAMA_DISTANCE: f32 = 3.2;
 /// Uniform scale of the diorama set.
 const DIORAMA_SCALE: f32 = 0.26;
 /// Vertical NDC offset of the pane center (+ = above screen center).
-const PANE_NDC_Y: f32 = 0.18;
+const PANE_NDC_Y: f32 = 0.16;
 /// tan(fovy/2) for the default 45-degree perspective projection.
 const FOVY_HALF_TAN: f32 = 0.41421356;
 
@@ -163,6 +163,21 @@ fn setup_preview_rig(
                 Visibility::default(),
                 InheritedVisibility::default(),
             ));
+            // Fill light: the world sun alone leaves the character muddy
+            // against the dark board. Physical-exposure scale (the camera
+            // runs Exposure::SUNLIGHT), tight range so nothing spills.
+            set.spawn((
+                PointLight {
+                    intensity: 2_800_000.0,
+                    range: 4.0,
+                    shadow_maps_enabled: false,
+                    ..default()
+                },
+                Transform::from_xyz(1.0, 0.8, 2.0),
+                GlobalTransform::default(),
+                Visibility::default(),
+                InheritedVisibility::default(),
+            ));
             let rig_entity = set
                 .spawn((
                     HeroPreviewRig,
@@ -237,92 +252,125 @@ fn spawn_creator(mut commands: Commands, roots: Query<(), With<CreatorRoot>>) {
         return;
     }
 
-    // --- The modal itself ---
-    let nodes = spawn_modal(
-        &mut commands,
-        CreatorRoot,
-        CreatorBackdrop,
-        CreatorPanel,
-        ModalLayout {
-            panel_size: Vec2::new(380.0, 640.0),
-            panel_padding: 16.0,
-        },
-    );
-
-    // A parent's background renders behind its children, so the panel itself
-    // must stay unpainted or it blanks out the see-through pane.
+    // Custom chrome, deliberately WITHOUT the usual dimming backdrop: the
+    // preview character lives in the 3D world behind the pane cutout, and a
+    // translucent backdrop would gray-filter him. The fullscreen button only
+    // catches outside-clicks to close.
     commands
-        .entity(nodes.panel)
-        .insert(BackgroundColor(Color::NONE));
-    commands.entity(nodes.panel).with_children(|panel| {
-        panel
-            .spawn((
-                Node {
-                    padding: UiRect::axes(Val::Px(18.0), Val::Px(6.0)),
-                    margin: UiRect::bottom(Val::Px(10.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(6.0)),
-                    ..default()
-                },
-                BackgroundColor(crate::ui::hud::PANEL_BACKGROUND),
-                BorderColor::from(BUTTON_BORDER),
-            ))
-            .with_children(|chip| {
-                chip.spawn((
-                    Text::new("CREATE HERO"),
-                    TextFont {
-                        font_size: FontSize::Px(16.0),
-                        ..default()
-                    },
-                    TextColor(ACCENT_COLOR),
-                ));
-            });
-
-        // Transparent cutout: the diorama (in the 3D world, following the
-        // camera) shows through here. Border only, no background.
-        panel.spawn((
+        .spawn((
+            CreatorRoot,
             Node {
-                width: Val::Px(PREVIEW_PANE_SIZE.0),
-                height: Val::Px(PREVIEW_PANE_SIZE.1),
-                margin: UiRect::bottom(Val::Px(12.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
                 ..default()
             },
-            BorderColor::from(BUTTON_BORDER),
-        ));
-
-        panel
-            .spawn((
+        ))
+        .with_children(|root| {
+            root.spawn((
+                CreatorBackdrop,
+                Button,
                 Node {
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    padding: UiRect::all(Val::Px(14.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
                     ..default()
                 },
-                BackgroundColor(crate::ui::hud::PANEL_BACKGROUND),
-                BorderColor::from(BUTTON_BORDER),
-            ))
-            .with_children(|controls| {
-                spawn_slot_row(controls, "HAIR", OutfitSlot::Hair);
-                spawn_slot_row(controls, "SHIRT", OutfitSlot::Shirt);
-                spawn_slot_row(controls, "SHORTS", OutfitSlot::Shorts);
+                BackgroundColor(Color::NONE),
+            ));
 
-                controls
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(10.0),
-                        margin: UiRect::top(Val::Px(14.0)),
+            // One flush column: header bar, see-through stage, controls.
+            root.spawn((
+                CreatorPanel,
+                Node {
+                    width: Val::Px(PREVIEW_PANE_SIZE.0 + 4.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Stretch,
+                    ..default()
+                },
+            ))
+            .with_children(|panel| {
+                panel
+                    .spawn((
+                        Node {
+                            justify_content: JustifyContent::Center,
+                            padding: UiRect::axes(Val::Px(12.0), Val::Px(9.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::top(Val::Px(8.0)),
+                            ..default()
+                        },
+                        BackgroundColor(crate::ui::hud::PANEL_BACKGROUND),
+                        BorderColor::from(BUTTON_BORDER),
+                    ))
+                    .with_children(|bar| {
+                        bar.spawn((
+                            Text::new("CREATE HERO"),
+                            TextFont {
+                                font_size: FontSize::Px(15.0),
+                                ..default()
+                            },
+                            TextColor(ACCENT_COLOR),
+                        ));
+                    });
+
+                // The stage window: fully transparent, the diorama shows
+                // through. Side borders only, so it reads as one card.
+                panel.spawn((
+                    Node {
+                        height: Val::Px(PREVIEW_PANE_SIZE.1),
+                        border: UiRect::horizontal(Val::Px(1.0)),
                         ..default()
-                    })
-                    .with_children(|row| {
-                        spawn_action_button(row, "CANCEL", TEXT_MUTED, BUTTON_BORDER, CancelButton);
-                        spawn_action_button(row, "PLACE", TEXT_COLOR, ACCENT_COLOR, PlaceButton);
+                    },
+                    BorderColor::from(BUTTON_BORDER),
+                ));
+
+                panel
+                    .spawn((
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Center,
+                            padding: UiRect::all(Val::Px(14.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::bottom(Val::Px(8.0)),
+                            ..default()
+                        },
+                        BackgroundColor(crate::ui::hud::PANEL_BACKGROUND),
+                        BorderColor::from(BUTTON_BORDER),
+                    ))
+                    .with_children(|controls| {
+                        spawn_slot_row(controls, "HAIR", OutfitSlot::Hair);
+                        spawn_slot_row(controls, "SHIRT", OutfitSlot::Shirt);
+                        spawn_slot_row(controls, "SHORTS", OutfitSlot::Shorts);
+
+                        controls
+                            .spawn(Node {
+                                flex_direction: FlexDirection::Row,
+                                column_gap: Val::Px(10.0),
+                                margin: UiRect::top(Val::Px(14.0)),
+                                ..default()
+                            })
+                            .with_children(|row| {
+                                spawn_action_button(
+                                    row,
+                                    "CANCEL",
+                                    TEXT_MUTED,
+                                    BUTTON_BORDER,
+                                    CancelButton,
+                                );
+                                spawn_action_button(
+                                    row,
+                                    "PLACE",
+                                    TEXT_COLOR,
+                                    ACCENT_COLOR,
+                                    PlaceButton,
+                                );
+                            });
                     });
             });
-    });
+        });
 }
 
 fn spawn_slot_row(panel: &mut ChildSpawnerCommands<'_>, label: &str, slot: OutfitSlot) {
