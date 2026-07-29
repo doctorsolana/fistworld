@@ -21,7 +21,7 @@ const CLOUD_BASE_YAW: f32 =
 // 0.5 deg/min of wall-clock time: slow enough to read as weather, not a body
 // orbiting the camera. Client-local on purpose — the dome is cosmetic, like
 // the cloud-card drift velocities.
-const CLOUD_YAW_DRIFT_RATE: f32 = 0.5_f32.to_radians() / 60.0;
+const CLOUD_YAW_DRIFT_RATE: f32 = 2.0_f32.to_radians() / 60.0;
 const CLOUD_BASE_PITCH: f32 = -std::f32::consts::FRAC_PI_2;
 
 /// Yaw of the cloud dome and card ring: fixed base orientation plus a slow
@@ -158,10 +158,11 @@ pub(super) fn setup_cloud_layers(
 
 /// Fixed wind bearing shared by the cloud plane and the cloud shadows.
 const CLOUD_WIND_BEARING: Vec2 = Vec2::new(0.86, 0.5);
-/// Wind speed wanders between these bounds (world units/sec) on slow swells:
-/// calm spells at the old constant 0.3, gusty spells at 3x it, ~2x average.
-const CLOUD_WIND_SPEED_MIN: f32 = 0.3;
-const CLOUD_WIND_SPEED_MAX: f32 = 0.9;
+/// Wind speed wanders between these bounds (world units/sec) on slow swells,
+/// keeping the 1:3 calm-to-gust ratio. Deliberately far above realistic
+/// (~0.3): clouds should visibly ROLL over the world at 1x game speed.
+const CLOUD_WIND_SPEED_MIN: f32 = 1.5;
+const CLOUD_WIND_SPEED_MAX: f32 = 4.5;
 
 /// World-space cloud drift offset at an absolute world time.
 ///
