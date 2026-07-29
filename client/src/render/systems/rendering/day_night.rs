@@ -119,9 +119,20 @@ pub fn update_day_night_cycle(
     // real sky+bounce contributes 10-20% of the sun. Keep the fill low-angle
     // and opposite the sun so it lights the faces/walls the sun misses.
     let lighting_boost = settings.lighting_boost.clamp(0.5, 4.0);
-    let fill_illuminance =
-        (lerp_f32(60.0, 11_000.0, day_factor) + 900.0 * twilight_factor) * lighting_boost;
-    let fill_dir = Vec3::new(-sun_dir.x, -0.35, -sun_dir.z).normalize_or_zero();
+    // At night the fill BECOMES the moon: the RTS night convention is a dim
+    // cool key light (~2-3% of the sun) so shapes still model instead of
+    // crushing to silhouette. It rises as the sun drops well below horizon.
+    let moon_factor = smoothstep(0.05, 0.35, -elevation);
+    let fill_illuminance = (lerp_f32(60.0, 11_000.0, day_factor)
+        + 900.0 * twilight_factor
+        + 9_000.0 * moon_factor)
+        * lighting_boost;
+    // The moon rides the antipode of the sun's arc: while the sun is below
+    // the horizon, -sun_dir points down from an elevated moon.
+    let day_fill_dir = Vec3::new(-sun_dir.x, -0.35, -sun_dir.z).normalize_or_zero();
+    let fill_dir = day_fill_dir
+        .lerp(-sun_dir, moon_factor)
+        .normalize_or_zero();
     let fill_rotation = Quat::from_rotation_arc(Vec3::NEG_Z, fill_dir);
     let fill_color = Color::srgb(0.60, 0.72, 0.95);
     for (mut fill_light, mut fill_transform) in fill_query.iter_mut() {
@@ -143,7 +154,10 @@ pub fn update_day_night_cycle(
     let day_ambient_warm = Color::srgb(0.68, 0.64, 0.56);
     let day_ambient_color = lerp_color(day_ambient_neutral, day_ambient_warm, dust_factor);
     let twilight_ambient_color = Color::srgb(0.50, 0.49, 0.45);
-    let night_ambient_color = Color::srgb(0.06, 0.09, 0.16);
+    // A real blue, not near-black: night reads as COLOR SHIFT (moonlit blue,
+    // desaturated), never as actual darkness — the whole map must stay
+    // playable at midnight.
+    let night_ambient_color = Color::srgb(0.38, 0.47, 0.72);
     let base_ambient_color = lerp_color(night_ambient_color, day_ambient_color, day_factor);
     let ambient_color = lerp_color(
         base_ambient_color,
@@ -154,11 +168,12 @@ pub fn update_day_night_cycle(
     // register; the old ~39 peak was ~1% of that (pitch-black shadows, the
     // "hospital light" contrast). ~2600 at noon puts shadowed sides at a
     // readable ~1:4 ratio against sunlit surfaces, like a clear real sky.
-    // 140 floor = moonlight stand-in: the world must stay readable at night
-    // (16 was below what the exposure registers — pitch-black land made even
-    // near-invisible clouds the only thing on screen).
+    // Night ambient runs HIGHER than day's (the moon+ambient must carry the
+    // whole scene at the fixed daylight exposure — physical moonlight would
+    // render black). The blue color keeps it reading as night. Day term is
+    // unchanged: lerp hits the old 2610 at day_factor 1.
     let ambient_brightness =
-        (140.0 + 2470.0 * day_factor + 600.0 * twilight_factor) * lighting_boost;
+        (lerp_f32(3_600.0, 2_610.0, day_factor) + 600.0 * twilight_factor) * lighting_boost;
     if ambient.color != ambient_color || ambient.brightness != ambient_brightness {
         ambient.color = ambient_color;
         ambient.brightness = ambient_brightness;

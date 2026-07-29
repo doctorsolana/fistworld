@@ -441,6 +441,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
                 0.62,
                 cloud_density(cloud_shadow_xz, cloud_params, material.clouds_b.w),
             );
+    // Night: the water is unlit-custom, so scene lights can't darken it —
+    // derive night from the synced sun elevation instead and pull toward a
+    // dark blue of itself (matching the moonlit land).
+    let day_w = smoothstep(-0.08, 0.12, material.sun_params.y);
+    color_rgb = mix(color_rgb * vec3<f32>(0.20, 0.26, 0.45), color_rgb, day_w);
     color_rgb *= cloud_shade;
 
     return vec4<f32>(color_rgb, alpha);
