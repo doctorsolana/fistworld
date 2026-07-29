@@ -65,6 +65,8 @@ struct TerrainPalette {
     clouds_a: vec4<f32>,
     // xy: sun projection (sun_dir.xz / sun_dir.y), z: shadow strength, w: seed phase.
     clouds_b: vec4<f32>,
+    // x: anchor time (client seconds), z: drift speed in client-time units.
+    clouds_c: vec4<f32>,
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(124) var<uniform> palette: TerrainPalette;
 
@@ -440,12 +442,19 @@ fn fragment(
         // clear, making shade exactly 1.0.
         let cloud_shadow_xz = pbr_input.world_position.xz
             - (CLOUD_LAYER_HEIGHT - pbr_input.world_position.y) * palette.clouds_b.xy;
+        // Extrapolate the wind past the anchored offset so drift is
+        // frame-smooth between the ~1/sec uniform refreshes.
+        let cloud_drift = palette.clouds_c.z * (globals.time - palette.clouds_c.x);
+        let cloud_params = vec4<f32>(
+            palette.clouds_a.xy,
+            palette.clouds_a.zw + vec2<f32>(0.86, 0.5) * cloud_drift,
+        );
         let cloud_shade = 1.0
             - palette.clouds_b.z
                 * smoothstep(
                     0.22,
                     0.62,
-                    cloud_density(cloud_shadow_xz, palette.clouds_a, palette.clouds_b.w),
+                    cloud_density(cloud_shadow_xz, cloud_params, palette.clouds_b.w),
                 );
         out.color = vec4<f32>(out.color.rgb * cloud_shade, out.color.a);
     } else {

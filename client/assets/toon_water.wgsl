@@ -30,6 +30,8 @@ struct ToonWaterUniform {
     clouds_a: vec4<f32>,
     // xy: sun projection (sun_dir.xz / sun_dir.y), z: shadow strength, w: seed phase.
     clouds_b: vec4<f32>,
+    // x: anchor time (client seconds), z: drift speed in client-time units.
+    clouds_c: vec4<f32>,
 };
 
 @group(3) @binding(0) var<uniform> material: ToonWaterUniform;
@@ -420,12 +422,19 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // when clouds are disabled or the sky is clear, making shade exactly 1.0.
     let cloud_shadow_xz = in.world_position.xz
         - (CLOUD_LAYER_HEIGHT - in.world_position.y) * material.clouds_b.xy;
+    // Extrapolate the wind past the anchored offset so drift is frame-smooth
+    // between the ~1/sec uniform refreshes.
+    let cloud_drift = material.clouds_c.z * (globals.time - material.clouds_c.x);
+    let cloud_params = vec4<f32>(
+        material.clouds_a.xy,
+        material.clouds_a.zw + vec2<f32>(0.86, 0.5) * cloud_drift,
+    );
     let cloud_shade = 1.0
         - material.clouds_b.z
             * smoothstep(
                 0.22,
                 0.62,
-                cloud_density(cloud_shadow_xz, material.clouds_a, material.clouds_b.w),
+                cloud_density(cloud_shadow_xz, cloud_params, material.clouds_b.w),
             );
     color_rgb *= cloud_shade;
 

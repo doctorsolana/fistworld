@@ -27,11 +27,11 @@ const CLOUD_SHADOW_STRENGTH: f32 = 0.30;
 const MIN_SUN_Y: f32 = 0.15;
 
 // Diff-gate thresholds: every materials.get_mut re-prepares the material on
-// the GPU, so the wind drift batches into sub-visible steps (~6 writes/sec at
-// 0.3 u/s) instead of touching every chunk material every frame.
-// Gusts triple the drift rate; a wider step keeps material re-prepares at
-// the same ~6/sec they were at constant speed.
-const WIND_WRITE_STEP: f32 = 0.15;
+// the GPU. Wind is NOT stepped — shaders extrapolate drift from an anchored
+// (offset, speed) pair via globals.time, so motion is frame-smooth while the
+// anchor refreshes at ~1/sec (plus immediately on gust/warp speed changes).
+const ANCHOR_REFRESH_SECS: f32 = 1.0;
+const SPEED_WRITE_STEP: f32 = 0.01;
 const COVERAGE_WRITE_STEP: f32 = 0.005;
 const SUN_PROJ_WRITE_STEP: f32 = 0.01;
 const STRENGTH_WRITE_STEP: f32 = 0.005;
@@ -48,10 +48,10 @@ fn hash_to_unit(seed: u64, salt: u64) -> f32 {
     (x as f64 / u64::MAX as f64) as f32
 }
 
-/// Last cloud-shadow uniform pair written to the GPU materials.
+/// Last cloud-shadow uniforms written to the GPU materials.
 #[derive(Default)]
 pub struct CloudShadowParams {
-    written: Option<(Vec4, Vec4)>,
+    written: Option<(Vec4, Vec4, Vec4)>,
 }
 
 /// Push the shared cloud-field parameters into every terrain chunk material
@@ -60,7 +60,9 @@ pub struct CloudShadowParams {
 /// topped up outside the gate so their shade doesn't pop at the next batch.
 #[allow(clippy::too_many_arguments)]
 pub fn sync_cloud_shadow_params(
+    time: Res<Time>,
     world_time_query: Query<&WorldTime>,
+    warp_query: Query<&shared::components::TimeWarp>,
     seed_query: Query<&CloudSeed>,
     cover: Res<CloudCover>,
     settings: Res<GraphicsSettings>,
@@ -86,7 +88,12 @@ pub fn sync_cloud_shadow_params(
 
     let seed = seed_query.iter().next().map(|s| s.seed).unwrap_or(0);
     let seed_phase = hash_to_unit(seed, 0) * 37.0;
-    let wind_offset = super::clouds::cloud_wind_offset(abs_seconds, seed_phase);
+    let (wind_offset, wind_speed) = super::clouds::cloud_wind_state(abs_seconds, seed_phase);
+    // Shaders advance the drift with globals.time (client seconds, warp-blind),
+    // so the anchored speed carries the warp factor.
+    let warp = warp_query.iter().next().map(|w| w.0).unwrap_or(1.0);
+    let anchor_time = time.elapsed_secs();
+    let speed_client = wind_speed * warp;
 
     // Same elevation curve update_day_night_cycle keys the sun on: shadows
     // fade with the direct light instead of ghosting through dusk, and the
@@ -115,16 +122,18 @@ pub fn sync_cloud_shadow_params(
         wind_offset.y,
     );
     let clouds_b = Vec4::new(sun_proj.x, sun_proj.y, strength, seed_phase);
+    let clouds_c = Vec4::new(anchor_time, 0.0, speed_client, 0.0);
 
     let write_due = match state.written {
         None => true,
-        Some((a, b)) => {
+        Some((a, b, c)) => {
             (clouds_a.x - a.x).abs() > COVERAGE_WRITE_STEP
-                || clouds_a.zw().distance_squared(a.zw()) > WIND_WRITE_STEP * WIND_WRITE_STEP
                 || clouds_b.xy().distance_squared(b.xy())
                     > SUN_PROJ_WRITE_STEP * SUN_PROJ_WRITE_STEP
                 || (clouds_b.z - b.z).abs() > STRENGTH_WRITE_STEP
                 || clouds_b.w != b.w
+                || anchor_time - c.x > ANCHOR_REFRESH_SECS
+                || (speed_client - c.z).abs() > SPEED_WRITE_STEP
         }
     };
 
@@ -135,6 +144,7 @@ pub fn sync_cloud_shadow_params(
         if let Some(mut material) = terrain_materials.get_mut(&chunk.material) {
             material.extension.palette.clouds_a = clouds_a;
             material.extension.palette.clouds_b = clouds_b;
+            material.extension.palette.clouds_c = clouds_c;
         }
     }
 
@@ -143,8 +153,9 @@ pub fn sync_cloud_shadow_params(
             if let Some(mut material) = water_materials.get_mut(&water_assets.material) {
                 material.uniform.clouds_a = clouds_a;
                 material.uniform.clouds_b = clouds_b;
+                material.uniform.clouds_c = clouds_c;
             }
         }
-        state.written = Some((clouds_a, clouds_b));
+        state.written = Some((clouds_a, clouds_b, clouds_c));
     }
 }

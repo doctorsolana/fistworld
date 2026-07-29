@@ -36,7 +36,10 @@ const CLOUD_ALPHA_SCALE: f32 = 0.85;
 // Diff-gates: every materials.get_mut re-prepares the material on the GPU, so
 // writes only happen past thresholds that are sub-pixel at any RTS zoom.
 const PLANE_FOLLOW_STEP: f32 = 1.0;
-const WIND_WRITE_STEP: f32 = 0.05;
+// Wind is anchor-extrapolated in the shader (globals.time); the anchor
+// refreshes ~1/sec or when gust/warp changes the drift speed.
+const ANCHOR_REFRESH_SECS: f32 = 1.0;
+const SPEED_WRITE_STEP: f32 = 0.01;
 const PARAM_EPSILON: f32 = 0.005;
 
 // Lit/shadow tint stops. Shadow tone stays a sky-blue-grey at >= ~60% of the
@@ -53,9 +56,11 @@ const CLOUD_PLANE_NIGHT_SHADOW: Color = Color::srgb(0.14, 0.18, 0.28);
 pub struct CloudLayerUniform {
     /// x: coverage 0..1, y: inv world scale, zw: wind offset (world units).
     pub params_a: Vec4,
-    /// x: seed phase, y: day factor, z: unused, w: alpha scale.
+    /// x: seed phase, y: day factor, z: drift anchor time (client seconds),
+    /// w: alpha scale.
     pub params_b: Vec4,
-    /// xyz: sun light travel direction (sun toward world), w: unused.
+    /// xyz: sun light travel direction (sun toward world), w: drift speed in
+    /// client-time units (world wind speed x time warp).
     pub sun_dir: Vec4,
     pub tint_lit: Vec4,
     pub tint_shadow: Vec4,
@@ -145,6 +150,8 @@ pub fn spawn_cloud_plane(
 pub struct CloudPlaneCache {
     written: bool,
     wind_offset: Vec2,
+    anchor_time: f32,
+    speed_client: f32,
     coverage: f32,
     day_factor: f32,
     sun_dir: Vec4,
@@ -154,7 +161,9 @@ pub struct CloudPlaneCache {
 
 /// Follow the camera in XZ and push coverage/wind/tint params.
 pub fn update_cloud_plane(
+    time: Res<Time>,
     world_time_query: Query<&WorldTime>,
+    warp_query: Query<&shared::components::TimeWarp>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
     sun: Query<&GlobalTransform, With<SunLight>>,
     cover: Res<CloudCover>,
@@ -196,7 +205,12 @@ pub fn update_cloud_plane(
         .get(&material_handle.0)
         .map(|m| m.uniform.params_b.x)
         .unwrap_or(0.0);
-    let wind_offset = super::clouds::cloud_wind_offset(world_seconds, seed_phase);
+    let (wind_offset, wind_speed) = super::clouds::cloud_wind_state(world_seconds, seed_phase);
+    // The shader extrapolates drift with globals.time (client seconds), so the
+    // anchored speed carries the warp factor. Must mirror cloud_shadows.rs.
+    let warp = warp_query.iter().next().map(|w| w.0).unwrap_or(1.0);
+    let anchor_time = time.elapsed_secs();
+    let speed_client = wind_speed * warp;
 
     // Same day/night cadence as the dome tints in update_cloud_layers.
     let t = world_time.normalized_time();
@@ -224,7 +238,8 @@ pub fn update_cloud_plane(
         .unwrap_or(cache.sun_dir);
 
     let dirty = !cache.written
-        || (cache.wind_offset - wind_offset).length_squared() > WIND_WRITE_STEP * WIND_WRITE_STEP
+        || anchor_time - cache.anchor_time > ANCHOR_REFRESH_SECS
+        || (cache.speed_client - speed_client).abs() > SPEED_WRITE_STEP
         || (cache.coverage - cover.current).abs() > PARAM_EPSILON
         || (cache.day_factor - day_factor).abs() > PARAM_EPSILON
         || cache.sun_dir.distance_squared(sun_dir) > 1e-4
@@ -243,15 +258,19 @@ pub fn update_cloud_plane(
         wind_offset.x,
         wind_offset.y,
     );
-    // Preserve the baked seed phase in .x; .z is unused, .w is constant.
+    // Preserve the baked seed phase in .x; .z carries the drift anchor time.
     material.uniform.params_b.y = day_factor;
+    material.uniform.params_b.z = anchor_time;
     material.uniform.params_b.w = CLOUD_ALPHA_SCALE;
-    material.uniform.sun_dir = sun_dir;
+    // sun_dir.w carries the drift speed in client-time units.
+    material.uniform.sun_dir = Vec4::new(sun_dir.x, sun_dir.y, sun_dir.z, speed_client);
     material.uniform.tint_lit = tint_lit;
     material.uniform.tint_shadow = tint_shadow;
 
     cache.written = true;
     cache.wind_offset = wind_offset;
+    cache.anchor_time = anchor_time;
+    cache.speed_client = speed_client;
     cache.coverage = cover.current;
     cache.day_factor = day_factor;
     cache.sun_dir = sun_dir;

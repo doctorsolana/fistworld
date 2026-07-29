@@ -4,18 +4,19 @@
 
 #import bevy_pbr::{
     forward_io::VertexOutput,
-    mesh_view_bindings::view,
+    mesh_view_bindings::{globals, view},
 }
 
 // Must match CLOUD_LAYER_HEIGHT in cloud_layer.rs.
 const CLOUD_LAYER_HEIGHT: f32 = 350.0;
 
 struct CloudLayerUniform {
-    // x: coverage 0..1, y: inv world scale, zw: wind offset (world units)
+    // x: coverage 0..1, y: inv world scale, zw: wind offset at the anchor
     params_a: vec4<f32>,
-    // x: seed phase, y: day factor, z: unused, w: alpha scale
+    // x: seed phase, y: day factor, z: drift anchor time (client seconds),
+    // w: alpha scale
     params_b: vec4<f32>,
-    // xyz: sun light travel direction (sun toward world), w: unused
+    // xyz: sun light travel direction, w: drift speed (client-time units)
     sun_dir: vec4<f32>,
     tint_lit: vec4<f32>,
     tint_shadow: vec4<f32>,
@@ -78,7 +79,14 @@ fn cloud_density(world_xz: vec2<f32>, params_a: vec4<f32>, seed_phase: f32) -> f
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    let params_a = material.params_a;
+    // Extrapolate the wind past the anchored offset so drift is frame-smooth
+    // between the ~1/sec uniform refreshes. Must mirror the terrain/water
+    // shaders' extrapolation exactly.
+    let cloud_drift = material.sun_dir.w * (globals.time - material.params_b.z);
+    let params_a = vec4<f32>(
+        material.params_a.xy,
+        material.params_a.zw + vec2<f32>(0.86, 0.5) * cloud_drift,
+    );
     let seed_phase = material.params_b.x;
     let world_xz = in.world_position.xz;
 

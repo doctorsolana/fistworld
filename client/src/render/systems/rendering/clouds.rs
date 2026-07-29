@@ -171,6 +171,16 @@ const CLOUD_WIND_SPEED_MAX: f32 = 0.9;
 /// ever teleporting the field, and the result stays deterministic, identical
 /// across clients, and time-warp aware (absolute world seconds in, offset out).
 pub(super) fn cloud_wind_offset(abs_seconds: f32, seed_phase: f32) -> Vec2 {
+    cloud_wind_state(abs_seconds, seed_phase).0
+}
+
+/// Wind offset AND instantaneous speed (world units/sec along the bearing).
+///
+/// The speed is what shaders extrapolate with between anchor writes: material
+/// uniforms carry (offset at anchor time, speed), and `globals.time` advances
+/// the drift per-frame, so cloud/shadow motion is frame-smooth while material
+/// re-uploads stay at ~1/sec.
+pub(super) fn cloud_wind_state(abs_seconds: f32, seed_phase: f32) -> (Vec2, f32) {
     use std::f32::consts::TAU;
     let amp = 0.5 * (CLOUD_WIND_SPEED_MAX - CLOUD_WIND_SPEED_MIN);
     let mid = CLOUD_WIND_SPEED_MIN + amp;
@@ -185,7 +195,10 @@ pub(super) fn cloud_wind_offset(abs_seconds: f32, seed_phase: f32) -> Vec2 {
         + amp
             * (0.7 * (p1.cos() - (w1 * abs_seconds + p1).cos()) / w1
                 + 0.3 * (p2.cos() - (w2 * abs_seconds + p2).cos()) / w2);
-    CLOUD_WIND_BEARING * integral
+    let speed = mid
+        + amp
+            * (0.7 * (w1 * abs_seconds + p1).sin() + 0.3 * (w2 * abs_seconds + p2).sin());
+    (CLOUD_WIND_BEARING * integral, speed)
 }
 
 pub(super) fn hash_to_unit(seed: u64, salt: u64) -> f32 {

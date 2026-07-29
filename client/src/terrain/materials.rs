@@ -86,6 +86,7 @@ pub fn stylized_palette() -> TerrainPalette {
         // sync_cloud_shadow_params owns these fields at runtime.
         clouds_a: Vec4::ZERO,
         clouds_b: Vec4::ZERO,
+        clouds_c: Vec4::ZERO,
     }
 }
 
@@ -105,6 +106,9 @@ pub struct TerrainPalette {
     /// Cloud shadow field: xy sun projection (sun_dir.xz / sun_dir.y),
     /// z shadow strength, w seed phase.
     pub clouds_b: Vec4,
+    /// x: anchor time (client seconds), z: drift speed in client secs
+    /// (world speed x warp); shaders extrapolate wind past the anchor.
+    pub clouds_c: Vec4,
 }
 
 /// Terrain water uniform from a generator's loaded map.

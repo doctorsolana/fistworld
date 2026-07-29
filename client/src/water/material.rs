@@ -53,6 +53,8 @@ pub struct ToonWaterUniform {
     /// Cloud shadow field: xy sun projection (sun_dir.xz / sun_dir.y),
     /// z shadow strength, w seed phase.
     pub clouds_b: Vec4,
+    /// x: anchor time (client seconds), z: drift speed (client-time units).
+    pub clouds_c: Vec4,
 }
 
 impl Material for ToonWaterMaterial {
@@ -109,6 +111,7 @@ pub(super) fn setup_water_assets(
             // sync_cloud_shadow_params owns these fields at runtime.
             clouds_a: Vec4::ZERO,
             clouds_b: Vec4::ZERO,
+            clouds_c: Vec4::ZERO,
         },
         alpha_mode: AlphaMode::Blend,
         double_sided: false,
