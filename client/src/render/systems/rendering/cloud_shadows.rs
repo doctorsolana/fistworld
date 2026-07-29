@@ -118,7 +118,13 @@ pub fn sync_cloud_shadow_params(
     // the height keeps a horizon sun from smearing shadows to infinity.
     let to_sun = Vec3::from(sun_tf.back());
     let sun_y = to_sun.y.max(MIN_SUN_Y);
-    let sun_proj = Vec2::new(-to_sun.x, -to_sun.z) / sun_y;
+    // Damped: at a 20-minute day the raw projection sweeps shadows 2-5x
+    // faster than the wind moves their clouds, so shadows visibly travel the
+    // WRONG WAY relative to the sky. The damp keeps a directional lean (long
+    // morning/evening shadows offset away from the sun) while the sweep rate
+    // stays below wind speed, so shadows track their clouds. 1.0 = physical.
+    const SUN_SWEEP_DAMP: f32 = 0.2;
+    let sun_proj = Vec2::new(-to_sun.x, -to_sun.z) / sun_y * SUN_SWEEP_DAMP;
 
     let clouds_a = Vec4::new(
         cover.current,
