@@ -170,10 +170,6 @@ const CLOUD_WIND_SPEED_MAX: f32 = 0.9;
 /// as its exact closed-form integral, so gusts accelerate the drift without
 /// ever teleporting the field, and the result stays deterministic, identical
 /// across clients, and time-warp aware (absolute world seconds in, offset out).
-pub(super) fn cloud_wind_offset(abs_seconds: f32, seed_phase: f32) -> Vec2 {
-    cloud_wind_state(abs_seconds, seed_phase).0
-}
-
 /// Wind offset AND instantaneous speed (world units/sec along the bearing).
 ///
 /// The speed is what shaders extrapolate with between anchor writes: material
