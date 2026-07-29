@@ -78,6 +78,12 @@ impl WorldTime {
     pub const DEFAULT_NIGHT_DURATION: f32 = 4.0 * 60.0;
     /// Start early morning (near sunrise).
     pub const DEFAULT_START_SECONDS_IN_DAY: f32 = 30.0;
+    /// Displayed clock hour of sunrise. The display clock is deliberately
+    /// asymmetric (summer hours): daylight owns 06:00-20:00 so dusk lands at
+    /// a natural-feeling clock time instead of mid-afternoon.
+    pub const SUNRISE_NORMALIZED: f32 = 6.0 / 24.0;
+    /// Displayed clock hour of sunset (20:00).
+    pub const SUNSET_NORMALIZED: f32 = 20.0 / 24.0;
 
     pub fn new(day_duration: f32, night_duration: f32, seconds_in_cycle: f32) -> Self {
         let mut wt = Self {
@@ -150,44 +156,31 @@ impl WorldTime {
         }
     }
 
-    /// Returns normalized time 0.0-1.0 where:
-    /// - 0.0 = midnight
-    /// - 0.25 = sunrise (start of day)
-    /// - 0.5 = noon (middle of day)
-    /// - 0.75 = sunset (end of day, start of night)
-    /// - 1.0 = back to midnight
-    ///
-    /// Our internal representation has day first (0 to day_duration) then night.
-    /// This maps it to a more intuitive 24-hour cycle.
+    /// DISPLAY clock, normalized 0..1 of a 24h day (0 = midnight). Sunrise
+    /// displays at [`Self::SUNRISE_NORMALIZED`] (06:00) and sunset at
+    /// [`Self::SUNSET_NORMALIZED`] (20:00) — summer hours, so dusk lands at a
+    /// late clock time. This is presentation ONLY: anything driving light or
+    /// simulation from the sun must use [`Self::sun_phase`], never this.
     pub fn normalized_time(&self) -> f32 {
-        let cycle = self.cycle_duration();
-        if cycle <= 0.0 {
-            return 0.5; // Default to noon if misconfigured
-        }
-
-        // Fraction of day portion (sunrise to sunset)
-        let day_fraction = self.day_duration / cycle; // e.g., 20/27 ≈ 0.74
-                                                      // Fraction of night portion
-        let night_fraction = self.night_duration / cycle; // e.g., 7/27 ≈ 0.26
-
-        // Current position in cycle (0 to 1)
-        let cycle_pos = self.seconds_in_cycle / cycle;
-
-        if cycle_pos < day_fraction {
-            // We're in the day portion (0 to day_duration maps to sunrise->sunset = 0.25 to 0.75)
-            let day_progress = cycle_pos / day_fraction; // 0 to 1 within day
-            0.25 + day_progress * 0.5 // Maps to 0.25 to 0.75
+        let day_span = Self::SUNSET_NORMALIZED - Self::SUNRISE_NORMALIZED;
+        let night_span = 1.0 - day_span;
+        if self.is_day() {
+            Self::SUNRISE_NORMALIZED + self.day_t() * day_span
         } else {
-            // We're in the night portion (day_duration to cycle_end maps to sunset->sunrise = 0.75 to 1.25, wrapped)
-            let night_progress = (cycle_pos - day_fraction) / night_fraction; // 0 to 1 within night
-                                                                              // First half of night: 0.75 to 1.0 (evening to midnight)
-                                                                              // Second half of night: 0.0 to 0.25 (midnight to sunrise)
-            let night_time = 0.75 + night_progress * 0.5;
-            if night_time >= 1.0 {
-                night_time - 1.0
-            } else {
-                night_time
-            }
+            (Self::SUNSET_NORMALIZED + self.night_t() * night_span).rem_euclid(1.0)
+        }
+    }
+
+    /// Sun position phase for lighting: elevation == `-cos(sun_phase())`,
+    /// exactly the old `normalized * TAU` convention (PI/2 = sunrise on the
+    /// horizon, PI = solar noon, 3*PI/2 = sunset). Derived from cycle
+    /// fractions, so it is independent of the asymmetric display clock.
+    pub fn sun_phase(&self) -> f32 {
+        use std::f32::consts::PI;
+        if self.is_day() {
+            PI * 0.5 + self.day_t() * PI
+        } else {
+            PI * 1.5 + self.night_t() * PI
         }
     }
 
@@ -202,17 +195,19 @@ impl WorldTime {
         }
 
         let n = normalized.rem_euclid(1.0);
+        let day_span = Self::SUNSET_NORMALIZED - Self::SUNRISE_NORMALIZED;
+        let night_span = 1.0 - day_span;
         let day_fraction = self.day_duration / cycle;
         let night_fraction = self.night_duration / cycle;
 
-        let cycle_pos = if (0.25..0.75).contains(&n) {
-            let day_progress = (n - 0.25) / 0.5; // 0..1
+        let cycle_pos = if (Self::SUNRISE_NORMALIZED..Self::SUNSET_NORMALIZED).contains(&n) {
+            let day_progress = (n - Self::SUNRISE_NORMALIZED) / day_span;
             day_progress * day_fraction
         } else {
-            let night_progress = if n >= 0.75 {
-                (n - 0.75) / 0.5
+            let night_progress = if n >= Self::SUNSET_NORMALIZED {
+                (n - Self::SUNSET_NORMALIZED) / night_span
             } else {
-                (n + 0.25) / 0.5
+                (n + 1.0 - Self::SUNSET_NORMALIZED) / night_span
             };
             day_fraction + night_progress * night_fraction
         };
@@ -245,6 +240,24 @@ mod tests {
         // One warped step spanning several cycles must count every one of them.
         wt.advance(360.0, 360.0);
         assert_eq!(wt.day, 4);
+    }
+
+    #[test]
+    fn display_clock_runs_summer_hours() {
+        let mut wt = WorldTime::new(240.0, 40.0, 0.0);
+        // Sunrise displays 06:00 no matter the real durations.
+        assert!((wt.normalized_time() - WorldTime::SUNRISE_NORMALIZED).abs() < 1e-4);
+        // The instant before night starts displays 20:00...
+        wt.seconds_in_cycle = 239.9;
+        assert!((wt.normalized_time() - WorldTime::SUNSET_NORMALIZED).abs() < 2e-3);
+        // ...while the sun's PHYSICAL phase still hits solar noon mid-day.
+        wt.seconds_in_cycle = 120.0;
+        assert!((wt.sun_phase() - std::f32::consts::PI).abs() < 1e-3);
+        assert!((-wt.sun_phase().cos() - 1.0).abs() < 1e-3);
+        // Midnight (display 0.0) round-trips through the inverse mapping.
+        wt.set_normalized_time(0.0);
+        assert!(!wt.is_day());
+        assert!((wt.normalized_time() - 0.0).rem_euclid(1.0) < 2e-3);
     }
 
     #[test]

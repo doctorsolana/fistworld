@@ -43,14 +43,13 @@ pub fn update_day_night_cycle(
         }
     };
 
-    // Normalized time: 0.0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset
-    let t = world_time.normalized_time();
-
     // =========================================================================
     // SUN POSITION - East-west great-circle arc (rises in east, sets in west)
     // =========================================================================
     // IMPORTANT: we want elevation = -1 at midnight, 0 at sunrise/sunset, +1 at noon.
-    let phase = t * std::f32::consts::TAU;
+    // Cycle-fraction phase, NOT display time: the display clock runs summer
+    // hours (sunset 20:00) and must never steer the physical sun.
+    let phase = world_time.sun_phase();
     let elevation = -phase.cos(); // [-1, 1]
 
     // Arc angle: 0 = sunrise, PI/2 = noon, PI = sunset; below horizon at night.

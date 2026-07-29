@@ -272,9 +272,7 @@ pub fn update_cloud_cover(
             if cover.segment != segment {
                 cover.segment = segment;
 
-                let t = world_time.normalized_time();
-                let phase = t * std::f32::consts::TAU;
-                let elevation = -phase.cos();
+                let elevation = -world_time.sun_phase().cos();
                 let dawn_dusk = 1.0 - smoothstep(0.25, 0.6, elevation.abs());
                 // Cloudy spells are a fairly rare event — the default sky is
                 // the sparse "forced clear" look; weather is the exception.
@@ -320,14 +318,13 @@ pub fn update_cloud_layers(
         return;
     };
 
-    let t = world_time_query
+    // Physical sun phase, not display time (the display clock runs summer
+    // hours and no longer tracks the sun's true position).
+    let elevation = world_time_query
         .iter()
         .next()
-        .map(|wt| wt.normalized_time())
-        .unwrap_or(0.5);
-
-    let phase = t * std::f32::consts::TAU;
-    let elevation = -phase.cos();
+        .map(|wt| -wt.sun_phase().cos())
+        .unwrap_or(1.0);
     let drift_yaw = cloud_drift_yaw(time.elapsed_secs());
     let day_factor = smoothstep(-0.05, 0.15, elevation);
     let twilight = 1.0 - smoothstep(0.12, 0.35, elevation.max(0.0));

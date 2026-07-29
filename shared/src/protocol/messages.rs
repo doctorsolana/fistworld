@@ -42,7 +42,8 @@ impl TimeOfDayPreset {
             TimeOfDayPreset::Night => 0.0,
             TimeOfDayPreset::Morning => 0.25,
             TimeOfDayPreset::Midday => 0.5,
-            TimeOfDayPreset::Sunset => 0.75,
+            // Display hours: sunset sits at 20:00 on the summer clock.
+            TimeOfDayPreset::Sunset => 0.81,
         }
     }
 }

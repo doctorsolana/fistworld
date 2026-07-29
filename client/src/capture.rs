@@ -280,20 +280,12 @@ fn apply_shot(
 /// 0.0 = midnight, 0.25 = sunrise, **0.5 = noon**, 0.75 = sunset. Getting this backwards
 /// silently photographs the world at dusk, which reads as "the renderer is broken".
 fn normalized_to_seconds(normalized: f32, time: &WorldTime) -> f32 {
-    let n = normalized.rem_euclid(1.0);
-    if (0.25..0.75).contains(&n) {
-        // Daytime: 0.25..0.75 spans sunrise..sunset.
-        let day_progress = (n - 0.25) / 0.5;
-        day_progress * time.day_duration
-    } else {
-        // Night wraps through midnight: 0.75..1.0 then 0.0..0.25.
-        let night_progress = if n >= 0.75 {
-            (n - 0.75) / 0.5
-        } else {
-            (n + 0.25) / 0.5
-        };
-        time.day_duration + night_progress * time.night_duration
-    }
+    // Delegate to the shared inverse so capture `--time` always agrees with
+    // the game's display clock (now asymmetric summer hours, sunset 20:00) —
+    // a hand-rolled copy here silently drifted once before.
+    let mut scratch = time.clone();
+    scratch.set_normalized_time(normalized);
+    scratch.seconds_in_cycle
 }
 
 #[cfg(test)]

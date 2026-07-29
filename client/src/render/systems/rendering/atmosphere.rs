@@ -184,9 +184,8 @@ pub fn update_atmosphere(
         Err(_) => return,
     };
 
-    let t = world_time.normalized_time();
-    let phase = t * std::f32::consts::TAU;
-    let elevation = -phase.cos(); // [-1, 1]
+    // Physical sun phase, not the display clock (which runs summer hours).
+    let elevation = -world_time.sun_phase().cos(); // [-1, 1]
     let sun_height = elevation.max(0.0);
 
     // Dusty near horizon, clear at noon.

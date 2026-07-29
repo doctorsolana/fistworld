@@ -103,7 +103,7 @@ pub fn sync_cloud_shadow_params(
     // Same elevation curve update_day_night_cycle keys the sun on: shadows
     // fade with the direct light instead of ghosting through dusk, and the
     // meaningless night-time projection never shows.
-    let elevation = -(world_time.normalized_time() * std::f32::consts::TAU).cos();
+    let elevation = -world_time.sun_phase().cos();
     let day_factor = smoothstep(-0.05, 0.15, elevation);
     // The coverage ramp pins strength to exactly 0 on a clear sky, so
     // shade == 1.0 bit-exactly when there is nothing overhead to cast it.

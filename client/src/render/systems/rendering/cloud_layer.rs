@@ -213,9 +213,7 @@ pub fn update_cloud_plane(
     let speed_client = wind_speed * warp;
 
     // Same day/night cadence as the dome tints in update_cloud_layers.
-    let t = world_time.normalized_time();
-    let phase = t * std::f32::consts::TAU;
-    let elevation = -phase.cos();
+    let elevation = -world_time.sun_phase().cos();
     let day_factor = smoothstep(-0.05, 0.15, elevation);
     let twilight = 1.0 - smoothstep(0.12, 0.35, elevation.max(0.0));
     let tint_lit = color_vec4(lerp_color(
