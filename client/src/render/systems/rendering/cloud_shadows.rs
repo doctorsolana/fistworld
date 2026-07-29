@@ -48,10 +48,15 @@ fn hash_to_unit(seed: u64, salt: u64) -> f32 {
     (x as f64 / u64::MAX as f64) as f32
 }
 
-/// Last cloud-shadow uniforms written to the GPU materials.
+/// Last cloud-shadow uniforms written to the GPU materials, plus the previous
+/// sun projection so its velocity can be finite-differenced for in-shader
+/// extrapolation (the sun arcs fast on a 20-minute day — its sweep component
+/// of shadow motion is often FASTER than the wind and steps visibly if only
+/// refreshed at the anchor rate).
 #[derive(Default)]
 pub struct CloudShadowParams {
     written: Option<(Vec4, Vec4, Vec4)>,
+    prev_sun_proj: Option<(Vec2, f32)>,
 }
 
 /// Push the shared cloud-field parameters into every terrain chunk material
@@ -122,7 +127,16 @@ pub fn sync_cloud_shadow_params(
         wind_offset.y,
     );
     let clouds_b = Vec4::new(sun_proj.x, sun_proj.y, strength, seed_phase);
-    let clouds_c = Vec4::new(anchor_time, 0.0, speed_client, 0.0);
+    // Sun-projection velocity by finite difference across anchor writes;
+    // includes warp automatically. First write starts at zero.
+    let sun_proj_vel = match state.prev_sun_proj {
+        Some((prev, prev_t)) if anchor_time - prev_t > 0.05 => {
+            (sun_proj - prev) / (anchor_time - prev_t)
+        }
+        Some(_) => Vec2::ZERO,
+        None => Vec2::ZERO,
+    };
+    let clouds_c = Vec4::new(anchor_time, sun_proj_vel.x, speed_client, sun_proj_vel.y);
 
     let write_due = match state.written {
         None => true,
@@ -157,5 +171,6 @@ pub fn sync_cloud_shadow_params(
             }
         }
         state.written = Some((clouds_a, clouds_b, clouds_c));
+        state.prev_sun_proj = Some((sun_proj, anchor_time));
     }
 }

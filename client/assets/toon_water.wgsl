@@ -30,7 +30,8 @@ struct ToonWaterUniform {
     clouds_a: vec4<f32>,
     // xy: sun projection (sun_dir.xz / sun_dir.y), z: shadow strength, w: seed phase.
     clouds_b: vec4<f32>,
-    // x: anchor time (client seconds), z: drift speed in client-time units.
+    // x: anchor time (client seconds), z: wind drift speed (client-time
+    // units), yw: sun-projection velocity — both extrapolated in-shader.
     clouds_c: vec4<f32>,
 };
 
@@ -420,11 +421,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // bands cross the waterline without a seam. Multiplied after the glint
     // add so sparkle dies under cloud cover too. Strength (clouds_b.z) is 0
     // when clouds are disabled or the sky is clear, making shade exactly 1.0.
+    // Extrapolate BOTH motion sources past the anchor so shadows are
+    // frame-smooth between the ~1/sec uniform refreshes: wind drift AND the
+    // sun-projection sweep (the sun arcs fast on a 20-min day).
+    let cloud_dt = globals.time - material.clouds_c.x;
+    let sun_proj = material.clouds_b.xy
+        + vec2<f32>(material.clouds_c.y, material.clouds_c.w) * cloud_dt;
     let cloud_shadow_xz = in.world_position.xz
-        - (CLOUD_LAYER_HEIGHT - in.world_position.y) * material.clouds_b.xy;
-    // Extrapolate the wind past the anchored offset so drift is frame-smooth
-    // between the ~1/sec uniform refreshes.
-    let cloud_drift = material.clouds_c.z * (globals.time - material.clouds_c.x);
+        - (CLOUD_LAYER_HEIGHT - in.world_position.y) * sun_proj;
+    let cloud_drift = material.clouds_c.z * cloud_dt;
     let cloud_params = vec4<f32>(
         material.clouds_a.xy,
         material.clouds_a.zw + vec2<f32>(0.86, 0.5) * cloud_drift,

@@ -65,7 +65,8 @@ struct TerrainPalette {
     clouds_a: vec4<f32>,
     // xy: sun projection (sun_dir.xz / sun_dir.y), z: shadow strength, w: seed phase.
     clouds_b: vec4<f32>,
-    // x: anchor time (client seconds), z: drift speed in client-time units.
+    // x: anchor time (client seconds), z: wind drift speed (client-time
+    // units), yw: sun-projection velocity — both extrapolated in-shader.
     clouds_c: vec4<f32>,
 }
 @group(#{MATERIAL_BIND_GROUP}) @binding(124) var<uniform> palette: TerrainPalette;
@@ -440,11 +441,15 @@ fn fragment(
         // shadow band is wider/softer than the cloud alpha band (penumbra).
         // Strength (clouds_b.z) is 0 when clouds are disabled or the sky is
         // clear, making shade exactly 1.0.
+        // Extrapolate BOTH motion sources past the anchor so shadows are
+        // frame-smooth between the ~1/sec uniform refreshes: the wind drift
+        // AND the sun-projection sweep (the sun arcs fast on a 20-min day).
+        let cloud_dt = globals.time - palette.clouds_c.x;
+        let sun_proj = palette.clouds_b.xy
+            + vec2<f32>(palette.clouds_c.y, palette.clouds_c.w) * cloud_dt;
         let cloud_shadow_xz = pbr_input.world_position.xz
-            - (CLOUD_LAYER_HEIGHT - pbr_input.world_position.y) * palette.clouds_b.xy;
-        // Extrapolate the wind past the anchored offset so drift is
-        // frame-smooth between the ~1/sec uniform refreshes.
-        let cloud_drift = palette.clouds_c.z * (globals.time - palette.clouds_c.x);
+            - (CLOUD_LAYER_HEIGHT - pbr_input.world_position.y) * sun_proj;
+        let cloud_drift = palette.clouds_c.z * cloud_dt;
         let cloud_params = vec4<f32>(
             palette.clouds_a.xy,
             palette.clouds_a.zw + vec2<f32>(0.86, 0.5) * cloud_drift,
