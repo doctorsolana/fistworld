@@ -28,7 +28,7 @@ const PREVIEW_PANE_SIZE: (f32, f32) = (300.0, 400.0);
 /// Diorama distance in front of the camera (metres, pre-scale).
 const DIORAMA_DISTANCE: f32 = 3.2;
 /// Uniform scale of the diorama set.
-const DIORAMA_SCALE: f32 = 0.26;
+const DIORAMA_SCALE: f32 = 0.34;
 /// Vertical NDC offset of the pane center (+ = above screen center).
 const PANE_NDC_Y: f32 = 0.16;
 /// tan(fovy/2) for the default 45-degree perspective projection.
@@ -151,14 +151,14 @@ fn setup_preview_rig(
         .with_children(|set| {
             // Backdrop board: unlit near-black, framed by the pane cutout.
             set.spawn((
-                Mesh3d(meshes.add(Rectangle::new(3.1, 4.3))),
+                Mesh3d(meshes.add(Rectangle::new(90.0, 60.0))),
                 MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.05, 0.045, 0.06),
+                    base_color: Color::srgb(0.075, 0.07, 0.085),
                     unlit: true,
                     ..default()
                 })),
                 NotShadowCaster,
-                Transform::from_xyz(0.0, 0.0, -0.8),
+                Transform::from_xyz(0.0, 0.0, -1.4),
                 GlobalTransform::default(),
                 Visibility::default(),
                 InheritedVisibility::default(),
@@ -282,13 +282,14 @@ fn spawn_creator(mut commands: Commands, roots: Query<(), With<CreatorRoot>>) {
                 BackgroundColor(Color::NONE),
             ));
 
-            // One flush column: header bar, see-through stage, controls.
+            // Two floating cards over the fullscreen void: title above, the
+            // open stage (character on the void) between, controls below.
             root.spawn((
                 CreatorPanel,
                 Node {
-                    width: Val::Px(PREVIEW_PANE_SIZE.0 + 4.0),
                     flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Stretch,
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(10.0),
                     ..default()
                 },
             ))
@@ -297,9 +298,9 @@ fn spawn_creator(mut commands: Commands, roots: Query<(), With<CreatorRoot>>) {
                     .spawn((
                         Node {
                             justify_content: JustifyContent::Center,
-                            padding: UiRect::axes(Val::Px(12.0), Val::Px(9.0)),
+                            padding: UiRect::axes(Val::Px(26.0), Val::Px(10.0)),
                             border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::top(Val::Px(8.0)),
+                            border_radius: BorderRadius::all(Val::Px(8.0)),
                             ..default()
                         },
                         BackgroundColor(crate::ui::hud::PANEL_BACKGROUND),
@@ -316,25 +317,20 @@ fn spawn_creator(mut commands: Commands, roots: Query<(), With<CreatorRoot>>) {
                         ));
                     });
 
-                // The stage window: fully transparent, the diorama shows
-                // through. Side borders only, so it reads as one card.
-                panel.spawn((
-                    Node {
-                        height: Val::Px(PREVIEW_PANE_SIZE.1),
-                        border: UiRect::horizontal(Val::Px(1.0)),
-                        ..default()
-                    },
-                    BorderColor::from(BUTTON_BORDER),
-                ));
+                // Open stage: nothing but the void and the character.
+                panel.spawn(Node {
+                    height: Val::Px(PREVIEW_PANE_SIZE.1),
+                    ..default()
+                });
 
                 panel
                     .spawn((
                         Node {
                             flex_direction: FlexDirection::Column,
                             align_items: AlignItems::Center,
-                            padding: UiRect::all(Val::Px(14.0)),
+                            padding: UiRect::all(Val::Px(16.0)),
                             border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::bottom(Val::Px(8.0)),
+                            border_radius: BorderRadius::all(Val::Px(8.0)),
                             ..default()
                         },
                         BackgroundColor(crate::ui::hud::PANEL_BACKGROUND),
