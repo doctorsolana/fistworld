@@ -423,8 +423,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let cloud_shade = 1.0
         - material.clouds_b.z
             * smoothstep(
-                0.15,
-                0.75,
+                0.22,
+                0.62,
                 cloud_density(cloud_shadow_xz, material.clouds_a, material.clouds_b.w),
             );
     color_rgb *= cloud_shade;

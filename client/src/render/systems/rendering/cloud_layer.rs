@@ -31,8 +31,6 @@ const CLOUD_PLANE_SIZE: f32 = 40_000.0;
 const CLOUD_FIELD_INV_SCALE: f32 = 1.0 / 190.0;
 /// Fixed wind bearing + speed (world units/sec). Shared with the terrain and
 /// water cloud-shadow params — any change must be mirrored there.
-const CLOUD_WIND_DIR: Vec2 = Vec2::new(0.86, 0.5);
-const CLOUD_WIND_SPEED: f32 = 0.3;
 const CLOUD_ALPHA_SCALE: f32 = 0.85;
 
 // Diff-gates: every materials.get_mut re-prepares the material on the GPU, so
@@ -192,7 +190,13 @@ pub fn update_cloud_plane(
     // desync from the visible deck.
     let world_seconds =
         world_time.day as f32 * world_time.cycle_duration() + world_time.seconds_in_cycle;
-    let wind_offset = CLOUD_WIND_DIR * (CLOUD_WIND_SPEED * world_seconds);
+    // Seed phase was baked into the material at spawn; it also seeds the wind
+    // swell phases, keeping plane and shadow drift byte-identical.
+    let seed_phase = materials
+        .get(&material_handle.0)
+        .map(|m| m.uniform.params_b.x)
+        .unwrap_or(0.0);
+    let wind_offset = super::clouds::cloud_wind_offset(world_seconds, seed_phase);
 
     // Same day/night cadence as the dome tints in update_cloud_layers.
     let t = world_time.normalized_time();

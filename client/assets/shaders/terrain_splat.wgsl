@@ -443,8 +443,8 @@ fn fragment(
         let cloud_shade = 1.0
             - palette.clouds_b.z
                 * smoothstep(
-                    0.15,
-                    0.75,
+                    0.22,
+                    0.62,
                     cloud_density(cloud_shadow_xz, palette.clouds_a, palette.clouds_b.w),
                 );
         out.color = vec4<f32>(out.color.rgb * cloud_shade, out.color.a);

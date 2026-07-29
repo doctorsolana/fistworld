@@ -18,20 +18,20 @@ use shared::components::{CloudSeed, WorldTime};
 
 /// Dominant cloud blob scale: the shaders sample the field at world_xz * this.
 const CLOUD_FIELD_INV_SCALE: f32 = 1.0 / 190.0;
-/// Fixed wind bearing (unit-ish, used as-is) and speed in world units/sec.
-/// ~0.3 u/s reads as weather at RTS zoom; real wind speeds look frantic.
-const CLOUD_WIND_BEARING: Vec2 = Vec2::new(0.86, 0.5);
-const CLOUD_WIND_SPEED: f32 = 0.3;
-/// The shade multiply lands after full lighting (ambient included), so this
-/// stays under the ~0.2 cap that direct-only cloud shadows could afford.
-const CLOUD_SHADOW_STRENGTH: f32 = 0.16;
+/// Wind bearing/speed live in `clouds::cloud_wind_offset` (shared with the
+/// visible deck). 0.30 strength: clearly readable rolling shade — the multiply
+/// lands after full lighting (ambient included), and past ~0.35 it stops
+/// reading as weather and starts reading as dirty ground.
+const CLOUD_SHADOW_STRENGTH: f32 = 0.30;
 /// Below this sun height the projection would smear shadows toward the horizon.
 const MIN_SUN_Y: f32 = 0.15;
 
 // Diff-gate thresholds: every materials.get_mut re-prepares the material on
 // the GPU, so the wind drift batches into sub-visible steps (~6 writes/sec at
 // 0.3 u/s) instead of touching every chunk material every frame.
-const WIND_WRITE_STEP: f32 = 0.05;
+// Gusts triple the drift rate; a wider step keeps material re-prepares at
+// the same ~6/sec they were at constant speed.
+const WIND_WRITE_STEP: f32 = 0.15;
 const COVERAGE_WRITE_STEP: f32 = 0.005;
 const SUN_PROJ_WRITE_STEP: f32 = 0.01;
 const STRENGTH_WRITE_STEP: f32 = 0.005;
@@ -83,10 +83,10 @@ pub fn sync_cloud_shadow_params(
     // cloud field drifts forever without a wrap pop.
     let abs_seconds =
         world_time.day as f32 * world_time.cycle_duration() + world_time.seconds_in_cycle;
-    let wind_offset = CLOUD_WIND_BEARING * (CLOUD_WIND_SPEED * abs_seconds);
 
     let seed = seed_query.iter().next().map(|s| s.seed).unwrap_or(0);
     let seed_phase = hash_to_unit(seed, 0) * 37.0;
+    let wind_offset = super::clouds::cloud_wind_offset(abs_seconds, seed_phase);
 
     // Same elevation curve update_day_night_cycle keys the sun on: shadows
     // fade with the direct light instead of ghosting through dusk, and the

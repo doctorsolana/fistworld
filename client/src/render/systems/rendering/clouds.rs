@@ -156,6 +156,38 @@ pub(super) fn setup_cloud_layers(
     }
 }
 
+/// Fixed wind bearing shared by the cloud plane and the cloud shadows.
+const CLOUD_WIND_BEARING: Vec2 = Vec2::new(0.86, 0.5);
+/// Wind speed wanders between these bounds (world units/sec) on slow swells:
+/// calm spells at the old constant 0.3, gusty spells at 3x it, ~2x average.
+const CLOUD_WIND_SPEED_MIN: f32 = 0.3;
+const CLOUD_WIND_SPEED_MAX: f32 = 0.9;
+
+/// World-space cloud drift offset at an absolute world time.
+///
+/// THE single source of wind for the cloud plane and the terrain/water cloud
+/// shadows — both must call this or they desync. The varying speed is applied
+/// as its exact closed-form integral, so gusts accelerate the drift without
+/// ever teleporting the field, and the result stays deterministic, identical
+/// across clients, and time-warp aware (absolute world seconds in, offset out).
+pub(super) fn cloud_wind_offset(abs_seconds: f32, seed_phase: f32) -> Vec2 {
+    use std::f32::consts::TAU;
+    let amp = 0.5 * (CLOUD_WIND_SPEED_MAX - CLOUD_WIND_SPEED_MIN);
+    let mid = CLOUD_WIND_SPEED_MIN + amp;
+    // Two incommensurate swell periods so gusts never settle into a loop.
+    let w1 = TAU / 540.0;
+    let w2 = TAU / 197.0;
+    let p1 = seed_phase;
+    let p2 = seed_phase * 2.7;
+    // ∫ mid + amp·(0.7·sin(w1·t+p1) + 0.3·sin(w2·t+p2)) dt, anchored so the
+    // integral is 0 at t = 0.
+    let integral = mid * abs_seconds
+        + amp
+            * (0.7 * (p1.cos() - (w1 * abs_seconds + p1).cos()) / w1
+                + 0.3 * (p2.cos() - (w2 * abs_seconds + p2).cos()) / w2);
+    CLOUD_WIND_BEARING * integral
+}
+
 pub(super) fn hash_to_unit(seed: u64, salt: u64) -> f32 {
     let mut x = seed ^ salt;
     x ^= x >> 30;
