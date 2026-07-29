@@ -110,7 +110,7 @@ pub fn run(config: CaptureConfig) {
     app.insert_resource(config);
 
     app.add_systems(Startup, enter_world_offline);
-    app.add_systems(Update, drive_capture);
+    app.add_systems(Update, (spawn_capture_heroes, drive_capture));
 
     app.run();
 }
@@ -149,6 +149,55 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
     }
 
     info!("capture: entering world offline (no server)");
+}
+
+/// FISTFORCE_CAPTURE_HERO="hair,shorts,shirt[;hair,shorts,shirt...]" spawns
+/// stand-in heroes (offline fakes of the replicated entity) in a line at the
+/// first shot's focus, terrain-snapped, so captures can verify the character
+/// model, wardrobe toggles and pose without a server.
+fn spawn_capture_heroes(
+    mut commands: Commands,
+    config: Res<CaptureConfig>,
+    terrain: Option<Res<shared::terrain::WorldTerrain>>,
+    mut spawned: Local<bool>,
+) {
+    if *spawned {
+        return;
+    }
+    let Ok(spec) = std::env::var("FISTFORCE_CAPTURE_HERO") else {
+        *spawned = true;
+        return;
+    };
+    let Some(terrain) = terrain else {
+        return;
+    };
+    let base = config.shots.first().map(|s| s.focus).unwrap_or(Vec3::ZERO);
+    for (i, outfit_spec) in spec.split(';').enumerate() {
+        // Positional parse: a bad token falls back to the default for THAT
+        // field instead of shifting later fields left.
+        let parts: Vec<Option<u8>> = outfit_spec
+            .split(',')
+            .map(|p| p.trim().parse().ok())
+            .collect();
+        let field = |i: usize, default: u8| parts.get(i).copied().flatten().unwrap_or(default);
+        let outfit = shared::components::HeroOutfit {
+            hair: field(0, 3),
+            shorts: field(1, 2),
+            shirt: field(2, 1) != 0,
+        };
+        let x = base.x + i as f32 * 1.4;
+        let z = base.z;
+        let pos = Vec3::new(x, terrain.get_height(x, z), z);
+        commands.spawn((
+            shared::components::Hero {
+                owner: lightyear::prelude::PeerId::Netcode(1000 + i as u64),
+            },
+            outfit,
+            shared::components::PlayerPosition(pos),
+            shared::components::PlayerRotation(std::f32::consts::PI),
+        ));
+    }
+    *spawned = true;
 }
 
 #[allow(clippy::too_many_arguments)]

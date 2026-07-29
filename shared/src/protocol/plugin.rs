@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::components::{
-    ActiveMapState, CloudSeed, Health, Player, PlayerPosition, PlayerProgression, PlayerRotation,
-    TimeWarp, WorldTime,
+    ActiveMapState, CloudSeed, Health, Hero, HeroOutfit, Player, PlayerPosition,
+    PlayerProgression, PlayerRotation, TimeWarp, WorldTime,
 };
 use crate::terrain::TerrainDeltaChunk;
 
@@ -21,6 +21,10 @@ impl Plugin for ProtocolPlugin {
         app.component::<PlayerPosition>().replicate();
         app.component::<PlayerRotation>().replicate();
         app.component::<PlayerProgression>().replicate();
+
+        // === HERO (embodied character; server-authoritative position) ===
+        app.component::<Hero>().replicate();
+        app.component::<HeroOutfit>().replicate();
 
         // === HEALTH ===
         app.component::<Health>().replicate();
@@ -45,6 +49,8 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<RequestPlayerRoster>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<DevCommand>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<HeroMoveTo>()
             .add_direction(NetworkDirection::ClientToServer);
 
         // Server -> Client

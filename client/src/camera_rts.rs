@@ -247,7 +247,10 @@ fn apply_commander_transform(
 
 /// March a ray against the heightfield, then binary-search the crossing.
 pub fn intersect_terrain(ray: Ray3d, terrain: &WorldTerrain) -> Option<Vec3> {
-    const RAY_MAX_DISTANCE: f32 = 5000.0;
+    // Must cover the camera at max zoom (12km) or clicks silently die in
+    // the upper zoom range. The step grows with distance (binary refinement
+    // restores precision), so the longer reach costs ~2x, not ~3x.
+    const RAY_MAX_DISTANCE: f32 = 14000.0;
     const RAY_STEP: f32 = 10.0;
     const RAY_BINARY_STEPS: usize = 12;
 
@@ -281,7 +284,7 @@ pub fn intersect_terrain(ray: Ray3d, terrain: &WorldTerrain) -> Option<Vec3> {
             prev_f = f;
         }
         prev_t = t;
-        t += RAY_STEP;
+        t += RAY_STEP + t * 0.008;
     }
 
     None

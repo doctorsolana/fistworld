@@ -10,6 +10,7 @@
 //! - Should avoid direct dependency on combat/collision internals.
 
 pub mod commander;
+pub mod hero;
 pub mod index;
 pub mod roster;
 pub mod roster_cache;

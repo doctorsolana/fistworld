@@ -70,6 +70,7 @@ pub fn handle_disconnections(
         &PlayerProgression,
     )>,
     mut inputs: ResMut<ClientInputs>,
+    mut hero_targets: ResMut<crate::player::hero::HeroMoveTargets>,
 ) {
     let client_entity = trigger.entity;
 
@@ -87,6 +88,10 @@ pub fn handle_disconnections(
         "PLAYER LEFT GAME - Client {:?} disconnected: {:?}",
         client_entity, peer_id
     );
+
+    // The hero despawns with the connection (ControlledBy SessionBased); its
+    // move target must go too or the map grows one orphan per disconnect.
+    hero_targets.0.remove(&peer_id);
 
     let name_lower = if let Some(name) = profiles.peer_to_name.get(&peer_id) {
         name.clone()

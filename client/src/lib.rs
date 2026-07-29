@@ -8,6 +8,7 @@ pub mod audio;
 pub mod camera_rts;
 pub mod capture;
 pub mod city;
+pub mod hero;
 pub mod input;
 pub mod perf_overlay;
 pub mod profiling;

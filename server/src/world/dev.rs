@@ -2,10 +2,13 @@
 
 use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
-use lightyear::prelude::{MessageReceiver, RemoteId};
+use lightyear::prelude::{
+    ControlledBy, Lifetime, MessageReceiver, NetworkTarget, RemoteId, Replicate,
+};
 
-use shared::components::TimeWarp;
+use shared::components::{Hero, PlayerPosition, PlayerRotation, TimeWarp};
 use shared::protocol::DevCommand;
+use shared::terrain::WorldTerrain;
 
 /// Whether this server honours god commands. Read once from `FISTWORLD_DEV` at startup;
 /// production deployments simply never set the variable.
@@ -30,13 +33,21 @@ fn parse_dev_flag(raw: Option<String>) -> bool {
 ///
 /// Receivers are drained even with dev mode off so messages never accumulate; they are
 /// just never applied.
+#[allow(clippy::too_many_arguments)]
 pub fn handle_dev_commands(
+    mut commands: Commands,
     dev: Res<DevMode>,
-    mut client_links: Query<(&RemoteId, &mut MessageReceiver<DevCommand>), With<ClientOf>>,
+    terrain: Option<Res<WorldTerrain>>,
+    heroes: Query<&Hero>,
+    mut client_links: Query<(Entity, &RemoteId, &mut MessageReceiver<DevCommand>), With<ClientOf>>,
     mut warp: Query<&mut TimeWarp>,
     mut warned_peers: Local<bevy::platform::collections::HashSet<lightyear::prelude::PeerId>>,
 ) {
-    for (remote_id, mut receiver) in client_links.iter_mut() {
+    // Spawns go through deferred Commands, so the Hero query cannot see a
+    // spawn from earlier in this same drain — track them here or a burst of
+    // two reliable SpawnHero messages in one tick defeats one-per-player.
+    let mut spawned_this_run = bevy::platform::collections::HashSet::new();
+    for (client_entity, remote_id, mut receiver) in client_links.iter_mut() {
         for command in receiver.receive() {
             if !dev.0 {
                 // A legitimate client never sends these without the grant; log the first
@@ -62,6 +73,42 @@ pub fn handle_dev_commands(
                         *tw = next;
                     }
                     info!("Dev: time warp set to {}x by {:?}", tw.0, remote_id.0);
+                }
+                DevCommand::SpawnHero { pos, outfit } => {
+                    // One hero per player, enforced HERE (the client also
+                    // greys its button, but the server is the authority).
+                    if spawned_this_run.contains(&remote_id.0)
+                        || heroes.iter().any(|h| h.owner == remote_id.0)
+                    {
+                        info!("Dev: ignoring SpawnHero from {:?}: hero exists", remote_id.0);
+                        continue;
+                    }
+                    if !pos.is_finite() {
+                        continue;
+                    }
+                    let Some(terrain) = terrain.as_ref() else {
+                        continue;
+                    };
+                    // Feet-on-ground: the character's origin is at its feet,
+                    // and hero PlayerPosition is defined as the feet point.
+                    let spawn =
+                        Vec3::new(pos.x, terrain.get_height(pos.x, pos.z), pos.z);
+                    commands.spawn((
+                        Hero { owner: remote_id.0 },
+                        outfit,
+                        // Opt into region interest BEFORE the visibility pass
+                        // runs, mirroring the commander spawn.
+                        shared::region::RegionCoord::from_world_pos(spawn),
+                        PlayerPosition(spawn),
+                        PlayerRotation(0.0),
+                        Replicate::to_clients(NetworkTarget::All),
+                        ControlledBy {
+                            owner: client_entity,
+                            lifetime: Lifetime::default(),
+                        },
+                    ));
+                    spawned_this_run.insert(remote_id.0);
+                    info!("Dev: hero spawned at {spawn:?} for {:?}", remote_id.0);
                 }
             }
         }

@@ -13,6 +13,10 @@ pub(super) fn spawn_hud(
     commands
         .spawn((
             HudRoot,
+            // Interaction makes the whole HUD rect (panels, labels, the gaps
+            // between swatches) register as UI to the world-click guard —
+            // Buttons alone left every non-button pixel click-through.
+            Interaction::default(),
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::Px(12.0),
@@ -150,6 +154,7 @@ fn spawn_god_panel(parent: &mut ChildSpawnerCommands<'_>) {
                     spawn_warp_button(row, "10x", 10.0);
                     spawn_warp_button(row, "100x", 100.0);
                 });
+            spawn_hero_section(panel);
             panel.spawn((
                 Text::new("G god mode   J time of day"),
                 TextFont {
@@ -183,6 +188,130 @@ fn spawn_warp_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, factor: 
                 Text::new(text),
                 TextFont {
                     font_size: FontSize::Px(15.0),
+                    ..default()
+                },
+                TextColor(TEXT_COLOR),
+            ));
+        });
+}
+
+/// Hero spawn section: outfit swatches + the spawn button. Lives inside the
+/// god panel so its visibility rides `sync_god_panel` for free.
+fn spawn_hero_section(panel: &mut ChildSpawnerCommands<'_>) {
+    panel.spawn((
+        Text::new("HERO"),
+        TextFont {
+            font_size: FontSize::Px(11.0),
+            ..default()
+        },
+        TextColor(TEXT_MUTED),
+        Node {
+            margin: UiRect::top(Val::Px(6.0)),
+            ..default()
+        },
+    ));
+
+    // Hair: two rows of three so the panel stays narrow.
+    for chunk in shared::components::HERO_HAIR_LABELS
+        .iter()
+        .enumerate()
+        .collect::<Vec<_>>()
+        .chunks(3)
+    {
+        let chunk = chunk.to_vec();
+        panel
+            .spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(4.0),
+                ..default()
+            })
+            .with_children(|row| {
+                for (index, label) in chunk {
+                    spawn_outfit_button(row, label, 52.0, HairButton(index as u8));
+                }
+            });
+    }
+
+    panel
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(4.0),
+            margin: UiRect::top(Val::Px(2.0)),
+            ..default()
+        })
+        .with_children(|row| {
+            for (index, label) in shared::components::HERO_SHORTS_LABELS.iter().enumerate() {
+                spawn_outfit_button(row, label, 52.0, ShortsButton(index as u8));
+            }
+        });
+
+    panel
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(4.0),
+            margin: UiRect::top(Val::Px(2.0)),
+            ..default()
+        })
+        .with_children(|row| {
+            spawn_outfit_button(row, "SHIRT", 52.0, ShirtToggleButton);
+        });
+
+    panel
+        .spawn((
+            SpawnHeroButton,
+            Button,
+            Node {
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
+                margin: UiRect::top(Val::Px(4.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::from(ACCENT_COLOR),
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                SpawnHeroLabel,
+                Text::new("SPAWN HERO"),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(TEXT_COLOR),
+            ));
+        });
+}
+
+fn spawn_outfit_button(
+    parent: &mut ChildSpawnerCommands<'_>,
+    text: &str,
+    width: f32,
+    marker: impl Component,
+) {
+    parent
+        .spawn((
+            Button,
+            marker,
+            Node {
+                width: Val::Px(width),
+                height: Val::Px(22.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::from(BUTTON_BORDER),
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                Text::new(text),
+                TextFont {
+                    font_size: FontSize::Px(10.0),
                     ..default()
                 },
                 TextColor(TEXT_COLOR),

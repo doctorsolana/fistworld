@@ -4,6 +4,8 @@ Everything learned turning a Tripo-generated blob into a rigged, animated, cloth
 character. Written for the next time you do this, and for when you start wiring it into the game.
 
 **Current asset:** `tripo_boy.blend` — `Character_Base` + `Rig` + `Wardrobe` collection.
+**Ships as:** `client/assets/characters/voxel_boy.glb`, built by `export_character_glb.py`
+(section 12). The `.blend` is the studio source; the `.glb` is the only thing the game reads.
 
 ---
 
@@ -362,14 +364,96 @@ poses and actually look at them.
 
 ---
 
-## 12. Known gaps before this ships in-game
+## 12. Export to Bevy
 
-1. **No UVs.** Flat materials only — no logos, prints, decals, or baked AO until it's unwrapped.
-   This is the biggest blocker for apparel variety.
+```bash
+blender asset_creation/tripo_boy.blend --background --python asset_creation/export_character_glb.py
+python3 asset_creation/inspect_glb.py client/assets/characters/voxel_boy.glb   # numeric contract
+blender --background --factory-startup --python asset_creation/render_glb_check.py  # look at it
+```
+
+**The `.blend` stays a studio file** — 1 unit tall, facing −Y, lights and camera tuned for that
+scale. The export script owns the conversion into game space, so the source never has to be re-lit
+and the conversion is repeatable rather than a one-off manual edit.
+
+The contract the script targets (Bevy 0.19, this repo):
+
+| Thing | Value |
+|---|---|
+| Container | `.glb`, embedded textures → `client/assets/characters/<name>.glb`, loaded as `characters/<name>.glb#Scene0` |
+| Scale | 1 unit = 1 m, bare head-top **1.70 m**; every object transform identity, **no armature scale** |
+| Facing | faces **+Y in Blender** → glTF **−Z** = Bevy forward. Never correct facing with a yaw offset in Rust |
+| Handedness | character's left on **−X**, which is left for a −Z-facing figure, so `.L`/`.R` stay honest |
+| Rig | one armature, 16 bones, **1 influence/vertex** (rigid), well under the 4-influence cap |
+| Wardrobe | all 11 meshes in the one file, all skinned to the one armature; dress by toggling node visibility |
+| Materials | Principled → baseColor only, metallic 0, roughness 1, no KHR extensions |
+
+### The one that would have shipped silently
+
+**`Armature.transform()` repositions bones but RECOMPUTES each bone's local axes**, and pose
+channels are stored in those axes. A 180° Z turn flips `leg.L`'s local X from `(1,0,0)` to
+`(-1,0,0)`, so every stored euler now means its own mirror image and the limbs swing the wrong way.
+This is a change of *meaning*, not of magnitude — rescaling fcurves cannot fix it. The symptom is
+tiny and easy to wave away: a pure rotation, which must leave world Z untouched, moved the planted
+foot from `0.00000` to `-0.00120`.
+
+The fix is to never read a channel. Sample every bone's armature-space `matrix` **before**
+transforming, then rewrite the action from those matrices afterwards (`loc → M @ loc`,
+`quat → R_M @ quat`, scale 1). Set parents before children and `view_layer.update()` between, since
+`pose_bone.matrix` is interpreted against the parent's *current* state. Verified exact: worst
+bone-position error 0.0025 mm across all bones and frames, stride ratio exactly 1.70333.
+
+### Order is load-bearing, and other traps
+
+- **Bake procedural materials FIRST**, before any rescale/rotation, and **in rest pose**. The voxel
+  patch look is driven by *world* position, so transforming first resizes and shifts every cell, and
+  a posed rig freezes the walk pose into the texture. Baking also fixes a latent bug: world-driven
+  noise would swim across the hair as an NPC walked around the map. Frozen to UVs, it travels along.
+- **`object.dimensions` / `bound_box` report the EVALUATED bounds.** On a posed frame they describe
+  the walk crouch (0.99001) rather than the bind pose (0.99805), which silently makes the character
+  0.8% short. Measure `mesh.vertices` for anything that must be exact.
+- **`select_set()` silently no-ops on a hidden object.** The five hairstyles the studio file keeps
+  switched off made the bake die with "No valid selected objects". Unhide everything first — which
+  is needed anyway, because a hidden-at-export garment simply would not exist at runtime.
+- **`nodes.remove()` invalidates other live Python node references in the same tree.** Rebuilding a
+  material by deleting around a node you keep a handle to fails with a bogus
+  `KeyError: 'Color' not found`. Clear the tree and rebuild from the image datablock.
+- **The exporter warns but does not fail** on bad geometry ("Mesh X is not valid, and may be exported
+  wrongly"), so a broken mesh ships quietly. `Shorts_Athletic` carries invalid geometry from its
+  Solidify pass; the script runs `mesh.validate()` and logs anything it repairs.
+- **`export_apply=True` would collapse the Armature modifier** and destroy skinning. Leave it off.
+
+### Verifying
+
+`inspect_glb.py` is pure stdlib — it checks node names, one-skin-for-everything, influence counts,
+animation name and duration, material channels, embedded image sizes, height, and facing. Get joint
+rest positions from **`inverseBindMatrices`** (invert, take the translation), *not* by walking the
+node hierarchy adding translations: bone nodes carry rest rotations, so naive addition reports the
+left eye on the wrong side and invents failures that aren't there.
+
+`render_glb_check.py` re-imports the shipped `.glb` into a clean scene and renders a turnaround, a
+walk strip and every hairstyle — testing what shipped rather than the source scene. One trap: the
+importer maps `(x,y,z)_gltf → (x,−z,y)_blender`, so a character facing −Z in the file faces **+Y**
+in Blender, and the camera must stand at **+Y** to photograph its face. Standing at −Y renders a
+convincing, fully-lit picture of the back of its head.
+
+---
+
+## 13. Known gaps before this ships in-game
+
+1. **No UVs on body or garments.** The six hairstyles are unwrapped and baked (section 12); the body
+   and clothes are still flat-colour only, so no logos, prints, decals or baked AO on apparel. This
+   is the biggest remaining blocker for apparel variety.
 2. **No edge loops at joints**, so group boundaries are positional. Fine for rigid binding;
    would need loops for any smooth deformation.
 3. **Eyes are 192 of ~750 verts** (3-segment bevel). Drop to 1 segment to reclaim ~25% of the
    mesh with no visible change at this scale.
-4. **Only one animation.** Idle, run, and jump would reuse the same rig and grounding technique.
-5. **Export untested.** glTF is the likely target; verify that rigid weights, the `.L`/`.R`
-   naming, and the 24-frame loop survive the round-trip before building on it.
+4. **Only one animation.** The glb ships `walk` alone; Bevy 0.19's `AnimationGraph` plays clips by
+   name, so `idle`, `run` and `jump` would slot in beside it reusing the same rig and the derived-
+   bounce grounding technique. An idle is the most conspicuous absence — an NPC standing still
+   currently has nothing to play.
+5. **`Shorts_Athletic` has invalid geometry** from its Solidify pass. The exporter only warns, and
+   `export_character_glb.py` repairs it with `mesh.validate()` on the way out, so the shipped glb is
+   clean — but the `.blend` is still wrong and should be fixed at source.
+6. **Not yet loaded in the game.** The glb meets the contract and round-trips correctly, but nothing
+   in `client/` references `characters/voxel_boy.glb` yet.

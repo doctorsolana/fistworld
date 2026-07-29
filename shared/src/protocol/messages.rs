@@ -64,6 +64,20 @@ pub struct SetTimeOfDay {
 pub enum DevCommand {
     /// Set the simulation speed multiplier: 0 = paused, 1 = real time.
     SetTimeWarp(f32),
+    /// Spawn the sender's hero at a world position with the chosen outfit.
+    /// One hero per player: the server ignores this if the sender already
+    /// has one alive.
+    SpawnHero {
+        pos: Vec3,
+        outfit: crate::components::HeroOutfit,
+    },
+}
+
+/// Client -> Server: order the sender's hero to walk to a terrain point.
+/// The server owns the movement; this is pure intent (RTS click-to-move).
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct HeroMoveTo {
+    pub target: Vec3,
 }
 
 /// Server -> Client: whether this connection may use god mode.
@@ -163,6 +177,35 @@ mod tests {
         let decoded: DevCommand = bincode::deserialize(&bytes).unwrap();
 
         assert_eq!(decoded, command);
+    }
+
+    #[test]
+    fn spawn_hero_roundtrips() {
+        let command = DevCommand::SpawnHero {
+            pos: Vec3::new(12.0, 3.5, -900.25),
+            outfit: crate::components::HeroOutfit {
+                hair: 4,
+                shorts: 1,
+                shirt: false,
+            },
+        };
+
+        let bytes = bincode::serialize(&command).unwrap();
+        let decoded: DevCommand = bincode::deserialize(&bytes).unwrap();
+
+        assert_eq!(decoded, command);
+    }
+
+    #[test]
+    fn hero_move_to_roundtrips() {
+        let msg = HeroMoveTo {
+            target: Vec3::new(-64.5, 12.0, 480.0),
+        };
+
+        let bytes = bincode::serialize(&msg).unwrap();
+        let decoded: HeroMoveTo = bincode::deserialize(&bytes).unwrap();
+
+        assert_eq!(decoded, msg);
     }
 
     #[test]

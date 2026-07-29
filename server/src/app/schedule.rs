@@ -66,6 +66,8 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             player::roster::handle_player_roster_requests,
             net::input::handle_client_input_messages,
             player::commander::sync_commander_views,
+            player::hero::handle_hero_move_orders,
+            player::hero::step_heroes,
             world::regions::update_client_interest,
             world::regions::apply_region_visibility,
             world::regions::update_region_sim_levels,

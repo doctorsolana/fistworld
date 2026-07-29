@@ -241,6 +241,7 @@ impl GraphicsSettings {
         self.clouds_enabled = env_bool("FISTFORCE_CLOUDS", self.clouds_enabled);
         self.props_enabled = env_bool("FISTFORCE_PROPS", self.props_enabled);
         self.vsync_enabled = env_bool("FISTFORCE_VSYNC", self.vsync_enabled);
+        self.fullscreen_enabled = env_bool("FISTFORCE_FULLSCREEN", self.fullscreen_enabled);
     }
 
     /// Settings for this run: the saved file (if any) under the env overrides.

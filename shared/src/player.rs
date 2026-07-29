@@ -3,6 +3,32 @@
 /// Player movement speed (units per second)
 pub const PLAYER_SPEED: f32 = 8.0;
 
+/// Hero walk speed (m/s). Tuned to the voxel character's 1.04s walk cycle so
+/// the feet don't skate; the client scales animation speed from actual
+/// velocity, so small changes here stay in sync automatically.
+pub const HERO_MOVE_SPEED: f32 = 3.2;
+/// Distance at which a hero move order counts as arrived.
+pub const HERO_ARRIVE_EPSILON: f32 = 0.15;
+
+/// Convert a `PeerId` into a stable `u64` for ownership/index keys.
+/// (Client compares `Hero::owner` against its `LocalPeerId(u64)`.)
+pub fn peer_id_to_u64(peer_id: lightyear::prelude::PeerId) -> u64 {
+    use lightyear::prelude::PeerId;
+    match peer_id {
+        PeerId::Netcode(id) => id,
+        PeerId::Steam(id) => id,
+        PeerId::Local(id) => id,
+        PeerId::Entity(id) => id,
+        PeerId::Raw(addr) => {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            addr.hash(&mut hasher);
+            hasher.finish()
+        }
+        PeerId::Server => 0,
+    }
+}
+
 /// Sprint speed multiplier when holding Shift on foot.
 pub const PLAYER_SPRINT_MULT: f32 = 1.55;
 

@@ -7,11 +7,14 @@ pub mod actions;
 pub mod layout;
 pub mod state_sync;
 
-use actions::{handle_mode_chip_button, handle_mode_toggle_key, handle_warp_buttons};
+use actions::{
+    handle_mode_chip_button, handle_mode_toggle_key, handle_outfit_buttons,
+    handle_spawn_hero_button, handle_warp_buttons,
+};
 use layout::{despawn_hud, spawn_hud};
 use state_sync::{
-    receive_dev_status, reset_dev_grant, style_warp_buttons, sync_clock_chip, sync_god_panel,
-    sync_mode_chip,
+    receive_dev_status, reset_dev_grant, style_outfit_buttons, style_warp_buttons,
+    sync_clock_chip, sync_god_panel, sync_mode_chip, sync_spawn_hero_button,
 };
 
 use bevy::prelude::*;
@@ -44,10 +47,14 @@ impl Plugin for HudPlugin {
                 handle_mode_toggle_key,
                 handle_mode_chip_button,
                 handle_warp_buttons,
+                handle_outfit_buttons,
+                handle_spawn_hero_button,
                 sync_clock_chip,
                 sync_mode_chip,
                 sync_god_panel,
                 style_warp_buttons,
+                style_outfit_buttons,
+                sync_spawn_hero_button,
             )
                 .run_if(in_state(GameState::Playing)),
         );
@@ -102,3 +109,19 @@ struct GodPanel;
 
 #[derive(Component, Clone, Copy)]
 struct WarpButton(f32);
+
+/// Outfit-picker buttons in the hero spawn section.
+#[derive(Component, Clone, Copy)]
+struct HairButton(u8);
+
+#[derive(Component, Clone, Copy)]
+struct ShortsButton(u8);
+
+#[derive(Component)]
+struct ShirtToggleButton;
+
+#[derive(Component)]
+struct SpawnHeroButton;
+
+#[derive(Component)]
+struct SpawnHeroLabel;
