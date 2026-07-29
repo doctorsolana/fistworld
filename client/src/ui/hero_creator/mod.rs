@@ -168,7 +168,7 @@ fn setup_preview_rig(
             // runs Exposure::SUNLIGHT), tight range so nothing spills.
             set.spawn((
                 PointLight {
-                    intensity: 2_800_000.0,
+                    intensity: 1_900_000.0,
                     range: 4.0,
                     shadow_maps_enabled: false,
                     ..default()
@@ -601,25 +601,41 @@ fn style_creator_buttons(
 }
 
 /// The diorama must never cast into the world's shadow maps.
+///
+/// Latches off once the instantiated scene is fully tagged — this must not
+/// keep walking the subtree every frame for the rest of the session.
 fn propagate_preview_shadows(
     mut commands: Commands,
     preview: Res<PreviewEntities>,
     children_q: Query<&Children>,
-    meshes: Query<Entity, (With<Mesh3d>, Without<PreviewLayered>)>,
+    untagged: Query<(), (With<Mesh3d>, Without<PreviewLayered>)>,
+    tagged: Query<(), With<PreviewLayered>>,
+    mut done: Local<bool>,
 ) {
+    if *done {
+        return;
+    }
     let Some(set) = preview.set else {
         return;
     };
     let mut stack = vec![set];
+    let mut tagged_total = 0usize;
     while let Some(node) = stack.pop() {
-        if meshes.get(node).is_ok() {
+        if untagged.get(node).is_ok() {
             commands
                 .entity(node)
                 .insert((NotShadowCaster, PreviewLayered));
+            tagged_total += 1;
+        } else if tagged.get(node).is_ok() {
+            tagged_total += 1;
         }
         if let Ok(children) = children_q.get(node) {
             stack.extend(children.iter());
         }
+    }
+    // Board + 14 rig primitives; once they all carry the tag, stop forever.
+    if tagged_total >= 15 {
+        *done = true;
     }
 }
 

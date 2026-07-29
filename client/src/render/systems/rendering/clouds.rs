@@ -401,6 +401,7 @@ pub fn update_cloud_layers(
         &mut CloudLayer,
         &MeshMaterial3d<StandardMaterial>,
         &mut Transform,
+        &mut Visibility,
     )>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut cache: ResMut<CloudMaterialCache>,
@@ -440,7 +441,22 @@ pub fn update_cloud_layers(
             || (cache.last_visibility - visibility).abs() > 0.005
     });
 
-    for (mut layer, material_handle, mut transform) in layers.iter_mut() {
+    for (mut layer, material_handle, mut transform, mut layer_visibility) in layers.iter_mut() {
+        // Alpha 0 still rasterizes: the camera sits INSIDE this sphere, so at
+        // map zoom (visibility exactly 0) it was a fullscreen transparent
+        // draw at Retina resolution doing nothing. Hide it outright.
+        let target_visibility = if visibility < 0.004 {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        if *layer_visibility != target_visibility {
+            *layer_visibility = target_visibility;
+        }
+        if target_visibility == Visibility::Hidden {
+            continue;
+        }
+
         // Keep clouds centered on the camera (scale stays the authored radius,
         // so the dome never deforms however far the camera zooms out).
         let translation = camera_tf.translation();

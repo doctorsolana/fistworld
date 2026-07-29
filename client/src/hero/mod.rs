@@ -326,18 +326,23 @@ fn sync_hero_transforms(
 }
 
 /// Scale the walk cycle from visual speed; pause it when standing.
+///
+/// Hidden rigs (the parked creator preview) pause outright: animation
+/// evaluation runs regardless of visibility, and a character nobody can see
+/// must not sample 16 bones per frame forever.
 fn drive_hero_walk_animation(
-    heroes: Query<(&HeroVisual, &HeroAnim)>,
+    heroes: Query<(&HeroVisual, &HeroAnim, Option<&InheritedVisibility>)>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    for (visual, anim) in heroes.iter() {
+    for (visual, anim, inherited) in heroes.iter() {
+        let hidden = inherited.is_some_and(|v| !v.get());
         let Ok(mut player) = players.get_mut(anim.player) else {
             continue;
         };
         let Some(active) = player.animation_mut(anim.walk) else {
             continue;
         };
-        let speed = if visual.speed > 0.2 {
+        let speed = if !hidden && visual.speed > 0.2 {
             (visual.speed / HERO_MOVE_SPEED).clamp(0.4, 1.6)
         } else {
             0.0

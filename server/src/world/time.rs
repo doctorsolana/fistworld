@@ -32,6 +32,12 @@ pub fn spawn_world_time_once(mut commands: Commands, spawned: Option<Res<WorldTi
 }
 
 /// Advance the world clock every fixed tick (server-authoritative).
+///
+/// KNOWN idle-traffic floor (accepted for now): mutating WorldTime every tick
+/// change-flags it every tick, so every client receives a ~30/s WorldTime
+/// trickle forever (~1 KiB/s each). The proper fix is client-side clock
+/// prediction (integrate locally from TimeWarp, correct on sparse syncs) —
+/// do that before worrying about idle bandwidth measurements.
 pub fn update_world_time(mut world_time: Query<&mut WorldTime>, warp: Query<&TimeWarp>) {
     let factor = warp.iter().next().map(|w| w.0).unwrap_or(1.0);
     let real_dt = 1.0 / shared::protocol::FIXED_TIMESTEP_HZ as f32;

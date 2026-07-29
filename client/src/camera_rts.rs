@@ -196,6 +196,7 @@ pub fn update_cursor_terrain_hit(
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     terrain: Res<WorldTerrain>,
     mut hit: ResMut<CursorTerrainHit>,
+    mut last_inputs: Local<Option<(Vec2, Vec3, Quat)>>,
 ) {
     let Ok(window) = windows.single() else {
         hit.0 = None;
@@ -220,6 +221,19 @@ pub fn update_cursor_terrain_hit(
         hit.0 = None;
         return;
     }
+    // The ray march is ~300 heightfield samples; with cursor, camera, and
+    // terrain all unchanged the result is identical, so an idle frame must
+    // not pay for it (this runs every Update frame forever).
+    let inputs = (
+        cursor_pos,
+        camera_transform.translation(),
+        camera_transform.rotation(),
+    );
+    if *last_inputs == Some(inputs) && !terrain.is_changed() {
+        return;
+    }
+    *last_inputs = Some(inputs);
+
     let viewport_pos = cursor_pos / window_size * viewport_size;
     let Ok(ray) = camera.viewport_to_world(camera_transform, viewport_pos) else {
         hit.0 = None;

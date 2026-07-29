@@ -176,14 +176,21 @@ pub fn update_cloud_plane(
     cover: Res<CloudCover>,
     settings: Res<GraphicsSettings>,
     terrain: Option<Res<shared::terrain::WorldTerrain>>,
-    mut plane: Query<(&mut Transform, &MeshMaterial3d<CloudLayerMaterial>), With<CloudLayerPlane>>,
+    mut plane: Query<
+        (
+            &mut Transform,
+            &mut Visibility,
+            &MeshMaterial3d<CloudLayerMaterial>,
+        ),
+        With<CloudLayerPlane>,
+    >,
     mut materials: ResMut<Assets<CloudLayerMaterial>>,
     mut cache: Local<CloudPlaneCache>,
 ) {
     if !settings.clouds_enabled {
         return;
     }
-    let Ok((mut transform, material_handle)) = plane.single_mut() else {
+    let Ok((mut transform, mut plane_visibility, material_handle)) = plane.single_mut() else {
         return;
     };
     let Some(world_time) = world_time_query.iter().next() else {
@@ -192,6 +199,23 @@ pub fn update_cloud_plane(
     let Ok(camera_tf) = camera.single() else {
         return;
     };
+
+    // At night the shader's night_fade forces alpha to exactly 0 everywhere —
+    // don't rasterize a 40 km alpha-blended quad (fullscreen at map zoom, at
+    // Retina resolution) for guaranteed-invisible output.
+    let night_elevation = -world_time.sun_phase().cos();
+    let plane_should_show = night_elevation > -0.05;
+    let target_visibility = if plane_should_show {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    if *plane_visibility != target_visibility {
+        *plane_visibility = target_visibility;
+    }
+    if !plane_should_show {
+        return;
+    }
 
     // Keep the quad centered under/over the camera. Sampling is world-space,
     // so the hop is invisible; 1m steps keep the transform quiet when idle.

@@ -150,7 +150,31 @@ pub fn update_client_interest(
     registry: Res<RegionRegistry>,
     inputs: Res<ClientInputs>,
     commanders: Query<(&Player, &PlayerPosition, &ControlledBy)>,
+    mut cached_keys: Local<Vec<(Entity, RegionCoord, i32)>>,
 ) {
+    // Interest only changes when a commander's center region or ring count
+    // does (or clients come/go, or the registry changes). Rebuilding a
+    // ~4k-entry set per client at 60Hz for a static camera was pure waste —
+    // and the unconditional rebuild also dirtied the resource every tick,
+    // defeating any change-gating downstream.
+    let mut keys: Vec<(Entity, RegionCoord, i32)> = Vec::with_capacity(commanders.iter().len());
+    for (player, position, controlled_by) in commanders.iter() {
+        let view_radius = inputs
+            .latest
+            .get(&player.client_id)
+            .map(|input| input.view_radius)
+            .filter(|r| r.is_finite() && *r > 0.0)
+            .unwrap_or(REGION_SIZE);
+        let rings = (view_radius / REGION_SIZE).ceil() as i32;
+        let center = RegionCoord::from_world_pos(position.0);
+        keys.push((controlled_by.owner, center, rings));
+    }
+    keys.sort_unstable_by_key(|(entity, _, _)| *entity);
+    if *cached_keys == keys && !registry.is_changed() {
+        return;
+    }
+    *cached_keys = keys;
+
     interest.by_client.clear();
 
     for (player, position, controlled_by) in commanders.iter() {

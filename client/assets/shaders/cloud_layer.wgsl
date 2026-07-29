@@ -123,26 +123,38 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let density2 = cloud_density(world_xz + vec2<f32>(1000.0, -700.0), params_a2, seed_phase);
     let shape = max(density, density2 * 0.7);
 
-    // Higher-frequency detail modulates brightness only — never alpha. Kept
-    // gentle: strong detail here reads as mottling inside the masses.
-    let p0 = (world_xz + params_a.zw) * params_a.y + vec2<f32>(seed_phase, seed_phase * 1.73);
-    let brightness = clamp(0.68 + 0.22 * cloud_fbm(p0 * 2.6), 0.0, 1.0);
+    // Everything below only affects COLOR; wherever the shape is ~zero the
+    // alpha is ~zero and the color is blended away. The branch is spatially
+    // coherent at the ~190 m blob scale, so the empty sky between clouds
+    // (most of the 40 km quad on calm frames) genuinely skips the 68 noise
+    // units of brightness detail + bump normal below.
+    var col = material.tint_shadow.rgb;
+    if (shape > 0.005) {
+        // Higher-frequency detail modulates brightness only — never alpha.
+        // Kept gentle: strong detail reads as mottling inside the masses.
+        let p0 =
+            (world_xz + params_a.zw) * params_a.y + vec2<f32>(seed_phase, seed_phase * 1.73);
+        let brightness = clamp(0.68 + 0.22 * cloud_fbm(p0 * 2.6), 0.0, 1.0);
 
-    // Fake volume: bump normal from central differences of the density field.
-    let e = 6.0;
-    let bump = 1.6;
-    let ddx = cloud_density(world_xz + vec2<f32>(e, 0.0), params_a, seed_phase)
-        - cloud_density(world_xz - vec2<f32>(e, 0.0), params_a, seed_phase);
-    let ddz = cloud_density(world_xz + vec2<f32>(0.0, e), params_a, seed_phase)
-        - cloud_density(world_xz - vec2<f32>(0.0, e), params_a, seed_phase);
-    let n = normalize(vec3<f32>(-ddx * bump, 1.0, -ddz * bump));
-    let half_lambert = dot(n, -material.sun_dir.xyz) * 0.5 + 0.5;
+        // Fake volume: bump normal from central differences of the density
+        // field. Taps use the same storm-boosted params as the drawn deck.
+        let e = 6.0;
+        let bump = 1.6;
+        let ddx = cloud_density(world_xz + vec2<f32>(e, 0.0), params_a_storm, seed_phase)
+            - cloud_density(world_xz - vec2<f32>(e, 0.0), params_a_storm, seed_phase);
+        let ddz = cloud_density(world_xz + vec2<f32>(0.0, e), params_a_storm, seed_phase)
+            - cloud_density(world_xz - vec2<f32>(0.0, e), params_a_storm, seed_phase);
+        let n = normalize(vec3<f32>(-ddx * bump, 1.0, -ddz * bump));
+        let half_lambert = dot(n, -material.sun_dir.xyz) * 0.5 + 0.5;
 
-    var col = mix(material.tint_shadow.rgb, material.tint_lit.rgb * brightness, half_lambert);
-    // Storm masses go slate and brooding.
-    col = mix(col, vec3<f32>(0.19, 0.21, 0.26), smoothstep(0.0, 0.7, storm) * 0.95);
-    // Rim brighten just inside the silhouette.
-    col += vec3<f32>(0.15 * (smoothstep(0.0, 0.3, density) - smoothstep(0.3, 0.7, density)));
+        col = mix(material.tint_shadow.rgb, material.tint_lit.rgb * brightness, half_lambert);
+        // Storm masses go slate and brooding.
+        col = mix(col, vec3<f32>(0.19, 0.21, 0.26), smoothstep(0.0, 0.7, storm) * 0.95);
+        // Rim brighten just inside the silhouette.
+        col += vec3<f32>(
+            0.15 * (smoothstep(0.0, 0.3, density) - smoothstep(0.3, 0.7, density))
+        );
+    }
 
     // Fade the layer out as the camera crosses it so the quad never slices
     // the view mid-screen.

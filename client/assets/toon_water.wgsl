@@ -462,15 +462,22 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         min(cloud_params.x + storm_at_cloud * 0.9, 1.0),
         cloud_params.yzw,
     );
-    let cloud_shade = (1.0
-        - material.clouds_b.z
-            * smoothstep(
-                0.22,
-                0.62,
-                cloud_density(cloud_shadow_xz, storm_params, material.clouds_b.w),
-            ))
-        * (1.0
-            - storm_cell(in.world_position.xz, storm_center, storminess) * 0.30);
+    var cloud_shade = 1.0;
+    // Uniform gate: skip the 16-noise-unit density field whenever the
+    // shadow strength is zero (night, clear sky, clouds disabled).
+    if (material.clouds_b.z > 0.0005) {
+        cloud_shade = 1.0
+            - material.clouds_b.z
+                * smoothstep(
+                    0.22,
+                    0.62,
+                    cloud_density(cloud_shadow_xz, storm_params, material.clouds_b.w),
+                );
+    }
+    // Uniform branch: calm frames skip the storm-cell evaluation entirely.
+    if (storminess >= 0.01) {
+        cloud_shade *= 1.0 - storm_cell(in.world_position.xz, storm_center, storminess) * 0.30;
+    }
     // Night: the water is unlit-custom, so scene lights can't darken it —
     // derive night from the synced sun elevation instead and pull toward a
     // dark blue of itself (matching the moonlit land).

@@ -537,35 +537,50 @@ fn fragment(
         let storminess = palette.storm.z;
         let storm_center = palette.storm.xy
             + vec2<f32>(0.86, 0.5) * (0.55 * cloud_drift);
-        let storm_at_cloud = storm_cell(cloud_shadow_xz, storm_center, storminess);
-        let storm_params = vec4<f32>(
-            min(cloud_params.x + storm_at_cloud * 0.9, 1.0),
-            cloud_params.yzw,
-        );
-        let cloud_shade = 1.0
-            - palette.clouds_b.z
-                * smoothstep(
-                    0.22,
-                    0.62,
-                    cloud_density(cloud_shadow_xz, storm_params, palette.clouds_b.w),
-                );
-        let ground_storm = storm_cell(
-            pbr_input.world_position.xz,
-            storm_center,
-            storminess,
-        );
-        // Rain: fine noise streaming with the wind reads as squall sheets
-        // sweeping the ground under the storm.
-        let rain_n = cloud_vnoise(
-            (pbr_input.world_position.xz
-                - vec2<f32>(0.86, 0.5) * (globals.time * 42.0))
-                * (1.0 / 55.0),
-        );
-        var shaded = out.color.rgb * cloud_shade
-            * (1.0 - ground_storm * (0.36 + 0.14 * rain_n));
-        // Rain-soaked ground desaturates toward slate.
-        let storm_gray = dot(shaded, vec3<f32>(0.299, 0.587, 0.114));
-        shaded = mix(shaded, vec3<f32>(storm_gray) * vec3<f32>(0.92, 0.96, 1.05), ground_storm * 0.5);
+        var shaded = out.color.rgb;
+        // Uniform, coherent gate: strength is exactly 0 all night, on a
+        // fully clear sky, and with clouds disabled — the 16-noise-unit
+        // density field below must not run just to be multiplied by zero.
+        if (palette.clouds_b.z > 0.0005) {
+            let storm_at_cloud = storm_cell(cloud_shadow_xz, storm_center, storminess);
+            let storm_params = vec4<f32>(
+                min(cloud_params.x + storm_at_cloud * 0.9, 1.0),
+                cloud_params.yzw,
+            );
+            let cloud_shade = 1.0
+                - palette.clouds_b.z
+                    * smoothstep(
+                        0.22,
+                        0.62,
+                        cloud_density(cloud_shadow_xz, storm_params, palette.clouds_b.w),
+                    );
+            shaded *= cloud_shade;
+        }
+        // Storm ground effects: storminess is a UNIFORM, so this branch is
+        // coherent — calm frames skip the rain noise + desaturation cost on
+        // every fragment.
+        if (storminess >= 0.01) {
+            let ground_storm = storm_cell(
+                pbr_input.world_position.xz,
+                storm_center,
+                storminess,
+            );
+            // Rain: fine noise streaming with the wind reads as squall
+            // sheets sweeping the ground under the storm.
+            let rain_n = cloud_vnoise(
+                (pbr_input.world_position.xz
+                    - vec2<f32>(0.86, 0.5) * (globals.time * 42.0))
+                    * (1.0 / 55.0),
+            );
+            shaded *= 1.0 - ground_storm * (0.36 + 0.14 * rain_n);
+            // Rain-soaked ground desaturates toward slate.
+            let storm_gray = dot(shaded, vec3<f32>(0.299, 0.587, 0.114));
+            shaded = mix(
+                shaded,
+                vec3<f32>(storm_gray) * vec3<f32>(0.92, 0.96, 1.05),
+                ground_storm * 0.5,
+            );
+        }
         out.color = vec4<f32>(shaded, out.color.a);
     } else {
         out.color = pbr_input.material.base_color;
