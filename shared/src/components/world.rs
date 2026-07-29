@@ -79,11 +79,11 @@ impl WorldTime {
     /// Start early morning (near sunrise).
     pub const DEFAULT_START_SECONDS_IN_DAY: f32 = 30.0;
     /// Displayed clock hour of sunrise. The display clock is deliberately
-    /// asymmetric (summer hours): daylight owns 06:00-20:00 so dusk lands at
-    /// a natural-feeling clock time instead of mid-afternoon.
+    /// asymmetric (long summer days): daylight owns 06:00-22:00 so dusk lands
+    /// late in the evening instead of mid-afternoon.
     pub const SUNRISE_NORMALIZED: f32 = 6.0 / 24.0;
-    /// Displayed clock hour of sunset (20:00).
-    pub const SUNSET_NORMALIZED: f32 = 20.0 / 24.0;
+    /// Displayed clock hour of sunset (22:00).
+    pub const SUNSET_NORMALIZED: f32 = 22.0 / 24.0;
 
     pub fn new(day_duration: f32, night_duration: f32, seconds_in_cycle: f32) -> Self {
         let mut wt = Self {

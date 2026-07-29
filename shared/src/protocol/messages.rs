@@ -42,8 +42,9 @@ impl TimeOfDayPreset {
             TimeOfDayPreset::Night => 0.0,
             TimeOfDayPreset::Morning => 0.25,
             TimeOfDayPreset::Midday => 0.5,
-            // Display hours: sunset sits at 20:00 on the summer clock.
-            TimeOfDayPreset::Sunset => 0.81,
+            // Display hours: sunset sits at 22:00 on the summer clock; the
+            // preset lands just before the boundary for the golden look.
+            TimeOfDayPreset::Sunset => 0.895,
         }
     }
 }
