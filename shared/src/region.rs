@@ -19,8 +19,34 @@ use serde::{Deserialize, Serialize};
 /// Edge length of a region in metres.
 ///
 /// Sized so a region is a meaningful political unit — roughly "a settlement and its
-/// surrounding land" — rather than a streaming detail. A 2816m map is ~6x6 regions.
+/// surrounding land" — rather than a streaming detail. The shipped 8192m map is
+/// 17x17 regions.
 pub const REGION_SIZE: f32 = 512.0;
+
+/// Hard ceiling on a client's reported view radius, in metres.
+///
+/// The radius is CLIENT-SUPPLIED (it rides `PlayerInput` so zooming out widens
+/// interest), and it feeds `rings = radius / REGION_SIZE` straight into
+/// [`RegionCoord::in_radius`], which allocates a `(2*rings+1)^2` Vec. Unclamped
+/// that is a one-message remote OOM: radius 1e6 asks for ~15M coords (~122MB)
+/// per client per tick, and radius 1e9 overflows the `i32` span multiply.
+///
+/// 16384m is above anything a legitimate client can ask for — max zoom is 12000m
+/// and the client scales it by 1.35 — while still covering the whole map from any
+/// point on it, so clamping here costs a legitimate player nothing.
+pub const MAX_VIEW_RADIUS: f32 = 16384.0;
+
+/// Sanitise a client-reported view radius into a ring count.
+///
+/// Non-finite and non-positive values fall back to a single region, so a client
+/// that has not sent input yet still receives its immediate surroundings.
+pub fn view_radius_to_rings(reported: Option<f32>) -> i32 {
+    let radius = reported
+        .filter(|r| r.is_finite() && *r > 0.0)
+        .unwrap_or(REGION_SIZE)
+        .min(MAX_VIEW_RADIUS);
+    (radius / REGION_SIZE).ceil() as i32
+}
 
 /// Integer coordinate of a region on the world grid.
 #[derive(
@@ -154,5 +180,51 @@ mod tests {
         let a = RegionCoord::new(0, 0);
         assert_eq!(a.ring_distance(RegionCoord::new(3, 1)), 3);
         assert_eq!(a.ring_distance(RegionCoord::new(-2, -5)), 5);
+    }
+}
+
+#[cfg(test)]
+mod view_radius_tests {
+    use super::*;
+
+    /// The clamp is a DoS guard, not a tuning knob: a hostile radius must not be
+    /// able to make `in_radius` allocate without bound, and must not overflow the
+    /// `span * span` multiply inside it.
+    #[test]
+    fn hostile_view_radius_is_clamped_to_a_survivable_ring_count() {
+        let max_rings = view_radius_to_rings(Some(MAX_VIEW_RADIUS));
+        for hostile in [1.0e6_f32, 1.0e9, 1.0e30, f32::MAX] {
+            let rings = view_radius_to_rings(Some(hostile));
+            assert_eq!(rings, max_rings, "radius {hostile} escaped the clamp");
+        }
+        // The clamped worst case must still be a sane allocation.
+        let span = (max_rings * 2 + 1) as i64;
+        assert!(
+            span * span < 10_000,
+            "clamped worst case still allocates {} coords",
+            span * span
+        );
+    }
+
+    /// Garbage must degrade to "your immediate surroundings", never to zero
+    /// regions (an invisible world) or a panic.
+    #[test]
+    fn degenerate_view_radius_falls_back_to_one_region() {
+        for bad in [None, Some(f32::NAN), Some(f32::INFINITY), Some(-1.0), Some(0.0)] {
+            assert_eq!(view_radius_to_rings(bad), 1, "bad radius {bad:?}");
+        }
+    }
+
+    /// A legitimate max-zoom client must be unaffected by the clamp, or the fix
+    /// would silently shrink what real players can see.
+    #[test]
+    fn legitimate_max_zoom_is_not_clamped() {
+        // client/src/camera_rts.rs: zoom_max 12000, reported radius = zoom * 1.35
+        let legit = 12_000.0 * 1.35;
+        assert!(legit <= MAX_VIEW_RADIUS, "clamp is below legitimate zoom");
+        assert_eq!(
+            view_radius_to_rings(Some(legit)),
+            (legit / REGION_SIZE).ceil() as i32
+        );
     }
 }

@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use shared::components::{Player, PlayerPosition, TimeWarp};
-use shared::region::{RegionCoord, SimLevel, REGION_SIZE};
+use shared::region::{view_radius_to_rings, RegionCoord, SimLevel, REGION_SIZE};
 use shared::terrain::WorldTerrain;
 
 use crate::net::input::ClientInputs;
@@ -150,6 +150,7 @@ pub fn update_client_interest(
     registry: Res<RegionRegistry>,
     inputs: Res<ClientInputs>,
     commanders: Query<(&Player, &PlayerPosition, &ControlledBy)>,
+    links: Query<Entity, With<lightyear::prelude::server::ClientOf>>,
     mut cached_keys: Local<Vec<(Entity, RegionCoord, i32)>>,
 ) {
     // Interest only changes when a commander's center region or ring count
@@ -157,46 +158,54 @@ pub fn update_client_interest(
     // ~4k-entry set per client at 60Hz for a static camera was pure waste —
     // and the unconditional rebuild also dirtied the resource every tick,
     // defeating any change-gating downstream.
+    //
+    // The key is computed ONCE and reused to build the sets below. It used to be
+    // recomputed in a second pass, which meant the cache key and the thing it
+    // claimed to describe could silently drift apart.
     let mut keys: Vec<(Entity, RegionCoord, i32)> = Vec::with_capacity(commanders.iter().len());
     for (player, position, controlled_by) in commanders.iter() {
-        let view_radius = inputs
-            .latest
-            .get(&player.client_id)
-            .map(|input| input.view_radius)
-            .filter(|r| r.is_finite() && *r > 0.0)
-            .unwrap_or(REGION_SIZE);
-        let rings = (view_radius / REGION_SIZE).ceil() as i32;
-        let center = RegionCoord::from_world_pos(position.0);
-        keys.push((controlled_by.owner, center, rings));
+        let rings = view_radius_to_rings(inputs.latest.get(&player.client_id).map(|i| i.view_radius));
+        keys.push((
+            controlled_by.owner,
+            RegionCoord::from_world_pos(position.0),
+            rings,
+        ));
     }
     keys.sort_unstable_by_key(|(entity, _, _)| *entity);
-    if *cached_keys == keys && !registry.is_changed() {
+
+    // Connected-but-unnamed clients must be represented too (see below), so a
+    // client connecting or disconnecting has to invalidate the cache even when
+    // no commander moved.
+    let mut link_entities: Vec<Entity> = links.iter().collect();
+    link_entities.sort_unstable();
+
+    let dirty = *cached_keys != keys
+        || registry.is_changed()
+        || interest.by_client.len() != link_entities.len();
+    if !dirty {
         return;
     }
-    *cached_keys = keys;
+    *cached_keys = keys.clone();
 
     interest.by_client.clear();
 
-    for (player, position, controlled_by) in commanders.iter() {
-        // View radius is client-reported; fall back to the focus point alone if a client
-        // has not sent input yet, so a fresh connection still receives its surroundings.
-        let view_radius = inputs
-            .latest
-            .get(&player.client_id)
-            .map(|input| input.view_radius)
-            .filter(|r| r.is_finite() && *r > 0.0)
-            .unwrap_or(REGION_SIZE);
+    // Seed EVERY connected link with an empty set before filling in commanders.
+    // A client gets its `ReplicationSender` at connect but its commander only
+    // after it submits a name, so between those two events it had no entry at
+    // all — and `apply_region_visibility` only iterates entries, so lightyear's
+    // visible-by-default left it receiving every region-tagged entity in the
+    // world. An empty set means "interested in nothing", which is correct.
+    for link in link_entities {
+        interest.by_client.insert(link, HashSet::new());
+    }
 
-        let rings = (view_radius / REGION_SIZE).ceil() as i32;
-        let center = RegionCoord::from_world_pos(position.0);
-
+    for (client, center, rings) in keys {
         let set: HashSet<RegionCoord> = center
             .in_radius(rings)
             .into_iter()
             .filter(|coord| registry.contains(*coord))
             .collect();
-
-        interest.by_client.insert(controlled_by.owner, set);
+        interest.by_client.insert(client, set);
     }
 }
 
@@ -262,6 +271,16 @@ pub fn update_region_sim_levels(
     mut registry: ResMut<RegionRegistry>,
     interest: Res<ClientInterest>,
 ) {
+    // Bypass change detection deliberately. Observer counts and sim levels churn
+    // as cameras move, but they are bookkeeping ABOUT regions, not a change to
+    // which regions exist — and this system is chained AFTER
+    // `update_client_interest`, whose cache tests `registry.is_changed()`.
+    // Touching the registry through `ResMut` here marked it changed on every one
+    // of the 60 ticks/sec, so that cache could never hit and the ~4k-entry
+    // interest set was rebuilt every tick per client regardless. The only writer
+    // that should dirty this resource is one that adds or removes a region.
+    let registry = registry.bypass_change_detection();
+
     for region in registry.regions.values_mut() {
         region.observers = 0;
     }
@@ -303,6 +322,23 @@ impl Default for StrategicClock {
     }
 }
 
+impl StrategicClock {
+    /// Advance by `dt` REAL seconds. Returns the simulated seconds this tick
+    /// represents, or `None` if it is not time to tick yet.
+    ///
+    /// Real time drives the cadence and warp scales the payload — never the
+    /// other way round, or warp multiplies how often the whole world is swept.
+    fn advance(&mut self, dt: f64, warp: f64) -> Option<f64> {
+        self.accumulator += dt;
+        if self.accumulator < self.interval {
+            return None;
+        }
+        let elapsed = self.accumulator * warp;
+        self.accumulator = 0.0;
+        Some(elapsed)
+    }
+}
+
 /// The always-on simulation: advances every region in the world, observed or not.
 ///
 /// This is the load-bearing cost of a persistent world, so it must stay cheap enough to
@@ -316,12 +352,26 @@ pub fn tick_strategic_world(
     mut registry: ResMut<RegionRegistry>,
 ) {
     let factor = warp.iter().next().map(|w| w.0).unwrap_or(1.0);
-    clock.accumulator += time.delta_secs_f64() * factor as f64;
-    if clock.accumulator < clock.interval {
+
+    // The accumulator tracks REAL time, so the tick fires at a true 1Hz whatever
+    // the warp. Warp then scales the simulated seconds handed to the tick body.
+    //
+    // It used to scale the accumulator instead, which coupled warp to the FIRING
+    // RATE: at the god panel's 100x, the accumulator gained (1/60)*100 = 1.667s
+    // per FixedUpdate, cleared the 1.0s interval every single tick, and the
+    // "1 Hz" strategic tick ran 60x/sec — 60 full sweeps of every region per
+    // real second. Simulated time still advanced correctly, so this was invisible
+    // until the tick body had work in it; with a real economy over 289 regions it
+    // would have been a 60x cost multiplier that only appeared under warp.
+    //
+    // NOTE for the economy: at high warp `elapsed` is a large integration step
+    // (100 simulated seconds at 100x), so nonlinear dynamics — logistic
+    // population growth, tier thresholds — will drift from what a 1x world
+    // produces. Sub-stepping or a warp cap is the fix when that starts to
+    // matter; it is a balance decision, not a bug here.
+    let Some(elapsed) = clock.advance(time.delta_secs_f64(), factor as f64) else {
         return;
-    }
-    let elapsed = clock.accumulator;
-    clock.accumulator = 0.0;
+    };
 
     let started = std::time::Instant::now();
     for region in registry.regions.values_mut() {
@@ -361,6 +411,55 @@ pub fn log_region_telemetry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The strategic tick is the load-bearing cost of a persistent world, so its
+    /// FIRING RATE must be bounded by real time alone. Warp belongs in the payload.
+    ///
+    /// Regression: the accumulator used to be scaled by warp, so at the god
+    /// panel's 100x it cleared the 1s interval every FixedUpdate and the "1 Hz"
+    /// tick swept all 289 regions 60 times a second.
+    #[test]
+    fn strategic_tick_rate_is_bounded_by_real_time_not_warp() {
+        const FIXED_DT: f64 = 1.0 / 60.0;
+
+        for warp in [1.0, 10.0, 100.0] {
+            let mut clock = StrategicClock::default();
+            let mut fires = 0;
+            let mut simulated = 0.0;
+
+            // Ten real seconds at the fixed-update rate.
+            for _ in 0..600 {
+                if let Some(elapsed) = clock.advance(FIXED_DT, warp) {
+                    fires += 1;
+                    simulated += elapsed;
+                }
+            }
+
+            assert_eq!(
+                fires, 10,
+                "at {warp}x the tick fired {fires} times in 10 real seconds, expected 10"
+            );
+            // Warp still advances the world: 10 real seconds at Nx is 10*N simulated.
+            assert!(
+                (simulated - 10.0 * warp).abs() < 1e-6,
+                "at {warp}x the world advanced {simulated} simulated seconds, expected {}",
+                10.0 * warp
+            );
+        }
+    }
+
+    /// Partial accumulation must carry, not be discarded, or the tick would drift
+    /// slower than 1Hz whenever dt does not divide the interval evenly.
+    #[test]
+    fn strategic_tick_carries_partial_accumulation() {
+        let mut clock = StrategicClock::default();
+        assert!(clock.advance(0.6, 1.0).is_none(), "fired early");
+        let elapsed = clock.advance(0.6, 1.0).expect("should fire at 1.2s");
+        assert!(
+            (elapsed - 1.2).abs() < 1e-9,
+            "elapsed {elapsed} lost the overshoot"
+        );
+    }
 
     fn registry_with(coords: &[RegionCoord]) -> RegionRegistry {
         let mut registry = RegionRegistry::default();
