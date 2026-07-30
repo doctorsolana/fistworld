@@ -34,6 +34,17 @@ pub struct LocalPeerId(pub u64);
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct CursorTerrainHit(pub Option<Vec3>);
 
+/// The world-space ray under the mouse cursor.
+///
+/// Published here rather than recomputed by every picker, because turning a
+/// window cursor position into a camera ray is NOT trivial in this app: the 3D
+/// camera renders to a scaled offscreen target, so cursor coordinates have to
+/// be mapped from window space into the camera's own viewport space first. Any
+/// second copy of that mapping is a picking offset that only appears at
+/// non-1.0 render scale -- exactly the kind of bug that ships unnoticed.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct CursorRay(pub Option<Ray3d>);
+
 /// How fast the camera catches up to what the input asked for, as a time
 /// constant in seconds: after `tau` the remaining error is down to ~37%.
 ///
@@ -257,18 +268,22 @@ pub fn update_cursor_terrain_hit(
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     terrain: Res<WorldTerrain>,
     mut hit: ResMut<CursorTerrainHit>,
+    mut cursor_ray: ResMut<CursorRay>,
     mut last_inputs: Local<Option<(Vec2, Vec3, Quat)>>,
 ) {
     let Ok(window) = windows.single() else {
         hit.0 = None;
+        cursor_ray.0 = None;
         return;
     };
     let Some(cursor_pos) = window.cursor_position() else {
         hit.0 = None;
+        cursor_ray.0 = None;
         return;
     };
     let Ok((camera, camera_transform)) = cameras.single() else {
         hit.0 = None;
+        cursor_ray.0 = None;
         return;
     };
     // The 3D camera renders to a scaled offscreen target, so window cursor
@@ -280,6 +295,7 @@ pub fn update_cursor_terrain_hit(
     };
     if window_size.x <= 0.0 || window_size.y <= 0.0 {
         hit.0 = None;
+        cursor_ray.0 = None;
         return;
     }
     // The ray march is ~300 heightfield samples; with cursor, camera, and
@@ -298,9 +314,11 @@ pub fn update_cursor_terrain_hit(
     let viewport_pos = cursor_pos / window_size * viewport_size;
     let Ok(ray) = camera.viewport_to_world(camera_transform, viewport_pos) else {
         hit.0 = None;
+        cursor_ray.0 = None;
         return;
     };
 
+    cursor_ray.0 = Some(ray);
     hit.0 = intersect_terrain(ray, &terrain);
 }
 

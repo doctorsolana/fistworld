@@ -1,5 +1,28 @@
 //! UI module
 
+use bevy::prelude::*;
+
+/// Put this on any UI node that must swallow world clicks.
+///
+/// The world-click guards used to test an UNFILTERED `Query<&Interaction>`:
+/// "is any UI element in the whole app hovered or pressed?". That is a veto that
+/// grows every time a panel is added, and it breaks badly for a wide node --
+/// one full-width bar hovering anywhere would make the entire world
+/// unclickable, with no error and no obvious cause.
+///
+/// Opting in per node instead means the guard's cost and blast radius are both
+/// explicit: the HUD plates and the selection plate block, and a decorative
+/// full-width container does not.
+#[derive(Component, Default)]
+pub struct BlocksWorldClicks;
+
+/// True when the cursor is over a UI surface that owns clicks.
+pub fn pointer_over_ui(blockers: &Query<&Interaction, With<BlocksWorldClicks>>) -> bool {
+    blockers
+        .iter()
+        .any(|interaction| *interaction != Interaction::None)
+}
+
 pub mod debug_time_menu;
 pub mod encyclopedia;
 pub mod hero_creator;

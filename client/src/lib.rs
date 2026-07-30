@@ -13,6 +13,7 @@ pub mod input;
 pub mod perf_overlay;
 pub mod profiling;
 pub mod props;
+pub mod selection;
 pub mod render;
 pub mod states;
 pub mod streaming;

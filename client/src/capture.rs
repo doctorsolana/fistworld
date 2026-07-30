@@ -148,6 +148,18 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         }
     }
 
+    // FISTFORCE_CAPTURE_HUD=play|god draws the persistent HUD, which is
+    // otherwise suppressed so world shots stay clean. `god` also grants the god
+    // capability and switches mode, so the god plate is visible.
+    if let Ok(mode) = std::env::var("FISTFORCE_CAPTURE_HUD") {
+        if !mode.is_empty() {
+            if mode == "god" {
+                commands.insert_resource(crate::ui::hud::GodCapability(true));
+                commands.insert_resource(crate::ui::hud::HudMode::God);
+            }
+        }
+    }
+
     // FISTFORCE_CAPTURE_HERO_CREATOR=1: open the character-creator modal so
     // captures can verify the live preview + selector UI without a server.
     if std::env::var("FISTFORCE_CAPTURE_HERO_CREATOR").is_ok_and(|v| v == "1") {
@@ -270,6 +282,22 @@ fn spawn_capture_heroes(
             shared::components::PlayerPosition(pos),
             shared::components::PlayerRotation(std::f32::consts::PI),
         ));
+    }
+    // FISTFORCE_CAPTURE_SELECT=1 selects the FIRST fake hero, so the ground ring
+    // and the selected-unit plate can be verified without a server. Deferred by
+    // a command so it runs after the spawns above are applied.
+    if std::env::var("FISTFORCE_CAPTURE_SELECT").is_ok_and(|v| v == "1") {
+        commands.queue(|world: &mut World| {
+            let mut heroes = world
+                .query_filtered::<(Entity, &shared::components::Hero), ()>();
+            if let Some((first, hero)) = heroes.iter(world).next() {
+                let owner = shared::player::peer_id_to_u64(hero.owner);
+                world.resource_mut::<crate::selection::Selection>().entity = Some(first);
+                // Claim ownership of it too, so the shot shows the state a real
+                // player sees (ember mark, own name) rather than "NOT YOURS".
+                world.insert_resource(crate::camera_rts::LocalPeerId(owner));
+            }
+        });
     }
     *spawned = true;
 }

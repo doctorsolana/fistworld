@@ -1,9 +1,9 @@
-//! Click handling + spawn intent for the hero.
+//! Spawn intent for the hero.
 //!
-//! God mode: the HUD arms placement, the next terrain click sends
-//! `DevCommand::SpawnHero`. Play mode: a terrain click orders the owned hero
-//! to walk there. Both go through the server; nothing here mutates world
-//! state directly.
+//! God mode: the HUD arms placement, the next left click sends
+//! `DevCommand::SpawnHero`. Selecting the hero and ordering it to walk live in
+//! [`crate::selection`] -- left click selects, right click commands. Everything
+//! goes through the server; nothing here mutates world state directly.
 
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageSender};
@@ -41,13 +41,9 @@ pub(super) fn handle_world_clicks(
     mut arm: ResMut<HeroSpawnArm>,
     local: Option<Res<LocalPeerId>>,
     heroes: Query<&Hero>,
-    ui_interactions: Query<&Interaction>,
+    ui_blockers: Query<&Interaction, With<crate::ui::BlocksWorldClicks>>,
     mut dev_sender: Query<
         &mut MessageSender<DevCommand>,
-        (With<crate::GameClient>, With<Connected>),
-    >,
-    mut move_sender: Query<
-        &mut MessageSender<HeroMoveTo>,
         (With<crate::GameClient>, With<Connected>),
     >,
 ) {
@@ -66,11 +62,8 @@ pub(super) fn handle_world_clicks(
     if !mouse.just_pressed(MouseButton::Left) || input_state.ui_blocking() {
         return;
     }
-    // A click on any HUD element must never fall through to the world.
-    if ui_interactions
-        .iter()
-        .any(|interaction| *interaction != Interaction::None)
-    {
+    // A click on a HUD surface must never fall through to the world.
+    if crate::ui::pointer_over_ui(&ui_blockers) {
         return;
     }
     let Some(target) = hit.0 else {
@@ -82,6 +75,9 @@ pub(super) fn handle_world_clicks(
 
     let owns_hero = local_hero_exists(&heroes, &local);
 
+    // Placement is the ONLY thing left click does here. Ordering the hero moved
+    // to right click (see `crate::selection`), so a left click with nothing armed
+    // is a selection click and belongs to the picker, not to this system.
     if arm.0 {
         if !owns_hero {
             if let Ok(mut sender) = dev_sender.single_mut() {
@@ -93,14 +89,6 @@ pub(super) fn handle_world_clicks(
             }
         }
         arm.0 = false;
-        return;
-    }
-
-    // Play-mode click-to-move (also handy in god mode when nothing is armed).
-    if owns_hero {
-        if let Ok(mut sender) = move_sender.single_mut() {
-            sender.send::<ReliableChannel>(HeroMoveTo { target });
-        }
     }
 }
 

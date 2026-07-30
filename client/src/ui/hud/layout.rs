@@ -1,4 +1,29 @@
-//! layout systems.
+//! HUD layout: two plates, and nothing else.
+//!
+//! Composition:
+//!
+//! ```text
+//!                                                  +---------------------+
+//!                                                  | DAY 3  14:22   PLAY |  <- one plate,
+//!                                                  +---------------------+     grows down
+//!                                                                              in god mode
+//!
+//!                              ( the world is the interface )
+//!
+//!                         +----------------------------------+
+//!                         | (o) |  SIGRUN         ON THE MOVE |  <- only when
+//!                         +----------------------------------+     selected
+//! ```
+//!
+//! Two things here are deliberate and easy to undo by accident.
+//!
+//! **The god panel is ONE plate with hairline dividers**, not a stack of nested
+//! bordered boxes. It also has no `SIMULATION SPEED` or `HERO` captions: four
+//! buttons reading `II 1x 10x 100x` do not need a label telling you they are
+//! speeds, and deleting the caption deletes a whole row of chrome.
+//!
+//! **The mode toggle lives INSIDE the clock row.** As its own bordered chip it
+//! was a second surface competing with the clock for the same corner.
 
 use super::*;
 
@@ -6,238 +31,324 @@ pub(super) fn spawn_hud(
     mut commands: Commands,
     capture: Option<Res<crate::capture::CaptureConfig>>,
 ) {
-    // The offline capture tool enters Playing too; its screenshots must stay clean of UI.
-    if capture.is_some() {
+    // The offline capture tool enters Playing too; its screenshots must stay
+    // clean of UI unless a capture explicitly asks for the HUD.
+    let hud_requested = std::env::var("FISTFORCE_CAPTURE_HUD").is_ok_and(|v| !v.is_empty());
+    if capture.is_some() && !hud_requested {
         return;
     }
-    commands
-        .spawn((
-            HudRoot,
-            // Interaction makes the whole HUD rect (panels, labels, the gaps
-            // between swatches) register as UI to the world-click guard —
-            // Buttons alone left every non-button pixel click-through.
-            Interaction::default(),
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(12.0),
-                top: Val::Px(12.0),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::FlexEnd,
-                row_gap: Val::Px(8.0),
-                ..default()
-            },
-        ))
-        .with_children(|root| {
-            spawn_clock_chip(root);
-            spawn_mode_chip(root);
-            spawn_god_panel(root);
-        });
+    commands.spawn((
+        HudRoot,
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(0.0),
+            left: Val::Px(0.0),
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        // NO `Interaction` on this root. It spans the whole screen, and a
+        // full-screen node that registers as UI would veto every world click
+        // for as long as the cursor is anywhere on screen. Only the plates
+        // themselves block -- see `BlocksWorldClicks`.
+        Pickable::IGNORE,
+        children![top_right_column(), selection_plate()],
+    ));
 }
 
-fn spawn_clock_chip(parent: &mut ChildSpawnerCommands<'_>) {
-    parent
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(6.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
-                ..default()
-            },
-            BackgroundColor(PANEL_BACKGROUND),
-            BorderColor::from(BUTTON_BORDER),
-        ))
-        .with_children(|chip| {
-            chip.spawn((
+/// The world-state corner: clock, and the god tools beneath it.
+fn top_right_column() -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(12.0),
+            top: Val::Px(12.0),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::FlexEnd,
+            row_gap: Val::Px(8.0),
+            ..default()
+        },
+        Pickable::IGNORE,
+        children![clock_plate(), god_plate()],
+    )
+}
+
+/// Shared plate chrome: fill, carved rule, radius, the two-layer shadow, and
+/// the marker that makes it swallow world clicks.
+fn plate(fill: Color) -> impl Bundle {
+    (
+        BackgroundColor(fill),
+        BorderColor::from(PLATE_RULE),
+        plate_shadow(),
+        BlocksWorldClicks,
+        Interaction::default(),
+    )
+}
+
+fn clock_plate() -> impl Bundle {
+    (
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(9.0),
+            padding: UiRect::axes(Val::Px(11.0), Val::Px(7.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(RADIUS)),
+            ..default()
+        },
+        plate(LIMEWASH),
+        children![
+            (
                 ClockPeriodText,
                 Text::new("DAY 0"),
                 TextFont {
                     font_size: FontSize::Px(11.0),
                     ..default()
                 },
-                TextColor(ACCENT_COLOR),
-            ));
-            chip.spawn((
+                TextColor(INK_MUTED),
+            ),
+            (
                 ClockTimeText,
                 Text::new("--:--"),
                 TextFont {
                     font_size: FontSize::Px(15.0),
                     ..default()
                 },
-                TextColor(TEXT_COLOR),
-            ));
-            chip.spawn((
+                TextColor(INK),
+            ),
+            (
                 ClockWarpText,
                 Text::new(""),
                 TextFont {
-                    font_size: FontSize::Px(15.0),
+                    font_size: FontSize::Px(13.0),
                     ..default()
                 },
-                TextColor(ACCENT_COLOR),
+                TextColor(EMBER),
                 Node {
                     display: Display::None,
                     ..default()
                 },
-            ));
-        });
+            ),
+            mode_toggle(),
+        ],
+    )
 }
 
-fn spawn_mode_chip(parent: &mut ChildSpawnerCommands<'_>) {
-    parent
-        .spawn((
-            ModeChipButton,
-            Button,
-            Node {
-                // Hidden until the server grants god capability.
-                display: Display::None,
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+/// The play/god toggle, folded into the clock row as a ghost button: no fill and
+/// no border at rest, so it reads as a word in the row rather than a second
+/// surface. Hidden entirely until the server grants god capability.
+fn mode_toggle() -> impl Bundle {
+    (
+        ModeChipButton,
+        Button,
+        BlocksWorldClicks,
+        Node {
+            display: Display::None,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+            border_radius: BorderRadius::all(Val::Px(2.0)),
+            ..default()
+        },
+        BackgroundColor(Color::NONE),
+        children![(
+            ModeChipText,
+            Text::new("PLAY"),
+            TextFont {
+                font_size: FontSize::Px(10.0),
                 ..default()
             },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::from(BUTTON_BORDER),
-        ))
-        .with_children(|btn| {
-            btn.spawn((
-                ModeChipText,
-                Text::new("PLAY MODE"),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(TEXT_MUTED),
-            ));
-        });
+            TextColor(INK_MUTED),
+        )],
+    )
 }
 
-fn spawn_god_panel(parent: &mut ChildSpawnerCommands<'_>) {
-    parent
-        .spawn((
-            GodPanel,
-            Node {
-                // Hidden outside god mode.
-                display: Display::None,
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::FlexEnd,
-                row_gap: Val::Px(6.0),
-                padding: UiRect::all(Val::Px(10.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
-                ..default()
-            },
-            BackgroundColor(PANEL_BACKGROUND),
-            BorderColor::from(BUTTON_BORDER),
-        ))
-        .with_children(|panel| {
-            panel.spawn((
-                Text::new("SIMULATION SPEED"),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(TEXT_MUTED),
-            ));
-            panel
-                .spawn(Node {
+/// God tools. One plate, hairline-separated, no section captions.
+fn god_plate() -> impl Bundle {
+    (
+        GodPanel,
+        Node {
+            display: Display::None,
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::FlexEnd,
+            row_gap: Val::Px(7.0),
+            padding: UiRect::all(Val::Px(9.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(RADIUS)),
+            ..default()
+        },
+        plate(LIMEWASH),
+        children![
+            (
+                Node {
                     flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(6.0),
+                    column_gap: Val::Px(5.0),
                     ..default()
-                })
-                .with_children(|row| {
-                    spawn_warp_button(row, "II", 0.0);
-                    spawn_warp_button(row, "1x", 1.0);
-                    spawn_warp_button(row, "10x", 10.0);
-                    spawn_warp_button(row, "100x", 100.0);
-                });
-            spawn_hero_section(panel);
-            panel.spawn((
-                Text::new("G god mode   J time of day"),
+                },
+                Pickable::IGNORE,
+                children![
+                    warp_button("II", 0.0),
+                    warp_button("1x", 1.0),
+                    warp_button("10x", 10.0),
+                    warp_button("100x", 100.0),
+                ],
+            ),
+            hairline(),
+            spawn_hero_button(),
+            hairline(),
+            (
+                Text::new("G god   J time   N people   M map"),
+                TextFont {
+                    font_size: FontSize::Px(9.0),
+                    ..default()
+                },
+                TextColor(INK_MUTED),
+            ),
+        ],
+    )
+}
+
+/// A 1px internal divider. Replaces wrapping each section in its own bordered
+/// box, which is what made the old panel read as boxes-inside-boxes.
+fn hairline() -> impl Bundle {
+    (
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Px(1.0),
+            ..default()
+        },
+        BackgroundColor(PLATE_RULE_SOFT),
+        Pickable::IGNORE,
+    )
+}
+
+fn warp_button(text: &str, factor: f32) -> impl Bundle {
+    (
+        Button,
+        WarpButton(factor),
+        BlocksWorldClicks,
+        Node {
+            width: Val::Px(40.0),
+            height: Val::Px(24.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(2.0)),
+            ..default()
+        },
+        BackgroundColor(BUTTON_NORMAL),
+        BorderColor::from(PLATE_RULE_SOFT),
+        children![(
+            Text::new(text),
+            TextFont {
+                font_size: FontSize::Px(13.0),
+                ..default()
+            },
+            TextColor(INK),
+        )],
+    )
+}
+
+fn spawn_hero_button() -> impl Bundle {
+    (
+        SpawnHeroButton,
+        Button,
+        BlocksWorldClicks,
+        Node {
+            // Full width so the column reads as one stack rather than a
+            // right-aligned button floating in its own row of empty plate.
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(2.0)),
+            ..default()
+        },
+        BackgroundColor(BUTTON_NORMAL),
+        BorderColor::from(PLATE_RULE_SOFT),
+        children![(
+            SpawnHeroLabel,
+            Text::new("SPAWN HERO"),
+            TextFont {
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(INK),
+        )],
+    )
+}
+
+/// The selected-unit plate.
+///
+/// The leading mark is a hollow ring: the SAME form as the mark on the ground,
+/// in the same ink. That rhyme is the whole "unmistakable" mechanism -- the
+/// player never has to be told the plate refers to the ringed unit, because the
+/// shapes match. No icon, no arrow, no label saying SELECTED.
+///
+/// It carries `Interaction` and `BlocksWorldClicks` because it sits in the
+/// bottom-centre cursor zone: without them, clicking your own readout would fall
+/// through to the world and deselect the very thing the readout describes.
+fn selection_plate() -> impl Bundle {
+    (
+        SelectionPlate,
+        Node {
+            display: Display::None,
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(26.0),
+            left: Val::Percent(50.0),
+            margin: UiRect::left(Val::Px(-112.0)),
+            width: Val::Px(224.0),
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(10.0),
+            padding: UiRect::axes(Val::Px(11.0), Val::Px(8.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(RADIUS)),
+            ..default()
+        },
+        plate(LIMEWASH_LIT),
+        children![
+            (
+                SelectionRingGlyph,
+                Node {
+                    width: Val::Px(12.0),
+                    height: Val::Px(12.0),
+                    border: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius::MAX,
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+                BorderColor::from(EMBER_RULE),
+                Pickable::IGNORE,
+            ),
+            // Fixed width, so a longer name can never reflow the status word
+            // sideways. Things that move under a settled cursor are the bug
+            // players actually feel.
+            (
+                SelectionNameText,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(14.0),
+                    ..default()
+                },
+                TextColor(INK),
+                Node {
+                    flex_grow: 1.0,
+                    ..default()
+                },
+            ),
+            (
+                SelectionStatusText,
+                Text::new(""),
                 TextFont {
                     font_size: FontSize::Px(10.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
-            ));
-        });
-}
-
-fn spawn_warp_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, factor: f32) {
-    parent
-        .spawn((
-            Button,
-            WarpButton(factor),
-            Node {
-                width: Val::Px(44.0),
-                height: Val::Px(28.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::from(BUTTON_BORDER),
-        ))
-        .with_children(|btn| {
-            btn.spawn((
-                Text::new(text),
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
-                TextColor(TEXT_COLOR),
-            ));
-        });
-}
-
-/// Hero spawn section: outfit swatches + the spawn button. Lives inside the
-/// god panel so its visibility rides `sync_god_panel` for free.
-fn spawn_hero_section(panel: &mut ChildSpawnerCommands<'_>) {
-    panel.spawn((
-        Text::new("HERO"),
-        TextFont {
-            font_size: FontSize::Px(11.0),
-            ..default()
-        },
-        TextColor(TEXT_MUTED),
-        Node {
-            margin: UiRect::top(Val::Px(6.0)),
-            ..default()
-        },
-    ));
-
-    panel
-        .spawn((
-            SpawnHeroButton,
-            Button,
-            Node {
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
-                margin: UiRect::top(Val::Px(4.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::from(ACCENT_COLOR),
-        ))
-        .with_children(|btn| {
-            btn.spawn((
-                SpawnHeroLabel,
-                Text::new("SPAWN HERO"),
-                TextFont {
-                    font_size: FontSize::Px(12.0),
-                    ..default()
-                },
-                TextColor(TEXT_COLOR),
-            ));
-        });
+                TextColor(INK_MUTED),
+            ),
+        ],
+    )
 }
 
 pub(super) fn despawn_hud(mut commands: Commands, roots: Query<Entity, With<HudRoot>>) {

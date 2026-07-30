@@ -1,0 +1,348 @@
+//! Selection: left click to select, right click to order.
+//!
+//! The RTS input contract, and the first thing in this repo that can pick a
+//! world ENTITY rather than a point on the heightfield.
+//!
+//! Deliberately its own module rather than more branches inside
+//! `hero::control`: selection is about to cover retinues, caravans and
+//! settlements, and none of that belongs in a file named after the hero. What
+//! is selectable is expressed by [`Selectable`], so new kinds opt in by
+//! spawning a component instead of by editing the picker.
+
+pub mod order;
+pub mod pick;
+pub mod ring;
+
+use bevy::prelude::*;
+
+use crate::states::GameState;
+
+pub struct SelectionPlugin;
+
+impl Plugin for SelectionPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Selection>();
+        app.init_resource::<RightDrag>();
+        app.add_systems(
+            Update,
+            (
+                // Order matters: drop a dead selection before anything reads it,
+                // then pick, then let the ring follow what is now selected.
+                tag_heroes_selectable,
+                clear_stale_selection,
+                pick::pick_on_left_click,
+                order::issue_order_on_right_click,
+                ring::sync_selection_ring,
+            )
+                .chain()
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.add_systems(OnExit(GameState::Playing), clear_on_exit);
+    }
+}
+
+/// Anything the player can click on.
+///
+/// `radius` is the world-space pick radius around the entity's vertical axis;
+/// `height` is how tall it is above its origin. The hero's origin is at its
+/// feet, so a hero is `height: 1.7`.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Selectable {
+    pub radius: f32,
+    pub height: f32,
+}
+
+impl Selectable {
+    /// A person-sized target.
+    pub fn person() -> Self {
+        Self {
+            radius: 0.55,
+            height: 1.7,
+        }
+    }
+}
+
+/// What the player currently has selected.
+///
+/// A Resource holding an `Entity`, not a marker Component, for one specific
+/// reason: the selected entity is REPLICATED and the server can despawn it at
+/// any time (the hero leaves interest range, or its owner is disconnected and
+/// it is culled). A marker would vanish silently with the entity and leave the
+/// HUD describing something that no longer exists; a resource holding a
+/// possibly-dead `Entity` can be validated in one place, which is exactly what
+/// [`clear_stale_selection`] does.
+#[derive(Resource, Debug, Default)]
+pub struct Selection {
+    pub entity: Option<Entity>,
+}
+
+impl Selection {
+    pub fn is_selected(&self, entity: Entity) -> bool {
+        self.entity == Some(entity)
+    }
+
+    pub fn clear(&mut self) {
+        if self.entity.is_some() {
+            self.entity = None;
+        }
+    }
+}
+
+/// Tracks whether the current right-button press has become a camera drag.
+///
+/// Right button does double duty: HELD it orbits the camera, TAPPED it issues a
+/// move order. Without this the two are indistinguishable and every orbit would
+/// fling the hero at wherever the cursor happened to stop. This repo has been
+/// bitten by right-click ambiguity before -- see the comment in
+/// `hero::control::handle_world_clicks` about why Escape, not right-click,
+/// cancels an armed placement.
+#[derive(Resource, Debug, Default)]
+pub struct RightDrag {
+    /// Cursor position when the button went down, in logical window pixels.
+    pub press_at: Option<Vec2>,
+    /// Accumulated RAW DEVICE motion since the press.
+    ///
+    /// Tracked separately from the radial distance below because the two catch
+    /// different gestures and are in different units -- see [`DRAG_MOTION_PX`].
+    pub motion: f32,
+    /// Seconds the button has been held.
+    pub held_secs: f32,
+    /// Set once this press has been disqualified from counting as a click.
+    pub became_drag: bool,
+}
+
+/// Radial cursor displacement from the press point that means "orbit", in
+/// logical window pixels.
+///
+/// RADIAL, not path length: summing per-frame travel turns a slow shaky click
+/// into a drag, because +/-1px of jitter over several frames adds up while the
+/// cursor has not actually gone anywhere. Distance from where the press started
+/// is what the player perceives as having moved the mouse.
+pub const DRAG_RADIAL_PX: f32 = 6.0;
+
+/// Accumulated raw device motion that means "orbit".
+///
+/// Needed IN ADDITION to the radial test because the cursor is never grabbed in
+/// RTS mode: an orbit drag that runs into the edge of the window stops moving
+/// the cursor while MouseMotion keeps streaming and the camera keeps yawing.
+/// Radial displacement alone would call that a click and fire an order at the
+/// end of every edge-of-screen orbit.
+///
+/// This is in raw device pixels, which on a Retina display are roughly half a
+/// logical pixel, so the threshold is deliberately larger than the radial one.
+pub const DRAG_MOTION_PX: f32 = 14.0;
+
+/// Seconds after which a right-press is an orbit regardless of movement.
+///
+/// Covers press-hold-think-release with a perfectly steady hand, which would
+/// otherwise land as an order the player forgot they were queuing.
+pub const DRAG_HOLD_SECS: f32 = 0.35;
+
+/// Whether a right-press that moved this much should still count as a click.
+pub fn is_click(radial_px: f32, motion_px: f32, held_secs: f32) -> bool {
+    radial_px <= DRAG_RADIAL_PX && motion_px <= DRAG_MOTION_PX && held_secs <= DRAG_HOLD_SECS
+}
+
+/// Forget a selection whose entity can no longer be shown.
+///
+/// Replication can despawn the hero underneath us at any time.
+///
+/// Validity is "still has a world position", NOT "still has [`Selectable`]".
+/// That distinction is load-bearing: `tag_heroes_selectable` inserts through
+/// deferred `Commands`, so on the frame a hero appears it does not yet carry
+/// `Selectable` even though this system has already run. Testing for the tag
+/// would clear any selection made in the same frame the entity arrived -- which
+/// is exactly what silently broke the capture harness's pre-seeded selection.
+/// `PlayerPosition` is also the honest condition, because it is what the ring
+/// and the HUD plate actually need in order to draw anything.
+fn clear_stale_selection(
+    mut selection: ResMut<Selection>,
+    positioned: Query<(), With<shared::components::PlayerPosition>>,
+) {
+    if let Some(entity) = selection.entity {
+        if positioned.get(entity).is_err() {
+            selection.entity = None;
+        }
+    }
+}
+
+/// Make replicated heroes clickable.
+///
+/// Polls `Without<Selectable>` rather than reacting to `Added<Hero>` because
+/// replication can deliver `Hero` and `PlayerPosition` in separate batches, and
+/// a one-shot on `Added` would miss the hero whose position arrived later.
+///
+/// Note this keys on `Hero`, NOT on the visual components: the hero creator's
+/// preview rig is a parked copy of the character 3m in front of the camera while
+/// the modal is open, and tagging that would let it swallow every click.
+fn tag_heroes_selectable(
+    mut commands: Commands,
+    heroes: Query<
+        Entity,
+        (
+            With<shared::components::Hero>,
+            With<shared::components::PlayerPosition>,
+            Without<Selectable>,
+        ),
+    >,
+) {
+    for entity in heroes.iter() {
+        commands.entity(entity).insert(Selectable::person());
+    }
+}
+
+fn clear_on_exit(mut selection: ResMut<Selection>, mut drag: ResMut<RightDrag>) {
+    selection.clear();
+    *drag = RightDrag::default();
+}
+
+/// Closest approach between a ray and a vertical segment, as
+/// `(distance_along_ray, gap)`.
+///
+/// Used to hit-test a standing character: the character is the segment from its
+/// feet to its head, and the click hits if `gap` is within its pick radius.
+/// Returns `None` when the ray points away from the segment.
+///
+/// This is a world-space test on purpose. The screen-space alternative
+/// (projecting the entity with `world_to_viewport` and comparing pixels) has to
+/// undo this app's render-target scaling by hand, and getting that subtly wrong
+/// produces a picking offset that only appears at non-1.0 render scale.
+pub fn ray_vs_vertical_segment(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    base: Vec3,
+    height: f32,
+) -> Option<(f32, f32)> {
+    let seg_dir = Vec3::Y;
+    let w0 = ray_origin - base;
+
+    let a = ray_dir.dot(ray_dir);
+    let b = ray_dir.dot(seg_dir);
+    let c = seg_dir.dot(seg_dir);
+    let d = ray_dir.dot(w0);
+    let e = seg_dir.dot(w0);
+
+    let denom = a * c - b * b;
+    // Where along the BODY the ray passes closest. Parallel rays fall back to
+    // the feet. `d` is unused in that branch, hence the explicit discard.
+    let t_seg = if denom.abs() < 1e-6 {
+        let _ = d;
+        0.0
+    } else {
+        (a * e - b * d) / denom
+    }
+    // Clamp to the real extents: the body stops at the head and the feet.
+    .clamp(0.0, height);
+
+    // Solve the ray parameter against that clamped point, so a click at the very
+    // top or bottom of the body still measures the true gap rather than the gap
+    // to an imaginary infinite pole.
+    let t_ray = (seg_dir * t_seg + base - ray_origin).dot(ray_dir) / a.max(1e-6);
+    if t_ray < 0.0 {
+        return None;
+    }
+
+    let on_ray = ray_origin + ray_dir * t_ray;
+    let on_seg = base + seg_dir * t_seg;
+    Some((t_ray, on_ray.distance(on_seg)))
+}
+
+/// Extra pick radius per metre of distance, so distant units stay clickable.
+///
+/// A 0.55m-wide hero is roughly two pixels across at 1km zoom; without this,
+/// selecting anything above a few hundred metres would be pixel hunting. The
+/// coefficient is chosen so the target stays about a dozen pixels wide at
+/// 1080p with the default 45-degree vertical FOV:
+/// `2 * tan(fov/2) / viewport_height * pixels`.
+pub const PICK_ANGULAR_SLOP: f32 = 0.011;
+
+/// Pick radius for a target `distance` metres away.
+pub fn pick_radius_at(base_radius: f32, distance: f32) -> f32 {
+    base_radius.max(distance * PICK_ANGULAR_SLOP)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole point of the discriminator: an orbit must never issue an order,
+    /// and a tap must never fail to.
+    #[test]
+    fn taps_are_clicks_and_drags_are_not() {
+        // A clean tap.
+        assert!(is_click(0.0, 0.0, 0.02));
+        // Hand tremor on a tap must survive: a couple of pixels of wobble and a
+        // little accumulated device motion is still a click.
+        assert!(is_click(2.0, 5.0, 0.10), "a shaky tap was rejected");
+        // A deliberate orbit.
+        assert!(!is_click(120.0, 300.0, 0.6), "an orbit was treated as a click");
+        // Cursor pinned at the window edge: radial displacement stops growing
+        // while device motion keeps streaming. This is the case radial-only
+        // discrimination gets wrong.
+        assert!(
+            !is_click(3.0, 400.0, 0.2),
+            "an edge-of-screen orbit was treated as a click"
+        );
+        // Press-and-hold with a perfectly steady hand is not a click either.
+        assert!(!is_click(0.0, 0.0, 1.5), "a long hold was treated as a click");
+    }
+
+    #[test]
+    fn ray_through_a_body_hits_it() {
+        // Looking down -Z at a body standing at the origin.
+        let hit = ray_vs_vertical_segment(
+            Vec3::new(0.0, 1.0, 10.0),
+            Vec3::NEG_Z,
+            Vec3::ZERO,
+            1.7,
+        );
+        let (distance, gap) = hit.expect("ray should reach the body");
+        assert!((distance - 10.0).abs() < 1e-3, "distance {distance}");
+        assert!(gap < 1e-3, "gap {gap} should be ~0 through the centre");
+    }
+
+    #[test]
+    fn ray_beside_a_body_measures_the_gap() {
+        let (_, gap) = ray_vs_vertical_segment(
+            Vec3::new(2.0, 1.0, 10.0),
+            Vec3::NEG_Z,
+            Vec3::ZERO,
+            1.7,
+        )
+        .expect("still in front");
+        assert!((gap - 2.0).abs() < 1e-3, "gap {gap} should be the 2m offset");
+    }
+
+    /// A click above the head must not hit. Without clamping the segment to
+        /// `height` the infinite-line solution would report a hit for a ray
+    /// passing well over the character.
+    #[test]
+    fn ray_over_the_head_misses() {
+        let (_, gap) = ray_vs_vertical_segment(
+            Vec3::new(0.0, 6.0, 10.0),
+            Vec3::NEG_Z,
+            Vec3::ZERO,
+            1.7,
+        )
+        .expect("in front, just high");
+        assert!(gap > 4.0, "gap {gap} should be the height shortfall");
+    }
+
+    #[test]
+    fn ray_pointing_away_misses_entirely() {
+        assert!(
+            ray_vs_vertical_segment(Vec3::new(0.0, 1.0, 10.0), Vec3::Z, Vec3::ZERO, 1.7).is_none(),
+            "a ray pointing away from the body must not hit it"
+        );
+    }
+
+    /// Distant targets must stay clickable, near ones must not become giant
+    /// invisible hitboxes.
+    #[test]
+    fn pick_radius_grows_with_distance_but_never_shrinks() {
+        let base = 0.55;
+        assert_eq!(pick_radius_at(base, 10.0), base, "near target lost its radius");
+        let far = pick_radius_at(base, 1000.0);
+        assert!(far > base * 10.0, "distant target radius {far} is too tight");
+    }
+}

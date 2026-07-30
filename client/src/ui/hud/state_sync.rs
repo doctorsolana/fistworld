@@ -84,10 +84,13 @@ pub(super) fn sync_clock_chip(
 
     // The calendar starts at day 0 and rides the replicated WorldTime, so every client
     // shows the same date even under warp.
+    // Day/night differ by WORD and by value, never by the accent: EMBER is
+    // reserved for selection, and a permanently-lit accent in the corner would
+    // compete with the one thing that must catch the eye.
     let (label, color) = if wt.is_day() {
-        (format!("DAY {}", wt.day), ACCENT_COLOR)
+        (format!("DAY {}", wt.day), INK)
     } else {
-        (format!("NIGHT {}", wt.day), TEXT_MUTED)
+        (format!("NIGHT {}", wt.day), INK_MUTED)
     };
     for (mut text, mut text_color) in period.iter_mut() {
         if text.0 != label {
@@ -125,9 +128,12 @@ pub(super) fn sync_mode_chip(
     } else {
         Display::None
     };
+    // GOD reads as a neutral dark inversion, not as the accent: dev chrome must
+    // never be mistakable for game state. It is also a ghost button at rest, so
+    // PLAY is just a word in the clock row.
     let (label, text_color, border) = match *mode {
-        HudMode::God => ("GOD MODE", ACCENT_COLOR, ACCENT_COLOR),
-        HudMode::Play => ("PLAY MODE", TEXT_MUTED, BUTTON_BORDER),
+        HudMode::God => ("GOD", INK_INVERSE, PLATE_RULE),
+        HudMode::Play => ("PLAY", INK_MUTED, Color::NONE),
     };
     for (mut node, mut border_color) in chips.iter_mut() {
         if node.display != display {
@@ -179,7 +185,7 @@ pub(super) fn style_warp_buttons(
         // highlights nothing — the clock chip's suffix already shows the true value.
         let is_active = (current - factor).abs() < 1e-3;
         let background = if is_active {
-            ACCENT_COLOR
+            SLATE
         } else {
             match *interaction {
                 Interaction::Pressed => BUTTON_PRESSED,
@@ -193,7 +199,7 @@ pub(super) fn style_warp_buttons(
         let text_color = if is_active {
             WARP_ACTIVE_TEXT
         } else {
-            TEXT_COLOR
+            INK
         };
         for child in children.iter() {
             if let Ok(mut color) = labels.get_mut(child) {
@@ -221,11 +227,13 @@ pub(super) fn sync_spawn_hero_button(
     }
 
     let (label, text_color, border) = if owns_hero {
-        ("HERO ACTIVE", TEXT_MUTED, BUTTON_BORDER)
+        ("HERO ACTIVE", INK_MUTED, PLATE_RULE_SOFT)
     } else if arm.0 {
-        ("CLICK TERRAIN...", ACCENT_COLOR, ACCENT_COLOR)
+        // Armed is the one dev affordance that genuinely needs to shout, so it
+        // takes the slate inversion rather than the reserved accent.
+        ("CLICK TERRAIN", INK_INVERSE, PLATE_RULE)
     } else {
-        ("SPAWN HERO", TEXT_COLOR, ACCENT_COLOR)
+        ("SPAWN HERO", INK, PLATE_RULE_SOFT)
     };
 
     for (mut bg, mut border_color) in buttons.iter_mut() {
@@ -244,6 +252,89 @@ pub(super) fn sync_spawn_hero_button(
         }
         if color.0 != text_color {
             color.0 = text_color;
+        }
+    }
+}
+
+/// Show the selected-unit plate, and say who it is and what they are doing.
+///
+/// The name is the OWNER's profile name, which is the only identity a hero has
+/// today. There is deliberately no health or stamina bar: a hero is spawned with
+/// position, rotation and an outfit and nothing else, so any bar would either be
+/// a lie or a hardcoded 100% -- and a fake gauge is worse than an absent one.
+pub(super) fn sync_selection_plate(
+    selection: Res<crate::selection::Selection>,
+    local: Option<Res<crate::camera_rts::LocalPeerId>>,
+    name_input: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
+    heroes: Query<(&shared::components::Hero, &shared::components::PlayerPosition)>,
+    mut plates: Query<&mut Node, With<SelectionPlate>>,
+    mut glyphs: Query<&mut BorderColor, With<SelectionRingGlyph>>,
+    mut names: Query<&mut Text, (With<SelectionNameText>, Without<SelectionStatusText>)>,
+    mut statuses: Query<&mut Text, (With<SelectionStatusText>, Without<SelectionNameText>)>,
+    mut last: Local<Option<Vec3>>,
+) {
+    let selected = selection.entity.and_then(|entity| heroes.get(entity).ok());
+
+    let display = if selected.is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    for mut node in plates.iter_mut() {
+        if node.display != display {
+            node.display = display;
+        }
+    }
+
+    let Some((hero, position)) = selected else {
+        *last = None;
+        return;
+    };
+
+    // Ours or someone else's. Only your own hero takes orders, so the plate has
+    // to distinguish inspecting from commanding -- and it does it with the one
+    // reserved accent rather than with a word.
+    let is_mine = local
+        .as_ref()
+        .is_some_and(|local| shared::player::peer_id_to_u64(hero.owner) == local.0);
+    let glyph_color = if is_mine { EMBER_RULE } else { INK_MUTED };
+    for mut border in glyphs.iter_mut() {
+        let next = BorderColor::from(glyph_color);
+        if *border != next {
+            *border = next;
+        }
+    }
+
+    let label = if is_mine {
+        name_input
+            .as_ref()
+            .map(|input| input.name.trim().to_uppercase())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "YOUR HERO".to_string())
+    } else {
+        "HERO".to_string()
+    };
+    for mut text in names.iter_mut() {
+        if text.0 != label {
+            text.0 = label.clone();
+        }
+    }
+
+    // Moving or standing, derived from whether the replicated position changed.
+    // The client has no copy of the server's move target, and inventing a
+    // replicated "is moving" flag for a cosmetic word is not worth the bandwidth.
+    let moved = last.is_some_and(|previous| previous.distance_squared(position.0) > 1e-4);
+    *last = Some(position.0);
+    let status = if !is_mine {
+        "NOT YOURS"
+    } else if moved {
+        "ON THE MOVE"
+    } else {
+        "HOLDING"
+    };
+    for mut text in statuses.iter_mut() {
+        if text.0 != status {
+            text.0 = status.to_string();
         }
     }
 }

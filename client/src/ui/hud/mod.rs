@@ -26,9 +26,10 @@ use shared::protocol::{DevCommand, DevStatus, ReliableChannel};
 use crate::input::InputState;
 use crate::states::GameState;
 use crate::ui::styles::{
-    ACCENT_COLOR, BUTTON_BORDER, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, TEXT_COLOR,
-    TEXT_MUTED,
+    plate_shadow, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, EMBER, EMBER_RULE, INK,
+    INK_INVERSE, INK_MUTED, LIMEWASH, LIMEWASH_LIT, PLATE_RULE, PLATE_RULE_SOFT, RADIUS, SLATE,
 };
+use crate::ui::BlocksWorldClicks;
 
 pub struct HudPlugin;
 
@@ -53,6 +54,7 @@ impl Plugin for HudPlugin {
                 sync_god_panel,
                 style_warp_buttons,
                 sync_spawn_hero_button,
+                state_sync::sync_selection_plate,
             )
                 .run_if(in_state(GameState::Playing)),
         );
@@ -80,9 +82,11 @@ impl HudMode {
     }
 }
 
-pub const PANEL_BACKGROUND: Color = Color::srgba(0.06, 0.05, 0.04, 0.88);
-/// Dark text on the accent-filled active speed button.
-pub(super) const WARP_ACTIVE_TEXT: Color = Color::srgb(0.08, 0.06, 0.04);
+/// Every HUD plate.
+pub const PANEL_BACKGROUND: Color = LIMEWASH;
+/// Text ON the filled active speed button. Must be the light inverse: ink on a
+/// dark slate fill is unreadable, and this is the one place the value flips.
+pub(super) const WARP_ACTIVE_TEXT: Color = INK_INVERSE;
 
 #[derive(Component)]
 struct HudRoot;
@@ -113,3 +117,20 @@ struct SpawnHeroButton;
 
 #[derive(Component)]
 struct SpawnHeroLabel;
+
+// --- the selected-unit plate ------------------------------------------------
+
+/// Root of the bottom-centre plate. Present always, shown only when something
+/// is selected, so appearing costs no spawn.
+#[derive(Component)]
+struct SelectionPlate;
+
+/// The hollow ring mark that rhymes with the ring on the ground.
+#[derive(Component)]
+struct SelectionRingGlyph;
+
+#[derive(Component)]
+struct SelectionNameText;
+
+#[derive(Component)]
+struct SelectionStatusText;
