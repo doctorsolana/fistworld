@@ -8,9 +8,10 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
-use lightyear::prelude::{MessageReceiver, PeerId, RemoteId};
+use lightyear::prelude::{MessageReceiver, NetworkTarget, PeerId, RemoteId, Replicate};
 
-use shared::components::{Hero, PlayerPosition, PlayerRotation};
+use shared::components::{Hero, HeroOutfit, PlayerPosition, PlayerRotation};
+use shared::player_profile::HeroSave;
 use shared::player::{HERO_ARRIVE_EPSILON, HERO_MOVE_SPEED};
 use shared::protocol::HeroMoveTo;
 use shared::region::RegionCoord;
@@ -20,6 +21,57 @@ use shared::terrain::WorldTerrain;
 /// semantics); an entry is removed on arrival.
 #[derive(Resource, Default)]
 pub struct HeroMoveTargets(pub HashMap<PeerId, Vec3>);
+
+/// Hero entity per player, keyed by lowercase profile NAME rather than peer.
+///
+/// Peer ids are random per session, so they cannot identify a returning
+/// player; the account name can. This is what lets a hero outlive its owner's
+/// connection and be re-adopted on reconnect.
+#[derive(Resource, Default)]
+pub struct HeroIndex {
+    pub by_name: HashMap<String, Entity>,
+}
+
+/// Spawn a hero for `owner`, terrain-snapped, and register it under `name`.
+///
+/// Deliberately NO `ControlledBy`: that component's lifetime would despawn the
+/// hero when its owner disconnects, and a `ControlledBy` pointing at a
+/// despawned client entity is a dangling reference. Ownership lives in
+/// [`Hero::owner`], which is re-pointed when the player returns.
+pub fn spawn_hero(
+    commands: &mut Commands,
+    index: &mut HeroIndex,
+    terrain: &shared::terrain::WorldTerrain,
+    owner: PeerId,
+    name_lower: &str,
+    position: Vec3,
+    rotation: f32,
+    outfit: HeroOutfit,
+) -> Entity {
+    let grounded = Vec3::new(
+        position.x,
+        terrain.get_height(position.x, position.z),
+        position.z,
+    );
+    let entity = commands
+        .spawn((
+            Hero { owner },
+            outfit,
+            // Opt into region interest BEFORE the visibility pass runs.
+            shared::region::RegionCoord::from_world_pos(grounded),
+            PlayerPosition(grounded),
+            PlayerRotation(rotation),
+            Replicate::to_clients(NetworkTarget::All),
+        ))
+        .id();
+    index.by_name.insert(name_lower.to_string(), entity);
+    entity
+}
+
+/// Snapshot a hero for the profile.
+pub fn hero_save(position: &PlayerPosition, rotation: &PlayerRotation, outfit: &HeroOutfit) -> HeroSave {
+    HeroSave::from_parts(position.0, rotation.0, outfit)
+}
 
 /// Drain [`HeroMoveTo`] intents into [`HeroMoveTargets`].
 ///

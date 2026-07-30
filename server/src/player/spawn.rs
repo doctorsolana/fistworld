@@ -38,6 +38,8 @@ pub fn handle_player_name_submission(
     terrain: Res<WorldTerrain>,
     mut profiles: ResMut<PlayerProfiles>,
     mut roster_cache: ResMut<PlayerRosterCache>,
+    mut hero_index: ResMut<crate::player::hero::HeroIndex>,
+    mut heroes: Query<&mut shared::components::Hero>,
     mut client_links: Query<
         (
             Entity,
@@ -129,6 +131,45 @@ pub fn handle_player_name_submission(
                 ))
                 .id();
 
+            // The hero outlives the connection, so a returning player either
+            // re-adopts the body still standing in the world, or -- after a
+            // server restart, when no entity survived -- has it rebuilt from
+            // the profile snapshot. Peer ids are per-session, so the identity
+            // that carries across connections is the name.
+            let readopted = match hero_index.by_name.get(&name_lower).copied() {
+                Some(hero_entity) => match heroes.get_mut(hero_entity) {
+                    Ok(mut hero) => {
+                        hero.owner = peer_id;
+                        info!("Re-adopted hero {hero_entity:?} for '{}'", name_lower);
+                        true
+                    }
+                    Err(_) => {
+                        // The index outlived the entity. Drop the dead link and
+                        // fall through to the profile so the player still gets
+                        // a hero this session rather than the next one.
+                        hero_index.by_name.remove(&name_lower);
+                        warn!("Hero index held a stale entity for '{}'", name_lower);
+                        false
+                    }
+                },
+                None => false,
+            };
+            if !readopted {
+                if let Some(saved) = profile.hero.clone() {
+                    let entity = crate::player::hero::spawn_hero(
+                        &mut commands,
+                        &mut hero_index,
+                        &terrain,
+                        peer_id,
+                        &name_lower,
+                        Vec3::from(saved.position),
+                        saved.rotation,
+                        saved.outfit(),
+                    );
+                    info!("Restored hero {entity:?} for '{}' from profile", name_lower);
+                }
+            }
+
             profiles.peer_to_name.insert(peer_id, name_lower.clone());
             profiles.name_to_peer.insert(name_lower.clone(), peer_id);
             roster_cache.upsert_profile(&profile);
@@ -137,6 +178,10 @@ pub fn handle_player_name_submission(
             sender.send::<ReliableChannel>(NameSubmissionResult::Accepted { profile_loaded });
             dev_sender.send::<ReliableChannel>(DevStatus { god: dev.0 });
             info!("Player '{}' spawned successfully for {:?}", name, peer_id);
+            // This connection is now named. The outer `peer_to_name` guard is
+            // only re-read next run, so without this break a client that sent
+            // two names in one batch would get a second commander and hero.
+            break;
         }
     }
 }

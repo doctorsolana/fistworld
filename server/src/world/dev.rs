@@ -2,11 +2,9 @@
 
 use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
-use lightyear::prelude::{
-    ControlledBy, Lifetime, MessageReceiver, NetworkTarget, RemoteId, Replicate,
-};
+use lightyear::prelude::{MessageReceiver, RemoteId};
 
-use shared::components::{Hero, PlayerPosition, PlayerRotation, TimeWarp};
+use shared::components::{Hero, TimeWarp};
 use shared::protocol::DevCommand;
 use shared::terrain::WorldTerrain;
 
@@ -38,8 +36,10 @@ pub fn handle_dev_commands(
     mut commands: Commands,
     dev: Res<DevMode>,
     terrain: Option<Res<WorldTerrain>>,
+    profiles: Res<crate::persistence::profiles::PlayerProfiles>,
+    mut hero_index: ResMut<crate::player::hero::HeroIndex>,
     heroes: Query<&Hero>,
-    mut client_links: Query<(Entity, &RemoteId, &mut MessageReceiver<DevCommand>), With<ClientOf>>,
+    mut client_links: Query<(&RemoteId, &mut MessageReceiver<DevCommand>), With<ClientOf>>,
     mut warp: Query<&mut TimeWarp>,
     mut warned_peers: Local<bevy::platform::collections::HashSet<lightyear::prelude::PeerId>>,
 ) {
@@ -47,7 +47,7 @@ pub fn handle_dev_commands(
     // spawn from earlier in this same drain — track them here or a burst of
     // two reliable SpawnHero messages in one tick defeats one-per-player.
     let mut spawned_this_run = bevy::platform::collections::HashSet::new();
-    for (client_entity, remote_id, mut receiver) in client_links.iter_mut() {
+    for (remote_id, mut receiver) in client_links.iter_mut() {
         for command in receiver.receive() {
             if !dev.0 {
                 // A legitimate client never sends these without the grant; log the first
@@ -77,7 +77,12 @@ pub fn handle_dev_commands(
                 DevCommand::SpawnHero { pos, outfit } => {
                     // One hero per player, enforced HERE (the client also
                     // greys its button, but the server is the authority).
+                    let Some(name_lower) = profiles.peer_to_name.get(&remote_id.0).cloned() else {
+                        info!("Dev: ignoring SpawnHero from {:?}: no profile", remote_id.0);
+                        continue;
+                    };
                     if spawned_this_run.contains(&remote_id.0)
+                        || hero_index.by_name.contains_key(&name_lower)
                         || heroes.iter().any(|h| h.owner == remote_id.0)
                     {
                         info!("Dev: ignoring SpawnHero from {:?}: hero exists", remote_id.0);
@@ -89,26 +94,18 @@ pub fn handle_dev_commands(
                     let Some(terrain) = terrain.as_ref() else {
                         continue;
                     };
-                    // Feet-on-ground: the character's origin is at its feet,
-                    // and hero PlayerPosition is defined as the feet point.
-                    let spawn =
-                        Vec3::new(pos.x, terrain.get_height(pos.x, pos.z), pos.z);
-                    commands.spawn((
-                        Hero { owner: remote_id.0 },
+                    let entity = crate::player::hero::spawn_hero(
+                        &mut commands,
+                        &mut hero_index,
+                        terrain,
+                        remote_id.0,
+                        &name_lower,
+                        pos,
+                        0.0,
                         outfit,
-                        // Opt into region interest BEFORE the visibility pass
-                        // runs, mirroring the commander spawn.
-                        shared::region::RegionCoord::from_world_pos(spawn),
-                        PlayerPosition(spawn),
-                        PlayerRotation(0.0),
-                        Replicate::to_clients(NetworkTarget::All),
-                        ControlledBy {
-                            owner: client_entity,
-                            lifetime: Lifetime::default(),
-                        },
-                    ));
+                    );
                     spawned_this_run.insert(remote_id.0);
-                    info!("Dev: hero spawned at {spawn:?} for {:?}", remote_id.0);
+                    info!("Dev: hero {entity:?} spawned for '{name_lower}' at {pos:?}");
                 }
             }
         }

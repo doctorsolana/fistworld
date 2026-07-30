@@ -126,3 +126,70 @@ pub(crate) fn save_profile_to_dir(
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shared::components::HeroOutfit;
+    use shared::player_profile::HeroSave;
+
+    /// A hero must survive the disk round-trip intact: this snapshot is the
+    /// ONLY thing that rebuilds a player's body after a server restart, so a
+    /// silent loss here reads to the player as "the game deleted my character".
+    #[test]
+    fn hero_survives_profile_round_trip() {
+        let dir = std::env::temp_dir().join(format!("fistworld-profile-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut outfit = HeroOutfit::default();
+        outfit.slots[0] = 2;
+        outfit.slots[1] = 1;
+        outfit.skin = 3;
+
+        let mut profile = PlayerProfile::new_player("HeroTester".to_string());
+        profile.hero = Some(HeroSave {
+            position: [123.5, 40.25, -678.75],
+            rotation: 1.75,
+            outfit_slots: outfit.slots,
+            outfit_skin: outfit.skin,
+        });
+
+        save_profile_to_dir(&dir, &profile).unwrap();
+
+        let profiles = PlayerProfiles::new(dir.clone());
+        let loaded = profiles.load_profile("herotester").unwrap();
+
+        assert_eq!(loaded.hero, profile.hero, "hero lost in round-trip");
+        let restored = loaded.hero.unwrap();
+        assert_eq!(restored.outfit(), outfit, "outfit indices drifted");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A profile written before heroes existed must be REJECTED, not silently
+    /// deserialized into garbage: bincode is positional, so an older layout
+    /// would misread every field after the insertion point.
+    #[test]
+    fn stale_profile_version_is_rejected() {
+        let dir =
+            std::env::temp_dir().join(format!("fistworld-profile-stale-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut profile = PlayerProfile::new_player("OldTimer".to_string());
+        profile.version = PROFILE_VERSION - 1;
+        save_profile_to_dir(&dir, &profile).unwrap();
+
+        let profiles = PlayerProfiles::new(dir.clone());
+        assert!(
+            profiles.load_profile("oldtimer").is_err(),
+            "stale profile was accepted"
+        );
+        assert!(
+            dir.join(format!("oldtimer.v{}.backup", PROFILE_VERSION - 1))
+                .exists(),
+            "stale profile was not backed up before rejection"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

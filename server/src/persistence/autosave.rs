@@ -1,7 +1,9 @@
 //! Periodic autosave systems.
 
 use bevy::prelude::*;
-use shared::components::{Player, PlayerPosition, PlayerProgression, PlayerRotation};
+use shared::components::{
+    Hero, HeroOutfit, Player, PlayerPosition, PlayerProgression, PlayerRotation,
+};
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 
 use crate::persistence::io_queue::{ProfileIoQueue, SavePriority};
@@ -23,6 +25,7 @@ pub fn update_periodic_player_save(
         &PlayerRotation,
         &PlayerProgression,
     )>,
+    heroes: Query<(&Hero, &PlayerPosition, &PlayerRotation, &HeroOutfit)>,
     time: Res<Time>,
     mut last_save_time: Local<f32>,
 ) {
@@ -45,8 +48,18 @@ pub fn update_periodic_player_save(
             continue;
         };
 
+        // Heroes outlive connections, so the snapshot is only needed to
+        // survive a server restart -- but it must be current when one happens.
+        let hero_state = heroes
+            .iter()
+            .find(|(hero, _, _, _)| hero.owner == player.client_id)
+            .map(|(_, position, rotation, outfit)| {
+                crate::player::hero::hero_save(position, rotation, outfit)
+            });
+
         let profile = PlayerProfile {
             version: PROFILE_VERSION,
+            hero: hero_state,
             player_name: profiles
                 .profiles
                 .get(name_lower)

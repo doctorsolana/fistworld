@@ -71,6 +71,12 @@ pub fn handle_disconnections(
     )>,
     mut inputs: ResMut<ClientInputs>,
     mut hero_targets: ResMut<crate::player::hero::HeroMoveTargets>,
+    heroes: Query<(
+        &shared::components::Hero,
+        &PlayerPosition,
+        &PlayerRotation,
+        &shared::components::HeroOutfit,
+    )>,
 ) {
     let client_entity = trigger.entity;
 
@@ -89,8 +95,10 @@ pub fn handle_disconnections(
         client_entity, peer_id
     );
 
-    // The hero despawns with the connection (ControlledBy SessionBased); its
-    // move target must go too or the map grows one orphan per disconnect.
+    // The hero KEEPS STANDING in the world (it carries no ControlledBy, so no
+    // lifetime despawns it) and is re-adopted when this player returns. Only
+    // the pending move order dies with the connection, or a returning hero
+    // would resume walking to a spot chosen last session.
     hero_targets.0.remove(&peer_id);
 
     let name_lower = if let Some(name) = profiles.peer_to_name.get(&peer_id) {
@@ -134,9 +142,19 @@ pub fn handle_disconnections(
         return;
     };
 
+    // Snapshot the hero so a SERVER RESTART can rebuild it; the live entity
+    // itself survives an ordinary disconnect.
+    let hero_state = heroes
+        .iter()
+        .find(|(hero, _, _, _)| hero.owner == peer_id)
+        .map(|(_, position, rotation, outfit)| {
+            crate::player::hero::hero_save(position, rotation, outfit)
+        });
+
     let profile = PlayerProfile {
         version: PROFILE_VERSION,
         player_name: display_name,
+        hero: hero_state,
         position: [pos.0.x, pos.0.y, pos.0.z],
         rotation: rot.0,
         level: progression.level,
