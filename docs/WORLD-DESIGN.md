@@ -4,6 +4,14 @@ How the living world works: villages that grow into towns and cities when they
 prosper, clans that hold territory, and a player who starts as one guy with a
 sword and ends up running a realm. Companion to [ARCHITECTURE.md](ARCHITECTURE.md),
 which says how the engine carries this; this document says what the world *is*.
+The build order for both lives in [ROADMAP.md](ROADMAP.md).
+
+> **Status, audited 2026-07-30.** Almost nothing in this document is built. There is no
+> `Settlement`, `Clan`, good, price, coin or caravan type anywhere in the workspace, and
+> the strategic tick that would run them has an empty body. Read this as the design it is.
+> Places where the text asserted something about existing code that turned out to be false
+> are corrected inline and marked **[correction]** — there were four, and two of them
+> (combat, and the biome resource field) would have caused real mis-planning.
 
 The genre anchor: Mount & Blade's economic loop (trade → enterprises → retinue
 → fiefs) and The Guild's business ownership, but observed from an RTS camera in
@@ -44,6 +52,16 @@ one persistent, always-simulating multiplayer world.
    playfield while the rest of the sky stays broken and readable. Identical
    on every client, cosmetic for now, but positioned so later mechanics
    (slowed caravans, delayed sailing) can read the exact same field.
+
+   > **[correction]** `BiomeField::resources()` — named above as the ground truth for
+   > production — has **zero production callers**. Its only callsites are its own unit
+   > tests; just `biome()` and `iron_vein()` are used, and only for colour. So the
+   > economic gradient this pillar describes is currently cosmetic, which is exactly
+   > what the pillar says it must not be. There is also no function anywhere that
+   > aggregates it over a radius, which settlement founding requires. Validate that it
+   > discriminates at the scale settlements care about BEFORE building site scoring on
+   > it (ROADMAP Phase 1). The climate and surface-band halves of this pillar, by
+   > contrast, are genuinely live and drive real rendering.
 3. **Statistical at distance, concrete when observed.** Per ARCHITECTURE.md:
    the strategic layer moves numbers (stocks, populations, caravan positions);
    the tactical layer spawns real units only inside someone's view bubble.
@@ -99,12 +117,17 @@ or occupation, never by a border quietly swallowing them.
 
 **Founding.** Settlement *sites* are chosen deterministically from the world
 seed at first server start (flat land near water, scored by the diversity and
-richness of `BiomeField::resources` within a working radius ~300m — the same
-spiral-search logic the old landmark placement used). Sites are data, the
+richness of `BiomeField::resources` within a working radius ~300m). Sites are data, the
 founding roster is state: the world starts with N settlements seeded across
 the continents, biased so each continent gets a spread of farm/wood/stone/iron
 specialisations. Most start independent; a few clusters start clan-held (§4).
 More can be founded later (by clans or players), and ruins can be refounded.
+
+> **[correction]** This used to cite "the same spiral-search logic the old landmark
+> placement used" as available machinery. That function was DELETED (commit `1fe84ed`)
+> and survives only at tag `citysim-final`. It was ~23 lines, scored slope and radius,
+> and never read the resource field at all. Treat it as deleted prior art worth
+> rewriting, not as a shortcut.
 
 **Production.** Each strategic-economy tick (see §7), a settlement produces
 according to `population × resource_profile`: meadows villages pile up food,
@@ -185,11 +208,24 @@ owning buildings in places worth defending. No magic global bank.
 - Caravans carry coin home; that income feeds the origin's prosperity — trade
   literally builds towns.
 - **Roads emerge from use.** Route segments that carry repeated traffic get
-  upgraded to visible roads (the flatten-stroke machinery in
-  `shared::worldgen` — recorded as strokes exactly like the old generated
-  roads, applied as world edits). Roads speed caravans, which concentrates
+  upgraded to visible roads. Roads speed caravans, which concentrates
   traffic, which paves more road: trade arteries emerge without an authored
   road network.
+
+  > **[correction]** This used to specify the mechanism as "the flatten-stroke
+  > machinery in `shared::worldgen` — recorded as strokes exactly like the old
+  > generated roads, applied as world edits". That **contradicts §7's own
+  > determinism boundary** ("nothing in the economy may write to the map recipe"):
+  > flatten strokes are part of the terrain recipe, replayed by every binary at
+  > load. It is also blocked in practice — the height grid is rebuilt whole, there
+  > is no incremental stroke append, and every stroke write site currently passes
+  > an empty vector.
+  >
+  > **Resolution: emergent roads modify travel cost and surface paint, never
+  > heights.** That keeps the loop intact (roads still speed caravans and extend
+  > influence reach) while leaving terrain a pure function of the seed. Note
+  > `surface_weights_at` already takes a road distance, so the painting half has a
+  > home.
 - Caravans are the world's bloodstream and the primary friction surface:
   escort contracts, banditry, tolls, and siege-by-starvation all fall out of
   "goods move physically."
@@ -282,14 +318,29 @@ is a territorial attack without a single battle.
 The M&B arc, RTS-flavoured. Each rung uses systems the rung below already
 exercised:
 
-1. **One guy.** Spawn as a commander (exists) with a sword (exists) and
-   pocket change near a village.
+1. **One guy.** Spawn as a commander with a sword and pocket change near a
+   village.
+
+   > **[correction]** This used to read "a commander (exists) with a sword
+   > (exists)". Both parentheticals were false, and this is the correction most
+   > likely to wreck a schedule. The commander exists only as a BODILESS camera
+   > anchor; the body is the Hero, and the only path to one is a god command the
+   > server drops unless `FISTWORLD_DEV=1`. **The sword does not exist at all** —
+   > weapons and combat were stripped wholesale in commit `041deaa` (~9,600 lines)
+   > and never replaced. `Health` survives, registered for replication and attached
+   > to nothing. Rung 1 is not done.
 2. **First coin.** Trade runs with a hand cart (buy grain, walk it to the
    quarry town), escort a caravan for a fee, bounty on a bandit camp. All of
    these are "move a unit next to a thing" — no new UI concepts.
-3. **Retinue.** Hire villagers/mercenaries into a small persistent squad
-   (melee combat exists; formations/orders are on the engine build order).
+3. **Retinue.** Hire villagers/mercenaries into a small persistent squad.
    Bigger escorts, bigger bounties, first raids.
+
+   > **[correction]** This used to say "melee combat exists". It does not — see
+   > rung 1. Combat is greenfield work and is the single largest hidden cost in
+   > this document; it is scheduled explicitly in ROADMAP Phase 7. The old design
+   > is recoverable prior art in git history, but it was built for a first-person
+   > shooter with one player-controlled body, so its input and targeting halves do
+   > not transfer to units under selection and orders.
 4. **Businesses.** Buy a slot in a settlement (sawmill in a forest village,
    quarry in the highlands, smithy where iron flows through). Passive share
    of that settlement's production stream — income while offline, a stake in
@@ -313,11 +364,43 @@ garrisons → sieges) so coin keeps mattering.
   prices) replicate globally like WorldTime — they're the map screen. Full
   detail (stocks, slots) replicates on interest. Caravans/warbands are
   ordinary interest-managed entities.
+
+  > **[correction]** This is **not expressible as written** and is an unmade design
+  > decision rather than a replication flag. lightyear 0.28 visibility is per-ENTITY,
+  > not per-component: `gain_visibility`/`lose_visibility` take `(entity, sender)` and
+  > hide the whole entity, and this repo's own interest pass does exactly that. Getting
+  > summary-global plus detail-on-interest requires EITHER two entities per settlement
+  > (a global summary entity plus a `RegionCoord`-tagged detail entity, joined
+  > client-side on `SettlementId`) OR a global directory message plus request/response
+  > for detail. Decide it in ROADMAP Phase 1, while a settlement has four fields — it
+  > shapes every entity class added afterwards.
+  >
+  > There is a second prize for getting this right: once a global directory carries the
+  > map screen, the map screen no longer justifies whole-world interest, so the view
+  > radius can be clamped hard. That is simultaneously the render-LOD/sim-LOD decoupling
+  > ARCHITECTURE §4 demands and the structural fix for zoom-driven replication cost.
 - **Persistence.** One world-state file (settlements, clans, caravans,
   ownership) saved like player profiles, small enough to snapshot whole. The
   deterministic site list and settlement plans are NOT stored — recomputed
   from seed; only mutable state persists (a settlement's layout is one
   cursor + damage bits). The derived region-control map is not saved at all.
+
+  > **[correction]** "Like player profiles" means *the same save discipline*, NOT the
+  > same format. Profiles are bincode, which is **positional**: it carries no field
+  > names, so the `#[serde(default)]` attributes on `PlayerProfile` are inert and the
+  > loader is forced to reject-and-backup on any layout change. `PROFILE_VERSION` is
+  > already at 6 — that is six wipes. A wipe is an inconvenience for a name and an
+  > outfit; for a world file holding months of population, prosperity and build cursors
+  > it deletes the game. Use a versioned self-describing format (RON is already a
+  > workspace dependency) with a real migration chain, and write the v1 to v2 migration
+  > while the payload is still trivial.
+  >
+  > Durability is a separate axis from format and is equally unbuilt: the world file
+  > needs backup rotation and load-newest-valid-on-corrupt, and it must be written
+  > through the existing background IO worker rather than the main thread. Note also
+  > that **`fly.toml` declares no volume**, so today `server_data/` is ephemeral and
+  > every deploy destroys it — persistence code of any format is worthless until that
+  > is fixed (ROADMAP Phase 0).
 - **Promotion contract.** Every strategic entity defines its tactical
   spawn (caravan → wagons+guards, settlement → buildings+villagers,
   warband → soldiers) and the demotion back to numbers must lose nothing the
@@ -327,40 +410,36 @@ garrisons → sieges) so coin keeps mattering.
   society state mutates live and persists. Nothing in the economy may write
   to the map recipe.
 
-## 8. Build order — vertical slices, each playable
+## 8. Build order
 
-Narrowing strategy: every phase ships something a player can *do*, and no
-phase builds breadth the previous phase didn't prove a need for.
+**Moved to [ROADMAP.md](ROADMAP.md).** This section and ARCHITECTURE §7 used to carry two
+different orderings that disagreed with each other; one list now covers both, with
+per-phase checklists and current state.
 
-- **Phase 1 — Settlements exist.** Deterministic sites, seed N independent
-  settlements (hamlets and villages) with plan-driven layouts and names,
-  map/minimap markers, inspect panel. No economy.
-  *Playable: explore a world with places in it.*
-- **Phase 2 — They eat.** Population + food production/consumption +
-  prosperity + tier transitions in both directions, down to Ruins. Watch a
-  meadows village outgrow a moor one while a starving hamlet empties out.
-  *Playable: find the town that will become the capital.*
-- **Phase 3 — Prices and the hand cart.** Goods stocks, local prices, player
-  buy/sell UI, carry capacity. First coin loop.
-  *Playable: the trading game.*
-- **Phase 4 — Caravans.** NPC dispatch, strategic movement, observed
-  promotion, escort/raid interactions, trade income → prosperity. Emergent
-  roads can land here or in 5.
-  *Playable: highwayman or guard captain.*
-- **Phase 5 — Retinue + businesses.** Hiring, wages, business slots and
-  passive income.
-  *Playable: the M&B mid-game.*
-- **Phase 6 — Clans.** NPC clans + settlement ownership + the derived
-  influence map as political tint (§5) + player charters + relations from
-  actions.
-  *Playable: factions to befriend or bleed.*
-- **Phase 7 — War for the realm.** Warbands, garrisons, settlement capture,
-  formula battles vs observed battles, realm victory condition. Razing and
-  offline protection get designed here, together (§10).
+The narrative order this section proposed (settlements, then food, then trade, then
+caravans) survives largely intact as ROADMAP Phases 1 and 3-5. Three things changed, all
+from auditing the code rather than the doc:
 
-Engine work that gates this (from ARCHITECTURE.md's build order): flow-field
-pathfinding + unit orders (needed by Phase 3's cart and everything after),
-the promotion/demotion seam (Phase 4), strategic map overlays (Phase 1).
+- **The promotion/demotion seam moved EARLY** (ROADMAP Phase 2). This section stacked four
+  phases of economy on top of a seam it never validated, which violates ARCHITECTURE §7's
+  own closing advice. It is now tested on one traveller, measured by arrival time — which
+  needs no combat code.
+- **Flow-field pathfinding moved LATE** (ROADMAP Phase 6). This section's closing note said
+  flow fields were "needed by Phase 3's cart". They are not: a hand cart is one unit
+  following one order, which the hero loop already does end to end. Flow fields are gated on
+  many units sharing a goal — the retinue, not the cart.
+- **A Phase 0 appeared.** Every "playable" claim below was really a DEV-MODE claim on a
+  local binary: the only path to a body is a god command, and the hosted server could not
+  boot or retain a profile. That had to be fixed before any phase could be validated by an
+  actual player.
+
+Two smaller corrections to this section's assumptions, both verified against the code:
+
+- **"Map/minimap markers" (old Phase 1).** There is no minimap anywhere in the client, and
+  the world map's only marker is bound to a component nothing ever inserts, so it sits
+  frozen at panel centre. The marker layer is greenfield.
+- **Carry capacity and inventory (old Phase 3).** No inventory concept exists in any crate;
+  the FPS inventory was deleted wholesale. The only trace is a dead `inventory_open` bool.
 
 ## 9. Deliberately NOT building (yet)
 

@@ -5,7 +5,14 @@ is expensive. If you are about to write simulation code, read this first.
 
 The companion document [WORLD-DESIGN.md](WORLD-DESIGN.md) describes what runs ON this
 architecture: settlements, goods, caravans, clans, and the player's climb from one guy
-to a realm — including the phased build order for those systems.
+to a realm. The build order for both lives in [ROADMAP.md](ROADMAP.md).
+
+> **Status, audited 2026-07-30.** This document is a design record, not a description of
+> the code. Most of it is still unbuilt. Where it previously described intent in the
+> present tense, that has been corrected inline and marked **[not built]**,
+> **[partial]** or **[done]**. The one-line summary: interest management is real, the
+> strategic tick is an empty loop, and nothing political or persistent about regions
+> exists. Do not read a section as a description of working code unless it says so.
 
 ## The game
 
@@ -60,6 +67,12 @@ An army crossing the map is one strategic entity. When a player zooms in on it, 
 meets a hostile force, it **promotes** into N tactical units. When attention leaves and
 the situation resolves, it **demotes** back to a strength number.
 
+> **[not built]** — zero implementation and zero tests. The seam currently has neither
+> endpoint: no strategic entity to promote, and no tactical unit type to promote into.
+> `SimLevel` is computed every tick and read only by a telemetry line. These rules are
+> therefore a specification to write tests against (ROADMAP Phase 2), not invariants that
+> existing code upholds.
+
 Rules that keep this sane:
 
 - Promotion must be **deterministic from strategic state** — the same party always
@@ -76,18 +89,46 @@ Rules that keep this sane:
 
 The world is divided into regions. That single division serves all of:
 
-| Role | Meaning |
-|------|---------|
-| **Political** | Who owns this land; the unit of conquest |
-| **Interest management** | What the server replicates to a given client |
-| **Simulation LOD** | Whether this region is tactical or strategic right now |
-| **Persistence** | The unit that gets saved and loaded |
+| Role | Meaning | State |
+|------|---------|-------|
+| **Interest management** | What the server replicates to a given client | **[done]** |
+| **Simulation LOD** | Whether this region is tactical or strategic right now | **[partial]** — `SimLevel` is computed every tick and read by one telemetry line. Nothing branches on it. |
+| **Political** | Who owns this land | **[not built]** — `RegionState` has no owner. See the correction below. |
+| **Persistence** | The unit that gets saved and loaded | **[not built]** — `RegionState` does not even derive `Serialize`. See the correction below. |
 
 Keeping these aligned is deliberate. When they diverge you end up maintaining several
 spatial systems that disagree with each other, and every feature has to reconcile them.
 
-Note the existing `SPATIAL_CELL_SIZE = 8.0` grid is an FPS-era structure for close-range
-queries. Regions are a **coarse layer above it**, not a replacement.
+**Correction — the political and persistence roles move off regions.** This section and
+WORLD-DESIGN §5/§7 flatly contradicted each other: this doc said persistence is per region
+and regions are the unit of conquest, while WORLD-DESIGN says region control is *derived,
+never saved* and persistence is one world-state file. Resolved in WORLD-DESIGN's favour,
+because it is the one that matches the gameplay verb — you take a *town*, not a grid
+square:
+
+- **Settlements** are the political and persistence unit. Ownership lives on the
+  settlement; territory is computed from it.
+- **Regions** are the interest / sim-LOD / travel-graph unit.
+
+A useful consequence: regions do not need to become ECS entities. They stay a resource-held
+map, and the per-region thing the strategic tick actually wants is an *index of the
+settlements inside it* — a field, not an architecture.
+
+**Known divergence — there are three spatial partitions today, not one.** The claim in this
+section's title is already false in practice, and the note below about the 8m grid
+understates it. Three live grids run and do not know about each other:
+
+| Grid | Size | Used for | Radius policy |
+|---|---|---|---|
+| `RegionCoord` | 512m | replication interest | scales with camera zoom |
+| `ChunkCoord` | 64m | terrain + static collider streaming | fixed +/-192m |
+| `SPATIAL_CELL_SIZE` | 8m | close-range obstacle queries | n/a |
+
+At max zoom the server replicates entities from a radius of kilometres while holding
+colliders for 192m — precisely the divergence this section says regions exist to prevent.
+This is *accepted* for now, not solved: collider streaming is an FPS-era structure that the
+tactical-unit work is expected to replace outright. Recorded here so the next reader does
+not assume it was reconciled.
 
 ## 4. What seamless zoom demands
 
@@ -100,9 +141,24 @@ This is the most technically demanding choice on the board. It requires:
   you are not tactically simulating (as icons/abstract), and you must simulate a region
   no one is rendering (strategic tick). Do not couple them.
 - **Transitions must not pop.** Cross-fade or match silhouettes across LOD bands.
-- **Camera range grows enormously** — roughly 5 m to 20 km, versus today's 55–900 m.
-  Expect depth-buffer precision problems; plan for a logarithmic depth buffer or
-  per-band camera settings.
+  **[partial]** — the terrain seam is genuinely invisible; water hard-pops, non-tree props
+  snap out at the wrong distance, and entities have no LOD to cross-fade at all.
+- ~~**Camera range grows enormously** — roughly 5 m to 20 km, versus today's 55–900 m.~~
+  **[done, and the figures were stale].** The commander camera is already 12m–12,000m, and
+  the shipped map is 8192m across, so 12km already frames the entire world. There is
+  nothing left to gain from more range.
+- ~~Expect depth-buffer precision problems; plan for a logarithmic depth buffer or per-band
+  camera settings.~~ **[void — do not plan for this].** Bevy 0.19 builds
+  `Mat4::perspective_infinite_reverse_rh`, so `far` never enters the depth matrix. With
+  reverse-Z, 5cm of separation at 12km is still tens of ULP. No logarithmic depth buffer
+  and no per-band camera settings are needed. This is an entire risk the roadmap can skip.
+
+**The real gap is entity representation, not camera range.** Above ~1.5km nothing changes
+for the remaining 8x of zoom: the world is one static coloured mesh with nothing on it.
+Terrain is the ONLY thing with a far-zoom representation — heroes, buildings, and every
+future settlement, caravan and army have exactly one representation (a full 3D mesh) and
+either render as sub-pixel geometry or vanish. Read step 5 of the build order as *entity
+representation across bands* (not started), not as camera work (done).
 
 Rough bands to design against:
 
@@ -120,33 +176,73 @@ Rough bands to design against:
 - **Offline progress must be designed, not emergent.** Players will be away for days;
   decide explicitly what accrues, what decays, and what is protected.
 - **Absent players need grief protection**, or the game punishes having a job.
-- **Persistence is per region**, and must handle a region being loaded/unloaded while
-  neighbours stay live.
-- **It needs a hosted server.** This is an operational commitment, not just code.
+- ~~**Persistence is per region**, and must handle a region being loaded/unloaded while
+  neighbours stay live.~~ **[superseded — see the correction in §3].** Persistence is one
+  world-state document keyed by stable settlement ids. Per-region sharding is a scale answer
+  to a problem an 8km world with ~30 settlements does not have, and stable ids make it a
+  pure write-side change if it is ever needed.
+- **It needs a hosted server.** This is an operational commitment, not just code. **And it
+  is currently not met:** `fly.toml` declares no `[mounts]` volume, so `server_data/` lives
+  on ephemeral storage and every deploy destroys every player profile. Persistence code is
+  worthless until that is fixed — it is the top item in ROADMAP Phase 0.
+
+On budgeting: "budget the strategic tick as the primary server cost" is right in principle
+but currently points at the wrong system. The tick *is* inside the measured Core phase, but
+its loop body is empty, so the number it reports is noise. The real measured cost today is
+the 60Hz interest and visibility work. Re-measure once the tick has a body (ROADMAP Phase 3)
+and write the actual numbers here.
 
 ## 6. What already exists and fits
 
-- `shared/src/city` already models `MapRoad`, `MapPlot`, `PlotZone`, `PlotArchetype` —
-  most of a settlement's data model, authorable in the editor today.
-- `server/src/world/navgrid.rs` + `pathfinding.rs` — tactical-layer movement.
-  **Note:** per-agent A\* does not scale to many units heading to one place; the tactical
-  layer wants flow fields.
-- Chunked terrain streaming, huge maps, and the map editor.
-- lightyear replication + profile persistence.
-- The commander camera, which needs its zoom range extended by ~20×.
+- `shared/src/city` — **[partial, and read the caveat]**. The *geometry* layer (road
+  strips, plot rects, frontage and facing math) is excellent, tested, genre-neutral and the
+  single most reusable asset in the repo. The *taxonomy* is not: `RoadClass` is
+  Alley/Local/Collector/Arterial with lane counts and parking, `PlotZone` is modern land-use
+  zoning, and `CityBuildingKind` is nine modern apartment blocks. The medieval GLBs exist on
+  disk and in `BuildingType` but no plot can reference them. The shipped map also has
+  `roads: []` and `plots: []`, so none of this pipeline has ever run on the current world.
+- ~~`server/src/world/navgrid.rs` + `pathfinding.rs` — tactical-layer movement.~~
+  **[not an asset — delete on sight].** `pathfinding.rs` has zero callers workspace-wide,
+  carries `#![allow(dead_code)]` to survive compilation, has no tests, and its scratch type
+  is never constructed. It is salvage from the deleted NPC AI with a node cap giving ~120m
+  of reach. `navgrid.rs` does run every tick, but its only consumer is that dead code and
+  its input is empty on the shipped map. The tactical layer wants flow fields; neither of
+  these is a step toward them.
+- Chunked terrain streaming, huge maps, and the map editor. **[done]**
+- lightyear replication + profile persistence. **[done]** — including heroes, which now
+  survive disconnect and server restart.
+- ~~The commander camera, which needs its zoom range extended by ~20×.~~ **[done]** —
+  12m–12,000m, which covers the whole map.
+
+**What does NOT exist, despite being easy to assume from the rest of this document:**
+combat (stripped wholesale — ~9,600 lines — and never replaced), any unit abstraction other
+than one hero per player, any settlement/clan/goods type, world-state persistence, entity
+picking, and any non-dev path to a body.
 
 ## 7. Build order
 
-1. **Region layer** — define regions, ownership, and make them the interest/persistence
-   unit. Everything else hangs off this.
-2. **Strategic tick** — settlements produce, caravans move along routes, clans hold
-   territory. No rendering beyond map symbols. Prove it is cheap at full world scale.
-3. **Tactical units, grey-boxed** — selection, move orders, formations, flow-field
-   pathfinding, with primitive shapes. No art dependency.
-4. **Promotion/demotion** — the seam between the two layers, plus unobserved-battle
-   resolution.
-5. **Zoom bands + rendering LOD** — make the seam invisible.
-6. **Art pass** — import the low-poly library once the game is fun.
+**Moved to [ROADMAP.md](ROADMAP.md).** This section and WORLD-DESIGN §8 used to carry two
+different orderings, and they disagreed about when the promotion seam and flow fields land.
+One list now covers both, with per-phase checklists.
 
-Steps 1–3 are independent enough to be worked in parallel; step 4 is where the design
-actually gets tested, so do not leave it until last.
+The engine steps this section listed map onto it as follows, with their real state:
+
+| Old step | Reality | Lands in |
+|---|---|---|
+| 1. Region layer | Interest management done; ownership and persistence never started, and both move off regions entirely (§3) | Phase 1 |
+| 2. Strategic tick | **Not started.** The loop body is `strategic_secs += elapsed` and nothing reads it. "Prove it is cheap" has so far been proved by timing an empty loop. | Phase 3 |
+| 3. Tactical units + flow fields | Not started. Deliberately moved LATE: it is the biggest block of work and carries the least architectural uncertainty. | Phase 6 |
+| 4. Promotion/demotion | Not started, and moved EARLY (see below) | Phase 2 |
+| 5. Zoom bands + render LOD | Camera range done; entity representation across bands not started. Re-scope accordingly (§4). | as needed |
+| 6. Art pass | ongoing | — |
+
+**The parting advice of this section still stands, and is why the order changed.** "Step 4
+is where the design actually gets tested, so do not leave it until last" was being violated
+by default: the old world-design order stacked four phases of economy on top of a seam it
+never validated. The seam is now Phase 2, tested on the cheapest entity that has one — a
+single traveller, measured by *arrival time*, which needs no combat code at all.
+
+One amendment: the advice was also impossible to act on as written, because the seam has
+neither endpoint — there is no strategic entity to promote and no tactical unit type to
+promote into. So the actionable form is: **write the promotion contract as tests the first
+time any strategic entity exists**, before the machinery it constrains.
