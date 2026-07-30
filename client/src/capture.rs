@@ -154,6 +154,56 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         commands.insert_resource(crate::ui::hero_creator::HeroCreatorOpen(true));
     }
 
+    // FISTFORCE_CAPTURE_ENCYCLOPEDIA=1 opens the encyclopedia and seeds a
+    // sample cast, so the window can be verified without a server (there is no
+    // roster offline, and an empty list photographs nothing).
+    if let Ok(mode) = std::env::var("FISTFORCE_CAPTURE_ENCYCLOPEDIA") {
+        use crate::ui::encyclopedia::{
+            Affiliation, EncyclopediaOpen, KnownPeople, PersonKind, PersonRecord, SelectedPerson,
+        };
+        let sample = |name: &str, level, prestige, online, known, is_self, affiliation| {
+            PersonRecord {
+                name: name.to_string(),
+                kind: PersonKind::Player,
+                affiliation,
+                level,
+                prestige,
+                online,
+                known,
+                is_self,
+            }
+        };
+        commands.insert_resource(KnownPeople {
+            records: vec![
+                sample("Aldric", 7, 2, true, true, true, Affiliation::Neutral),
+                sample("Bryn", 4, 0, true, true, false, Affiliation::Neutral),
+                sample("Cassia", 11, 5, false, true, false, Affiliation::Clan("HOLLOWMERE".into())),
+                sample("Dunstan", 2, 0, false, true, false, Affiliation::Neutral),
+                sample("Eirwen", 9, 3, true, true, false, Affiliation::Clan("HOLLOWMERE".into())),
+                sample("Faelan", 1, 0, false, false, false, Affiliation::Neutral),
+                sample("Gwyneth", 14, 8, false, false, false, Affiliation::Clan("BRACKWATER".into())),
+                sample("Hollis", 5, 1, false, true, false, Affiliation::Neutral),
+                sample("Ivo", 3, 0, false, false, false, Affiliation::Neutral),
+                sample("Jorunn", 8, 4, true, true, false, Affiliation::Clan("BRACKWATER".into())),
+                sample("Kelda", 6, 2, false, true, false, Affiliation::Neutral),
+                sample("Lorcan", 12, 6, false, false, false, Affiliation::Neutral),
+            ],
+            requested: true,
+        });
+        commands.insert_resource(SelectedPerson(Some("Cassia".to_string())));
+        commands.insert_resource(EncyclopediaOpen(true));
+        // Mode picks which surface to photograph: a tab name, or "god" to
+        // grant capability so the unknown-people view can be verified.
+        commands.insert_resource(match mode.as_str() {
+            "retinue" => crate::ui::encyclopedia::EncyclopediaTab::Retinue,
+            "ledger" => crate::ui::encyclopedia::EncyclopediaTab::Ledger,
+            _ => crate::ui::encyclopedia::EncyclopediaTab::People,
+        });
+        if mode == "god" {
+            commands.insert_resource(crate::ui::hud::GodCapability(true));
+        }
+    }
+
     info!("capture: entering world offline (no server)");
 }
 

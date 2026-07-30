@@ -93,6 +93,29 @@ where
     }
 }
 
+/// Whether a freshly-opened modal may act on mouse input yet.
+///
+/// A window that appears under the cursor puts controls beneath a button that
+/// may already be down — the click that opened it, or one held across the
+/// transition. Arming only once the button has been observed RELEASED means
+/// such a press can never action a freshly-spawned control.
+///
+/// Call every frame; gate every click handler on the returned value.
+pub fn update_modal_click_guard(
+    open: bool,
+    mouse: &ButtonInput<MouseButton>,
+    armed: &mut bool,
+) -> bool {
+    if !open {
+        *armed = false;
+        return false;
+    }
+    if !*armed && !mouse.pressed(MouseButton::Left) {
+        *armed = true;
+    }
+    *armed
+}
+
 pub fn handle_backdrop_pressed<B: Component>(
     backdrop: &Query<&Interaction, (With<B>, Changed<Interaction>)>,
 ) -> bool {

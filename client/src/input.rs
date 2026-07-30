@@ -20,6 +20,8 @@ pub struct InputState {
     pub debug_menu_open: bool,
     /// True when the hero creator modal is open.
     pub hero_creator_open: bool,
+    /// True when the encyclopedia window is open.
+    pub encyclopedia_open: bool,
 }
 
 impl InputState {
@@ -29,5 +31,6 @@ impl InputState {
             || self.map_open
             || self.debug_menu_open
             || self.hero_creator_open
+            || self.encyclopedia_open
     }
 }

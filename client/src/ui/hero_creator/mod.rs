@@ -15,7 +15,7 @@ use crate::hero::control::{HeroSpawnArm, SelectedOutfit};
 use crate::hero::{spawn_character_scene_child, HeroPreviewRig, HeroVisual};
 use crate::input::InputState;
 use crate::states::GameState;
-use crate::ui::modal::handle_backdrop_pressed;
+use crate::ui::modal::{handle_backdrop_pressed, update_modal_click_guard};
 use crate::ui::styles::{
     ACCENT_COLOR, BUTTON_BORDER, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, TEXT_COLOR,
     TEXT_MUTED,
@@ -40,9 +40,11 @@ impl Plugin for HeroCreatorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HeroCreatorOpen>();
         app.init_resource::<PreviewEntities>();
+        app.init_resource::<CreatorClickGuard>();
         app.add_systems(
             Update,
             (
+                update_click_guard,
                 setup_preview_rig,
                 follow_camera_with_diorama,
                 propagate_preview_shadows,
@@ -67,6 +69,19 @@ impl Plugin for HeroCreatorPlugin {
 
 #[derive(Resource, Default)]
 pub struct HeroCreatorOpen(pub bool);
+
+/// Armed once the left button has been released since the modal opened, so a
+/// button already under the cursor cannot action itself on open.
+#[derive(Resource, Default)]
+pub struct CreatorClickGuard(pub bool);
+
+fn update_click_guard(
+    open: Res<HeroCreatorOpen>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut guard: ResMut<CreatorClickGuard>,
+) {
+    update_modal_click_guard(open.0, &mouse, &mut guard.0);
+}
 
 fn creator_open(open: Res<HeroCreatorOpen>) -> bool {
     open.0
@@ -508,6 +523,7 @@ fn sync_creator_open_state(open: Res<HeroCreatorOpen>, mut input_state: ResMut<I
 
 /// Cycle a slot and re-dress both the preview rig and the pending selection.
 fn handle_arrow_buttons(
+    guard: Res<CreatorClickGuard>,
     mouse: Res<ButtonInput<MouseButton>>,
     manifest: Res<crate::hero::HeroManifest>,
     mut selected: ResMut<SelectedOutfit>,
@@ -515,11 +531,10 @@ fn handle_arrow_buttons(
     buttons: Query<(&Interaction, &ArrowButton), Changed<Interaction>>,
     mut rig_outfits: Query<&mut HeroOutfit, With<HeroPreviewRig>>,
 ) {
-    // `Interaction::Pressed` alone is not proof of a click: it fires for the
-    // button under the cursor when the modal opens (verified — three phantom
-    // presses cycled a slot in a capture with no input at all). Requiring the
-    // real button-down edge makes a stray Pressed harmless.
-    if !mouse.just_pressed(MouseButton::Left) {
+    // Ordinary menu hygiene: act only on a real button-down edge, and only
+    // once the guard has armed (see CreatorClickGuard), so the click that
+    // opened this modal cannot fall through onto a swatch underneath it.
+    if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
     let mut changed = false;
@@ -549,15 +564,16 @@ fn handle_arrow_buttons(
 }
 
 fn handle_confirm_buttons(
+    guard: Res<CreatorClickGuard>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut open: ResMut<HeroCreatorOpen>,
     mut arm: ResMut<HeroSpawnArm>,
     place: Query<&Interaction, (With<PlaceButton>, Changed<Interaction>)>,
     cancel: Query<&Interaction, (With<CancelButton>, Changed<Interaction>)>,
 ) {
-    // Same phantom-press guard as the arrows: without it the creator could
-    // PLACE or CANCEL itself the instant it opened under the cursor.
-    if !mouse.just_pressed(MouseButton::Left) {
+    // Same guard as the arrows: without it a click that opened the modal
+    // could land on PLACE or CANCEL the instant they appear.
+    if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
     for interaction in place.iter() {
@@ -575,13 +591,15 @@ fn handle_confirm_buttons(
 
 fn close_on_escape_or_backdrop(
     keyboard: Res<ButtonInput<KeyCode>>,
+    guard: Res<CreatorClickGuard>,
     mouse: Res<ButtonInput<MouseButton>>,
     backdrop: Query<&Interaction, (With<CreatorBackdrop>, Changed<Interaction>)>,
     mut open: ResMut<HeroCreatorOpen>,
 ) {
-    // The backdrop covers the whole screen, so a phantom Pressed on it would
-    // close the modal the frame it opened.
-    let clicked_out = mouse.just_pressed(MouseButton::Left) && handle_backdrop_pressed(&backdrop);
+    // The backdrop covers the whole screen, so an un-guarded press would
+    // close the modal on the very click that opened it.
+    let clicked_out =
+        guard.0 && mouse.just_pressed(MouseButton::Left) && handle_backdrop_pressed(&backdrop);
     if keyboard.just_pressed(KeyCode::Escape) || clicked_out {
         open.0 = false;
     }
