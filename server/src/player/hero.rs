@@ -103,6 +103,7 @@ pub fn handle_hero_move_orders(
 /// and an idle hero must generate zero network traffic.
 pub fn step_heroes(
     terrain: Option<Res<WorldTerrain>>,
+    warp: Query<&shared::components::TimeWarp>,
     mut targets: ResMut<HeroMoveTargets>,
     mut heroes: Query<(
         &Hero,
@@ -114,7 +115,12 @@ pub fn step_heroes(
     let Some(terrain) = terrain else {
         return;
     };
-    let dt = 1.0 / shared::protocol::FIXED_TIMESTEP_HZ as f32;
+    // Time warp scales movement too. Without this the world clock and the
+    // strategic tick sped up while the hero kept walking at 1x, so god mode's
+    // 100x button made everything EXCEPT the thing you were watching go faster.
+    // The arrival clamp below is what keeps a huge step from overshooting.
+    let factor = warp.iter().next().map(|w| w.0).unwrap_or(1.0);
+    let dt = factor / shared::protocol::FIXED_TIMESTEP_HZ as f32;
 
     for (hero, mut pos, mut rot, mut region) in heroes.iter_mut() {
         let Some(&target) = targets.0.get(&hero.owner) else {
@@ -157,6 +163,27 @@ pub fn step_heroes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Time warp scales hero movement, and the arrival clamp is what makes that
+    /// safe: a 100x step is far larger than the remaining distance, so without
+    /// the clamp the hero would rocket past its target and oscillate forever.
+    #[test]
+    fn warped_steps_land_on_target_instead_of_overshooting() {
+        let distance = 3.0_f32;
+        for factor in [1.0_f32, 10.0, 100.0] {
+            let dt = factor / shared::protocol::FIXED_TIMESTEP_HZ as f32;
+            let step = (HERO_MOVE_SPEED * dt).min(distance);
+            assert!(
+                step <= distance,
+                "at {factor}x the step {step} overshot the remaining {distance}"
+            );
+        }
+        // And warp must actually make the hero faster, or the god-mode buttons
+        // speed up the world while the thing you are watching crawls.
+        let slow = HERO_MOVE_SPEED / shared::protocol::FIXED_TIMESTEP_HZ as f32;
+        let fast = HERO_MOVE_SPEED * 100.0 / shared::protocol::FIXED_TIMESTEP_HZ as f32;
+        assert!(fast > slow * 50.0, "warp did not scale movement");
+    }
 
     /// Yaw convention: a hero walking toward +X must face +X, i.e. rotating
     /// Bevy's -Z forward by the yaw must give the travel direction. This is

@@ -36,10 +36,6 @@ pub const SWIM_DOWN_SPEED: f32 = 3.5;
 pub const WATER_MAX_DESCENT_SPEED: f32 = 8.0;
 /// Jump velocity in m/s (upward).
 pub const JUMP_VELOCITY: f32 = 7.5;
-/// Debug fly mode speed (m/s).
-pub const FLY_SPEED: f32 = 40.0;
-/// Debug fly fast multiplier (Shift).
-pub const FLY_FAST_MULT: f32 = 3.0;
 /// Threshold for determining if a surface normal is "walkable".
 pub const WALKABLE_THRESHOLD: f32 = 0.5;
 

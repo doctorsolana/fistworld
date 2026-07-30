@@ -118,9 +118,6 @@ struct TimeButton(TimeOfDayPreset);
 #[derive(Component)]
 struct CloseButton;
 
-#[derive(Component)]
-struct FlyToggleButton;
-
 #[derive(Component, Clone, Copy)]
 struct CloudCoverButton(CloudCoverMode);
 

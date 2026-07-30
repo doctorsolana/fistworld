@@ -387,9 +387,16 @@ fn apply_shot(
     world_time: &mut Query<&mut WorldTime>,
 ) {
     for mut camera in cameras.iter_mut() {
+        // Set BOTH the rendered value and the target. The commander camera eases
+        // toward its targets every frame, so writing only the rendered value
+        // would have the camera spring straight back to wherever the target
+        // still pointed -- a capture harness that silently framed the wrong shot.
         camera.focus = shot.focus;
+        camera.focus_target = shot.focus;
         camera.yaw = shot.yaw;
+        camera.yaw_target = shot.yaw;
         camera.zoom = shot.zoom;
+        camera.zoom_target = shot.zoom;
         camera.tilt = shot.tilt;
     }
 
