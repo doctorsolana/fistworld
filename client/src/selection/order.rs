@@ -14,7 +14,7 @@ use shared::components::Hero;
 use shared::player::peer_id_to_u64;
 use shared::protocol::{HeroMoveTo, ReliableChannel};
 
-use super::{is_click, RightDrag, Selection};
+use super::{formation_targets, is_click, RightDrag, Selection};
 use crate::camera_rts::{CursorTerrainHit, LocalPeerId};
 use crate::input::InputState;
 
@@ -84,23 +84,48 @@ pub(super) fn issue_order_on_right_click(
         return;
     }
 
-    // Only a selected hero we own takes orders. No selection = no order, which
-    // is what makes right-click safe to also be the orbit button: with nothing
-    // selected a tap does nothing at all.
-    let Some(selected) = selection.entity else {
-        return;
-    };
-    let Some(local) = local else { return };
-    let Ok(hero) = heroes.get(selected) else {
-        return;
-    };
-    if peer_id_to_u64(hero.owner) != local.0 {
+    // Only selected units we OWN take orders. An empty selection means no
+    // order, which is what makes right-click safe to also be the orbit button:
+    // with nothing selected a tap does nothing at all.
+    if selection.is_empty() {
         return;
     }
+    let Some(local) = local else { return };
     let Some(target) = hit.0 else {
         return;
     };
-    if let Ok(mut sender) = move_sender.single_mut() {
-        sender.send::<ReliableChannel>(HeroMoveTo { target });
+
+    // Selecting a mixed group (yours and someone else's) orders only yours,
+    // silently. The alternative -- refusing the whole order -- would make a
+    // box-select over a crowded village feel broken.
+    let ours: Vec<Entity> = selection
+        .entities
+        .iter()
+        .copied()
+        .filter(|entity| {
+            heroes
+                .get(*entity)
+                .is_ok_and(|hero| peer_id_to_u64(hero.owner) == local.0)
+        })
+        .collect();
+    if ours.is_empty() {
+        return;
+    }
+
+    let Ok(mut sender) = move_sender.single_mut() else {
+        return;
+    };
+    // Spread arrival points so a group ordered to one spot arrives as a group
+    // rather than stacking into one body.
+    for (entity, point) in ours
+        .iter()
+        .zip(formation_targets(target, ours.len(), FORMATION_SPACING))
+    {
+        let _ = entity;
+        sender.send::<ReliableChannel>(HeroMoveTo { target: point });
     }
 }
+
+/// Gap between neighbours when a group is ordered to one point, in metres.
+/// Roughly two body widths, so a squad reads as a cluster rather than a queue.
+const FORMATION_SPACING: f32 = 1.4;

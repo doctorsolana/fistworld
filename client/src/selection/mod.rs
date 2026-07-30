@@ -23,6 +23,7 @@ impl Plugin for SelectionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Selection>();
         app.init_resource::<RightDrag>();
+        app.init_resource::<DragBox>();
         app.add_systems(
             Update,
             (
@@ -73,17 +74,40 @@ impl Selectable {
 /// [`clear_stale_selection`] does.
 #[derive(Resource, Debug, Default)]
 pub struct Selection {
-    pub entity: Option<Entity>,
+    /// Order is preserved rather than using a set, so the "primary" selection --
+    /// the one a single-name UI shows -- is stable instead of hash-ordered.
+    pub entities: Vec<Entity>,
 }
 
 impl Selection {
     pub fn is_selected(&self, entity: Entity) -> bool {
-        self.entity == Some(entity)
+        self.entities.contains(&entity)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entities.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entities.len()
+    }
+
+    /// The one to name when the UI has room for a single name.
+    pub fn primary(&self) -> Option<Entity> {
+        self.entities.first().copied()
     }
 
     pub fn clear(&mut self) {
-        if self.entity.is_some() {
-            self.entity = None;
+        if !self.entities.is_empty() {
+            self.entities.clear();
+        }
+    }
+
+    /// Replace the selection, but only when it actually differs: this is a
+    /// change-detected resource and several systems rebuild when it changes.
+    pub fn set(&mut self, entities: Vec<Entity>) {
+        if self.entities != entities {
+            self.entities = entities;
         }
     }
 }
@@ -110,6 +134,32 @@ pub struct RightDrag {
     /// Set once this press has been disqualified from counting as a click.
     pub became_drag: bool,
 }
+
+/// An in-progress left-drag selection box, in WINDOW pixels.
+///
+/// Only becomes a box once the cursor has travelled past [`BOX_MIN_PX`]; below
+/// that the gesture is a plain click, so a slightly shaky single-unit click does
+/// not turn into a one-pixel marquee that selects nothing.
+#[derive(Resource, Debug, Default)]
+pub struct DragBox {
+    pub start: Option<Vec2>,
+    pub current: Vec2,
+    pub active: bool,
+}
+
+impl DragBox {
+    /// Min/max corners, or `None` when there is no active box.
+    pub fn rect(&self) -> Option<(Vec2, Vec2)> {
+        let start = self.start?;
+        if !self.active {
+            return None;
+        }
+        Some((start.min(self.current), start.max(self.current)))
+    }
+}
+
+/// Cursor travel before a left-press becomes a selection box.
+pub const BOX_MIN_PX: f32 = 5.0;
 
 /// Radial cursor displacement from the press point that means "orbit", in
 /// logical window pixels.
@@ -159,11 +209,24 @@ fn clear_stale_selection(
     mut selection: ResMut<Selection>,
     positioned: Query<(), With<shared::components::PlayerPosition>>,
 ) {
-    if let Some(entity) = selection.entity {
-        if positioned.get(entity).is_err() {
-            selection.entity = None;
-        }
+    if selection.entities.is_empty() {
+        return;
     }
+    // Bypass change detection in the common no-op case: this runs every frame,
+    // and touching the resource unconditionally would make every consumer of the
+    // selection rebuild every frame.
+    if selection
+        .entities
+        .iter()
+        .all(|entity| positioned.get(*entity).is_ok())
+    {
+        return;
+    }
+    selection
+        .bypass_change_detection()
+        .entities
+        .retain(|entity| positioned.get(*entity).is_ok());
+    selection.set_changed();
 }
 
 /// Make replicated heroes clickable.
@@ -191,9 +254,14 @@ fn tag_heroes_selectable(
     }
 }
 
-fn clear_on_exit(mut selection: ResMut<Selection>, mut drag: ResMut<RightDrag>) {
+fn clear_on_exit(
+    mut selection: ResMut<Selection>,
+    mut drag: ResMut<RightDrag>,
+    mut drag_box: ResMut<DragBox>,
+) {
     selection.clear();
     *drag = RightDrag::default();
+    *drag_box = DragBox::default();
 }
 
 /// Closest approach between a ray and a vertical segment, as
@@ -261,12 +329,84 @@ pub fn pick_radius_at(base_radius: f32, distance: f32) -> f32 {
     base_radius.max(distance * PICK_ANGULAR_SLOP)
 }
 
+/// Spread `count` move targets around `centre` so a group ordered to one point
+/// arrives as a group instead of stacking into one body.
+///
+/// Concentric rings rather than a grid, because a ring reads as a gathering and
+/// keeps every unit roughly equidistant from the click -- a grid puts its back
+/// row noticeably further away and looks like a queue. `spacing` is the gap
+/// between neighbours.
+///
+/// This is formation as ARRIVAL SPREAD, not as a maintained formation: there is
+/// no unit collision yet, so this only stops the pile-up. Real formations belong
+/// with flow fields (ROADMAP Phase 6).
+pub fn formation_targets(centre: Vec3, count: usize, spacing: f32) -> Vec<Vec3> {
+    let mut out = Vec::with_capacity(count);
+    if count == 0 {
+        return out;
+    }
+    out.push(centre);
+    let mut placed = 1;
+    let mut ring = 1;
+    while placed < count {
+        let radius = ring as f32 * spacing;
+        // Circumference divided by spacing, so rings do not crowd as they grow.
+        let capacity = ((std::f32::consts::TAU * radius) / spacing).floor().max(1.0) as usize;
+        for i in 0..capacity {
+            if placed >= count {
+                break;
+            }
+            let angle = std::f32::consts::TAU * i as f32 / capacity as f32;
+            out.push(centre + Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius));
+            placed += 1;
+        }
+        ring += 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// The whole point of the discriminator: an orbit must never issue an order,
     /// and a tap must never fail to.
+    /// A group ordered to one point must not stack into one body, and must not
+    /// scatter so far that the order stops reading as "go there".
+    #[test]
+    fn formation_spreads_without_scattering() {
+        let centre = Vec3::new(10.0, 0.0, -4.0);
+        let spacing = 1.2;
+        for count in [1usize, 2, 5, 12, 40] {
+            let targets = formation_targets(centre, count, spacing);
+            assert_eq!(targets.len(), count, "wrong target count for {count}");
+
+            // Nobody shares a spot.
+            for (i, a) in targets.iter().enumerate() {
+                for b in targets.iter().skip(i + 1) {
+                    assert!(
+                        a.distance(*b) > spacing * 0.5,
+                        "targets {a:?} and {b:?} are stacked for count {count}"
+                    );
+                }
+            }
+            // The whole group stays near where the player actually clicked.
+            for target in &targets {
+                assert!(
+                    target.distance(centre) < spacing * count as f32,
+                    "target {target:?} scattered too far for count {count}"
+                );
+                assert_eq!(target.y, centre.y, "formation must stay in the ground plane");
+            }
+        }
+    }
+
+    #[test]
+    fn a_single_unit_is_ordered_exactly_where_clicked() {
+        let centre = Vec3::new(3.0, 1.0, 9.0);
+        assert_eq!(formation_targets(centre, 1, 1.2), vec![centre]);
+    }
+
     #[test]
     fn taps_are_clicks_and_drags_are_not() {
         // A clean tap.

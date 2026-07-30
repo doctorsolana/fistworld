@@ -57,6 +57,7 @@ impl Plugin for HudPlugin {
                 sync_spawn_hero_button,
                 state_sync::sync_spawn_npc_button,
                 state_sync::sync_selection_plate,
+                state_sync::sync_selection_box,
             )
                 .run_if(in_state(GameState::Playing)),
         );
@@ -132,6 +133,10 @@ struct SpawnNpcLabel;
 /// is selected, so appearing costs no spawn.
 #[derive(Component)]
 struct SelectionPlate;
+
+/// The drag-select marquee.
+#[derive(Component)]
+struct SelectionBox;
 
 /// The hollow ring mark that rhymes with the ring on the ground.
 #[derive(Component)]

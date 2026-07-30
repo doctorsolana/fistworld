@@ -1,14 +1,45 @@
-//! Left click picks an entity, or clears the selection on empty ground.
+//! Left click selects one; left DRAG box-selects many.
+//!
+//! Both gestures come off the same press, and which one it was is only knowable
+//! at release — so selection resolves on release, and the box is drawn while the
+//! button is down.
 
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 
 use shared::components::PlayerPosition;
 
-use super::{pick_radius_at, ray_vs_vertical_segment, Selectable, Selection};
+use super::{pick_radius_at, ray_vs_vertical_segment, DragBox, Selectable, Selection, BOX_MIN_PX};
 use crate::camera_rts::{CursorRay, CursorTerrainHit};
 use crate::hero::control::{placement_armed, HeroSpawnArm, NpcSpawnArm};
 use crate::input::InputState;
 
+/// Project a world point into WINDOW pixels, or `None` if it is off screen.
+///
+/// The conversion is not just `world_to_viewport`: the 3D camera renders to a
+/// scaled offscreen image, so that call returns IMAGE pixels while the cursor —
+/// and therefore the drag box — is in window pixels. Mapping back through the
+/// viewport/window ratio is what keeps a box drawn around a unit actually
+/// containing that unit. Getting this wrong gives a selection box that is
+/// subtly offset only at non-1.0 render scale: near-invisible in testing and
+/// infuriating in play.
+fn world_to_window(
+    camera: &Camera,
+    camera_transform: &GlobalTransform,
+    window_size: Vec2,
+    world: Vec3,
+) -> Option<Vec2> {
+    let viewport_size = camera.logical_viewport_size()?;
+    if viewport_size.x <= 0.0 || viewport_size.y <= 0.0 {
+        return None;
+    }
+    // Errors here mean "outside the frustum", which rejects off-screen units for
+    // free rather than needing a separate visibility test.
+    let viewport_pos = camera.world_to_viewport(camera_transform, world).ok()?;
+    Some(viewport_pos / viewport_size * window_size)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn pick_on_left_click(
     mouse: Res<ButtonInput<MouseButton>>,
     input_state: Res<InputState>,
@@ -16,34 +47,92 @@ pub(super) fn pick_on_left_click(
     npc_arm: Res<NpcSpawnArm>,
     cursor_ray: Res<CursorRay>,
     terrain_hit: Res<CursorTerrainHit>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     ui_blockers: Query<&Interaction, With<crate::ui::BlocksWorldClicks>>,
     candidates: Query<(Entity, &Selectable, &PlayerPosition)>,
+    mut drag: ResMut<DragBox>,
     mut selection: ResMut<Selection>,
 ) {
-    if !mouse.just_pressed(MouseButton::Left) || input_state.ui_blocking() {
+    let cursor = windows.single().ok().and_then(|w| w.cursor_position());
+
+    // --- track the drag -----------------------------------------------------
+    if mouse.just_pressed(MouseButton::Left) {
+        // A press that starts on the UI, or during an armed placement, can never
+        // become a selection. Latched AT PRESS rather than re-tested at release,
+        // so press-on-HUD then drag into the world cannot marquee the world.
+        let blocked = input_state.ui_blocking()
+            || placement_armed(&spawn_arm, &npc_arm)
+            || crate::ui::pointer_over_ui(&ui_blockers);
+        *drag = DragBox {
+            start: if blocked { None } else { cursor },
+            current: cursor.unwrap_or_default(),
+            active: false,
+        };
+    }
+
+    if mouse.pressed(MouseButton::Left) {
+        if let (Some(start), Some(now)) = (drag.start, cursor) {
+            drag.current = now;
+            if start.distance(now) > BOX_MIN_PX {
+                drag.active = true;
+            }
+        }
+    }
+
+    if !mouse.just_released(MouseButton::Left) {
         return;
     }
-    // An armed god-mode placement owns this click: it consumes the left button to
-    // put the hero down. Selecting as well would leave the player having both
-    // placed and selected in one gesture, which reads as the click doing two
-    // things.
-    if placement_armed(&spawn_arm, &npc_arm) {
+
+    let box_rect = drag.rect();
+    let had_press = drag.start.is_some();
+    *drag = DragBox::default();
+
+    if !had_press {
         return;
     }
-    // A click on a HUD surface must never reach the world.
-    if crate::ui::pointer_over_ui(&ui_blockers) {
+
+    let Ok(window) = windows.single() else {
         return;
-    }
-    let Some(ray) = cursor_ray.0 else {
+    };
+    let Ok((camera, camera_transform)) = cameras.single() else {
         return;
     };
 
+    // --- box select ---------------------------------------------------------
+    if let Some((min, max)) = box_rect {
+        let window_size = window.size();
+        let mut hits: Vec<(Entity, f32)> = Vec::new();
+        for (entity, selectable, position) in candidates.iter() {
+            // Aim at the middle of the body: projecting the FEET means a unit
+            // standing at the very bottom edge of the box is missed even though
+            // the player clearly dragged over it.
+            let centre = position.0 + Vec3::Y * selectable.height * 0.5;
+            let Some(screen) = world_to_window(camera, camera_transform, window_size, centre)
+            else {
+                continue;
+            };
+            if screen.x >= min.x && screen.x <= max.x && screen.y >= min.y && screen.y <= max.y {
+                // Sorted by depth so the order is stable and front-most first,
+                // which is what `primary()` should name.
+                hits.push((entity, camera_transform.translation().distance(centre)));
+            }
+        }
+        hits.sort_by(|a, b| a.1.total_cmp(&b.1));
+        selection.set(hits.into_iter().map(|(entity, _)| entity).collect());
+        return;
+    }
+
+    // --- single click -------------------------------------------------------
+    let Some(ray) = cursor_ray.0 else {
+        return;
+    };
     let origin = ray.origin;
     let dir = ray.direction.as_vec3();
 
-    // How far along the ray the ground is. Anything further than this is behind
-    // a hill and must not be selectable through it -- a click that picks a unit
-    // you cannot see reads as the game ignoring the terrain.
+    // How far along the ray the ground is. Anything beyond it is behind a hill
+    // and must not be selectable through it -- picking a unit you cannot see
+    // reads as the game ignoring the terrain.
     let terrain_distance = terrain_hit
         .0
         .map(|point| (point - origin).dot(dir))
@@ -51,33 +140,26 @@ pub(super) fn pick_on_left_click(
 
     let mut best: Option<(Entity, f32)> = None;
     for (entity, selectable, position) in candidates.iter() {
-        let Some((distance, gap)) = ray_vs_vertical_segment(
-            origin,
-            dir,
-            position.0,
-            selectable.height,
-        ) else {
+        let Some((distance, gap)) =
+            ray_vs_vertical_segment(origin, dir, position.0, selectable.height)
+        else {
             continue;
         };
         if gap > pick_radius_at(selectable.radius, distance) {
             continue;
         }
-        // Allow a little tolerance past the ground hit: a character's feet sit
-        // AT the terrain, so an exact comparison rejects the unit you clicked.
+        // Tolerance past the ground hit: a character's feet sit AT the terrain,
+        // so an exact comparison rejects the unit that was clicked.
         if let Some(ground) = terrain_distance {
             if distance > ground + selectable.height.max(1.0) {
                 continue;
             }
         }
-        // Nearest wins, so overlapping units resolve to the front one.
         if best.is_none_or(|(_, best_distance)| distance < best_distance) {
             best = Some((entity, distance));
         }
     }
 
-    let picked = best.map(|(entity, _)| entity);
     // Clicking empty ground clears -- the standard RTS deselect.
-    if selection.entity != picked {
-        selection.entity = picked;
-    }
+    selection.set(best.into_iter().map(|(entity, _)| entity).collect());
 }

@@ -321,13 +321,30 @@ fn spawn_capture_heroes(
     // FISTFORCE_CAPTURE_SELECT=1 selects the FIRST fake hero, so the ground ring
     // and the selected-unit plate can be verified without a server. Deferred by
     // a command so it runs after the spawns above are applied.
-    if std::env::var("FISTFORCE_CAPTURE_SELECT").is_ok_and(|v| v == "1") {
+    if std::env::var("FISTFORCE_CAPTURE_SELECT").is_ok_and(|v| v == "all") {
+        commands.queue(|world: &mut World| {
+            let mut all = world
+                .query_filtered::<Entity, With<shared::components::CharacterName>>();
+            let entities: Vec<Entity> = all.iter(world).collect();
+            if let Some((first, hero)) = world
+                .query::<(Entity, &shared::components::Hero)>()
+                .iter(world)
+                .next()
+            {
+                let owner = shared::player::peer_id_to_u64(hero.owner);
+                let _ = first;
+                world.insert_resource(crate::camera_rts::LocalPeerId(owner));
+            }
+            world.resource_mut::<crate::selection::Selection>().entities = entities;
+        });
+    } else if std::env::var("FISTFORCE_CAPTURE_SELECT").is_ok_and(|v| v == "1") {
         commands.queue(|world: &mut World| {
             let mut heroes = world
                 .query_filtered::<(Entity, &shared::components::Hero), ()>();
             if let Some((first, hero)) = heroes.iter(world).next() {
                 let owner = shared::player::peer_id_to_u64(hero.owner);
-                world.resource_mut::<crate::selection::Selection>().entity = Some(first);
+                world.resource_mut::<crate::selection::Selection>().entities = vec![first];
+                let _ = &owner;
                 // Claim ownership of it too, so the shot shows the state a real
                 // player sees (ember mark, own name) rather than "NOT YOURS".
                 world.insert_resource(crate::camera_rts::LocalPeerId(owner));

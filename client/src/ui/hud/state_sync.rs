@@ -256,48 +256,60 @@ pub(super) fn sync_spawn_hero_button(
     }
 }
 
-/// Show the selected-unit plate, and say who it is and what they are doing.
+/// Show the selected-unit plate, and say who is selected and what they are.
 ///
-/// The name is the OWNER's profile name, which is the only identity a hero has
-/// today. There is deliberately no health or stamina bar: a hero is spawned with
-/// position, rotation and an outfit and nothing else, so any bar would either be
-/// a lie or a hardcoded 100% -- and a fake gauge is worse than an absent one.
+/// Reads `CharacterName` rather than the player's profile: every person in the
+/// world now has a name, so a selected villager is named as themselves instead
+/// of showing an empty plate.
+///
+/// There is deliberately no health or stamina bar. A character carries position,
+/// rotation, a name and an outfit and nothing else, so any bar would be a lie or
+/// a hardcoded 100%, and a fake gauge is worse than an absent one.
 pub(super) fn sync_selection_plate(
     selection: Res<crate::selection::Selection>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
-    name_input: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
-    heroes: Query<(&shared::components::Hero, &shared::components::PlayerPosition)>,
+    characters: Query<(
+        &shared::components::CharacterName,
+        &shared::components::CharacterKind,
+        &shared::components::PlayerPosition,
+        Option<&shared::components::Hero>,
+    )>,
     mut plates: Query<&mut Node, With<SelectionPlate>>,
     mut glyphs: Query<&mut BorderColor, With<SelectionRingGlyph>>,
     mut names: Query<&mut Text, (With<SelectionNameText>, Without<SelectionStatusText>)>,
     mut statuses: Query<&mut Text, (With<SelectionStatusText>, Without<SelectionNameText>)>,
     mut last: Local<Option<Vec3>>,
 ) {
-    let selected = selection.entity.and_then(|entity| heroes.get(entity).ok());
-
-    let display = if selected.is_some() {
-        Display::Flex
-    } else {
-        Display::None
-    };
+    let count = selection.len();
+    let display = if count > 0 { Display::Flex } else { Display::None };
     for mut node in plates.iter_mut() {
         if node.display != display {
             node.display = display;
         }
     }
-
-    let Some((hero, position)) = selected else {
+    let Some(primary) = selection.primary().and_then(|e| characters.get(e).ok()) else {
         *last = None;
         return;
     };
+    let (name, kind, position, hero) = primary;
 
-    // Ours or someone else's. Only your own hero takes orders, so the plate has
-    // to distinguish inspecting from commanding -- and it does it with the one
-    // reserved accent rather than with a word.
-    let is_mine = local
-        .as_ref()
-        .is_some_and(|local| shared::player::peer_id_to_u64(hero.owner) == local.0);
-    let glyph_color = if is_mine { EMBER_RULE } else { INK_MUTED };
+    let owns = |hero: Option<&shared::components::Hero>| {
+        matches!((hero, local.as_ref()), (Some(hero), Some(local))
+            if shared::player::peer_id_to_u64(hero.owner) == local.0)
+    };
+    let is_mine = owns(hero);
+
+    // How many of the selection actually take orders. A box-drag over a village
+    // grabs a mixed crowd, and the plate has to say what will move.
+    let commandable = selection
+        .entities
+        .iter()
+        .filter(|entity| characters.get(**entity).is_ok_and(|(_, _, _, h)| owns(h)))
+        .count();
+
+    // The one saturated colour means "you command this". Grey means you are
+    // merely looking at someone.
+    let glyph_color = if commandable > 0 { EMBER_RULE } else { INK_MUTED };
     for mut border in glyphs.iter_mut() {
         let next = BorderColor::from(glyph_color);
         if *border != next {
@@ -305,14 +317,12 @@ pub(super) fn sync_selection_plate(
         }
     }
 
-    let label = if is_mine {
-        name_input
-            .as_ref()
-            .map(|input| input.name.trim().to_uppercase())
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| "YOUR HERO".to_string())
+    // A group is named by its SIZE, not by whoever happens to be front-most:
+    // one name over a squad of six is a lie about what the next order moves.
+    let label = if count > 1 {
+        format!("{count} SELECTED")
     } else {
-        "HERO".to_string()
+        name.0.to_uppercase()
     };
     for mut text in names.iter_mut() {
         if text.0 != label {
@@ -321,20 +331,53 @@ pub(super) fn sync_selection_plate(
     }
 
     // Moving or standing, derived from whether the replicated position changed.
-    // The client has no copy of the server's move target, and inventing a
-    // replicated "is moving" flag for a cosmetic word is not worth the bandwidth.
+    // The client holds no copy of the server's move target, and inventing a
+    // replicated "is moving" flag for one cosmetic word is not worth the traffic.
     let moved = last.is_some_and(|previous| previous.distance_squared(position.0) > 1e-4);
     *last = Some(position.0);
-    let status = if !is_mine {
-        "NOT YOURS"
-    } else if moved {
-        "ON THE MOVE"
+    let status = if count > 1 {
+        match commandable {
+            0 => "NONE YOURS".to_string(),
+            n if n == count => "READY".to_string(),
+            n => format!("{n} YOURS"),
+        }
+    } else if is_mine {
+        if moved { "ON THE MOVE".to_string() } else { "HOLDING".to_string() }
     } else {
-        "HOLDING"
+        kind.label().to_string()
     };
     for mut text in statuses.iter_mut() {
         if text.0 != status {
-            text.0 = status.to_string();
+            text.0 = status.clone();
+        }
+    }
+}
+
+/// Draw the drag-select marquee where the cursor actually is.
+///
+/// Both the drag box and Bevy UI use top-left-origin WINDOW pixels, so this is a
+/// direct mapping with no conversion -- unlike the world-to-screen projection
+/// the box test needs, which has to undo the render-target scaling.
+pub(super) fn sync_selection_box(
+    drag: Res<crate::selection::DragBox>,
+    mut boxes: Query<&mut Node, With<SelectionBox>>,
+) {
+    let rect = drag.rect();
+    for mut node in boxes.iter_mut() {
+        match rect {
+            Some((min, max)) => {
+                let size = (max - min).max(Vec2::ZERO);
+                node.display = Display::Flex;
+                node.left = Val::Px(min.x);
+                node.top = Val::Px(min.y);
+                node.width = Val::Px(size.x);
+                node.height = Val::Px(size.y);
+            }
+            None => {
+                if node.display != Display::None {
+                    node.display = Display::None;
+                }
+            }
         }
     }
 }

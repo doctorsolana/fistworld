@@ -52,7 +52,7 @@ pub(super) fn spawn_hud(
         // for as long as the cursor is anywhere on screen. Only the plates
         // themselves block -- see `BlocksWorldClicks`.
         Pickable::IGNORE,
-        children![top_right_column(), selection_plate()],
+        children![top_right_column(), selection_plate(), selection_box()],
     ));
 }
 
@@ -277,6 +277,28 @@ fn spawn_hero_button() -> impl Bundle {
             },
             TextColor(INK),
         )],
+    )
+}
+
+/// The drag-select marquee.
+///
+/// A hairline outline with a barely-there wash, not a filled rectangle: the
+/// player is selecting things they need to keep SEEING while they drag, and a
+/// tinted overlay is exactly what stops them judging which units are inside it.
+fn selection_box() -> impl Bundle {
+    (
+        SelectionBox,
+        Node {
+            display: Display::None,
+            position_type: PositionType::Absolute,
+            border: UiRect::all(Val::Px(1.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.973, 0.961, 0.929, 0.10)),
+        BorderColor::from(Color::srgba(0.129, 0.118, 0.102, 0.75)),
+        // Never blocks: the marquee sits under the cursor for its whole life,
+        // and a marquee that ate the release event could not finish a selection.
+        Pickable::IGNORE,
     )
 }
 

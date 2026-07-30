@@ -1,8 +1,8 @@
 //! The selection ring: a soft mark on the ground under the selected unit.
 //!
-//! One ring exists for the lifetime of the app and is shown, hidden and moved.
-//! Spawning it per selection would churn mesh handles and flash for a frame at
-//! the origin before its transform is set.
+//! Rings are POOLED: the pool only grows, and spare rings hide rather than
+//! despawn. Spawning per selection would churn mesh handles and, worse, flash
+//! for a frame at the origin before the transform is set.
 //!
 //! It is a SEPARATE entity that follows the selection rather than a child of it,
 //! for three reasons that all bite:
@@ -24,13 +24,18 @@ use shared::terrain::WorldTerrain;
 
 use super::Selection;
 
-/// Marker for the ring root.
+/// Marker for a ring root. There is one per pooled ring.
 #[derive(Component)]
 pub struct SelectionRing;
 
-/// Set once the ring has been built, so its meshes are created exactly once.
+/// Shared handles, so every pooled ring reuses one mesh and material pair.
 #[derive(Resource)]
-pub struct RingBuilt;
+pub struct RingAssets {
+    shoulder_mesh: Handle<Mesh>,
+    core_mesh: Handle<Mesh>,
+    shoulder: Handle<StandardMaterial>,
+    core: Handle<StandardMaterial>,
+}
 
 /// The ring is TWO concentric annuli: a dark shoulder under a light core.
 ///
@@ -121,39 +126,78 @@ pub(super) fn sync_selection_ring(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    built: Option<Res<RingBuilt>>,
+    assets: Option<Res<RingAssets>>,
     selection: Res<Selection>,
     terrain: Option<Res<WorldTerrain>>,
     camera: Query<&crate::camera_rts::CommanderCamera>,
     positions: Query<&PlayerPosition>,
-    mut ring: Query<(&mut Transform, &mut Visibility), With<SelectionRing>>,
+    mut rings: Query<(&mut Transform, &mut Visibility), With<SelectionRing>>,
 ) {
-    if built.is_none() {
-        // Annulus meshes are built in the XY plane facing +Z (normals [0,0,1]),
-        // so the root is rotated -90 degrees about X to lay them flat.
-        let shoulder_mesh = meshes.add(Annulus::new(SHOULDER_INNER, SHOULDER_OUTER));
-        let core_mesh = meshes.add(Annulus::new(CORE_INNER, CORE_OUTER));
-        // Quiet on purpose. This marks the selection, it does not announce it --
-        // the HUD plate is what states the selection loudly. Raising these alphas
-        // is the fastest way to make the world look like a debug view.
-        let shoulder = materials.add(ring_material(Color::srgba(0.106, 0.094, 0.082, 0.34)));
-        let core = materials.add(ring_material(Color::srgba(0.973, 0.961, 0.929, 0.42)));
+    let Some(assets) = assets else {
+        // Quiet on purpose. The ring MARKS the selection; the HUD plate is what
+        // states it loudly. Raising these alphas is the fastest way to make the
+        // world look like a debug view.
+        commands.insert_resource(RingAssets {
+            shoulder_mesh: meshes.add(Annulus::new(SHOULDER_INNER, SHOULDER_OUTER)),
+            core_mesh: meshes.add(Annulus::new(CORE_INNER, CORE_OUTER)),
+            shoulder: materials.add(ring_material(Color::srgba(0.106, 0.094, 0.082, 0.34))),
+            core: materials.add(ring_material(Color::srgba(0.973, 0.961, 0.929, 0.42))),
+        });
+        return;
+    };
 
-        commands.insert_resource(RingBuilt);
+    let zoom = camera
+        .iter()
+        .next()
+        .map(|c| c.zoom)
+        .unwrap_or(RING_SCALE_FROM);
+    let scale_factor = (zoom / RING_SCALE_FROM).clamp(1.0, RING_SCALE_MAX);
+
+    // Where every ring belongs this frame. Empty past the hide distance, so the
+    // whole pool simply hides.
+    let wanted: Vec<Vec3> = if zoom > RING_HIDE_ZOOM {
+        Vec::new()
+    } else {
+        selection
+            .entities
+            .iter()
+            .filter_map(|entity| positions.get(*entity).ok())
+            .map(|position| {
+                let mut point = position.0;
+                // Sit on the GROUND, not on the entity's replicated Y: feet are
+                // terrain-snapped server-side but the client can be a frame
+                // behind, and a ring that lags into a hillside is worse than one
+                // that is always on it.
+                if let Some(terrain) = terrain.as_deref() {
+                    point.y = ground_under_ring(terrain, point, SHOULDER_OUTER * scale_factor);
+                }
+                point.y += RING_LIFT;
+                point
+            })
+            .collect()
+    };
+
+    // Grow the pool to fit. It never shrinks: a player who box-selects twenty
+    // units once will do it again, and despawn-then-respawn costs more than
+    // twenty hidden transforms.
+    let pooled = rings.iter().count();
+    for _ in pooled..wanted.len() {
         commands.spawn((
             SelectionRing,
+            // Annulus meshes are built in the XY plane facing +Z, so the root is
+            // rotated -90 degrees about X to lay them flat.
             Transform::from_rotation(Quat::from_rotation_x(-FRAC_PI_2)),
             Visibility::Hidden,
             children![
                 (
-                    Mesh3d(shoulder_mesh),
-                    MeshMaterial3d(shoulder),
+                    Mesh3d(assets.shoulder_mesh.clone()),
+                    MeshMaterial3d(assets.shoulder.clone()),
                     NotShadowCaster,
                     NotShadowReceiver,
                 ),
                 (
-                    Mesh3d(core_mesh),
-                    MeshMaterial3d(core),
+                    Mesh3d(assets.core_mesh.clone()),
+                    MeshMaterial3d(assets.core.clone()),
                     // Lifted a hair along the ring's own local +Z (which points
                     // up after the root's rotation) so the core always resolves
                     // in front of its own shoulder.
@@ -163,51 +207,27 @@ pub(super) fn sync_selection_ring(
                 ),
             ],
         ));
-        return;
     }
-
-    let Ok((mut transform, mut visibility)) = ring.single_mut() else {
-        return;
-    };
-
-    let zoom = camera
-        .iter()
-        .next()
-        .map(|c| c.zoom)
-        .unwrap_or(RING_SCALE_FROM);
-
-    let target = selection
-        .entity
-        .and_then(|entity| positions.get(entity).ok())
-        .map(|position| position.0)
-        .filter(|_| zoom <= RING_HIDE_ZOOM);
-
-    let Some(mut point) = target else {
-        if *visibility != Visibility::Hidden {
-            *visibility = Visibility::Hidden;
-        }
-        return;
-    };
-
-    let scale_factor = (zoom / RING_SCALE_FROM).clamp(1.0, RING_SCALE_MAX);
-
-    // Sit on the GROUND, not on the entity's replicated Y. The hero's feet are
-    // terrain-snapped server-side, but the client can be a frame behind, and a
-    // ring that lags into a hillside is worse than one that is always on it.
-    if let Some(terrain) = terrain.as_deref() {
-        point.y = ground_under_ring(terrain, point, SHOULDER_OUTER * scale_factor);
-    }
-    point.y += RING_LIFT;
 
     let scale = Vec3::splat(scale_factor);
-
-    if transform.translation != point {
-        transform.translation = point;
-    }
-    if transform.scale != scale {
-        transform.scale = scale;
-    }
-    if *visibility != Visibility::Visible {
-        *visibility = Visibility::Visible;
+    for (index, (mut transform, mut visibility)) in rings.iter_mut().enumerate() {
+        match wanted.get(index) {
+            Some(point) => {
+                if transform.translation != *point {
+                    transform.translation = *point;
+                }
+                if transform.scale != scale {
+                    transform.scale = scale;
+                }
+                if *visibility != Visibility::Visible {
+                    *visibility = Visibility::Visible;
+                }
+            }
+            None => {
+                if *visibility != Visibility::Hidden {
+                    *visibility = Visibility::Hidden;
+                }
+            }
+        }
     }
 }
