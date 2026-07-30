@@ -321,6 +321,10 @@ fn spawn_capture_heroes(
     // FISTFORCE_CAPTURE_SELECT=1 selects the FIRST fake hero, so the ground ring
     // and the selected-unit plate can be verified without a server. Deferred by
     // a command so it runs after the spawns above are applied.
+    // FISTFORCE_CAPTURE_SELECT=all force-selects EVERY character, including ones
+    // you do not own. This is a stress harness for the ring pool and the group
+    // HUD, NOT a picture of what a box-drag produces: a real drag filters to
+    // your own units (see selection::pick). Do not read it as the game's rule.
     if std::env::var("FISTFORCE_CAPTURE_SELECT").is_ok_and(|v| v == "all") {
         commands.queue(|world: &mut World| {
             let mut all = world

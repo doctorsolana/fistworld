@@ -11,10 +11,9 @@ use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageSender};
 
 use shared::components::Hero;
-use shared::player::peer_id_to_u64;
 use shared::protocol::{HeroMoveTo, ReliableChannel};
 
-use super::{formation_targets, is_click, RightDrag, Selection};
+use super::{formation_targets, is_click, is_owned_by, RightDrag, Selection};
 use crate::camera_rts::{CursorTerrainHit, LocalPeerId};
 use crate::input::InputState;
 
@@ -98,15 +97,15 @@ pub(super) fn issue_order_on_right_click(
     // Selecting a mixed group (yours and someone else's) orders only yours,
     // silently. The alternative -- refusing the whole order -- would make a
     // box-select over a crowded village feel broken.
+    // Box-select already filters to your own, so this normally passes
+    // everything through. It stays as the authority anyway: selection can be set
+    // by a single click on someone else's unit, and an order must never leak
+    // through that.
     let ours: Vec<Entity> = selection
         .entities
         .iter()
         .copied()
-        .filter(|entity| {
-            heroes
-                .get(*entity)
-                .is_ok_and(|hero| peer_id_to_u64(hero.owner) == local.0)
-        })
+        .filter(|entity| is_owned_by(heroes.get(*entity).ok(), Some(local.0)))
         .collect();
     if ours.is_empty() {
         return;

@@ -329,6 +329,24 @@ pub fn pick_radius_at(base_radius: f32, distance: f32) -> f32 {
     base_radius.max(distance * PICK_ANGULAR_SLOP)
 }
 
+/// Whether a character is under YOUR banner.
+///
+/// The one place ownership is decided, because it is asked in three different
+/// contexts -- can I box-select this, can I order it, does the HUD call it mine
+/// -- and three copies of the same peer-id comparison is three chances for them
+/// to disagree.
+///
+/// A character with no [`Hero`] is nobody's: villagers belong to the world, not
+/// to a player, so they are never yours.
+///
+/// [`Hero`]: shared::components::Hero
+pub fn is_owned_by(hero: Option<&shared::components::Hero>, local: Option<u64>) -> bool {
+    match (hero, local) {
+        (Some(hero), Some(local)) => shared::player::peer_id_to_u64(hero.owner) == local,
+        _ => false,
+    }
+}
+
 /// Spread `count` move targets around `centre` so a group ordered to one point
 /// arrives as a group instead of stacking into one body.
 ///
@@ -399,6 +417,29 @@ mod tests {
                 assert_eq!(target.y, centre.y, "formation must stay in the ground plane");
             }
         }
+    }
+
+    /// Ownership is what gates command, so getting it wrong either hands you
+    /// someone else's units or takes away your own.
+    #[test]
+    fn only_your_own_heroes_are_owned() {
+        use lightyear::prelude::PeerId;
+        use shared::components::Hero;
+
+        let mine = Hero {
+            owner: PeerId::Netcode(7),
+        };
+        let theirs = Hero {
+            owner: PeerId::Netcode(8),
+        };
+        let local = Some(shared::player::peer_id_to_u64(PeerId::Netcode(7)));
+
+        assert!(is_owned_by(Some(&mine), local));
+        assert!(!is_owned_by(Some(&theirs), local), "took someone else's unit");
+        // A villager has no Hero at all: it belongs to the world.
+        assert!(!is_owned_by(None, local), "claimed a villager");
+        // Before the local peer id arrives, nothing is commandable.
+        assert!(!is_owned_by(Some(&mine), None), "claimed a unit with no local id");
     }
 
     #[test]

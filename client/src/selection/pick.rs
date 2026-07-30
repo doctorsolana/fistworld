@@ -3,14 +3,26 @@
 //! Both gestures come off the same press, and which one it was is only knowable
 //! at release — so selection resolves on release, and the box is drawn while the
 //! button is down.
+//!
+//! The two gestures answer different questions, and so have different rules:
+//!
+//! - A **drag** means "I want to command these", so it only ever grabs units
+//!   under your own banner. Dragging across a village full of other people's
+//!   heroes and villagers picks up exactly your own and nothing else, instead of
+//!   handing you a group where most of it silently refuses orders.
+//! - A **click** means "what is that?", so it selects anything — someone else's
+//!   hero, a villager — for inspection. It just cannot be ordered.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use shared::components::PlayerPosition;
+use shared::components::{Hero, PlayerPosition};
 
-use super::{pick_radius_at, ray_vs_vertical_segment, DragBox, Selectable, Selection, BOX_MIN_PX};
-use crate::camera_rts::{CursorRay, CursorTerrainHit};
+use super::{
+    is_owned_by, pick_radius_at, ray_vs_vertical_segment, DragBox, Selectable, Selection,
+    BOX_MIN_PX,
+};
+use crate::camera_rts::{CursorRay, CursorTerrainHit, LocalPeerId};
 use crate::hero::control::{placement_armed, HeroSpawnArm, NpcSpawnArm};
 use crate::input::InputState;
 
@@ -50,7 +62,8 @@ pub(super) fn pick_on_left_click(
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     ui_blockers: Query<&Interaction, With<crate::ui::BlocksWorldClicks>>,
-    candidates: Query<(Entity, &Selectable, &PlayerPosition)>,
+    local: Option<Res<LocalPeerId>>,
+    candidates: Query<(Entity, &Selectable, &PlayerPosition, Option<&Hero>)>,
     mut drag: ResMut<DragBox>,
     mut selection: ResMut<Selection>,
 ) {
@@ -102,8 +115,14 @@ pub(super) fn pick_on_left_click(
     // --- box select ---------------------------------------------------------
     if let Some((min, max)) = box_rect {
         let window_size = window.size();
+        let local_id = local.as_ref().map(|local| local.0);
         let mut hits: Vec<(Entity, f32)> = Vec::new();
-        for (entity, selectable, position) in candidates.iter() {
+        for (entity, selectable, position, hero) in candidates.iter() {
+            // Yours only. A drag is a command gesture, so anything you cannot
+            // order has no business being in the result.
+            if !is_owned_by(hero, local_id) {
+                continue;
+            }
             // Aim at the middle of the body: projecting the FEET means a unit
             // standing at the very bottom edge of the box is missed even though
             // the player clearly dragged over it.
@@ -139,7 +158,7 @@ pub(super) fn pick_on_left_click(
         .filter(|d| *d > 0.0);
 
     let mut best: Option<(Entity, f32)> = None;
-    for (entity, selectable, position) in candidates.iter() {
+    for (entity, selectable, position, _hero) in candidates.iter() {
         let Some((distance, gap)) =
             ray_vs_vertical_segment(origin, dir, position.0, selectable.height)
         else {

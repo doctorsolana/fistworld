@@ -293,9 +293,9 @@ pub(super) fn sync_selection_plate(
     };
     let (name, kind, position, hero) = primary;
 
+    let local_id = local.as_ref().map(|local| local.0);
     let owns = |hero: Option<&shared::components::Hero>| {
-        matches!((hero, local.as_ref()), (Some(hero), Some(local))
-            if shared::player::peer_id_to_u64(hero.owner) == local.0)
+        crate::selection::is_owned_by(hero, local_id)
     };
     let is_mine = owns(hero);
 
@@ -335,11 +335,14 @@ pub(super) fn sync_selection_plate(
     // replicated "is moving" flag for one cosmetic word is not worth the traffic.
     let moved = last.is_some_and(|previous| previous.distance_squared(position.0) > 1e-4);
     *last = Some(position.0);
+    // A box-drag only ever selects your own, so a group is normally all
+    // commandable. The mixed branches stay because a selection can also be set
+    // by other means, and a group that silently would not move must say so.
     let status = if count > 1 {
         match commandable {
             0 => "NONE YOURS".to_string(),
-            n if n == count => "READY".to_string(),
-            n => format!("{n} YOURS"),
+            n if n == count => "UNDER YOUR BANNER".to_string(),
+            n => format!("{n} OF {count} YOURS"),
         }
     } else if is_mine {
         if moved { "ON THE MOVE".to_string() } else { "HOLDING".to_string() }
