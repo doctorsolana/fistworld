@@ -356,6 +356,7 @@ fn spawn_detail_card(detail: &mut ChildSpawnerCommands<'_>) {
 
 fn spawn_detail_stat(card: &mut ChildSpawnerCommands<'_>, field: DetailField) {
     card.spawn((
+        DetailRow(field),
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -376,15 +377,67 @@ fn spawn_detail_stat(card: &mut ChildSpawnerCommands<'_>, field: DetailField) {
             TextColor(TEXT_MUTED),
         ));
         row.spawn((
-            DetailStat(field),
-            Text::new("-"),
-            TextFont {
-                font_size: FontSize::Px(13.0),
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
                 ..default()
             },
-            TextColor(TEXT_COLOR),
-        ));
+            children![],
+        ))
+        .with_children(|value_row| {
+            // God-only banner control, left of the value. Only the affiliation
+            // row gets one: it is the only field the world lets you change.
+            if field == DetailField::Affiliation {
+                spawn_banner_button(value_row, "<", -1);
+            }
+            value_row.spawn((
+                DetailStat(field),
+                Text::new("-"),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+                TextColor(TEXT_COLOR),
+            ));
+            if field == DetailField::Affiliation {
+                spawn_banner_button(value_row, ">", 1);
+            }
+        });
     });
+}
+
+/// One step of the banner cycle. Hidden unless the player has god capability.
+fn spawn_banner_button(parent: &mut ChildSpawnerCommands<'_>, glyph: &str, step: i16) {
+    parent
+        .spawn((
+            Button,
+            BannerButton(step),
+            Node {
+                // Hidden until god capability; sized so showing it does not
+                // reflow the row it sits in.
+                display: Display::None,
+                width: Val::Px(18.0),
+                height: Val::Px(18.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(2.0)),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+            BorderColor::from(DIVIDER),
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                Text::new(glyph),
+                TextFont {
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
+                TextColor(TEXT_MUTED),
+            ));
+        });
 }
 
 /// Placeholder tabs still get a real empty state: a blank panel is what makes

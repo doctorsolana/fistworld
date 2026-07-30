@@ -11,7 +11,8 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, NetworkTarget, PeerId, RemoteId, Replicate};
 
 use shared::components::{
-    CharacterKind, CharacterName, Hero, HeroOutfit, PlayerPosition, PlayerRotation,
+    CharacterAffiliation, CharacterKind, CharacterName, Hero, HeroOutfit, PlayerPosition,
+    PlayerRotation,
 };
 use shared::player_profile::HeroSave;
 use shared::player::{HERO_ARRIVE_EPSILON, HERO_MOVE_SPEED};
@@ -65,6 +66,8 @@ pub fn spawn_hero(
             // a stranger.
             CharacterName(display_name.to_string()),
             CharacterKind::Hero,
+            // Unaffiliated is the normal, permanent state -- not a gap.
+            CharacterAffiliation::default(),
             outfit,
             // Opt into region interest BEFORE the visibility pass runs.
             shared::region::RegionCoord::from_world_pos(grounded),
@@ -104,6 +107,7 @@ pub fn spawn_villager(
         .spawn((
             CharacterName(name),
             CharacterKind::Villager,
+            CharacterAffiliation::default(),
             outfit,
             shared::region::RegionCoord::from_world_pos(grounded),
             PlayerPosition(grounded),

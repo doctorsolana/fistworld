@@ -67,6 +67,26 @@ const EPITHETS: &[&str] = &[
     "Wanderer", "Silent", "Ready", "Cross", "Patient", "Lucky", "Grey",
 ];
 
+/// Placeholder banners, until clans are real (ROADMAP Phase 8).
+///
+/// Named after places, because a clan in this world is named for its seat --
+/// which is also why they are drawn from the same word tables as settlements.
+/// This is a fixed roster on purpose: god mode cycles it to test the affiliation
+/// plumbing before there is anything to found a clan with.
+pub const BANNERS: &[&str] = &[
+    "HOLLOWMERE",
+    "BRACKWATER",
+    "ASHFELL",
+    "THORNDALE",
+    "RAVENSTEAD",
+    "COLDBARROW",
+];
+
+/// Display name for an affiliation index, or `None` for unaffiliated.
+pub fn banner_name(index: Option<u8>) -> Option<&'static str> {
+    index.and_then(|i| BANNERS.get(i as usize).copied())
+}
+
 /// One of `list`, chosen by `rng`. Panics only on an empty list, which would be a
 /// build-time mistake in the tables above.
 fn pick<'a>(rng: &mut XorShift64, list: &'a [&'a str]) -> &'a str {

@@ -77,6 +77,13 @@ pub enum DevCommand {
     SpawnNpc {
         pos: Vec3,
     },
+    /// Set a character's banner. Targeted by NAME rather than entity, because
+    /// the encyclopedia lists people the client may not currently have
+    /// replicated -- interest management only delivers who is nearby.
+    SetAffiliation {
+        character: String,
+        banner: Option<u8>,
+    },
 }
 
 /// Client -> Server: order the sender's hero to walk to a terrain point.
@@ -153,6 +160,7 @@ pub struct CharacterRoster {
 pub struct CharacterRosterEntry {
     pub name: String,
     pub kind: crate::components::CharacterKind,
+    pub affiliation: crate::components::CharacterAffiliation,
     /// For a hero, whether its owner is connected right now. Villagers are never
     /// "online" -- they are simply present, which is a different thing.
     pub online: bool,

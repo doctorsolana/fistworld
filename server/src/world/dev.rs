@@ -43,6 +43,10 @@ pub fn handle_dev_commands(
     profiles: Res<crate::persistence::profiles::PlayerProfiles>,
     mut hero_index: ResMut<crate::player::hero::HeroIndex>,
     heroes: Query<&Hero>,
+    mut named: Query<(
+        &shared::components::CharacterName,
+        &mut shared::components::CharacterAffiliation,
+    )>,
     mut client_links: Query<(&RemoteId, &mut MessageReceiver<DevCommand>), With<ClientOf>>,
     mut warp: Query<&mut TimeWarp>,
     mut villager_seed: ResMut<VillagerSeed>,
@@ -139,6 +143,34 @@ pub fn handle_dev_commands(
                         pos,
                     );
                     info!("Dev: villager {entity:?} spawned at {pos:?}");
+                }
+                DevCommand::SetAffiliation { character, banner } => {
+                    // Reject out-of-range indices rather than storing one: a
+                    // stored bad index renders as UNAFFILIATED and would look
+                    // like the change silently failed.
+                    if banner.is_some_and(|b| (b as usize) >= shared::names::BANNERS.len()) {
+                        warn!("Dev: ignoring SetAffiliation with unknown banner {banner:?}");
+                        continue;
+                    }
+                    let wanted = character.to_lowercase();
+                    let mut hit = false;
+                    for (name, mut affiliation) in named.iter_mut() {
+                        if name.0.to_lowercase() != wanted {
+                            continue;
+                        }
+                        hit = true;
+                        let next = shared::components::CharacterAffiliation(banner);
+                        // Change detection drives replication; an idle re-set
+                        // must not re-send the component to every client.
+                        if *affiliation != next {
+                            *affiliation = next;
+                        }
+                    }
+                    if hit {
+                        info!("Dev: '{character}' banner set to {banner:?}");
+                    } else {
+                        info!("Dev: no character named '{character}'");
+                    }
                 }
             }
         }

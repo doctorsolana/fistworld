@@ -38,6 +38,7 @@ impl Plugin for EncyclopediaPlugin {
                 state_sync::sync_input_state,
                 state_sync::receive_character_roster,
                 state_sync::learn_visible_characters,
+                state_sync::track_affiliation_changes,
             )
                 .run_if(in_state(GameState::Playing)),
         );
@@ -49,12 +50,14 @@ impl Plugin for EncyclopediaPlugin {
                 actions::handle_tab_buttons,
                 actions::handle_filter_buttons,
                 actions::handle_person_rows,
+                actions::handle_banner_buttons,
                 actions::close_on_escape_or_backdrop,
                 actions::scroll_people_list,
                 state_sync::rebuild_people_list,
                 state_sync::sync_tab_visuals,
                 state_sync::sync_filter_visuals,
                 state_sync::sync_detail_panel,
+                state_sync::sync_banner_controls,
                 state_sync::style_person_rows,
             )
                 .chain()
@@ -141,24 +144,11 @@ impl PeopleFilter {
 #[derive(Resource, Default)]
 pub struct SelectedPerson(pub Option<String>);
 
-/// Who someone answers to. Clans do not exist yet (WORLD-DESIGN §4); every
-/// real person is currently unaffiliated, and the badge already has a home
-/// for the day they do.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
-pub enum Affiliation {
-    #[default]
-    Neutral,
-    Clan(String),
-}
-
-impl Affiliation {
-    pub fn badge(&self) -> &str {
-        match self {
-            Affiliation::Neutral => "NEUTRAL",
-            Affiliation::Clan(name) => name.as_str(),
-        }
-    }
-}
+/// Who someone answers to.
+///
+/// This is now the SERVER's value, not a client-side label: affiliation decides
+/// who is hostile to whom, so the client only ever displays what it was told.
+pub type Affiliation = shared::components::CharacterAffiliation;
 
 /// What kind of person this is.
 ///
@@ -315,7 +305,28 @@ impl DetailField {
             DetailField::Knowledge => "KNOWLEDGE",
         }
     }
+
+    /// Whether this row says anything true about `kind`.
+    ///
+    /// STANDING and STATUS are player concepts. A villager has no level and no
+    /// prestige, and is never "away" -- they live here, they are simply present.
+    /// Showing those rows for a villager prints two confident-looking lies, so
+    /// the rows are hidden instead of filled with filler.
+    pub fn applies_to(self, kind: PersonKind) -> bool {
+        match self {
+            DetailField::Affiliation | DetailField::Knowledge => true,
+            DetailField::Standing | DetailField::Status => kind == PersonKind::Hero,
+        }
+    }
 }
+
+/// The whole row for a field, so it can be hidden when it does not apply.
+#[derive(Component, Clone, Copy)]
+pub struct DetailRow(pub DetailField);
+
+/// God-only banner control on the affiliation row. `-1` steps back, `1` forward.
+#[derive(Component, Clone, Copy)]
+pub struct BannerButton(pub i16);
 
 #[derive(Component)]
 pub struct DetailEmptyState;

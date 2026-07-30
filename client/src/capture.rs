@@ -110,7 +110,10 @@ pub fn run(config: CaptureConfig) {
     app.insert_resource(config);
 
     app.add_systems(Startup, enter_world_offline);
-    app.add_systems(Update, (spawn_capture_heroes, drive_capture));
+    app.add_systems(
+        Update,
+        (spawn_capture_heroes, select_capture_person, drive_capture),
+    );
 
     app.run();
 }
@@ -196,18 +199,18 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         };
         commands.insert_resource(KnownPeople {
             records: vec![
-                sample("Aldric", 7, 2, true, true, true, Affiliation::Neutral),
-                sample("Bryn", 4, 0, true, true, false, Affiliation::Neutral),
-                sample("Cassia", 11, 5, false, true, false, Affiliation::Clan("HOLLOWMERE".into())),
-                sample("Dunstan", 2, 0, false, true, false, Affiliation::Neutral),
-                sample("Eirwen", 9, 3, true, true, false, Affiliation::Clan("HOLLOWMERE".into())),
-                sample("Faelan", 1, 0, false, false, false, Affiliation::Neutral),
-                sample("Gwyneth", 14, 8, false, false, false, Affiliation::Clan("BRACKWATER".into())),
-                sample("Hollis", 5, 1, false, true, false, Affiliation::Neutral),
-                sample("Ivo", 3, 0, false, false, false, Affiliation::Neutral),
-                sample("Jorunn", 8, 4, true, true, false, Affiliation::Clan("BRACKWATER".into())),
-                sample("Kelda", 6, 2, false, true, false, Affiliation::Neutral),
-                sample("Lorcan", 12, 6, false, false, false, Affiliation::Neutral),
+                sample("Aldric", 7, 2, true, true, true, Affiliation::default()),
+                sample("Bryn", 4, 0, true, true, false, Affiliation::default()),
+                sample("Cassia", 11, 5, false, true, false, shared::components::CharacterAffiliation(Some(0))),
+                sample("Dunstan", 2, 0, false, true, false, Affiliation::default()),
+                sample("Eirwen", 9, 3, true, true, false, shared::components::CharacterAffiliation(Some(0))),
+                sample("Faelan", 1, 0, false, false, false, Affiliation::default()),
+                sample("Gwyneth", 14, 8, false, false, false, shared::components::CharacterAffiliation(Some(0))),
+                sample("Hollis", 5, 1, false, true, false, Affiliation::default()),
+                sample("Ivo", 3, 0, false, false, false, Affiliation::default()),
+                sample("Jorunn", 8, 4, true, true, false, shared::components::CharacterAffiliation(Some(0))),
+                sample("Kelda", 6, 2, false, true, false, Affiliation::default()),
+                sample("Lorcan", 12, 6, false, false, false, Affiliation::default()),
             ],
             requested: true,
         });
@@ -294,6 +297,7 @@ fn spawn_capture_heroes(
             },
             shared::components::CharacterName(format!("Capture Hero {}", i + 1)),
             shared::components::CharacterKind::Hero,
+            shared::components::CharacterAffiliation::default(),
             outfit,
             shared::components::PlayerPosition(pos),
             shared::components::PlayerRotation(std::f32::consts::PI),
@@ -311,6 +315,7 @@ fn spawn_capture_heroes(
             commands.spawn((
                 shared::components::CharacterName(shared::names::person_name(seed)),
                 shared::components::CharacterKind::Villager,
+                shared::components::CharacterAffiliation::default(),
                 shared::components::HeroOutfit::varied(seed),
                 shared::components::PlayerPosition(pos),
                 shared::components::PlayerRotation(std::f32::consts::PI),
@@ -356,6 +361,27 @@ fn spawn_capture_heroes(
         });
     }
     *spawned = true;
+}
+
+/// FISTFORCE_CAPTURE_SELECT_PERSON=<name> selects that person in the
+/// encyclopedia once they actually exist.
+///
+/// Retried rather than set once: `rebuild_people_list` drops a selection that is
+/// not in the visible list, and at startup the list is empty, so a one-shot set
+/// is cleared before the characters have even been learned.
+fn select_capture_person(
+    people: Res<crate::ui::encyclopedia::KnownPeople>,
+    mut selected: ResMut<crate::ui::encyclopedia::SelectedPerson>,
+) {
+    if selected.0.is_some() {
+        return;
+    }
+    let Ok(wanted) = std::env::var("FISTFORCE_CAPTURE_SELECT_PERSON") else {
+        return;
+    };
+    if people.find(&wanted).is_some() {
+        selected.0 = Some(wanted);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -72,6 +72,36 @@ impl CharacterKind {
     }
 }
 
+/// Who a character answers to.
+///
+/// `None` is unaffiliated, and per WORLD-DESIGN section 4 that is a normal and
+/// permanent state, not a gap waiting to be filled.
+///
+/// The index points into [`crate::names::BANNERS`], a placeholder roster that
+/// stands in until clans are real (ROADMAP Phase 8), at which point this becomes
+/// a `ClanId`. Server-authoritative and replicated: affiliation decides who is
+/// hostile to whom, so it can never be a client-side label.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct CharacterAffiliation(pub Option<u8>);
+
+impl CharacterAffiliation {
+    pub fn label(self) -> &'static str {
+        crate::names::banner_name(self.0).unwrap_or("UNAFFILIATED")
+    }
+
+    /// Step through the banner roster, wrapping via unaffiliated.
+    ///
+    /// Unaffiliated is part of the cycle rather than a separate control, so god
+    /// mode can always get back to it without a second button.
+    pub fn cycled(self, step: i16) -> Self {
+        let len = crate::names::BANNERS.len() as i16;
+        // 0 = unaffiliated, 1..=len = banner index + 1.
+        let current = self.0.map(|i| i as i16 + 1).unwrap_or(0);
+        let next = (current + step).rem_euclid(len + 1);
+        Self(if next == 0 { None } else { Some((next - 1) as u8) })
+    }
+}
+
 /// Wardrobe slots a hero can carry. The shipped model uses three
 /// (bottom/top/hair); the spare capacity lets the art build add a slot
 /// without a protocol change, since this component is replicated.
@@ -185,3 +215,69 @@ pub struct LocalPlayer;
 /// Marker for ground/terrain.
 #[derive(Component)]
 pub struct Ground;
+
+#[cfg(test)]
+mod affiliation_tests {
+    use super::*;
+
+    /// Unaffiliated must be reachable in the cycle, or god mode could set a
+    /// banner and never take it off again.
+    #[test]
+    fn cycling_returns_to_unaffiliated() {
+        let mut current = CharacterAffiliation::default();
+        assert_eq!(current.0, None);
+
+        let steps = crate::names::BANNERS.len() + 1;
+        let mut seen_none = 0;
+        for _ in 0..steps {
+            current = current.cycled(1);
+            if current.0.is_none() {
+                seen_none += 1;
+            }
+        }
+        assert_eq!(current.0, None, "a full cycle did not return to unaffiliated");
+        assert_eq!(seen_none, 1, "unaffiliated appeared {seen_none} times in one cycle");
+    }
+
+    /// Every banner must be reachable, and no index may fall outside the roster
+    /// -- an out-of-range index renders as UNAFFILIATED and would look like the
+    /// setting silently failed.
+    #[test]
+    fn cycling_visits_every_banner_and_stays_in_range() {
+        let mut current = CharacterAffiliation::default();
+        let mut visited = std::collections::HashSet::new();
+        for _ in 0..crate::names::BANNERS.len() + 1 {
+            current = current.cycled(1);
+            if let Some(index) = current.0 {
+                assert!(
+                    (index as usize) < crate::names::BANNERS.len(),
+                    "banner index {index} is outside the roster"
+                );
+                visited.insert(index);
+            }
+        }
+        assert_eq!(visited.len(), crate::names::BANNERS.len(), "missed a banner");
+    }
+
+    #[test]
+    fn cycling_backwards_is_the_inverse() {
+        for start in 0..crate::names::BANNERS.len() + 1 {
+            let mut current = CharacterAffiliation::default();
+            for _ in 0..start {
+                current = current.cycled(1);
+            }
+            assert_eq!(current.cycled(1).cycled(-1), current, "step +1 then -1 moved");
+        }
+    }
+
+    #[test]
+    fn unaffiliated_reads_as_unaffiliated() {
+        assert_eq!(CharacterAffiliation(None).label(), "UNAFFILIATED");
+        assert_eq!(
+            CharacterAffiliation(Some(0)).label(),
+            crate::names::BANNERS[0]
+        );
+        // Out of range must not panic.
+        assert_eq!(CharacterAffiliation(Some(200)).label(), "UNAFFILIATED");
+    }
+}

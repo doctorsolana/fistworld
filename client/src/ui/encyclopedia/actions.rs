@@ -158,3 +158,44 @@ pub(super) fn close_on_escape_or_backdrop(
         open.0 = false;
     }
 }
+
+/// God-only: step the selected person's banner.
+///
+/// Sends intent and waits for the server to replicate the result back, exactly
+/// like every other world change. Setting the local record directly would show
+/// a banner the world has not agreed to, and affiliation decides who is hostile
+/// to whom -- that is not a thing to guess at locally.
+pub(super) fn handle_banner_buttons(
+    guard: Res<ClickGuard>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    god: Res<crate::ui::hud::GodCapability>,
+    selected: Res<SelectedPerson>,
+    people: Res<KnownPeople>,
+    buttons: Query<(&Interaction, &BannerButton), Changed<Interaction>>,
+    mut senders: Query<
+        &mut MessageSender<shared::protocol::DevCommand>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+) {
+    if !guard.0 || !god.0 || !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let Some(name) = selected.0.clone() else {
+        return;
+    };
+    let Some(record) = people.find(&name) else {
+        return;
+    };
+    for (interaction, BannerButton(step)) in buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let next = record.affiliation.cycled(*step);
+        if let Ok(mut sender) = senders.single_mut() {
+            sender.send::<ReliableChannel>(shared::protocol::DevCommand::SetAffiliation {
+                character: name.clone(),
+                banner: next.0,
+            });
+        }
+    }
+}

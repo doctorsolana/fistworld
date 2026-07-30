@@ -48,6 +48,7 @@ pub(super) fn receive_character_roster(
                     .find(|record| record.name == entry.name)
                 {
                     existing.kind = kind;
+                    existing.affiliation = entry.affiliation;
                     existing.online = entry.online;
                     existing.is_self = entry.is_self;
                     // Knowing OF someone from the roster does not make them
@@ -61,7 +62,7 @@ pub(super) fn receive_character_roster(
                         is_self: entry.is_self,
                         name: entry.name,
                         kind,
-                        affiliation: Affiliation::Neutral,
+                        affiliation: entry.affiliation,
                         level: 0,
                         prestige: 0,
                         online: entry.online,
@@ -80,12 +81,22 @@ pub(super) fn receive_character_roster(
 /// than a proximity list.
 pub(super) fn learn_visible_characters(
     seen: Query<
-        (&shared::components::CharacterName, &shared::components::CharacterKind),
+        (
+            &shared::components::CharacterName,
+            &shared::components::CharacterKind,
+            // OPTIONAL, and that is load-bearing: replication can deliver a
+            // character's components in separate batches, so requiring the
+            // banner here would silently skip anyone whose name arrived first
+            // -- and `Added` fires once, so they would never be learned at all.
+            // `track_affiliation_changes` fills it in when it lands.
+            Option<&shared::components::CharacterAffiliation>,
+        ),
         Added<shared::components::CharacterName>,
     >,
     mut people: ResMut<KnownPeople>,
 ) {
-    for (name, kind) in seen.iter() {
+    for (name, kind, affiliation) in seen.iter() {
+        let affiliation = affiliation.copied().unwrap_or_default();
         let kind = match kind {
             shared::components::CharacterKind::Hero => PersonKind::Hero,
             shared::components::CharacterKind::Villager => PersonKind::Villager,
@@ -93,17 +104,39 @@ pub(super) fn learn_visible_characters(
         if let Some(existing) = people.records.iter_mut().find(|r| r.name == name.0) {
             existing.known = true;
             existing.kind = kind;
+            existing.affiliation = affiliation;
         } else {
             people.records.push(PersonRecord {
                 name: name.0.clone(),
                 kind,
-                affiliation: Affiliation::Neutral,
+                affiliation,
                 level: 0,
                 prestige: 0,
                 online: false,
                 known: true,
                 is_self: false,
             });
+        }
+    }
+}
+
+/// Track banner changes on characters you can see, so a god-mode edit shows up
+/// immediately rather than waiting for the next roster request.
+pub(super) fn track_affiliation_changes(
+    changed: Query<
+        (
+            &shared::components::CharacterName,
+            &shared::components::CharacterAffiliation,
+        ),
+        Changed<shared::components::CharacterAffiliation>,
+    >,
+    mut people: ResMut<KnownPeople>,
+) {
+    for (name, affiliation) in changed.iter() {
+        if let Some(record) = people.records.iter_mut().find(|r| r.name == name.0) {
+            if record.affiliation != *affiliation {
+                record.affiliation = *affiliation;
+            }
         }
     }
 }
@@ -233,7 +266,7 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
         ));
         row.spawn((
             Text::new(if record.known {
-                record.affiliation.badge().to_string()
+                record.affiliation.label().to_string()
             } else {
                 "UNKNOWN".to_string()
             }),
@@ -394,7 +427,7 @@ pub(super) fn sync_detail_panel(
         let value = match field {
             DetailField::Affiliation => {
                 if record.known {
-                    record.affiliation.badge().to_string()
+                    record.affiliation.label().to_string()
                 } else {
                     "Unrecorded".to_string()
                 }
@@ -406,10 +439,13 @@ pub(super) fn sync_detail_panel(
                     "Unrecorded".to_string()
                 }
             }
+            // Only ever rendered for a hero -- see DetailField::applies_to. A
+            // villager is not "away" when nobody is driving them; they live
+            // here, which is a different thing entirely.
             DetailField::Status => if record.online {
-                "In the world now"
+                "Playing now"
             } else {
-                "Away"
+                "Logged off"
             }
             .to_string(),
             DetailField::Knowledge => if record.is_self {
@@ -423,6 +459,52 @@ pub(super) fn sync_detail_panel(
         };
         if text.0 != value {
             text.0 = value;
+        }
+    }
+}
+
+/// Show the banner control only with god capability, and hide detail rows that
+/// say nothing true about the selected person's kind.
+pub(super) fn sync_banner_controls(
+    god: Res<crate::ui::hud::GodCapability>,
+    people: Res<KnownPeople>,
+    selected: Res<SelectedPerson>,
+    mut buttons: Query<(&mut Node, &Interaction, &mut BorderColor), With<BannerButton>>,
+    mut rows: Query<(&DetailRow, &mut Node), Without<BannerButton>>,
+) {
+    let kind = selected
+        .0
+        .as_deref()
+        .and_then(|name| people.find(name))
+        .map(|record| record.kind);
+
+    for (mut node, interaction, mut border) in buttons.iter_mut() {
+        // Editable only in god mode, and only when the row it lives on is shown.
+        let visible = god.0 && kind.is_some_and(|k| DetailField::Affiliation.applies_to(k));
+        let display = if visible { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
+        let next = BorderColor::from(if *interaction == Interaction::Hovered {
+            ACCENT_COLOR
+        } else {
+            DIVIDER
+        });
+        if *border != next {
+            *border = next;
+        }
+    }
+
+    for (DetailRow(field), mut node) in rows.iter_mut() {
+        let display = match kind {
+            Some(kind) if field.applies_to(kind) => Display::Flex,
+            Some(_) => Display::None,
+            // Nothing selected: the whole card is hidden anyway, so leave the
+            // rows alone rather than flickering them.
+            None => continue,
+        };
+        if node.display != display {
+            node.display = display;
         }
     }
 }
