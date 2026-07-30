@@ -162,6 +162,7 @@ pub fn handle_player_name_submission(
                         &terrain,
                         peer_id,
                         &name_lower,
+                        &profile.player_name,
                         Vec3::from(saved.position),
                         saved.rotation,
                         saved.outfit(),

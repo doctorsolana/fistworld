@@ -10,7 +10,7 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageSender};
 
-use shared::protocol::{ReliableChannel, RequestPlayerRoster};
+use shared::protocol::{ReliableChannel, RequestCharacterRoster};
 
 use super::*;
 use crate::input::InputState;
@@ -47,7 +47,7 @@ pub(super) fn update_click_guard(
 pub(super) fn request_roster_on_open(
     mut people: ResMut<KnownPeople>,
     mut senders: Query<
-        &mut MessageSender<RequestPlayerRoster>,
+        &mut MessageSender<RequestCharacterRoster>,
         (With<crate::GameClient>, With<Connected>),
     >,
 ) {
@@ -59,7 +59,7 @@ pub(super) fn request_roster_on_open(
         // so it retries if a connection appears while the window is open.
         return;
     };
-    sender.send::<ReliableChannel>(RequestPlayerRoster);
+    sender.send::<ReliableChannel>(RequestCharacterRoster);
     people.requested = true;
 }
 
@@ -105,7 +105,9 @@ pub(super) fn handle_person_rows(
         return;
     }
     for (interaction, PersonRow(name)) in rows.iter() {
-        if *interaction == Interaction::Pressed {
+        // The empty-state row carries the marker so it gets cleaned up, but it
+        // names nobody -- clicking it must not select a person who is not there.
+        if *interaction == Interaction::Pressed && !name.is_empty() {
             selected.0 = Some(name.clone());
         }
     }

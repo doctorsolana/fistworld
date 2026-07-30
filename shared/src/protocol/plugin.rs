@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::components::{
-    ActiveMapState, CloudSeed, Health, Hero, HeroOutfit, Player, PlayerPosition,
-    PlayerProgression, PlayerRotation, TimeWarp, WorldTime,
+    ActiveMapState, CharacterKind, CharacterName, CloudSeed, Health, Hero, HeroOutfit, Player,
+    PlayerPosition, PlayerProgression, PlayerRotation, TimeWarp, WorldTime,
 };
 use crate::terrain::TerrainDeltaChunk;
 
@@ -26,6 +26,10 @@ impl Plugin for ProtocolPlugin {
         app.component::<Hero>().replicate();
         app.component::<HeroOutfit>().replicate();
 
+        // === CHARACTERS (heroes and villagers alike) ===
+        app.component::<CharacterName>().replicate();
+        app.component::<CharacterKind>().replicate();
+
         // === HEALTH ===
         app.component::<Health>().replicate();
 
@@ -46,7 +50,7 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SubmitPlayerName>()
             .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<RequestPlayerRoster>()
+        app.register_message::<RequestCharacterRoster>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<DevCommand>()
             .add_direction(NetworkDirection::ClientToServer);
@@ -56,7 +60,7 @@ impl Plugin for ProtocolPlugin {
         // Server -> Client
         app.register_message::<NameSubmissionResult>()
             .add_direction(NetworkDirection::ServerToClient);
-        app.register_message::<PlayerRoster>()
+        app.register_message::<CharacterRoster>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<DevStatus>()
             .add_direction(NetworkDirection::ServerToClient);

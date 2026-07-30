@@ -7,12 +7,11 @@
 use bevy::prelude::*;
 use lightyear::prelude::MessageReceiver;
 
-use shared::protocol::PlayerRoster;
+use shared::protocol::CharacterRoster;
 
 use super::*;
 use crate::input::InputState;
 use crate::ui::hud::GodCapability;
-use crate::ui::name_entry::PlayerNameInput;
 use crate::ui::styles::{ACCENT_COLOR, TEXT_COLOR, TEXT_MUTED};
 
 /// The camera must not pan and world clicks must not fire underneath.
@@ -25,40 +24,86 @@ pub(super) fn sync_input_state(
     }
 }
 
-/// Fold the replicated roster into the knowledge registry.
+/// Fold the server's character roster into the knowledge registry.
 ///
-/// Runs whether or not the window is open so a roster that arrives late still
-/// lands. Today's knowledge rule: you know yourself, and anyone in the world
-/// with you right now.
-pub(super) fn receive_player_roster(
-    mut receivers: Query<&mut MessageReceiver<PlayerRoster>, With<crate::GameClient>>,
-    local_name: Option<Res<PlayerNameInput>>,
+/// The roster is the full picture the SERVER has. It is merged rather than
+/// assigned, because the registry is knowledge the player accumulates: a person
+/// you have met stays in your encyclopedia after they walk out of your interest
+/// range, which is the whole point of it being an encyclopedia rather than a
+/// list of who is nearby.
+pub(super) fn receive_character_roster(
+    mut receivers: Query<&mut MessageReceiver<CharacterRoster>, With<crate::GameClient>>,
     mut people: ResMut<KnownPeople>,
 ) {
-    let local = local_name
-        .as_ref()
-        .map(|input| input.name.trim().to_lowercase())
-        .unwrap_or_default();
-
     for mut receiver in receivers.iter_mut() {
         for roster in receiver.receive() {
-            people.records = roster
-                .entries
-                .into_iter()
-                .map(|entry| {
-                    let is_self = !local.is_empty() && entry.name.to_lowercase() == local;
-                    PersonRecord {
-                        known: is_self || entry.online,
-                        is_self,
+            for entry in roster.entries {
+                let kind = match entry.kind {
+                    shared::components::CharacterKind::Hero => PersonKind::Hero,
+                    shared::components::CharacterKind::Villager => PersonKind::Villager,
+                };
+                if let Some(existing) = people
+                    .records
+                    .iter_mut()
+                    .find(|record| record.name == entry.name)
+                {
+                    existing.kind = kind;
+                    existing.online = entry.online;
+                    existing.is_self = entry.is_self;
+                    // Knowing OF someone from the roster does not make them
+                    // known -- god mode reveals unknown records still marked
+                    // unknown, so the fog stays visible rather than being
+                    // silently switched off.
+                    existing.known |= entry.is_self;
+                } else {
+                    people.records.push(PersonRecord {
+                        known: entry.is_self,
+                        is_self: entry.is_self,
                         name: entry.name,
-                        kind: PersonKind::Player,
+                        kind,
                         affiliation: Affiliation::Neutral,
-                        level: entry.level,
-                        prestige: entry.prestige,
+                        level: 0,
+                        prestige: 0,
                         online: entry.online,
-                    }
-                })
-                .collect();
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Anyone you can actually SEE becomes known, permanently.
+///
+/// Replication only delivers entities inside your interest range, so this is
+/// literally "people you have laid eyes on". Once known they stay in the
+/// registry after they leave range -- that is what makes it knowledge rather
+/// than a proximity list.
+pub(super) fn learn_visible_characters(
+    seen: Query<
+        (&shared::components::CharacterName, &shared::components::CharacterKind),
+        Added<shared::components::CharacterName>,
+    >,
+    mut people: ResMut<KnownPeople>,
+) {
+    for (name, kind) in seen.iter() {
+        let kind = match kind {
+            shared::components::CharacterKind::Hero => PersonKind::Hero,
+            shared::components::CharacterKind::Villager => PersonKind::Villager,
+        };
+        if let Some(existing) = people.records.iter_mut().find(|r| r.name == name.0) {
+            existing.known = true;
+            existing.kind = kind;
+        } else {
+            people.records.push(PersonRecord {
+                name: name.0.clone(),
+                kind,
+                affiliation: Affiliation::Neutral,
+                level: 0,
+                prestige: 0,
+                online: false,
+                known: true,
+                is_self: false,
+            });
         }
     }
 }
@@ -115,6 +160,10 @@ pub(super) fn rebuild_people_list(
     commands.entity(content_entity).with_children(|list| {
         if visible.is_empty() {
             list.spawn((
+                // MUST carry the row marker: the rebuild despawns
+                // `Query<Entity, With<PersonRow>>`, so an unmarked empty-state
+                // node is never cleaned up and sits above a populated list.
+                PersonRow(String::new()),
                 Text::new("No one here yet"),
                 TextFont {
                     font_size: FontSize::Px(12.0),

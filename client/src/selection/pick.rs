@@ -6,13 +6,14 @@ use shared::components::PlayerPosition;
 
 use super::{pick_radius_at, ray_vs_vertical_segment, Selectable, Selection};
 use crate::camera_rts::{CursorRay, CursorTerrainHit};
-use crate::hero::control::HeroSpawnArm;
+use crate::hero::control::{placement_armed, HeroSpawnArm, NpcSpawnArm};
 use crate::input::InputState;
 
 pub(super) fn pick_on_left_click(
     mouse: Res<ButtonInput<MouseButton>>,
     input_state: Res<InputState>,
     spawn_arm: Res<HeroSpawnArm>,
+    npc_arm: Res<NpcSpawnArm>,
     cursor_ray: Res<CursorRay>,
     terrain_hit: Res<CursorTerrainHit>,
     ui_blockers: Query<&Interaction, With<crate::ui::BlocksWorldClicks>>,
@@ -26,7 +27,7 @@ pub(super) fn pick_on_left_click(
     // put the hero down. Selecting as well would leave the player having both
     // placed and selected in one gesture, which reads as the click doing two
     // things.
-    if spawn_arm.0 {
+    if placement_armed(&spawn_arm, &npc_arm) {
         return;
     }
     // A click on a HUD surface must never reach the world.

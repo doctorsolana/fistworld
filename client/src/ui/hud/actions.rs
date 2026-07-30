@@ -83,3 +83,21 @@ pub(super) fn handle_spawn_hero_button(
         creator.0 = true;
     }
 }
+
+/// Arm villager placement. Stays armed across clicks so a crowd can be dropped
+/// in one go; Escape or leaving god mode clears it.
+pub(super) fn handle_spawn_npc_button(
+    mut npc_arm: ResMut<crate::hero::control::NpcSpawnArm>,
+    mut hero_arm: ResMut<crate::hero::control::HeroSpawnArm>,
+    buttons: Query<&Interaction, (With<SpawnNpcButton>, Changed<Interaction>)>,
+) {
+    for interaction in buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        // Only one placement can be armed: an invisible second armed mode would
+        // make the next click do something the player did not ask for.
+        hero_arm.0 = false;
+        npc_arm.0 = !npc_arm.0;
+    }
+}

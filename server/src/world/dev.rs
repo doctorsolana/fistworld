@@ -32,6 +32,10 @@ fn parse_dev_flag(raw: Option<String>) -> bool {
 /// Receivers are drained even with dev mode off so messages never accumulate; they are
 /// just never applied.
 #[allow(clippy::too_many_arguments)]
+/// Counter behind generated villager names, so each spawn is a distinct person.
+#[derive(Resource, Default)]
+pub struct VillagerSeed(pub u64);
+
 pub fn handle_dev_commands(
     mut commands: Commands,
     dev: Res<DevMode>,
@@ -41,6 +45,7 @@ pub fn handle_dev_commands(
     heroes: Query<&Hero>,
     mut client_links: Query<(&RemoteId, &mut MessageReceiver<DevCommand>), With<ClientOf>>,
     mut warp: Query<&mut TimeWarp>,
+    mut villager_seed: ResMut<VillagerSeed>,
     mut warned_peers: Local<bevy::platform::collections::HashSet<lightyear::prelude::PeerId>>,
 ) {
     // Spawns go through deferred Commands, so the Hero query cannot see a
@@ -100,12 +105,40 @@ pub fn handle_dev_commands(
                         terrain,
                         remote_id.0,
                         &name_lower,
+                        // The display name off the profile, so the hero is
+                        // listed under the name the player typed rather than the
+                        // lowercased key.
+                        profiles
+                            .profiles
+                            .get(&name_lower)
+                            .map(|p| p.player_name.as_str())
+                            .unwrap_or(name_lower.as_str()),
                         pos,
                         0.0,
                         outfit,
                     );
                     spawned_this_run.insert(remote_id.0);
                     info!("Dev: hero {entity:?} spawned for '{name_lower}' at {pos:?}");
+                }
+                DevCommand::SpawnNpc { pos } => {
+                    if !pos.is_finite() {
+                        continue;
+                    }
+                    let Some(terrain) = terrain.as_ref() else {
+                        continue;
+                    };
+                    // The seed is a running counter, not a hash of the position:
+                    // two villagers spawned on the same spot must not be the same
+                    // person, and a villager must keep its name if the world is
+                    // later rebuilt around it.
+                    villager_seed.0 = villager_seed.0.wrapping_add(1);
+                    let entity = crate::player::hero::spawn_villager(
+                        &mut commands,
+                        terrain,
+                        villager_seed.0,
+                        pos,
+                    );
+                    info!("Dev: villager {entity:?} spawned at {pos:?}");
                 }
             }
         }

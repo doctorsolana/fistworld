@@ -36,7 +36,8 @@ impl Plugin for EncyclopediaPlugin {
                 actions::toggle_encyclopedia,
                 actions::update_click_guard,
                 state_sync::sync_input_state,
-                state_sync::receive_player_roster,
+                state_sync::receive_character_roster,
+                state_sync::learn_visible_characters,
             )
                 .run_if(in_state(GameState::Playing)),
         );
@@ -159,19 +160,24 @@ impl Affiliation {
     }
 }
 
-/// What kind of person this is. Only players exist today; NPCs land here
-/// unchanged when settlements start populating.
+/// What kind of person this is.
+///
+/// Mirrors `shared::components::CharacterKind`, which is what the server
+/// actually replicates. Kept as a separate client type so the UI can gain
+/// display-only distinctions later without touching the protocol.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PersonKind {
-    Player,
-    Npc,
+    /// The embodied character of a player account.
+    Hero,
+    /// Someone who lives in the world.
+    Villager,
 }
 
 impl PersonKind {
     pub fn label(self) -> &'static str {
         match self {
-            PersonKind::Player => "PLAYER",
-            PersonKind::Npc => "VILLAGER",
+            PersonKind::Hero => "HERO",
+            PersonKind::Villager => "VILLAGER",
         }
     }
 }
@@ -321,12 +327,17 @@ pub struct DetailCard;
 // Local palette (extends ui::styles rather than replacing it)
 // ---------------------------------------------------------------------------
 
-pub(super) const PANEL_BG: Color = Color::srgba(0.055, 0.048, 0.042, 0.97);
-pub(super) const HEADER_BG: Color = Color::srgba(0.085, 0.072, 0.060, 1.0);
+pub(super) const PANEL_BG: Color = Color::srgba(0.836, 0.812, 0.769, 0.97);
+pub(super) const HEADER_BG: Color = Color::srgba(0.780, 0.755, 0.710, 1.0);
 pub(super) const ROW_NORMAL: Color = Color::srgba(0.0, 0.0, 0.0, 0.0);
-pub(super) const ROW_HOVERED: Color = Color::srgba(0.20, 0.15, 0.09, 0.75);
-pub(super) const ROW_SELECTED: Color = Color::srgba(0.30, 0.19, 0.09, 0.95);
-pub(super) const DETAIL_BG: Color = Color::srgba(0.03, 0.027, 0.024, 0.85);
-pub(super) const DIVIDER: Color = Color::srgba(0.30, 0.22, 0.14, 0.55);
-/// Online marker.
-pub(super) const STATUS_ONLINE: Color = Color::srgb(0.42, 0.72, 0.36);
+pub(super) const ROW_HOVERED: Color = Color::srgba(0.741, 0.718, 0.678, 0.85);
+/// A rust WASH rather than a rust FILL: the row's text stays ink, so a selected
+/// row is still the most readable row in the list instead of the least.
+pub(super) const ROW_SELECTED: Color = Color::srgba(0.560, 0.325, 0.129, 0.20);
+/// The detail pane goes LIGHTER than the body, like a fresh leaf laid on the
+/// ledger.
+pub(super) const DETAIL_BG: Color = Color::srgba(0.898, 0.878, 0.843, 0.92);
+pub(super) const DIVIDER: Color = Color::srgba(0.361, 0.345, 0.318, 0.32);
+/// Online marker. Moss green -- the old bright green measured ~2.3:1 on a light
+/// panel and read as a lit LED rather than as ink.
+pub(super) const STATUS_ONLINE: Color = Color::srgb(0.243, 0.435, 0.196);

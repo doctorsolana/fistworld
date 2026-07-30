@@ -195,6 +195,7 @@ fn god_plate() -> impl Bundle {
             ),
             hairline(),
             spawn_hero_button(),
+            spawn_npc_button(),
             hairline(),
             (
                 Text::new("G god   J time   N people   M map"),
@@ -270,6 +271,36 @@ fn spawn_hero_button() -> impl Bundle {
         children![(
             SpawnHeroLabel,
             Text::new("SPAWN HERO"),
+            TextFont {
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(INK),
+        )],
+    )
+}
+
+/// Drop a villager: a named person who lives in the world and belongs to
+/// nobody. A test tool until settlements produce their own population.
+fn spawn_npc_button() -> impl Bundle {
+    (
+        SpawnNpcButton,
+        Button,
+        BlocksWorldClicks,
+        Node {
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(2.0)),
+            ..default()
+        },
+        BackgroundColor(BUTTON_NORMAL),
+        BorderColor::from(PLATE_RULE_SOFT),
+        children![(
+            SpawnNpcLabel,
+            Text::new("SPAWN VILLAGER"),
             TextFont {
                 font_size: FontSize::Px(11.0),
                 ..default()

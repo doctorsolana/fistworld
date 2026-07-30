@@ -49,11 +49,13 @@ impl Plugin for HudPlugin {
                 handle_mode_chip_button,
                 handle_warp_buttons,
                 handle_spawn_hero_button,
+                actions::handle_spawn_npc_button,
                 sync_clock_chip,
                 sync_mode_chip,
                 sync_god_panel,
                 style_warp_buttons,
                 sync_spawn_hero_button,
+                state_sync::sync_spawn_npc_button,
                 state_sync::sync_selection_plate,
             )
                 .run_if(in_state(GameState::Playing)),
@@ -117,6 +119,12 @@ struct SpawnHeroButton;
 
 #[derive(Component)]
 struct SpawnHeroLabel;
+
+#[derive(Component)]
+struct SpawnNpcButton;
+
+#[derive(Component)]
+struct SpawnNpcLabel;
 
 // --- the selected-unit plate ------------------------------------------------
 

@@ -2,7 +2,6 @@
 
 use bevy::prelude::*;
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
-use shared::protocol::PlayerRosterEntry;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -61,41 +60,4 @@ impl PlayerRosterCache {
         );
     }
 
-    pub fn build_roster(&self, profiles: &PlayerProfiles) -> Vec<PlayerRosterEntry> {
-        let mut entries = Vec::with_capacity(self.entries.len() + profiles.profiles.len());
-        let mut seen = HashSet::new();
-
-        for (name_lower, base) in self.entries.iter() {
-            let online = profiles.name_to_peer.contains_key(name_lower);
-            entries.push(PlayerRosterEntry {
-                name: base.name.clone(),
-                level: base.level,
-                prestige: base.prestige,
-                online,
-            });
-            seen.insert(name_lower.clone());
-        }
-
-        for (name_lower, profile) in profiles.profiles.iter() {
-            if seen.contains(name_lower) {
-                continue;
-            }
-            let online = profiles.name_to_peer.contains_key(name_lower);
-            entries.push(PlayerRosterEntry {
-                name: profile.player_name.clone(),
-                level: profile.level,
-                prestige: profile.prestige,
-                online,
-            });
-        }
-
-        entries.sort_by(|a, b| {
-            b.online
-                .cmp(&a.online)
-                .then_with(|| b.level.cmp(&a.level))
-                .then_with(|| a.name.cmp(&b.name))
-        });
-
-        entries
-    }
 }

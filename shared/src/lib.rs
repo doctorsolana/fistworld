@@ -5,6 +5,7 @@ pub mod colliders;
 pub mod components;
 pub mod debug;
 pub mod map;
+pub mod names;
 pub mod physics;
 pub mod player;
 pub mod player_profile;

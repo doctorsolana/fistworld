@@ -10,7 +10,9 @@ use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, NetworkTarget, PeerId, RemoteId, Replicate};
 
-use shared::components::{Hero, HeroOutfit, PlayerPosition, PlayerRotation};
+use shared::components::{
+    CharacterKind, CharacterName, Hero, HeroOutfit, PlayerPosition, PlayerRotation,
+};
 use shared::player_profile::HeroSave;
 use shared::player::{HERO_ARRIVE_EPSILON, HERO_MOVE_SPEED};
 use shared::protocol::HeroMoveTo;
@@ -44,6 +46,7 @@ pub fn spawn_hero(
     terrain: &shared::terrain::WorldTerrain,
     owner: PeerId,
     name_lower: &str,
+    display_name: &str,
     position: Vec3,
     rotation: f32,
     outfit: HeroOutfit,
@@ -56,6 +59,12 @@ pub fn spawn_hero(
     let entity = commands
         .spawn((
             Hero { owner },
+            // A player's hero takes the player's OWN name rather than a
+            // generated one: that is the identity they already chose at login,
+            // and the encyclopedia listing it under anything else would read as
+            // a stranger.
+            CharacterName(display_name.to_string()),
+            CharacterKind::Hero,
             outfit,
             // Opt into region interest BEFORE the visibility pass runs.
             shared::region::RegionCoord::from_world_pos(grounded),
@@ -66,6 +75,42 @@ pub fn spawn_hero(
         .id();
     index.by_name.insert(name_lower.to_string(), entity);
     entity
+}
+
+/// Spawn a villager: a named person who lives in the world and belongs to
+/// nobody.
+///
+/// A test tool until settlements produce their own population (ROADMAP Phase 3),
+/// and deliberately NOT persisted -- world-state persistence does not exist yet,
+/// so a villager lasts until the server restarts. That is honest for a spawn
+/// button; the alternative is a villager who silently evaporates and looks like
+/// a bug.
+pub fn spawn_villager(
+    commands: &mut Commands,
+    terrain: &shared::terrain::WorldTerrain,
+    seed: u64,
+    position: Vec3,
+) -> Entity {
+    let grounded = Vec3::new(
+        position.x,
+        terrain.get_height(position.x, position.z),
+        position.z,
+    );
+    // Deterministic in the seed, so the same villager keeps their name.
+    let name = shared::names::person_name(seed);
+    // Wardrobe varies with the same seed so a crowd is not identical twins.
+    let outfit = HeroOutfit::varied(seed);
+    commands
+        .spawn((
+            CharacterName(name),
+            CharacterKind::Villager,
+            outfit,
+            shared::region::RegionCoord::from_world_pos(grounded),
+            PlayerPosition(grounded),
+            PlayerRotation(seed as f32 % std::f32::consts::TAU),
+            Replicate::to_clients(NetworkTarget::All),
+        ))
+        .id()
 }
 
 /// Snapshot a hero for the profile.

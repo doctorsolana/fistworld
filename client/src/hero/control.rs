@@ -24,6 +24,19 @@ pub struct SelectedOutfit(pub HeroOutfit);
 #[derive(Resource, Default)]
 pub struct HeroSpawnArm(pub bool);
 
+/// Whether the next terrain click drops a villager (armed by the HUD button).
+///
+/// Separate from [`HeroSpawnArm`] rather than one enum, because they arm from
+/// different buttons and only one can be armed at a time -- arming either
+/// disarms the other, which a shared bool could not express.
+#[derive(Resource, Default)]
+pub struct NpcSpawnArm(pub bool);
+
+/// True when any placement is armed, so the selection picker can stand aside.
+pub fn placement_armed(hero: &HeroSpawnArm, npc: &NpcSpawnArm) -> bool {
+    hero.0 || npc.0
+}
+
 /// True when a replicated hero owned by the local peer exists.
 pub fn local_hero_exists(heroes: &Query<&Hero>, local: &LocalPeerId) -> bool {
     heroes.iter().any(|h| peer_id_to_u64(h.owner) == local.0)
@@ -39,6 +52,7 @@ pub(super) fn handle_world_clicks(
     capability: Res<GodCapability>,
     selected: Res<SelectedOutfit>,
     mut arm: ResMut<HeroSpawnArm>,
+    mut npc_arm: ResMut<NpcSpawnArm>,
     local: Option<Res<LocalPeerId>>,
     heroes: Query<&Hero>,
     ui_blockers: Query<&Interaction, With<crate::ui::BlocksWorldClicks>>,
@@ -50,14 +64,16 @@ pub(super) fn handle_world_clicks(
     // Escape cancels an armed placement. (NOT right-click: RMB-drag is the
     // camera orbit, and cancelling on it silently killed every placement
     // that involved looking around first.)
-    if arm.0 && keyboard.just_pressed(KeyCode::Escape) {
+    if (arm.0 || npc_arm.0) && keyboard.just_pressed(KeyCode::Escape) {
         arm.0 = false;
+        npc_arm.0 = false;
         return;
     }
     // Losing god capability or leaving god mode disarms — an invisible armed
     // state must never swallow or convert a later click.
-    if arm.0 && (!capability.0 || *mode != HudMode::God) {
+    if (arm.0 || npc_arm.0) && (!capability.0 || *mode != HudMode::God) {
         arm.0 = false;
+        npc_arm.0 = false;
     }
     if !mouse.just_pressed(MouseButton::Left) || input_state.ui_blocking() {
         return;
@@ -89,6 +105,16 @@ pub(super) fn handle_world_clicks(
             }
         }
         arm.0 = false;
+        return;
+    }
+
+    // Villager placement stays armed, so a crowd can be dropped without
+    // re-arming between each one. Escape or leaving god mode clears it.
+    if npc_arm.0 {
+        if let Ok(mut sender) = dev_sender.single_mut() {
+            sender.send::<ReliableChannel>(DevCommand::SpawnNpc { pos: target });
+            info!("Villager spawn requested at {target:?}");
+        }
     }
 }
 
@@ -140,6 +166,21 @@ pub(super) fn auto_spawn_hero(
             let target = camera.focus + Vec3::new(12.0, 0.0, 6.0);
             sender.send::<ReliableChannel>(HeroMoveTo { target });
             info!("AUTOSPAWN: move order sent to {target:?}");
+
+            // FISTWORLD_AUTOSPAWN_NPC=<n> also drops n villagers, so the god
+            // SpawnNpc path is exercised headlessly instead of only by hand.
+            if let Some(count) = std::env::var("FISTWORLD_AUTOSPAWN_NPC")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+            {
+                if let Ok(mut dev) = dev_sender.single_mut() {
+                    for i in 0..count {
+                        let pos = camera.focus + Vec3::new(i as f32 * 2.0 - 4.0, 0.0, -6.0);
+                        dev.send::<ReliableChannel>(DevCommand::SpawnNpc { pos });
+                    }
+                    info!("AUTOSPAWN: {count} villager spawn(s) sent");
+                }
+            }
             *state = 2;
         }
     }

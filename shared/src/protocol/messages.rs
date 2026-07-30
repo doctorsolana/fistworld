@@ -71,6 +71,12 @@ pub enum DevCommand {
         pos: Vec3,
         outfit: crate::components::HeroOutfit,
     },
+    /// Spawn a villager at a world position. A test tool for now: villagers have
+    /// a name and stand there, so the encyclopedia and selection have real
+    /// non-player people to list before settlements exist to produce them.
+    SpawnNpc {
+        pos: Vec3,
+    },
 }
 
 /// Client -> Server: order the sender's hero to walk to a terrain point.
@@ -128,21 +134,30 @@ pub enum NameRejectionReason {
 
 /// Client -> Server: request the full player roster (levels + online status).
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct RequestPlayerRoster;
+pub struct RequestCharacterRoster;
 
-/// Server -> Client: player roster response.
+/// Server -> Client: every PERSON in the world.
+///
+/// Deliberately characters, not accounts. Interest management means a client
+/// only ever receives entities near it, so a client-side registry built purely
+/// from replication would show whoever is standing nearby and nothing else --
+/// which is not an encyclopedia. This is the full picture the server has, sent
+/// on request, and the client merges it with what it has actually seen.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct PlayerRoster {
-    pub entries: Vec<PlayerRosterEntry>,
+pub struct CharacterRoster {
+    pub entries: Vec<CharacterRosterEntry>,
 }
 
-/// Summary info for a player in the roster.
+/// One person in the world.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct PlayerRosterEntry {
+pub struct CharacterRosterEntry {
     pub name: String,
-    pub level: u32,
-    pub prestige: u32,
+    pub kind: crate::components::CharacterKind,
+    /// For a hero, whether its owner is connected right now. Villagers are never
+    /// "online" -- they are simply present, which is a different thing.
     pub online: bool,
+    /// True when this is the requesting player's own hero.
+    pub is_self: bool,
 }
 
 /// Reliable channel for important messages.

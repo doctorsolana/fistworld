@@ -36,6 +36,42 @@ pub struct Hero {
     pub owner: PeerId,
 }
 
+/// A person in the world, with a name.
+///
+/// Every character carries one -- a player's hero and a villager alike -- so the
+/// encyclopedia can list PEOPLE rather than accounts. This is the thing that
+/// separates "who is in this world" from "who has a login".
+///
+/// Replicated, and the server is the only writer. Names are generated from a
+/// stable seed (see [`crate::names`]) so a villager keeps their name across a
+/// restart; a player's hero takes the player's chosen profile name instead,
+/// because that is the identity they already picked.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct CharacterName(pub String);
+
+/// What kind of person this is.
+///
+/// The encyclopedia shows both, and needs to say which is which -- "a hero
+/// belonging to a player" and "a villager who lives here" are different things
+/// to the player even when they look identical on the ground.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CharacterKind {
+    /// The embodied character of a player account.
+    #[default]
+    Hero,
+    /// A world inhabitant. Not owned by anyone.
+    Villager,
+}
+
+impl CharacterKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            CharacterKind::Hero => "HERO",
+            CharacterKind::Villager => "VILLAGER",
+        }
+    }
+}
+
 /// Wardrobe slots a hero can carry. The shipped model uses three
 /// (bottom/top/hair); the spare capacity lets the art build add a slot
 /// without a protocol change, since this component is replicated.
@@ -71,6 +107,21 @@ impl Default for HeroOutfit {
 
 impl HeroOutfit {
     /// The look the art build declares as default.
+    /// A deterministic outfit for a generated person, so a crowd is not
+    /// identical twins. Indices are clamped on use, so a value beyond a slot's
+    /// item count simply lands on the last item rather than panicking.
+    pub fn varied(seed: u64) -> Self {
+        let mut rng = crate::rng::XorShift64::new(seed ^ 0x5DEE_CE66_D3A1_9B0F);
+        let mut slots = [0u8; HERO_SLOT_MAX];
+        for slot in slots.iter_mut() {
+            *slot = (rng.next_u64() % 6) as u8;
+        }
+        Self {
+            slots,
+            skin: (rng.next_u64() % 6) as u8,
+        }
+    }
+
     pub fn from_manifest(manifest: &crate::character::CharacterManifest) -> Self {
         let mut outfit = Self::default();
         for (index, slot) in manifest.slots.iter().take(HERO_SLOT_MAX).enumerate() {

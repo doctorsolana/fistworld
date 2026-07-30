@@ -173,10 +173,19 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         use crate::ui::encyclopedia::{
             Affiliation, EncyclopediaOpen, KnownPeople, PersonKind, PersonRecord, SelectedPerson,
         };
+        // "live" opens the window with NO sample cast, so it fills from the
+        // characters actually spawned in the world. That is the only way to
+        // verify the real path -- a seeded list proves the layout renders and
+        // nothing about whether characters reach it.
+        if mode == "live" {
+            commands.insert_resource(EncyclopediaOpen(true));
+            commands.insert_resource(crate::ui::hud::GodCapability(true));
+            return;
+        }
         let sample = |name: &str, level, prestige, online, known, is_self, affiliation| {
             PersonRecord {
                 name: name.to_string(),
-                kind: PersonKind::Player,
+                kind: PersonKind::Hero,
                 affiliation,
                 level,
                 prestige,
@@ -237,14 +246,19 @@ fn spawn_capture_heroes(
     if *spawned {
         return;
     }
-    let Ok(spec) = std::env::var("FISTFORCE_CAPTURE_HERO") else {
+    let hero_spec = std::env::var("FISTFORCE_CAPTURE_HERO").ok();
+    let villager_count = std::env::var("FISTFORCE_CAPTURE_VILLAGERS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok());
+    if hero_spec.is_none() && villager_count.is_none() {
         *spawned = true;
         return;
-    };
+    }
     let Some(terrain) = terrain else {
         return;
     };
     let base = config.shots.first().map(|s| s.focus).unwrap_or(Vec3::ZERO);
+    let spec = hero_spec.unwrap_or_default();
     // Indices are validated against the same manifest the renderer uses.
     let manifest = match shared::character::CharacterManifest::load() {
         Ok(manifest) => manifest,
@@ -255,7 +269,7 @@ fn spawn_capture_heroes(
         }
     };
     let default_outfit = shared::components::HeroOutfit::from_manifest(&manifest);
-    for (i, outfit_spec) in spec.split(';').enumerate() {
+    for (i, outfit_spec) in spec.split(';').filter(|s| !s.is_empty()).enumerate() {
         // Positional parse: a bad token falls back to the default for THAT
         // field instead of shifting later fields left.
         let parts: Vec<Option<u8>> = outfit_spec
@@ -278,11 +292,32 @@ fn spawn_capture_heroes(
             shared::components::Hero {
                 owner: lightyear::prelude::PeerId::Netcode(1000 + i as u64),
             },
+            shared::components::CharacterName(format!("Capture Hero {}", i + 1)),
+            shared::components::CharacterKind::Hero,
             outfit,
             shared::components::PlayerPosition(pos),
             shared::components::PlayerRotation(std::f32::consts::PI),
         ));
     }
+    // FISTFORCE_CAPTURE_VILLAGERS=<n> drops n named villagers in a row behind the
+    // heroes, so the encyclopedia and the character visuals can be verified
+    // without a server. Names come from the same generator the server uses.
+    if let Some(count) = villager_count {
+        for i in 0..count {
+            let x = base.x + i as f32 * 1.5 - (count as f32 * 0.75);
+            let z = base.z + 3.0;
+            let pos = Vec3::new(x, terrain.get_height(x, z), z);
+            let seed = 1_000 + i as u64;
+            commands.spawn((
+                shared::components::CharacterName(shared::names::person_name(seed)),
+                shared::components::CharacterKind::Villager,
+                shared::components::HeroOutfit::varied(seed),
+                shared::components::PlayerPosition(pos),
+                shared::components::PlayerRotation(std::f32::consts::PI),
+            ));
+        }
+    }
+
     // FISTFORCE_CAPTURE_SELECT=1 selects the FIRST fake hero, so the ground ring
     // and the selected-unit plate can be verified without a server. Deferred by
     // a command so it runs after the spawns above are applied.

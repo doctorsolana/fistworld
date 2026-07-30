@@ -13,7 +13,7 @@ use bevy::gltf::{Gltf, GltfMaterialName};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use shared::character::CharacterManifest;
-use shared::components::{Hero, HeroOutfit, PlayerPosition, PlayerRotation};
+use shared::components::{CharacterKind, HeroOutfit, PlayerPosition, PlayerRotation};
 use shared::player::HERO_MOVE_SPEED;
 
 use crate::states::GameState;
@@ -174,7 +174,10 @@ fn attach_hero_visuals(
     manifest: Res<HeroManifest>,
     heroes: Query<
         (Entity, &PlayerPosition, Option<&PlayerRotation>),
-        (With<Hero>, Without<HeroVisual>),
+        // Gated on CharacterKind, not Hero: villagers are people too and use
+        // the same body. `Hero` means "owned by a player", which is a question
+        // about ownership, not about having a body to draw.
+        (With<CharacterKind>, Without<HeroVisual>),
     >,
 ) {
     for (entity, pos, rot) in heroes.iter() {
@@ -359,7 +362,7 @@ const CLIP_FACE_IDLE: &str = "face_idle";
 fn matte_character_materials(
     mut assets: ResMut<HeroAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    rigs: Query<Entity, Or<(With<Hero>, With<HeroPreviewRig>)>>,
+    rigs: Query<Entity, Or<(With<CharacterKind>, With<HeroPreviewRig>)>>,
     children_q: Query<&Children>,
     primitives: Query<&MeshMaterial3d<StandardMaterial>>,
 ) {
@@ -407,8 +410,8 @@ fn setup_hero_animation(
     parents: Query<&ChildOf>,
     names: Query<&Name>,
     children_q: Query<&Children>,
-    rigs: Query<(), Or<(With<Hero>, With<HeroPreviewRig>)>>,
-    rig_roots: Query<Entity, (Or<(With<Hero>, With<HeroPreviewRig>)>, Without<HeroAnim>)>,
+    rigs: Query<(), Or<(With<CharacterKind>, With<HeroPreviewRig>)>>,
+    rig_roots: Query<Entity, (Or<(With<CharacterKind>, With<HeroPreviewRig>)>, Without<HeroAnim>)>,
 ) {
     if players.is_empty() {
         return;

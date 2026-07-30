@@ -63,7 +63,7 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         (
             net::connection::handle_connections,
             player::spawn::handle_player_name_submission,
-            player::roster::handle_player_roster_requests,
+            player::roster::handle_character_roster_requests,
             net::input::handle_client_input_messages,
             player::commander::sync_commander_views,
             player::hero::handle_hero_move_orders,
