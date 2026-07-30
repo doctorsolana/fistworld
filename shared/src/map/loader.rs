@@ -294,7 +294,7 @@ fn compute_loaded_map_hash(
     hasher.finish()
 }
 
-fn asset_roots() -> Vec<PathBuf> {
+pub fn asset_roots() -> Vec<PathBuf> {
     let mut out = Vec::with_capacity(ASSET_ROOT_CANDIDATES.len() + 4);
     let mut push_unique = |path: PathBuf| {
         if !out.iter().any(|existing| existing == &path) {

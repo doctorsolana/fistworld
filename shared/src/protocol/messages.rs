@@ -184,9 +184,8 @@ mod tests {
         let command = DevCommand::SpawnHero {
             pos: Vec3::new(12.0, 3.5, -900.25),
             outfit: crate::components::HeroOutfit {
-                hair: 4,
-                shorts: 1,
-                shirt: false,
+                slots: [1, 0, 4, 0, 0, 0],
+                skin: 3,
             },
         };
 

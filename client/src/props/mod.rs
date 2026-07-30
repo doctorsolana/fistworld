@@ -4,7 +4,7 @@
 
 mod assets;
 mod debug;
-mod foliage;
+pub(crate) mod foliage;
 mod kinds;
 mod lod;
 mod plugin;

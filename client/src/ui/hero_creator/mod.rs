@@ -9,7 +9,7 @@
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
-use shared::components::{HeroOutfit, HERO_HAIR_LABELS, HERO_SHORTS_LABELS};
+use shared::components::HeroOutfit;
 
 use crate::hero::control::{HeroSpawnArm, SelectedOutfit};
 use crate::hero::{spawn_character_scene_child, HeroPreviewRig, HeroVisual};
@@ -99,22 +99,23 @@ struct CreatorBackdrop;
 #[derive(Component)]
 struct CreatorPanel;
 
+/// Which control a row drives. Wardrobe rows are indices into the manifest's
+/// slot list, so adding a slot to the asset adds a row with no code change.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum OutfitSlot {
-    Hair,
-    Shirt,
-    Shorts,
+enum CreatorRow {
+    Slot(usize),
+    Skin,
 }
 
 /// `<` / `>` selector; direction is -1 or +1.
 #[derive(Component, Clone, Copy)]
 struct ArrowButton {
-    slot: OutfitSlot,
+    row: CreatorRow,
     dir: i8,
 }
 
 #[derive(Component, Clone, Copy)]
-struct SlotValueText(OutfitSlot);
+struct SlotValueText(CreatorRow);
 
 #[derive(Component)]
 struct PlaceButton;
@@ -131,6 +132,7 @@ fn setup_preview_rig(
     mut commands: Commands,
     mut preview: ResMut<PreviewEntities>,
     asset_server: Res<AssetServer>,
+    manifest: Res<crate::hero::HeroManifest>,
     mut hero_assets: ResMut<crate::hero::HeroAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -191,7 +193,12 @@ fn setup_preview_rig(
                     InheritedVisibility::default(),
                 ))
                 .with_children(|root| {
-                    spawn_character_scene_child(root, &asset_server, &mut hero_assets);
+                    spawn_character_scene_child(
+                        root,
+                        &asset_server,
+                        &mut hero_assets,
+                        &manifest,
+                    );
                 })
                 .id();
             rig = Some(rig_entity);
@@ -247,7 +254,11 @@ fn follow_camera_with_diorama(
     }
 }
 
-fn spawn_creator(mut commands: Commands, roots: Query<(), With<CreatorRoot>>) {
+fn spawn_creator(
+    mut commands: Commands,
+    manifest: Res<crate::hero::HeroManifest>,
+    roots: Query<(), With<CreatorRoot>>,
+) {
     if !roots.is_empty() {
         return;
     }
@@ -337,9 +348,15 @@ fn spawn_creator(mut commands: Commands, roots: Query<(), With<CreatorRoot>>) {
                         BorderColor::from(BUTTON_BORDER),
                     ))
                     .with_children(|controls| {
-                        spawn_slot_row(controls, "HAIR", OutfitSlot::Hair);
-                        spawn_slot_row(controls, "SHIRT", OutfitSlot::Shirt);
-                        spawn_slot_row(controls, "SHORTS", OutfitSlot::Shorts);
+                        // Wardrobe rows straight from the asset manifest.
+                        for (index, slot) in manifest.slots.iter().enumerate() {
+                            spawn_slot_row(
+                                controls,
+                                &slot.name.to_uppercase(),
+                                CreatorRow::Slot(index),
+                            );
+                        }
+                        spawn_slot_row(controls, "SKIN", CreatorRow::Skin);
 
                         controls
                             .spawn(Node {
@@ -369,7 +386,7 @@ fn spawn_creator(mut commands: Commands, roots: Query<(), With<CreatorRoot>>) {
         });
 }
 
-fn spawn_slot_row(panel: &mut ChildSpawnerCommands<'_>, label: &str, slot: OutfitSlot) {
+fn spawn_slot_row(panel: &mut ChildSpawnerCommands<'_>, label: &str, row: CreatorRow) {
     panel
         .spawn(Node {
             flex_direction: FlexDirection::Row,
@@ -379,9 +396,9 @@ fn spawn_slot_row(panel: &mut ChildSpawnerCommands<'_>, label: &str, slot: Outfi
             margin: UiRect::top(Val::Px(8.0)),
             ..default()
         })
-        .with_children(|row| {
-            spawn_arrow(row, "<", ArrowButton { slot, dir: -1 });
-            row.spawn(Node {
+        .with_children(|line| {
+            spawn_arrow(line, "<", ArrowButton { row, dir: -1 });
+            line.spawn(Node {
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 width: Val::Px(160.0),
@@ -397,7 +414,7 @@ fn spawn_slot_row(panel: &mut ChildSpawnerCommands<'_>, label: &str, slot: Outfi
                     TextColor(TEXT_MUTED),
                 ));
                 center.spawn((
-                    SlotValueText(slot),
+                    SlotValueText(row),
                     Text::new("-"),
                     TextFont {
                         font_size: FontSize::Px(15.0),
@@ -406,12 +423,12 @@ fn spawn_slot_row(panel: &mut ChildSpawnerCommands<'_>, label: &str, slot: Outfi
                     TextColor(TEXT_COLOR),
                 ));
             });
-            spawn_arrow(row, ">", ArrowButton { slot, dir: 1 });
+            spawn_arrow(line, ">", ArrowButton { row, dir: 1 });
         });
 }
 
-fn spawn_arrow(row: &mut ChildSpawnerCommands<'_>, glyph: &str, marker: ArrowButton) {
-    row.spawn((
+fn spawn_arrow(line: &mut ChildSpawnerCommands<'_>, glyph: &str, marker: ArrowButton) {
+    line.spawn((
         Button,
         marker,
         Node {
@@ -491,29 +508,34 @@ fn sync_creator_open_state(open: Res<HeroCreatorOpen>, mut input_state: ResMut<I
 
 /// Cycle a slot and re-dress both the preview rig and the pending selection.
 fn handle_arrow_buttons(
+    mouse: Res<ButtonInput<MouseButton>>,
+    manifest: Res<crate::hero::HeroManifest>,
     mut selected: ResMut<SelectedOutfit>,
     preview: Res<PreviewEntities>,
     buttons: Query<(&Interaction, &ArrowButton), Changed<Interaction>>,
     mut rig_outfits: Query<&mut HeroOutfit, With<HeroPreviewRig>>,
 ) {
+    // `Interaction::Pressed` alone is not proof of a click: it fires for the
+    // button under the cursor when the modal opens (verified — three phantom
+    // presses cycled a slot in a capture with no input at all). Requiring the
+    // real button-down edge makes a stray Pressed harmless.
+    if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
     let mut changed = false;
     for (interaction, arrow) in buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;
         }
-        let outfit = &mut selected.0;
-        match arrow.slot {
-            OutfitSlot::Hair => {
-                let n = HERO_HAIR_LABELS.len() as i16;
-                outfit.hair = ((outfit.hair as i16 + arrow.dir as i16).rem_euclid(n)) as u8;
+        let step = arrow.dir as i16;
+        match arrow.row {
+            CreatorRow::Slot(index) => {
+                let Some(slot) = manifest.slots.get(index) else {
+                    continue;
+                };
+                selected.0.cycle_slot(index, step, slot.items.len());
             }
-            OutfitSlot::Shorts => {
-                let n = HERO_SHORTS_LABELS.len() as i16;
-                outfit.shorts = ((outfit.shorts as i16 + arrow.dir as i16).rem_euclid(n)) as u8;
-            }
-            OutfitSlot::Shirt => {
-                outfit.shirt = !outfit.shirt;
-            }
+            CreatorRow::Skin => selected.0.cycle_skin(step, manifest.skin.tones.len()),
         }
         changed = true;
     }
@@ -527,11 +549,17 @@ fn handle_arrow_buttons(
 }
 
 fn handle_confirm_buttons(
+    mouse: Res<ButtonInput<MouseButton>>,
     mut open: ResMut<HeroCreatorOpen>,
     mut arm: ResMut<HeroSpawnArm>,
     place: Query<&Interaction, (With<PlaceButton>, Changed<Interaction>)>,
     cancel: Query<&Interaction, (With<CancelButton>, Changed<Interaction>)>,
 ) {
+    // Same phantom-press guard as the arrows: without it the creator could
+    // PLACE or CANCEL itself the instant it opened under the cursor.
+    if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
     for interaction in place.iter() {
         if *interaction == Interaction::Pressed {
             open.0 = false;
@@ -547,34 +575,56 @@ fn handle_confirm_buttons(
 
 fn close_on_escape_or_backdrop(
     keyboard: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
     backdrop: Query<&Interaction, (With<CreatorBackdrop>, Changed<Interaction>)>,
     mut open: ResMut<HeroCreatorOpen>,
 ) {
-    if keyboard.just_pressed(KeyCode::Escape) || handle_backdrop_pressed(&backdrop) {
+    // The backdrop covers the whole screen, so a phantom Pressed on it would
+    // close the modal the frame it opened.
+    let clicked_out = mouse.just_pressed(MouseButton::Left) && handle_backdrop_pressed(&backdrop);
+    if keyboard.just_pressed(KeyCode::Escape) || clicked_out {
         open.0 = false;
     }
 }
 
+/// Turn an asset node/tone name into a readable value label:
+/// "Bottom_Shorts_Long" -> "SHORTS LONG", "Hair_Tousled" -> "TOUSLED".
+fn value_label(raw: &str, slot_prefix: Option<&str>) -> String {
+    let trimmed = slot_prefix
+        .and_then(|prefix| raw.strip_prefix(prefix))
+        .unwrap_or(raw);
+    trimmed.replace('_', " ").trim().to_uppercase()
+}
+
 fn sync_slot_labels(
+    manifest: Res<crate::hero::HeroManifest>,
     selected: Res<SelectedOutfit>,
     mut labels: Query<(&SlotValueText, &mut Text)>,
 ) {
-    for (SlotValueText(slot), mut text) in labels.iter_mut() {
-        let value = match slot {
-            OutfitSlot::Hair => HERO_HAIR_LABELS[selected.0.hair as usize % HERO_HAIR_LABELS.len()],
-            OutfitSlot::Shorts => {
-                HERO_SHORTS_LABELS[selected.0.shorts as usize % HERO_SHORTS_LABELS.len()]
-            }
-            OutfitSlot::Shirt => {
-                if selected.0.shirt {
-                    "ON"
-                } else {
-                    "OFF"
-                }
-            }
+    for (SlotValueText(row), mut text) in labels.iter_mut() {
+        let value = match row {
+            CreatorRow::Slot(index) => manifest
+                .slots
+                .get(*index)
+                .and_then(|slot| {
+                    // Items are named "<Slot>_<Item>"; drop the slot prefix so
+                    // the row reads "SHORTS", not "BOTTOM SHORTS".
+                    let prefix = slot
+                        .items
+                        .first()
+                        .and_then(|first| first.split('_').next())
+                        .map(|head| format!("{head}_"));
+                    slot.item(selected.0.slot(*index))
+                        .map(|item| value_label(item, prefix.as_deref()))
+                })
+                .unwrap_or_else(|| "-".to_string()),
+            CreatorRow::Skin => manifest
+                .skin_tone(selected.0.skin)
+                .map(|tone| value_label(&tone.name, None))
+                .unwrap_or_else(|| "-".to_string()),
         };
         if text.0 != value {
-            text.0 = value.to_string();
+            text.0 = value;
         }
     }
 }

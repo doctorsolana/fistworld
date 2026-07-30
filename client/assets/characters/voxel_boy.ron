@@ -1,0 +1,24 @@
+(
+  version: 1,
+  scene: "characters/voxel_boy.glb#Scene0",
+  body: "Character_Base",
+  slots: [
+    (name: "bottom", default: "Bottom_Shorts", items: ["Bottom_Shorts", "Bottom_Shorts_Long"]),
+    (name: "top", default: "Top_Tee", items: ["Top_Tee", "Top_LongSleeve"]),
+    (name: "hair", default: "Hair_Tousled", items: ["Hair_Tousled", "Hair_Crop", "Hair_Bowl", "Hair_Spiky", "Hair_Long", "Hair_Afro"]),
+  ],
+  skin: (
+    material: "Skin_Tan",   // the primitive in the glb to re-point
+    default: "Tan",
+    tones: [
+      (name: "Porcelain", rgb: (0.8500, 0.5450, 0.3950)),
+      (name: "Fair", rgb: (0.8600, 0.4700, 0.2900)),
+      (name: "Tan", rgb: (0.8070, 0.3372, 0.1170)),
+      (name: "Olive", rgb: (0.4300, 0.2050, 0.0780)),
+      (name: "Brown", rgb: (0.1800, 0.0780, 0.0320)),
+      (name: "Deep", rgb: (0.0620, 0.0260, 0.0130)),
+    ],
+  ),
+  body_clips: ["idle", "sit_down", "sit_idle", "walk"],
+  face_clips: ["face_angry", "face_happy", "face_idle", "face_sad", "face_surprised"],
+)

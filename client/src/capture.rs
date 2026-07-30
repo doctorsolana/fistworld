@@ -157,10 +157,15 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
     info!("capture: entering world offline (no server)");
 }
 
-/// FISTFORCE_CAPTURE_HERO="hair,shorts,shirt[;hair,shorts,shirt...]" spawns
-/// stand-in heroes (offline fakes of the replicated entity) in a line at the
-/// first shot's focus, terrain-snapped, so captures can verify the character
-/// model, wardrobe toggles and pose without a server.
+/// FISTFORCE_CAPTURE_HERO spawns stand-in heroes (offline fakes of the
+/// replicated entity) in a line at the first shot's focus, terrain-snapped, so
+/// captures can verify the character model, wardrobe and pose without a
+/// server.
+///
+/// Spec: `slot0,slot1,...,skin` per hero, semicolon-separated, all indices
+/// into the manifest's slot items / skin tones (order as in voxel_boy.ron:
+/// bottom, top, hair). Missing or unparsable fields use the manifest default.
+/// `FISTFORCE_CAPTURE_HERO=default` spawns one hero in the declared default.
 fn spawn_capture_heroes(
     mut commands: Commands,
     config: Res<CaptureConfig>,
@@ -178,6 +183,16 @@ fn spawn_capture_heroes(
         return;
     };
     let base = config.shots.first().map(|s| s.focus).unwrap_or(Vec3::ZERO);
+    // Indices are validated against the same manifest the renderer uses.
+    let manifest = match shared::character::CharacterManifest::load() {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            error!("capture: character manifest unavailable: {e}");
+            *spawned = true;
+            return;
+        }
+    };
+    let default_outfit = shared::components::HeroOutfit::from_manifest(&manifest);
     for (i, outfit_spec) in spec.split(';').enumerate() {
         // Positional parse: a bad token falls back to the default for THAT
         // field instead of shifting later fields left.
@@ -185,12 +200,15 @@ fn spawn_capture_heroes(
             .split(',')
             .map(|p| p.trim().parse().ok())
             .collect();
-        let field = |i: usize, default: u8| parts.get(i).copied().flatten().unwrap_or(default);
-        let outfit = shared::components::HeroOutfit {
-            hair: field(0, 3),
-            shorts: field(1, 2),
-            shirt: field(2, 1) != 0,
-        };
+        let mut outfit = default_outfit;
+        for (slot_index, _) in manifest.slots.iter().enumerate() {
+            if let Some(Some(value)) = parts.get(slot_index) {
+                outfit.slots[slot_index] = *value;
+            }
+        }
+        if let Some(Some(skin)) = parts.get(manifest.slots.len()) {
+            outfit.skin = *skin;
+        }
         let x = base.x + i as f32 * 1.4;
         let z = base.z;
         let pos = Vec3::new(x, terrain.get_height(x, z), z);

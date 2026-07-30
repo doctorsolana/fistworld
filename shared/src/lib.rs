@@ -1,4 +1,5 @@
 pub mod building;
+pub mod character;
 pub mod city;
 pub mod colliders;
 pub mod components;
