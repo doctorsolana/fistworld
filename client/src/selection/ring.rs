@@ -34,8 +34,16 @@ pub struct RingAssets {
     shoulder_mesh: Handle<Mesh>,
     core_mesh: Handle<Mesh>,
     shoulder: Handle<StandardMaterial>,
-    core: Handle<StandardMaterial>,
+    /// Warm core: this unit takes your orders.
+    core_command: Handle<StandardMaterial>,
+    /// Cool core: selected for inspection only.
+    core_inspect: Handle<StandardMaterial>,
 }
+
+/// Which core a pooled ring is currently wearing, so the material is only
+/// swapped when it actually changes.
+#[derive(Component, PartialEq, Eq, Clone, Copy)]
+pub struct RingTone(pub bool);
 
 /// The ring is TWO concentric annuli: a dark shoulder under a light core.
 ///
@@ -130,8 +138,10 @@ pub(super) fn sync_selection_ring(
     selection: Res<Selection>,
     terrain: Option<Res<WorldTerrain>>,
     camera: Query<&crate::camera_rts::CommanderCamera>,
-    positions: Query<&PlayerPosition>,
-    mut rings: Query<(&mut Transform, &mut Visibility), With<SelectionRing>>,
+    account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
+    positions: Query<(&PlayerPosition, Option<&shared::components::CommandedBy>)>,
+    mut rings: Query<(Entity, &mut Transform, &mut Visibility, &Children), With<SelectionRing>>,
+    mut cores: Query<(&mut MeshMaterial3d<StandardMaterial>, &mut RingTone)>,
 ) {
     let Some(assets) = assets else {
         // Quiet on purpose. The ring MARKS the selection; the HUD plate is what
@@ -141,7 +151,11 @@ pub(super) fn sync_selection_ring(
             shoulder_mesh: meshes.add(Annulus::new(SHOULDER_INNER, SHOULDER_OUTER)),
             core_mesh: meshes.add(Annulus::new(CORE_INNER, CORE_OUTER)),
             shoulder: materials.add(ring_material(Color::srgba(0.106, 0.094, 0.082, 0.34))),
-            core: materials.add(ring_material(Color::srgba(0.973, 0.961, 0.929, 0.42))),
+            // Commandable rings carry a warm cast -- the same ember family the
+            // HUD reserves for selection -- so "I can move this" is legible
+            // without reading the plate. Inspect-only rings stay neutral.
+            core_command: materials.add(ring_material(Color::srgba(0.984, 0.898, 0.792, 0.46))),
+            core_inspect: materials.add(ring_material(Color::srgba(0.945, 0.949, 0.953, 0.30))),
         });
         return;
     };
@@ -153,16 +167,19 @@ pub(super) fn sync_selection_ring(
         .unwrap_or(RING_SCALE_FROM);
     let scale_factor = (zoom / RING_SCALE_FROM).clamp(1.0, RING_SCALE_MAX);
 
-    // Where every ring belongs this frame. Empty past the hide distance, so the
-    // whole pool simply hides.
-    let wanted: Vec<Vec3> = if zoom > RING_HIDE_ZOOM {
+    let my_account = account.as_ref().map(|input| input.name.trim().to_lowercase());
+
+    // Where every ring belongs this frame, and whether that unit takes orders.
+    // Empty past the hide distance, so the whole pool simply hides.
+    let wanted: Vec<(Vec3, bool)> = if zoom > RING_HIDE_ZOOM {
         Vec::new()
     } else {
         selection
             .entities
             .iter()
             .filter_map(|entity| positions.get(*entity).ok())
-            .map(|position| {
+            .map(|(position, commanded)| {
+                let commandable = super::can_command(commanded, my_account.as_deref());
                 let mut point = position.0;
                 // Sit on the GROUND, not on the entity's replicated Y: feet are
                 // terrain-snapped server-side but the client can be a frame
@@ -172,7 +189,7 @@ pub(super) fn sync_selection_ring(
                     point.y = ground_under_ring(terrain, point, SHOULDER_OUTER * scale_factor);
                 }
                 point.y += RING_LIFT;
-                point
+                (point, commandable)
             })
             .collect()
     };
@@ -197,7 +214,8 @@ pub(super) fn sync_selection_ring(
                 ),
                 (
                     Mesh3d(assets.core_mesh.clone()),
-                    MeshMaterial3d(assets.core.clone()),
+                    MeshMaterial3d(assets.core_command.clone()),
+                    RingTone(true),
                     // Lifted a hair along the ring's own local +Z (which points
                     // up after the root's rotation) so the core always resolves
                     // in front of its own shoulder.
@@ -210,11 +228,27 @@ pub(super) fn sync_selection_ring(
     }
 
     let scale = Vec3::splat(scale_factor);
-    for (index, (mut transform, mut visibility)) in rings.iter_mut().enumerate() {
+    for (index, (_entity, mut transform, mut visibility, children)) in
+        rings.iter_mut().enumerate()
+    {
         match wanted.get(index) {
-            Some(point) => {
+            Some((point, commandable)) => {
                 if transform.translation != *point {
                     transform.translation = *point;
+                }
+                // Swap the core material only when the tone actually changes:
+                // writing a material handle every frame re-uploads it.
+                for child in children.iter() {
+                    if let Ok((mut material, mut tone)) = cores.get_mut(child) {
+                        if tone.0 != *commandable {
+                            tone.0 = *commandable;
+                            material.0 = if *commandable {
+                                assets.core_command.clone()
+                            } else {
+                                assets.core_inspect.clone()
+                            };
+                        }
+                    }
                 }
                 if transform.scale != scale {
                     transform.scale = scale;

@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::components::{
-    ActiveMapState, CharacterAffiliation, CharacterKind, CharacterName, CloudSeed, Health, Hero, HeroOutfit, Player,
+    ActiveMapState, CharacterAffiliation, CharacterKind, CharacterName, CommandedBy, CloudSeed, Health, Hero, HeroOutfit, Player,
     PlayerPosition, PlayerProgression, PlayerRotation, TimeWarp, WorldTime,
 };
 use crate::terrain::TerrainDeltaChunk;
@@ -30,6 +30,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<CharacterName>().replicate();
         app.component::<CharacterKind>().replicate();
         app.component::<CharacterAffiliation>().replicate();
+        app.component::<CommandedBy>().replicate();
 
         // === HEALTH ===
         app.component::<Health>().replicate();
@@ -53,9 +54,14 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<RequestCharacterRoster>()
             .add_direction(NetworkDirection::ClientToServer);
+        // `.add_map_entities()` must live HERE, in the shared plugin: it swaps
+        // both the serialize and deserialize functions for the type, so if only
+        // one peer registered it the two would disagree on the wire format.
         app.register_message::<DevCommand>()
+            .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<HeroMoveTo>()
+        app.register_message::<UnitMoveOrder>()
+            .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
 
         // Server -> Client

@@ -10,7 +10,7 @@ use lightyear::prelude::{Connected, MessageSender};
 
 use shared::components::{Hero, HeroOutfit};
 use shared::player::peer_id_to_u64;
-use shared::protocol::{DevCommand, HeroMoveTo, ReliableChannel};
+use shared::protocol::{DevCommand, ReliableChannel, UnitMoveOrder};
 
 use crate::camera_rts::{CursorTerrainHit, LocalPeerId};
 use crate::input::InputState;
@@ -40,6 +40,17 @@ pub fn placement_armed(hero: &HeroSpawnArm, npc: &NpcSpawnArm) -> bool {
 /// True when a replicated hero owned by the local peer exists.
 pub fn local_hero_exists(heroes: &Query<&Hero>, local: &LocalPeerId) -> bool {
     heroes.iter().any(|h| peer_id_to_u64(h.owner) == local.0)
+}
+
+/// The local player's hero entity, if it has replicated in.
+pub fn local_hero_entity(
+    heroes: &Query<(Entity, &Hero)>,
+    local: &LocalPeerId,
+) -> Option<Entity> {
+    heroes
+        .iter()
+        .find(|(_, h)| peer_id_to_u64(h.owner) == local.0)
+        .map(|(entity, _)| entity)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -125,14 +136,14 @@ pub(super) fn handle_world_clicks(
 pub(super) fn auto_spawn_hero(
     capability: Res<GodCapability>,
     local: Option<Res<LocalPeerId>>,
-    heroes: Query<&Hero>,
+    heroes: Query<(Entity, &Hero)>,
     cameras: Query<&crate::camera_rts::CommanderCamera>,
     mut dev_sender: Query<
         &mut MessageSender<DevCommand>,
         (With<crate::GameClient>, With<Connected>),
     >,
     mut move_sender: Query<
-        &mut MessageSender<HeroMoveTo>,
+        &mut MessageSender<UnitMoveOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
     mut state: Local<u8>,
@@ -161,10 +172,12 @@ pub(super) fn auto_spawn_hero(
     }
 
     // State 1: wait for our hero to replicate back, then order a walk.
-    if local_hero_exists(&heroes, &local) {
+    if let Some(hero_entity) = local_hero_entity(&heroes, &local) {
         if let Ok(mut sender) = move_sender.single_mut() {
             let target = camera.focus + Vec3::new(12.0, 0.0, 6.0);
-            sender.send::<ReliableChannel>(HeroMoveTo { target });
+            sender.send::<ReliableChannel>(UnitMoveOrder {
+                units: vec![(hero_entity, target)],
+            });
             info!("AUTOSPAWN: move order sent to {target:?}");
 
             // FISTWORLD_AUTOSPAWN_NPC=<n> also drops n villagers, so the god

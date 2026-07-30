@@ -11,19 +11,25 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, NetworkTarget, PeerId, RemoteId, Replicate};
 
 use shared::components::{
-    CharacterAffiliation, CharacterKind, CharacterName, Hero, HeroOutfit, PlayerPosition,
-    PlayerRotation,
+    CharacterAffiliation, CharacterKind, CharacterName, CommandedBy, Hero, HeroOutfit,
+    PlayerPosition, PlayerRotation,
 };
 use shared::player_profile::HeroSave;
 use shared::player::{HERO_ARRIVE_EPSILON, HERO_MOVE_SPEED};
-use shared::protocol::HeroMoveTo;
+use shared::protocol::{UnitMoveOrder, MAX_UNITS_PER_ORDER};
 use shared::region::RegionCoord;
 use shared::terrain::WorldTerrain;
 
-/// Latest move order per peer. Later orders replace earlier ones (click-to-move
-/// semantics); an entry is removed on arrival.
-#[derive(Resource, Default)]
-pub struct HeroMoveTargets(pub HashMap<PeerId, Vec3>);
+/// Where a unit is walking, if anywhere.
+///
+/// A COMPONENT on the unit, not a map keyed by peer. The old
+/// `HashMap<PeerId, Vec3>` held one target per PLAYER, which caused four
+/// separate bugs at once: an N-unit order collapsed onto the last message, the
+/// first unit to arrive cancelled everyone else's order, a disconnect cancelled
+/// every order the player had given, and a villager could not be addressed at
+/// all. Putting the target on the unit dissolves all four.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct MoveTarget(pub Vec3);
 
 /// Hero entity per player, keyed by lowercase profile NAME rather than peer.
 ///
@@ -66,6 +72,10 @@ pub fn spawn_hero(
             // a stranger.
             CharacterName(display_name.to_string()),
             CharacterKind::Hero,
+            // Your hero obeys you. Keyed by ACCOUNT, so a reconnect needs no
+            // repair -- unlike `Hero::owner`, which holds a per-session peer id
+            // and has to be re-pointed by hand every time you come back.
+            CommandedBy(name_lower.to_string()),
             // Unaffiliated is the normal, permanent state -- not a gap.
             CharacterAffiliation::default(),
             outfit,
@@ -122,26 +132,53 @@ pub fn hero_save(position: &PlayerPosition, rotation: &PlayerRotation, outfit: &
     HeroSave::from_parts(position.0, rotation.0, outfit)
 }
 
-/// Drain [`HeroMoveTo`] intents into [`HeroMoveTargets`].
+/// Turn [`UnitMoveOrder`] intents into [`MoveTarget`] components.
 ///
-/// Unlike god commands this needs no dev gate — moving your own hero is a
-/// normal gameplay verb. Orders from peers WITHOUT a hero are dropped here:
-/// retaining them would pre-seed a walk order that fires the instant a hero
-/// spawns, and (with per-session random peer ids) grow the map forever.
-pub fn handle_hero_move_orders(
-    mut client_links: Query<(&RemoteId, &mut MessageReceiver<HeroMoveTo>), With<ClientOf>>,
-    heroes: Query<&Hero>,
-    mut targets: ResMut<HeroMoveTargets>,
+/// THE AUTHORITY CHECK LIVES HERE, and it is one clause: the unit's
+/// [`CommandedBy`] must equal the sender's account. Entity mapping guarantees an
+/// id is meaningful in this world; it says nothing about whose it is, so a
+/// modified client can and will name units it does not command.
+///
+/// Every rejection is silent and identical, whether the unit does not exist,
+/// has despawned, or belongs to someone else -- distinguishable rejections would
+/// let a client probe for entities outside its interest.
+///
+/// No dev gate: commanding your own retinue is a normal gameplay verb.
+pub fn handle_unit_move_orders(
+    mut commands: Commands,
+    profiles: Res<crate::persistence::profiles::PlayerProfiles>,
+    mut client_links: Query<(&RemoteId, &mut MessageReceiver<UnitMoveOrder>), With<ClientOf>>,
+    units: Query<&CommandedBy, With<CharacterKind>>,
 ) {
     for (remote_id, mut receiver) in client_links.iter_mut() {
+        // Resolved ONCE per connection. Account name, not peer id: that is the
+        // identity a retinue is keyed by, so it survives reconnects.
+        let account = profiles.peer_to_name.get(&remote_id.0).cloned();
         for order in receiver.receive() {
-            if !order.target.is_finite() {
+            // Drain the receiver even for an unnamed peer, or a client that
+            // orders before submitting a name backs the queue up forever.
+            let Some(account) = account.as_deref() else {
                 continue;
+            };
+            // Cap SERVER-side: a client-side cap is advisory, and an unbounded
+            // Vec in a message is an unbounded loop here.
+            for (unit, point) in order.units.iter().take(MAX_UNITS_PER_ORDER) {
+                if !point.is_finite() {
+                    continue;
+                }
+                // A client that could not map an id sends PLACEHOLDER, which is
+                // a valid-looking Entity that must never reach `commands.entity`.
+                if *unit == Entity::PLACEHOLDER {
+                    continue;
+                }
+                let Ok(commanded) = units.get(*unit) else {
+                    continue;
+                };
+                if commanded.0 != account {
+                    continue;
+                }
+                commands.entity(*unit).insert(MoveTarget(*point));
             }
-            if !heroes.iter().any(|h| h.owner == remote_id.0) {
-                continue;
-            }
-            targets.0.insert(remote_id.0, order.target);
         }
     }
 }
@@ -150,16 +187,24 @@ pub fn handle_hero_move_orders(
 ///
 /// Every component write is `!=`-guarded: change detection drives replication,
 /// and an idle hero must generate zero network traffic.
-pub fn step_heroes(
+pub fn step_units(
+    mut commands: Commands,
     terrain: Option<Res<WorldTerrain>>,
     warp: Query<&shared::components::TimeWarp>,
-    mut targets: ResMut<HeroMoveTargets>,
-    mut heroes: Query<(
-        &Hero,
-        &mut PlayerPosition,
-        &mut PlayerRotation,
-        &mut RegionCoord,
-    )>,
+    // `With<CharacterKind>` is load-bearing, not decoration: the commander
+    // camera anchor carries the identical PlayerPosition + PlayerRotation +
+    // RegionCoord shape, so without it this system would start walking the
+    // player's CAMERA around the map.
+    mut units: Query<
+        (
+            Entity,
+            &MoveTarget,
+            &mut PlayerPosition,
+            &mut PlayerRotation,
+            &mut RegionCoord,
+        ),
+        With<CharacterKind>,
+    >,
 ) {
     let Some(terrain) = terrain else {
         return;
@@ -171,10 +216,8 @@ pub fn step_heroes(
     let factor = warp.iter().next().map(|w| w.0).unwrap_or(1.0);
     let dt = factor / shared::protocol::FIXED_TIMESTEP_HZ as f32;
 
-    for (hero, mut pos, mut rot, mut region) in heroes.iter_mut() {
-        let Some(&target) = targets.0.get(&hero.owner) else {
-            continue;
-        };
+    for (entity, target, mut pos, mut rot, mut region) in units.iter_mut() {
+        let target = target.0;
 
         // Plan in the ground plane; height is derived from the terrain, so a
         // click on a hillside never makes the hero chase an unreachable Y.
@@ -184,7 +227,10 @@ pub fn step_heroes(
         let distance = to_goal.length();
 
         if distance <= HERO_ARRIVE_EPSILON {
-            targets.0.remove(&hero.owner);
+            // Arrival is per UNIT now. Under the old peer-keyed map the first
+            // unit to arrive removed the shared entry and silently cancelled
+            // every other unit's order.
+            commands.entity(entity).remove::<MoveTarget>();
             continue;
         }
 

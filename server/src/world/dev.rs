@@ -47,6 +47,7 @@ pub fn handle_dev_commands(
         &shared::components::CharacterName,
         &mut shared::components::CharacterAffiliation,
     )>,
+    kinds: Query<&shared::components::CharacterKind>,
     mut client_links: Query<(&RemoteId, &mut MessageReceiver<DevCommand>), With<ClientOf>>,
     mut warp: Query<&mut TimeWarp>,
     mut villager_seed: ResMut<VillagerSeed>,
@@ -165,11 +166,51 @@ pub fn handle_dev_commands(
                         if *affiliation != next {
                             *affiliation = next;
                         }
+                        // STOP at the first match. Generated names are not
+                        // unique -- the first duplicate appears around the
+                        // fifty-first villager -- so without this one command
+                        // re-flags every namesake in the world.
+                        break;
                     }
                     if hit {
                         info!("Dev: '{character}' banner set to {banner:?}");
                     } else {
                         info!("Dev: no character named '{character}'");
+                    }
+                }
+                DevCommand::SetRetinue { unit, commanded } => {
+                    // Entity-targeted, because command must be exact and
+                    // generated names collide.
+                    if unit == Entity::PLACEHOLDER {
+                        continue;
+                    }
+                    let Some(account) = profiles.peer_to_name.get(&remote_id.0).cloned() else {
+                        continue;
+                    };
+                    // Only VILLAGERS can be conscripted. A hero is somebody's
+                    // persisted body; taking one into a retinue would let god
+                    // mode hand a player's character to another player.
+                    let Ok(kind) = kinds.get(unit) else {
+                        continue;
+                    };
+                    if *kind != shared::components::CharacterKind::Villager {
+                        info!("Dev: refusing to conscript a hero");
+                        continue;
+                    }
+                    if commanded {
+                        commands
+                            .entity(unit)
+                            .insert(shared::components::CommandedBy(account.clone()));
+                        info!("Dev: {unit:?} joined '{account}'s retinue");
+                    } else {
+                        commands
+                            .entity(unit)
+                            .remove::<shared::components::CommandedBy>();
+                        // Dropping the order too: a dismissed villager should
+                        // stop where it stands, not finish an errand for someone
+                        // who no longer commands it.
+                        commands.entity(unit).remove::<crate::player::hero::MoveTarget>();
+                        info!("Dev: {unit:?} dismissed from '{account}'s retinue");
                     }
                 }
             }

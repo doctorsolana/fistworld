@@ -267,12 +267,12 @@ pub(super) fn sync_spawn_hero_button(
 /// a hardcoded 100%, and a fake gauge is worse than an absent one.
 pub(super) fn sync_selection_plate(
     selection: Res<crate::selection::Selection>,
-    local: Option<Res<crate::camera_rts::LocalPeerId>>,
+    account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
     characters: Query<(
         &shared::components::CharacterName,
         &shared::components::CharacterKind,
         &shared::components::PlayerPosition,
-        Option<&shared::components::Hero>,
+        Option<&shared::components::CommandedBy>,
     )>,
     mut plates: Query<&mut Node, With<SelectionPlate>>,
     mut glyphs: Query<&mut BorderColor, With<SelectionRingGlyph>>,
@@ -291,20 +291,20 @@ pub(super) fn sync_selection_plate(
         *last = None;
         return;
     };
-    let (name, kind, position, hero) = primary;
+    let (name, kind, position, commanded) = primary;
 
-    let local_id = local.as_ref().map(|local| local.0);
-    let owns = |hero: Option<&shared::components::Hero>| {
-        crate::selection::is_owned_by(hero, local_id)
+    let my_account = account.as_ref().map(|input| input.name.trim().to_lowercase());
+    let owns = |commanded: Option<&shared::components::CommandedBy>| {
+        crate::selection::can_command(commanded, my_account.as_deref())
     };
-    let is_mine = owns(hero);
+    let is_mine = owns(commanded);
 
     // How many of the selection actually take orders. A box-drag over a village
     // grabs a mixed crowd, and the plate has to say what will move.
     let commandable = selection
         .entities
         .iter()
-        .filter(|entity| characters.get(**entity).is_ok_and(|(_, _, _, h)| owns(h)))
+        .filter(|entity| characters.get(**entity).is_ok_and(|(_, _, _, c)| owns(c)))
         .count();
 
     // The one saturated colour means "you command this". Grey means you are
@@ -338,11 +338,14 @@ pub(super) fn sync_selection_plate(
     // A box-drag only ever selects your own, so a group is normally all
     // commandable. The mixed branches stay because a selection can also be set
     // by other means, and a group that silently would not move must say so.
+    // Phrased as the CONSEQUENCE of the next right-click, not as a property.
+    // "UNDER YOUR BANNER" was both wrong -- a banner is affiliation, not command
+    // -- and the exact phrase that made a player expect clanmates to obey.
     let status = if count > 1 {
         match commandable {
-            0 => "NONE YOURS".to_string(),
-            n if n == count => "UNDER YOUR BANNER".to_string(),
-            n => format!("{n} OF {count} YOURS"),
+            0 => "NONE WILL MOVE".to_string(),
+            n if n == count => format!("{n} WILL MOVE"),
+            n => format!("{n} OF {count} WILL MOVE"),
         }
     } else if is_mine {
         if moved { "ON THE MOVE".to_string() } else { "HOLDING".to_string() }
@@ -358,17 +361,34 @@ pub(super) fn sync_selection_plate(
 
 /// Draw the drag-select marquee where the cursor actually is.
 ///
-/// Both the drag box and Bevy UI use top-left-origin WINDOW pixels, so this is a
-/// direct mapping with no conversion -- unlike the world-to-screen projection
-/// the box test needs, which has to undo the render-target scaling.
+/// The drag box is in WINDOW pixels and Bevy UI lengths are in UI pixels, and on
+/// this app those are NOT the same unit. On macOS the window takes a scale
+/// factor override of 1.0 and the Retina factor is moved into `UiScale`
+/// (see `app_wiring::window::apply_window_mode`), so `cursor_position` comes
+/// back in physical pixels while every `Val::Px` is multiplied by `UiScale` on
+/// the way to the screen.
+///
+/// Writing cursor coordinates straight into `Val::Px` therefore draws the
+/// marquee at roughly double the intended position -- down and to the right by
+/// the scale factor. Dividing here is the conversion between the two spaces.
+///
+/// Note the box TEST does not need this: it compares world-projected points
+/// against the cursor, both already in window pixels. Only drawing crosses into
+/// UI space.
 pub(super) fn sync_selection_box(
     drag: Res<crate::selection::DragBox>,
+    ui_scale: Res<bevy::ui::UiScale>,
     mut boxes: Query<&mut Node, With<SelectionBox>>,
 ) {
     let rect = drag.rect();
+    let scale = if ui_scale.0 > 0.0 { ui_scale.0 } else { 1.0 };
     for mut node in boxes.iter_mut() {
         match rect {
             Some((min, max)) => {
+                // Convert both corners once, then measure -- converting the
+                // corner and then un-converting to get the size is the kind of
+                // arithmetic that looks right and drifts by a pixel.
+                let (min, max) = (min / scale, max / scale);
                 let size = (max - min).max(Vec2::ZERO);
                 node.display = Display::Flex;
                 node.left = Val::Px(min.x);

@@ -66,6 +66,7 @@ pub(super) fn receive_character_roster(
                         level: 0,
                         prestige: 0,
                         online: entry.online,
+                        commanded_by: None,
                     });
                 }
             }
@@ -90,12 +91,13 @@ pub(super) fn learn_visible_characters(
             // -- and `Added` fires once, so they would never be learned at all.
             // `track_affiliation_changes` fills it in when it lands.
             Option<&shared::components::CharacterAffiliation>,
+            Option<&shared::components::CommandedBy>,
         ),
         Added<shared::components::CharacterName>,
     >,
     mut people: ResMut<KnownPeople>,
 ) {
-    for (name, kind, affiliation) in seen.iter() {
+    for (name, kind, affiliation, commanded) in seen.iter() {
         let affiliation = affiliation.copied().unwrap_or_default();
         let kind = match kind {
             shared::components::CharacterKind::Hero => PersonKind::Hero,
@@ -105,6 +107,7 @@ pub(super) fn learn_visible_characters(
             existing.known = true;
             existing.kind = kind;
             existing.affiliation = affiliation;
+            existing.commanded_by = commanded.map(|c| c.0.clone());
         } else {
             people.records.push(PersonRecord {
                 name: name.0.clone(),
@@ -115,6 +118,7 @@ pub(super) fn learn_visible_characters(
                 online: false,
                 known: true,
                 is_self: false,
+                commanded_by: commanded.map(|c| c.0.clone()),
             });
         }
     }
@@ -505,6 +509,63 @@ pub(super) fn sync_banner_controls(
         };
         if node.display != display {
             node.display = display;
+        }
+    }
+}
+
+/// Keep the registry's retinue column current for anyone you can see, so
+/// conscripting shows immediately rather than waiting for a roster request.
+pub(super) fn track_retinue_changes(
+    changed: Query<
+        (
+            &shared::components::CharacterName,
+            Option<&shared::components::CommandedBy>,
+        ),
+        Changed<shared::components::CommandedBy>,
+    >,
+    removed: RemovedComponents<shared::components::CommandedBy>,
+    mut people: ResMut<KnownPeople>,
+) {
+    let _ = removed;
+    for (name, commanded) in changed.iter() {
+        if let Some(record) = people.records.iter_mut().find(|r| r.name == name.0) {
+            let next = commanded.map(|c| c.0.clone());
+            if record.commanded_by != next {
+                record.commanded_by = next;
+            }
+        }
+    }
+}
+
+/// God-only: show CONSCRIPT or DISMISS for the selected villager.
+///
+/// Heroes are never offered: a hero is somebody's persisted body, and taking one
+/// into a retinue would hand a player's character to another player.
+pub(super) fn sync_retinue_button(
+    god: Res<crate::ui::hud::GodCapability>,
+    people: Res<KnownPeople>,
+    selected: Res<SelectedPerson>,
+    account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
+    mut buttons: Query<&mut Node, With<RetinueButton>>,
+    mut labels: Query<&mut Text, With<RetinueLabel>>,
+) {
+    let record = selected.0.as_deref().and_then(|name| people.find(name));
+    let offerable = god.0 && record.is_some_and(|r| r.kind == PersonKind::Villager);
+    for mut node in buttons.iter_mut() {
+        let display = if offerable { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    let my_account = account
+        .as_ref()
+        .map(|input| input.name.trim().to_lowercase())
+        .unwrap_or_default();
+    let mine = record.is_some_and(|r| r.commanded_by.as_deref() == Some(my_account.as_str()));
+    let label = if mine { "DISMISS" } else { "CONSCRIPT" };
+    for mut text in labels.iter_mut() {
+        if text.0 != label {
+            text.0 = label.to_string();
         }
     }
 }

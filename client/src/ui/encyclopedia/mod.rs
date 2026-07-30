@@ -39,6 +39,7 @@ impl Plugin for EncyclopediaPlugin {
                 state_sync::receive_character_roster,
                 state_sync::learn_visible_characters,
                 state_sync::track_affiliation_changes,
+                state_sync::track_retinue_changes,
             )
                 .run_if(in_state(GameState::Playing)),
         );
@@ -51,6 +52,7 @@ impl Plugin for EncyclopediaPlugin {
                 actions::handle_filter_buttons,
                 actions::handle_person_rows,
                 actions::handle_banner_buttons,
+                actions::handle_retinue_button,
                 actions::close_on_escape_or_backdrop,
                 actions::scroll_people_list,
                 state_sync::rebuild_people_list,
@@ -58,6 +60,7 @@ impl Plugin for EncyclopediaPlugin {
                 state_sync::sync_filter_visuals,
                 state_sync::sync_detail_panel,
                 state_sync::sync_banner_controls,
+                state_sync::sync_retinue_button,
                 state_sync::style_person_rows,
             )
                 .chain()
@@ -189,6 +192,9 @@ pub struct PersonRecord {
     pub known: bool,
     /// True for the local player's own entry.
     pub is_self: bool,
+    /// Lowercase account that commands this person, if any. Display only -- the
+    /// server checks its own copy before moving anything.
+    pub commanded_by: Option<String>,
 }
 
 /// Every person the client is aware of, known or not.
@@ -327,6 +333,13 @@ pub struct DetailRow(pub DetailField);
 /// God-only banner control on the affiliation row. `-1` steps back, `1` forward.
 #[derive(Component, Clone, Copy)]
 pub struct BannerButton(pub i16);
+
+/// God-only retinue toggle: conscript this villager, or dismiss it.
+#[derive(Component)]
+pub struct RetinueButton;
+
+#[derive(Component)]
+pub struct RetinueLabel;
 
 #[derive(Component)]
 pub struct DetailEmptyState;

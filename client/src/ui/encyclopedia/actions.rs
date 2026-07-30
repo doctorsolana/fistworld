@@ -199,3 +199,57 @@ pub(super) fn handle_banner_buttons(
         }
     }
 }
+
+/// God-only: take the selected villager into your retinue, or dismiss it.
+///
+/// Sends intent and waits for replication, like every other world change: a
+/// locally-flipped retinue would show a unit as commandable that the server has
+/// not agreed to, and the next order would silently do nothing -- which is
+/// exactly the failure this whole feature exists to remove.
+pub(super) fn handle_retinue_button(
+    guard: Res<ClickGuard>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    god: Res<crate::ui::hud::GodCapability>,
+    selected: Res<SelectedPerson>,
+    people: Res<KnownPeople>,
+    account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
+    characters: Query<(Entity, &shared::components::CharacterName)>,
+    buttons: Query<&Interaction, (With<RetinueButton>, Changed<Interaction>)>,
+    mut senders: Query<
+        &mut MessageSender<shared::protocol::DevCommand>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+) {
+    if !guard.0 || !god.0 || !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    if !buttons
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        return;
+    }
+    let Some(name) = selected.0.clone() else {
+        return;
+    };
+    let Some(record) = people.find(&name) else {
+        return;
+    };
+    // Targeted by ENTITY, so this only works on someone you can currently see.
+    // That is a real limitation and the honest one: generated names collide, and
+    // conscripting the wrong namesake is worse than not offering the button.
+    let Some((entity, _)) = characters.iter().find(|(_, n)| n.0 == name) else {
+        return;
+    };
+    let my_account = account
+        .as_ref()
+        .map(|input| input.name.trim().to_lowercase())
+        .unwrap_or_default();
+    let already_mine = record.commanded_by.as_deref() == Some(my_account.as_str());
+    if let Ok(mut sender) = senders.single_mut() {
+        sender.send::<ReliableChannel>(shared::protocol::DevCommand::SetRetinue {
+            unit: entity,
+            commanded: !already_mine,
+        });
+    }
+}

@@ -70,7 +70,6 @@ pub fn handle_disconnections(
         &PlayerProgression,
     )>,
     mut inputs: ResMut<ClientInputs>,
-    mut hero_targets: ResMut<crate::player::hero::HeroMoveTargets>,
     heroes: Query<(
         &shared::components::Hero,
         &PlayerPosition,
@@ -96,10 +95,14 @@ pub fn handle_disconnections(
     );
 
     // The hero KEEPS STANDING in the world (it carries no ControlledBy, so no
-    // lifetime despawns it) and is re-adopted when this player returns. Only
-    // the pending move order dies with the connection, or a returning hero
-    // would resume walking to a spot chosen last session.
-    hero_targets.0.remove(&peer_id);
+    // lifetime despawns it) and is re-adopted when this player returns.
+    //
+    // Its move order is deliberately NOT cancelled. Orders now live on the unit
+    // rather than in a per-peer map, and a retinue is keyed by account name, so
+    // a villager mid-walk keeps walking and finishes where it was sent -- the
+    // world is meant to carry on without you (WORLD-DESIGN pillar 1). The old
+    // per-peer map could not express that: one removal cancelled every order the
+    // player had given.
 
     let name_lower = if let Some(name) = profiles.peer_to_name.get(&peer_id) {
         name.clone()

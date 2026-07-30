@@ -16,13 +16,13 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use shared::components::{Hero, PlayerPosition};
+use shared::components::{CommandedBy, PlayerPosition};
 
 use super::{
-    is_owned_by, pick_radius_at, ray_vs_vertical_segment, DragBox, Selectable, Selection,
+    can_command, pick_radius_at, ray_vs_vertical_segment, DragBox, Selectable, Selection,
     BOX_MIN_PX,
 };
-use crate::camera_rts::{CursorRay, CursorTerrainHit, LocalPeerId};
+use crate::camera_rts::{CursorRay, CursorTerrainHit};
 use crate::hero::control::{placement_armed, HeroSpawnArm, NpcSpawnArm};
 use crate::input::InputState;
 
@@ -62,8 +62,8 @@ pub(super) fn pick_on_left_click(
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     ui_blockers: Query<&Interaction>,
-    local: Option<Res<LocalPeerId>>,
-    candidates: Query<(Entity, &Selectable, &PlayerPosition, Option<&Hero>)>,
+    account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
+    candidates: Query<(Entity, &Selectable, &PlayerPosition, Option<&CommandedBy>)>,
     mut drag: ResMut<DragBox>,
     mut selection: ResMut<Selection>,
 ) {
@@ -115,12 +115,12 @@ pub(super) fn pick_on_left_click(
     // --- box select ---------------------------------------------------------
     if let Some((min, max)) = box_rect {
         let window_size = window.size();
-        let local_id = local.as_ref().map(|local| local.0);
+        let my_account = account.as_ref().map(|i| i.name.trim().to_lowercase());
         let mut hits: Vec<(Entity, f32)> = Vec::new();
-        for (entity, selectable, position, hero) in candidates.iter() {
+        for (entity, selectable, position, commanded) in candidates.iter() {
             // Yours only. A drag is a command gesture, so anything you cannot
             // order has no business being in the result.
-            if !is_owned_by(hero, local_id) {
+            if !can_command(commanded, my_account.as_deref()) {
                 continue;
             }
             // Aim at the middle of the body: projecting the FEET means a unit
@@ -158,7 +158,7 @@ pub(super) fn pick_on_left_click(
         .filter(|d| *d > 0.0);
 
     let mut best: Option<(Entity, f32)> = None;
-    for (entity, selectable, position, _hero) in candidates.iter() {
+    for (entity, selectable, position, _commanded) in candidates.iter() {
         let Some((distance, gap)) =
             ray_vs_vertical_segment(origin, dir, position.0, selectable.height)
         else {

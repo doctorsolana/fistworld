@@ -348,6 +348,7 @@ fn spawn_detail_card(detail: &mut ChildSpawnerCommands<'_>) {
                     ..default()
                 },
             ));
+            spawn_retinue_button(card);
             for field in DetailField::ALL {
                 spawn_detail_stat(card, field);
             }
@@ -404,6 +405,36 @@ fn spawn_detail_stat(card: &mut ChildSpawnerCommands<'_>, field: DetailField) {
                 spawn_banner_button(value_row, ">", 1);
             }
         });
+    });
+}
+
+/// God-only retinue toggle. Hidden for heroes and outside god mode.
+fn spawn_retinue_button(card: &mut ChildSpawnerCommands<'_>) {
+    card.spawn((
+        RetinueButton,
+        Button,
+        Node {
+            display: Display::None,
+            align_self: AlignSelf::FlexStart,
+            padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+            margin: UiRect::bottom(Val::Px(10.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(2.0)),
+            ..default()
+        },
+        BackgroundColor(HEADER_BG),
+        BorderColor::from(ACCENT_COLOR),
+    ))
+    .with_children(|btn| {
+        btn.spawn((
+            RetinueLabel,
+            Text::new("CONSCRIPT"),
+            TextFont {
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(TEXT_COLOR),
+        ));
     });
 }
 

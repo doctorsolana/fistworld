@@ -29,7 +29,7 @@ impl Plugin for SelectionPlugin {
             (
                 // Order matters: drop a dead selection before anything reads it,
                 // then pick, then let the ring follow what is now selected.
-                tag_heroes_selectable,
+                tag_characters_selectable,
                 clear_stale_selection,
                 pick::pick_on_left_click,
                 order::issue_order_on_right_click,
@@ -229,27 +229,34 @@ fn clear_stale_selection(
     selection.set_changed();
 }
 
-/// Make replicated heroes clickable.
+/// Make every replicated PERSON clickable.
 ///
-/// Polls `Without<Selectable>` rather than reacting to `Added<Hero>` because
-/// replication can deliver `Hero` and `PlayerPosition` in separate batches, and
-/// a one-shot on `Added` would miss the hero whose position arrived later.
+/// Gated on `CharacterKind`, not `Hero`. `Hero` means "a player's body", so
+/// keying on it made villagers unclickable entirely -- you could not even
+/// inspect one, which contradicted this module's own documentation. Selectable
+/// is about being a thing in the world you can point at; whether you may command
+/// it is a separate question answered by [`is_owned_by`].
 ///
-/// Note this keys on `Hero`, NOT on the visual components: the hero creator's
-/// preview rig is a parked copy of the character 3m in front of the camera while
-/// the modal is open, and tagging that would let it swallow every click.
-fn tag_heroes_selectable(
+/// The hero creator's preview rig is still excluded, because it carries no
+/// `PlayerPosition` -- it is a parked model in front of the camera, not someone
+/// standing somewhere. That requirement, not the `Hero` filter, is what was
+/// really keeping it out of the picker.
+///
+/// Polls `Without<Selectable>` rather than reacting to `Added<..>` because
+/// replication delivers a character's components in separate batches, and a
+/// one-shot on `Added` would miss whoever's position arrived on a later tick.
+fn tag_characters_selectable(
     mut commands: Commands,
-    heroes: Query<
+    characters: Query<
         Entity,
         (
-            With<shared::components::Hero>,
+            With<shared::components::CharacterKind>,
             With<shared::components::PlayerPosition>,
             Without<Selectable>,
         ),
     >,
 ) {
-    for entity in heroes.iter() {
+    for entity in characters.iter() {
         commands.entity(entity).insert(Selectable::person());
     }
 }
@@ -329,20 +336,27 @@ pub fn pick_radius_at(base_radius: f32, distance: f32) -> f32 {
     base_radius.max(distance * PICK_ANGULAR_SLOP)
 }
 
-/// Whether a character is under YOUR banner.
+/// Whether YOU may order this unit.
 ///
-/// The one place ownership is decided, because it is asked in three different
-/// contexts -- can I box-select this, can I order it, does the HUD call it mine
-/// -- and three copies of the same peer-id comparison is three chances for them
-/// to disagree.
+/// The one place command is decided client-side, because it is asked in three
+/// contexts -- can I box-select this, does the ring glow, what does the HUD say
+/// -- and three copies of the same test is three chances for them to disagree.
 ///
-/// A character with no [`Hero`] is nobody's: villagers belong to the world, not
-/// to a player, so they are never yours.
+/// Command follows [`CommandedBy`], NOT the banner. A banner is affiliation, and
+/// clans are joinable by several players, so banner-as-command would hand your
+/// units to anyone who joined your clan. It would also break outright at ROADMAP
+/// Phase 8 when the placeholder banner becomes a real ClanId.
 ///
-/// [`Hero`]: shared::components::Hero
-pub fn is_owned_by(hero: Option<&shared::components::Hero>, local: Option<u64>) -> bool {
-    match (hero, local) {
-        (Some(hero), Some(local)) => shared::player::peer_id_to_u64(hero.owner) == local,
+/// This is a DISPLAY predicate. The server runs the same check itself before
+/// moving anything; a client that lies to itself here only lies to itself.
+///
+/// [`CommandedBy`]: shared::components::CommandedBy
+pub fn can_command(
+    commanded: Option<&shared::components::CommandedBy>,
+    my_account: Option<&str>,
+) -> bool {
+    match (commanded, my_account) {
+        (Some(commanded), Some(account)) => commanded.0 == account,
         _ => false,
     }
 }
@@ -419,27 +433,24 @@ mod tests {
         }
     }
 
-    /// Ownership is what gates command, so getting it wrong either hands you
-    /// someone else's units or takes away your own.
+    /// Command gating decides whether you can move a thing, so getting it wrong
+    /// either hands you someone else's units or takes away your own.
     #[test]
-    fn only_your_own_heroes_are_owned() {
-        use lightyear::prelude::PeerId;
-        use shared::components::Hero;
+    fn only_your_own_retinue_is_commandable() {
+        use shared::components::CommandedBy;
 
-        let mine = Hero {
-            owner: PeerId::Netcode(7),
-        };
-        let theirs = Hero {
-            owner: PeerId::Netcode(8),
-        };
-        let local = Some(shared::player::peer_id_to_u64(PeerId::Netcode(7)));
+        let mine = CommandedBy("aldric".to_string());
+        let theirs = CommandedBy("bryn".to_string());
 
-        assert!(is_owned_by(Some(&mine), local));
-        assert!(!is_owned_by(Some(&theirs), local), "took someone else's unit");
-        // A villager has no Hero at all: it belongs to the world.
-        assert!(!is_owned_by(None, local), "claimed a villager");
-        // Before the local peer id arrives, nothing is commandable.
-        assert!(!is_owned_by(Some(&mine), None), "claimed a unit with no local id");
+        assert!(can_command(Some(&mine), Some("aldric")));
+        assert!(!can_command(Some(&theirs), Some("aldric")), "took someone else's unit");
+        // Nobody's unit: a villager not in any retinue.
+        assert!(!can_command(None, Some("aldric")), "claimed an unconscripted villager");
+        // Before the account is known, nothing is commandable.
+        assert!(!can_command(Some(&mine), None), "claimed a unit with no account");
+        // Account keys are lowercase on both sides; a case mismatch must NOT
+        // silently grant command.
+        assert!(!can_command(Some(&mine), Some("Aldric")), "case-insensitive match");
     }
 
     #[test]

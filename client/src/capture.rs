@@ -112,7 +112,12 @@ pub fn run(config: CaptureConfig) {
     app.add_systems(Startup, enter_world_offline);
     app.add_systems(
         Update,
-        (spawn_capture_heroes, select_capture_person, drive_capture),
+        (
+            spawn_capture_heroes,
+            select_capture_person,
+            force_capture_drag_box,
+            drive_capture,
+        ),
     );
 
     app.run();
@@ -195,6 +200,7 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                 online,
                 known,
                 is_self,
+                commanded_by: None,
             }
         };
         commands.insert_resource(KnownPeople {
@@ -361,6 +367,35 @@ fn spawn_capture_heroes(
         });
     }
     *spawned = true;
+}
+
+/// FISTFORCE_CAPTURE_DRAG_BOX="x0,y0,x1,y1[,ui_scale]" pins the drag-select
+/// marquee to a known rectangle in WINDOW pixels, so where it actually lands on
+/// screen can be measured instead of eyeballed.
+///
+/// The optional ui_scale reproduces the macOS setup, where the window takes a
+/// scale-factor override of 1.0 and the Retina factor lives in `UiScale` -- the
+/// exact condition under which cursor pixels and UI pixels stop being the same
+/// unit, which is what put the marquee in the wrong place.
+fn force_capture_drag_box(
+    mut drag: ResMut<crate::selection::DragBox>,
+    mut ui_scale: ResMut<bevy::ui::UiScale>,
+) {
+    let Ok(spec) = std::env::var("FISTFORCE_CAPTURE_DRAG_BOX") else {
+        return;
+    };
+    let parts: Vec<f32> = spec.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+    if parts.len() < 4 {
+        return;
+    }
+    if let Some(scale) = parts.get(4) {
+        if ui_scale.0 != *scale {
+            ui_scale.0 = *scale;
+        }
+    }
+    drag.start = Some(Vec2::new(parts[0], parts[1]));
+    drag.current = Vec2::new(parts[2], parts[3]);
+    drag.active = true;
 }
 
 /// FISTFORCE_CAPTURE_SELECT_PERSON=<name> selects that person in the

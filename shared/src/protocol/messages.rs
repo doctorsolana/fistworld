@@ -84,13 +84,61 @@ pub enum DevCommand {
         character: String,
         banner: Option<u8>,
     },
+    /// Take a villager into the sender's retinue, or dismiss it.
+    ///
+    /// Targeted by ENTITY, not by name: `shared::names::person_name` produces
+    /// its first duplicate around the fifty-first villager, and command has to
+    /// be exact. Affiliation can afford to be name-targeted because it addresses
+    /// people the client has never replicated; command cannot.
+    SetRetinue {
+        unit: Entity,
+        commanded: bool,
+    },
 }
 
-/// Client -> Server: order the sender's hero to walk to a terrain point.
-/// The server owns the movement; this is pure intent (RTS click-to-move).
+impl bevy::ecs::entity::MapEntities for DevCommand {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        if let DevCommand::SetRetinue { unit, .. } = self {
+            *unit = mapper.get_mapped(*unit);
+        }
+    }
+}
+
+/// Client -> Server: walk these specific units to these specific points.
+///
+/// Replaces the old `HeroMoveTo`, which carried NO unit identity -- the server
+/// inferred "the sender's hero" from the peer id, which is exactly why a
+/// villager could never be moved and why an N-unit order collapsed onto one
+/// unit.
+///
+/// Carries real `Entity` ids. `.add_map_entities()` in the protocol plugin makes
+/// the CLIENT rewrite each id into the server's id before it goes on the wire.
+/// Mapping makes an id MEANINGFUL; it does not make it YOURS -- authority is a
+/// separate check on the server, see `CommandedBy`.
+///
+/// `Entity` is acceptable as a unit reference only because nothing it can name
+/// is persisted: villagers are not saved, and a hero's entity is recreated and
+/// re-replicated on connect. When world-state persistence lands (ROADMAP Phase
+/// 1) this should become a stable id.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct HeroMoveTo {
-    pub target: Vec3,
+pub struct UnitMoveOrder {
+    /// (unit, arrival point). PAIRED rather than two parallel Vecs, so a
+    /// truncated or hostile message cannot desynchronise units from targets.
+    pub units: Vec<(Entity, Vec3)>,
+}
+
+/// Hard cap on units per order, enforced SERVER-side.
+///
+/// A hostile client can put anything in a Vec; a client-side cap is advisory
+/// only. This is what stops one packet costing an unbounded loop.
+pub const MAX_UNITS_PER_ORDER: usize = 256;
+
+impl bevy::ecs::entity::MapEntities for UnitMoveOrder {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        for (unit, _) in self.units.iter_mut() {
+            *unit = mapper.get_mapped(*unit);
+        }
+    }
 }
 
 /// Server -> Client: whether this connection may use god mode.
@@ -219,15 +267,60 @@ mod tests {
     }
 
     #[test]
-    fn hero_move_to_roundtrips() {
-        let msg = HeroMoveTo {
-            target: Vec3::new(-64.5, 12.0, 480.0),
+    fn unit_move_order_roundtrips() {
+        let msg = UnitMoveOrder {
+            units: vec![
+                (Entity::from_raw_u32(7).unwrap(), Vec3::new(-64.5, 12.0, 480.0)),
+                (Entity::from_raw_u32(9).unwrap(), Vec3::new(1.0, 2.0, 3.0)),
+            ],
         };
 
         let bytes = bincode::serialize(&msg).unwrap();
-        let decoded: HeroMoveTo = bincode::deserialize(&bytes).unwrap();
+        let decoded: UnitMoveOrder = bincode::deserialize(&bytes).unwrap();
 
         assert_eq!(decoded, msg);
+    }
+
+    /// Every unit in the order must be remapped, not just the first: a partially
+    /// mapped order would move some units and silently drop the rest.
+    #[test]
+    fn unit_move_order_maps_every_entity() {
+        use bevy::ecs::entity::MapEntities;
+
+        // Hands back a fixed replacement per call, in order, so the assertion
+        // does not depend on how `EntityIndex` happens to be represented.
+        struct SeqMapper {
+            next: u32,
+        }
+        impl bevy::ecs::entity::EntityMapper for SeqMapper {
+            fn get_mapped(&mut self, _entity: Entity) -> Entity {
+                self.next += 1;
+                Entity::from_raw_u32(self.next).unwrap()
+            }
+            fn set_mapped(&mut self, _source: Entity, _target: Entity) {}
+        }
+
+        let mut msg = UnitMoveOrder {
+            units: vec![
+                (Entity::from_raw_u32(50).unwrap(), Vec3::ZERO),
+                (Entity::from_raw_u32(60).unwrap(), Vec3::ONE),
+                (Entity::from_raw_u32(70).unwrap(), Vec3::X),
+            ],
+        };
+        msg.map_entities(&mut SeqMapper { next: 0 });
+
+        let mapped: Vec<Entity> = msg.units.iter().map(|(e, _)| *e).collect();
+        assert_eq!(
+            mapped,
+            vec![
+                Entity::from_raw_u32(1).unwrap(),
+                Entity::from_raw_u32(2).unwrap(),
+                Entity::from_raw_u32(3).unwrap(),
+            ],
+            "not every unit was remapped"
+        );
+        // Targets must be untouched: mapping addresses, not destinations.
+        assert_eq!(msg.units[1].1, Vec3::ONE);
     }
 
     #[test]

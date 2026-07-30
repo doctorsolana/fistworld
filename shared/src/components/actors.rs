@@ -72,6 +72,25 @@ impl CharacterKind {
     }
 }
 
+/// Who COMMANDS this unit: the lowercase account name of the player whose
+/// orders it obeys.
+///
+/// Deliberately NOT the banner. A banner is affiliation -- who you side with --
+/// and clans are joinable by several players (WORLD-DESIGN section 4), so
+/// banner-as-command would hand your units to anyone who joined your clan. It
+/// would also detonate at ROADMAP Phase 8, when the placeholder banner index
+/// becomes a real ClanId.
+///
+/// Keyed by ACCOUNT NAME rather than `PeerId` because peer ids are random per
+/// session: a retinue keyed by account survives a disconnect with no repair,
+/// whereas `Hero::owner` has to be re-pointed by hand on every reconnect.
+///
+/// Replicated so the client can show at a glance what it may order -- but the
+/// client's copy is display only. The server checks this component itself before
+/// moving anything.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct CommandedBy(pub String);
+
 /// Who a character answers to.
 ///
 /// `None` is unaffiliated, and per WORLD-DESIGN section 4 that is a normal and

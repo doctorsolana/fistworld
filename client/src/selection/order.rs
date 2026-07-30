@@ -10,11 +10,11 @@ use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageSender};
 
-use shared::components::Hero;
-use shared::protocol::{HeroMoveTo, ReliableChannel};
+use shared::components::CommandedBy;
+use shared::protocol::{ReliableChannel, UnitMoveOrder, MAX_UNITS_PER_ORDER};
 
-use super::{formation_targets, is_click, is_owned_by, RightDrag, Selection};
-use crate::camera_rts::{CursorTerrainHit, LocalPeerId};
+use super::{can_command, formation_targets, is_click, RightDrag, Selection};
+use crate::camera_rts::CursorTerrainHit;
 use crate::input::InputState;
 
 #[allow(clippy::too_many_arguments)]
@@ -27,11 +27,11 @@ pub(super) fn issue_order_on_right_click(
     hit: Res<CursorTerrainHit>,
     selection: Res<Selection>,
     ui_blockers: Query<&Interaction>,
-    local: Option<Res<LocalPeerId>>,
-    heroes: Query<&Hero>,
+    account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
+    units: Query<&CommandedBy>,
     mut drag: ResMut<RightDrag>,
     mut move_sender: Query<
-        &mut MessageSender<HeroMoveTo>,
+        &mut MessageSender<UnitMoveOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
 ) {
@@ -89,10 +89,12 @@ pub(super) fn issue_order_on_right_click(
     if selection.is_empty() {
         return;
     }
-    let Some(local) = local else { return };
     let Some(target) = hit.0 else {
         return;
     };
+    let my_account = account
+        .as_ref()
+        .map(|input| input.name.trim().to_lowercase());
 
     // Selecting a mixed group (yours and someone else's) orders only yours,
     // silently. The alternative -- refusing the whole order -- would make a
@@ -105,7 +107,8 @@ pub(super) fn issue_order_on_right_click(
         .entities
         .iter()
         .copied()
-        .filter(|entity| is_owned_by(heroes.get(*entity).ok(), Some(local.0)))
+        .filter(|entity| can_command(units.get(*entity).ok(), my_account.as_deref()))
+        .take(MAX_UNITS_PER_ORDER)
         .collect();
     if ours.is_empty() {
         return;
@@ -114,15 +117,21 @@ pub(super) fn issue_order_on_right_click(
     let Ok(mut sender) = move_sender.single_mut() else {
         return;
     };
-    // Spread arrival points so a group ordered to one spot arrives as a group
-    // rather than stacking into one body.
-    for (entity, point) in ours
+    // ONE message carrying every (unit, point) pair. The old code sent one
+    // message per unit with no unit id in it at all, so the server -- which
+    // inferred "the sender's hero" -- collapsed the whole order onto one body
+    // and kept only the last target.
+    //
+    // Arrival points are spread so a group sent to one spot arrives as a group
+    // rather than stacking into a single body.
+    let units_and_points: Vec<(Entity, Vec3)> = ours
         .iter()
+        .copied()
         .zip(formation_targets(target, ours.len(), FORMATION_SPACING))
-    {
-        let _ = entity;
-        sender.send::<ReliableChannel>(HeroMoveTo { target: point });
-    }
+        .collect();
+    sender.send::<ReliableChannel>(UnitMoveOrder {
+        units: units_and_points,
+    });
 }
 
 /// Gap between neighbours when a group is ordered to one point, in metres.
