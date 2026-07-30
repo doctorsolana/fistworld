@@ -47,10 +47,11 @@ pub(super) fn spawn_hud(
             height: Val::Percent(100.0),
             ..default()
         },
-        // NO `Interaction` on this root. It spans the whole screen, and a
-        // full-screen node that registers as UI would veto every world click
-        // for as long as the cursor is anywhere on screen. Only the plates
-        // themselves block -- see `BlocksWorldClicks`.
+        // NO `Interaction` on this root, and this is load-bearing. It spans the
+        // whole screen, and the world-click guard treats any hovered
+        // `Interaction` as UI -- so a full-screen node carrying one would veto
+        // every world click for as long as the cursor is on screen. The plates
+        // inside it carry `Interaction` and swallow clicks; this does not.
         Pickable::IGNORE,
         children![top_right_column(), selection_plate(), selection_box()],
     ));
@@ -80,7 +81,6 @@ fn plate(fill: Color) -> impl Bundle {
         BackgroundColor(fill),
         BorderColor::from(PLATE_RULE),
         plate_shadow(),
-        BlocksWorldClicks,
         Interaction::default(),
     )
 }
@@ -141,7 +141,6 @@ fn mode_toggle() -> impl Bundle {
     (
         ModeChipButton,
         Button,
-        BlocksWorldClicks,
         Node {
             display: Display::None,
             justify_content: JustifyContent::Center,
@@ -227,7 +226,6 @@ fn warp_button(text: &str, factor: f32) -> impl Bundle {
     (
         Button,
         WarpButton(factor),
-        BlocksWorldClicks,
         Node {
             width: Val::Px(40.0),
             height: Val::Px(24.0),
@@ -254,7 +252,6 @@ fn spawn_hero_button() -> impl Bundle {
     (
         SpawnHeroButton,
         Button,
-        BlocksWorldClicks,
         Node {
             // Full width so the column reads as one stack rather than a
             // right-aligned button floating in its own row of empty plate.
@@ -308,7 +305,6 @@ fn spawn_npc_button() -> impl Bundle {
     (
         SpawnNpcButton,
         Button,
-        BlocksWorldClicks,
         Node {
             width: Val::Percent(100.0),
             justify_content: JustifyContent::Center,
@@ -339,9 +335,9 @@ fn spawn_npc_button() -> impl Bundle {
 /// player never has to be told the plate refers to the ringed unit, because the
 /// shapes match. No icon, no arrow, no label saying SELECTED.
 ///
-/// It carries `Interaction` and `BlocksWorldClicks` because it sits in the
-/// bottom-centre cursor zone: without them, clicking your own readout would fall
-/// through to the world and deselect the very thing the readout describes.
+/// It carries `Interaction` because it sits in the bottom-centre cursor zone:
+/// without it, clicking your own readout would fall through to the world and
+/// deselect the very thing the readout describes.
 fn selection_plate() -> impl Bundle {
     (
         SelectionPlate,

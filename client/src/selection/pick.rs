@@ -61,7 +61,7 @@ pub(super) fn pick_on_left_click(
     terrain_hit: Res<CursorTerrainHit>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
-    ui_blockers: Query<&Interaction, With<crate::ui::BlocksWorldClicks>>,
+    ui_blockers: Query<&Interaction>,
     local: Option<Res<LocalPeerId>>,
     candidates: Query<(Entity, &Selectable, &PlayerPosition, Option<&Hero>)>,
     mut drag: ResMut<DragBox>,

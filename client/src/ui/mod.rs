@@ -2,22 +2,21 @@
 
 use bevy::prelude::*;
 
-/// Put this on any UI node that must swallow world clicks.
+/// True when the pointer is over ANY interactive UI, so a world click must not
+/// fall through.
 ///
-/// The world-click guards used to test an UNFILTERED `Query<&Interaction>`:
-/// "is any UI element in the whole app hovered or pressed?". That is a veto that
-/// grows every time a panel is added, and it breaks badly for a wide node --
-/// one full-width bar hovering anywhere would make the entire world
-/// unclickable, with no error and no obvious cause.
+/// Deliberately broad: every UI surface swallows clicks, because that is what a
+/// player expects and because the alternative -- an opt-in marker -- silently
+/// fails for whatever was forgotten. It HAS failed that way: narrowing this to a
+/// marker meant modals stopped blocking, so clicking PLACE in the hero creator
+/// armed placement and then, in the same frame, consumed it against whatever
+/// terrain lay under the modal. Placement appeared to do nothing.
 ///
-/// Opting in per node instead means the guard's cost and blast radius are both
-/// explicit: the HUD plates and the selection plate block, and a decorative
-/// full-width container does not.
-#[derive(Component, Default)]
-pub struct BlocksWorldClicks;
-
-/// True when the cursor is over a UI surface that owns clicks.
-pub fn pointer_over_ui(blockers: &Query<&Interaction, With<BlocksWorldClicks>>) -> bool {
+/// The hazard this must not reintroduce is a FULL-SCREEN node carrying
+/// `Interaction`: that would veto every world click for as long as the cursor is
+/// anywhere on screen. So full-screen containers carry `Pickable::IGNORE` and no
+/// `Interaction` -- see `ui::hud::layout::spawn_hud`. Keep it that way.
+pub fn pointer_over_ui(blockers: &Query<&Interaction>) -> bool {
     blockers
         .iter()
         .any(|interaction| *interaction != Interaction::None)

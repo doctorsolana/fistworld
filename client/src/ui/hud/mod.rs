@@ -29,7 +29,6 @@ use crate::ui::styles::{
     plate_shadow, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, EMBER, EMBER_RULE, INK,
     INK_INVERSE, INK_MUTED, LIMEWASH, LIMEWASH_LIT, PLATE_RULE, PLATE_RULE_SOFT, RADIUS, SLATE,
 };
-use crate::ui::BlocksWorldClicks;
 
 pub struct HudPlugin;
 

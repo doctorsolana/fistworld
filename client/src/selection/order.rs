@@ -26,7 +26,7 @@ pub(super) fn issue_order_on_right_click(
     input_state: Res<InputState>,
     hit: Res<CursorTerrainHit>,
     selection: Res<Selection>,
-    ui_blockers: Query<&Interaction, With<crate::ui::BlocksWorldClicks>>,
+    ui_blockers: Query<&Interaction>,
     local: Option<Res<LocalPeerId>>,
     heroes: Query<&Hero>,
     mut drag: ResMut<RightDrag>,

@@ -55,7 +55,7 @@ pub(super) fn handle_world_clicks(
     mut npc_arm: ResMut<NpcSpawnArm>,
     local: Option<Res<LocalPeerId>>,
     heroes: Query<&Hero>,
-    ui_blockers: Query<&Interaction, With<crate::ui::BlocksWorldClicks>>,
+    ui_blockers: Query<&Interaction>,
     mut dev_sender: Query<
         &mut MessageSender<DevCommand>,
         (With<crate::GameClient>, With<Connected>),
