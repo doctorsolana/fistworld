@@ -21,11 +21,46 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Faster compile times during development
 [profile.dev]
 opt-level = 1
+# Line tables only. Full debuginfo is the biggest single cost in both link time
+# and disk -- it is what grew target/debug past 100GB. Backtraces keep their file
+# and line numbers, which is what actually gets used. Stepping in a debugger with
+# full locals does not, and is available via `--profile dev-debug`.
+debug = "line-tables-only"
 
+# Dependencies are optimised hard and then cached, so paying opt-level 3 once
+# buys a playable frame rate without slowing iteration: only workspace code
+# recompiles as you edit, and that stays at opt-level 1.
 [profile.dev.package."*"]
 opt-level = 3
 
-# Thin LTO: a few percent of free runtime perf in release builds for a modest
-# increase in link time.
+# Full debuginfo, for when a debugger is actually needed.
+[profile.dev-debug]
+inherits = "dev"
+debug = true
+
+# THE PLAYTEST PROFILE. Use this to play the game.
+#
+# Release-grade code (opt-level 3 everywhere) without the two things that make a
+# release build cost ten minutes for a one-line change:
+#
+#   lto = false         thin LTO re-optimises and re-links the WHOLE program on
+#                       every edit, however small
+#   incremental = true  cargo disables incremental for release-like profiles, so
+#                       every change otherwise recompiles the crate from scratch
+#
+# codegen-units is raised for the same reason: more units compile in parallel and
+# more of them survive an edit, costing a few percent of runtime speed.
+#
+# If you are measuring performance to make a decision, measure `--release`. For
+# judging whether the game FEELS right while building it, use this.
+[profile.playtest]
+inherits = "release"
+lto = false
+incremental = true
+codegen-units = 256
+debug = "line-tables-only"
+
+# Thin LTO: a few percent of free runtime perf, for a link that walks the entire
+# program. Correct for shipping, ruinous for iterating -- see `playtest`.
 [profile.release]
 lto = "thin"
