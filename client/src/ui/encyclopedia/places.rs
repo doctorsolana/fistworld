@@ -27,6 +27,8 @@ pub struct PlaceRecord {
     /// How many people live there. Zero means a founded site with no life in it
     /// yet, which is a real and distinct state rather than a missing number.
     pub residents: u32,
+    /// Local coin. Zero until permits cost something.
+    pub treasury: u32,
 }
 
 /// Every settlement the client is aware of.
@@ -135,7 +137,12 @@ pub(super) fn learn_settlements(
     // capture, where the correct answer is 1.
     let needs_update = seen.iter().any(|(settlement, position)| {
         match places.find(&settlement.name) {
-            Some(record) => record.tier != settlement.tier || record.position != position.0,
+            Some(record) => {
+                record.tier != settlement.tier
+                    || record.position != position.0
+                    || record.residents != settlement.residents
+                    || record.treasury != settlement.treasury
+            }
             None => true,
         }
     });
@@ -152,14 +159,15 @@ pub(super) fn learn_settlements(
             Some(record) => {
                 record.tier = settlement.tier;
                 record.position = position.0;
+                record.residents = settlement.residents;
+                record.treasury = settlement.treasury;
             }
             None => places.records.push(PlaceRecord {
                 name: settlement.name.clone(),
                 tier: settlement.tier,
                 position: position.0,
-                // Rosters do not exist yet (ROADMAP Phase 1). Zero is the
-                // truthful answer today, and the detail pane says what it means.
-                residents: 0,
+                residents: settlement.residents,
+                treasury: settlement.treasury,
             }),
         }
     }
@@ -430,6 +438,7 @@ mod tests {
                 tier,
                 position: Vec3::ZERO,
                 residents: 0,
+                treasury: 0,
             });
         }
         let names: Vec<&str> = places.ordered().iter().map(|r| r.name.as_str()).collect();

@@ -15,4 +15,5 @@ pub mod map_state;
 pub mod navgrid;
 pub mod pathfinding;
 pub mod regions;
+pub mod village;
 pub mod time;

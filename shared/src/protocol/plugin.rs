@@ -3,7 +3,7 @@ use lightyear::prelude::*;
 
 use crate::components::{
     ActiveMapState, CharacterAffiliation, CharacterKind, CharacterName, CommandedBy,
-    Settlement, CloudSeed, Health, Hero, HeroOutfit, Player,
+    ConstructionSite, Residence, Settlement, SettlementBuilding, CloudSeed, Health, Hero, HeroOutfit, Player,
     PlayerPosition, PlayerProgression, PlayerRotation, TimeWarp, WorldTime,
 };
 use crate::terrain::TerrainDeltaChunk;
@@ -33,6 +33,9 @@ impl Plugin for ProtocolPlugin {
         app.component::<CharacterAffiliation>().replicate();
         app.component::<CommandedBy>().replicate();
         app.component::<Settlement>().replicate();
+        app.component::<SettlementBuilding>().replicate();
+        app.component::<ConstructionSite>().replicate();
+        app.component::<Residence>().replicate();
 
         // === HEALTH ===
         app.component::<Health>().replicate();

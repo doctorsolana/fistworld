@@ -281,7 +281,17 @@ pub(super) fn sync_selection_plate(
     mut last: Local<Option<Vec3>>,
 ) {
     let count = selection.len();
-    let display = if count > 0 { Display::Flex } else { Display::None };
+    // A selected SETTLEMENT is not a unit and gets its own panel. Without this
+    // the plate would stay up showing whoever was selected before, because the
+    // character lookup below simply fails and returns.
+    let is_person = selection
+        .primary()
+        .is_some_and(|entity| characters.contains(entity));
+    let display = if count > 0 && is_person {
+        Display::Flex
+    } else {
+        Display::None
+    };
     for mut node in plates.iter_mut() {
         if node.display != display {
             node.display = display;

@@ -157,6 +157,11 @@ pub(super) fn handle_world_clicks(
 /// focus right after god capability arrives, then orders a short walk — lets
 /// a headless run exercise the whole spawn->replicate->animate path without
 /// UI clicks.
+///
+/// `FISTWORLD_AUTOSPAWN_AT="x,z"` moves the whole smoke run somewhere else.
+/// Needed, not cosmetic: the camera starts at the world origin, which on
+/// `big_world` is 34 metres UNDERWATER, so a run that founds at the default
+/// focus is correctly refused by the water rule and tests nothing.
 pub(super) fn auto_spawn_hero(
     capability: Res<GodCapability>,
     local: Option<Res<LocalPeerId>>,
@@ -179,6 +184,19 @@ pub(super) fn auto_spawn_hero(
     let Ok(camera) = cameras.single() else {
         return;
     };
+    // A bad coordinate falls back to the camera rather than to the origin: a
+    // typo should behave like the flag was absent, not teleport the run into
+    // the sea.
+    let anchor = std::env::var("FISTWORLD_AUTOSPAWN_AT")
+        .ok()
+        .and_then(|spec| {
+            let mut parts = spec.split(',').map(|p| p.trim().parse::<f32>().ok());
+            match (parts.next().flatten(), parts.next().flatten()) {
+                (Some(x), Some(z)) => Some(Vec3::new(x, 0.0, z)),
+                _ => None,
+            }
+        })
+        .unwrap_or(camera.focus);
 
     if *state == 0 {
         if !capability.0 {
@@ -186,10 +204,10 @@ pub(super) fn auto_spawn_hero(
         }
         if let Ok(mut sender) = dev_sender.single_mut() {
             sender.send::<ReliableChannel>(DevCommand::SpawnHero {
-                pos: camera.focus,
+                pos: anchor,
                 outfit: HeroOutfit::default(),
             });
-            info!("AUTOSPAWN: hero spawn sent at {:?}", camera.focus);
+            info!("AUTOSPAWN: hero spawn sent at {anchor:?}");
             *state = 1;
         }
         return;
@@ -198,7 +216,7 @@ pub(super) fn auto_spawn_hero(
     // State 1: wait for our hero to replicate back, then order a walk.
     if let Some(hero_entity) = local_hero_entity(&heroes, &local) {
         if let Ok(mut sender) = move_sender.single_mut() {
-            let target = camera.focus + Vec3::new(12.0, 0.0, 6.0);
+            let target = anchor + Vec3::new(12.0, 0.0, 6.0);
             sender.send::<ReliableChannel>(UnitMoveOrder {
                 units: vec![(hero_entity, target)],
             });
@@ -212,7 +230,7 @@ pub(super) fn auto_spawn_hero(
             if std::env::var("FISTWORLD_AUTOFOUND").is_ok_and(|v| v == "1") {
                 if let Ok(mut dev) = dev_sender.single_mut() {
                     dev.send::<ReliableChannel>(DevCommand::FoundSettlement {
-                        pos: camera.focus + Vec3::new(-20.0, 0.0, -20.0),
+                        pos: anchor + Vec3::new(-20.0, 0.0, -20.0),
                         name: "Testholt".to_string(),
                     });
                     info!("AUTOFOUND: settlement founding sent");
@@ -224,7 +242,7 @@ pub(super) fn auto_spawn_hero(
             {
                 if let Ok(mut dev) = dev_sender.single_mut() {
                     for i in 0..count {
-                        let pos = camera.focus + Vec3::new(i as f32 * 2.0 - 4.0, 0.0, -6.0);
+                        let pos = anchor + Vec3::new(i as f32 * 2.0 - 4.0, 0.0, -6.0);
                         dev.send::<ReliableChannel>(DevCommand::SpawnNpc { pos });
                     }
                     info!("AUTOSPAWN: {count} villager spawn(s) sent");

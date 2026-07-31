@@ -50,6 +50,16 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             collision::building_index::sync_building_spatial_index,
             collision::streaming::update_static_collider_streaming,
             world::navgrid::sync_obstacle_grid,
+            // Villages run themselves: tag, seek, arrive, recount, decide, build.
+            // Chained because each step reads what the previous one wrote, and
+            // a resident who arrives must be counted before anyone applies for
+            // a permit on their behalf.
+            world::village::tag_villager_intent,
+            world::village::seek_settlement,
+            world::village::arrive_at_settlement,
+            world::village::recount_residents,
+            world::village::consider_permits,
+            world::village::finish_construction,
             world::regions::tick_strategic_world,
             world::regions::log_region_telemetry,
         )

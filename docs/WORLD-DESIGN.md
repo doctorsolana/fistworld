@@ -176,10 +176,19 @@ Who may found:
   a settlement's plan, not to people — so ownership of *ground* is expressed
   through the settlement that claims it, never through a count of structures.
 
-The founder names the place. `shared::names::place_name` generates a suggestion
-so the field is never empty, but the name is the founder's to choose — naming a
-place is the first act of ownership the game offers, and it should not be taken
-away by a generator.
+**A settlement does not need a founder.** Most will not have one. The world
+spawns settlements from the seed, god mode spawns them on command, and neither
+produces a person who founded anything — those places simply exist, named by
+`shared::names::place_name`, and that is a COMPLETE answer rather than a
+placeholder waiting for an owner. Nothing in the data model records who founded
+a settlement, and nothing should: a hall belongs to the moot, not to whoever
+raised it.
+
+Where a PLAYER performs the founding act, the naming is theirs. `place_name`
+still suggests, so the field is never empty, but the name is the player's to
+choose — naming a place is the first act of ownership the game offers and should
+not be taken away by a generator. That is a courtesy extended to the person who
+did the founding, not a claim that founding requires one.
 
 **Seeded settlements.** The world does not start empty. Settlement *sites* are
 chosen deterministically from the world seed at first server start (flat land
@@ -447,6 +456,90 @@ way, and may take a vacant forestry job when she arrives.
 **Forbidden, for the same reason it is affordable:** per-person pathfinding over
 the terrain, per-person needs or schedules, and replicating people to clients.
 Break any of those and the numbers above stop holding.
+
+## 1b. What actually runs today — the autonomous village slice
+
+Everything above §1b is design. This section is a REPORT: it describes the code
+in `server/src/world/village.rs` and `client/src/ui/settlement_panel.rs` as it
+stands, so a reader can tell what the game does from what the game intends. When
+the two disagree, this section is the true one.
+
+The slice was built to answer one question — **can a village run itself?** —
+with a player who does nothing but found the hall and put people on the map.
+
+**The loop, in full.** Each of these is a scheduled server system:
+
+1. Every villager gets an `Intent`, starting at `Idle`. Unhoused, unemployed,
+   resident nowhere. God mode spawns people; it does not place them.
+2. Every 3s an `Idle` villager finds the nearest non-Ruins settlement and walks
+   to its hall. Nowhere to go is a real state, not an error — they look again.
+3. Within 6m of the hall they become `Resident`. The hall is their lodging until
+   houses exist, which is why the first House is a need rather than a luxury.
+4. The settlement's resident count is RE-DERIVED from the roster every tick, not
+   incremented on arrival. A counter nudged by events drifts the first time an
+   event is missed, and a population that disagrees with the people standing in
+   the square is the exact lie the encyclopedia must never tell.
+5. Every 4s a settlement with no permit in flight asks what it lacks, in strict
+   order: **Farmstead → Lumberjack Hut → House**. What is already APPROVED counts
+   as had, which is what stops three residents all deciding the village needs a
+   farm in the same instant.
+6. A resident applies. No residents, no permit — an empty foundation does not
+   build itself, which is the whole point of §1's "a hall is a site, not a
+   village". The applicant becomes the building's owner, by name, and it is
+   whoever holds the FEWEST buildings already. That last part is not a detail:
+   taking whichever resident the query returned first gave one villager the
+   entire village and left the other two owning nothing, which makes the roster
+   decorative and makes "the wheat farm stopped because the farmer died"
+   meaningless — one death would take everything with it.
+7. Siting is a deterministic ring search out from the hall: 12 bearings per ring,
+   6m steps, rejecting slope over 0.30, ground within 1.5m of the waterline, and
+   anything that would overlap what is already there. Houses ring 12–26m, work
+   buildings 30–60m, so the place reads as a village rather than a scatter.
+   Deterministic on purpose: the same village in the same state makes the same
+   choice, so a bug is reproducible rather than a story about what happened once.
+8. Six seconds later the building exists. The timer is a stand-in for real
+   construction, kept because a DECISION and its RESULT must be separate events —
+   otherwise "under construction" is not a state the panel can honestly show.
+
+**Clicking the hall opens the settlement panel** — name, tier, residents,
+treasury, what stands (with each building's owner by name), what is going up, who
+lives there, and what a permit costs. It contains no controls, because there is
+nothing for a player to approve: permits from residents are auto-granted, and
+the first ones are free. The panel is a window onto decisions already made.
+
+**Water is refused twice**, at founding and at siting. Worth stating because the
+failure was not obvious: a lake bed is the FLATTEST ground in reach, so a slope
+test alone actively steers a village into the water. A hall founded in a lake
+would then look fine and never build anything, because every site its residents
+tried would be refused — a silent failure that reads as "the village is broken".
+
+**Deliberately not in this slice**, so the autonomy could be judged on its own:
+immigration, births, boats, markets, goods, production, employment and worker
+slots, and the settlement planner of §1. A building here is a decision that
+happened, not an economy that runs. The ring search is emphatically NOT the
+planner — it knows nothing of roads, frontage, farmland quality or forest
+proximity, and the real planner replaces it wholesale.
+
+**Where this slice diverges from the design above**, all of it deferred rather
+than decided against:
+
+- Buildings ARE standalone entities with a position and an owner, which §1 says
+  the model has no room for. That is a real tension, taken knowingly: three
+  buildings per village is nowhere near the tick cost §1 was protecting against,
+  and the owner-by-name is what makes "the wheat farm stopped because the farmer
+  died" expressible at all. It converges when the planner lands.
+- Residency is replicated per person (`Residence`), where §1a forbids replicating
+  people. Three villagers is not thirty thousand; the forbidding stands for the
+  strategic layer.
+- Tier never advances. Founding lands at Hamlet and stays there — the ladder in
+  §1 has no implementation.
+
+**The acceptance test is code**, not a checklist: `village::tests::
+three_villagers_settle_and_build_a_village_unaided` runs the real scheduled
+systems including `step_units`, so the walking, the arrival radius, the permit
+clock and the water rule are all under test. It asserts three residents joined
+unaided, all three buildings went up in order, every one is owned by a named
+person, nothing was built in the lake, and nobody was charged.
 
 ## 2. Goods and markets
 
@@ -717,16 +810,27 @@ Two smaller corrections to this section's assumptions, both verified against the
 
 ## 9. Deliberately NOT building (yet)
 
-- Per-villager BEHAVIOUR simulation — needs, schedules, daily routines, or
-  per-person pathfinding over the terrain. Note this is not the same as saying
-  villagers are anonymous: §1a makes every person a specific named individual
-  with a trade and a workplace, permanently. What is deferred is simulating what
-  they DO minute to minute. Identity is ~24 bytes; behaviour is unbounded.
+- Per-villager BEHAVIOUR simulation — needs, schedules, daily routines. Note
+  this is not the same as saying villagers are anonymous: §1a makes every person
+  a specific named individual with a trade and a workplace, permanently. What is
+  deferred is simulating what they DO minute to minute. Identity is ~24 bytes;
+  behaviour is unbounded.
+
+  **Amended by §1b:** per-person walking over the terrain is no longer deferred
+  for EMBODIED people — villagers walk to the hall they chose, on the real
+  ground. What §1a forbids is per-person pathfinding at strategic scale, for
+  people who are `AtPlace` or `Travelling`. A handful of villagers standing in
+  a village you are looking at is not that population.
 - A goods graph beyond 4+coin — tools/luxury/cloth wait until cities exist
   and need demand sinks.
 - Diplomacy UI — relations are consequences of actions until proven boring.
-- Player-founded settlements and sieges — rung 6/7 problems; the economy has
-  to be worth fighting over first.
+- Sieges — a rung 6/7 problem; the economy has to be worth fighting over first.
+
+  **Player founding is no longer deferred** (§1b): raising a hall in god mode
+  founds a settlement today, with spacing, water and naming all enforced
+  server-side. What is still missing is the COST of founding — right now it is
+  free, which is fine while only god mode can do it and wrong the moment
+  ordinary players can.
 - A live reactive settlement planner — the deterministic plan plus per-plot
   archetype choice covers growth; revisit only if settlements feel static.
 - Any economy client-side — clients render and request; the server owns every

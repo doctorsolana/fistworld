@@ -209,6 +209,18 @@ pub fn handle_dev_commands(
                         );
                         continue;
                     }
+                    // Dry land only. A hall founded in a lake would look
+                    // fine and then never build anything, because every site
+                    // its residents tried would be refused as underwater -- a
+                    // silent failure that reads as "the village is broken".
+                    let ground = terrain.get_height(pos.x, pos.z);
+                    if terrain
+                        .water_level()
+                        .is_some_and(|level| ground < level + crate::world::village::FREEBOARD)
+                    {
+                        info!("Dev: cannot found a settlement in the water here");
+                        continue;
+                    }
                     let name = name.trim().to_string();
                     let name = if name.is_empty() {
                         // A generator only ever SUGGESTS; this is the fallback
@@ -219,10 +231,12 @@ pub fn handle_dev_commands(
                     } else {
                         name
                     };
-                    let grounded = Vec3::new(pos.x, terrain.get_height(pos.x, pos.z), pos.z);
+                    let grounded = Vec3::new(pos.x, ground, pos.z);
                     let entity = commands
                         .spawn((
                             shared::components::Settlement {
+                                residents: 0,
+                                treasury: 0,
                                 name: name.clone(),
                                 // Founding lands you at the bottom LIVING tier.
                                 // Ruins is only ever reached by destruction.

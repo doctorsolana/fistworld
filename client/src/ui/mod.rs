@@ -30,6 +30,7 @@ pub mod main_menu;
 pub mod modal;
 pub mod name_entry;
 pub mod pause_menu;
+pub mod settlement_panel;
 pub mod styles;
 pub mod world_map;
 
@@ -41,4 +42,5 @@ pub use main_menu::MainMenuPlugin;
 pub use main_menu::ServerAddress;
 pub use name_entry::NameEntryPlugin;
 pub use pause_menu::PauseMenuPlugin;
+pub use settlement_panel::SettlementPanelPlugin;
 pub use world_map::WorldMapPlugin;

@@ -22,7 +22,7 @@ infrastructure is a phase that cannot be tested.
 | Phase | Name | Size | State |
 |---|---|---|---|
 | 0 | Let me in | M | in progress |
-| 1 | The world remembers | L | not started |
+| 1 | The world remembers | L | in progress — founding, picking, panels and the autonomous village slice land; persistence and identity do not |
 | 2 | The seam | L | not started |
 | 3 | They eat | M | not started |
 | 4 | Prices and the hand cart | M | not started |
@@ -99,20 +99,63 @@ join keys or on-disk contracts that are ruinous to change later.
       AtPlace is populated at first. Everyone must always have a knowable
       position; only bodies are conditional on observation.
 - [x] **Founding as an act: the moot hall.** `DevCommand::FoundSettlement`
-      places a hall, the founder names the place, a settlement exists.
-      Spacing rule enforced server-side.
+      places a hall and a settlement exists. Spacing, water and naming all
+      enforced server-side. No founder is recorded — a world- or god-spawned
+      settlement has none, and the hall belongs to the moot.
 - [ ] Founders: a hall with an empty roster is a SITE, not a hamlet. Player
       foundings need pioneers brought to them; world-seeded ones start with
       deterministic households.
-- [ ] Naming in the UI -- the founder types it, `place_name` only suggests.
-      Needs a text field, which the UI does not have yet.
+- [ ] Naming in the UI, for the case where a PLAYER founds: they type it,
+      `place_name` only suggests. Needs a text field the UI does not have yet.
+      Today founding always sends an empty name and the server generates one,
+      which is the correct behaviour for world and god foundings and a gap only
+      for player ones.
 - [ ] Deterministic settlement site selection from the seed (for the world's
       OWN settlements; player founding does not need it)
-- [ ] Settlement names -- `place_name` suggests, the founder decides
 - [ ] Map markers (there is no marker layer today; the map's only marker is bound to a
       component nothing inserts)
-- [ ] Screen-space picking so a settlement can be clicked
-- [ ] Inspect panel (copy the encyclopedia's master/detail layout)
+- [x] Screen-space picking so a settlement can be clicked. Halls opt into
+      `Selectable` with a building-sized hit shape; a place is never commandable,
+      so selecting one never produces an order.
+- [x] Inspect panel. `client/src/ui/settlement_panel.rs` — name, tier, residents
+      by name, treasury, what stands (with owners), what is going up, permit
+      prices. Contains no controls, because the village decides for itself.
+- [x] PLACES tab in the encyclopedia: every known settlement, with bearing and
+      distance from the player.
+
+**The autonomous village slice** (WORLD-DESIGN §1b — a whole experiment, run to
+answer "can a village run itself?" before any of the economy above exists):
+
+- [x] Villagers start unhoused, unemployed and resident nowhere. God mode spawns
+      people; it never places them.
+- [x] Uncommitted villagers find the nearest non-Ruins settlement and walk to its
+      hall on the real terrain. Arriving makes them residents.
+- [x] Resident count RE-DERIVED from the roster every tick, never incremented on
+      arrival — a nudged counter drifts, and a population that disagrees with the
+      people standing there is the lie the encyclopedia must never tell.
+- [x] `Residence` replicated per person, so a panel can name who lives where.
+- [x] One permit in flight per settlement; needs taken in strict order
+      (Farmstead → Lumberjack Hut → House) counting BUILT and PLANNED alike.
+- [x] A resident applies and becomes the building's owner, by name — whoever
+      holds the fewest already, so each person has a stake rather than one
+      villager owning the whole place. No residents, no permits: a foundation
+      does not build itself.
+- [x] Deterministic ring siting: 12 bearings, 6m rings, rejecting slope, water
+      and overlap. Houses ring close, work buildings far.
+- [x] Water refused at BOTH founding and siting. A lake bed is the flattest
+      ground in reach, so a slope test alone steers a village into the water.
+- [x] Permit → timer → building, so "under construction" is a state the panel can
+      honestly show.
+- [x] End-to-end test over the real scheduled systems:
+      `village::tests::three_villagers_settle_and_build_a_village_unaided`.
+- [ ] Founding costs something. Free is fine while only god mode can found and
+      wrong the moment ordinary players can.
+- [ ] Permits cost something, and the treasury moves. The fee path exists and
+      charges zero; the panel already says "free" rather than hiding it.
+- [ ] Occupations. A Farmstead has an owner but nobody works in it, so nothing
+      §1a promises about "the wheat farm stops when the farmer dies" is testable
+      yet. This is the next honest step, and it is Phase 3's territory.
+- [ ] Tier advancement. Founding lands at Hamlet and stays there forever.
 
 **Deliberately deferred:** a billboard/impostor/symbol renderer. Settlements read as
 screen-projected UI labels, using the world-to-panel projection the map already has. That

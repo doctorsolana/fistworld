@@ -86,6 +86,123 @@ pub struct Settlement {
     /// ownership the game offers, so a generator only ever SUGGESTS.
     pub name: String,
     pub tier: SettlementTier,
+    /// How many people live here.
+    ///
+    /// A COUNT on the wire, not the roster itself: the roster is server truth
+    /// and can be long, while every client needs the number for the map screen.
+    /// Nobody sets this by hand -- residents arrive on their own feet and the
+    /// server counts them.
+    pub residents: u32,
+    /// Local coin. Permit fees land here, including for independent
+    /// settlements: a place's income is its own, and belongs to nobody else.
+    /// Every permit is free today, so this stays at zero and says so honestly.
+    pub treasury: u32,
+}
+
+/// What a building in a settlement IS, as distinct from what it looks like.
+///
+/// Semantic rather than artistic on purpose. `BuildingType` names a glTF file;
+/// this names a role in the economy, and the two are deliberately separable so
+/// a Farmstead can be re-skinned without touching a single rule. Today several
+/// of these borrow art that was modelled for something else.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SettlementBuildingKind {
+    /// The founding act. One per settlement, and its position IS the
+    /// settlement's position.
+    Hall,
+    /// Grows food.
+    Farmstead,
+    /// Cuts timber.
+    LumberjackHut,
+    /// Somewhere to live.
+    House,
+}
+
+impl SettlementBuildingKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            SettlementBuildingKind::Hall => "MOOT HALL",
+            SettlementBuildingKind::Farmstead => "FARMSTEAD",
+            SettlementBuildingKind::LumberjackHut => "LUMBERJACK HUT",
+            SettlementBuildingKind::House => "HOUSE",
+        }
+    }
+
+    /// The art that stands in for this role today.
+    ///
+    /// A windmill is not a farmstead and a log cabin is not a moot hall; both
+    /// read closely enough to test the systems, and swapping them later is one
+    /// line here rather than a change to any rule.
+    pub fn art(self) -> crate::building::BuildingType {
+        use crate::building::BuildingType as Art;
+        match self {
+            SettlementBuildingKind::Hall => Art::LogCabin,
+            SettlementBuildingKind::Farmstead => Art::Windmill,
+            SettlementBuildingKind::LumberjackHut => Art::LumberjackHut,
+            SettlementBuildingKind::House => Art::House05,
+        }
+    }
+
+    /// How far from the hall this belongs, in metres.
+    ///
+    /// Houses cluster around the hall because that is what a village looks
+    /// like; workplaces sit out where their work is. Real siting against
+    /// farmland and forest comes with the settlement planner -- this is the
+    /// crude version that gets the shape right.
+    pub fn preferred_ring(self) -> (f32, f32) {
+        match self {
+            SettlementBuildingKind::Hall => (0.0, 0.0),
+            SettlementBuildingKind::House => (12.0, 26.0),
+            SettlementBuildingKind::Farmstead => (30.0, 60.0),
+            SettlementBuildingKind::LumberjackHut => (30.0, 60.0),
+        }
+    }
+
+    /// Ground a building of this kind needs to itself, in metres.
+    pub fn clearance(self) -> f32 {
+        match self {
+            SettlementBuildingKind::Hall => 10.0,
+            SettlementBuildingKind::Farmstead => 12.0,
+            SettlementBuildingKind::LumberjackHut => 9.0,
+            SettlementBuildingKind::House => 8.0,
+        }
+    }
+}
+
+/// Where a person lives.
+///
+/// Replicated by NAME rather than by entity because residence is a fact about a
+/// person that outlives any particular client's view of the settlement, and
+/// because it is what the encyclopedia wants to print: "Aldith of Yewcrag".
+/// Absent means unhoused -- a real state, not a missing value.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Residence(pub String);
+
+/// A permitted building that has not gone up yet.
+///
+/// Replicated so the settlement panel can honestly distinguish "approved" from
+/// "standing" -- a decision and its result are separate events, and a panel that
+/// showed only finished buildings would make construction invisible.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ConstructionSite {
+    pub kind: SettlementBuildingKind,
+    pub settlement: String,
+}
+
+/// A building standing in a settlement.
+///
+/// Replicated as its own entity so the client can draw it without knowing any
+/// of the rules that put it there.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SettlementBuilding {
+    pub kind: SettlementBuildingKind,
+    /// The settlement this belongs to, by NAME -- the same identity the
+    /// encyclopedia and the dev commands use, until `SettlementId` exists
+    /// (ROADMAP Phase 1).
+    pub settlement: String,
+    /// Who applied for the permit. Employment and worker slots come later;
+    /// today this only records who wanted it built.
+    pub owner: Option<String>,
 }
 
 /// The rungs a settlement climbs. Every step asks for something the step below

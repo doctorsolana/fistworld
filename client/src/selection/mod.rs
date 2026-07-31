@@ -30,6 +30,7 @@ impl Plugin for SelectionPlugin {
                 // Order matters: drop a dead selection before anything reads it,
                 // then pick, then let the ring follow what is now selected.
                 tag_characters_selectable,
+                tag_settlements_selectable,
                 clear_stale_selection,
                 pick::pick_on_left_click,
                 order::issue_order_on_right_click,
@@ -54,6 +55,14 @@ pub struct Selectable {
 }
 
 impl Selectable {
+    /// A building-sized target: a hall is clicked at its walls, not its axis.
+    pub fn hall() -> Self {
+        Self {
+            radius: 4.5,
+            height: 5.0,
+        }
+    }
+
     /// A person-sized target.
     pub fn person() -> Self {
         Self {
@@ -245,6 +254,27 @@ fn clear_stale_selection(
 /// Polls `Without<Selectable>` rather than reacting to `Added<..>` because
 /// replication delivers a character's components in separate batches, and a
 /// one-shot on `Added` would miss whoever's position arrived on a later tick.
+/// Halls are clickable, so a settlement can be inspected by pointing at it.
+///
+/// Separate from the character tagger because a settlement is not a person and
+/// wants a different hit shape -- and because command never applies to it: a
+/// place cannot be ordered anywhere.
+fn tag_settlements_selectable(
+    mut commands: Commands,
+    settlements: Query<
+        Entity,
+        (
+            With<shared::components::Settlement>,
+            With<shared::components::PlayerPosition>,
+            Without<Selectable>,
+        ),
+    >,
+) {
+    for entity in settlements.iter() {
+        commands.entity(entity).insert(Selectable::hall());
+    }
+}
+
 fn tag_characters_selectable(
     mut commands: Commands,
     characters: Query<

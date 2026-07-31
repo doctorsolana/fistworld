@@ -171,7 +171,8 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
 
     // FISTFORCE_CAPTURE_SETTLEMENT=1 founds a settlement at the shot's focus so
     // the moot hall can be photographed without a server.
-    if std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").is_ok_and(|v| v == "1") {
+    // "village" additionally populates the first one; see below.
+    if std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").is_ok_and(|v| v == "1" || v == "village") {
         commands.queue(|world: &mut World| {
             // The FIRST SHOT's focus, not the camera's: this runs in Startup,
             // before `apply_shot` has moved the camera, so reading the camera
@@ -203,9 +204,55 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                     shared::components::Settlement {
                         name: name.to_string(),
                         tier,
+                        residents: (i as u32) * 3,
+                        treasury: 0,
                     },
                     shared::components::PlayerPosition(Vec3::new(at.x, y, at.z)),
                 ));
+            }
+
+            // FISTFORCE_CAPTURE_SETTLEMENT=village also populates the FIRST
+            // settlement: residents on record, buildings standing, one going
+            // up. These are offline stand-ins for what the server's autonomy
+            // produces, so the settlement panel can be photographed without
+            // waiting out a live village.
+            if std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").is_ok_and(|v| v == "village") {
+                use shared::components::SettlementBuildingKind as K;
+                let people: Vec<String> =
+                    (0..3).map(|i| shared::names::person_name(7_000 + i)).collect();
+                for name in &people {
+                    world.spawn((
+                        shared::components::CharacterName(name.clone()),
+                        shared::components::Residence("Brackwater".to_string()),
+                    ));
+                }
+                for (index, kind) in [K::Farmstead, K::LumberjackHut].into_iter().enumerate() {
+                    let at = focus + Vec3::new(30.0 + index as f32 * 14.0, 0.0, 18.0);
+                    let ground = world
+                        .get_resource::<shared::terrain::WorldTerrain>()
+                        .map(|t| t.get_height(at.x, at.z))
+                        .unwrap_or(at.y);
+                    world.spawn((
+                        shared::components::SettlementBuilding {
+                            kind,
+                            settlement: "Brackwater".to_string(),
+                            owner: Some(people[index].clone()),
+                        },
+                        shared::components::PlayerPosition(Vec3::new(at.x, ground, at.z)),
+                        shared::components::PlayerRotation(0.0),
+                    ));
+                }
+                world.spawn(shared::components::ConstructionSite {
+                    kind: K::House,
+                    settlement: "Brackwater".to_string(),
+                });
+                if let Some(mut settlement) = world
+                    .query::<&mut shared::components::Settlement>()
+                    .iter_mut(world)
+                    .find(|s| s.name == "Brackwater")
+                {
+                    settlement.residents = people.len() as u32;
+                }
             }
         });
     }
@@ -396,6 +443,19 @@ fn spawn_capture_heroes(
                 world.insert_resource(crate::camera_rts::LocalPeerId(owner));
             }
             world.resource_mut::<crate::selection::Selection>().entities = entities;
+        });
+    } else if std::env::var("FISTFORCE_CAPTURE_SELECT").is_ok_and(|v| v == "hall") {
+        // Selects the first SETTLEMENT rather than a person, so the settlement
+        // panel can be photographed. A place is never commandable, so this is
+        // always a single selection.
+        commands.queue(|world: &mut World| {
+            let entity = world
+                .query_filtered::<Entity, With<shared::components::Settlement>>()
+                .iter(world)
+                .next();
+            if let Some(entity) = entity {
+                world.resource_mut::<crate::selection::Selection>().entities = vec![entity];
+            }
         });
     } else if std::env::var("FISTFORCE_CAPTURE_SELECT").is_ok_and(|v| v == "1") {
         commands.queue(|world: &mut World| {
