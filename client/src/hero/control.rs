@@ -32,9 +32,13 @@ pub struct HeroSpawnArm(pub bool);
 #[derive(Resource, Default)]
 pub struct NpcSpawnArm(pub bool);
 
+/// Whether the next terrain click founds a settlement (armed by the HUD).
+#[derive(Resource, Default)]
+pub struct FoundSpawnArm(pub bool);
+
 /// True when any placement is armed, so the selection picker can stand aside.
-pub fn placement_armed(hero: &HeroSpawnArm, npc: &NpcSpawnArm) -> bool {
-    hero.0 || npc.0
+pub fn placement_armed(hero: &HeroSpawnArm, npc: &NpcSpawnArm, found: &FoundSpawnArm) -> bool {
+    hero.0 || npc.0 || found.0
 }
 
 /// True when a replicated hero owned by the local peer exists.
@@ -64,6 +68,7 @@ pub(super) fn handle_world_clicks(
     selected: Res<SelectedOutfit>,
     mut arm: ResMut<HeroSpawnArm>,
     mut npc_arm: ResMut<NpcSpawnArm>,
+    mut found_arm: ResMut<FoundSpawnArm>,
     local: Option<Res<LocalPeerId>>,
     heroes: Query<&Hero>,
     ui_blockers: Query<&Interaction>,
@@ -75,16 +80,18 @@ pub(super) fn handle_world_clicks(
     // Escape cancels an armed placement. (NOT right-click: RMB-drag is the
     // camera orbit, and cancelling on it silently killed every placement
     // that involved looking around first.)
-    if (arm.0 || npc_arm.0) && keyboard.just_pressed(KeyCode::Escape) {
+    if (arm.0 || npc_arm.0 || found_arm.0) && keyboard.just_pressed(KeyCode::Escape) {
         arm.0 = false;
         npc_arm.0 = false;
+        found_arm.0 = false;
         return;
     }
     // Losing god capability or leaving god mode disarms — an invisible armed
     // state must never swallow or convert a later click.
-    if (arm.0 || npc_arm.0) && (!capability.0 || *mode != HudMode::God) {
+    if (arm.0 || npc_arm.0 || found_arm.0) && (!capability.0 || *mode != HudMode::God) {
         arm.0 = false;
         npc_arm.0 = false;
+        found_arm.0 = false;
     }
     if !mouse.just_pressed(MouseButton::Left) || input_state.ui_blocking() {
         return;
@@ -116,6 +123,23 @@ pub(super) fn handle_world_clicks(
             }
         }
         arm.0 = false;
+        return;
+    }
+
+    // Founding disarms after one placement: a settlement is a deliberate act,
+    // not something to sprinkle, and the spacing rule would reject the second
+    // one anyway.
+    if found_arm.0 {
+        if let Ok(mut sender) = dev_sender.single_mut() {
+            // Empty name lets the server suggest one from the position; naming
+            // properly is a UI job for when there is a text field worth using.
+            sender.send::<ReliableChannel>(DevCommand::FoundSettlement {
+                pos: target,
+                name: String::new(),
+            });
+            info!("Settlement founding requested at {target:?}");
+        }
+        found_arm.0 = false;
         return;
     }
 
@@ -182,6 +206,18 @@ pub(super) fn auto_spawn_hero(
 
             // FISTWORLD_AUTOSPAWN_NPC=<n> also drops n villagers, so the god
             // SpawnNpc path is exercised headlessly instead of only by hand.
+            // FISTWORLD_AUTOFOUND=1 founds a settlement at the camera focus,
+            // so the whole found -> replicate -> draw path is exercised
+            // headlessly rather than only by hand.
+            if std::env::var("FISTWORLD_AUTOFOUND").is_ok_and(|v| v == "1") {
+                if let Ok(mut dev) = dev_sender.single_mut() {
+                    dev.send::<ReliableChannel>(DevCommand::FoundSettlement {
+                        pos: camera.focus + Vec3::new(-20.0, 0.0, -20.0),
+                        name: "Testholt".to_string(),
+                    });
+                    info!("AUTOFOUND: settlement founding sent");
+                }
+            }
             if let Some(count) = std::env::var("FISTWORLD_AUTOSPAWN_NPC")
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())

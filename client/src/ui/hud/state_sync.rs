@@ -435,3 +435,34 @@ pub(super) fn sync_spawn_npc_button(
         }
     }
 }
+
+/// Found button reflects whether founding is armed.
+pub(super) fn sync_found_village_button(
+    found_arm: Res<crate::hero::control::FoundSpawnArm>,
+    mut buttons: Query<(&mut BackgroundColor, &mut BorderColor), With<FoundVillageButton>>,
+    mut labels: Query<(&mut Text, &mut TextColor), With<FoundVillageLabel>>,
+) {
+    let (label, text_color, border) = if found_arm.0 {
+        ("CLICK TO FOUND", INK_INVERSE, PLATE_RULE)
+    } else {
+        ("FOUND VILLAGE", INK, PLATE_RULE_SOFT)
+    };
+    for (mut bg, mut border_color) in buttons.iter_mut() {
+        let background = if found_arm.0 { BUTTON_PRESSED } else { BUTTON_NORMAL };
+        if bg.0 != background {
+            bg.0 = background;
+        }
+        let next = BorderColor::from(border);
+        if *border_color != next {
+            *border_color = next;
+        }
+    }
+    for (mut text, mut color) in labels.iter_mut() {
+        if text.0 != label {
+            text.0 = label.to_string();
+        }
+        if color.0 != text_color {
+            color.0 = text_color;
+        }
+    }
+}

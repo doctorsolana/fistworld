@@ -23,7 +23,7 @@ use super::{
     BOX_MIN_PX,
 };
 use crate::camera_rts::{CursorRay, CursorTerrainHit};
-use crate::hero::control::{placement_armed, HeroSpawnArm, NpcSpawnArm};
+use crate::hero::control::{placement_armed, FoundSpawnArm, HeroSpawnArm, NpcSpawnArm};
 use crate::input::InputState;
 
 /// Project a world point into WINDOW pixels, or `None` if it is off screen.
@@ -57,6 +57,7 @@ pub(super) fn pick_on_left_click(
     input_state: Res<InputState>,
     spawn_arm: Res<HeroSpawnArm>,
     npc_arm: Res<NpcSpawnArm>,
+    found_arm: Res<FoundSpawnArm>,
     cursor_ray: Res<CursorRay>,
     terrain_hit: Res<CursorTerrainHit>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -75,7 +76,7 @@ pub(super) fn pick_on_left_click(
         // become a selection. Latched AT PRESS rather than re-tested at release,
         // so press-on-HUD then drag into the world cannot marquee the world.
         let blocked = input_state.ui_blocking()
-            || placement_armed(&spawn_arm, &npc_arm)
+            || placement_armed(&spawn_arm, &npc_arm, &found_arm)
             || crate::ui::pointer_over_ui(&ui_blockers);
         *drag = DragBox {
             start: if blocked { None } else { cursor },

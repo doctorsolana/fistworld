@@ -72,6 +72,63 @@ impl CharacterKind {
     }
 }
 
+/// A settlement: the economic atom, and a PLACE rather than a set of buildings.
+///
+/// Buildings are how its plan gets expressed; this is what constitutes it. See
+/// WORLD-DESIGN section 1.
+///
+/// Replicated whole for now because a settlement is currently four small fields.
+/// When it carries stocks and rosters, the summary/detail split (ROADMAP Phase 1)
+/// separates what every client needs from what only nearby clients do.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Settlement {
+    /// Chosen by whoever founded it. Naming a place is the first act of
+    /// ownership the game offers, so a generator only ever SUGGESTS.
+    pub name: String,
+    pub tier: SettlementTier,
+}
+
+/// The rungs a settlement climbs. Every step asks for something the step below
+/// did not -- see the tier table in WORLD-DESIGN section 1.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SettlementTier {
+    /// Only ever reached by DESTRUCTION, never by decline. The bottom living
+    /// tier is a floor.
+    Ruins,
+    /// A city hall and not much else. Where founding lands you.
+    #[default]
+    Hamlet,
+    /// Feeds itself.
+    Village,
+    /// Trade and defence.
+    Town,
+    /// Leisure: something past survival.
+    City,
+}
+
+impl SettlementTier {
+    pub fn label(self) -> &'static str {
+        match self {
+            SettlementTier::Ruins => "RUINS",
+            SettlementTier::Hamlet => "HAMLET",
+            SettlementTier::Village => "VILLAGE",
+            SettlementTier::Town => "TOWN",
+            SettlementTier::City => "CITY",
+        }
+    }
+
+    /// What this rung must acquire to reach the next one. `None` at the top.
+    pub fn next_requirement(self) -> Option<&'static str> {
+        match self {
+            SettlementTier::Ruins => Some("refounding"),
+            SettlementTier::Hamlet => Some("food: a worked farm with surplus"),
+            SettlementTier::Village => Some("trade and defence: a market and a garrison"),
+            SettlementTier::Town => Some("leisure: an inn or a church"),
+            SettlementTier::City => None,
+        }
+    }
+}
+
 /// Who COMMANDS this unit: the lowercase account name of the player whose
 /// orders it obeys.
 ///

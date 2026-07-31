@@ -36,6 +36,13 @@ fn parse_dev_flag(raw: Option<String>) -> bool {
 #[derive(Resource, Default)]
 pub struct VillagerSeed(pub u64);
 
+/// How far apart settlements must be, in metres.
+///
+/// Two settlements closer than this would fight over the same plan footprint
+/// and the same working radius of land, and it is what stops the map being
+/// carpeted in halls.
+pub const MIN_SETTLEMENT_SPACING: f32 = 300.0;
+
 pub fn handle_dev_commands(
     mut commands: Commands,
     dev: Res<DevMode>,
@@ -48,6 +55,10 @@ pub fn handle_dev_commands(
         &mut shared::components::CharacterAffiliation,
     )>,
     kinds: Query<&shared::components::CharacterKind>,
+    settlements: Query<(
+        &shared::components::Settlement,
+        &shared::components::PlayerPosition,
+    )>,
     mut client_links: Query<(&RemoteId, &mut MessageReceiver<DevCommand>), With<ClientOf>>,
     mut warp: Query<&mut TimeWarp>,
     mut villager_seed: ResMut<VillagerSeed>,
@@ -177,6 +188,54 @@ pub fn handle_dev_commands(
                     } else {
                         info!("Dev: no character named '{character}'");
                     }
+                }
+                DevCommand::FoundSettlement { pos, name } => {
+                    if !pos.is_finite() {
+                        continue;
+                    }
+                    let Some(terrain) = terrain.as_ref() else {
+                        continue;
+                    };
+                    // Spacing is enforced HERE, not on the client: it is what
+                    // stops the map being carpeted, so it cannot be advisory.
+                    if let Some(existing) = settlements
+                        .iter()
+                        .find(|(_, p)| p.0.distance(pos) < MIN_SETTLEMENT_SPACING)
+                    {
+                        info!(
+                            "Dev: too close to '{}' to found here ({:.0}m, need {MIN_SETTLEMENT_SPACING:.0}m)",
+                            existing.0.name,
+                            existing.1 .0.distance(pos)
+                        );
+                        continue;
+                    }
+                    let name = name.trim().to_string();
+                    let name = if name.is_empty() {
+                        // A generator only ever SUGGESTS; this is the fallback
+                        // for an empty field, not the naming policy.
+                        shared::names::place_name(
+                            (pos.x as i64 as u64) ^ (pos.z as i64 as u64).rotate_left(17),
+                        )
+                    } else {
+                        name
+                    };
+                    let grounded = Vec3::new(pos.x, terrain.get_height(pos.x, pos.z), pos.z);
+                    let entity = commands
+                        .spawn((
+                            shared::components::Settlement {
+                                name: name.clone(),
+                                // Founding lands you at the bottom LIVING tier.
+                                // Ruins is only ever reached by destruction.
+                                tier: shared::components::SettlementTier::Hamlet,
+                            },
+                            shared::components::PlayerPosition(grounded),
+                            shared::region::RegionCoord::from_world_pos(grounded),
+                            lightyear::prelude::Replicate::to_clients(
+                                lightyear::prelude::NetworkTarget::All,
+                            ),
+                        ))
+                        .id();
+                    info!("Dev: founded '{name}' ({entity:?}) at {grounded:?}");
                 }
                 DevCommand::SetRetinue { unit, commanded } => {
                     // Entity-targeted, because command must be exact and

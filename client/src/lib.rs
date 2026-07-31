@@ -14,6 +14,7 @@ pub mod perf_overlay;
 pub mod profiling;
 pub mod props;
 pub mod selection;
+pub mod settlement;
 pub mod render;
 pub mod states;
 pub mod streaming;

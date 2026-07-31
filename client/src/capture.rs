@@ -168,6 +168,32 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         }
     }
 
+    // FISTFORCE_CAPTURE_SETTLEMENT=1 founds a settlement at the shot's focus so
+    // the city hall can be photographed without a server.
+    if std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").is_ok_and(|v| v == "1") {
+        commands.queue(|world: &mut World| {
+            // The FIRST SHOT's focus, not the camera's: this runs in Startup,
+            // before `apply_shot` has moved the camera, so reading the camera
+            // here plants the settlement at the origin and photographs empty
+            // ground two kilometres away from it.
+            let focus = world
+                .get_resource::<CaptureConfig>()
+                .and_then(|c| c.shots.first().map(|s| s.focus))
+                .unwrap_or_default();
+            let ground = world
+                .get_resource::<shared::terrain::WorldTerrain>()
+                .map(|t| t.get_height(focus.x, focus.z))
+                .unwrap_or(focus.y);
+            world.spawn((
+                shared::components::Settlement {
+                    name: "Testholt".to_string(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                },
+                shared::components::PlayerPosition(Vec3::new(focus.x, ground, focus.z)),
+            ));
+        });
+    }
+
     // FISTFORCE_CAPTURE_HERO_CREATOR=1: open the character-creator modal so
     // captures can verify the live preview + selector UI without a server.
     if std::env::var("FISTFORCE_CAPTURE_HERO_CREATOR").is_ok_and(|v| v == "1") {

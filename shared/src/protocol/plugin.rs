@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::components::{
-    ActiveMapState, CharacterAffiliation, CharacterKind, CharacterName, CommandedBy, CloudSeed, Health, Hero, HeroOutfit, Player,
+    ActiveMapState, CharacterAffiliation, CharacterKind, CharacterName, CommandedBy,
+    Settlement, CloudSeed, Health, Hero, HeroOutfit, Player,
     PlayerPosition, PlayerProgression, PlayerRotation, TimeWarp, WorldTime,
 };
 use crate::terrain::TerrainDeltaChunk;
@@ -31,6 +32,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<CharacterKind>().replicate();
         app.component::<CharacterAffiliation>().replicate();
         app.component::<CommandedBy>().replicate();
+        app.component::<Settlement>().replicate();
 
         // === HEALTH ===
         app.component::<Health>().replicate();

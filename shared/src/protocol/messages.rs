@@ -84,6 +84,14 @@ pub enum DevCommand {
         character: String,
         banner: Option<u8>,
     },
+    /// Found a settlement: raise a city hall here and name the place.
+    ///
+    /// The founding act per WORLD-DESIGN section 1. The server enforces the
+    /// spacing rule -- a client-side check is advisory.
+    FoundSettlement {
+        pos: Vec3,
+        name: String,
+    },
     /// Take a villager into the sender's retinue, or dismiss it.
     ///
     /// Targeted by ENTITY, not by name: `shared::names::person_name` produces

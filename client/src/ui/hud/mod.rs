@@ -49,12 +49,14 @@ impl Plugin for HudPlugin {
                 handle_warp_buttons,
                 handle_spawn_hero_button,
                 actions::handle_spawn_npc_button,
+                actions::handle_found_village_button,
                 sync_clock_chip,
                 sync_mode_chip,
                 sync_god_panel,
                 style_warp_buttons,
                 sync_spawn_hero_button,
                 state_sync::sync_spawn_npc_button,
+                state_sync::sync_found_village_button,
                 state_sync::sync_selection_plate,
                 state_sync::sync_selection_box,
             )
@@ -125,6 +127,12 @@ struct SpawnNpcButton;
 
 #[derive(Component)]
 struct SpawnNpcLabel;
+
+#[derive(Component)]
+struct FoundVillageButton;
+
+#[derive(Component)]
+struct FoundVillageLabel;
 
 // --- the selected-unit plate ------------------------------------------------
 

@@ -195,6 +195,7 @@ fn god_plate() -> impl Bundle {
             hairline(),
             spawn_hero_button(),
             spawn_npc_button(),
+            found_village_button(),
             hairline(),
             (
                 Text::new("G god   J time   N people   M map"),
@@ -268,6 +269,34 @@ fn spawn_hero_button() -> impl Bundle {
         children![(
             SpawnHeroLabel,
             Text::new("SPAWN HERO"),
+            TextFont {
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(INK),
+        )],
+    )
+}
+
+/// Found a settlement: arm placement, next terrain click raises a city hall.
+fn found_village_button() -> impl Bundle {
+    (
+        FoundVillageButton,
+        Button,
+        Node {
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(2.0)),
+            ..default()
+        },
+        BackgroundColor(BUTTON_NORMAL),
+        BorderColor::from(PLATE_RULE_SOFT),
+        children![(
+            FoundVillageLabel,
+            Text::new("FOUND VILLAGE"),
             TextFont {
                 font_size: FontSize::Px(11.0),
                 ..default()

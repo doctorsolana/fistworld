@@ -101,3 +101,21 @@ pub(super) fn handle_spawn_npc_button(
         npc_arm.0 = !npc_arm.0;
     }
 }
+
+/// Arm settlement founding. Disarms the other placements: only one thing can be
+/// waiting on the next click.
+pub(super) fn handle_found_village_button(
+    mut found_arm: ResMut<crate::hero::control::FoundSpawnArm>,
+    mut hero_arm: ResMut<crate::hero::control::HeroSpawnArm>,
+    mut npc_arm: ResMut<crate::hero::control::NpcSpawnArm>,
+    buttons: Query<&Interaction, (With<FoundVillageButton>, Changed<Interaction>)>,
+) {
+    for interaction in buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        hero_arm.0 = false;
+        npc_arm.0 = false;
+        found_arm.0 = !found_arm.0;
+    }
+}
