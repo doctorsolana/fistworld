@@ -62,11 +62,25 @@ one persistent, always-simulating multiplayer world.
    > discriminates at the scale settlements care about BEFORE building site scoring on
    > it (ROADMAP Phase 1). The climate and surface-band halves of this pillar, by
    > contrast, are genuinely live and drive real rendering.
-3. **Statistical at distance, concrete when observed.** Per ARCHITECTURE.md:
-   the strategic layer moves numbers (stocks, populations, caravan positions);
-   the tactical layer spawns real units only inside someone's view bubble.
-   Every system below must define both halves and keep them statistically
-   consistent.
+3. **Statistical at distance, concrete when observed** — but this applies to
+   BEHAVIOUR, not to IDENTITY. The strategic layer moves numbers (stocks,
+   prices, positions along a route); the tactical layer spawns real bodies only
+   inside someone's view bubble. Every system below must define both halves and
+   keep them statistically consistent.
+
+   **Identity is never statistical.** Every person in the world is a specific
+   named person with a trade, a home and a workplace, whether or not anyone is
+   looking at them — see §1a. What is abstracted at distance is what they are
+   *doing* and exactly where they are standing, not *who they are*. A village is
+   never "population 34"; it is thirty-four people, one of whom is Gudrun the
+   Forester, and if she dies the sawmill she worked stops producing.
+
+   This is affordable because identity is tiny and simulation is not. Measured:
+   a person costs ~24 bytes when their name is stored as the `u64` seed that
+   generates it (30,000 people = 0.69 MB), and 10,000 people advancing along
+   cached routes costs 13 microseconds per tick. What does NOT scale, and is
+   therefore forbidden, is per-person pathfinding over the heightfield,
+   per-person needs and schedules, and replicating people to clients.
 4. **Society persists, terrain regenerates.** The map is a seed recipe;
    settlements, clans, stocks, and claims are server state. Wiping
    `server_data` gives a fresh society on the same land.
@@ -95,7 +109,7 @@ down the same ladder that growth walks up.
 Settlement {
     id, name, position, region: RegionCoord,
     tier: Ruins | Hamlet | Village | Town | City,
-    population: f32,          // people, fractional at strategic scale
+    residents: Vec<PersonId>, // NOT a float -- see §1a
     food_stock: f32,
     stocks: [f32; Goods],     // wood, stone, iron, (later: tools, cloth…)
     prosperity: f32,          // 0..100 rolling score
@@ -115,13 +129,44 @@ settlement governs itself — it trades, grows, projects local influence (§5),
 and can stay independent forever. Clans acquire settlements through diplomacy
 or occupation, never by a border quietly swallowing them.
 
-**Founding.** Settlement *sites* are chosen deterministically from the world
-seed at first server start (flat land near water, scored by the diversity and
-richness of `BiomeField::resources` within a working radius ~300m). Sites are data, the
-founding roster is state: the world starts with N settlements seeded across
-the continents, biased so each continent gets a spread of farm/wood/stone/iron
-specialisations. Most start independent; a few clusters start clan-held (§4).
-More can be founded later (by clans or players), and ruins can be refounded.
+**Founding is an act, and the act is a building.** A settlement comes into
+existence when a **city hall** is raised. That is the whole rule: place the
+building, name the place, and a settlement exists at the bottom tier. There is
+no density test, no "three houses make a village", no arithmetic over who owns
+what.
+
+That is deliberate, and it is worth being explicit about why, because the
+obvious alternative is tempting: let players build houses wherever they like and
+have a village *emerge* once enough cluster together. The data model above
+cannot express it. A settlement is a PLACE with a plan; buildings are how that
+plan gets EXPRESSED (`build_cursor`), not what constitutes it. There is no
+standalone building entity with an owner and a position anywhere in this design,
+and adding one would mean re-deriving settlements from geometry on every tick —
+which is exactly what the strategic layer may not do. The city hall gives the
+player the same feeling ("I put a building down and a village appeared") while
+keeping the settlement as the atom.
+
+Who may found:
+
+- **Unclaimed land**, at least `MIN_SETTLEMENT_SPACING` from any existing
+  settlement — so the map cannot be carpeted and two settlements never fight
+  over the same plan footprint.
+- **Land you already hold**, i.e. you own the buildings in that area.
+
+The founder names the place. `shared::names::place_name` generates a suggestion
+so the field is never empty, but the name is the founder's to choose — naming a
+place is the first act of ownership the game offers, and it should not be taken
+away by a generator.
+
+**Seeded settlements.** The world does not start empty. Settlement *sites* are
+chosen deterministically from the world seed at first server start (flat land
+near water, scored by the diversity and richness of `BiomeField::resources`
+within a working radius ~300m). Sites are data, the founding roster is state:
+the world starts with N settlements seeded across the continents, biased so each
+continent gets a spread of farm/wood/stone/iron specialisations. Most start
+independent; a few clusters start clan-held (§4). Ruins can be refounded, which
+is the same act — raising a city hall on the old site, inheriting its name and
+its plan.
 
 > **[correction]** This used to cite "the same spiral-search logic the old landmark
 > placement used" as available machinery. That function was DELETED (commit `1fe84ed`)
@@ -129,10 +174,25 @@ More can be founded later (by clans or players), and ruins can be refounded.
 > and never read the resource field at all. Treat it as deleted prior art worth
 > rewriting, not as a shortcut.
 
-**Production.** Each strategic-economy tick (see §7), a settlement produces
-according to `population × resource_profile`: meadows villages pile up food,
-forest villages wood, highlands stone and — on vein sites — iron. Nobody
-produces everything; that gap is the entire reason trade exists.
+**Production is people in jobs, not population times a multiplier.** Each
+strategic-economy tick (§7), a settlement produces from its FILLED work slots:
+
+```
+output(good) = Σ over filled slots producing that good:
+                   slot.base_yield × worker.skill × local_resource_quality
+```
+
+A built plot exposes work slots; a slot produces only while a living person
+fills it. So a sawmill with nobody in it produces nothing, and when Gudrun the
+Forester dies her slot empties and that mill's output drops until someone takes
+it. This is the whole reason §1a exists: production that reads
+`population × profile` cannot express "the wheat farm stopped because the farmer
+died", and that sentence is the point.
+
+`local_resource_quality` is `BiomeField::resources` sampled around the
+settlement and cached at founding — meadows villages pile up food, forest
+villages wood, highlands stone and, on vein sites, iron. Nobody produces
+everything; that gap is the entire reason trade exists.
 
 **Prosperity and growth.** One scalar drives the tier ladder:
 
@@ -142,17 +202,58 @@ prosperity += k1 * food_surplus_per_capita
             - k3 * unrest (raids, war, famine)
 ```
 
-- Hamlet → Village → Town → City: population above a tier threshold and
-  prosperity above a bar for T sustained minutes; each rung raises both bars.
-- Downgrades are the same rungs walked backward (famine, sacking, lost
-  trade), with hysteresis so tiers don't flap.
-- A settlement that cannot sustain any population eventually bottoms out as
-  **Ruins**: no production, no allegiance, no influence. The site, name,
-  history, and damaged visuals stay on the map — political actions leave
-  permanent marks. Ruins can be refounded as a hamlet (by clans or players),
-  inheriting the site and its plan.
-- Population grows logistically toward a food-supported cap and migrates
-  toward prosperous settlements (a trickle, at the strategic tick).
+**Each rung asks for something the rung below did not.** Growth is not one
+number getting bigger; every step introduces a NEW requirement, which is what
+forces settlements to diversify their buildings and gives each tier a distinct
+character:
+
+| Step | Requires | Expressed as |
+|---|---|---|
+| founded → **Hamlet** | a city hall | the founding act itself |
+| Hamlet → **Village** | it feeds itself | a farm, staffed, food surplus > 0 sustained |
+| Village → **Town** | trade AND defence | a market with trade volume through it, plus a garrison |
+| Town → **City** | leisure | an inn, a church — something past survival |
+
+Every requirement is a BUILDING plus a PERSON WORKING IT plus a sustained
+output. A market with no merchant does not count; a barracks with no garrison
+does not count. Tier is therefore never a number you can farm — it is a shape
+the settlement has to actually take.
+
+Defence sits at the Village → Town step on purpose. Historically a town was a
+place with the right and the means to hold a market safe, and practically it is
+what puts soldiers in the world early enough to fight over anything (§7 war).
+Note this cuts both ways: military strength also gates HOLDING a tier when
+contested, which is where it earns its keep in the late phases.
+
+Population above a tier threshold and prosperity above a bar for T sustained
+minutes remain necessary alongside the requirement above; each rung raises both
+bars, and hysteresis stops tiers flapping.
+
+**The bottom tier is a floor. Ruins require an act, not a trend.**
+A settlement that cannot feed itself shrinks — people leave, slots empty, it
+becomes a hollow, struggling place — but it does NOT quietly rot into Ruins.
+Only destruction does that: a sacking, a razing, a siege carried through.
+
+This overrides the earlier "sustained decline walks a settlement down the same
+ladder that growth walks up" for the bottom rung specifically, and the reasons
+are worth keeping:
+
+- **Ruins should be a scar, not a statistic.** The design already says political
+  actions leave permanent marks. If villages rot from bad arithmetic, ruins stop
+  reading as "something happened here" and become map noise.
+- **Players log off for days.** A settlement you founded silently dying while
+  you slept is exactly the "punishes having a job" failure ARCHITECTURE §5
+  warns about.
+- **It protects the map from erosion.** A mistuned economy could otherwise
+  quietly empty the world. A floor puts the variance in tier, where it is
+  interesting, rather than in existence, where it is just loss.
+
+A struggling hamlet is better content than a deleted one, and it leaves the
+raid that finally ends it something to mean.
+
+Population grows from births against a food-supported cap and migrates toward
+prosperous settlements (a trickle, at the strategic tick) — as PEOPLE moving
+between rosters, not as a float moving between counters.
 
 **The settlement plan: layout is a seed recipe too.** At founding, a
 deterministic generator produces the settlement's entire growth plan from
@@ -173,6 +274,60 @@ settlement need — a riverside industrial plot resolves to mill | warehouse |
 workshop, an outer flat plot to farm | pasture | cottage, a central plot to
 market | inn | merchant house. Needs shape the town's appearance without any
 runtime terrain search.
+
+## 1a. People
+
+**Everyone in the world is somebody.** A settlement's population is a roster of
+named people, not a number:
+
+```
+Person {
+    id: PersonId,
+    name_seed: u64,           // the name is generated, never stored
+    trade: Trade,             // Farmer | Forester | Miner | Mason | Smith | Merchant | Soldier | ...
+    age: u8,
+    home: SettlementId,
+    workplace: Option<SlotId>,
+    alive: bool,
+}
+```
+
+Roughly 24 bytes each. The name is NOT stored — `shared::names::person_name`
+turns the seed into "Gudrun the Forester" on demand, deterministically, in about
+200 nanoseconds. Thirty thousand people is under a megabyte, and their names
+cost nothing until something needs to print one.
+
+**What is simulated, and what is not.** This is the line that makes it
+affordable, and it is not the line people expect:
+
+| Always true, everywhere | Only when observed |
+|---|---|
+| who someone is, and their name | where exactly they are standing |
+| their trade and which slot they work | their animation and gait |
+| who they live with, and where | collision and local steering |
+| whether they are alive | what they are doing this second |
+
+So a village is never a spawner emitting anonymous villagers. When you walk in,
+the bodies that appear ARE the roster — Gudrun is at the sawmill because that is
+her slot, and if you come back tomorrow she is still Gudrun and still there.
+
+**Movement.** People travel along the ROAD GRAPH (§3), never by per-person
+search over the heightfield. A route is computed once for an (origin,
+destination) pair and shared by everyone making that journey; a traveller
+carries `(route, progress)` and advances along it. Measured on this repo's scale:
+routing the entire network is ~21µs per origin, and ten thousand people
+advancing along cached routes costs ~13µs per tick — under a tenth of one
+percent of a frame.
+
+That is what makes **refugee migration** cheap enough to be a real mechanic
+rather than a fantasy: raze a town and its roster does not evaporate, it walks.
+One route, five hundred people following it, and they arrive somewhere else
+looking for empty slots. The story tells itself and the simulation barely
+notices.
+
+**Forbidden, for the same reason it is affordable:** per-person pathfinding over
+the terrain, per-person needs or schedules, and replicating people to clients.
+Break any of those and the numbers above stop holding.
 
 ## 2. Goods and markets
 
@@ -443,8 +598,11 @@ Two smaller corrections to this section's assumptions, both verified against the
 
 ## 9. Deliberately NOT building (yet)
 
-- Per-villager simulation — villagers are population numbers until observed,
-  and even then they're set dressing plus hirelings, not agents with needs.
+- Per-villager BEHAVIOUR simulation — needs, schedules, daily routines, or
+  per-person pathfinding over the terrain. Note this is not the same as saying
+  villagers are anonymous: §1a makes every person a specific named individual
+  with a trade and a workplace, permanently. What is deferred is simulating what
+  they DO minute to minute. Identity is ~24 bytes; behaviour is unbounded.
 - A goods graph beyond 4+coin — tools/luxury/cloth wait until cities exist
   and need demand sinks.
 - Diplomacy UI — relations are consequences of actions until proven boring.

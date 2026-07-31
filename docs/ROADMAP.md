@@ -89,8 +89,17 @@ join keys or on-disk contracts that are ruinous to change later.
 - [ ] Radius aggregator over `BiomeField::resources` — does not exist in any form, and
       `resources()` has never had a production caller, so validate it discriminates before
       building site scoring on it
-- [ ] Deterministic settlement site selection from the seed
-- [ ] Settlement names
+- [ ] **`Person` and the settlement roster, before anything writes a population
+      float.** WORLD-DESIGN 1a makes population a roster of named people rather
+      than a number, and retrofitting that later means tearing out every
+      consumer of `population: f32`. It is ~24 bytes a head and the name model
+      already exists, so there is no reason to defer it.
+- [ ] **Founding as an act: the city hall.** `DevCommand::FoundSettlement`
+      places a hall, the founder names the place, a settlement exists at the
+      bottom tier. Spacing rule against existing settlements.
+- [ ] Deterministic settlement site selection from the seed (for the world's
+      OWN settlements; player founding does not need it)
+- [ ] Settlement names -- `place_name` suggests, the founder decides
 - [ ] Map markers (there is no marker layer today; the map's only marker is bound to a
       component nothing inserts)
 - [ ] Screen-space picking so a settlement can be clicked
@@ -144,11 +153,18 @@ change when it arrives.
 The strategic tick finally gets a body. Note it currently runs an empty loop — the "prove
 it is cheap at world scale" claim has so far been made by timing nothing.
 
-- [ ] Population as a float, growing logistically toward a food-supported cap
-- [ ] Food production from `population x resource_profile`
+- [ ] Work slots on built plots, and people filling them
+- [ ] Food production from FILLED SLOTS, not `population x resource_profile` --
+      a farm with nobody in it produces nothing, which is the whole point
+- [ ] Births against a food-supported cap, and deaths, as roster events
 - [ ] Consumption
 - [ ] Prosperity scalar
-- [ ] Tier ladder both directions with hysteresis, down to Ruins
+- [ ] Tier ladder with the per-rung REQUIREMENTS from WORLD-DESIGN 1 (feeds
+      itself -> trade and defence -> leisure), each needing a building, a worker
+      and sustained output
+- [ ] Hysteresis on every transition
+- [ ] The bottom-tier FLOOR: shrinking never reaches Ruins; only destruction
+      does. A hollow struggling hamlet is better content than a deleted one.
 - [ ] Stagger economy work per settlement (30-60s) rather than sweeping every region
 - [ ] Measure the tick at full world scale and write the real numbers into ARCHITECTURE
 - [ ] **Decide the warp policy.** At 100x the tick hands the economy a 100-simulated-second
@@ -191,7 +207,10 @@ wagons when you get close.
 Cargo rides the seam proven in Phase 2, so this phase adds economics, not architecture.
 
 - [ ] Settlement dispatch toward the best price in range
-- [ ] Strategic movement along the region graph
+- [ ] The ROAD GRAPH and cached routes -- one route per origin/destination pair,
+      shared by everyone travelling it. Measured at this scale: ~21us to route
+      the whole network, ~13us for 10k travellers per tick.
+- [ ] Strategic movement along that graph
 - [ ] Trade income to origin prosperity
 - [ ] Escort and interception interactions
 - [ ] Caravan detail on the map (routes read as arteries)
@@ -263,7 +282,10 @@ border without a battle.
 
 **Playable:** take a realm.
 
-- [ ] Warbands and garrisons
+- [ ] Warbands and garrisons (note: a garrison is already a Town REQUIREMENT
+      from Phase 3, so soldiers exist as people well before this phase)
+- [ ] Refugee migration when a settlement is destroyed: the roster walks to the
+      nearest settlement looking for empty slots, rather than evaporating
 - [ ] Settlement capture
 - [ ] Sieges
 - [ ] Razing and offline protection, designed TOGETHER (razing is permanent, so the rules
