@@ -64,10 +64,13 @@ impl Plugin for EncyclopediaPlugin {
                 state_sync::sync_filter_visuals,
                 state_sync::sync_detail_panel,
                 state_sync::sync_banner_controls,
+                // Click FIRST, then rebuild, then draw: handling the click
+                // last meant a selection did not reach the detail pane until
+                // the following frame.
+                places::handle_place_rows,
                 places::rebuild_place_list,
                 places::sync_place_detail,
                 places::style_place_rows,
-                places::handle_place_rows,
                 state_sync::sync_retinue_button,
                 state_sync::style_person_rows,
             )

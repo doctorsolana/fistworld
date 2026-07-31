@@ -124,6 +124,25 @@ pub(super) fn learn_settlements(
     seen: Query<(&Settlement, &PlayerPosition)>,
     mut places: ResMut<KnownPlaces>,
 ) {
+    // Decide FIRST whether anything changed, using read-only access, and only
+    // then take the mutable borrow. Touching `ResMut` marks the resource changed
+    // even when every write is diff-gated, because merely calling
+    // `.records.iter_mut()` is a `DerefMut`. That flagged `KnownPlaces` as
+    // changed every frame, which made `rebuild_place_list` despawn and respawn
+    // every row every frame, which meant a row never survived long enough for
+    // its `Interaction` to reach `Pressed`. The list rendered perfectly and was
+    // completely unclickable. Measured before the fix: 275 rebuilds in one short
+    // capture, where the correct answer is 1.
+    let needs_update = seen.iter().any(|(settlement, position)| {
+        match places.find(&settlement.name) {
+            Some(record) => record.tier != settlement.tier || record.position != position.0,
+            None => true,
+        }
+    });
+    if !needs_update {
+        return;
+    }
+
     for (settlement, position) in seen.iter() {
         match places
             .records
@@ -131,13 +150,8 @@ pub(super) fn learn_settlements(
             .find(|record| record.name == settlement.name)
         {
             Some(record) => {
-                // Diff-gated: this runs every frame the window is open.
-                if record.tier != settlement.tier {
-                    record.tier = settlement.tier;
-                }
-                if record.position != position.0 {
-                    record.position = position.0;
-                }
+                record.tier = settlement.tier;
+                record.position = position.0;
             }
             None => places.records.push(PlaceRecord {
                 name: settlement.name.clone(),
