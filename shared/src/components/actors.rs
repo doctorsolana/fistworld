@@ -92,8 +92,8 @@ pub struct Settlement {
 /// did not -- see the tier table in WORLD-DESIGN section 1.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SettlementTier {
-    /// Only ever reached by DESTRUCTION, never by decline. The bottom living
-    /// tier is a floor.
+    /// Reached by DESTRUCTION, deliberate razing, or long physical decay after
+    /// abandonment -- never by economic decline alone.
     Ruins,
     /// A city hall and not much else. Where founding lands you.
     #[default]
@@ -121,9 +121,9 @@ impl SettlementTier {
     pub fn next_requirement(self) -> Option<&'static str> {
         match self {
             SettlementTier::Ruins => Some("refounding"),
-            SettlementTier::Hamlet => Some("food: a worked farm with surplus"),
-            SettlementTier::Village => Some("trade and defence: a market and a garrison"),
-            SettlementTier::Town => Some("leisure: an inn or a church"),
+            SettlementTier::Hamlet => Some("food security: fed, grown here or bought in"),
+            SettlementTier::Village => Some("external trade and administration: a working market"),
+            SettlementTier::Town => Some("regional pull: diverse work and real amenities"),
             SettlementTier::City => None,
         }
     }

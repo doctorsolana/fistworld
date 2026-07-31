@@ -1,7 +1,7 @@
-//! Settlements on the client: draw the city hall, and say where places are.
+//! Settlements on the client: draw the moot hall, and say where places are.
 //!
 //! A settlement replicates as a NAME, a TIER and a POSITION -- not as a bag of
-//! buildings. Its city hall is drawn here from that position, because buildings
+//! buildings. Its moot hall is drawn here from that position, because buildings
 //! are how a settlement's plan gets expressed rather than what constitutes it
 //! (WORLD-DESIGN section 1). That is also why the hall is not replicated: it is
 //! derivable, so sending it would be sending the same fact twice.
@@ -29,7 +29,7 @@ impl Plugin for SettlementPlugin {
 #[derive(Component)]
 pub struct SettlementVisual;
 
-/// Give every replicated settlement a city hall.
+/// Give every replicated settlement a moot hall.
 ///
 /// Polls `Without<SettlementVisual>` rather than reacting to `Added<Settlement>`
 /// because replication delivers a settlement's components in separate batches --

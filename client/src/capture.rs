@@ -169,7 +169,7 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
     }
 
     // FISTFORCE_CAPTURE_SETTLEMENT=1 founds a settlement at the shot's focus so
-    // the city hall can be photographed without a server.
+    // the moot hall can be photographed without a server.
     if std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").is_ok_and(|v| v == "1") {
         commands.queue(|world: &mut World| {
             // The FIRST SHOT's focus, not the camera's: this runs in Startup,

@@ -103,7 +103,12 @@ Ruins ↔ Hamlet ↔ Village ↔ Town ↔ City
 Every rung is the same object — including Ruins. There is no separate
 lifecycle state machine: "declining" is never stored, it is visible as
 falling population and prosperity, and sustained decline walks a settlement
-down the same ladder that growth walks up.
+back down the rungs it climbed.
+
+With one asymmetry, and it is deliberate: **decline stops at the bottom
+living rung.** A settlement can shrink to a struggling hamlet and can empty
+to abandoned, but nothing short of destruction turns it to Ruins. See "The
+bottom tier is a floor" below.
 
 ```
 Settlement {
@@ -129,11 +134,23 @@ settlement governs itself — it trades, grows, projects local influence (§5),
 and can stay independent forever. Clans acquire settlements through diplomacy
 or occupation, never by a border quietly swallowing them.
 
-**Founding is an act, and the act is a building.** A settlement comes into
-existence when a **city hall** is raised. That is the whole rule: place the
-building, name the place, and a settlement exists at the bottom tier. There is
-no density test, no "three houses make a village", no arithmetic over who owns
-what.
+**Founding is an act, and the act is a building.** A settlement site comes into
+existence when a **moot hall** is raised. Place the building, name the place, and
+a settlement exists at the bottom rung. There is no density test, no "three
+houses make a village", no arithmetic over who owns what.
+
+"Moot hall" rather than "city hall" because the name has to scale DOWN: the first
+one goes up in an empty field, and calling that a city hall is a lie the player
+can see. A longhouse, a hearth, a moot — the seat of a place that intends to
+become somewhere.
+
+**A hall is a site, not a village.** Raising one does not conjure residents. A
+settlement with an empty roster is a FOUNDATION: it has a name, a position, a
+plan and no life. It becomes a hamlet when people actually live there —
+player-founded settlements need pioneers brought to them, and world-seeded ones
+start with deterministic founding households. This matters because it is the
+difference between founding meaning something and being a button that prints
+villages.
 
 That is deliberate, and it is worth being explicit about why, because the
 obvious alternative is tempting: let players build houses wherever they like and
@@ -151,7 +168,13 @@ Who may found:
 - **Unclaimed land**, at least `MIN_SETTLEMENT_SPACING` from any existing
   settlement — so the map cannot be carpeted and two settlements never fight
   over the same plan footprint.
-- **Land you already hold**, i.e. you own the buildings in that area.
+- **Inside a settlement you already hold**, which is how a Ruins site gets
+  refounded and how a clan plants a second seat in its own territory.
+
+  Note this is deliberately NOT "land where you own the buildings". There is
+  no independently-owned building record in this design — buildings belong to
+  a settlement's plan, not to people — so ownership of *ground* is expressed
+  through the settlement that claims it, never through a count of structures.
 
 The founder names the place. `shared::names::place_name` generates a suggestion
 so the field is never empty, but the name is the founder's to choose — naming a
@@ -210,29 +233,54 @@ character:
 | Step | Requires | Expressed as |
 |---|---|---|
 | founded → **Hamlet** | a city hall | the founding act itself |
-| Hamlet → **Village** | it feeds itself | a farm, staffed, food surplus > 0 sustained |
-| Village → **Town** | trade AND defence | a market with trade volume through it, plus a garrison |
-| Town → **City** | leisure | an inn, a church — something past survival |
+| Hamlet → **Village** | food SECURITY | reliable food, whether grown here or bought in |
+| Village → **Town** | external trade and administration | a market with real volume through it |
+| Town → **City** | regional pull and amenities | diverse employment, and services people travel to |
 
 Every requirement is a BUILDING plus a PERSON WORKING IT plus a sustained
-output. A market with no merchant does not count; a barracks with no garrison
-does not count. Tier is therefore never a number you can farm — it is a shape
-the settlement has to actually take.
+output. A market with no merchant does not count. Tier is therefore never a
+number you can farm — it is a shape the settlement has to actually take.
 
-Defence sits at the Village → Town step on purpose. Historically a town was a
-place with the right and the means to hold a market safe, and practically it is
-what puts soldiers in the world early enough to fight over anything (§7 war).
-Note this cuts both ways: military strength also gates HOLDING a tier when
-contested, which is where it earns its keep in the late phases.
+**Food SECURITY, not local farming.** A mining settlement on bare highland that
+buys its grain in is fed, and should be allowed to grow. Requiring local
+production would make every settlement follow the same build order and would
+quietly forbid the specialisation that makes trade exist at all (pillar 2).
+
+**Military strength is NOT a tier requirement.** An undefended city is still a
+city; it is simply vulnerable — and a frontier hamlet should be able to raise a
+militia, a palisade and a garrison without first becoming a town. Tying the two
+together would make defence a promotion checkbox and would forbid exactly the
+frontier outpost this world wants.
+
+Soldiers are therefore available from the hamlet rung onward. Where military
+strength does bite is in HOLDING what you have: it gates whether a settlement
+survives being contested (§7 war), which is a far more interesting place for it
+than a growth gate.
 
 Population above a tier threshold and prosperity above a bar for T sustained
 minutes remain necessary alongside the requirement above; each rung raises both
 bars, and hysteresis stops tiers flapping.
 
+**Services are not a City-only luxury.** Inns, shrines, healers, markets and
+gathering places should be buildable from the village rung onward, because what
+they actually do is improve retention, draw immigrants and lift prosperity. The
+City rung asks for a *concentration* of them, not their invention.
+
 **The bottom tier is a floor. Ruins require an act, not a trend.**
-A settlement that cannot feed itself shrinks — people leave, slots empty, it
-becomes a hollow, struggling place — but it does NOT quietly rot into Ruins.
-Only destruction does that: a sacking, a razing, a siege carried through.
+Decline has three landings, and only the last is permanent:
+
+| State | How you get there | Recoverable? |
+|---|---|---|
+| **struggling** | prosperity and population fall | yes — it is still a settlement |
+| **abandoned** | the last resident leaves or dies | yes — resettle it; the plan survives |
+| **Ruins** | the core is destroyed, deliberately razed, or left abandoned long enough to physically decay | only by refounding |
+
+So a settlement CAN genuinely leave the active economy, which the earlier
+absolute floor did not allow for — it just cannot do so silently or quickly.
+
+Destroying the hall alone does not erase a populated town. Residents get the
+chance to rebuild their core; a town is its people, and killing a building is
+not killing them. Razing a living settlement means finishing the job.
 
 This overrides the earlier "sustained decline walks a settlement down the same
 ladder that growth walks up" for the bottom rung specifically, and the reasons
@@ -285,6 +333,7 @@ Person {
     id: PersonId,
     name_seed: u64,           // the name is generated, never stored
     trade: Trade,             // Farmer | Forester | Miner | Mason | Smith | Merchant | Soldier | ...
+    skill: u8,                // proficiency in their CURRENT trade
     age: u8,
     home: SettlementId,
     workplace: Option<SlotId>,
@@ -292,38 +341,108 @@ Person {
 }
 ```
 
+**A trade is a job, not a caste.** A forester can take a vacant farm slot and
+work it at reduced skill until they learn it. Without that, one unlucky death in
+a small settlement permanently removes a capability and dooms the place — which
+is punishment, not drama. Retraining is what lets a village recover from a bad
+winter, and it is also what makes a specialist genuinely valuable: skill is
+earned time, so losing your only master smith still hurts.
+
 Roughly 24 bytes each. The name is NOT stored — `shared::names::person_name`
 turns the seed into "Gudrun the Forester" on demand, deterministically, in about
 200 nanoseconds. Thirty thousand people is under a megabyte, and their names
 cost nothing until something needs to print one.
 
-**What is simulated, and what is not.** This is the line that makes it
-affordable, and it is not the line people expect:
+**Everyone always has a position. Almost nobody has a Transform.**
 
-| Always true, everywhere | Only when observed |
+This is the distinction that makes the whole thing work, and it is not the
+obvious one. A person's location is ALWAYS knowable — you can find anyone on the
+map at any zoom, at any moment, and zoom to them. What scales with observation is
+not whether they have a position but whether that position is a *simulated body*.
+
+Every person is in exactly one of three states:
+
+| State | What is stored | Where they are |
+|---|---|---|
+| **AtPlace** | the place (home, workplace, inn, shrine) | that place's activity point |
+| **Travelling** | `route`, `departed_at`, `speed` | DERIVED: evaluate the route at the current world time |
+| **Embodied** | a real Transform, animation, collision | wherever the tactical sim has walked them |
+
+The load-bearing word is DERIVED. A traveller's position is a pure function of
+`(route, departed_at, speed, now)` — so an unobserved person walking to the
+tavern costs **nothing per tick at all**. Nothing advances them. You evaluate
+their position only when something asks: a minimap marker, a zoom-in, a search.
+Ten thousand people walking across the world is ten thousand small records and
+zero per-frame work.
+
+That is why the fantasy survives contact with the budget. Aldric leaves his house
+for the bakery at world-time T; the server records the destination, the route and
+T. Zoom into that street ninety seconds later and Aldric is exactly where ninety
+seconds of walking put him — because his position was always that expression,
+not a number someone had to keep updating. Walk away and his body is discarded;
+his progress along the route is not.
+
+So a village is never a spawner emitting anonymous villagers. The bodies that
+appear ARE the roster, at the positions they already had.
+
+**Reading the world at every zoom.** The simulation can locate ten thousand
+people; showing ten thousand markers would be unreadable. The map shows:
+
+| Zoom | What a person looks like |
 |---|---|
-| who someone is, and their name | where exactly they are standing |
-| their trade and which slot they work | their animation and gait |
-| who they live with, and where | collision and local steering |
-| whether they are alive | what they are doing this second |
+| realm | not individually — settlements show population and activity |
+| regional | groups: a refugee column, a caravan, a warband, with a count |
+| local | individual named markers |
+| tactical | an animated body walking the actual road |
 
-So a village is never a spawner emitting anonymous villagers. When you walk in,
-the bodies that appear ARE the roster — Gudrun is at the sawmill because that is
-her slot, and if you come back tomorrow she is still Gudrun and still there.
+With one exception that overrides all of it: **anyone you have explicitly
+tracked keeps a marker at every zoom.** Find Gudrun in the encyclopedia, track
+her, and she is findable from realm view forever — that is what makes the
+encyclopedia a tool rather than a list.
 
-**Movement.** People travel along the ROAD GRAPH (§3), never by per-person
-search over the heightfield. A route is computed once for an (origin,
-destination) pair and shared by everyone making that journey; a traveller
-carries `(route, progress)` and advances along it. Measured on this repo's scale:
-routing the entire network is ~21µs per origin, and ten thousand people
-advancing along cached routes costs ~13µs per tick — under a tenth of one
-percent of a frame.
+**Movement runs on a graph, and the graph is hierarchical.** People never search
+the heightfield. They route over a movement graph with three tiers:
+
+```
+building entrances  ->  village paths and squares  ->  settlement exits  ->  regional roads
+```
+
+A settlement's generated plan must therefore produce a connected MOVEMENT GRAPH,
+not just decorative roads: entrance nodes, path segments, gathering points, and
+the exits that join the regional network. That graph is what makes a village look
+inhabited, because people are genuinely walking between meaningful places on it.
+
+**A traversable base graph exists before any visible road does.** §3's "roads
+emerge from traffic" is otherwise circular — traffic cannot wear a path along a
+route it has no way to take. So connectivity comes first, as rough cross-country
+routes between settlements; traffic then UPGRADES a route (track, trail, road),
+making it faster and more attractive, which concentrates more traffic on it.
+Roads are the visible record of use, never the precondition for it.
+
+Cost, measured on this repo's scale: routing the entire network is ~21µs per
+origin, and advancing ten thousand travellers costs ~13µs per tick — though note
+that with positions derived rather than stepped, even that is only paid for
+travellers something is actually looking at.
+
+To be precise about what that measurement covers, since it is easy to over-read:
+it measured route interpolation and graph search, and nothing else. It is
+evidence that STRATEGIC MOVEMENT is cheap. It is not evidence that ten thousand
+scheduled, deciding, colliding, replicated NPCs are cheap — which is exactly why
+those things live behind observation.
 
 That is what makes **refugee migration** cheap enough to be a real mechanic
-rather than a fantasy: raze a town and its roster does not evaporate, it walks.
-One route, five hundred people following it, and they arrive somewhere else
-looking for empty slots. The story tells itself and the simulation barely
-notices.
+rather than a fantasy. Raze a town and its roster does not evaporate, it walks:
+
+1. Pick which residents actually escape.
+2. Form one or more refugee PARTIES, each holding a list of `PersonId`.
+3. Compute ONE route per party.
+4. Everyone in the party shares that route and keeps their own identity.
+5. On arrival they become residents and compete for vacant homes and jobs.
+
+A party is a group for ROUTING and for map presentation, never for identity: at
+realm zoom it is a column marker with a count, at local zoom it separates into
+named people, and up close it is individuals walking. Gudrun is Gudrun the whole
+way, and may take a vacant forestry job when she arrives.
 
 **Forbidden, for the same reason it is affordable:** per-person pathfinding over
 the terrain, per-person needs or schedules, and replicating people to clients.

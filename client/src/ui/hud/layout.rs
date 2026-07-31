@@ -278,7 +278,7 @@ fn spawn_hero_button() -> impl Bundle {
     )
 }
 
-/// Found a settlement: arm placement, next terrain click raises a city hall.
+/// Found a settlement: arm placement, next terrain click raises a moot hall.
 fn found_village_button() -> impl Bundle {
     (
         FoundVillageButton,

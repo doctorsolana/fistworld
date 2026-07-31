@@ -94,9 +94,18 @@ join keys or on-disk contracts that are ruinous to change later.
       than a number, and retrofitting that later means tearing out every
       consumer of `population: f32`. It is ~24 bytes a head and the name model
       already exists, so there is no reason to defer it.
-- [ ] **Founding as an act: the city hall.** `DevCommand::FoundSettlement`
-      places a hall, the founder names the place, a settlement exists at the
-      bottom tier. Spacing rule against existing settlements.
+- [ ] The three LOCATION STATES from WORLD-DESIGN 1a -- AtPlace, Travelling
+      (position derived, not stepped) and Embodied -- decided here even if only
+      AtPlace is populated at first. Everyone must always have a knowable
+      position; only bodies are conditional on observation.
+- [x] **Founding as an act: the moot hall.** `DevCommand::FoundSettlement`
+      places a hall, the founder names the place, a settlement exists.
+      Spacing rule enforced server-side.
+- [ ] Founders: a hall with an empty roster is a SITE, not a hamlet. Player
+      foundings need pioneers brought to them; world-seeded ones start with
+      deterministic households.
+- [ ] Naming in the UI -- the founder types it, `place_name` only suggests.
+      Needs a text field, which the UI does not have yet.
 - [ ] Deterministic settlement site selection from the seed (for the world's
       OWN settlements; player founding does not need it)
 - [ ] Settlement names -- `place_name` suggests, the founder decides
@@ -159,12 +168,15 @@ it is cheap at world scale" claim has so far been made by timing nothing.
 - [ ] Births against a food-supported cap, and deaths, as roster events
 - [ ] Consumption
 - [ ] Prosperity scalar
-- [ ] Tier ladder with the per-rung REQUIREMENTS from WORLD-DESIGN 1 (feeds
-      itself -> trade and defence -> leisure), each needing a building, a worker
-      and sustained output
+- [ ] Tier ladder with the per-rung REQUIREMENTS from WORLD-DESIGN 1 (food
+      SECURITY -> trade and administration -> regional pull and amenities),
+      each needing a building, a worker and sustained output. Military is
+      deliberately NOT a rung requirement -- it gates HOLDING a settlement, not
+      growing one.
 - [ ] Hysteresis on every transition
-- [ ] The bottom-tier FLOOR: shrinking never reaches Ruins; only destruction
-      does. A hollow struggling hamlet is better content than a deleted one.
+- [ ] The decline ladder: struggling -> abandoned (recoverable) -> Ruins, where
+      only the last needs destruction, deliberate razing, or long physical decay.
+      Destroying the hall alone must not erase a populated town.
 - [ ] Stagger economy work per settlement (30-60s) rather than sweeping every region
 - [ ] Measure the tick at full world scale and write the real numbers into ARCHITECTURE
 - [ ] **Decide the warp policy.** At 100x the tick hands the economy a 100-simulated-second
@@ -207,9 +219,15 @@ wagons when you get close.
 Cargo rides the seam proven in Phase 2, so this phase adds economics, not architecture.
 
 - [ ] Settlement dispatch toward the best price in range
-- [ ] The ROAD GRAPH and cached routes -- one route per origin/destination pair,
-      shared by everyone travelling it. Measured at this scale: ~21us to route
-      the whole network, ~13us for 10k travellers per tick.
+- [ ] A TRAVERSABLE BASE GRAPH first: rough cross-country routes between
+      settlements, so "roads emerge from traffic" is not circular -- traffic
+      cannot wear a path along a route it cannot take.
+- [ ] Cached routes over it, one per origin/destination pair, shared by everyone
+      travelling it. Traffic UPGRADES a route (track -> trail -> road) rather
+      than creating connectivity.
+- [ ] Positions DERIVED from `(route, departed_at, speed, now)` rather than
+      stepped, so an unobserved traveller costs nothing per tick and still has a
+      minimap position at all times.
 - [ ] Strategic movement along that graph
 - [ ] Trade income to origin prosperity
 - [ ] Escort and interception interactions
@@ -284,8 +302,10 @@ border without a battle.
 
 - [ ] Warbands and garrisons (note: a garrison is already a Town REQUIREMENT
       from Phase 3, so soldiers exist as people well before this phase)
-- [ ] Refugee migration when a settlement is destroyed: the roster walks to the
-      nearest settlement looking for empty slots, rather than evaporating
+- [ ] Refugee migration when a settlement is destroyed: form parties holding
+      real PersonIds, one route per party, and on arrival they compete for
+      vacant homes and jobs. A party groups for ROUTING and map presentation,
+      never for identity.
 - [ ] Settlement capture
 - [ ] Sieges
 - [ ] Razing and offline protection, designed TOGETHER (razing is permanent, so the rules
