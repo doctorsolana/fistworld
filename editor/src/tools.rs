@@ -1153,8 +1153,10 @@ fn choose_forest_kind(preset: ForestBrushPreset, group: ForestPropGroup, roll: f
         Spring_Flower_08,
         Spring_Flower_09,
     ];
-    const LEAVES: &[PropKind] = &[Env_Leaves_02, Env_Leaves_03];
-    const DEAD_GROUND: &[PropKind] = &[Env_Leaves_02, Env_Leaves_03, Rock_1, Rock_2, Rock_3];
+    // The leaf-litter meshes were deleted (corrupt: 283-357 m bounding boxes on a
+    // ground-detail prop). Small flowers are the nearest surviving ground dressing.
+    const LEAVES: &[PropKind] = &[Flower_05, Spring_Flower_09];
+    const DEAD_GROUND: &[PropKind] = &[Flower_05, Rock_1, Rock_2, Rock_3];
 
     match group {
         ForestPropGroup::Tree => match preset {

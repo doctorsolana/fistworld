@@ -48,19 +48,16 @@ pub enum PropKind {
     Spring_Flower_08,
     Spring_Flower_09,
 
-    // environment/leaves
-    Env_Leaves_02,
-    Env_Leaves_03,
-
     // environment/grass
     GrassBlade_9v,
     Env_Grass_Tall_04,
     Env_Grass_06,
     Env_Grass_07,
 
-    // environment/ivy
-    Env_Ivy_08,
-    Env_Ivy_13,
+    // environment/crops — built in-repo by asset_creation/houses/build_wheat_field.py.
+    // Deliberately has NO colliders_manifest.ron entry: a crop field must be walkable so farmers
+    // can stand in it to harvest.
+    Wheat_Field,
 }
 
 impl PropKind {
@@ -100,14 +97,11 @@ impl PropKind {
             "spring_flower_07" => Some(PropKind::Spring_Flower_07),
             "spring_flower_08" => Some(PropKind::Spring_Flower_08),
             "spring_flower_09" => Some(PropKind::Spring_Flower_09),
-            "env_leaves_02" => Some(PropKind::Env_Leaves_02),
-            "env_leaves_03" => Some(PropKind::Env_Leaves_03),
             "grass_blade_9v" => Some(PropKind::GrassBlade_9v),
             "env_grass_tall_04" => Some(PropKind::Env_Grass_Tall_04),
             "env_grass_06" => Some(PropKind::Env_Grass_06),
             "env_grass_07" => Some(PropKind::Env_Grass_07),
-            "env_ivy_08" => Some(PropKind::Env_Ivy_08),
-            "env_ivy_13" => Some(PropKind::Env_Ivy_13),
+            "wheat_field" => Some(PropKind::Wheat_Field),
             _ => None,
         }
     }
@@ -147,70 +141,64 @@ impl PropKind {
             PropKind::Spring_Flower_07 => "spring_flower_07",
             PropKind::Spring_Flower_08 => "spring_flower_08",
             PropKind::Spring_Flower_09 => "spring_flower_09",
-            PropKind::Env_Leaves_02 => "env_leaves_02",
-            PropKind::Env_Leaves_03 => "env_leaves_03",
             PropKind::GrassBlade_9v => "grass_blade_9v",
             PropKind::Env_Grass_Tall_04 => "env_grass_tall_04",
             PropKind::Env_Grass_06 => "env_grass_06",
             PropKind::Env_Grass_07 => "env_grass_07",
-            PropKind::Env_Ivy_08 => "env_ivy_08",
-            PropKind::Env_Ivy_13 => "env_ivy_13",
+            PropKind::Wheat_Field => "wheat_field",
         }
     }
 
     /// Asset scene path (used by the client and by the collider bake tool).
     pub const fn scene_path(&self) -> &'static str {
         match self {
-            PropKind::Rock_1 => "game_assets/environment/rocks/Rock_1.glb#Scene0",
-            PropKind::Rock_2 => "game_assets/environment/rocks/Rock_2.glb#Scene0",
-            PropKind::Rock_3 => "game_assets/environment/rocks/Rock_3.glb#Scene0",
-            PropKind::Rock_4 => "game_assets/environment/rocks/Rock_4.glb#Scene0",
-            PropKind::Rock_5 => "game_assets/environment/rocks/Rock_5.glb#Scene0",
-            PropKind::Tree_01 => "game_assets/environment/trees/Tree_01.glb#Scene0",
-            PropKind::Tree_02 => "game_assets/environment/trees/Tree_02.glb#Scene0",
-            PropKind::Tree_08 => "game_assets/environment/trees/Tree_08.glb#Scene0",
-            PropKind::Tree_09 => "game_assets/environment/trees/Tree_09.glb#Scene0",
-            PropKind::Tree_10 => "game_assets/environment/trees/Tree_10.glb#Scene0",
-            PropKind::Tree_18 => "game_assets/environment/trees/Tree_18.glb#Scene0",
-            PropKind::Tree_29 => "game_assets/environment/trees/Tree_29.glb#Scene0",
-            PropKind::Dead_tree_1 => "game_assets/environment/trees_dead/Dead_tree_1.glb#Scene0",
-            PropKind::Dead_tree_2 => "game_assets/environment/trees_dead/Dead_tree_2.glb#Scene0",
-            PropKind::Dead_tree_3 => "game_assets/environment/trees_dead/Dead_tree_3.glb#Scene0",
-            PropKind::Pine_Tree_1 => "game_assets/environment/trees_pine/Pine_Tree_1.glb#Scene0",
-            PropKind::Pine_Tree_2 => "game_assets/environment/trees_pine/Pine_Tree_2.glb#Scene0",
-            PropKind::Pine_Tree_3 => "game_assets/environment/trees_pine/Pine_Tree_3.glb#Scene0",
-            PropKind::Pine_Tree_4 => "game_assets/environment/trees_pine/Pine_Tree_4.glb#Scene0",
-            PropKind::Bush_01 => "game_assets/environment/bushes/Bush_01.glb#Scene0",
-            PropKind::Bush_02 => "game_assets/environment/bushes/Bush_02.glb#Scene0",
-            PropKind::Bush_03 => "game_assets/environment/bushes/Bush_03.glb#Scene0",
-            PropKind::Bush_04 => "game_assets/environment/bushes/Bush_04.glb#Scene0",
-            PropKind::Flower_01 => "game_assets/environment/flowers/Flower_01.glb#Scene0",
-            PropKind::Flower_02 => "game_assets/environment/flowers/Flower_02.glb#Scene0",
-            PropKind::Flower_03 => "game_assets/environment/flowers/Flower_03.glb#Scene0",
-            PropKind::Flower_04 => "game_assets/environment/flowers/Flower_04.glb#Scene0",
-            PropKind::Flower_05 => "game_assets/environment/flowers/Flower_05.glb#Scene0",
+            PropKind::Rock_1 => "game_assets/environment/rocks/Rock_A.glb#Scene0",
+            PropKind::Rock_2 => "game_assets/environment/rocks/Rock_B.glb#Scene0",
+            PropKind::Rock_3 => "game_assets/environment/rocks/Rock_C.glb#Scene0",
+            PropKind::Rock_4 => "game_assets/environment/rocks/Rock_A.glb#Scene0",
+            PropKind::Rock_5 => "game_assets/environment/rocks/Rock_B.glb#Scene0",
+            PropKind::Tree_01 => "game_assets/environment/trees/Tree01_Graft.glb#Scene0",
+            PropKind::Tree_02 => "game_assets/environment/trees/Oak_A.glb#Scene0",
+            PropKind::Tree_08 => "game_assets/environment/trees/Bare_Gnarled_A.glb#Scene0",
+            PropKind::Tree_09 => "game_assets/environment/trees/Tree09_Graft.glb#Scene0",
+            PropKind::Tree_10 => "game_assets/environment/trees/Birch_A.glb#Scene0",
+            PropKind::Tree_18 => "game_assets/environment/trees/Chestnut_A.glb#Scene0",
+            PropKind::Tree_29 => "game_assets/environment/trees/Tree29_Graft.glb#Scene0",
+            PropKind::Dead_tree_1 => "game_assets/environment/trees_dead/Dead_A.glb#Scene0",
+            PropKind::Dead_tree_2 => "game_assets/environment/trees_dead/Dead_B.glb#Scene0",
+            PropKind::Dead_tree_3 => "game_assets/environment/trees_dead/Dead_C.glb#Scene0",
+            PropKind::Pine_Tree_1 => "game_assets/environment/trees_pine/Pine_A.glb#Scene0",
+            PropKind::Pine_Tree_2 => "game_assets/environment/trees_pine/Pine_B.glb#Scene0",
+            PropKind::Pine_Tree_3 => "game_assets/environment/trees_pine/Pine_Tall_A.glb#Scene0",
+            PropKind::Pine_Tree_4 => "game_assets/environment/trees_pine/Pine_Small_A.glb#Scene0",
+            PropKind::Bush_01 => "game_assets/environment/bushes/Bush_A.glb#Scene0",
+            PropKind::Bush_02 => "game_assets/environment/bushes/Bush_B.glb#Scene0",
+            PropKind::Bush_03 => "game_assets/environment/bushes/Bush_C.glb#Scene0",
+            PropKind::Bush_04 => "game_assets/environment/bushes/Bush_A.glb#Scene0",
+            PropKind::Flower_01 => "game_assets/environment/flowers/Flower_A.glb#Scene0",
+            PropKind::Flower_02 => "game_assets/environment/flowers/Flower_B.glb#Scene0",
+            PropKind::Flower_03 => "game_assets/environment/flowers/Flower_B.glb#Scene0",
+            PropKind::Flower_04 => "game_assets/environment/flowers/Flower_C.glb#Scene0",
+            PropKind::Flower_05 => "game_assets/environment/flowers/Flower_D.glb#Scene0",
             PropKind::Spring_Flower_06 => {
-                "game_assets/environment/flowers/Spring_Flower_06.glb#Scene0"
+                "game_assets/environment/flowers/Flower_C.glb#Scene0"
             }
             PropKind::Spring_Flower_07 => {
-                "game_assets/environment/flowers/Spring_Flower_07.glb#Scene0"
+                "game_assets/environment/flowers/Flower_A.glb#Scene0"
             }
             PropKind::Spring_Flower_08 => {
-                "game_assets/environment/flowers/Spring_Flower_08.glb#Scene0"
+                "game_assets/environment/flowers/Flower_D.glb#Scene0"
             }
             PropKind::Spring_Flower_09 => {
-                "game_assets/environment/flowers/Spring_Flower_09.glb#Scene0"
+                "game_assets/environment/flowers/Flower_B.glb#Scene0"
             }
-            PropKind::Env_Leaves_02 => "game_assets/environment/leaves/Env_Leaves_02.glb#Scene0",
-            PropKind::Env_Leaves_03 => "game_assets/environment/leaves/Env_Leaves_03.glb#Scene0",
-            PropKind::GrassBlade_9v => "game_assets/environment/grass/GrassBlade_9v.glb#Scene0",
+            PropKind::GrassBlade_9v => "game_assets/environment/grass/Grass_Patch_A.glb#Scene0",
             PropKind::Env_Grass_Tall_04 => {
-                "game_assets/environment/grass/Env_Grass_Tall_04.glb#Scene0"
+                "game_assets/environment/grass/Grass_Tall_A.glb#Scene0"
             }
-            PropKind::Env_Grass_06 => "game_assets/environment/grass/Env_Grass_06.glb#Scene0",
-            PropKind::Env_Grass_07 => "game_assets/environment/grass/Env_Grass_07.glb#Scene0",
-            PropKind::Env_Ivy_08 => "game_assets/environment/ivy/Env_Ivy_08.glb#Scene0",
-            PropKind::Env_Ivy_13 => "game_assets/environment/ivy/Env_Ivy_13.glb#Scene0",
+            PropKind::Env_Grass_06 => "game_assets/environment/grass/Grass_Patch_A.glb#Scene0",
+            PropKind::Env_Grass_07 => "game_assets/environment/grass/Grass_Patch_A.glb#Scene0",
+            PropKind::Wheat_Field => "game_assets/environment/crops/WheatField.glb#Scene0",
         }
     }
 }
@@ -249,14 +237,11 @@ pub const ALL_PROP_KINDS: &[PropKind] = &[
     PropKind::Spring_Flower_07,
     PropKind::Spring_Flower_08,
     PropKind::Spring_Flower_09,
-    PropKind::Env_Leaves_02,
-    PropKind::Env_Leaves_03,
     PropKind::GrassBlade_9v,
     PropKind::Env_Grass_Tall_04,
     PropKind::Env_Grass_06,
     PropKind::Env_Grass_07,
-    PropKind::Env_Ivy_08,
-    PropKind::Env_Ivy_13,
+    PropKind::Wheat_Field,
 ];
 
 #[cfg(test)]

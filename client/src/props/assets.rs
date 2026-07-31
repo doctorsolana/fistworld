@@ -24,21 +24,33 @@ fn tree_mesh_labels(kind: shared::props::PropKind) -> Option<TreeMeshLabels> {
                 material_label: "Material0",
             })
         }
+        // Dead trees now HAVE a LOD1. They did not when this table was written:
+        // the bought ones were a single mesh, so lod1_label had to be None.
         Dead_tree_1 | Dead_tree_2 | Dead_tree_3 => Some(TreeMeshLabels {
             lod0_label: "Mesh0/Primitive0",
-            lod1_label: None,
+            lod1_label: Some("Mesh1/Primitive0"),
             material_label: "Material0",
         }),
-        // Pines are deliberately NOT in this table.
+        // Pines are IN this table now, and the reason they were excluded is worth
+        // keeping because it is the exact thing that must never regress.
         //
-        // Their GLBs are one mesh with TWO primitives — Primitive0 is the bark and
-        // Primitive1 is `Leaves_Pine` — and this fast path renders a single primitive with
-        // a single material. Taking Primitive0 drew ~2000 bare trunk skeletons across the
-        // map, which is what the "thin stalks" in capture screenshots were. lod1 cannot
-        // hold the leaves either: it is a level of detail, so the tree would swap between
-        // trunk and foliage with distance. Falling through to the full SceneRoot spawns
-        // every primitive with its own material, which is correct at the cost of a child
-        // hierarchy per tree.
+        // The bought pine GLBs were one mesh with TWO primitives -- Primitive0 the
+        // bark and Primitive1 the `Leaves_Pine` cutout -- and this fast path draws a
+        // single primitive with a single material. Taking Primitive0 drew ~2,000 bare
+        // trunk skeletons across the map, which is what the "thin stalks" in the old
+        // capture screenshots were. lod1 could not hold the leaves either: it is a
+        // level of DETAIL, so the tree would have swapped between trunk and foliage
+        // with distance.
+        //
+        // The replacements are one primitive and one material per LOD, so the
+        // objection is gone -- and with it the reason the pines rendered full detail
+        // from 0 m to the far cutoff, which made 2,834 of them cost more than all
+        // 19,622 broadleaf trees combined.
+        Pine_Tree_1 | Pine_Tree_2 | Pine_Tree_3 | Pine_Tree_4 => Some(TreeMeshLabels {
+            lod0_label: "Mesh0/Primitive0",
+            lod1_label: Some("Mesh1/Primitive0"),
+            material_label: "Material0",
+        }),
         _ => None,
     }
 }

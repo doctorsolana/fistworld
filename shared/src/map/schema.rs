@@ -386,9 +386,13 @@ mod tests {
             rotation_degrees: 0.0,
             scale: 1.0,
         };
+        // Asserted against the KIND's own registered path rather than a filename.
+        // A hardcoded "Rock_1.glb" here fails the day the art is replaced, which
+        // says nothing about whether resolution works -- and it has now happened.
         assert_eq!(
             known.resolved_scene_path().as_deref(),
-            Some("game_assets/environment/rocks/Rock_1.glb#Scene0")
+            Some(PropKind::Rock_1.scene_path()),
+            "a registered kind must resolve to that kind's own scene path"
         );
 
         let custom = MapObjectSpawn {

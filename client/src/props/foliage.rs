@@ -314,15 +314,10 @@ pub(super) fn needs_foliage_materials(kind: shared::props::PropKind) -> bool {
             | Spring_Flower_07
             | Spring_Flower_08
             | Spring_Flower_09
-            // environment/leaves
-            | Env_Leaves_02
-            | Env_Leaves_03
             // environment/grass + ivy
             | GrassBlade_9v
             | Env_Grass_Tall_04
             | Env_Grass_06
             | Env_Grass_07
-            | Env_Ivy_08
-            | Env_Ivy_13
     )
 }

@@ -32,11 +32,7 @@ pub fn visual_role(kind: PropKind) -> PropVisualRole {
         PropKind::GrassBlade_9v
         | PropKind::Env_Grass_Tall_04
         | PropKind::Env_Grass_06
-        | PropKind::Env_Grass_07
-        | PropKind::Env_Ivy_08
-        | PropKind::Env_Ivy_13
-        | PropKind::Env_Leaves_02
-        | PropKind::Env_Leaves_03 => PropVisualRole::GroundDetail,
+        | PropKind::Env_Grass_07 => PropVisualRole::GroundDetail,
 
         PropKind::Flower_01
         | PropKind::Flower_02

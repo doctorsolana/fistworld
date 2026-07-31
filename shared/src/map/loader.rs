@@ -536,10 +536,9 @@ mod tests {
             .cloned()
             .unwrap();
         assert_eq!(item.kind.map(|kind| kind.id()), Some("rock_1"));
-        assert_eq!(
-            item.scene_path.as_str(),
-            "game_assets/environment/rocks/Rock_1.glb#Scene0"
-        );
+        // The kind's own path, not a filename literal -- see the note in
+        // schema.rs: swapping the art must not break resolution tests.
+        assert_eq!(item.scene_path.as_str(), PropKind::Rock_1.scene_path());
         let rotated_forward = item.rotation * bevy::prelude::Vec3::Z;
         assert!((rotated_forward.x - 1.0).abs() < 1e-6);
         assert!(rotated_forward.z.abs() < 1e-6);
