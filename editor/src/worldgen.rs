@@ -259,7 +259,11 @@ fn scatter_props(
     // around the camera), so density is what matters for frame time; the absolute total
     // only drives map.ron size. Clustering from the forest mask means real forests come out
     // far denser than this average.
-    const PROPS_PER_KM2: f32 = 1_100.0;
+    //
+    // 1100 -> 880: a deliberate 20% thin. The thinning pass below scales every
+    // biome by the same factor, so forests stay proportionally denser than
+    // scrub and only the overall crowding changes.
+    const PROPS_PER_KM2: f32 = 880.0;
     /// Ceiling on total props so map.ron stays a manageable size (~190 bytes each).
     const PROP_HARD_CAP: usize = 90_000;
     let area_km2 = (half_extent * 2.0 / 1000.0).powi(2);

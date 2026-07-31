@@ -78,13 +78,30 @@ pub fn generate_chunk_prop_spawns(terrain: &TerrainGenerator, chunk: ChunkCoord)
 /// than as dots. This is the dial for "more grass".
 const GRASS_CELL: f32 = 2.6;
 
-/// Ceiling on grass patches per chunk. A backstop, not a design value: at 2.6 m
-/// spacing a 64 m chunk offers ~600 sample points, and this caps the richest
-/// meadow so one freak chunk cannot stall the spawn queue.
-const GRASS_PER_CHUNK_CAP: usize = 480;
+/// Ceiling on grass patches per chunk. A backstop, and it must STAY one.
+///
+/// At 480 it was binding — 6 chunks of a 25-chunk temperate sample sat pinned
+/// exactly on it, so the cap rather than the biome was setting density in the
+/// best meadow, and it flat-topped the richest ground at a uniform value.
+/// 640 is above the 625 the densest measured chunk wants, so the biome decides
+/// again and [`GRASS_DENSITY_SCALE`] is the honest dial.
+const GRASS_PER_CHUNK_CAP: usize = 640;
 
 /// Steepest ground grass will grow on.
 const GRASS_MAX_SLOPE: f32 = 0.72;
+
+/// Global thinning applied after the biome decides.
+///
+/// Multiplying the acceptance probability rather than widening [`GRASS_CELL`]
+/// keeps the farmland gradient's SHAPE intact — wider spacing would thin the
+/// already-sparse north proportionally harder and strip it bare.
+///
+/// 0.685 rather than a round 0.8 because the per-chunk cap used to bind: the
+/// richest meadow generated 324 patches a chunk and was being clipped to 480
+/// across a 25-chunk sample, so the number anyone actually SAW was 278. This
+/// lands that on ~222, a true 20% off the observed density, and the cap no
+/// longer touches it.
+const GRASS_DENSITY_SCALE: f32 = 0.685;
 
 /// Two variants, mixed. The short patch is the common one and the tall one
 /// breaks up the repeat; roughly 2:1, which is what the asset pair was built
@@ -164,7 +181,8 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
             let profile = field.resources(x, z, height, slope);
             // Bare rock and deep forest floor still show some cover, so the
             // ground never reads as a texture with nothing on it.
-            let density = (profile.farmland * 1.25 + profile.wood * 0.45).min(1.0);
+            let density =
+                (profile.farmland * 1.25 + profile.wood * 0.45).min(1.0) * GRASS_DENSITY_SCALE;
             if crate::worldgen::rand01(&mut rng) > density {
                 continue;
             }
@@ -224,10 +242,28 @@ mod tests {
                     chunks += 1;
                 }
             }
+            let mut per: Vec<usize> = Vec::new();
+            for dz in -2..=2 {
+                for dx in -2..=2 {
+                    per.push(
+                        generate_chunk_grass(
+                            &terrain.generator,
+                            ChunkCoord { x: centre.x + dx, z: centre.z + dz },
+                        )
+                        .len(),
+                    );
+                }
+            }
+            per.sort_unstable();
+            let capped = per.iter().filter(|n| **n >= GRASS_PER_CHUNK_CAP).count();
             println!(
-                "{label:22} {:>5} patches over {chunks} chunks = {:>4.0}/chunk",
+                "{label:22} {:>5} over {chunks} chunks = {:>4.0}/chunk  min {} med {} max {}  at-cap {}",
                 total,
-                total as f32 / chunks as f32
+                total as f32 / chunks as f32,
+                per[0],
+                per[per.len() / 2],
+                per[per.len() - 1],
+                capped
             );
         }
     }
