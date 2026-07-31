@@ -153,39 +153,62 @@
     // =========================================================================
     // buildings/village
     // =========================================================================
+    // Built in-repo by asset_creation/houses/build_cabin_lowpoly.py, not a purchased asset.
+    //
+    // A HULL, not decomposition, because this is a top-down RTS: the thing units need is a footprint
+    // to walk around. VHACD would spend dozens of convex pieces describing log ends and roof steps
+    // that no unit can ever touch, and cost that at runtime for detail the camera never resolves.
+    //
+    // The Y slice is what makes a plain hull correct. Walls top out at 2.20 m of a 4.33 m total
+    // (-0.16..4.17), so 0.545 cuts exactly at the eaves. Without it the hull would also enclose the
+    // roof, and since the overhang stands 0.47 m proud of the walls a CONVEX hull flares outward as
+    // it rises — stopping units short of the wall at head height, against thin air.
+    //
+    // The doorway is solid, as any hull's would be. Units path to the Anchor_Door empty and stop
+    // outside, which is the intent while the interior is an empty shell.
     (
-      kind: "building_windmill",
-      gltf_path: "game_assets/buildings/village/Bld_Windmill_01.glb#Scene0",
-      mode: ConvexDecomposition,
-      vertex_filter: All,
+      kind: "building_log_cabin",
+      gltf_path: "game_assets/buildings/village/LogCabin.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.545 ),
+      collidable: true,
+    ),
+    // Same reasoning as the cabin above. Walls top out at 2.20 m of a 3.76 m total (-0.16..3.60),
+    // so 0.628 cuts at the eaves. The hull covers the YARD as well as the house — the woodpile and
+    // the chopping block are below the cut line and units should walk around them, not through.
+    // Anchor_Door and Anchor_Work are placed to sit OUTSIDE the resulting hull; moving either the
+    // block or those anchors means re-checking that, or units will path into their own collider.
+    (
+      kind: "building_lumberjack_hut",
+      gltf_path: "game_assets/buildings/village/LumberjackHut.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.628 ),
+      collidable: true,
+    ),
+    // Walls top out at 2.20 m of a 4.07 m total (-0.16..3.91), so 0.580 cuts at the eaves. The hull
+    // takes in the farmyard (hay bales, sheaves, scythe) as well as the house, which is intended —
+    // units should walk round them.
+    //
+    // NOTE the WHEAT FIELD is deliberately absent from this file. It is PropKind::Wheat_Field, a
+    // separate glb, and a crop field must be WALKABLE so farmers can stand in it to harvest. An
+    // asset with no entry here has no collider, which is how it says so. It is also why the field
+    // is not part of Farmstead.glb: the baker gathers every mesh in a scene and VertexFilter has no
+    // by-name exclusion, so a field inside the building would bake as a solid 11 x 8 m block.
+    // Two storeys: eaves at 4.40 m of an 8.18 m total (-0.16..8.02), so 0.558 cuts at the eaves and
+    // the hull excludes the roof and the bell cupola entirely. Takes in the entrance steps and the
+    // notice board, which is intended. Anchor_Door sits beyond the bottom step, outside the hull.
+    (
+      kind: "building_town_hall",
+      gltf_path: "game_assets/buildings/village/TownHall.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.558 ),
       collidable: true,
     ),
     (
-      kind: "building_church",
-      gltf_path: "game_assets/buildings/village/Church.glb#Scene0",
-      mode: ConvexDecomposition,
-      vertex_filter: All,
-      collidable: true,
-    ),
-    (
-      kind: "building_house_05",
-      gltf_path: "game_assets/buildings/village/House_05.glb#Scene0",
-      mode: ConvexDecomposition,
-      vertex_filter: All,
-      collidable: true,
-    ),
-    (
-      kind: "building_house_06",
-      gltf_path: "game_assets/buildings/village/House_06.glb#Scene0",
-      mode: ConvexDecomposition,
-      vertex_filter: All,
-      collidable: true,
-    ),
-    (
-      kind: "building_house_07",
-      gltf_path: "game_assets/buildings/village/House_07.glb#Scene0",
-      mode: ConvexDecomposition,
-      vertex_filter: All,
+      kind: "building_farmstead",
+      gltf_path: "game_assets/buildings/village/Farmstead.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.580 ),
       collidable: true,
     ),
 

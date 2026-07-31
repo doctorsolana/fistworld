@@ -554,7 +554,7 @@ Note: `client/src/render/sniper_fisheye.wgsl` (P1) lives in `client/src/render/`
 `maps/` (124 MB), `textures/` (54 MB), `shaders/` (24 KB — `wind_foliage.wgsl`, `terrain_splat.wgsl`),
 `toon_water.wgsl` (16 KB), `sky_10_2k/sky_10_2k.png` (1.2 MB), `colliders.bin` + `colliders_manifest.ron`
 (D9), `servers.ron`, `game_assets/environment/` (19 MB, `shared/src/props/kinds.rs:164-213`),
-`game_assets/buildings/{village,multistory}/` (`shared/src/building/defs.rs:73-104`,
+`game_assets/buildings/{village,multistory}/` (multistory has since been DELETED — the game uses village buildings only) (`shared/src/building/defs.rs:73-104`,
 `shared/src/city/buildings.rs:76-220`).
 
 ### 5c. Pre-existing orphans — NOT slice-attributable, verify separately

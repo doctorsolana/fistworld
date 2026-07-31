@@ -136,10 +136,10 @@ impl SettlementBuildingKind {
     pub fn art(self) -> crate::building::BuildingType {
         use crate::building::BuildingType as Art;
         match self {
-            SettlementBuildingKind::Hall => Art::LogCabin,
-            SettlementBuildingKind::Farmstead => Art::Windmill,
+            SettlementBuildingKind::Hall => Art::TownHall,
+            SettlementBuildingKind::Farmstead => Art::Farmstead,
             SettlementBuildingKind::LumberjackHut => Art::LumberjackHut,
-            SettlementBuildingKind::House => Art::House05,
+            SettlementBuildingKind::House => Art::LogCabin,
         }
     }
 

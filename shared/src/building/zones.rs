@@ -110,12 +110,12 @@ mod tests {
         let buildings = vec![
             (
                 Vec3::new(4.0, 0.0, 6.0),
-                BuildingType::Windmill,
+                BuildingType::TownHall,
                 30.0f32.to_radians(),
             ),
             (
                 Vec3::new(92.0, 0.0, -20.0),
-                BuildingType::Church,
+                BuildingType::Farmstead,
                 -15.0f32.to_radians(),
             ),
         ];

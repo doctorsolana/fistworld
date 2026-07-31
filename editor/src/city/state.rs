@@ -58,7 +58,7 @@ impl Default for PlotToolSettings {
         let mut settings = Self {
             zone: PlotZone::Residential,
             primary_archetype: PlotArchetype::ApartmentLowrise,
-            selected_building: Some(CityBuildingKind::Multistory01),
+            selected_building: Some(CityBuildingKind::LogCabin),
             auto_fit_selected_building: true,
             half_extents: Vec2::new(8.0, 14.0),
             rotation_degrees: 0.0,

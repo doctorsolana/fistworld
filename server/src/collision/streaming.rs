@@ -257,7 +257,7 @@ mod tests {
             chunk_a,
             vec![BuildZoneEntry::from_building(
                 Vec3::new(4.0, 0.0, 4.0),
-                BuildingType::Windmill,
+                BuildingType::TownHall,
                 0.0,
             )],
         );
@@ -265,7 +265,7 @@ mod tests {
             chunk_b,
             vec![BuildZoneEntry::from_building(
                 Vec3::new(68.0, 0.0, 4.0),
-                BuildingType::Church,
+                BuildingType::Farmstead,
                 0.0,
             )],
         );
@@ -276,7 +276,7 @@ mod tests {
             chunk_c,
             vec![BuildZoneEntry::from_building(
                 Vec3::new(132.0, 0.0, 4.0),
-                BuildingType::House05,
+                BuildingType::LogCabin,
                 0.25,
             )],
         );

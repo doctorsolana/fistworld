@@ -8,8 +8,9 @@
 
 use bevy::prelude::*;
 
-use shared::building::BuildingType;
-use shared::components::{PlayerPosition, PlayerRotation, Settlement, SettlementBuilding};
+use shared::components::{
+    PlayerPosition, PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind,
+};
 use shared::terrain::WorldTerrain;
 
 use crate::states::GameState;
@@ -101,9 +102,11 @@ fn attach_settlement_visuals(
         // The hall stands on the ground, not at the replicated Y: the server
         // snapped it once at founding, but terrain deltas can move under it.
         let ground = terrain.get_height(position.0.x, position.0.z);
-        // The hall is a LogCabin for now -- a placeholder with the right
-        // silhouette until a real hall model exists.
-        let Some(scene) = BuildingType::LogCabin.scene_path() else {
+        // Through the KIND, not a hardcoded model: the hall was a LogCabin
+        // placeholder and is now the TownHall, and a second copy of that fact
+        // here is how the hall and the panel end up disagreeing about what a
+        // hall is.
+        let Some(scene) = SettlementBuildingKind::Hall.art().scene_path() else {
             continue;
         };
 

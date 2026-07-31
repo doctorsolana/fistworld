@@ -9,27 +9,17 @@ use super::{MapPlot, OrientedRect, PlotArchetype, PlotZone};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CityBuildingKind {
-    Multistory01,
-    Multistory02,
-    Multistory03,
-    Multistory04,
-    Multistory05,
-    Multistory06,
-    Multistory07,
-    Multistory08,
-    Multistory09,
+    LogCabin,
+    Farmstead,
+    LumberjackHut,
+    TownHall,
 }
 
 pub const ALL_CITY_BUILDING_KINDS: &[CityBuildingKind] = &[
-    CityBuildingKind::Multistory01,
-    CityBuildingKind::Multistory02,
-    CityBuildingKind::Multistory03,
-    CityBuildingKind::Multistory04,
-    CityBuildingKind::Multistory05,
-    CityBuildingKind::Multistory06,
-    CityBuildingKind::Multistory07,
-    CityBuildingKind::Multistory08,
-    CityBuildingKind::Multistory09,
+    CityBuildingKind::LogCabin,
+    CityBuildingKind::Farmstead,
+    CityBuildingKind::LumberjackHut,
+    CityBuildingKind::TownHall,
 ];
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,165 +60,75 @@ impl CityBuildingKind {
 
     pub fn spec(self) -> CityBuildingSpec {
         match self {
-            CityBuildingKind::Multistory01 => multistory_spec(
+            CityBuildingKind::LogCabin => village_spec(
                 self,
-                "Multistory 01",
-                "game_assets/buildings/multistory/Multistory_01.glb#Scene0",
-                BuildingType::Multistory01,
+                "Log Cabin",
+                "game_assets/buildings/village/LogCabin.glb#Scene0",
+                BuildingType::LogCabin,
                 PlotZone::Residential,
-                PlotArchetype::ApartmentLowrise,
-                Vec2::new(7.1446, 6.2987),
-                12.3559,
+                PlotArchetype::HouseSmall,
+                Vec2::new(6.0000, 6.9400),
+                4.3300,
                 1.0,
                 2.0,
                 1.5,
                 1.0,
-                Vec2::new(0.0, 0.4019),
-                0.0017,
+                Vec2::new(0.0000, 0.0000),
+                -0.1600,
                 BuildingFrontAxis::PositiveZ,
                 0.0,
             ),
-            CityBuildingKind::Multistory02 => multistory_spec(
+            CityBuildingKind::Farmstead => village_spec(
                 self,
-                "Multistory 02",
-                "game_assets/buildings/multistory/Multistory_02.glb#Scene0",
-                BuildingType::Multistory02,
-                PlotZone::MixedUse,
-                PlotArchetype::ApartmentLowrise,
-                Vec2::new(7.1446, 6.2987),
-                14.7378,
+                "Farmstead",
+                "game_assets/buildings/village/Farmstead.glb#Scene0",
+                BuildingType::Farmstead,
+                PlotZone::Industrial,
+                PlotArchetype::Warehouse,
+                Vec2::new(5.4100, 6.6200),
+                4.0700,
                 1.0,
                 2.0,
                 1.5,
                 1.0,
-                Vec2::new(0.0, 0.4019),
-                0.0017,
+                Vec2::new(0.1400, -0.1700),
+                -0.1600,
                 BuildingFrontAxis::PositiveZ,
                 0.0,
             ),
-            CityBuildingKind::Multistory03 => multistory_spec(
+            CityBuildingKind::LumberjackHut => village_spec(
                 self,
-                "Multistory 03",
-                "game_assets/buildings/multistory/Multistory_03.glb#Scene0",
-                BuildingType::Multistory03,
-                PlotZone::MixedUse,
-                PlotArchetype::ApartmentLowrise,
-                Vec2::new(14.0670, 6.2987),
-                14.0470,
-                1.25,
-                2.5,
-                1.75,
-                1.5,
-                Vec2::new(0.0, 0.4019),
-                0.0027,
-                BuildingFrontAxis::PositiveZ,
-                0.0,
-            ),
-            CityBuildingKind::Multistory04 => multistory_spec(
-                self,
-                "Multistory 04",
-                "game_assets/buildings/multistory/Multistory_04.glb#Scene0",
-                BuildingType::Multistory04,
-                PlotZone::Commercial,
-                PlotArchetype::CornerStore,
-                Vec2::new(14.0670, 6.2987),
-                14.3836,
-                1.25,
-                2.5,
-                1.75,
-                1.5,
-                Vec2::new(0.0, 0.4019),
-                -0.0278,
-                BuildingFrontAxis::PositiveZ,
-                0.0,
-            ),
-            CityBuildingKind::Multistory05 => multistory_spec(
-                self,
-                "Multistory 05",
-                "game_assets/buildings/multistory/Multistory_05.glb#Scene0",
-                BuildingType::Multistory05,
-                PlotZone::Residential,
-                PlotArchetype::ApartmentLowrise,
-                Vec2::new(7.1446, 6.2987),
-                12.3559,
+                "Lumberjack Hut",
+                "game_assets/buildings/village/LumberjackHut.glb#Scene0",
+                BuildingType::LumberjackHut,
+                PlotZone::Industrial,
+                PlotArchetype::Warehouse,
+                Vec2::new(5.1600, 5.4000),
+                3.7600,
                 1.0,
                 2.0,
                 1.5,
                 1.0,
-                Vec2::new(0.0, 0.4019),
-                0.0017,
+                Vec2::new(0.3300, -0.1800),
+                -0.1600,
                 BuildingFrontAxis::PositiveZ,
                 0.0,
             ),
-            CityBuildingKind::Multistory06 => multistory_spec(
+            CityBuildingKind::TownHall => village_spec(
                 self,
-                "Multistory 06",
-                "game_assets/buildings/multistory/Multistory_06.glb#Scene0",
-                BuildingType::Multistory06,
-                PlotZone::MixedUse,
-                PlotArchetype::ApartmentLowrise,
-                Vec2::new(7.1446, 6.2987),
-                14.7378,
+                "Town Hall",
+                "game_assets/buildings/village/TownHall.glb#Scene0",
+                BuildingType::TownHall,
+                PlotZone::Civic,
+                PlotArchetype::Civic,
+                Vec2::new(6.4500, 8.7400),
+                8.1800,
                 1.0,
                 2.0,
                 1.5,
                 1.0,
-                Vec2::new(0.0, 0.4019),
-                0.0017,
-                BuildingFrontAxis::PositiveZ,
-                0.0,
-            ),
-            CityBuildingKind::Multistory07 => multistory_spec(
-                self,
-                "Multistory 07",
-                "game_assets/buildings/multistory/Multistory_07.glb#Scene0",
-                BuildingType::Multistory07,
-                PlotZone::MixedUse,
-                PlotArchetype::ApartmentLowrise,
-                Vec2::new(14.0670, 6.2987),
-                14.0470,
-                1.25,
-                2.5,
-                1.75,
-                1.5,
-                Vec2::new(0.0, 0.4019),
-                0.0027,
-                BuildingFrontAxis::PositiveZ,
-                0.0,
-            ),
-            CityBuildingKind::Multistory08 => multistory_spec(
-                self,
-                "Multistory 08",
-                "game_assets/buildings/multistory/Multistory_08.glb#Scene0",
-                BuildingType::Multistory08,
-                PlotZone::Commercial,
-                PlotArchetype::CornerStore,
-                Vec2::new(14.0670, 6.2987),
-                14.3836,
-                1.25,
-                2.5,
-                1.75,
-                1.5,
-                Vec2::new(0.0, 0.4019),
-                -0.0278,
-                BuildingFrontAxis::PositiveZ,
-                0.0,
-            ),
-            CityBuildingKind::Multistory09 => multistory_spec(
-                self,
-                "Multistory 09",
-                "game_assets/buildings/multistory/Multistory_09.glb#Scene0",
-                BuildingType::Multistory09,
-                PlotZone::Residential,
-                PlotArchetype::ApartmentLowrise,
-                Vec2::new(7.1446, 6.3741),
-                10.4102,
-                1.0,
-                1.75,
-                1.25,
-                1.0,
-                Vec2::new(0.0, 0.4396),
-                0.0017,
+                Vec2::new(0.0000, -0.2800),
+                -0.1600,
                 BuildingFrontAxis::PositiveZ,
                 0.0,
             ),
@@ -240,7 +140,7 @@ impl CityBuildingKind {
     }
 }
 
-fn multistory_spec(
+fn village_spec(
     kind: CityBuildingKind,
     display_name: &'static str,
     scene_path: &'static str,
@@ -367,8 +267,8 @@ mod tests {
 
     #[test]
     fn suggested_plot_half_extents_include_padding() {
-        let spec = CityBuildingKind::Multistory03.spec();
-        let suggested = suggested_plot_half_extents(CityBuildingKind::Multistory03);
+        let spec = CityBuildingKind::Farmstead.spec();
+        let suggested = suggested_plot_half_extents(CityBuildingKind::Farmstead);
         assert!(suggested.x > spec.footprint.x * 0.5);
         assert!(suggested.y > spec.footprint.y * 0.5);
     }
@@ -385,14 +285,14 @@ mod tests {
             setback: 4.0,
             driveway_side: Some(RoadSide::Left),
             archetypes: Vec::new(),
-            building_kind: Some(CityBuildingKind::Multistory01),
+            building_kind: Some(CityBuildingKind::LogCabin),
             tags: Vec::new(),
         };
 
-        let rect = plot_building_rect(&plot, CityBuildingKind::Multistory01);
+        let rect = plot_building_rect(&plot, CityBuildingKind::LogCabin);
         assert!(rect.rotation_y > PI * 0.9);
         assert!(rect.center.y < plot.center[1]);
-        let front = plot_building_front_direction(&plot, CityBuildingKind::Multistory01);
+        let front = plot_building_front_direction(&plot, CityBuildingKind::LogCabin);
         assert!(front.y < 0.0);
     }
 
@@ -408,14 +308,14 @@ mod tests {
             setback: 4.0,
             driveway_side: Some(RoadSide::Right),
             archetypes: Vec::new(),
-            building_kind: Some(CityBuildingKind::Multistory01),
+            building_kind: Some(CityBuildingKind::LogCabin),
             tags: Vec::new(),
         };
 
-        let rect = plot_building_rect(&plot, CityBuildingKind::Multistory01);
+        let rect = plot_building_rect(&plot, CityBuildingKind::LogCabin);
         assert!(rect.rotation_y.abs() < 1.0e-4);
         assert!(rect.center.y > plot.center[1]);
-        let front = plot_building_front_direction(&plot, CityBuildingKind::Multistory01);
+        let front = plot_building_front_direction(&plot, CityBuildingKind::LogCabin);
         assert!(front.y > 0.0);
     }
 
@@ -431,14 +331,14 @@ mod tests {
             setback: 4.0,
             driveway_side: Some(RoadSide::Left),
             archetypes: Vec::new(),
-            building_kind: Some(CityBuildingKind::Multistory01),
+            building_kind: Some(CityBuildingKind::LogCabin),
             tags: Vec::new(),
         };
 
-        let transform = plot_building_scene_transform(&plot, CityBuildingKind::Multistory01, 0.0);
+        let transform = plot_building_scene_transform(&plot, CityBuildingKind::LogCabin, 0.0);
         let forward = transform.rotation * Vec3::Z;
         let scene_forward = Vec2::new(forward.x, forward.z).normalize_or_zero();
-        let frontage_forward = plot_building_front_direction(&plot, CityBuildingKind::Multistory01)
+        let frontage_forward = plot_building_front_direction(&plot, CityBuildingKind::LogCabin)
             .normalize_or_zero();
 
         assert!(scene_forward.distance(frontage_forward) < 1.0e-4);
@@ -456,14 +356,14 @@ mod tests {
             setback: 4.0,
             driveway_side: Some(RoadSide::Right),
             archetypes: Vec::new(),
-            building_kind: Some(CityBuildingKind::Multistory01),
+            building_kind: Some(CityBuildingKind::LogCabin),
             tags: Vec::new(),
         };
 
-        let transform = plot_building_scene_transform(&plot, CityBuildingKind::Multistory01, 0.0);
+        let transform = plot_building_scene_transform(&plot, CityBuildingKind::LogCabin, 0.0);
         let forward = transform.rotation * Vec3::Z;
         let scene_forward = Vec2::new(forward.x, forward.z).normalize_or_zero();
-        let frontage_forward = plot_building_front_direction(&plot, CityBuildingKind::Multistory01)
+        let frontage_forward = plot_building_front_direction(&plot, CityBuildingKind::LogCabin)
             .normalize_or_zero();
 
         assert!(scene_forward.distance(frontage_forward) < 1.0e-4);

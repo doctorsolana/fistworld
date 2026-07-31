@@ -120,7 +120,7 @@ mod tests {
             .world_mut()
             .spawn((
                 PlacedBuilding {
-                    building_type: BuildingType::Windmill,
+                    building_type: BuildingType::TownHall,
                     rotation: 0.0,
                 },
                 BuildingPosition(Vec3::new(0.0, 0.0, 0.0)),
