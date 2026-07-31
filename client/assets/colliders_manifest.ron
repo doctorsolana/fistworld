@@ -59,7 +59,7 @@
     ),
     (
       kind: "tree_08",
-      gltf_path: "game_assets/environment/trees/Bare_Gnarled_A.glb#Scene0",
+      gltf_path: "game_assets/environment/trees/Broadleaf_Big_A.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,

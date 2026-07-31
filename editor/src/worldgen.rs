@@ -67,6 +67,13 @@ fn scatter_props(
         PropKind::Rock_4,
         PropKind::Rock_5,
     ];
+    /// Bare, dead wood. Zero of these existed in the world before: the pool
+    /// was never wired up, so the assets shipped and nothing placed them.
+    const TREES_DEAD: &[PropKind] = &[
+        PropKind::Dead_tree_1,
+        PropKind::Dead_tree_2,
+        PropKind::Dead_tree_3,
+    ];
     const FLOWERS: &[PropKind] = &[
         PropKind::Flower_01,
         PropKind::Flower_03,
@@ -75,6 +82,39 @@ fn scatter_props(
     ];
 
     let pick = |pool: &[PropKind], r: f32| pool[((r * pool.len() as f32) as usize).min(pool.len() - 1)];
+
+    // Which tree grows here.
+    //
+    // TWO signals, and both are load-bearing. The BIOME sets the base mix --
+    // highlands are conifer country at any latitude, meadows are broadleaf --
+    // and CLIMATE shifts it north or south. Latitude alone gives ruler-straight
+    // bands of species; biome alone gives a world where the arctic and the
+    // desert grow the same oak.
+    //
+    // It reads the SAME `climate_at` the ground shading and the economy read,
+    // which is what makes the result legible rather than merely varied:
+    // conifers take over just before the ground turns white, because `frost`
+    // leads the snowline by design, and that is what a real treeline looks
+    // like. The climate sampler already wobbles its bands east-west, so the
+    // treeline inherits that meander for free and never reads as a drawn line.
+    let tree_pool = |conifer_bias: f32,
+                     climate: &shared::worldgen::ClimateSample,
+                     rng: &mut u64|
+     -> &'static [PropKind] {
+        let conifer = (conifer_bias + climate.frost * 0.90).clamp(0.0, 0.98);
+        // Dead wood belongs to the dry south. Capped well below 1 so even deep
+        // desert keeps living trees -- a band of nothing but skeletons reads as
+        // a bug, not as a climate.
+        let dead = (climate.dry * 0.70).min(0.72);
+        let r = rand01(rng);
+        if r < dead {
+            TREES_DEAD
+        } else if r < dead + conifer * (1.0 - dead) {
+            TREES_PINE
+        } else {
+            TREES_BROADLEAF
+        }
+    };
 
     // Jittered grid sampling across the whole map.
     let cell = 7.0;
@@ -107,6 +147,10 @@ fn scatter_props(
         let slope = grid.slope(x, z);
 
         let biome = biomes.biome(x, z, h, slope);
+        // The same sampler that decides whether this ground shades as snow,
+        // pale frost or scorched desert. Species read it too, so the treeline
+        // and the snowline are one fact rather than two that disagree.
+        let climate = shared::worldgen::climate_at(seed, x, z, h, half_extent);
         let clump = (clump_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
         let roll = rand01(&mut rng);
 
@@ -126,13 +170,13 @@ fn scatter_props(
                     if h > SEA_LEVEL + 2.0 && roll < 0.18 + clump * 0.50 {
                         if clump < 0.35 && rand01(&mut rng) < 0.40 {
                             (pick(BUSHES, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.5)
-                        } else if h > 16.0 {
-                            (pick(TREES_PINE, rand01(&mut rng)), 0.85 + rand01(&mut rng) * 0.45)
                         } else {
-                            (
-                                pick(TREES_BROADLEAF, rand01(&mut rng)),
-                                0.85 + rand01(&mut rng) * 0.45,
-                            )
+                            // Altitude still favours conifers on its own, so a
+                            // southern mountain forest is not all oak. Climate
+                            // adds the latitude half on top.
+                            let alt_bias = ((h - 16.0) / 45.0).clamp(0.0, 0.55);
+                            let pool = tree_pool(0.08 + alt_bias, &climate, &mut rng);
+                            (pick(pool, rand01(&mut rng)), 0.85 + rand01(&mut rng) * 0.45)
                         }
                     } else if roll > 0.97 {
                         (pick(ROCKS, rand01(&mut rng)), 0.5 + rand01(&mut rng) * 0.5)
@@ -143,17 +187,16 @@ fn scatter_props(
                 WorldBiome::Meadows => {
                     // The farmland biome: open grass, flowers, the odd lone
                     // tree — visibly sparse in wood.
-                    if roll < 0.30 {
-                        if rand01(&mut rng) < 0.10 {
-                            (pick(FLOWERS, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.4)
-                        } else {
-                            (PropKind::Env_Grass_Tall_04, 0.32 + rand01(&mut rng) * 0.16)
-                        }
+                    // Grass is NOT authored any more -- ground cover is generated
+                    // per chunk at runtime (shared::props::spawn), so this budget
+                    // buys flowers instead of 38,578 map entries.
+                    if roll < 0.085 {
+                        (pick(FLOWERS, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.4)
                     } else if roll < 0.325 && h > SEA_LEVEL + 2.0 {
-                        (
-                            pick(TREES_BROADLEAF, rand01(&mut rng)),
-                            0.9 + rand01(&mut rng) * 0.4,
-                        )
+                        // Lone meadow trees: broadleaf country, so the bias is
+                        // near zero and only real cold or real drought moves it.
+                        let pool = tree_pool(0.03, &climate, &mut rng);
+                        (pick(pool, rand01(&mut rng)), 0.9 + rand01(&mut rng) * 0.4)
                     } else if roll > 0.995 {
                         (pick(ROCKS, rand01(&mut rng)), 0.5 + rand01(&mut rng) * 0.5)
                     } else {
@@ -171,7 +214,11 @@ fn scatter_props(
                     } else if roll < 0.12 {
                         (pick(ROCKS, rand01(&mut rng)), 1.6 + rand01(&mut rng) * 1.6)
                     } else if roll < 0.165 && h > SEA_LEVEL + 2.0 {
-                        (pick(TREES_PINE, rand01(&mut rng)), 0.75 + rand01(&mut rng) * 0.35)
+                        // Conifer country whatever the latitude -- that is the
+                        // biome asserting itself -- but southern highlands still
+                        // bleach to standing dead wood.
+                        let pool = tree_pool(0.80, &climate, &mut rng);
+                        (pick(pool, rand01(&mut rng)), 0.75 + rand01(&mut rng) * 0.35)
                     } else {
                         return None;
                     }
@@ -183,7 +230,8 @@ fn scatter_props(
                     } else if roll < 0.14 {
                         (pick(ROCKS, rand01(&mut rng)), 2.0 + rand01(&mut rng) * 1.8)
                     } else if roll < 0.155 && h < 42.0 {
-                        (pick(TREES_PINE, rand01(&mut rng)), 0.7 + rand01(&mut rng) * 0.3)
+                        let pool = tree_pool(0.90, &climate, &mut rng);
+                        (pick(pool, rand01(&mut rng)), 0.7 + rand01(&mut rng) * 0.3)
                     } else {
                         return None;
                     }

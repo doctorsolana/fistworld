@@ -6,8 +6,11 @@ use bevy::prelude::*;
 use crate::states::GameState;
 
 use super::PropLodDebugMode;
+use super::ground_cover::{
+    GroundCoverIndex, LoadedGroundCoverChunks, PendingGroundCover,
+};
 use super::{
-    assets, debug, foliage, lod, spawn, BuildZoneChunkIndex, FoliageMaterialCache,
+    assets, debug, foliage, ground_cover, lod, spawn, BuildZoneChunkIndex, FoliageMaterialCache,
     LoadedPropChunks, PendingPropSpawns, PropChunkIndex, SimplePropMeshCache,
 };
 
@@ -24,6 +27,10 @@ impl Plugin for PropsPlugin {
         app.init_resource::<FoliageMaterialCache>();
         app.init_resource::<PropLodDebugMode>();
         app.init_resource::<SimplePropMeshCache>();
+        app.init_resource::<LoadedGroundCoverChunks>();
+        app.init_resource::<PendingGroundCover>();
+        app.init_resource::<GroundCoverIndex>();
+        app.add_systems(OnExit(GameState::Playing), ground_cover::clear_ground_cover);
         app.add_systems(
             Startup,
             (assets::load_prop_assets, assets::load_baked_prop_colliders),
@@ -36,6 +43,7 @@ impl Plugin for PropsPlugin {
                 spawn::invalidate_props_for_new_buildings,
                 spawn::sync_build_zone_chunk_index,
                 spawn::spawn_chunk_props,
+                ground_cover::stream_ground_cover,
                 spawn::sync_props_enabled_state,
                 lod::apply_prop_render_tuning,
                 lod::reveal_pending_prop_roots,
@@ -44,6 +52,7 @@ impl Plugin for PropsPlugin {
                 foliage::apply_foliage_materials,
                 lod::update_prop_visibility_ranges,
                 spawn::cleanup_chunk_props,
+                ground_cover::cleanup_ground_cover,
                 debug::debug_draw_prop_colliders,
             )
                 .chain()

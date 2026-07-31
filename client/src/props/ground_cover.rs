@@ -1,0 +1,200 @@
+//! Ground cover streams on its own, much tighter radius than the props.
+//!
+//! Trees have to exist far out — they are the silhouette of the landscape, and
+//! the prop radius grows with zoom until it reaches 512 m. Grass is the
+//! opposite: it carries an 80 m `visible_end_distance`, so anything spawned
+//! beyond that ring is an entity, a transform and a visibility check that can
+//! never draw a pixel. At full zoom the shared radius would have spawned tens
+//! of thousands of them.
+//!
+//! So ground cover gets its own loaded-set, its own index and its own radius,
+//! and the two layers stream past each other without interfering. The cost of
+//! the split is this file; the cost of not splitting it is a frame budget.
+
+use bevy::prelude::*;
+use std::collections::{HashMap, HashSet};
+
+use shared::terrain::{ChunkCoord, WorldTerrain};
+
+use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
+use crate::streaming::{streaming_anchor, AnchorCamera, AnchorPlayer};
+use crate::terrain::LoadedChunks;
+
+use super::spawn::spawn_prop_instance;
+use super::{PropAssets, SimplePropMeshCache};
+
+/// How far ground cover streams, in chunks.
+///
+/// Two chunks is 128 m, comfortably past the 80 m draw distance so a patch is
+/// already loaded by the time it could be seen, and nowhere near the prop
+/// radius. Deliberately NOT scaled with zoom: zooming out does not make grass
+/// visible further away, it only makes it smaller.
+const GROUND_COVER_CHUNK_RADIUS: i32 = 2;
+
+/// Spawn budget per frame. Lower than the prop budget because a chunk of grass
+/// is hundreds of instances and there is no hurry — nothing beyond 80 m shows.
+const MAX_GROUND_COVER_SPAWNS_PER_FRAME: usize = 64;
+
+/// Marks an entity as ground cover so it can be culled on its own radius.
+#[derive(Component)]
+pub struct GroundCover;
+
+#[derive(Resource, Default)]
+pub struct LoadedGroundCoverChunks {
+    pub chunks: HashSet<ChunkCoord>,
+}
+
+#[derive(Resource, Default)]
+pub struct GroundCoverIndex {
+    pub by_chunk: HashMap<ChunkCoord, Vec<Entity>>,
+}
+
+#[derive(Resource, Default)]
+pub struct PendingGroundCover {
+    pub queue: std::collections::VecDeque<(ChunkCoord, Vec<shared::props::PropSpawn>)>,
+}
+
+fn in_radius(coord: ChunkCoord, anchor: ChunkCoord, radius: i32) -> bool {
+    (coord.x - anchor.x).abs() <= radius && (coord.z - anchor.z).abs() <= radius
+}
+
+/// Grow ground cover for chunks near the anchor.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn stream_ground_cover(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    terrain: Option<Res<WorldTerrain>>,
+    anchor: (AnchorPlayer, AnchorCamera),
+    prop_assets: Option<Res<PropAssets>>,
+    mut simple_mesh_cache: ResMut<SimplePropMeshCache>,
+    gltf_assets: (
+        Option<Res<Assets<bevy::gltf::Gltf>>>,
+        Option<Res<Assets<bevy::gltf::GltfNode>>>,
+        Option<Res<Assets<bevy::gltf::GltfMesh>>>,
+    ),
+    loaded_chunks: Res<LoadedChunks>,
+    mut loaded: ResMut<LoadedGroundCoverChunks>,
+    mut pending: ResMut<PendingGroundCover>,
+    mut index: ResMut<GroundCoverIndex>,
+    world_root_query: Query<Entity, With<ClientWorldRoot>>,
+    settings: Res<GraphicsSettings>,
+) {
+    let Some(terrain) = terrain else { return };
+    let (player_query, camera_query) = anchor;
+    let (gltfs, gltf_nodes, gltf_meshes) = gltf_assets;
+    let Some(assets) = prop_assets else { return };
+    let Some(anchor_pos) = streaming_anchor(&player_query, &camera_query) else {
+        return;
+    };
+    let Ok(world_root) = world_root_query.single() else {
+        return;
+    };
+    if !settings.props_enabled {
+        return;
+    }
+
+    let anchor_chunk = ChunkCoord::from_world_pos(anchor_pos);
+
+    // Stage 1: one chunk's worth of cover queued per frame, nearest first.
+    let mut desired: Vec<ChunkCoord> = anchor_chunk
+        .chunks_in_radius(GROUND_COVER_CHUNK_RADIUS)
+        .into_iter()
+        .filter(|coord| loaded_chunks.chunks.contains(coord) && !loaded.chunks.contains(coord))
+        .collect();
+    desired.sort_by_key(|coord| {
+        (coord.x - anchor_chunk.x).abs().max((coord.z - anchor_chunk.z).abs())
+    });
+
+    if let Some(coord) = desired.first().copied() {
+        let spawns = shared::props::generate_chunk_grass(&terrain.generator, coord);
+        loaded.chunks.insert(coord);
+        if !spawns.is_empty() {
+            pending.queue.push_back((coord, spawns));
+        }
+    }
+
+    // Stage 2: realise a bounded number of queued patches.
+    let mut budget = MAX_GROUND_COVER_SPAWNS_PER_FRAME;
+    while budget > 0 {
+        let Some((coord, spawns)) = pending.queue.front_mut() else {
+            break;
+        };
+        let coord = *coord;
+        let take = budget.min(spawns.len());
+        for spawn in spawns.drain(..take) {
+            let entity = spawn_prop_instance(
+                &mut commands,
+                &asset_server,
+                &terrain,
+                &assets,
+                &mut simple_mesh_cache,
+                gltfs.as_deref(),
+                gltf_nodes.as_deref(),
+                gltf_meshes.as_deref(),
+                world_root,
+                spawn,
+            );
+            commands.entity(entity).insert(GroundCover);
+            index.by_chunk.entry(coord).or_default().push(entity);
+        }
+        budget -= take;
+        if pending.queue.front().is_some_and(|(_, s)| s.is_empty()) {
+            pending.queue.pop_front();
+        }
+    }
+}
+
+/// Drop ground cover once its chunk leaves the ring.
+pub(super) fn cleanup_ground_cover(
+    mut commands: Commands,
+    player_query: AnchorPlayer,
+    camera_query: AnchorCamera,
+    loaded_chunks: Res<LoadedChunks>,
+    mut loaded: ResMut<LoadedGroundCoverChunks>,
+    mut pending: ResMut<PendingGroundCover>,
+    mut index: ResMut<GroundCoverIndex>,
+) {
+    let anchor_chunk =
+        streaming_anchor(&player_query, &camera_query).map(ChunkCoord::from_world_pos);
+
+    let stale: Vec<ChunkCoord> = loaded
+        .chunks
+        .iter()
+        .copied()
+        .filter(|coord| {
+            if !loaded_chunks.chunks.contains(coord) {
+                return true;
+            }
+            let Some(anchor_chunk) = anchor_chunk else {
+                return false;
+            };
+            !in_radius(*coord, anchor_chunk, GROUND_COVER_CHUNK_RADIUS)
+        })
+        .collect();
+
+    for coord in stale {
+        if let Some(entities) = index.by_chunk.remove(&coord) {
+            for entity in entities {
+                commands.entity(entity).despawn();
+            }
+        }
+        pending.queue.retain(|(c, _)| *c != coord);
+        loaded.chunks.remove(&coord);
+    }
+}
+
+/// Forget everything on world teardown, so a reconnect does not inherit ghosts.
+pub(super) fn clear_ground_cover(
+    mut commands: Commands,
+    cover: Query<Entity, With<GroundCover>>,
+    mut loaded: ResMut<LoadedGroundCoverChunks>,
+    mut pending: ResMut<PendingGroundCover>,
+    mut index: ResMut<GroundCoverIndex>,
+) {
+    for entity in cover.iter() {
+        commands.entity(entity).despawn();
+    }
+    loaded.chunks.clear();
+    pending.queue.clear();
+    index.by_chunk.clear();
+}

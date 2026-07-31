@@ -4,6 +4,7 @@
 
 mod assets;
 mod debug;
+mod ground_cover;
 pub(crate) mod foliage;
 mod kinds;
 mod lod;

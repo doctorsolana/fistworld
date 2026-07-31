@@ -170,13 +170,15 @@ pub(super) fn spawn_chunk_props(
         }
         let chunk_zones = build_zone_index.by_chunk.get(&coord);
         let mut spawns = shared::props::generate_chunk_prop_spawns(&terrain.generator, coord);
-        // Ground detail reads as nothing from a camera 200m+ up; spawning it is pure
-        // cost. Ground cover belongs in the terrain texture at this camera distance.
-        spawns.retain(|spawn| {
-            spawn.kind.is_none_or(|kind| {
-                shared::props::visual_role(kind) != shared::props::PropVisualRole::GroundDetail
-            })
-        });
+        // Ground detail IS spawned now. It was blanket-dropped here because the
+        // only ground cover in the world was a 738-triangle textured tuft, and
+        // 38,578 of those were pure cost from a camera 200 m up.
+        //
+        // Both halves of that changed. The patches are 36 triangles at LOD0 and
+        // 12 at LOD1, opaque and untextured, and they carry a 80 m
+        // `visible_end_distance` (props::tuning) so nothing outside a tight ring
+        // around the focus is ever submitted. What is left is the carpet you see
+        // when you actually zoom in, which is the thing that was missing.
         if let Some(chunk_zones) = chunk_zones {
             spawns.retain(|spawn| {
                 let point_xz = Vec2::new(spawn.position.x, spawn.position.z);
@@ -238,7 +240,7 @@ pub(super) fn spawn_chunk_props(
     perf.props_spawn_ms += start.elapsed().as_secs_f32() * 1000.0;
 }
 
-fn spawn_prop_instance(
+pub(super) fn spawn_prop_instance(
     commands: &mut Commands,
     asset_server: &AssetServer,
     terrain: &WorldTerrain,

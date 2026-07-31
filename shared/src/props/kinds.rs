@@ -159,7 +159,7 @@ impl PropKind {
             PropKind::Rock_5 => "game_assets/environment/rocks/Rock_B.glb#Scene0",
             PropKind::Tree_01 => "game_assets/environment/trees/Tree01_Graft.glb#Scene0",
             PropKind::Tree_02 => "game_assets/environment/trees/Oak_A.glb#Scene0",
-            PropKind::Tree_08 => "game_assets/environment/trees/Bare_Gnarled_A.glb#Scene0",
+            PropKind::Tree_08 => "game_assets/environment/trees/Broadleaf_Big_A.glb#Scene0",
             PropKind::Tree_09 => "game_assets/environment/trees/Tree09_Graft.glb#Scene0",
             PropKind::Tree_10 => "game_assets/environment/trees/Birch_A.glb#Scene0",
             PropKind::Tree_18 => "game_assets/environment/trees/Chestnut_A.glb#Scene0",
