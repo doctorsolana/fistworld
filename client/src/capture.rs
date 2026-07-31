@@ -115,6 +115,7 @@ pub fn run(config: CaptureConfig) {
         (
             spawn_capture_heroes,
             select_capture_person,
+            select_capture_place,
             force_capture_drag_box,
             drive_capture,
         ),
@@ -184,13 +185,28 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                 .get_resource::<shared::terrain::WorldTerrain>()
                 .map(|t| t.get_height(focus.x, focus.z))
                 .unwrap_or(focus.y);
-            world.spawn((
-                shared::components::Settlement {
-                    name: "Testholt".to_string(),
-                    tier: shared::components::SettlementTier::Hamlet,
-                },
-                shared::components::PlayerPosition(Vec3::new(focus.x, ground, focus.z)),
-            ));
+            use shared::components::SettlementTier as T;
+            // A spread of rungs, so the list's ordering and the detail pane's
+            // per-rung wording can both be photographed.
+            for (i, (name, tier, offset)) in [
+                ("Brackwater", T::Town, Vec3::new(0.0, 0.0, 0.0)),
+                ("Ashfell", T::Hamlet, Vec3::new(-1400.0, 0.0, -1900.0)),
+                ("Millhollow", T::Village, Vec3::new(900.0, 0.0, 1500.0)),
+                ("Coldbarrow", T::Hamlet, Vec3::new(1800.0, 0.0, -600.0)),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let at = focus + offset;
+                let y = if i == 0 { ground } else { at.y };
+                world.spawn((
+                    shared::components::Settlement {
+                        name: name.to_string(),
+                        tier,
+                    },
+                    shared::components::PlayerPosition(Vec3::new(at.x, y, at.z)),
+                ));
+            }
         });
     }
 
@@ -211,9 +227,12 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         // characters actually spawned in the world. That is the only way to
         // verify the real path -- a seeded list proves the layout renders and
         // nothing about whether characters reach it.
-        if mode == "live" {
+        if mode == "live" || mode == "places" {
             commands.insert_resource(EncyclopediaOpen(true));
             commands.insert_resource(crate::ui::hud::GodCapability(true));
+            if mode == "places" {
+                commands.insert_resource(crate::ui::encyclopedia::EncyclopediaTab::Places);
+            }
             return;
         }
         let sample = |name: &str, level, prestige, online, known, is_self, affiliation| {
@@ -430,6 +449,24 @@ fn force_capture_drag_box(
 /// Retried rather than set once: `rebuild_people_list` drops a selection that is
 /// not in the visible list, and at startup the list is empty, so a one-shot set
 /// is cleared before the characters have even been learned.
+/// FISTFORCE_CAPTURE_SELECT_PLACE=<name>, retried for the same reason as the
+/// person selector: the list is empty at startup and drops a selection it does
+/// not contain.
+fn select_capture_place(
+    places: Res<crate::ui::encyclopedia::places::KnownPlaces>,
+    mut selected: ResMut<crate::ui::encyclopedia::places::SelectedPlace>,
+) {
+    if selected.0.is_some() {
+        return;
+    }
+    let Ok(wanted) = std::env::var("FISTFORCE_CAPTURE_SELECT_PLACE") else {
+        return;
+    };
+    if places.find(&wanted).is_some() {
+        selected.0 = Some(wanted);
+    }
+}
+
 fn select_capture_person(
     people: Res<crate::ui::encyclopedia::KnownPeople>,
     mut selected: ResMut<crate::ui::encyclopedia::SelectedPerson>,

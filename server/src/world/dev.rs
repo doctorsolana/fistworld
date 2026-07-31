@@ -229,7 +229,13 @@ pub fn handle_dev_commands(
                                 tier: shared::components::SettlementTier::Hamlet,
                             },
                             shared::components::PlayerPosition(grounded),
-                            shared::region::RegionCoord::from_world_pos(grounded),
+                            // NO RegionCoord, deliberately. Region tagging is
+                            // what opts an entity into interest management, and
+                            // settlement summaries are the map screen
+                            // (WORLD-DESIGN section 7) -- a place you have to
+                            // stand next to before it appears on your map is not
+                            // a map. Entities without the tag replicate to
+                            // everyone, which is exactly what a summary wants.
                             lightyear::prelude::Replicate::to_clients(
                                 lightyear::prelude::NetworkTarget::All,
                             ),

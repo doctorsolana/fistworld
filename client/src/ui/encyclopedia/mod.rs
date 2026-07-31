@@ -13,6 +13,7 @@
 //! starts sending them — see docs/WORLD-DESIGN.md §1/§4.
 
 pub mod actions;
+pub mod places;
 pub mod layout;
 pub mod state_sync;
 
@@ -29,6 +30,8 @@ impl Plugin for EncyclopediaPlugin {
         app.init_resource::<PeopleFilter>();
         app.init_resource::<SelectedPerson>();
         app.init_resource::<KnownPeople>();
+        app.init_resource::<places::KnownPlaces>();
+        app.init_resource::<places::SelectedPlace>();
         app.init_resource::<ClickGuard>();
         app.add_systems(
             Update,
@@ -40,6 +43,7 @@ impl Plugin for EncyclopediaPlugin {
                 state_sync::learn_visible_characters,
                 state_sync::track_affiliation_changes,
                 state_sync::track_retinue_changes,
+                places::learn_settlements,
             )
                 .run_if(in_state(GameState::Playing)),
         );
@@ -60,6 +64,10 @@ impl Plugin for EncyclopediaPlugin {
                 state_sync::sync_filter_visuals,
                 state_sync::sync_detail_panel,
                 state_sync::sync_banner_controls,
+                places::rebuild_place_list,
+                places::sync_place_detail,
+                places::style_place_rows,
+                places::handle_place_rows,
                 state_sync::sync_retinue_button,
                 state_sync::style_person_rows,
             )
@@ -98,6 +106,10 @@ fn close_on_main_menu(mut open: ResMut<EncyclopediaOpen>) {
 pub enum EncyclopediaTab {
     #[default]
     People,
+    /// Settlements you know of. Places and people are the two halves of
+    /// knowing a world, so they are peers here rather than one being a
+    /// sub-view of the other.
+    Places,
     /// Your followers. Named "retinue" rather than "clan" because you start
     /// with neither, and this page stays correct at 0 followers and at 50 —
     /// a clan view grows inside it later instead of forcing a rename.
@@ -107,8 +119,9 @@ pub enum EncyclopediaTab {
 }
 
 impl EncyclopediaTab {
-    pub const ALL: [EncyclopediaTab; 3] = [
+    pub const ALL: [EncyclopediaTab; 4] = [
         EncyclopediaTab::People,
+        EncyclopediaTab::Places,
         EncyclopediaTab::Retinue,
         EncyclopediaTab::Ledger,
     ];
@@ -116,6 +129,7 @@ impl EncyclopediaTab {
     pub fn label(self) -> &'static str {
         match self {
             EncyclopediaTab::People => "PEOPLE",
+            EncyclopediaTab::Places => "PLACES",
             EncyclopediaTab::Retinue => "RETINUE",
             EncyclopediaTab::Ledger => "LEDGER",
         }

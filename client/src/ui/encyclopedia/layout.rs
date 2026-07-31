@@ -177,6 +177,7 @@ fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
         })
         .with_children(|body| {
             spawn_people_tab(body);
+            spawn_places_tab(body);
             spawn_placeholder_tab(
                 body,
                 EncyclopediaTab::Retinue,
@@ -192,6 +193,205 @@ fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
                  until you own something.",
             );
         });
+}
+
+/// The PLACES tab: master list of settlements, detail on the right.
+///
+/// Mirrors the people tab's shape on purpose -- the two answer the same kind of
+/// question, and a player who has learned one list should not have to learn a
+/// second layout to read the other.
+fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
+    use super::places::{
+        PlaceCountText, PlaceDetailCard, PlaceDetailEmptyState, PlaceDetailName, PlaceDetailSubtitle,
+        PlaceField, PlaceStat, PlacesListContent,
+    };
+
+    body.spawn((
+        TabBody(EncyclopediaTab::Places),
+        Node {
+            display: Display::None,
+            flex_grow: 1.0,
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Stretch,
+            overflow: Overflow::clip(),
+            ..default()
+        },
+    ))
+    .with_children(|tab| {
+        // Header strip: just a count. No filters, because there is no
+        // known/unknown distinction for places -- settlement summaries are the
+        // map screen, so you know them all.
+        tab.spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::FlexEnd,
+                padding: UiRect::axes(Val::Px(20.0), Val::Px(10.0)),
+                border: UiRect::bottom(Val::Px(1.0)),
+                ..default()
+            },
+            BorderColor::from(DIVIDER),
+        ))
+        .with_children(|row| {
+            row.spawn((
+                PlaceCountText,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
+                TextColor(TEXT_MUTED),
+            ));
+        });
+
+        // Master / detail
+        tab.spawn(Node {
+            flex_grow: 1.0,
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Stretch,
+            overflow: Overflow::clip(),
+            ..default()
+        })
+        .with_children(|split| {
+            // list
+            split
+                .spawn((
+                    Node {
+                        width: Val::Percent(46.0),
+                        flex_direction: FlexDirection::Column,
+                        padding: UiRect::axes(Val::Px(12.0), Val::Px(10.0)),
+                        row_gap: Val::Px(2.0),
+                        border: UiRect::right(Val::Px(1.0)),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                    BorderColor::from(DIVIDER),
+                ))
+                .with_children(|list| {
+                    list.spawn((
+                        PlacesListContent,
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(2.0),
+                            ..default()
+                        },
+                    ));
+                });
+
+            // detail
+            split
+                .spawn((
+                    Node {
+                        flex_grow: 1.0,
+                        flex_direction: FlexDirection::Column,
+                        padding: UiRect::all(Val::Px(20.0)),
+                        ..default()
+                    },
+                    BackgroundColor(DETAIL_BG),
+                ))
+                .with_children(|detail| {
+                    detail.spawn((
+                        PlaceDetailEmptyState,
+                        Node {
+                            flex_grow: 1.0,
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        children![(
+                            Text::new("Select a place"),
+                            TextFont {
+                                font_size: FontSize::Px(12.0),
+                                ..default()
+                            },
+                            TextColor(TEXT_MUTED),
+                        )],
+                    ));
+
+                    detail
+                        .spawn((
+                            PlaceDetailCard,
+                            Node {
+                                display: Display::None,
+                                flex_direction: FlexDirection::Column,
+                                ..default()
+                            },
+                        ))
+                        .with_children(|card| {
+                            card.spawn((
+                                PlaceDetailName,
+                                Text::new(""),
+                                TextFont {
+                                    font_size: FontSize::Px(22.0),
+                                    ..default()
+                                },
+                                TextColor(TEXT_COLOR),
+                            ));
+                            card.spawn((
+                                PlaceDetailSubtitle,
+                                Text::new(""),
+                                TextFont {
+                                    font_size: FontSize::Px(11.0),
+                                    ..default()
+                                },
+                                TextColor(ACCENT_COLOR),
+                                Node {
+                                    margin: UiRect::bottom(Val::Px(16.0)),
+                                    ..default()
+                                },
+                            ));
+                            for field in PlaceField::ALL {
+                                card.spawn((
+                                    Node {
+                                        flex_direction: FlexDirection::Row,
+                                        align_items: AlignItems::Center,
+                                        justify_content: JustifyContent::SpaceBetween,
+                                        padding: UiRect::vertical(Val::Px(9.0)),
+                                        border: UiRect::bottom(Val::Px(1.0)),
+                                        ..default()
+                                    },
+                                    BorderColor::from(DIVIDER),
+                                    children![
+                                        (
+                                            Text::new(field.label()),
+                                            TextFont {
+                                                font_size: FontSize::Px(10.0),
+                                                ..default()
+                                            },
+                                            TextColor(TEXT_MUTED),
+                                            // Never compress the label: a long
+                                            // value would otherwise wrap "TO
+                                            // ADVANCE" onto two lines and the
+                                            // row would read as broken.
+                                            Node {
+                                                flex_shrink: 0.0,
+                                                margin: UiRect::right(Val::Px(16.0)),
+                                                ..default()
+                                            },
+                                        ),
+                                        (
+                                            PlaceStat(field),
+                                            Text::new("-"),
+                                            TextFont {
+                                                font_size: FontSize::Px(13.0),
+                                                ..default()
+                                            },
+                                            TextColor(TEXT_COLOR),
+                                            // The value wraps instead, right-aligned
+                                            // so the column edge stays straight.
+                                            TextLayout::justify(Justify::Right),
+                                            Node {
+                                                flex_shrink: 1.0,
+                                                ..default()
+                                            },
+                                        ),
+                                    ],
+                                ));
+                            }
+                        });
+                });
+        });
+    });
 }
 
 fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
