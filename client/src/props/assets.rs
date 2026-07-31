@@ -51,6 +51,25 @@ fn tree_mesh_labels(kind: shared::props::PropKind) -> Option<TreeMeshLabels> {
             lod1_label: Some("Mesh1/Primitive0"),
             material_label: "Material0",
         }),
+        // Grass is not a tree, but it wants exactly what this path provides and
+        // it wants it more than anything else does.
+        //
+        // A grass GLB has two nodes (LOD0, LOD1), which fails the simple-mesh
+        // fast path's `nodes.len() == 1` test, so every patch was falling
+        // through to a full scene: a root plus one entity per LOD mesh, THREE
+        // entities each. Measured density is 278 patches per chunk in temperate
+        // meadow, so a 128 m ring was already ~21,000 entities and pushing the
+        // draw distance out was unaffordable.
+        //
+        // Here each patch is ONE entity with a swapped mesh handle, and it gains
+        // the LOD1 it was never using: 36 triangles inside 72 m, 12 beyond.
+        GrassBlade_9v | Env_Grass_Tall_04 | Env_Grass_06 | Env_Grass_07 => {
+            Some(TreeMeshLabels {
+                lod0_label: "Mesh0/Primitive0",
+                lod1_label: Some("Mesh1/Primitive0"),
+                material_label: "Material0",
+            })
+        }
         _ => None,
     }
 }
@@ -68,11 +87,14 @@ pub(super) fn load_prop_assets(mut commands: Commands, asset_server: Res<AssetSe
             .next()
             .unwrap_or(kind.scene_path());
         gltfs.insert(kind, asset_server.load::<Gltf>(base));
-        if is_tree_kind(kind) {
-            let Some(labels) = tree_mesh_labels(kind) else {
-                warn!("Missing tree mesh labels for kind {:?}", kind);
-                continue;
-            };
+        // The table is the authority now, not `is_tree_kind`: grass uses this
+        // path too. A tree kind MISSING from the table is still a bug worth
+        // shouting about, because it silently loses LOD swapping.
+        let labels = tree_mesh_labels(kind);
+        if labels.is_none() && is_tree_kind(kind) {
+            warn!("Missing tree mesh labels for kind {:?}", kind);
+        }
+        if let Some(labels) = labels {
             let mesh0 = asset_server.load(format!("{base}#{}", labels.lod0_label));
             let mesh1 = labels
                 .lod1_label

@@ -18,5 +18,5 @@ pub use debug::PropLodDebugMode;
 pub use plugin::PropsPlugin;
 pub use types::*;
 
-pub(crate) use kinds::is_tree_kind;
+pub(crate) use kinds::{is_tree_kind, uses_swap_mesh_lod};
 pub(crate) use simple_mesh::{try_spawn_simple_prop_mesh, SimplePropMeshCache};

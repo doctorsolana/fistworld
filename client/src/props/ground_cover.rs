@@ -25,15 +25,20 @@ use super::{PropAssets, SimplePropMeshCache};
 
 /// How far ground cover streams, in chunks.
 ///
-/// Two chunks is 128 m, comfortably past the 80 m draw distance so a patch is
-/// already loaded by the time it could be seen, and nowhere near the prop
-/// radius. Deliberately NOT scaled with zoom: zooming out does not make grass
+/// Four chunks is 256 m, which covers the 240 m draw distance with a chunk to
+/// spare so a patch is loaded before it could be seen. Deliberately NOT scaled
+/// with zoom the way the prop radius is: zooming out does not make grass
 /// visible further away, it only makes it smaller.
-const GROUND_COVER_CHUNK_RADIUS: i32 = 2;
+///
+/// The budget behind the number, measured rather than guessed: 278 patches per
+/// chunk in temperate meadow (50 in the north, 54 in the desert -- the farmland
+/// gradient), so 81 chunks is ~22,500 patches, one entity each.
+const GROUND_COVER_CHUNK_RADIUS: i32 = 4;
 
-/// Spawn budget per frame. Lower than the prop budget because a chunk of grass
-/// is hundreds of instances and there is no hurry — nothing beyond 80 m shows.
-const MAX_GROUND_COVER_SPAWNS_PER_FRAME: usize = 64;
+/// Spawn budget per frame. Higher than the prop budget because there are two
+/// orders of magnitude more patches than trees and they are one cheap entity
+/// each; at 64 a frame filling the ring took nine seconds of visible growing-in.
+const MAX_GROUND_COVER_SPAWNS_PER_FRAME: usize = 256;
 
 /// Marks an entity as ground cover so it can be culled on its own radius.
 #[derive(Component)]

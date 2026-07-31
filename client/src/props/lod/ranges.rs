@@ -21,7 +21,11 @@ pub(crate) fn update_prop_visibility_ranges(
     let max_prop_distance = settings.view_distance as f32 * CHUNK_SIZE;
 
     for (root, tuning, kind) in roots.iter() {
-        if is_tree_kind(kind.0) {
+        // Skip anything the swap-mesh LOD system owns -- it sets visibility and
+        // shadows itself, and a second VisibilityRange on the same root fights
+        // it. Keyed on the kind rather than on the component because this runs
+        // before the handles are attached on the first frame.
+        if is_tree_kind(kind.0) || crate::props::uses_swap_mesh_lod(kind.0) {
             continue;
         }
         let presence = lod_presence_q.get(root).copied().unwrap_or_default();

@@ -60,11 +60,18 @@ pub fn visual_role(kind: PropKind) -> PropVisualRole {
 /// far the camera can actually be.
 pub fn default_render_tuning(kind: PropKind) -> PropRenderTuning {
     match visual_role(kind) {
-        // Not spawned at all (see the client spawn filter); kept short in case one
-        // slips through via an authored map.
+        // Ground cover. 80 m was the right number when a patch was a
+        // 738-triangle textured tuft costing three entities: at that price it
+        // had to be a thin ring under the camera, and it read as one.
+        //
+        // A patch is now 36 triangles inside 72 m and 12 beyond, on ONE entity,
+        // so the carpet can reach most of the way across a normal RTS view. The
+        // client streams it on a matching radius (props::ground_cover) rather
+        // than the much larger prop radius, so raising this does not drag tens
+        // of thousands of invisible patches along with it.
         PropVisualRole::GroundDetail => PropRenderTuning {
             casts_shadows: false,
-            visible_end_distance: Some(80.0),
+            visible_end_distance: Some(240.0),
         },
         // Clumps of colour: worth drawing at mid zoom, dropped when zoomed way out
         // where they would be sub-pixel anyway.

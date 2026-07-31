@@ -194,3 +194,41 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terrain::WorldTerrain;
+
+    /// Measure real ground-cover density, because the radius is a budget
+    /// decision and estimating "about 400 a chunk" is how budgets get blown.
+    #[test]
+    #[ignore = "diagnostic: cargo test -p shared -- --ignored --nocapture ground_cover_density"]
+    fn ground_cover_density() {
+        let terrain = WorldTerrain::default();
+        for (label, wx, wz) in [
+            ("temperate (1720,0)", 1720.0f32, 0.0f32),
+            ("north (-754,-3000)", -754.0, -3000.0),
+            ("south (427,2900)", 427.0, 2900.0),
+        ] {
+            let centre = ChunkCoord::from_world_pos(Vec3::new(wx, 0.0, wz));
+            let mut total = 0usize;
+            let mut chunks = 0usize;
+            for dz in -2..=2 {
+                for dx in -2..=2 {
+                    let c = ChunkCoord {
+                        x: centre.x + dx,
+                        z: centre.z + dz,
+                    };
+                    total += generate_chunk_grass(&terrain.generator, c).len();
+                    chunks += 1;
+                }
+            }
+            println!(
+                "{label:22} {:>5} patches over {chunks} chunks = {:>4.0}/chunk",
+                total,
+                total as f32 / chunks as f32
+            );
+        }
+    }
+}
