@@ -63,13 +63,25 @@ fn tree_mesh_labels(kind: shared::props::PropKind) -> Option<TreeMeshLabels> {
         //
         // Here each patch is ONE entity with a swapped mesh handle, and it gains
         // the LOD1 it was never using: 36 triangles inside 72 m, 12 beyond.
-        GrassBlade_9v | Env_Grass_Tall_04 | Env_Grass_06 | Env_Grass_07 => {
-            Some(TreeMeshLabels {
-                lod0_label: "Mesh0/Primitive0",
-                lod1_label: Some("Mesh1/Primitive0"),
-                material_label: "Material0",
-            })
-        }
+        // Grass takes the single-entity path but DOES NOT LOD, and that is a
+        // deliberate exception.
+        //
+        // A blade is one quad, so there is no such thing as a simpler blade --
+        // the LOD1 patch is the same blades minus two thirds of them (18 -> 6).
+        // For a tree, dropping detail at distance is invisible. For ground
+        // cover it means the ground past the swap distance genuinely has less
+        // grass on it, and the swap radius reads as a disc of thick grass
+        // around the camera with thin grass beyond. You cannot shade your way
+        // out of that; the coverage really is different.
+        //
+        // Cost of never swapping, measured: ~640k triangles in view against
+        // ~250k, on a world whose trees are 30 MILLION. It buys uniform ground
+        // for 1.3% of what the forest already costs.
+        Grass_Patch | Grass_Tall => Some(TreeMeshLabels {
+            lod0_label: "Mesh0/Primitive0",
+            lod1_label: None,
+            material_label: "Material0",
+        }),
         _ => None,
     }
 }
