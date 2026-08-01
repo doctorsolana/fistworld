@@ -1113,35 +1113,32 @@ fn draw_forest_size_presets(ui: &mut egui::Ui, brush_radius: &mut f32) {
 
 fn draw_terrain_layer_swatches(ui: &mut egui::Ui, selected: &mut TerrainLayer) {
     ui.horizontal_wrapped(|ui| {
-        terrain_layer_swatch(
-            ui,
-            selected,
-            TerrainLayer::Grass,
-            "Grass",
-            egui::Color32::from_rgb(105, 128, 36),
-        );
-        terrain_layer_swatch(
-            ui,
-            selected,
-            TerrainLayer::Dirt,
-            "Dark Ground",
-            egui::Color32::from_rgb(70, 84, 42),
-        );
-        terrain_layer_swatch(
-            ui,
-            selected,
-            TerrainLayer::Sand,
-            "Dry Dirt",
-            egui::Color32::from_rgb(157, 137, 113),
-        );
-        terrain_layer_swatch(
-            ui,
-            selected,
-            TerrainLayer::Cobblestone,
-            "Cobblestone",
-            egui::Color32::from_rgb(145, 140, 129),
-        );
+        // Names and colours come from `shared::terrain::TERRAIN_LAYERS`, which is also what the
+        // shader renders. They used to be hand-written here and had drifted badly: Dirt was
+        // labelled "Dark Ground" in rgb(70,84,42) and Sand "Dry Dirt" in rgb(157,137,113) --
+        // the mean colours of the old photographic textures, not the flat palette the terrain
+        // actually draws. Painting "Dark Ground" put brown on the map.
+        for def in shared::terrain::TERRAIN_LAYERS.iter() {
+            terrain_layer_swatch(ui, selected, def.layer, def.display_name, swatch_color(def));
+        }
     });
+}
+
+/// Palette colours are linear; egui wants sRGB bytes.
+fn swatch_color(def: &shared::terrain::TerrainLayerDef) -> egui::Color32 {
+    fn to_srgb_u8(c: f32) -> u8 {
+        let s = if c <= 0.003_130_8 {
+            c * 12.92
+        } else {
+            1.055 * c.powf(1.0 / 2.4) - 0.055
+        };
+        (s.clamp(0.0, 1.0) * 255.0).round() as u8
+    }
+    egui::Color32::from_rgb(
+        to_srgb_u8(def.color[0]),
+        to_srgb_u8(def.color[1]),
+        to_srgb_u8(def.color[2]),
+    )
 }
 
 fn terrain_layer_swatch(

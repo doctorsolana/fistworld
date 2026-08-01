@@ -1,7 +1,4 @@
 use bevy::asset::RenderAssetUsages;
-use bevy::image::{
-    ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor,
-};
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
@@ -16,7 +13,7 @@ use shared::{
         AuthoredCityBuilding, MapPlot, MapRoad, OrientedRect, RoadClass, RoadRenderSegment,
         RoadSegment,
     },
-    terrain::WorldTerrain,
+    terrain::{stylized_palette, WorldTerrain},
 };
 
 use crate::{
@@ -61,16 +58,15 @@ pub fn setup_city_scene(
     world: Res<WorldTerrain>,
     session: Res<EditorSession>,
 ) {
-    let cobblestone_albedo = load_repeating_texture(
-        &asset_server,
-        "textures/terrain/optimized_1k/Cobblestone_Texture_01.png",
-        true,
-    );
-    let cobblestone_normal = load_repeating_texture(
-        &asset_server,
-        "textures/terrain/optimized_1k/Cobblestone_Normals_01.png",
-        false,
-    );
+    // No textures here on purpose -- and for a second reason the client does not have.
+    //
+    // This block loaded two PNGs that this pipeline deletes, so leaving it would have been a
+    // missing-asset failure at editor startup rather than a wasted megabyte. It is the same
+    // duplicate-VRAM mistake `client/src/city/spawn.rs` had (see the note there), copied into
+    // the editor, and it survived the client's fix because nothing connects the two files.
+    // That is the editor's whole failure mode: a second copy of the renderer that nobody
+    // compiles against the first.
+    let palette = stylized_palette();
     let city_materials = CityEditorMaterials {
         road_alley: materials.add(StandardMaterial {
             base_color: Color::srgb(0.07, 0.07, 0.08),
@@ -78,9 +74,7 @@ pub fn setup_city_scene(
             ..default()
         }),
         road_local: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.82, 0.82, 0.80),
-            base_color_texture: Some(cobblestone_albedo),
-            normal_map_texture: Some(cobblestone_normal),
+            base_color: linear(palette.cobble),
             perceptual_roughness: 1.0,
             metallic: 0.0,
             reflectance: 0.08,
@@ -838,25 +832,8 @@ fn build_mesh(
     mesh
 }
 
-fn load_repeating_texture(
-    asset_server: &AssetServer,
-    path: &'static str,
-    is_srgb: bool,
-) -> Handle<Image> {
-    asset_server.load_builder().with_settings(move |settings: &mut ImageLoaderSettings| {
-        settings.is_srgb = is_srgb;
-        settings.sampler = repeat_sampler();
-    }).load(path)
-}
-
-fn repeat_sampler() -> ImageSampler {
-    ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::Repeat,
-        address_mode_v: ImageAddressMode::Repeat,
-        address_mode_w: ImageAddressMode::Repeat,
-        mag_filter: ImageFilterMode::Linear,
-        min_filter: ImageFilterMode::Linear,
-        mipmap_filter: ImageFilterMode::Linear,
-        ..default()
-    })
+/// Palette entries are LINEAR -- they go to the shader as uniforms -- so they must not pass
+/// through `Color::srgb`, which would apply the transfer curve twice and wash the roads out.
+fn linear(v: Vec4) -> Color {
+    Color::linear_rgb(v.x, v.y, v.z)
 }

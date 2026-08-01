@@ -1,7 +1,4 @@
 use bevy::asset::RenderAssetUsages;
-use bevy::image::{
-    ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor,
-};
 use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
@@ -12,7 +9,7 @@ use shared::{
         build_road_render_segments, plot_rect, road_polyline_points, sample_polyline_strip,
         AuthoredCityLayout, OrientedRect, RoadClass, RoadRenderSegment, RoadSegment,
     },
-    terrain::{ChunkCoord, WorldTerrain},
+    terrain::{stylized_palette, ChunkCoord, WorldTerrain},
 };
 
 use crate::render::systems::ClientWorldRoot;
@@ -42,39 +39,29 @@ pub fn spawn_city_layout_visuals(
         return;
     }
 
-    let cobblestone_albedo = load_repeating_texture(
-        &asset_server,
-        "textures/terrain/optimized_1k/Cobblestone_Texture_01.png",
-        true,
-    );
-    let cobblestone_normal = load_repeating_texture(
-        &asset_server,
-        "textures/terrain/optimized_1k/Cobblestone_Normals_01.png",
-        false,
-    );
-    let dirt_albedo = load_repeating_texture(
-        &asset_server,
-        "textures/terrain/optimized_1k/Dirt_Texture_01.png",
-        true,
-    );
-    let dirt_normal = load_repeating_texture(
-        &asset_server,
-        "textures/terrain/optimized_1k/Dirt_Normals_01.png",
-        false,
-    );
+    // No textures here on purpose.
+    //
+    // This block used to load four PNGs from `textures/terrain/optimized_1k/` -- the same
+    // Cobblestone and Dirt images that are already layers 3 and 2 of `terrain_albedo_array`,
+    // byte-identical to their mip 0. Roads are ordinary `StandardMaterial` strips and cannot
+    // sample a `2d_array` the splat shader owns, so they re-loaded standalone copies: 16 MiB of
+    // duplicate VRAM the moment any road existed, with `mip_level_count: 1` (Bevy 0.19 generates
+    // no mips for PNGs) so they shimmered at the grazing angles an RTS camera always sees.
+    //
+    // The terrain itself renders as flat palette colour -- `stylize.x` is 1.0 -- so photographic
+    // cobblestone beside it was off-model anyway. Roads now take their colour from the same
+    // palette the ground does, which is why they no longer need an image at all.
+    let palette = stylized_palette();
     let road_alley_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.24, 0.20, 0.16),
-        base_color_texture: Some(dirt_albedo.clone()),
-        normal_map_texture: Some(dirt_normal),
+        // Dirt, darkened: an alley is packed earth, not open ground.
+        base_color: linear(palette.dirt * 0.62),
         perceptual_roughness: 0.96,
         metallic: 0.0,
         reflectance: 0.04,
         ..default()
     });
     let road_local_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.76, 0.75, 0.70),
-        base_color_texture: Some(cobblestone_albedo.clone()),
-        normal_map_texture: Some(cobblestone_normal.clone()),
+        base_color: linear(palette.cobble),
         perceptual_roughness: 0.94,
         metallic: 0.0,
         reflectance: 0.06,
@@ -95,9 +82,8 @@ pub fn spawn_city_layout_visuals(
         ..default()
     });
     let sidewalk_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.70, 0.69, 0.64),
-        base_color_texture: Some(cobblestone_albedo),
-        normal_map_texture: Some(cobblestone_normal),
+        // A shade lighter than the road it borders, so the kerb line reads.
+        base_color: linear(palette.cobble * 1.18),
         perceptual_roughness: 0.97,
         metallic: 0.0,
         reflectance: 0.035,
@@ -621,25 +607,9 @@ fn build_mesh(buffers: MeshBuffers) -> Option<Mesh> {
     Some(mesh)
 }
 
-fn load_repeating_texture(
-    asset_server: &AssetServer,
-    path: &'static str,
-    is_srgb: bool,
-) -> Handle<Image> {
-    asset_server.load_builder().with_settings(move |settings: &mut ImageLoaderSettings| {
-        settings.is_srgb = is_srgb;
-        settings.sampler = repeat_sampler();
-    }).load(path)
-}
-
-fn repeat_sampler() -> ImageSampler {
-    ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::Repeat,
-        address_mode_v: ImageAddressMode::Repeat,
-        address_mode_w: ImageAddressMode::Repeat,
-        mag_filter: ImageFilterMode::Linear,
-        min_filter: ImageFilterMode::Linear,
-        mipmap_filter: ImageFilterMode::Linear,
-        ..default()
-    })
+/// Palette entries are LINEAR (they are handed straight to the shader as uniforms), so they
+/// must not go through `Color::srgb`, which would apply the transfer curve a second time and
+/// wash every road out.
+fn linear(v: Vec4) -> Color {
+    Color::linear_rgb(v.x, v.y, v.z)
 }

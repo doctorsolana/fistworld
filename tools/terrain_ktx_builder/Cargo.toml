@@ -5,9 +5,22 @@ edition = "2021"
 
 [features]
 default = []
-ktx2-native = ["dep:ktx2-rw"]
+# Kept as a feature name for muscle memory, but there is nothing "native" about it any more:
+# the KTX2 container is written by this crate and the blocks are encoded by intel_tex_2. The
+# previous implementation pulled in ktx2-rw, which builds Khronos' KTX-Software from C++ via
+# cmake -- a toolchain requirement this tool no longer has.
+ktx2-native = ["dep:ktx2", "dep:intel_tex_2"]
 
 [dependencies]
 anyhow = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
-ktx2-rw = { version = "0.2.4", optional = true }
+# The layer table. Index -> (albedo image, normal image, tiling, colour) lives in exactly one
+# place, and this tool reads it rather than repeating it. Costs a bevy link on a tool that runs
+# about once a year; buys the guarantee that the built array and the renderer agree on what is
+# in each slot.
+shared = { path = "../../shared" }
+ktx2 = { version = "0.5.0", optional = true }
+intel_tex_2 = { version = "0.5.0", optional = true }
+
+[dev-dependencies]
+texture2ddecoder = "0.1.2"

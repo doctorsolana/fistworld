@@ -1,146 +1,27 @@
-use bevy::asset::Asset;
-use bevy::image::{
-    ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor,
-};
-use bevy::pbr::{ExtendedMaterial, MaterialExtension};
+use bevy::image::ImageLoaderSettings;
 use bevy::prelude::*;
-use bevy::reflect::TypePath;
-use bevy::render::render_resource::ShaderType;
-use bevy::render::render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension};
-use bevy::shader::ShaderRef;
+use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
 use shared::components::WorldTime;
 use shared::water::{OCEAN_LOOP_SECONDS, WATER_SURFACE_OFFSET};
 
 use super::chunks::TerrainChunk;
 
-/// Splatmap material definition (StandardMaterial + extension).
-pub type TerrainSplatMaterial = ExtendedMaterial<StandardMaterial, TerrainSplatExtension>;
-
-#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-pub struct TerrainSplatExtension {
-    // Weight map (RGBA): grass, dirt, sand, cobblestone.
-    #[texture(100)]
-    #[sampler(101)]
-    pub weight_map: Handle<Image>,
-
-    // Array textures: layer 0 = grass, 1 = dirt, 2 = sand, 3 = cobblestone.
-    #[texture(102, dimension = "2d_array")]
-    #[sampler(103)]
-    pub albedo_array: Handle<Image>,
-    #[texture(104, dimension = "2d_array")]
-    #[sampler(105)]
-    pub normal_array: Handle<Image>,
-
-    // UV tiling per layer.
-    #[uniform(120)]
-    pub layer_tiling: Vec4,
-
-    // Debug mode selector.
-    #[uniform(121)]
-    pub debug_mode: u32,
-
-    // 1.0 = full normal mapping, 0.0 = skip normal-map contribution.
-    #[uniform(122)]
-    pub normal_strength: f32,
-
-    // x: water level, y: enabled, z: server clock offset, w: surface offset.
-    #[uniform(123)]
-    pub water_params: Vec4,
-
-    // --- Stylised palette ---
-    //
-    // The photographic splat textures read as "realistic dirt" no matter how the frame is
-    // graded, which fights the low-poly look. These flat per-layer colours replace them.
-    // `stylize.x` blends between the two (0 = photo textures, 1 = flat colour) so the
-    // change stays A/B-able instead of being a one-way rewrite.
-    //
-    // Packed into ONE binding on purpose: seven separate `#[uniform]` attributes each
-    // allocate their own buffer, which overran the Metal vertex-stage buffer limit
-    // ("pipeline needs too many buffers in the vertex stage: 1 vertex and 17 layout").
-    #[uniform(124)]
-    pub palette: TerrainPalette,
-}
-
-/// Flat palette for the stylised terrain.
-///
-/// Slightly desaturated, slightly blue-shifted in shadow-facing values so the world reads
-/// storybook rather than photographic. Keep these as the single source of truth — the
-/// far-terrain material below should match, or distant hills change colour at the LOD seam.
-pub fn stylized_palette() -> TerrainPalette {
-    TerrainPalette {
-        // Deep enough to survive the sun's exposure and the aerial haze. A first pass used
-        // mid-value colours and the whole world came out pale and bland — the light and fog
-        // both wash these out, so the authored values need to sit darker/richer than the
-        // intended on-screen result.
-        grass: Vec4::new(0.26, 0.45, 0.20, 1.0),
-        dirt: Vec4::new(0.42, 0.32, 0.22, 1.0),
-        sand: Vec4::new(0.78, 0.70, 0.50, 1.0),
-        cobble: Vec4::new(0.40, 0.39, 0.38, 1.0),
-        rock: Vec4::new(0.36, 0.35, 0.38, 1.0),
-        // 1.0 stylised, 5 bands, gentle banding, strong slope rock.
-        stylize: Vec4::new(1.0, 5.0, 0.10, 0.85),
-        // Bands span 0..90m of height, with a little texture break-up so large flat areas
-        // are not perfectly uniform (which reads as untextured rather than stylised).
-        bands: Vec4::new(0.0, 90.0, 0.18, 0.0),
-        // Cloud shadows start off (strength 0 = shade 1.0 exactly);
-        // sync_cloud_shadow_params owns these fields at runtime.
-        clouds_a: Vec4::ZERO,
-        clouds_b: Vec4::ZERO,
-        clouds_c: Vec4::ZERO,
-        // Half extent must default SANE, not zero: a zero half extent makes
-        // the shader read |z| metres as latitude — every chunk flashes full
-        // snow/desert for any frame that renders before the first
-        // sync_cloud_shadow_params write lands.
-        climate: Vec4::new(4096.0, 0.0, 0.0, 0.0),
-        // Storm center parked far off-world, strength 0.
-        storm: Vec4::new(1.0e8, 1.0e8, 0.0, 0.0),
-    }
-}
-
-#[derive(Clone, Copy, Debug, ShaderType)]
-pub struct TerrainPalette {
-    pub grass: Vec4,
-    pub dirt: Vec4,
-    pub sand: Vec4,
-    pub cobble: Vec4,
-    pub rock: Vec4,
-    pub stylize: Vec4,
-    pub bands: Vec4,
-    /// Cloud shadow field: x coverage, y inv world scale, zw wind offset.
-    /// Lives in the palette (binding 124) because a new binding would overrun
-    /// the Metal buffer limit documented on `TerrainSplatExtension::palette`.
-    pub clouds_a: Vec4,
-    /// Cloud shadow field: xy sun projection (sun_dir.xz / sun_dir.y),
-    /// z shadow strength, w seed phase.
-    pub clouds_b: Vec4,
-    /// x: anchor time (client seconds), z: drift speed in client secs
-    /// (world speed x warp); shaders extrapolate wind past the anchor.
-    pub clouds_c: Vec4,
-    /// x: map half extent (m), y: climate seed phase, zw: reserved. Static
-    /// per map; pushed by sync_cloud_shadow_params alongside the cloud lanes.
-    pub climate: Vec4,
-    /// THE storm system (one per map): xy = cell center at the wind anchor
-    /// (shaders extrapolate it with the cloud drift), z = storminess 0..1
-    /// (0 whenever clouds are disabled — the rain must vanish with its sky),
-    /// w: reserved. Live per frame-ish; pushed by sync_cloud_shadow_params.
-    pub storm: Vec4,
-}
+// The material, palette and samplers live in `shared` so the editor cannot declare a
+// different set of bindings against the same shader -- which is exactly how the editor
+// spent five weeks failing pipeline validation on startup. See shared/src/terrain/material.rs.
+// `TerrainPalette` is deliberately absent: the client never names the type, it only calls
+// `stylized_palette()`. Re-exporting it anyway would be an unused import, and silencing that
+// with an allow would hide the next one that means something.
+pub use shared::terrain::{
+    layer_tiling, repeat_sampler, stylized_palette, weightmap_sampler, TerrainSplatExtension,
+    TerrainSplatMaterial, TERRAIN_ALBEDO_ARRAY, TERRAIN_NORMAL_ARRAY,
+};
 
 /// Terrain water uniform from a generator's loaded map.
 pub fn water_params_for_generator(generator: &shared::terrain::TerrainGenerator) -> Vec4 {
     match generator.loaded_map().heightmap.water_level {
         Some(level) => Vec4::new(level, 1.0, 0.0, WATER_SURFACE_OFFSET),
         None => Vec4::ZERO,
-    }
-}
-
-impl MaterialExtension for TerrainSplatExtension {
-    fn fragment_shader() -> ShaderRef {
-        "shaders/terrain_splat.wgsl".into()
-    }
-
-    fn deferred_fragment_shader() -> ShaderRef {
-        "shaders/terrain_splat.wgsl".into()
     }
 }
 
@@ -170,11 +51,11 @@ pub(super) fn setup_terrain_render_assets(
     let albedo_array: Handle<Image> = asset_server.load_builder().with_settings(|settings: &mut ImageLoaderSettings| {
             settings.is_srgb = true;
             settings.sampler = repeat_sampler();
-        }).load("textures/terrain/optimized_1k/terrain_albedo_array.ktx2");
+        }).load(TERRAIN_ALBEDO_ARRAY);
     let normal_array: Handle<Image> = asset_server.load_builder().with_settings(|settings: &mut ImageLoaderSettings| {
             settings.is_srgb = false;
             settings.sampler = repeat_sampler();
-        }).load("textures/terrain/optimized_1k/terrain_normal_array.ktx2");
+        }).load(TERRAIN_NORMAL_ARRAY);
 
     let far_mesh_material = materials.add(StandardMaterial {
         // Far mesh uses vertex colors for biome tinting; keep base color white.
@@ -185,7 +66,7 @@ pub(super) fn setup_terrain_render_assets(
         ..default()
     });
 
-    let layer_tiling = Vec4::new(8.0, 7.0, 6.0, 5.0);
+    let layer_tiling = layer_tiling();
 
     commands.insert_resource(TerrainTextureSources {
         albedo_array,
@@ -240,30 +121,6 @@ pub(super) fn build_terrain_texture_arrays(
     commands.remove_resource::<TerrainTextureSources>();
 
     info!("Loaded terrain KTX2 arrays (albedo + normal).");
-}
-
-fn repeat_sampler() -> ImageSampler {
-    ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::Repeat,
-        address_mode_v: ImageAddressMode::Repeat,
-        address_mode_w: ImageAddressMode::Repeat,
-        mag_filter: ImageFilterMode::Linear,
-        min_filter: ImageFilterMode::Linear,
-        mipmap_filter: ImageFilterMode::Linear,
-        ..default()
-    })
-}
-
-pub(crate) fn weightmap_sampler() -> ImageSampler {
-    ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::ClampToEdge,
-        address_mode_v: ImageAddressMode::ClampToEdge,
-        address_mode_w: ImageAddressMode::ClampToEdge,
-        mag_filter: ImageFilterMode::Linear,
-        min_filter: ImageFilterMode::Linear,
-        mipmap_filter: ImageFilterMode::Linear,
-        ..default()
-    })
 }
 
 #[derive(Default)]

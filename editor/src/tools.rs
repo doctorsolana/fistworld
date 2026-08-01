@@ -13,9 +13,9 @@ use shared::map::{
 };
 use shared::props::PropKind;
 use shared::terrain::{
-    apply_terrain_paint_op_to_weights, terrain_paint_op_chunk_coords, ChunkCoord, ChunkMeshData,
-    TerrainLayer, TerrainPaintOp, TerrainPaintShape, WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE,
-    TERRAIN_WEIGHTMAP_RESOLUTION, VERTEX_SPACING,
+    apply_terrain_paint_op_to_weights, stylized_palette, terrain_paint_op_chunk_coords, ChunkCoord,
+    ChunkMeshData, TerrainLayer, TerrainPaintOp, TerrainPaintShape, WorldTerrain, CHUNK_RESOLUTION,
+    CHUNK_SIZE, TERRAIN_WEIGHTMAP_RESOLUTION, VERTEX_SPACING,
 };
 
 use bevy::app::AppExit;
@@ -1590,6 +1590,11 @@ fn spawn_all_terrain_chunks(
                     } else {
                         Vec4::ZERO
                     },
+                    // Binding 124. Omitting it is what killed the editor for five weeks: the
+                    // shader reads `palette` unconditionally, so the binding must exist whatever
+                    // values it carries. Using the game's palette means the editor shows the
+                    // colours the game renders, which is the point of an editor.
+                    palette: stylized_palette(),
                 },
             });
             commands.spawn((
@@ -1789,12 +1794,7 @@ fn refresh_terrain_weightmap(
 }
 
 fn terrain_layer_display_name(layer: TerrainLayer) -> &'static str {
-    match layer {
-        TerrainLayer::Grass => "Grass",
-        TerrainLayer::Dirt => "Dark Ground",
-        TerrainLayer::Sand => "Dry Dirt",
-        TerrainLayer::Cobblestone => "Cobblestone",
-    }
+    shared::terrain::TERRAIN_LAYERS[layer.index()].display_name
 }
 
 fn spawn_prop_visuals(

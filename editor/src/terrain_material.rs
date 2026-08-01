@@ -1,50 +1,31 @@
-use bevy::asset::{Asset, RenderAssetUsages};
-use bevy::image::{
-    ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor,
-};
-use bevy::pbr::{ExtendedMaterial, MaterialExtension};
+//! Editor-side terrain texture assets.
+//!
+//! There is deliberately **no material definition here**. The editor renders terrain with the
+//! same `TerrainSplatExtension` the client uses, from `shared::terrain`, because it loads the
+//! same `terrain_splat.wgsl`.
+//!
+//! It used to declare its own. That struct listed bindings 100-105 and 120-123; when the shader
+//! gained `palette` at binding 124 the editor's copy was not updated, its pipeline layout stopped
+//! matching the shader, both the forward and deferred pipelines failed validation, and Bevy 0.19
+//! escalated that to a process exit ~20-40 s after launch. The editor was dead from `8b189ca`
+//! until this file stopped duplicating the definition. Two bind groups against one shader is a
+//! mismatch nothing can catch -- not the compiler, not a test -- so the only real fix is to have
+//! one.
+
+use bevy::asset::RenderAssetUsages;
+use bevy::image::{ImageLoaderSettings, ImageSampler};
 use bevy::prelude::*;
-use bevy::reflect::TypePath;
 use bevy::render::render_resource::{
-    AsBindGroup, Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor,
-    TextureViewDimension,
+    Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
 };
-use bevy::shader::ShaderRef;
 
-pub type EditorTerrainSplatMaterial =
-    ExtendedMaterial<StandardMaterial, EditorTerrainSplatExtension>;
+use shared::terrain::{
+    layer_tiling, repeat_sampler, weightmap_sampler, TERRAIN_ALBEDO_ARRAY, TERRAIN_NORMAL_ARRAY,
+};
 
-#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-pub struct EditorTerrainSplatExtension {
-    #[texture(100)]
-    #[sampler(101)]
-    pub weight_map: Handle<Image>,
-    #[texture(102, dimension = "2d_array")]
-    #[sampler(103)]
-    pub albedo_array: Handle<Image>,
-    #[texture(104, dimension = "2d_array")]
-    #[sampler(105)]
-    pub normal_array: Handle<Image>,
-    #[uniform(120)]
-    pub layer_tiling: Vec4,
-    #[uniform(121)]
-    pub debug_mode: u32,
-    #[uniform(122)]
-    pub normal_strength: f32,
-    /// x: water level (world Y), y: 1.0 when water is shown, zw: unused.
-    #[uniform(123)]
-    pub water_params: Vec4,
-}
-
-impl MaterialExtension for EditorTerrainSplatExtension {
-    fn fragment_shader() -> ShaderRef {
-        "shaders/terrain_splat.wgsl".into()
-    }
-
-    fn deferred_fragment_shader() -> ShaderRef {
-        "shaders/terrain_splat.wgsl".into()
-    }
-}
+/// The one terrain material. Aliased rather than redefined -- see the module docs.
+pub type EditorTerrainSplatMaterial = shared::terrain::TerrainSplatMaterial;
+pub type EditorTerrainSplatExtension = shared::terrain::TerrainSplatExtension;
 
 #[derive(Resource)]
 pub struct EditorTerrainTextureAssets {
@@ -57,19 +38,25 @@ pub struct EditorTerrainTextureAssets {
 impl FromWorld for EditorTerrainTextureAssets {
     fn from_world(world: &mut World) -> Self {
         let asset_server = world.resource::<AssetServer>().clone();
-        let albedo_array = asset_server.load_builder().with_settings(|settings: &mut ImageLoaderSettings| {
+        let albedo_array = asset_server
+            .load_builder()
+            .with_settings(|settings: &mut ImageLoaderSettings| {
                 settings.is_srgb = true;
-                settings.sampler = repeating_sampler();
-            }).load("textures/terrain/optimized_1k/terrain_albedo_array.ktx2");
-        let normal_array = asset_server.load_builder().with_settings(|settings: &mut ImageLoaderSettings| {
+                settings.sampler = repeat_sampler();
+            })
+            .load(TERRAIN_ALBEDO_ARRAY);
+        let normal_array = asset_server
+            .load_builder()
+            .with_settings(|settings: &mut ImageLoaderSettings| {
                 settings.is_srgb = false;
-                settings.sampler = repeating_sampler();
-            }).load("textures/terrain/optimized_1k/terrain_normal_array.ktx2");
+                settings.sampler = repeat_sampler();
+            })
+            .load(TERRAIN_NORMAL_ARRAY);
 
         Self {
             albedo_array,
             normal_array,
-            layer_tiling: Vec4::new(8.0, 7.0, 6.0, 5.0),
+            layer_tiling: layer_tiling(),
             configured: false,
         }
     }
@@ -133,7 +120,7 @@ pub fn update_weightmap_image(image: &mut Image, weights: &[[u8; 4]]) {
 }
 
 fn configure_array_image(image: &mut Image, label: &'static str) {
-    image.sampler = repeating_sampler();
+    image.sampler = repeat_sampler();
     image.texture_view_descriptor = Some(TextureViewDescriptor {
         label: Some(label),
         dimension: Some(TextureViewDimension::D2Array),
@@ -141,26 +128,7 @@ fn configure_array_image(image: &mut Image, label: &'static str) {
     });
 }
 
-fn repeating_sampler() -> ImageSampler {
-    ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::Repeat,
-        address_mode_v: ImageAddressMode::Repeat,
-        address_mode_w: ImageAddressMode::Repeat,
-        mag_filter: ImageFilterMode::Linear,
-        min_filter: ImageFilterMode::Linear,
-        mipmap_filter: ImageFilterMode::Linear,
-        ..default()
-    })
-}
-
+/// The weightmap sampler, by its editor-local name. Descriptor lives in `shared`.
 fn clamped_sampler() -> ImageSampler {
-    ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::ClampToEdge,
-        address_mode_v: ImageAddressMode::ClampToEdge,
-        address_mode_w: ImageAddressMode::ClampToEdge,
-        mag_filter: ImageFilterMode::Linear,
-        min_filter: ImageFilterMode::Linear,
-        mipmap_filter: ImageFilterMode::Linear,
-        ..default()
-    })
+    weightmap_sampler()
 }
