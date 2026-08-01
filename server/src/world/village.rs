@@ -458,6 +458,7 @@ pub fn consider_permits(
                 settlement: settlement.name.clone(),
                 raising: false,
                 stand,
+                rotation,
             },
             PlayerPosition(position),
             Replicate::to_clients(NetworkTarget::All),
@@ -520,6 +521,7 @@ pub fn advance_construction(
     mut intents: Query<&mut VillagerIntent>,
     mut pending: Query<(Entity, &mut UnderConstruction)>,
     mut sites: Query<&mut shared::components::ConstructionSite>,
+    mut facings: Query<&mut PlayerRotation>,
 ) {
     let warp = 1.0;
     for (site, mut under) in pending.iter_mut() {
@@ -572,6 +574,22 @@ pub fn advance_construction(
                 // server streaming a progress float at tick rate.
                 if let Ok(mut site_view) = sites.get_mut(site) {
                     site_view.raising = true;
+                }
+                // Turn them to face the work. They arrive facing whichever way
+                // they were walking, which is away from the plot as often as
+                // not, and a builder hammering with their back to the house
+                // reads as broken.
+                //
+                // Same convention as `step_units`: Bevy yaw 0 looks down -Z, so
+                // atan2 of the negated forward vector gives the yaw whose -Z
+                // points along it.
+                if let Some(builder) = under.builder {
+                    if let Ok(mut facing) = facings.get_mut(builder) {
+                        let to_work = under.position - under.stand;
+                        if to_work.length_squared() > 1e-4 {
+                            facing.0 = f32::atan2(-to_work.x, -to_work.z);
+                        }
+                    }
                 }
                 info!(
                     "Village '{}': ground cleared for a {}",

@@ -174,9 +174,9 @@ pub(super) fn clear_ground_cover_for_new_buildings(
         (&shared::building::PlacedBuilding, &shared::building::BuildingPosition),
         Added<shared::building::PlacedBuilding>,
     >,
-    mut loaded: ResMut<LoadedGroundCoverChunks>,
     mut pending: ResMut<PendingGroundCover>,
     mut index: ResMut<GroundCoverIndex>,
+    transforms: Query<&GlobalTransform>,
 ) {
     for (building, position) in added.iter() {
         let zone = shared::building::BuildZoneEntry::from_building(
@@ -184,18 +184,34 @@ pub(super) fn clear_ground_cover_for_new_buildings(
             building.building_type,
             building.rotation,
         );
+        // Only the patches ON the plot, for the same reason the props are
+        // culled surgically: re-growing whole chunks makes the whole meadow
+        // blink every time a hut goes up.
         let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
         for cx in min_x..=max_x {
             for cz in min_z..=max_z {
                 let coord = ChunkCoord::new(cx, cz);
-                if !loaded.chunks.remove(&coord) {
-                    continue;
+                if let Some(entities) = index.by_chunk.get_mut(&coord) {
+                    entities.retain(|patch| {
+                        let Ok(transform) = transforms.get(*patch) else {
+                            return true;
+                        };
+                        let at = transform.translation();
+                        if zone.contains_point(Vec2::new(at.x, at.z)) {
+                            commands.entity(*patch).despawn();
+                            false
+                        } else {
+                            true
+                        }
+                    });
                 }
-                pending.queue.retain(|(c, _)| *c != coord);
-                if let Some(entities) = index.by_chunk.remove(&coord) {
-                    for entity in entities {
-                        commands.entity(entity).despawn();
+                for (queued, spawns) in pending.queue.iter_mut() {
+                    if *queued != coord {
+                        continue;
                     }
+                    spawns.retain(|spawn| {
+                        !zone.contains_point(Vec2::new(spawn.position.x, spawn.position.z))
+                    });
                 }
             }
         }

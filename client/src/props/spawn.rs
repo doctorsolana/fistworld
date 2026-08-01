@@ -30,6 +30,7 @@ pub(super) fn invalidate_props_for_new_buildings(
     mut pending_spawns: ResMut<PendingPropSpawns>,
     mut prop_chunk_index: ResMut<PropChunkIndex>,
     mut build_zone_index: ResMut<BuildZoneChunkIndex>,
+    prop_transforms: Query<&GlobalTransform>,
 ) {
     let mut added_entities = HashSet::new();
     for (entity, building, position) in new_buildings.iter() {
@@ -38,17 +39,40 @@ pub(super) fn invalidate_props_for_new_buildings(
             BuildZoneEntry::from_building(position.0, building.building_type, building.rotation);
         let (min_chunk_x, max_chunk_x, min_chunk_z, max_chunk_z) = zone.chunk_bounds();
 
-        // Despawn props in affected chunks and mark for respawn.
+        // Remove ONLY the props standing on the new plot.
+        //
+        // This used to unload every affected chunk and respawn it wholesale.
+        // A chunk is 64 m and a building's zone can touch four of them, so
+        // putting up one hut made several hundred trees vanish and trickle back
+        // at the spawn budget -- the "everything reloads" flicker. The building
+        // covers a few metres; only those few metres need to change.
         for cx in min_chunk_x..=max_chunk_x {
             for cz in min_chunk_z..=max_chunk_z {
                 let coord = shared::terrain::ChunkCoord::new(cx, cz);
-                if loaded_prop_chunks.chunks.remove(&coord) {
-                    pending_spawns.discard_chunk(coord);
-                    if let Some(entities) = prop_chunk_index.by_chunk.remove(&coord) {
-                        for entity in entities {
-                            commands.entity(entity).despawn();
+                if let Some(entities) = prop_chunk_index.by_chunk.get_mut(&coord) {
+                    entities.retain(|prop| {
+                        let Ok(transform) = prop_transforms.get(*prop) else {
+                            return true;
+                        };
+                        let at = transform.translation();
+                        if zone.contains_point(Vec2::new(at.x, at.z)) {
+                            commands.entity(*prop).despawn();
+                            false
+                        } else {
+                            true
                         }
+                    });
+                }
+                // Anything still queued for this chunk has not been spawned
+                // yet; drop the ones that would land inside the building rather
+                // than letting them appear indoors a few frames later.
+                for (queued_coord, spawns) in pending_spawns.queue.iter_mut() {
+                    if *queued_coord != coord {
+                        continue;
                     }
+                    spawns.retain(|spawn| {
+                        !zone.contains_point(Vec2::new(spawn.position.x, spawn.position.z))
+                    });
                 }
             }
         }

@@ -282,6 +282,12 @@ pub struct ConstructionSite {
     pub raising: bool,
     /// Where the builder stands to work — beside the plot, not on it.
     pub stand: Vec3,
+    /// Which way the finished building will face.
+    ///
+    /// Replicated because the frame RISES before the building exists, and it
+    /// has to rise already turned the right way. Without this the model came up
+    /// unrotated and then snapped to its real bearing the instant it finished.
+    pub rotation: f32,
 }
 
 /// How long a permitted building takes to rise, in seconds.

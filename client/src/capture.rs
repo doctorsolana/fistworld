@@ -265,9 +265,13 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                         raising: true,
                         stand: shared::components::builder_stand_position(
                             site_at,
-                            0.0,
+                            0.9,
                             K::House.art().definition().footprint.y,
                         ),
+                        // Deliberately NOT zero: a rotated site is the case
+                        // where a mismatch between the rising frame and the
+                        // finished building would show.
+                        rotation: 0.9,
                     },
                     shared::components::PlayerPosition(Vec3::new(
                         site_at.x,

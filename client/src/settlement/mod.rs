@@ -91,7 +91,8 @@ fn raise_construction_visuals(
                     RaisingVisual { elapsed: 0.0, sunk },
                     Name::new(format!("{} rising", site.kind.label())),
                     WorldAssetRoot(asset_server.load(scene)),
-                    Transform::from_xyz(position.0.x, ground - sunk, position.0.z),
+                    Transform::from_xyz(position.0.x, ground - sunk, position.0.z)
+                        .with_rotation(Quat::from_rotation_y(site.rotation)),
                     Visibility::Inherited,
                 ));
             }
@@ -138,13 +139,13 @@ fn claim_building_ground(
             BuildingPosition(position.0),
         ));
     }
-    // Sites replicate no rotation; the zone is a rectangle around the plot and
-    // an unrotated one is close enough to clear the ground it will stand on.
+    // Sites carry their rotation now, so the cleared patch is turned exactly
+    // like the building that will stand on it.
     for (entity, site, position) in sites.iter() {
         commands.entity(entity).insert((
             PlacedBuilding {
                 building_type: site.kind.art(),
-                rotation: 0.0,
+                rotation: site.rotation,
             },
             BuildingPosition(position.0),
         ));
