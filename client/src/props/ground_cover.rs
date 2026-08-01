@@ -14,6 +14,7 @@
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
+use shared::building::point_in_any_build_zone_entries;
 use shared::terrain::{ChunkCoord, WorldTerrain};
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
@@ -83,6 +84,7 @@ pub(super) fn stream_ground_cover(
     mut index: ResMut<GroundCoverIndex>,
     world_root_query: Query<Entity, With<ClientWorldRoot>>,
     settings: Res<GraphicsSettings>,
+    build_zone_index: Res<super::BuildZoneChunkIndex>,
 ) {
     let Some(terrain) = terrain else { return };
     let (player_query, camera_query) = anchor;
@@ -111,7 +113,19 @@ pub(super) fn stream_ground_cover(
     });
 
     if let Some(coord) = desired.first().copied() {
-        let spawns = shared::props::generate_chunk_grass(&terrain.generator, coord);
+        let mut spawns = shared::props::generate_chunk_grass(&terrain.generator, coord);
+        // Ground cover respects build zones exactly as the props do. It is easy
+        // to forget precisely because grass is generated rather than authored --
+        // it never passed through the prop spawner, so it never inherited the
+        // filter, and grass would have grown through floorboards.
+        if let Some(zones) = build_zone_index.by_chunk.get(&coord) {
+            spawns.retain(|spawn| {
+                !point_in_any_build_zone_entries(
+                    Vec2::new(spawn.position.x, spawn.position.z),
+                    zones,
+                )
+            });
+        }
         loaded.chunks.insert(coord);
         if !spawns.is_empty() {
             pending.queue.push_back((coord, spawns));
@@ -145,6 +159,45 @@ pub(super) fn stream_ground_cover(
         budget -= take;
         if pending.queue.front().is_some_and(|(_, s)| s.is_empty()) {
             pending.queue.pop_front();
+        }
+    }
+}
+
+/// Re-grow a chunk's cover when a building claims ground in it.
+///
+/// The prop streamer has had this since buildings existed; ground cover needed
+/// its own because it keeps its own loaded-set. Without it, grass already
+/// standing when the plot was claimed keeps standing -- inside the building.
+pub(super) fn clear_ground_cover_for_new_buildings(
+    mut commands: Commands,
+    added: Query<
+        (&shared::building::PlacedBuilding, &shared::building::BuildingPosition),
+        Added<shared::building::PlacedBuilding>,
+    >,
+    mut loaded: ResMut<LoadedGroundCoverChunks>,
+    mut pending: ResMut<PendingGroundCover>,
+    mut index: ResMut<GroundCoverIndex>,
+) {
+    for (building, position) in added.iter() {
+        let zone = shared::building::BuildZoneEntry::from_building(
+            position.0,
+            building.building_type,
+            building.rotation,
+        );
+        let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
+        for cx in min_x..=max_x {
+            for cz in min_z..=max_z {
+                let coord = ChunkCoord::new(cx, cz);
+                if !loaded.chunks.remove(&coord) {
+                    continue;
+                }
+                pending.queue.retain(|(c, _)| *c != coord);
+                if let Some(entities) = index.by_chunk.remove(&coord) {
+                    for entity in entities {
+                        commands.entity(entity).despawn();
+                    }
+                }
+            }
         }
     }
 }

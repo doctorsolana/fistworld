@@ -27,6 +27,7 @@ impl Plugin for SettlementPlugin {
                 attach_settlement_visuals,
                 attach_building_visuals,
                 claim_building_ground,
+                raise_construction_visuals,
             )
                 .run_if(in_state(GameState::Playing)),
         );
@@ -40,6 +41,73 @@ pub struct SettlementVisual;
 /// Marks a settlement building that already has its model drawn.
 #[derive(Component)]
 pub struct BuildingVisual;
+
+/// A building part-way out of the ground, with its own clock.
+#[derive(Component)]
+struct RaisingVisual {
+    elapsed: f32,
+    /// How far it started below the ground, so the lerp has a floor.
+    sunk: f32,
+}
+
+/// Draw a building rising out of its plot while it is being raised.
+///
+/// The server sends ONE bit — `raising` flips true when the ground is cleared —
+/// and the clock runs here. Streaming a progress float instead would re-send
+/// every site to every client at tick rate, because sites replicate globally.
+/// The cost of the local clock is that it starts a network hop late, which at
+/// ten seconds nobody can see.
+fn raise_construction_visuals(
+    mut commands: Commands,
+    time: Res<Time>,
+    asset_server: Res<AssetServer>,
+    terrain: Option<Res<WorldTerrain>>,
+    mut sites: Query<(
+        Entity,
+        &ConstructionSite,
+        &PlayerPosition,
+        Option<&mut RaisingVisual>,
+        Option<&BuildingVisual>,
+    )>,
+    mut transforms: Query<&mut Transform>,
+) {
+    let Some(terrain) = terrain else {
+        return;
+    };
+    for (entity, site, position, raising, drawn) in sites.iter_mut() {
+        if !site.raising {
+            continue;
+        }
+        let ground = terrain.get_height(position.0.x, position.0.z);
+        let Some(mut raising) = raising else {
+            // First frame of the raise: put the model in, fully underground.
+            let Some(scene) = site.kind.art().scene_path() else {
+                continue;
+            };
+            let sunk = site.kind.art().definition().height.max(1.0);
+            if drawn.is_none() {
+                commands.entity(entity).insert((
+                    BuildingVisual,
+                    RaisingVisual { elapsed: 0.0, sunk },
+                    Name::new(format!("{} rising", site.kind.label())),
+                    WorldAssetRoot(asset_server.load(scene)),
+                    Transform::from_xyz(position.0.x, ground - sunk, position.0.z),
+                    Visibility::Inherited,
+                ));
+            }
+            continue;
+        };
+
+        raising.elapsed += time.delta_secs();
+        let t = (raising.elapsed / shared::components::SETTLEMENT_RAISE_SECONDS).clamp(0.0, 1.0);
+        // Ease out: it breaks ground quickly and settles, which reads as being
+        // pushed up rather than as a linear lift.
+        let eased = 1.0 - (1.0 - t) * (1.0 - t);
+        if let Ok(mut transform) = transforms.get_mut(entity) {
+            transform.translation.y = ground - raising.sunk * (1.0 - eased);
+        }
+    }
+}
 
 /// Claim the ground under anything a settlement has built or is building.
 ///

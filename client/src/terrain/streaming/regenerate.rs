@@ -2,6 +2,13 @@
 
 use super::*;
 
+/// A chunk whose heights changed and whose replacement is still building.
+///
+/// It keeps rendering the old ground until the new mesh exists. Without this
+/// the world blinks a hole every time terrain is edited.
+#[derive(Component)]
+pub(crate) struct StaleChunk;
+
 /// Regenerate terrain mesh for dirty chunks.
 pub(crate) fn regenerate_dirty_chunks(
     mut delta_state: ResMut<TerrainDeltaState>,
@@ -44,17 +51,25 @@ pub(crate) fn regenerate_dirty_chunks(
     }
     perf.terrain_chunks_regen += dirty.len() as u32;
 
-    // Despawn dirty loaded chunks so they get regenerated.
-    // Important: do not eagerly cancel tasks for chunks that are not currently loaded.
-    // Canceling those can starve initial terrain appearance when large dirty queues are present.
-    for (entity, chunk, mesh_handle) in chunk_query.iter() {
+    // Mark dirty chunks stale; DO NOT tear them down yet.
+    //
+    // This used to despawn the entity and free its mesh, material and weightmap
+    // here, and let the replacement arrive whenever the async rebuild finished.
+    // That leaves a hole in the world for every frame in between — which is the
+    // flicker you see the instant a building levels its plot, because levelling
+    // dirties the chunk under it.
+    //
+    // The old mesh is still perfectly good ground; it is merely out of date. So
+    // it keeps rendering until the new one is ready, and `process_chunk_tasks`
+    // despawns it in the same command batch that spawns the replacement — one
+    // atomic swap, no hole and no overlapping pair.
+    //
+    // Tasks are still cancelled here so a rebuild in flight against the OLD
+    // heights is discarded rather than finalised over the new ones.
+    for (entity, chunk, _mesh_handle) in chunk_query.iter() {
         if dirty.contains(&chunk.coord) {
             tasks.remove(&chunk.coord);
-            meshes.remove(mesh_handle.0.id());
-            materials.remove(chunk.material.id());
-            images.remove(chunk.weightmap.id());
-            paint_state.weightmaps.remove(&chunk.coord);
-            commands.entity(entity).despawn();
+            commands.entity(entity).insert(StaleChunk);
             loaded_chunks.chunks.remove(&chunk.coord);
         }
     }
@@ -77,6 +92,7 @@ pub(crate) fn process_chunk_tasks(
     mut perf: ResMut<PerfHitchStats>,
     debug_perf: Res<DebugPerfSettings>,
     mut scratch: ResMut<TerrainTaskScratch>,
+    stale_query: Query<(Entity, &TerrainChunk, &Mesh3d), With<StaleChunk>>,
 ) {
     let start = Instant::now();
     let (player_query, camera_query) = anchor;
@@ -216,6 +232,19 @@ pub(crate) fn process_chunk_tasks(
                 palette,
             },
         });
+
+        // Retire the superseded chunk now, in the same batch as the spawn
+        // below, so the swap happens between frames rather than across them.
+        for (stale_entity, stale_chunk, stale_mesh) in stale_query.iter() {
+            if stale_chunk.coord != result.coord {
+                continue;
+            }
+            meshes.remove(stale_mesh.0.id());
+            materials.remove(stale_chunk.material.id());
+            images.remove(stale_chunk.weightmap.id());
+            paint_state.weightmaps.remove(&stale_chunk.coord);
+            commands.entity(stale_entity).despawn();
+        }
 
         let chunk_pos = result.coord.world_pos();
         let chunk_entity = commands

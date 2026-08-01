@@ -307,9 +307,6 @@ impl WorldTerrain {
         blend_width: f32,
     ) -> Vec<ChunkCoord> {
         let target_height = center.y;
-        let cos_r = rotation_y.cos();
-        let sin_r = rotation_y.sin();
-
         let corners = [
             Vec2::new(-half_extents.x - blend_width, -half_extents.y - blend_width),
             Vec2::new(half_extents.x + blend_width, -half_extents.y - blend_width),
@@ -323,8 +320,13 @@ impl WorldTerrain {
         let mut max_z = f32::MIN;
 
         for corner in &corners {
-            let world_x = center.x + corner.x * cos_r - corner.y * sin_r;
-            let world_z = center.z + corner.x * sin_r + corner.y * cos_r;
+            // Same convention as the model and the build zone. This used to
+            // rotate the opposite way -- internally consistent, so the levelled
+            // patch was the right SHAPE, just turned the wrong way relative to
+            // the building standing on it.
+            let world = crate::rotation::local_to_world_xz(*corner, rotation_y);
+            let world_x = center.x + world.x;
+            let world_z = center.z + world.y;
             min_x = min_x.min(world_x);
             max_x = max_x.max(world_x);
             min_z = min_z.min(world_z);
@@ -353,8 +355,9 @@ impl WorldTerrain {
 
                         let rel_x = world_x - center.x;
                         let rel_z = world_z - center.z;
-                        let local_x = rel_x * cos_r + rel_z * sin_r;
-                        let local_z = -rel_x * sin_r + rel_z * cos_r;
+                        let local =
+                            crate::rotation::world_to_local_xz(Vec2::new(rel_x, rel_z), rotation_y);
+                        let (local_x, local_z) = (local.x, local.y);
 
                         let dist_x = local_x.abs() - half_extents.x;
                         let dist_z = local_z.abs() - half_extents.y;

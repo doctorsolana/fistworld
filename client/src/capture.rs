@@ -248,10 +248,33 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                         shared::components::PlayerRotation(0.0),
                     ));
                 }
-                world.spawn(shared::components::ConstructionSite {
-                    kind: K::House,
-                    settlement: "Brackwater".to_string(),
-                });
+                // A site needs a POSITION as well as its record -- the raise
+                // visual is placed from it, and without one the frame has
+                // nowhere to come out of.
+                let site_at = focus + Vec3::new(-14.0, 0.0, 10.0);
+                let site_ground = world
+                    .get_resource::<shared::terrain::WorldTerrain>()
+                    .map(|t| t.get_height(site_at.x, site_at.z))
+                    .unwrap_or(site_at.y);
+                world.spawn((
+                    shared::components::ConstructionSite {
+                        kind: K::House,
+                        settlement: "Brackwater".to_string(),
+                        // Mid-raise, so a screenshot catches the frame partly
+                        // out of the ground rather than an empty plot.
+                        raising: true,
+                        stand: shared::components::builder_stand_position(
+                            site_at,
+                            0.0,
+                            K::House.art().definition().footprint.y,
+                        ),
+                    },
+                    shared::components::PlayerPosition(Vec3::new(
+                        site_at.x,
+                        site_ground,
+                        site_at.z,
+                    )),
+                ));
                 if let Some(mut settlement) = world
                     .query::<&mut shared::components::Settlement>()
                     .iter_mut(world)

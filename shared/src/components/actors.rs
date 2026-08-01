@@ -271,6 +271,36 @@ pub struct Occupation(pub Option<String>);
 pub struct ConstructionSite {
     pub kind: SettlementBuildingKind,
     pub settlement: String,
+    /// False while the builder is still walking out; true once the plot is
+    /// cleared and the frame is going up.
+    ///
+    /// A BOOL, not a progress float, and that is deliberate: a float would mark
+    /// this component changed every tick and re-send every site to every client
+    /// forever, because these replicate globally. This flips once. The client
+    /// runs its own clock from the flip and uses [`SETTLEMENT_RAISE_SECONDS`],
+    /// which both sides agree on.
+    pub raising: bool,
+    /// Where the builder stands to work — beside the plot, not on it.
+    pub stand: Vec3,
+}
+
+/// How long a permitted building takes to rise, in seconds.
+///
+/// Shared because the server times it and the client animates against it; two
+/// copies would drift and the building would pop or stall at the end.
+pub const SETTLEMENT_RAISE_SECONDS: f32 = 10.0;
+
+/// Where a builder stands to work on a plot.
+///
+/// Beside the footprint, in front of it, facing in — a villager standing in the
+/// middle of their own building looks like a bug even when it is not, and once
+/// the frame starts rising out of the ground they would be inside it.
+pub fn builder_stand_position(plot: Vec3, rotation_y: f32, footprint_depth: f32) -> Vec3 {
+    let offset = crate::rotation::local_to_world_xz(
+        Vec2::new(0.0, -(footprint_depth * 0.5 + 1.6)),
+        rotation_y,
+    );
+    Vec3::new(plot.x + offset.x, plot.y, plot.z + offset.y)
 }
 
 /// A building standing in a settlement.

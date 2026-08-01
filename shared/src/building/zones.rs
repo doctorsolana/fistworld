@@ -9,6 +9,7 @@ use crate::terrain::{ChunkCoord, CHUNK_SIZE};
 pub struct BuildZoneEntry {
     pub center: Vec2,
     pub half_extents: Vec2,
+    rotation_y: f32,
     inv_basis_x: Vec2,
     inv_basis_z: Vec2,
 }
@@ -27,18 +28,34 @@ impl BuildZoneEntry {
         Self {
             center: Vec2::new(position.x, position.z),
             half_extents,
+            rotation_y,
             // Inverse rotation basis for world->local projection.
-            inv_basis_x: Vec2::new(cos_r, sin_r),
-            inv_basis_z: Vec2::new(-sin_r, cos_r),
+            //
+            // The signs are the whole correctness of this type, and they were
+            // wrong: the basis rotated by +r instead of -r, so the zone came out
+            // turned by DOUBLE the building's angle. On a square footprint that
+            // is invisible; on an oblong one it leaves an uncovered wedge, and a
+            // tree standing in that wedge survives into a finished house.
+            //
+            // Bevy's `Quat::from_rotation_y(r)` maps local->world as
+            //     x' =  x*cos + z*sin
+            //     z' = -x*sin + z*cos
+            // so the inverse, world->local, is
+            //     x  =  x'*cos - z'*sin
+            //     z  =  x'*sin + z'*cos
+            // which is these two rows. `world_to_local_is_the_exact_inverse_of_
+            // the_model_rotation` fails if either sign is flipped again.
+            inv_basis_x: Vec2::new(cos_r, -sin_r),
+            inv_basis_z: Vec2::new(sin_r, cos_r),
         }
     }
 
     #[inline]
     pub fn contains_point(&self, point_xz: Vec2) -> bool {
-        let rel = point_xz - self.center;
-        let local_x = rel.dot(self.inv_basis_x);
-        let local_z = rel.dot(self.inv_basis_z);
-        local_x.abs() <= self.half_extents.x && local_z.abs() <= self.half_extents.y
+        // The ONE convention (crate::rotation), so this can never drift from
+        // where the model actually stands again.
+        let local = crate::rotation::world_to_local_xz(point_xz - self.center, self.rotation_y);
+        local.x.abs() <= self.half_extents.x && local.y.abs() <= self.half_extents.y
     }
 
     #[inline]
@@ -140,6 +157,114 @@ mod tests {
                 .unwrap_or(false);
             let linear = point_in_any_build_zone(point, &buildings);
             assert_eq!(indexed, linear);
+        }
+    }
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    use super::*;
+
+    /// The zone must agree with the MODEL about which way the building faces.
+    ///
+    /// The model is placed with `Transform::with_rotation(Quat::from_rotation_y(r))`,
+    /// so that quaternion is the ground truth for where the walls actually are.
+    /// This takes points that are inside the footprint in the building's own
+    /// local space, moves them into the world exactly the way the renderer
+    /// does, and asks the zone whether they are inside.
+    ///
+    /// A sign error here is invisible on a square building and leaves an
+    /// uncovered wedge on an oblong one — which is precisely how a tree ends up
+    /// standing inside a finished house.
+    #[test]
+    fn the_zone_covers_the_ground_the_model_actually_stands_on() {
+        let kind = BuildingType::TownHall;
+        let def = kind.definition();
+        let centre = Vec3::new(137.0, 0.0, -64.0);
+
+        // Corners of the real footprint, in the building's local frame.
+        let half = def.footprint * 0.5;
+        let local_corners = [
+            Vec2::new(half.x, half.y),
+            Vec2::new(-half.x, half.y),
+            Vec2::new(half.x, -half.y),
+            Vec2::new(-half.x, -half.y),
+        ];
+
+        for step in 0..16 {
+            let rotation = std::f32::consts::TAU * step as f32 / 16.0;
+            let zone = BuildZoneEntry::from_building(centre, kind, rotation);
+            let quat = Quat::from_rotation_y(rotation);
+            for corner in local_corners {
+                // Exactly how the renderer places a vertex of the model.
+                let world = centre + quat * Vec3::new(corner.x, 0.0, corner.y);
+                assert!(
+                    zone.contains_point(Vec2::new(world.x, world.z)),
+                    "rotation {rotation:.3}: the model's corner {corner:?} lands at \
+                     ({:.2},{:.2}), which the build zone says is OUTSIDE the building",
+                    world.x,
+                    world.z
+                );
+            }
+        }
+    }
+
+    /// And the chunk bounds must contain the zone, or the clearing never even
+    /// looks at the chunk the tree is in.
+    #[test]
+    fn chunk_bounds_cover_every_rotated_corner() {
+        let kind = BuildingType::TownHall;
+        let centre = Vec3::new(137.0, 0.0, -64.0);
+        for step in 0..16 {
+            let rotation = std::f32::consts::TAU * step as f32 / 16.0;
+            let zone = BuildZoneEntry::from_building(centre, kind, rotation);
+            let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
+            let quat = Quat::from_rotation_y(rotation);
+            let def = kind.definition();
+            let half = def.footprint * 0.5 + Vec2::splat(def.flatten_radius);
+            for corner in [
+                Vec2::new(half.x, half.y),
+                Vec2::new(-half.x, half.y),
+                Vec2::new(half.x, -half.y),
+                Vec2::new(-half.x, -half.y),
+            ] {
+                let world = centre + quat * Vec3::new(corner.x, 0.0, corner.y);
+                let cx = (world.x / CHUNK_SIZE).floor() as i32;
+                let cz = (world.z / CHUNK_SIZE).floor() as i32;
+                assert!(
+                    (min_x..=max_x).contains(&cx) && (min_z..=max_z).contains(&cz),
+                    "rotation {rotation:.3}: corner chunk ({cx},{cz}) outside bounds \
+                     ({min_x}..={max_x}, {min_z}..={max_z})"
+                );
+            }
+        }
+    }
+
+    /// The exact check the two above cannot make.
+    ///
+    /// `flatten_radius` pads the zone by metres, so a rotation that is wrong by
+    /// a sign can still contain a footprint corner and look fine. This asks the
+    /// only question that has no slack in it: does the zone's world->local
+    /// transform actually INVERT the quaternion the renderer used?
+    #[test]
+    fn world_to_local_is_the_exact_inverse_of_the_model_rotation() {
+        let kind = BuildingType::TownHall;
+        let centre = Vec3::new(137.0, 0.0, -64.0);
+        // Deliberately asymmetric, and not on an axis, so any sign or transpose
+        // error shows up instead of cancelling.
+        let local = Vec2::new(2.75, -1.25);
+
+        for step in 1..12 {
+            let rotation = std::f32::consts::TAU * step as f32 / 12.0;
+            let zone = BuildZoneEntry::from_building(centre, kind, rotation);
+            let world = centre + Quat::from_rotation_y(rotation) * Vec3::new(local.x, 0.0, local.y);
+            let rel = Vec2::new(world.x, world.z) - zone.center;
+            let round_tripped = Vec2::new(rel.dot(zone.inv_basis_x), rel.dot(zone.inv_basis_z));
+            assert!(
+                (round_tripped - local).length() < 1e-3,
+                "rotation {rotation:.3}: local {local:?} -> world -> local came back as \
+                 {round_tripped:?}; the zone is not the inverse of the model rotation"
+            );
         }
     }
 }

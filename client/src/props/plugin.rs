@@ -43,6 +43,7 @@ impl Plugin for PropsPlugin {
                 spawn::invalidate_props_for_new_buildings,
                 spawn::sync_build_zone_chunk_index,
                 spawn::spawn_chunk_props,
+                ground_cover::clear_ground_cover_for_new_buildings,
                 ground_cover::stream_ground_cover,
                 spawn::sync_props_enabled_state,
                 lod::apply_prop_render_tuning,

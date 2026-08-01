@@ -10,6 +10,7 @@ pub mod physics;
 pub mod player;
 pub mod player_profile;
 pub mod props;
+pub mod rotation;
 pub mod protocol;
 pub mod region;
 pub mod rng;

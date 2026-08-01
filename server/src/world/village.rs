@@ -47,7 +47,7 @@ const ARRIVAL_RADIUS: f32 = 6.0;
 /// hauling are deliberately deferred; what this preserves is that a decision
 /// and its result are separate events, so the panel can honestly show something
 /// as "under construction".
-const BUILD_SECONDS: f32 = 10.0;
+const BUILD_SECONDS: f32 = shared::components::SETTLEMENT_RAISE_SECONDS;
 
 /// Where a villager is in the business of joining somewhere.
 #[derive(Component, Debug, Clone, PartialEq)]
@@ -110,6 +110,9 @@ pub struct UnderConstruction {
     /// up around the fifty-first villager.
     pub builder: Option<Entity>,
     pub settlement: Entity,
+    /// Where the builder stands to work. Arrival is judged against THIS, not
+    /// the plot centre, or they would walk into the middle of the site.
+    pub stand: Vec3,
     pub stage: BuildStage,
     /// How good this ground is for what is being built, 0..1. Sampled once,
     /// where it is built. See `site_quality`.
@@ -428,6 +431,14 @@ pub fn consider_permits(
         // by the plot, not the village.
         let quality = site_quality(&terrain, kind, position);
 
+        // Beside the plot, in front of it. The builder must not stand where the
+        // building is about to rise.
+        let stand = shared::components::builder_stand_position(
+            position,
+            rotation,
+            kind.art().definition().footprint.y,
+        );
+
         let site = commands
             .spawn((
             UnderConstruction {
@@ -437,6 +448,7 @@ pub fn consider_permits(
                 owner: Some(applicant.clone()),
                 builder: Some(builder),
                 settlement: settlement_entity,
+                stand,
                 stage: BuildStage::Walking,
                 quality,
             },
@@ -444,6 +456,8 @@ pub fn consider_permits(
             shared::components::ConstructionSite {
                 kind,
                 settlement: settlement.name.clone(),
+                raising: false,
+                stand,
             },
             PlayerPosition(position),
             Replicate::to_clients(NetworkTarget::All),
@@ -451,7 +465,7 @@ pub fn consider_permits(
             .id();
 
         // The permit does not build anything. Somebody has to walk out there.
-        commands.entity(builder).insert(MoveTarget(position));
+        commands.entity(builder).insert(MoveTarget(stand));
         if let Ok(mut intent) = villagers.get_mut(builder).map(|(_, _, intent)| intent) {
             *intent = VillagerIntent::Building {
                 settlement: settlement_entity,
@@ -505,6 +519,7 @@ pub fn advance_construction(
     positions: Query<&PlayerPosition>,
     mut intents: Query<&mut VillagerIntent>,
     mut pending: Query<(Entity, &mut UnderConstruction)>,
+    mut sites: Query<&mut shared::components::ConstructionSite>,
 ) {
     let warp = 1.0;
     for (site, mut under) in pending.iter_mut() {
@@ -528,7 +543,7 @@ pub fn advance_construction(
                     commands.entity(site).despawn();
                     continue;
                 };
-                if at.0.distance(under.position) > BUILD_REACH {
+                if at.0.distance(under.stand) > BUILD_REACH {
                     continue;
                 }
 
@@ -552,6 +567,12 @@ pub fn advance_construction(
                 under.stage = BuildStage::Raising {
                     seconds_left: BUILD_SECONDS,
                 };
+                // One flip, one replication. The client runs its own clock from
+                // here so the frame can rise out of the ground without the
+                // server streaming a progress float at tick rate.
+                if let Ok(mut site_view) = sites.get_mut(site) {
+                    site_view.raising = true;
+                }
                 info!(
                     "Village '{}': ground cleared for a {}",
                     settlement.name,
