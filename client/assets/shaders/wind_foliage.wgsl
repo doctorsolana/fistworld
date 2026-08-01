@@ -81,10 +81,31 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
         vec4<f32>(vertex.position, 1.0)
     );
 
-    // Prevailing wind direction; the multi-band gusting hides its constancy.
+    // Prevailing wind direction. MIRRORED from client/src/wind.rs; the clouds,
+    // cloud shadows, storm cells, rain and water caustics all use this same
+    // literal, and `wind_direction_is_identical_everywhere` fails if any of
+    // them drifts. The multi-band gusting hides its constancy.
     let dir = vec2<f32>(0.8206, 0.5715);
     let side = vec2<f32>(-dir.y, dir.x);
-    let t = globals.time * wind.params.y;
+
+    // TWO clocks, and the split is the point.
+    //
+    // `t` drives the gust FIELD, and it is the same for every plant in the
+    // world. It used to be `globals.time * wind.params.y` with params.y set per
+    // kind -- 1.4 for grass, 1.05 for trees -- and because `t` appears inside
+    // the travelling wave it scaled how fast the FRONT MOVES, not just how fast
+    // a plant wobbled. Grass fronts ran at 22.2 m/s and tree fronts at 16.7,
+    // so grass and the trees above it slid through a full cycle relative to
+    // each other every 13.3 seconds. One gust crossing a meadow reached the
+    // grass and the canopy at different moments, which is exactly the thing a
+    // gust is supposed to prove is one event.
+    //
+    // MIRRORED from client/src/wind.rs GUST_TIME_SCALE.
+    let t = globals.time * 1.15;
+    // `ft` drives local flutter only, and stays per kind. Small light blades
+    // really do shiver faster than a loaded branch, and that difference is
+    // worth keeping -- it just must not be allowed to move the weather.
+    let ft = globals.time * wind.params.y;
 
     // Traveling gust fronts: two wave bands (~75m and ~260m wavelength)
     // sweeping downwind. The front is bowed by a slow cross-wind phase
@@ -106,7 +127,7 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
 
     // Local flutter with per-plant phase so neighbors desynchronize.
     let phase = world_pos.x * 0.37 + world_pos.z * 0.43;
-    let flutter = 0.45 * sin(t * 2.0 + phase) + 0.25 * sin(t * 3.7 + phase * 1.7);
+    let flutter = 0.45 * sin(ft * 2.0 + phase) + 0.25 * sin(ft * 3.7 + phase * 1.7);
 
     // Downwind push (lean + gust + flutter) with a touch of sideways wobble.
     let push = (0.22 + 2.2 * gust + 0.6 * flutter * (0.5 + 0.5 * gust))

@@ -27,6 +27,13 @@ fn is_swayable(kind: shared::props::PropKind) -> bool {
         || matches!(kind, Bush_01 | Bush_02 | Bush_03 | Bush_04)
 }
 
+/// Per-kind sway: amplitude in metres at the tip, and FLUTTER rate.
+///
+/// The second value used to scale the whole gust clock, which meant it set how
+/// fast gust fronts crossed the world -- so each kind of plant experienced its
+/// own weather and they drifted out of step. The field now runs on one shared
+/// clock (`wind::GUST_TIME_SCALE`) and this only controls local shiver, which
+/// is what it always read as.
 fn sway_strength(kind: shared::props::PropKind) -> (f32, f32) {
     use shared::props::PropKind::*;
     if is_grass_kind(kind) {

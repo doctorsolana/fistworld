@@ -1,0 +1,145 @@
+//! One wind, for everything the world does with it.
+//!
+//! Before this, the prevailing wind was written out by hand in eight places
+//! with **three different directions**: the foliage gust ran at 34.85°, the
+//! clouds, cloud shadows, storm cells and rain at 30.18°, and the water
+//! caustics at 27.10°. Rain therefore fell four degrees off the way the grass
+//! leaned, and nobody had to look at a wind vane to see it — rain and grass
+//! share a frame.
+//!
+//! That is what happens to a value with no home. It is copied, it is rounded
+//! differently each time, and the copies drift.
+//!
+//! # Why a mirrored literal rather than a uniform
+//!
+//! The obvious fix is to push the direction in from Rust. It cannot be done:
+//! `bevy_shader`'s `ShaderDefVal` is `Bool | Int | UInt` — there is no float
+//! variant — so `0.8206` cannot travel through a shader def. The alternatives
+//! are a new uniform binding per material (a real cost, and `TerrainMaterial`
+//! has already hit Metal's vertex-buffer ceiling once) or a literal in the WGSL
+//! text. A literal costs nothing at runtime: it folds at compile time exactly
+//! as the hand-written numbers did.
+//!
+//! So the literal stays, and [`tests::wind_direction_is_identical_everywhere`]
+//! is what stops it drifting again. That test is the whole point of this
+//! module; without it this is just a ninth copy.
+
+use bevy::prelude::*;
+
+/// The prevailing wind, as a UNIT vector in world XZ.
+///
+/// 34.85°, taken from the foliage gust because that was the only one of the
+/// three already exactly unit length — and because the gust field is the thing
+/// built most deliberately around it.
+///
+/// Normalising has two real consequences, both corrections rather than
+/// regressions: the cloud bearing used to be 0.99479 long, so cloud drift ran
+/// 0.52% slower than its own speed constant claimed, and the storm's 400 m
+/// cross-track meander was really 397.9 m. Both now mean what they say.
+pub const WIND_DIRECTION: Vec2 = Vec2::new(0.8206, 0.5715);
+
+/// The exact text every shader must contain for [`WIND_DIRECTION`].
+///
+/// Compared against the shader sources by the test below. Kept as a string
+/// rather than formatted from the `Vec2` because float formatting is not
+/// stable enough to reproduce a source literal byte for byte, and a test that
+/// fails on `0.86` vs `0.860` is a test people learn to ignore.
+pub const WIND_DIRECTION_WGSL: &str = "vec2<f32>(0.8206, 0.5715)";
+
+/// How fast gust fronts sweep downwind, as a multiplier on world time.
+///
+/// ONE value for every plant. It used to be per-kind — grass 1.4, bushes 1.25,
+/// trees 1.05 — and because it scales `t` inside the travelling wave, it scaled
+/// the *propagation speed of the front*, not just how fast a plant wobbled.
+/// Grass fronts ran at 22.2 m/s and tree fronts at 16.7 m/s, so the two slid
+/// through a complete cycle relative to each other every 13.3 seconds: in step,
+/// then in opposition six seconds later, forever.
+///
+/// 1.15 sits between the old extremes, putting the front at ~18 m/s.
+pub const GUST_TIME_SCALE: f32 = 1.15;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Every shader that moves something in the wind, and how many times each
+    /// names the direction.
+    ///
+    /// EXACT counts, not "at least one". A presence check passes while somebody
+    /// edits two of `terrain_splat`'s three sites and leaves the third behind,
+    /// which is the same class of half-finished edit this module exists to
+    /// catch. Paths are listed one by one because `toon_water.wgsl` sits
+    /// outside `assets/shaders/` — a test that walked that folder would report
+    /// green while the water drifted away from the land.
+    const SHADERS: &[(&str, usize)] = &[
+        ("assets/shaders/wind_foliage.wgsl", 1),
+        ("assets/shaders/cloud_layer.wgsl", 2),
+        ("assets/shaders/terrain_splat.wgsl", 3),
+        ("assets/toon_water.wgsl", 2),
+    ];
+
+    /// Directions that used to be here. None may come back.
+    const RETIRED: &[&str] = &["vec2<f32>(0.86, 0.5)", "vec2<f32>(0.8206, 0.5715f)"];
+
+    fn shader(rel: &str) -> String {
+        // CARGO_MANIFEST_DIR, not the cwd: `cargo test -p client` happens to run
+        // from `client/`, but running the test binary directly does not.
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("cannot read {}: {err}", path.display()))
+    }
+
+    #[test]
+    fn wind_direction_is_identical_everywhere() {
+        for (rel, expected) in SHADERS {
+            let src = shader(rel);
+            let found = src.matches(WIND_DIRECTION_WGSL).count();
+            assert_eq!(
+                found, *expected,
+                "{rel} names the wind direction {found} times, expected {expected}. \
+                 If a site was added or removed, update SHADERS deliberately — do \
+                 not just make the number match."
+            );
+        }
+    }
+
+    #[test]
+    fn no_retired_wind_direction_survives() {
+        for (rel, _) in SHADERS {
+            let src = shader(rel);
+            for old in RETIRED {
+                assert!(
+                    !src.contains(old),
+                    "{rel} still contains the retired direction {old}; every wind \
+                     vector must be WIND_DIRECTION"
+                );
+            }
+        }
+    }
+
+    /// The literal and the Rust value must be the same numbers.
+    ///
+    /// Guards the case where someone fixes the shaders and forgets Rust, which
+    /// the count test above cannot see.
+    #[test]
+    fn the_literal_matches_the_rust_constant() {
+        let inner = WIND_DIRECTION_WGSL
+            .trim_start_matches("vec2<f32>(")
+            .trim_end_matches(')');
+        let (x, y) = inner.split_once(',').expect("literal is a pair");
+        assert_eq!(x.trim().parse::<f32>().unwrap(), WIND_DIRECTION.x);
+        assert_eq!(y.trim().parse::<f32>().unwrap(), WIND_DIRECTION.y);
+    }
+
+    /// It must be a unit vector, or "direction" and "speed" are entangled and
+    /// every speed constant downstream is quietly wrong by the shortfall.
+    #[test]
+    fn the_wind_direction_is_normalised() {
+        let length = WIND_DIRECTION.length();
+        assert!(
+            (length - 1.0).abs() < 1e-4,
+            "WIND_DIRECTION must be unit length, got {length}"
+        );
+    }
+}

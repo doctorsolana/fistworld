@@ -104,13 +104,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let cloud_drift = material.sun_dir.w * (globals.time - material.params_b.z);
     let params_a = vec4<f32>(
         material.params_a.xy,
-        material.params_a.zw + vec2<f32>(0.86, 0.5) * cloud_drift,
+        material.params_a.zw + vec2<f32>(0.8206, 0.5715) * cloud_drift,
     );
     let seed_phase = material.params_b.x;
     let world_xz = in.world_position.xz;
 
     // THE storm locally thickens the deck into a dark ragged disc.
-    let storm_center = material.storm.xy + vec2<f32>(0.86, 0.5) * (0.55 * cloud_drift);
+    let storm_center = material.storm.xy + vec2<f32>(0.8206, 0.5715) * (0.55 * cloud_drift);
     let storm = storm_cell(world_xz, storm_center, material.storm.z);
     let params_a_storm = vec4<f32>(min(params_a.x + storm * 0.95, 1.0), params_a.yzw);
     let density = cloud_density(world_xz, params_a_storm, seed_phase);

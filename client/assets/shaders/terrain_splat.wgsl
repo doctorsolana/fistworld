@@ -528,7 +528,7 @@ fn fragment(
         let cloud_drift = palette.clouds_c.z * cloud_dt;
         let cloud_params = vec4<f32>(
             palette.clouds_a.xy,
-            palette.clouds_a.zw + vec2<f32>(0.86, 0.5) * cloud_drift,
+            palette.clouds_a.zw + vec2<f32>(0.8206, 0.5715) * cloud_drift,
         );
         // THE storm: locally near-solid cloud (deeper shadow field) plus a
         // rain darkening at the fragment itself — rain falls straight down,
@@ -536,7 +536,7 @@ fn fragment(
         // 0.55x the wind (STORM_DRIFT_FACTOR), extrapolated like the wind.
         let storminess = palette.storm.z;
         let storm_center = palette.storm.xy
-            + vec2<f32>(0.86, 0.5) * (0.55 * cloud_drift);
+            + vec2<f32>(0.8206, 0.5715) * (0.55 * cloud_drift);
         var shaded = out.color.rgb;
         // Uniform, coherent gate: strength is exactly 0 all night, on a
         // fully clear sky, and with clouds disabled — the 16-noise-unit
@@ -569,7 +569,7 @@ fn fragment(
             // sheets sweeping the ground under the storm.
             let rain_n = cloud_vnoise(
                 (pbr_input.world_position.xz
-                    - vec2<f32>(0.86, 0.5) * (globals.time * 42.0))
+                    - vec2<f32>(0.8206, 0.5715) * (globals.time * 42.0))
                     * (1.0 / 55.0),
             );
             shaded *= 1.0 - ground_storm * (0.36 + 0.14 * rain_n);

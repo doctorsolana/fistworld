@@ -189,7 +189,12 @@ pub(super) fn setup_cloud_layers(
 }
 
 /// Fixed wind bearing shared by the cloud plane and the cloud shadows.
-const CLOUD_WIND_BEARING: Vec2 = Vec2::new(0.86, 0.5);
+///
+/// The world's ONE wind now, rather than a bearing of its own. It was
+/// `(0.86, 0.5)`: 4.7 degrees off the foliage and 0.99479 long, so cloud drift
+/// ran half a percent slower than `CLOUD_WIND_SPEED` claimed and the storm's
+/// 400 m meander below was really 397.9 m. Both are exact now.
+const CLOUD_WIND_BEARING: Vec2 = crate::wind::WIND_DIRECTION;
 /// Wind speed wanders between these bounds (world units/sec) on slow swells,
 /// keeping the 1:3 calm-to-gust ratio. Deliberately far above realistic
 /// (~0.3): clouds should visibly ROLL over the world at 1x game speed.

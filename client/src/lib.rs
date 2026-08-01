@@ -17,6 +17,7 @@ pub mod selection;
 pub mod settlement;
 pub mod render;
 pub mod states;
+pub mod wind;
 pub mod streaming;
 pub mod terrain;
 pub mod ui;

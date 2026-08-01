@@ -453,10 +453,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let cloud_drift = material.clouds_c.z * cloud_dt;
     let cloud_params = vec4<f32>(
         material.clouds_a.xy,
-        material.clouds_a.zw + vec2<f32>(0.86, 0.5) * cloud_drift,
+        material.clouds_a.zw + vec2<f32>(0.8206, 0.5715) * cloud_drift,
     );
     let storminess = material.storm.z;
-    let storm_center = material.storm.xy + vec2<f32>(0.86, 0.5) * (0.55 * cloud_drift);
+    let storm_center = material.storm.xy + vec2<f32>(0.8206, 0.5715) * (0.55 * cloud_drift);
     let storm_at_cloud = storm_cell(cloud_shadow_xz, storm_center, storminess);
     let storm_params = vec4<f32>(
         min(cloud_params.x + storm_at_cloud * 0.9, 1.0),
