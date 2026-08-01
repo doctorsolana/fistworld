@@ -15,10 +15,7 @@ use super::{
 /// per-instance height jitter; trees/bushes keep their authored colors.
 pub(super) fn is_grass_kind(kind: shared::props::PropKind) -> bool {
     use shared::props::PropKind::*;
-    matches!(
-        kind,
-        GrassBlade_9v | Env_Grass_Tall_04 | Env_Grass_06 | Env_Grass_07
-    )
+    matches!(kind, Grass_Patch | Grass_Tall)
 }
 
 /// Kinds that get wind sway (trunk-rooted plants; flowers and ground clutter
@@ -39,7 +36,15 @@ fn sway_strength(kind: shared::props::PropKind) -> (f32, f32) {
     }
     match kind {
         Bush_01 | Bush_02 | Bush_03 | Bush_04 => (0.030, 1.25),
-        _ => (0.055, 1.05),
+        // Trees. The first number is METRES AT THE TIP, so 0.055 was 5.5 cm on
+        // a canopy 6-8 m up -- physically defensible and visually nothing,
+        // especially from an RTS camera where that is a fraction of a pixel.
+        //
+        // 0.11 m is still conservative: a real canopy in a moderate breeze
+        // moves considerably more than a hand's width. It reads as movement at
+        // playing zoom without turning the forest into seaweed, which is the
+        // failure mode on the other side.
+        _ => (0.11, 1.05),
     }
 }
 
@@ -314,10 +319,8 @@ pub(super) fn needs_foliage_materials(kind: shared::props::PropKind) -> bool {
             | Spring_Flower_07
             | Spring_Flower_08
             | Spring_Flower_09
-            // environment/grass + ivy
-            | GrassBlade_9v
-            | Env_Grass_Tall_04
-            | Env_Grass_06
-            | Env_Grass_07
+            // environment/grass
+            | Grass_Patch
+            | Grass_Tall
     )
 }

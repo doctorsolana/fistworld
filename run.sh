@@ -17,6 +17,18 @@
 #   (default)   playtest  -- play the game
 #   --dev       dev       -- fastest rebuilds, workspace code at opt-level 1
 #   --release   release   -- true shipping build; use when MEASURING performance
+#
+# IF THE LINK FAILS with "Undefined symbols for architecture arm64" naming a
+# mangled generic (typically something like ...WindExtension...), the code is
+# fine and a stale playtest artifact is not. `playtest` runs incremental with
+# codegen-units=256 and no LTO, which occasionally leaves an rlib referencing a
+# monomorphisation that no longer exists. Note `cargo test` will still pass,
+# because it uses the dev profile.
+#
+#     cargo clean -p client --profile playtest
+#
+# That is ~30s and fixes it. Clearing target/playtest/incremental alone does
+# NOT -- the stale reference lives in the rlib, not the incremental cache.
 
 set -euo pipefail
 

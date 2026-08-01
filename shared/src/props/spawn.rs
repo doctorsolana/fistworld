@@ -103,11 +103,15 @@ const GRASS_MAX_SLOPE: f32 = 0.72;
 /// longer touches it.
 const GRASS_DENSITY_SCALE: f32 = 0.685;
 
-/// Two variants, mixed. The short patch is the common one and the tall one
-/// breaks up the repeat; roughly 2:1, which is what the asset pair was built
+/// Two variants, mixed roughly 2:1 -- the low patch is the common ground and
+/// the tall tufts break up the repeat, which is what the asset pair was built
 /// for.
-const GRASS_SHORT: PropKind = PropKind::Env_Grass_06;
-const GRASS_TALL: PropKind = PropKind::Env_Grass_Tall_04;
+///
+/// Named for the kinds they hold rather than for their height. Both ARE
+/// patches; the difference is how tall the blades stand, and the kind names
+/// are the ones that appear in `map.ron` ids and asset filenames.
+const GRASS_PATCH: PropKind = PropKind::Grass_Patch;
+const GRASS_TALL: PropKind = PropKind::Grass_Tall;
 
 /// Grow the ground cover for a chunk.
 ///
@@ -141,9 +145,9 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
     let base_z = chunk.z as f32 * CHUNK_SIZE;
     let steps = (CHUNK_SIZE / GRASS_CELL).ceil() as i32;
 
-    let short_tuning = default_render_tuning(GRASS_SHORT);
+    let short_tuning = default_render_tuning(GRASS_PATCH);
     let tall_tuning = default_render_tuning(GRASS_TALL);
-    let short_path = GRASS_SHORT.scene_path().to_string();
+    let short_path = GRASS_PATCH.scene_path().to_string();
     let tall_path = GRASS_TALL.scene_path().to_string();
 
     let mut grown = 0usize;
@@ -191,7 +195,7 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
             let (kind, path, tuning) = if tall {
                 (GRASS_TALL, &tall_path, tall_tuning)
             } else {
-                (GRASS_SHORT, &short_path, short_tuning)
+                (GRASS_PATCH, &short_path, short_tuning)
             };
 
             out.push(PropSpawn {
