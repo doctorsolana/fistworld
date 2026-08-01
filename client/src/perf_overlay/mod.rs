@@ -285,7 +285,13 @@ pub fn update_debug_overlay(
     meshes: Res<Assets<Mesh>>,
     materials: Res<Assets<StandardMaterial>>,
     images: Res<Assets<Image>>,
-    loaded_chunks: Res<crate::terrain::LoadedChunks>,
+    // Grouped: a Bevy system takes at most 16 parameters and this was already at
+    // the cap. Both are "what the world is like here", so they travel together
+    // rather than being split by an arbitrary limit.
+    world: (
+        Res<crate::terrain::LoadedChunks>,
+        Option<Res<shared::terrain::WorldTerrain>>,
+    ),
     collider_library: Option<Res<crate::props::ClientDerivedColliderLibrary>>,
     mut counts_a: ParamSet<(
         Query<(), With<crate::props::EnvironmentProp>>,
@@ -382,17 +388,70 @@ pub fn update_debug_overlay(
             collider_chunks.extend(center.chunks_in_radius(collider_chunk_radius));
         }
         // Camera state first: bug reports lead with "at zoom X near (x, z)".
-        if let Ok(cam) = counts_b.p2().single() {
+        let focus = counts_b.p2().single().ok().map(|cam| {
             lines.push_str(&format!(
                 "Camera: zoom {:.0}m | tilt {:.2} | focus ({:.0}, {:.0})\n",
                 cam.zoom, cam.tilt, cam.focus.x, cam.focus.z,
             ));
+            cam.focus
+        });
+
+        // What the ground under the screen centre actually IS.
+        //
+        // Sampled at the camera focus rather than at the player: the focus is
+        // what you are looking at, and it is what every other distance in this
+        // engine is measured from.
+        //
+        // These are the same numbers the simulation reads -- the biome that
+        // decides which species scatter here, the climate that decides whether
+        // it snows or bakes, and the resource profile that sets grass density
+        // and what a building sited here would yield. If the view and these
+        // ever disagree, the numbers are the truth and the view is the bug.
+        if let (Some(focus), Some(terrain)) = (focus, world.1.as_ref()) {
+            let map = terrain.generator.loaded_map();
+            if let (Some(field), Some(generated)) =
+                (map.biome_field.as_deref(), map.definition.generated.as_ref())
+            {
+                let height = terrain.get_height(focus.x, focus.z);
+                // Gradient magnitude (rise per metre): the convention
+                // `BiomeField` was written against and the terrain mesh uses.
+                // Two other slope formulas live in this repo; neither belongs
+                // here, and using one would quietly report the wrong biome on
+                // any hillside.
+                let normal = terrain.get_normal(focus.x, focus.z);
+                let slope =
+                    (normal.x * normal.x + normal.z * normal.z).sqrt() / normal.y.max(0.01);
+                let biome = field.biome(focus.x, focus.z, height, slope);
+                let profile = field.resources(focus.x, focus.z, height, slope);
+                let climate = shared::worldgen::climate_at(
+                    generated.seed,
+                    focus.x,
+                    focus.z,
+                    height,
+                    generated.half_extent,
+                );
+                lines.push_str(&format!(
+                    "Biome: {:?} | ground {:.0}m | slope {:.2}\n\
+                     Climate: snow {:.2} | frost {:.2} | dry {:.2}\n\
+                     Resources: farm {:.2} | wood {:.2} | stone {:.2} | iron {:.2}\n",
+                    biome,
+                    height,
+                    slope,
+                    climate.snow,
+                    climate.frost,
+                    climate.dry,
+                    profile.farmland,
+                    profile.wood,
+                    profile.stone,
+                    profile.iron,
+                ));
+            }
         }
         lines.push_str(&format!(
             "Gizmos: {}\nEntities: {:.0}\nChunks: {}\nProps: {}\nSand particles: {}\nCollider chunks: {}\nCollidable props: {} (baked kinds: {})\nCloud layers: {} | Cloud plane: {}\nFrame ms p50/p95/p99: {:.2}/{:.2}/{:.2}\nHitches > {:.1}ms (window): {}\nAssets: meshes {} | materials {} | images {}\n",
             if debug_mode.0 { "ON" } else { "OFF" },
             entity_count,
-            loaded_chunks.chunks.len(),
+            world.0.chunks.len(),
             counts_a.p0().iter().count(),
             counts_a.p3().iter().count(),
             collider_chunks.len(),

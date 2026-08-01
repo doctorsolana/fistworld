@@ -222,6 +222,43 @@ mod tests {
     use super::*;
     use crate::terrain::WorldTerrain;
 
+    /// What the F3 overlay will report, at three latitudes.
+    ///
+    /// The overlay is only worth having if the numbers are right, and "it
+    /// printed something" is not evidence of that. This samples the exact same
+    /// calls the overlay makes and shows they differ sensibly across the world.
+    #[test]
+    #[ignore = "diagnostic: cargo test -p shared -- --ignored --nocapture biome_readout"]
+    fn biome_readout() {
+        let terrain = WorldTerrain::default();
+        let map = terrain.generator.loaded_map();
+        let field = map.biome_field.as_deref().expect("generated map");
+        let generated = map.definition.generated.as_ref().expect("recipe");
+        for (label, x, z) in [
+            ("far north", -754.0f32, -3000.0f32),
+            ("temperate", 1720.0, 0.0),
+            ("far south", 427.0, 2900.0),
+        ] {
+            let height = terrain.get_height(x, z);
+            let n = terrain.get_normal(x, z);
+            let slope = (n.x * n.x + n.z * n.z).sqrt() / n.y.max(0.01);
+            let biome = field.biome(x, z, height, slope);
+            let p = field.resources(x, z, height, slope);
+            let c = crate::worldgen::climate_at(
+                generated.seed,
+                x,
+                z,
+                height,
+                generated.half_extent,
+            );
+            println!(
+                "{label:10} Biome: {biome:?} ground {height:.0}m slope {slope:.2} | \
+                 snow {:.2} frost {:.2} dry {:.2} | farm {:.2} wood {:.2} stone {:.2} iron {:.2}",
+                c.snow, c.frost, c.dry, p.farmland, p.wood, p.stone, p.iron
+            );
+        }
+    }
+
     /// Measure real ground-cover density, because the radius is a budget
     /// decision and estimating "about 400 a chunk" is how budgets get blown.
     #[test]
