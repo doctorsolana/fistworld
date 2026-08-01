@@ -18,8 +18,8 @@ use bevy::prelude::*;
 use lightyear::prelude::{NetworkTarget, Replicate};
 
 use shared::components::{
-    CharacterKind, CharacterName, PlayerPosition, PlayerRotation, Residence, Settlement,
-    SettlementBuilding, SettlementBuildingKind,
+    CharacterKind, CharacterName, Occupation, PlayerPosition, PlayerRotation, Residence,
+    Settlement, SettlementBuilding, SettlementBuildingKind,
 };
 use shared::terrain::WorldTerrain;
 
@@ -47,7 +47,7 @@ const ARRIVAL_RADIUS: f32 = 6.0;
 /// hauling are deliberately deferred; what this preserves is that a decision
 /// and its result are separate events, so the panel can honestly show something
 /// as "under construction".
-const BUILD_SECONDS: f32 = 6.0;
+const BUILD_SECONDS: f32 = 10.0;
 
 /// Where a villager is in the business of joining somewhere.
 #[derive(Component, Debug, Clone, PartialEq)]
@@ -58,6 +58,44 @@ pub enum VillagerIntent {
     Travelling { settlement: Entity },
     /// Lives somewhere. The hall is their lodging until houses exist.
     Resident { settlement: Entity },
+    /// Living there AND away raising something they were granted a permit for.
+    ///
+    /// Carries the settlement as well as the site so a builder still counts as
+    /// a resident while they are out working. Without that the population dips
+    /// by one every time somebody starts a building, which would be a lie the
+    /// panel tells for ten seconds at a time.
+    Building {
+        settlement: Entity,
+        site: Entity,
+    },
+}
+
+impl VillagerIntent {
+    /// The settlement this villager belongs to, if any.
+    pub fn settlement(&self) -> Option<Entity> {
+        match self {
+            VillagerIntent::Idle => None,
+            VillagerIntent::Travelling { settlement } => Some(*settlement),
+            VillagerIntent::Resident { settlement } => Some(*settlement),
+            VillagerIntent::Building { settlement, .. } => Some(*settlement),
+        }
+    }
+
+    /// Whether this villager is available to take on a new job or permit.
+    pub fn is_settled(&self) -> bool {
+        matches!(self, VillagerIntent::Resident { .. })
+    }
+}
+
+/// How far along a permitted building is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BuildStage {
+    /// Granted. The builder is walking out to the plot, and nothing has
+    /// happened to the ground yet.
+    Walking,
+    /// The builder is on site. The plot has been cleared and levelled, and the
+    /// frame is going up.
+    Raising { seconds_left: f32 },
 }
 
 /// A building a settlement has approved and is waiting on.
@@ -67,8 +105,28 @@ pub struct UnderConstruction {
     pub position: Vec3,
     pub rotation: f32,
     pub owner: Option<String>,
+    /// Who is actually walking out there. Held as an entity rather than looked
+    /// up by name because generated names repeat -- the first duplicate shows
+    /// up around the fifty-first villager.
+    pub builder: Option<Entity>,
     pub settlement: Entity,
-    pub seconds_left: f32,
+    pub stage: BuildStage,
+    /// How good this ground is for what is being built, 0..1. Sampled once,
+    /// where it is built. See `site_quality`.
+    pub quality: f32,
+}
+
+/// How close the builder must get to their plot before work starts.
+const BUILD_REACH: f32 = 4.0;
+
+/// Which chunk each published terrain delta belongs to.
+///
+/// One replicated entity per chunk, reused. Spawning a fresh one per edit would
+/// give a chunk two competing authorities and the client would apply whichever
+/// arrived last.
+#[derive(Resource, Default)]
+pub struct PublishedTerrainDeltas {
+    pub by_chunk: bevy::platform::collections::HashMap<shared::terrain::ChunkCoord, Entity>,
 }
 
 /// Paces the two decision ticks.
@@ -109,7 +167,12 @@ pub fn tag_villager_intent(
         if kinds.get(entity) != Ok(&CharacterKind::Villager) {
             continue;
         }
-        commands.entity(entity).insert(VillagerIntent::Idle);
+        // Occupation rides along with intent so every villager has one from the
+        // moment they exist -- the panel must be able to say "unemployed"
+        // rather than "unknown".
+        commands
+            .entity(entity)
+            .insert((VillagerIntent::Idle, Occupation::default()));
     }
 }
 
@@ -248,7 +311,10 @@ pub fn consider_permits(
     buildings: Query<&SettlementBuilding>,
     pending: Query<&UnderConstruction>,
     placed: Query<(&SettlementBuilding, &PlayerPosition)>,
-    villagers: Query<(&CharacterName, &VillagerIntent)>,
+    // ONE query, read then written. Two -- a read of `&VillagerIntent` and a
+    // write of `&mut VillagerIntent` -- is a genuine conflict Bevy refuses at
+    // runtime, and iterating a mutable query gives read-only items anyway.
+    mut villagers: Query<(Entity, &CharacterName, &mut VillagerIntent)>,
 ) {
     clock.permit += time.delta_secs();
     if clock.permit < PERMIT_INTERVAL {
@@ -315,14 +381,17 @@ pub fn consider_permits(
                     })
                     .count()
         };
+        // Only a SETTLED resident applies. Somebody already out raising a
+        // building cannot also start another one, which is what stops a single
+        // eager villager holding every permit in the village.
         let applicant = villagers
             .iter()
-            .filter(|(_, intent)| {
+            .filter(|(_, _, intent)| {
                 matches!(intent, VillagerIntent::Resident { settlement } if *settlement == settlement_entity)
             })
-            .map(|(name, _)| name.0.clone())
-            .min_by(|a, b| holdings(a).cmp(&holdings(b)).then_with(|| a.cmp(b)));
-        let Some(applicant) = applicant else {
+            .map(|(entity, name, _)| (entity, name.0.clone()))
+            .min_by(|a, b| holdings(&a.1).cmp(&holdings(&b.1)).then_with(|| a.1.cmp(&b.1)));
+        let Some((builder, applicant)) = applicant else {
             continue;
         };
 
@@ -353,14 +422,23 @@ pub fn consider_permits(
         // Auto-approved: a valid application from a resident is granted. The
         // fee is zero today, so the treasury is untouched rather than
         // pretending to move.
-        commands.spawn((
+        // How good this ground is for this trade, sampled where it will stand
+        // rather than at the hall. A farmstead on the settlement's best soil is
+        // worth more than one behind the woodshed, and that has to be decided
+        // by the plot, not the village.
+        let quality = site_quality(&terrain, kind, position);
+
+        let site = commands
+            .spawn((
             UnderConstruction {
                 kind,
                 position,
                 rotation,
                 owner: Some(applicant.clone()),
+                builder: Some(builder),
                 settlement: settlement_entity,
-                seconds_left: BUILD_SECONDS,
+                stage: BuildStage::Walking,
+                quality,
             },
             // The replicated half, so the panel can show it as approved.
             shared::components::ConstructionSite {
@@ -369,7 +447,17 @@ pub fn consider_permits(
             },
             PlayerPosition(position),
             Replicate::to_clients(NetworkTarget::All),
-        ));
+            ))
+            .id();
+
+        // The permit does not build anything. Somebody has to walk out there.
+        commands.entity(builder).insert(MoveTarget(position));
+        if let Ok(mut intent) = villagers.get_mut(builder).map(|(_, _, intent)| intent) {
+            *intent = VillagerIntent::Building {
+                settlement: settlement_entity,
+                site,
+            };
+        }
         info!(
             "Village '{}': {applicant} permitted a {} at {:.0},{:.0}",
             settlement.name,
@@ -380,42 +468,289 @@ pub fn consider_permits(
     }
 }
 
-/// Finished buildings become real.
-pub fn finish_construction(
+/// How well this ground suits what is being built, 0..1.
+///
+/// Reads the SAME `BiomeField::resources` the grass density and the economy
+/// read, so a farmstead standing in thick grass really is standing on good
+/// soil — the thing you can see is the thing the number says.
+///
+/// Slope is passed as zero deliberately. `find_site` already rejected anything
+/// above `MAX_BUILD_SLOPE`, which is below every slope threshold inside
+/// `biome()` and `resources()`, so at a legal plot the slope term cannot change
+/// the answer. Inventing a second slope formula here would only create
+/// something to disagree with the siting gate about.
+pub fn site_quality(terrain: &WorldTerrain, kind: SettlementBuildingKind, at: Vec3) -> f32 {
+    let Some(field) = terrain.generator.loaded_map().biome_field.as_deref() else {
+        // Hand-authored maps carry no biome field. Neutral rather than zero: a
+        // building that works nowhere is worse than one that works averagely.
+        return 0.5;
+    };
+    let profile = field.resources(at.x, at.z, at.y, 0.0);
+    kind.yield_quality(&profile)
+}
+
+/// Drive every permitted building from grant to standing.
+///
+/// Three things happen in order, and the order is the point: the builder walks
+/// out, the plot is cleared and levelled, and only then does the frame go up.
+/// A building that simply materialised on a timer told you nothing about who
+/// built it or what it cost.
+#[allow(clippy::too_many_arguments)]
+pub fn advance_construction(
     time: Res<Time>,
     mut commands: Commands,
+    mut terrain: Option<ResMut<WorldTerrain>>,
+    mut deltas: ResMut<PublishedTerrainDeltas>,
     settlements: Query<&Settlement>,
+    positions: Query<&PlayerPosition>,
+    mut intents: Query<&mut VillagerIntent>,
     mut pending: Query<(Entity, &mut UnderConstruction)>,
 ) {
-    for (entity, mut under) in pending.iter_mut() {
-        under.seconds_left -= time.delta_secs();
-        if under.seconds_left > 0.0 {
-            continue;
-        }
+    let warp = 1.0;
+    for (site, mut under) in pending.iter_mut() {
         let Ok(settlement) = settlements.get(under.settlement) else {
             // Its settlement vanished; drop the site rather than leaving a
             // building belonging to nowhere.
-            commands.entity(entity).despawn();
+            release_builder(&mut commands, &mut intents, under.builder, None);
+            commands.entity(site).despawn();
             continue;
         };
-        commands.spawn((
-            SettlementBuilding {
-                kind: under.kind,
-                settlement: settlement.name.clone(),
-                owner: under.owner.clone(),
-            },
-            PlayerPosition(under.position),
-            PlayerRotation(under.rotation),
-            // No RegionCoord: buildings are part of the map screen, like the
-            // settlements they belong to.
-            Replicate::to_clients(NetworkTarget::All),
-        ));
-        info!(
-            "Village '{}': {} completed",
-            settlement.name,
-            under.kind.label()
-        );
-        commands.entity(entity).despawn();
+
+        match under.stage {
+            BuildStage::Walking => {
+                // No builder left (they were despawned): the permit lapses
+                // rather than the building appearing by itself.
+                let Some(builder) = under.builder else {
+                    commands.entity(site).despawn();
+                    continue;
+                };
+                let Ok(at) = positions.get(builder) else {
+                    commands.entity(site).despawn();
+                    continue;
+                };
+                if at.0.distance(under.position) > BUILD_REACH {
+                    continue;
+                }
+
+                // On site. Clear the plot before anything is raised on it.
+                if let Some(terrain) = terrain.as_mut() {
+                    clear_and_level(terrain, &mut deltas, &mut commands, &under);
+                }
+                // Carrying these two is what makes the world treat the plot as
+                // built-on: the client stops scattering props inside it, the
+                // server drops the tree colliders and marks it as an obstacle.
+                // Attached NOW, at clearing, not at completion -- that is the
+                // difference between a site being cleared and a building
+                // appearing on top of standing trees.
+                commands.entity(site).insert((
+                    shared::building::PlacedBuilding {
+                        building_type: under.kind.art(),
+                        rotation: under.rotation,
+                    },
+                    shared::building::BuildingPosition(under.position),
+                ));
+                under.stage = BuildStage::Raising {
+                    seconds_left: BUILD_SECONDS,
+                };
+                info!(
+                    "Village '{}': ground cleared for a {}",
+                    settlement.name,
+                    under.kind.label()
+                );
+            }
+            BuildStage::Raising { seconds_left } => {
+                let left = seconds_left - time.delta_secs() * warp;
+                if left > 0.0 {
+                    under.stage = BuildStage::Raising {
+                        seconds_left: left,
+                    };
+                    continue;
+                }
+                commands.spawn((
+                    SettlementBuilding {
+                        kind: under.kind,
+                        settlement: settlement.name.clone(),
+                        owner: under.owner.clone(),
+                        quality: under.quality,
+                        workers: Vec::new(),
+                    },
+                    PlayerPosition(under.position),
+                    PlayerRotation(under.rotation),
+                    // The finished building takes over the plot claim from the
+                    // site, so the ground stays clear once the site despawns.
+                    shared::building::PlacedBuilding {
+                        building_type: under.kind.art(),
+                        rotation: under.rotation,
+                    },
+                    shared::building::BuildingPosition(under.position),
+                    // No RegionCoord: buildings are part of the map screen, like
+                    // the settlements they belong to.
+                    Replicate::to_clients(NetworkTarget::All),
+                ));
+                info!(
+                    "Village '{}': {} completed ({:.0}% ground)",
+                    settlement.name,
+                    under.kind.label(),
+                    under.quality * 100.0
+                );
+                release_builder(
+                    &mut commands,
+                    &mut intents,
+                    under.builder,
+                    Some(under.settlement),
+                );
+                commands.entity(site).despawn();
+            }
+        }
+    }
+}
+
+/// Put a builder back to ordinary residency.
+fn release_builder(
+    commands: &mut Commands,
+    intents: &mut Query<&mut VillagerIntent>,
+    builder: Option<Entity>,
+    settlement: Option<Entity>,
+) {
+    let Some(builder) = builder else { return };
+    commands.entity(builder).remove::<MoveTarget>();
+    if let Ok(mut intent) = intents.get_mut(builder) {
+        *intent = match settlement {
+            Some(settlement) => VillagerIntent::Resident { settlement },
+            None => VillagerIntent::Idle,
+        };
+    }
+}
+
+/// Level the plot and publish the change so clients see the same ground.
+///
+/// The flatten itself already existed -- it is what the editor's terrain brush
+/// uses -- and so did the client's ingest of replicated deltas. What did not
+/// exist was anything on the SERVER writing one, so this is the missing half of
+/// a road that was already built from both ends.
+fn clear_and_level(
+    terrain: &mut WorldTerrain,
+    deltas: &mut PublishedTerrainDeltas,
+    commands: &mut Commands,
+    under: &UnderConstruction,
+) {
+    let def = under.kind.art().definition();
+    // Level TO the plot's own height, so a building on a slope cuts a terrace
+    // rather than the whole village drifting to one altitude.
+    let ground = terrain.get_height(under.position.x, under.position.z);
+    let centre = Vec3::new(under.position.x, ground, under.position.z);
+    let affected = terrain.apply_flatten_rect(
+        centre,
+        def.footprint * 0.5,
+        under.rotation,
+        def.flatten_radius,
+    );
+
+    for coord in affected {
+        let Some(data) = terrain.get_delta_chunk(coord) else {
+            continue;
+        };
+        let chunk = shared::terrain::TerrainDeltaChunk::from_delta_data(coord, data);
+        match deltas.by_chunk.get(&coord) {
+            // Update in place: a second building in the same chunk must not
+            // spawn a second authority for that chunk's heights.
+            Some(entity) => {
+                commands.entity(*entity).insert(chunk);
+            }
+            None => {
+                let entity = commands
+                    .spawn((chunk, Replicate::to_clients(NetworkTarget::All)))
+                    .id();
+                deltas.by_chunk.insert(coord, entity);
+            }
+        }
+    }
+}
+
+/// Residents take vacant positions in their own settlement.
+///
+/// This is the smallest honest version of WORLD-DESIGN section 1a's rule that
+/// production is people in jobs rather than population times a multiplier. A
+/// position is held by a NAMED person, so when that person is gone the position
+/// is vacant again and whatever it produced stops. Nothing produces yet, but
+/// the shape is the one production will read, so it cannot quietly become a
+/// headcount later.
+///
+/// Deliberately simple: nearest vacancy, one job each, no preferences and no
+/// skills. Every one of those is a real design question and inventing answers
+/// now would be guessing.
+pub fn fill_vacancies(
+    mut buildings: Query<(&mut SettlementBuilding, &PlayerPosition)>,
+    mut villagers: Query<(&CharacterName, &VillagerIntent, &PlayerPosition, &mut Occupation)>,
+    settlements: Query<(Entity, &Settlement)>,
+) {
+    // Who is already employed anywhere, so a name is never double-counted.
+    let mut employed: HashSet<String> = HashSet::new();
+    for (building, _) in buildings.iter() {
+        for worker in &building.workers {
+            employed.insert(worker.clone());
+        }
+    }
+
+    for (settlement_entity, settlement) in settlements.iter() {
+        loop {
+            // The nearest building in THIS settlement with room left.
+            let vacancy = buildings
+                .iter()
+                .filter(|(building, _)| {
+                    building.settlement == settlement.name
+                        && (building.workers.len() as u8) < building.kind.positions()
+                })
+                .map(|(building, at)| (building.kind, at.0))
+                .next();
+            let Some((kind, plot)) = vacancy else { break };
+
+            // The nearest settled resident of this settlement without a job.
+            let taker = villagers
+                .iter()
+                .filter(|(name, intent, _, _)| {
+                    intent.settlement() == Some(settlement_entity)
+                        && !employed.contains(&name.0)
+                })
+                .min_by(|a, b| {
+                    a.2 .0
+                        .distance_squared(plot)
+                        .total_cmp(&b.2 .0.distance_squared(plot))
+                })
+                .map(|(name, _, _, _)| name.0.clone());
+            let Some(taker) = taker else { break };
+
+            // Write the name into the FIRST matching vacancy. Re-found rather
+            // than remembered because the earlier borrow was read-only.
+            let mut placed = false;
+            for (mut building, at) in buildings.iter_mut() {
+                if building.settlement == settlement.name
+                    && at.0 == plot
+                    && (building.workers.len() as u8) < building.kind.positions()
+                {
+                    building.workers.push(taker.clone());
+                    placed = true;
+                    break;
+                }
+            }
+            if !placed {
+                break;
+            }
+            employed.insert(taker.clone());
+            for (name, _, _, mut occupation) in villagers.iter_mut() {
+                if name.0 == taker {
+                    let title = kind.trade().unwrap_or("Villager").to_string();
+                    if occupation.0.as_deref() != Some(title.as_str()) {
+                        occupation.0 = Some(title);
+                    }
+                }
+            }
+            info!(
+                "Village '{}': {taker} took work as a {}",
+                settlement.name,
+                kind.trade().unwrap_or("hand")
+            );
+        }
     }
 }
 
@@ -557,6 +892,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Time>();
         app.init_resource::<VillageClock>();
+        app.init_resource::<PublishedTerrainDeltas>();
         app.insert_resource(WorldTerrain::default());
         app.add_systems(
             Update,
@@ -567,7 +903,8 @@ mod tests {
                 arrive_at_settlement,
                 recount_residents,
                 consider_permits,
-                finish_construction,
+                advance_construction,
+                fill_vacancies,
             )
                 .chain(),
         );
@@ -611,9 +948,13 @@ mod tests {
             ));
         }
 
-        // Forty seconds of simulated time at the fixed rate.
+        // Three minutes of simulated time. It used to be forty seconds, which
+        // was ample when a permit became a building on a timer. Now somebody has
+        // to WALK to each plot -- up to 60 m at 3.2 m/s -- and then spend ten
+        // seconds raising it, so a village of three buildings needs roughly two
+        // minutes even with nothing going wrong.
         let step = std::time::Duration::from_secs_f32(1.0 / 60.0);
-        for _ in 0..(60 * 40) {
+        for _ in 0..(60 * 180) {
             app.world_mut().resource_mut::<Time>().advance_by(step);
             app.update();
         }
@@ -699,8 +1040,76 @@ mod tests {
         // No player spent anything and nobody was charged.
         assert_eq!(settlement.treasury, 0, "first permits are free");
 
+        // Somebody WALKED to each plot. If construction still completed on a
+        // timer alone this would pass with the builders standing at the hall,
+        // so it checks the distance from the hall rather than merely that
+        // buildings exist.
+        let sites: Vec<Vec3> = world
+            .query::<(&SettlementBuilding, &PlayerPosition)>()
+            .iter(&world)
+            .map(|(_, at)| at.0)
+            .collect();
+        assert!(
+            sites.iter().all(|at| at.distance(hall_position) > 8.0),
+            "buildings should stand out on their own plots, not on the hall: {sites:?}"
+        );
+
+        // The ground under every building was levelled and published. An empty
+        // map here means the terrain edit never happened or never left the
+        // server, and the client would draw buildings floating over a hillside.
+        let published = world.resource::<PublishedTerrainDeltas>().by_chunk.len();
+        assert!(
+            published > 0,
+            "clearing a plot must publish a terrain delta for its chunk"
+        );
+
+        // Every building claims its plot, which is what stops trees being drawn
+        // inside it and what makes it a navigation obstacle.
+        let claimed = world
+            .query::<(&SettlementBuilding, &shared::building::PlacedBuilding)>()
+            .iter(&world)
+            .count();
+        assert_eq!(claimed, 3, "each building must claim its ground");
+
+        // Work exists and named people hold it. A Farmstead seats two and a
+        // Lumberjack Hut one, so with three residents every position that can
+        // be filled is filled -- and the House seats nobody, which is the point
+        // of homes and workplaces being different things.
+        let staffed: usize = world
+            .query::<&SettlementBuilding>()
+            .iter(&world)
+            .map(|building| building.workers.len())
+            .sum();
+        assert!(
+            staffed >= 2,
+            "residents should have taken the vacant positions, got {staffed}"
+        );
+        let titles: Vec<String> = world
+            .query::<&Occupation>()
+            .iter(&world)
+            .filter_map(|job| job.0.clone())
+            .collect();
+        assert!(
+            titles.iter().any(|t| t == "Farmer"),
+            "somebody works the farm: {titles:?}"
+        );
+
+        // Ground quality was sampled where each building stands, not defaulted.
+        let qualities: Vec<f32> = world
+            .query::<&SettlementBuilding>()
+            .iter(&world)
+            .map(|building| building.quality)
+            .collect();
+        assert!(
+            qualities.iter().all(|q| (0.0..=1.0).contains(q)),
+            "quality must be a real 0..1 sample: {qualities:?}"
+        );
+
         // Where the test actually founded, so a failure elsewhere is diagnosable.
         println!("founded at {hall_position:?}, waterline {water}");
+        println!("plots {sites:?}");
+        println!("delta chunks published: {published}");
+        println!("occupations: {titles:?}  ground quality: {qualities:?}");
     }
 
     #[test]

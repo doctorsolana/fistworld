@@ -143,6 +143,47 @@ impl SettlementBuildingKind {
         }
     }
 
+    /// What this building makes its owner, given the ground it stands on.
+    ///
+    /// Reads the same `ResourceProfile` the vegetation density reads, so the
+    /// answer is legible from the window: a farmstead standing in thick grass
+    /// really is on good soil, and a lumberjack hut among dense trees really is
+    /// in good timber. A player should be able to site a building well by
+    /// LOOKING, without opening a heatmap.
+    pub fn yield_quality(self, profile: &crate::worldgen::ResourceProfile) -> f32 {
+        match self {
+            SettlementBuildingKind::Farmstead => profile.farmland,
+            SettlementBuildingKind::LumberjackHut => profile.wood,
+            // A hall and a house harvest nothing. Neutral rather than zero, so
+            // "quality" never reads as "this house is broken".
+            SettlementBuildingKind::Hall | SettlementBuildingKind::House => 0.5,
+        }
+    }
+
+    /// What someone working here is called, if anyone works here at all.
+    pub fn trade(self) -> Option<&'static str> {
+        match self {
+            SettlementBuildingKind::Farmstead => Some("Farmer"),
+            SettlementBuildingKind::LumberjackHut => Some("Woodcutter"),
+            SettlementBuildingKind::Hall => Some("Reeve"),
+            SettlementBuildingKind::House => None,
+        }
+    }
+
+    /// How many people this building has room to employ.
+    ///
+    /// A house has none on purpose: it is where people live, not where they
+    /// work, and conflating the two is how population quietly becomes a
+    /// multiplier again.
+    pub fn positions(self) -> u8 {
+        match self {
+            SettlementBuildingKind::Farmstead => 2,
+            SettlementBuildingKind::LumberjackHut => 1,
+            SettlementBuildingKind::Hall => 1,
+            SettlementBuildingKind::House => 0,
+        }
+    }
+
     /// How far from the hall this belongs, in metres.
     ///
     /// Houses cluster around the hall because that is what a village looks
@@ -178,6 +219,15 @@ impl SettlementBuildingKind {
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Residence(pub String);
 
+/// What a person does for a living, if anything.
+///
+/// `None` is unemployed, which is a real and common state -- a villager who has
+/// just walked into town holds no position until one exists to hold. Present on
+/// every villager so the panel never has to guess whether the answer is
+/// "nothing" or "not loaded yet".
+#[derive(Component, Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Occupation(pub Option<String>);
+
 /// A permitted building that has not gone up yet.
 ///
 /// Replicated so the settlement panel can honestly distinguish "approved" from
@@ -200,9 +250,21 @@ pub struct SettlementBuilding {
     /// encyclopedia and the dev commands use, until `SettlementId` exists
     /// (ROADMAP Phase 1).
     pub settlement: String,
-    /// Who applied for the permit. Employment and worker slots come later;
-    /// today this only records who wanted it built.
+    /// Who applied for the permit and walked out to raise it.
     pub owner: Option<String>,
+    /// How well the ground it stands on suits its trade, 0..1.
+    ///
+    /// Sampled ONCE, where it was built, and then carried. Recomputing it per
+    /// tick would mark the component changed at tick rate and re-send every
+    /// building to every client forever -- these replicate globally, with no
+    /// interest management, because they belong to the map screen.
+    pub quality: f32,
+    /// Who works here, by name. Fewer than `kind.positions()` means vacancies.
+    ///
+    /// Names, not entities, because this is replicated and it is what the panel
+    /// prints. A position counts as filled only while a living person holds it,
+    /// which is the whole reason this is a roster and not a number.
+    pub workers: Vec<String>,
 }
 
 /// The rungs a settlement climbs. Every step asks for something the step below

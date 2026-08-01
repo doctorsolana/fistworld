@@ -53,6 +53,7 @@ impl Plugin for HeroPlugin {
                 apply_hero_skin,
                 setup_hero_animation,
                 sync_hero_transforms,
+                tag_builders,
                 drive_hero_locomotion,
                 control::handle_world_clicks,
                 control::auto_spawn_hero,
@@ -126,7 +127,18 @@ struct HeroAnim {
     player: Entity,
     idle: Option<AnimationNodeIndex>,
     walk: Option<AnimationNodeIndex>,
+    build: Option<AnimationNodeIndex>,
 }
+
+/// Marks a character the client believes is working on a building.
+///
+/// DERIVED from a replicated construction site standing next to them, not sent.
+/// The server already tells us where every site is and where every villager is;
+/// "that villager is building" is the two facts read together, and sending it
+/// as a third would be sending the same thing twice — the same reason the moot
+/// hall is drawn from the settlement's position rather than replicated.
+#[derive(Component)]
+struct Building;
 
 /// Spawn the (hidden-until-dressed) character scene under a rig root.
 /// Shared by replicated heroes and the creator's preview rig.
@@ -348,6 +360,8 @@ const FACE_BONE_PREFIX: &str = "eye.";
 /// Clip names the locomotion blend expects to find in `body_clips`.
 const CLIP_IDLE: &str = "idle";
 const CLIP_WALK: &str = "walk";
+/// Played while a villager works on a construction site.
+const CLIP_BUILD: &str = "build";
 /// Resting expression; face clips play on their own masked layer.
 const CLIP_FACE_IDLE: &str = "face_idle";
 
@@ -525,11 +539,18 @@ fn setup_hero_animation(
         // the explicit repeat() matters.
         let idle = hero_graph.body.get(CLIP_IDLE).copied();
         let walk = hero_graph.body.get(CLIP_WALK).copied();
+        let build = hero_graph.body.get(CLIP_BUILD).copied();
         if let Some(idle) = idle {
             player.play(idle).repeat().set_weight(1.0);
         }
         if let Some(walk) = walk {
             player.play(walk).repeat().set_weight(0.0);
+        }
+        // Started at zero like the others and cross-faded in, rather than
+        // played on demand: every locomotion clip is always resident, so the
+        // blend never has to wait for a clip to start.
+        if let Some(build) = build {
+            player.play(build).repeat().set_weight(0.0);
         }
         // Resting expression on the face layer; body clips cannot touch it.
         if let Some(face_idle) = hero_graph.face.get(CLIP_FACE_IDLE).copied() {
@@ -541,6 +562,7 @@ fn setup_hero_animation(
                 player: player_entity,
                 idle,
                 walk,
+                build,
             });
         }
         info!("Hero animation configured for {rig_root:?}");
@@ -593,11 +615,65 @@ fn sync_hero_transforms(
 /// Hidden rigs (the parked creator preview) freeze outright: animation
 /// evaluation runs regardless of visibility, and a character nobody can see
 /// must not sample 16 bones per frame forever.
+/// Decide who is swinging a hammer.
+///
+/// A character standing on a live construction site is building. That is the
+/// whole rule, and it is derived from two things the server already sends:
+/// where the sites are and where the people are. The server's own
+/// `VillagerIntent::Building` never leaves the server, and it does not need to.
+///
+/// Radius rather than exact position because the builder stops within
+/// `BUILD_REACH` of the plot centre, not on it, and because a villager who
+/// wanders a metre while working should not flicker between clips.
+fn tag_builders(
+    mut commands: Commands,
+    sites: Query<&PlayerPosition, With<shared::components::ConstructionSite>>,
+    characters: Query<
+        (Entity, &PlayerPosition, Option<&Building>),
+        With<shared::components::CharacterKind>,
+    >,
+) {
+    /// Slightly wider than the server's own BUILD_REACH, so the clip is playing
+    /// by the time the walk stops rather than a frame later.
+    const BUILD_ANIM_RADIUS: f32 = 6.0;
+
+    if sites.is_empty() {
+        // Nothing under construction anywhere: clear every tag in one pass
+        // rather than distance-checking against an empty set.
+        for (entity, _, building) in characters.iter() {
+            if building.is_some() {
+                commands.entity(entity).remove::<Building>();
+            }
+        }
+        return;
+    }
+
+    for (entity, at, building) in characters.iter() {
+        let on_site = sites
+            .iter()
+            .any(|site| site.0.distance(at.0) <= BUILD_ANIM_RADIUS);
+        match (on_site, building.is_some()) {
+            (true, false) => {
+                commands.entity(entity).insert(Building);
+            }
+            (false, true) => {
+                commands.entity(entity).remove::<Building>();
+            }
+            _ => {}
+        }
+    }
+}
+
 fn drive_hero_locomotion(
-    heroes: Query<(&HeroVisual, &HeroAnim, Option<&InheritedVisibility>)>,
+    heroes: Query<(
+        &HeroVisual,
+        &HeroAnim,
+        Option<&InheritedVisibility>,
+        Option<&Building>,
+    )>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    for (visual, anim, inherited) in heroes.iter() {
+    for (visual, anim, inherited, building) in heroes.iter() {
         let hidden = inherited.is_some_and(|visibility| !visibility.get());
         let Ok(mut player) = players.get_mut(anim.player) else {
             continue;
@@ -609,6 +685,15 @@ fn drive_hero_locomotion(
             0.0
         } else {
             ((visual.speed - 0.15) / (HERO_MOVE_SPEED * 0.6)).clamp(0.0, 1.0)
+        };
+        // Building wins over standing but NOT over walking: someone still
+        // crossing the plot should be seen walking, and the hammer starts when
+        // they stop. Falls out of the blend for free rather than needing a
+        // state machine.
+        let build_blend = if building.is_some() && !hidden {
+            1.0 - walk_blend
+        } else {
+            0.0
         };
         let stride_speed = if hidden {
             0.0
@@ -626,9 +711,22 @@ fn drive_hero_locomotion(
                 }
             }
         }
+        if let Some(build) = anim.build {
+            if let Some(active) = player.animation_mut(build) {
+                if (active.weight() - build_blend).abs() > 0.01 {
+                    active.set_weight(build_blend);
+                }
+                let build_speed = if hidden { 0.0 } else { 1.0 };
+                if (active.speed() - build_speed).abs() > 0.01 {
+                    active.set_speed(build_speed);
+                }
+            }
+        }
         if let Some(idle) = anim.idle {
             if let Some(active) = player.animation_mut(idle) {
-                let idle_weight = 1.0 - walk_blend;
+                // Whatever the build lane takes comes out of idle, so the three
+                // weights always sum to one.
+                let idle_weight = 1.0 - walk_blend - build_blend;
                 if (active.weight() - idle_weight).abs() > 0.01 {
                     active.set_weight(idle_weight);
                 }

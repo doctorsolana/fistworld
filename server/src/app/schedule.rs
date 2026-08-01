@@ -59,7 +59,8 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             world::village::arrive_at_settlement,
             world::village::recount_residents,
             world::village::consider_permits,
-            world::village::finish_construction,
+            world::village::advance_construction,
+            world::village::fill_vacancies,
             world::regions::tick_strategic_world,
             world::regions::log_region_telemetry,
         )

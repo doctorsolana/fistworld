@@ -49,6 +49,7 @@ impl Plugin for ProtocolPlugin {
         // === TERRAIN DELTA CHUNKS ===
         app.component::<TerrainDeltaChunk>().replicate();
 
+
         // === MESSAGES ===
         // Client -> Server
         app.register_message::<PlayerInput>()

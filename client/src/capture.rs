@@ -237,6 +237,12 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                             kind,
                             settlement: "Brackwater".to_string(),
                             owner: Some(people[index].clone()),
+                            // Stand-ins, like the resident names above. The
+                            // client has no BiomeField truth to sample and must
+                            // not invent one -- these numbers exist so the panel
+                            // has something to lay out, nothing more.
+                            quality: if index == 0 { 0.82 } else { 0.41 },
+                            workers: vec![people[index].clone()],
                         },
                         shared::components::PlayerPosition(Vec3::new(at.x, ground, at.z)),
                         shared::components::PlayerRotation(0.0),

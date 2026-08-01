@@ -8,8 +8,10 @@
 
 use bevy::prelude::*;
 
+use shared::building::{BuildingPosition, PlacedBuilding};
 use shared::components::{
-    PlayerPosition, PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind,
+    ConstructionSite, PlayerPosition, PlayerRotation, Settlement, SettlementBuilding,
+    SettlementBuildingKind,
 };
 use shared::terrain::WorldTerrain;
 
@@ -21,7 +23,11 @@ impl Plugin for SettlementPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (attach_settlement_visuals, attach_building_visuals)
+            (
+                attach_settlement_visuals,
+                attach_building_visuals,
+                claim_building_ground,
+            )
                 .run_if(in_state(GameState::Playing)),
         );
     }
@@ -34,6 +40,48 @@ pub struct SettlementVisual;
 /// Marks a settlement building that already has its model drawn.
 #[derive(Component)]
 pub struct BuildingVisual;
+
+/// Claim the ground under anything a settlement has built or is building.
+///
+/// DERIVED, not replicated. `PlacedBuilding` + `BuildingPosition` are what the
+/// build-zone system keys on to stop scattering props inside a building, and
+/// every input needed to produce them — kind, position, rotation — already
+/// arrives with the building itself. Replicating them as well would be sending
+/// the same fact twice, which is the same reason the moot hall is drawn from
+/// the settlement's position rather than sent as its own entity.
+///
+/// It applies to CONSTRUCTION SITES too, and that is the point: the plot is
+/// claimed and cleared while the frame is still going up, so the building never
+/// appears standing in a thicket.
+fn claim_building_ground(
+    mut commands: Commands,
+    built: Query<
+        (Entity, &SettlementBuilding, &PlayerPosition, &PlayerRotation),
+        Without<PlacedBuilding>,
+    >,
+    sites: Query<(Entity, &ConstructionSite, &PlayerPosition), Without<PlacedBuilding>>,
+) {
+    for (entity, building, position, rotation) in built.iter() {
+        commands.entity(entity).insert((
+            PlacedBuilding {
+                building_type: building.kind.art(),
+                rotation: rotation.0,
+            },
+            BuildingPosition(position.0),
+        ));
+    }
+    // Sites replicate no rotation; the zone is a rectangle around the plot and
+    // an unrotated one is close enough to clear the ground it will stand on.
+    for (entity, site, position) in sites.iter() {
+        commands.entity(entity).insert((
+            PlacedBuilding {
+                building_type: site.kind.art(),
+                rotation: 0.0,
+            },
+            BuildingPosition(position.0),
+        ));
+    }
+}
 
 /// Give every replicated settlement building its model.
 ///

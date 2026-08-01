@@ -149,6 +149,51 @@ fn line(left: String, right: String, emphasis: bool) -> impl Bundle {
     )
 }
 
+/// A quieter second line under a row, for the detail behind it.
+fn sub_line(left: String, right: String) -> impl Bundle {
+    (
+        Node {
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::SpaceBetween,
+            column_gap: Val::Px(8.0),
+            padding: UiRect::left(Val::Px(9.0)),
+            ..default()
+        },
+        children![
+            (
+                Text::new(left),
+                TextFont {
+                    font_size: FontSize::Px(10.5),
+                    ..default()
+                },
+                TextColor(INK_MUTED),
+            ),
+            (
+                Text::new(right),
+                TextFont {
+                    font_size: FontSize::Px(10.5),
+                    ..default()
+                },
+                TextColor(INK_MUTED),
+            ),
+        ],
+    )
+}
+
+/// Ground quality as a word.
+///
+/// A player reading a panel wants to know whether a plot was a good idea, not
+/// that it scored 0.62. The number stays server truth; this is the reading.
+fn ground_word(quality: f32) -> &'static str {
+    match quality {
+        q if q >= 0.75 => "prime",
+        q if q >= 0.55 => "good",
+        q if q >= 0.35 => "fair",
+        q if q >= 0.15 => "poor",
+        _ => "barren",
+    }
+}
+
 /// Rebuild the panel when what it would show has changed.
 #[allow(clippy::too_many_arguments)]
 fn sync_settlement_panel(
@@ -182,24 +227,42 @@ fn sync_settlement_panel(
     };
 
     // Everything the panel shows, in display order, as one comparable string.
-    let mut people: Vec<&str> = residents
+    // Job titles are DERIVED from the buildings' own worker rosters, which
+    // already replicate. A separate replicated Occupation would be the same
+    // fact travelling twice, and the two could then disagree.
+    let mut trades: std::collections::HashMap<&str, &'static str> = std::collections::HashMap::new();
+    for building in built.iter() {
+        if building.settlement != place.name {
+            continue;
+        }
+        let Some(trade) = building.kind.trade() else {
+            continue;
+        };
+        for worker in &building.workers {
+            trades.insert(worker.as_str(), trade);
+        }
+    }
+    let mut people: Vec<(&str, Option<&'static str>)> = residents
         .iter()
         .filter(|(_, home)| home.0 == place.name)
-        .map(|(name, _)| name.0.as_str())
+        .map(|(name, _)| (name.0.as_str(), trades.get(name.0.as_str()).copied()))
         .collect();
-    people.sort_unstable();
+    people.sort_unstable_by_key(|(name, _)| *name);
 
-    let mut standing: Vec<(SettlementBuildingKind, String)> = built
+    let mut standing: Vec<(SettlementBuildingKind, String, u8, u8, f32)> = built
         .iter()
         .filter(|building| building.settlement == place.name)
         .map(|building| {
             (
                 building.kind,
                 building.owner.clone().unwrap_or_else(|| "—".to_string()),
+                building.workers.len() as u8,
+                building.kind.positions(),
+                building.quality,
             )
         })
         .collect();
-    standing.sort_by_key(|(kind, _)| kind.label());
+    standing.sort_by_key(|(kind, ..)| kind.label());
 
     let mut raising: Vec<SettlementBuildingKind> = sites
         .iter()
@@ -218,7 +281,7 @@ fn sync_settlement_panel(
         place.tier.label(),
         place.residents,
         place.treasury,
-        people.join(","),
+        people.iter().map(|(n, j)| format!("{n}:{j:?}")).collect::<Vec<_>>().join(","),
         standing,
         raising,
     );
@@ -297,12 +360,30 @@ fn sync_settlement_panel(
             ))
             .id(),
     );
-    for (kind, owner) in &standing {
+    for (kind, owner, staffed, positions, quality) in &standing {
         rows.push(
             commands
                 .spawn(line(kind.label().to_string(), owner.clone(), true))
                 .id(),
         );
+        // The two facts that decide whether a building is doing anything: is
+        // anyone in it, and is the ground any good. A building with vacancies
+        // produces less; one on poor ground produces less whoever is in it.
+        if *positions > 0 {
+            let staffing = if staffed == positions {
+                format!("{staffed}/{positions} staffed")
+            } else {
+                format!("{staffed}/{positions} — {} vacant", positions - staffed)
+            };
+            rows.push(
+                commands
+                    .spawn(sub_line(
+                        staffing,
+                        format!("{} ground", ground_word(*quality)),
+                    ))
+                    .id(),
+            );
+        }
     }
 
     // Under construction. Shown even when empty, so its absence reads as "the
@@ -333,10 +414,14 @@ fn sync_settlement_panel(
                 .id(),
         );
     }
-    for person in &people {
+    for (person, trade) in &people {
         rows.push(
             commands
-                .spawn(line((*person).to_string(), String::new(), true))
+                .spawn(line(
+                    (*person).to_string(),
+                    trade.map(str::to_string).unwrap_or_else(|| "unemployed".to_string()),
+                    true,
+                ))
                 .id(),
         );
     }
