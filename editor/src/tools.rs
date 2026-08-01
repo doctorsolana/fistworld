@@ -1167,10 +1167,11 @@ fn choose_forest_kind(preset: ForestBrushPreset, group: ForestPropGroup, roll: f
         },
         ForestPropGroup::Bush => choose_from(BUSHES, roll),
         ForestPropGroup::Rock => choose_from(ROCKS, roll),
-        // ONE grass model everywhere: every tuft shares a mesh + wind
-        // material, so the whole field renders as a single instanced batch.
-        // 06/07 (4.6k/5.7k tris) and GrassBlade stay manual-placement only.
-        ForestPropGroup::Grass => Env_Grass_Tall_04,
+        // The tall variant: it reads from further away than the short patch,
+        // which is what a brush stroke wants. The old comment here described
+        // three grass kinds that no longer exist -- the bought 06/07 tufts and
+        // the single blade were replaced by the two repo-built patches.
+        ForestPropGroup::Grass => Grass_Tall,
         ForestPropGroup::GroundCover => match preset {
             ForestBrushPreset::Deadwood => choose_from(DEAD_GROUND, roll),
             _ => {

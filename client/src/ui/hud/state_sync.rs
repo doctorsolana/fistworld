@@ -278,7 +278,7 @@ pub(super) fn sync_selection_plate(
     mut glyphs: Query<&mut BorderColor, With<SelectionRingGlyph>>,
     mut names: Query<&mut Text, (With<SelectionNameText>, Without<SelectionStatusText>)>,
     mut statuses: Query<&mut Text, (With<SelectionStatusText>, Without<SelectionNameText>)>,
-    mut last: Local<Option<Vec3>>,
+    visuals: Query<&crate::hero::HeroVisual>,
 ) {
     let count = selection.len();
     // A selected SETTLEMENT is not a unit and gets its own panel. Without this
@@ -298,10 +298,11 @@ pub(super) fn sync_selection_plate(
         }
     }
     let Some(primary) = selection.primary().and_then(|e| characters.get(e).ok()) else {
-        *last = None;
         return;
     };
-    let (name, kind, position, commanded) = primary;
+    // Position is no longer read here: movement comes from the smoothed
+    // visual, not from diffing the replicated position frame to frame.
+    let (name, kind, _position, commanded) = primary;
 
     let my_account = account.as_ref().map(|input| input.name.trim().to_lowercase());
     let owns = |commanded: Option<&shared::components::CommandedBy>| {
@@ -343,8 +344,22 @@ pub(super) fn sync_selection_plate(
     // Moving or standing, derived from whether the replicated position changed.
     // The client holds no copy of the server's move target, and inventing a
     // replicated "is moving" flag for one cosmetic word is not worth the traffic.
-    let moved = last.is_some_and(|previous| previous.distance_squared(position.0) > 1e-4);
-    *last = Some(position.0);
+    // Ask the SMOOTHED visual whether it is walking.
+    //
+    // This used to compare the replicated position against last frame's. That
+    // answers "did a packet land this frame?", not "is this character moving?"
+    // -- replication is ~20 Hz and rendering is not, so a walking villager read
+    // HOLDING on the two frames out of three with no packet and flipped to ON
+    // THE MOVE on the third. The plate changed its mind dozens of times a
+    // second while the character walked in a straight line.
+    //
+    // `HeroVisual::speed` is already smoothed for the walk animation, so the
+    // feet and the label now agree by construction.
+    const MOVING_ABOVE: f32 = 0.25;
+    let moved = selection
+        .primary()
+        .and_then(|entity| visuals.get(entity).ok())
+        .is_some_and(|visual| visual.speed() > MOVING_ABOVE);
     // A box-drag only ever selects your own, so a group is normally all
     // commandable. The mixed branches stay because a selection can also be set
     // by other means, and a group that silently would not move must say so.

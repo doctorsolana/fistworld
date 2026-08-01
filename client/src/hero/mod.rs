@@ -97,6 +97,15 @@ pub struct HeroVisual {
 }
 
 impl HeroVisual {
+    /// Smoothed visual speed, m/s.
+    ///
+    /// The honest source for "is this character moving?". The replicated
+    /// position is a staircase at network rate, so comparing it frame to frame
+    /// answers "did a packet land this frame?" rather than "is it walking?".
+    pub fn speed(&self) -> f32 {
+        self.speed
+    }
+
     /// A rig that should always animate at full walk speed (the character
     /// creator preview walks in place on its turntable).
     pub fn walking_in_place() -> Self {

@@ -139,7 +139,11 @@ pub(super) fn sync_selection_ring(
     terrain: Option<Res<WorldTerrain>>,
     camera: Query<&crate::camera_rts::CommanderCamera>,
     account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
-    positions: Query<(&PlayerPosition, Option<&shared::components::CommandedBy>)>,
+    positions: Query<(
+        &PlayerPosition,
+        Option<&GlobalTransform>,
+        Option<&shared::components::CommandedBy>,
+    )>,
     mut rings: Query<(Entity, &mut Transform, &mut Visibility, &Children), With<SelectionRing>>,
     mut cores: Query<(&mut MeshMaterial3d<StandardMaterial>, &mut RingTone)>,
 ) {
@@ -178,9 +182,16 @@ pub(super) fn sync_selection_ring(
             .entities
             .iter()
             .filter_map(|entity| positions.get(*entity).ok())
-            .map(|(position, commanded)| {
+            .map(|(position, visual, commanded)| {
                 let commandable = super::can_command(commanded, my_account.as_deref());
-                let mut point = position.0;
+                // Follow the SMOOTHED transform, not the replicated position.
+                // `PlayerPosition` is a staircase at network rate while the body
+                // is interpolated every frame, so a ring drawn from it walks in
+                // steps behind a character that glides -- which is the lag you
+                // see. The body and its ring must be driven by the same number.
+                let mut point = visual
+                    .map(|visual| visual.translation())
+                    .unwrap_or(position.0);
                 // Sit on the GROUND, not on the entity's replicated Y: feet are
                 // terrain-snapped server-side but the client can be a frame
                 // behind, and a ring that lags into a hillside is worse than one
