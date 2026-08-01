@@ -222,6 +222,79 @@ mod tests {
     use super::*;
     use crate::terrain::WorldTerrain;
 
+    /// Actual prop density per biome, measured from the shipped map.
+    ///
+    /// "Forest feels emptier than meadows" is either a real defect or an
+    /// illusion, and the map file can settle it. Classifies every authored
+    /// object by the biome it stands in and reports trees per square kilometre.
+    #[test]
+    #[ignore = "diagnostic: cargo test -p shared -- --ignored --nocapture density_by_biome"]
+    fn density_by_biome() {
+        use std::collections::HashMap;
+        let terrain = WorldTerrain::default();
+        let map = terrain.generator.loaded_map();
+        let field = map.biome_field.as_deref().expect("generated map");
+
+        // Area per biome, from a coarse sweep, so counts become densities.
+        let mut area: HashMap<String, f64> = HashMap::new();
+        const STEP: f32 = 64.0;
+        let half = map.definition.generated.as_ref().unwrap().half_extent;
+        let mut x = -half;
+        while x < half {
+            let mut z = -half;
+            while z < half {
+                let h = terrain.get_height(x, z);
+                if h > 1.0 {
+                    let n = terrain.get_normal(x, z);
+                    let slope = (n.x * n.x + n.z * n.z).sqrt() / n.y.max(0.01);
+                    let b = format!("{:?}", field.biome(x, z, h, slope));
+                    *area.entry(b).or_default() += (STEP * STEP) as f64;
+                }
+                z += STEP;
+            }
+            x += STEP;
+        }
+
+        let mut counts: HashMap<(String, String), u32> = HashMap::new();
+        for objects in map.objects_by_chunk.values() {
+            for object in objects {
+                let (x, z) = (object.position[0], object.position[2]);
+                let h = terrain.get_height(x, z);
+                let n = terrain.get_normal(x, z);
+                let slope = (n.x * n.x + n.z * n.z).sqrt() / n.y.max(0.01);
+                let b = format!("{:?}", field.biome(x, z, h, slope));
+                let id = object.kind.map(|k| k.id()).unwrap_or("?");
+                let family = if id.starts_with("pine") {
+                    "conifer"
+                } else if id.starts_with("dead") {
+                    "dead"
+                } else if id.starts_with("tree") {
+                    "broadleaf"
+                } else if id.starts_with("bush") {
+                    "bush"
+                } else if id.starts_with("rock") {
+                    "rock"
+                } else {
+                    "flower"
+                };
+                *counts.entry((b, family.to_string())).or_default() += 1;
+            }
+        }
+
+        let mut biomes: Vec<&String> = area.keys().collect();
+        biomes.sort();
+        println!("\n{:<11}{:>9}   {:>26}", "BIOME", "km2", "per km2");
+        for b in biomes {
+            let km2 = area[b] / 1_000_000.0;
+            let get = |f: &str| *counts.get(&(b.clone(), f.to_string())).unwrap_or(&0) as f64 / km2;
+            let trees = get("broadleaf") + get("conifer");
+            println!(
+                "{b:<11}{km2:>9.1}   trees {trees:>6.0}  (broadleaf {:>5.0} conifer {:>5.0})  bush {:>4.0}  rock {:>4.0}  flower {:>4.0}",
+                get("broadleaf"), get("conifer"), get("bush"), get("rock"), get("flower")
+            );
+        }
+    }
+
     /// What the F3 overlay will report, at three latitudes.
     ///
     /// The overlay is only worth having if the numbers are right, and "it
