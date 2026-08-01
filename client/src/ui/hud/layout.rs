@@ -196,6 +196,7 @@ fn god_plate() -> impl Bundle {
             spawn_hero_button(),
             spawn_npc_button(),
             found_village_button(),
+            god_notice(),
             hairline(),
             (
                 Text::new("G god   J time   N people   M map"),
@@ -303,6 +304,28 @@ fn found_village_button() -> impl Bundle {
             },
             TextColor(INK),
         )],
+    )
+}
+
+/// Why the last god action was refused. Hidden until there is something to say.
+fn god_notice() -> impl Bundle {
+    (
+        super::GodNoticeText,
+        Node {
+            display: Display::None,
+            max_width: Val::Px(190.0),
+            ..default()
+        },
+        Pickable::IGNORE,
+        Text::new(String::new()),
+        TextFont {
+            font_size: FontSize::Px(10.0),
+            ..default()
+        },
+        // Madder, the reserved danger colour: this is the one place in god
+        // chrome that reports a refusal, and it must not read as a label.
+        TextColor(crate::ui::styles::ACCENT_RED),
+        TextLayout::justify(Justify::Right),
     )
 }
 

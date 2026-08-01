@@ -210,6 +210,40 @@ impl SettlementBuildingKind {
     }
 }
 
+/// How far apart settlements must be founded, in metres.
+///
+/// Lives in `shared` because BOTH sides need it and they must not disagree: the
+/// server enforces it, and the client checks it before sending so the player is
+/// told why a click did nothing instead of watching the button reset in silence.
+pub const MIN_SETTLEMENT_SPACING: f32 = 300.0;
+
+/// How far above the waterline a settlement must be founded, in metres.
+///
+/// Same reason as the spacing: a hall founded in a lake looks fine and then
+/// never builds anything, because every plot its residents try is refused as
+/// underwater. Better to say no at the click.
+pub const SETTLEMENT_FREEBOARD: f32 = 1.5;
+
+/// Why a settlement cannot be founded at a point, if it cannot.
+///
+/// Returned as a sentence rather than a code because its only job is to be
+/// shown to a person.
+pub fn founding_refusal(
+    ground: f32,
+    water_level: Option<f32>,
+    nearest_settlement: Option<(&str, f32)>,
+) -> Option<String> {
+    if water_level.is_some_and(|level| ground < level + SETTLEMENT_FREEBOARD) {
+        return Some("Too close to the water".to_string());
+    }
+    if let Some((name, distance)) = nearest_settlement {
+        if distance < MIN_SETTLEMENT_SPACING {
+            return Some(format!("Too close to {name} ({distance:.0}m of {MIN_SETTLEMENT_SPACING:.0}m)"));
+        }
+    }
+    None
+}
+
 /// Where a person lives.
 ///
 /// Replicated by NAME rather than by entity because residence is a fact about a

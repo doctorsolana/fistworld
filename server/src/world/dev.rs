@@ -41,7 +41,7 @@ pub struct VillagerSeed(pub u64);
 /// Two settlements closer than this would fight over the same plan footprint
 /// and the same working radius of land, and it is what stops the map being
 /// carpeted in halls.
-pub const MIN_SETTLEMENT_SPACING: f32 = 300.0;
+pub use shared::components::MIN_SETTLEMENT_SPACING;
 
 pub fn handle_dev_commands(
     mut commands: Commands,

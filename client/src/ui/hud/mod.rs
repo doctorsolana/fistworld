@@ -36,6 +36,7 @@ impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GodCapability>();
         app.init_resource::<HudMode>();
+        app.init_resource::<GodNotice>();
         // A fresh connection must not inherit a stale god grant.
         app.add_systems(OnEnter(GameState::Connecting), reset_dev_grant);
         app.add_systems(Update, receive_dev_status);
@@ -57,11 +58,55 @@ impl Plugin for HudPlugin {
                 sync_spawn_hero_button,
                 state_sync::sync_spawn_npc_button,
                 state_sync::sync_found_village_button,
+                tick_god_notice,
                 state_sync::sync_selection_plate,
                 state_sync::sync_selection_box,
             )
                 .run_if(in_state(GameState::Playing)),
         );
+    }
+}
+
+/// A short message shown under the god controls: why the last action was
+/// refused.
+///
+/// Exists because a refused placement used to be indistinguishable from a
+/// broken button — the click was consumed, the arm reset, and the reason lived
+/// only in a server log.
+#[derive(Resource, Default)]
+pub struct GodNotice {
+    pub text: String,
+    pub seconds_left: f32,
+}
+
+impl GodNotice {
+    pub fn show(&mut self, text: impl Into<String>) {
+        self.text = text.into();
+        self.seconds_left = 4.5;
+    }
+}
+
+#[derive(Component)]
+struct GodNoticeText;
+
+/// Fade the notice out, and keep the label in step with it.
+fn tick_god_notice(
+    time: Res<Time>,
+    mut notice: ResMut<GodNotice>,
+    mut labels: Query<(&mut Text, &mut Node), With<GodNoticeText>>,
+) {
+    if notice.seconds_left > 0.0 {
+        notice.seconds_left -= time.delta_secs();
+    }
+    let showing = notice.seconds_left > 0.0;
+    for (mut text, mut node) in labels.iter_mut() {
+        let wanted = if showing { Display::Flex } else { Display::None };
+        if node.display != wanted {
+            node.display = wanted;
+        }
+        if showing && text.0 != notice.text {
+            text.0 = notice.text.clone();
+        }
     }
 }
 

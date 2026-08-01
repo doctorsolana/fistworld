@@ -66,17 +66,29 @@ pub(super) fn handle_world_clicks(
     mode: Res<HudMode>,
     capability: Res<GodCapability>,
     selected: Res<SelectedOutfit>,
-    mut arm: ResMut<HeroSpawnArm>,
-    mut npc_arm: ResMut<NpcSpawnArm>,
-    mut found_arm: ResMut<FoundSpawnArm>,
+    // Grouped because Bevy caps a system at 16 parameters and these three
+    // always travel together anyway: they are the same question -- what is the
+    // next click for?
+    arms: (
+        ResMut<HeroSpawnArm>,
+        ResMut<NpcSpawnArm>,
+        ResMut<FoundSpawnArm>,
+    ),
     local: Option<Res<LocalPeerId>>,
     heroes: Query<&Hero>,
     ui_blockers: Query<&Interaction>,
+    terrain: Option<Res<shared::terrain::WorldTerrain>>,
+    settlements: Query<(
+        &shared::components::Settlement,
+        &shared::components::PlayerPosition,
+    )>,
+    mut notice: ResMut<crate::ui::hud::GodNotice>,
     mut dev_sender: Query<
         &mut MessageSender<DevCommand>,
         (With<crate::GameClient>, With<Connected>),
     >,
 ) {
+    let (mut arm, mut npc_arm, mut found_arm) = arms;
     // Escape cancels an armed placement. (NOT right-click: RMB-drag is the
     // camera orbit, and cancelling on it silently killed every placement
     // that involved looking around first.)
@@ -130,6 +142,37 @@ pub(super) fn handle_world_clicks(
     // not something to sprinkle, and the spacing rule would reject the second
     // one anyway.
     if found_arm.0 {
+        // Check BEFORE sending, and say why if the answer is no.
+        //
+        // The server enforces these rules and always will -- it is the
+        // authority. But it enforced them silently: the button disarmed, no
+        // hall appeared, and the only trace was a log line on a machine the
+        // player is not looking at. "I clicked and nothing happened" is the
+        // worst possible answer to a deliberate act.
+        //
+        // The client has everything needed to predict it: it holds the terrain
+        // and every settlement replicates to it. Same constants, from `shared`,
+        // so the prediction cannot drift from the enforcement.
+        let ground = terrain
+            .as_ref()
+            .map(|terrain| terrain.get_height(target.x, target.z));
+        let nearest = settlements
+            .iter()
+            .map(|(settlement, at)| (settlement.name.as_str(), at.0.distance(target)))
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        let refusal = ground.and_then(|ground| {
+            shared::components::founding_refusal(
+                ground,
+                terrain.as_ref().and_then(|terrain| terrain.water_level()),
+                nearest,
+            )
+        });
+        if let Some(reason) = refusal {
+            // Stay ARMED. The player meant to found something; make them pick a
+            // better spot, not press the button again.
+            notice.show(reason);
+            return;
+        }
         if let Ok(mut sender) = dev_sender.single_mut() {
             // Empty name lets the server suggest one from the position; naming
             // properly is a UI job for when there is a text field worth using.

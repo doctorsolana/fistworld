@@ -64,18 +64,35 @@ pub(super) fn handle_spawn_hero_button(
     mut creator: ResMut<crate::ui::hero_creator::HeroCreatorOpen>,
     mut arm: ResMut<crate::hero::control::HeroSpawnArm>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
-    heroes: Query<&shared::components::Hero>,
+    heroes: Query<(&shared::components::Hero, &shared::components::PlayerPosition)>,
+    mut cameras: Query<&mut crate::camera_rts::CommanderCamera>,
+    mut notice: ResMut<super::GodNotice>,
     buttons: Query<&Interaction, (With<SpawnHeroButton>, Changed<Interaction>)>,
 ) {
     for interaction in buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;
         }
-        let owns_hero = local
-            .as_ref()
-            .is_some_and(|local| crate::hero::control::local_hero_exists(&heroes, local));
-        if owns_hero {
+        // You only ever have one hero, and it PERSISTS -- leaving the game does
+        // not delete it, so on rejoining the button will say HERO ACTIVE and
+        // refuse to place another. That is correct, but "HERO ACTIVE" answered
+        // a question nobody asked and left the button dead.
+        //
+        // It now takes you to them. The most likely reason a player is pressing
+        // it is that they cannot see their hero, and the honest answer to that
+        // is not a label, it is the camera.
+        let mine = local.as_ref().and_then(|local| {
+            heroes
+                .iter()
+                .find(|(hero, _)| shared::player::peer_id_to_u64(hero.owner) == local.0)
+                .map(|(_, at)| at.0)
+        });
+        if let Some(at) = mine {
             arm.0 = false;
+            for mut camera in cameras.iter_mut() {
+                camera.focus = at;
+            }
+            notice.show("Your hero is here — you only get one");
             continue;
         }
         // An armed placement reopens the creator instead of toggling blind.

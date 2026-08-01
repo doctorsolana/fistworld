@@ -47,16 +47,16 @@ impl Plugin for HeroPlugin {
         app.add_systems(
             Update,
             (
-                attach_hero_visuals,
-                dress_heroes,
-                matte_character_materials,
-                apply_hero_skin,
-                setup_hero_animation,
-                sync_hero_transforms,
-                tag_builders,
-                drive_hero_locomotion,
-                control::handle_world_clicks,
-                control::auto_spawn_hero,
+                (
+                    attach_hero_visuals,
+                    dress_heroes,
+                    matte_character_materials,
+                    apply_hero_skin,
+                    setup_hero_animation,
+                    sync_hero_transforms,
+                ),
+                (tag_builders, drive_hero_locomotion),
+                (control::handle_world_clicks, control::auto_spawn_hero),
             )
                 .chain()
                 .run_if(in_state(GameState::Playing)),
