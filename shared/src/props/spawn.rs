@@ -185,8 +185,13 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
             let profile = field.resources(x, z, height, slope);
             // Bare rock and deep forest floor still show some cover, so the
             // ground never reads as a texture with nothing on it.
+            // Weighted toward FARMLAND, so grassland is grassy and a forest
+            // floor is not. At 1.25/0.45 a meadow and a wood came out at 0.69
+            // and 0.55 -- barely separable. At 1.45/0.20 the meadow still
+            // saturates and the wood drops to 0.43, which reads as canopy
+            // shading the ground out.
             let density =
-                (profile.farmland * 1.25 + profile.wood * 0.45).min(1.0) * GRASS_DENSITY_SCALE;
+                (profile.farmland * 1.45 + profile.wood * 0.20).min(1.0) * GRASS_DENSITY_SCALE;
             if crate::worldgen::rand01(&mut rng) > density {
                 continue;
             }
@@ -221,6 +226,51 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
 mod tests {
     use super::*;
     use crate::terrain::WorldTerrain;
+
+    /// Somewhere to point the camera for each biome.
+    #[test]
+    #[ignore = "diagnostic: cargo test -p shared -- --ignored --nocapture find_biome_spots"]
+    fn find_biome_spots() {
+        let terrain = WorldTerrain::default();
+        let map = terrain.generator.loaded_map();
+        let field = map.biome_field.as_deref().expect("generated map");
+        let mut want = vec!["Forest", "Meadows", "Highlands"];
+        let mut x = -3000.0f32;
+        while x < 3000.0 && !want.is_empty() {
+            let mut z = -1500.0f32;
+            while z < 1500.0 && !want.is_empty() {
+                let h = terrain.get_height(x, z);
+                if h > 3.0 {
+                    let n = terrain.get_normal(x, z);
+                    let slope = (n.x * n.x + n.z * n.z).sqrt() / n.y.max(0.01);
+                    let b = format!("{:?}", field.biome(x, z, h, slope));
+                    if let Some(i) = want.iter().position(|w| *w == b) {
+                        // Require the neighbourhood to agree, so the camera
+                        // lands INSIDE the biome rather than on its edge.
+                        let solid = [(-70.0, 0.0), (70.0, 0.0), (0.0, -70.0), (0.0, 70.0)]
+                            .iter()
+                            .all(|(dx, dz)| {
+                                let (sx, sz) = (x + dx, z + dz);
+                                let sh = terrain.get_height(sx, sz);
+                                let sn = terrain.get_normal(sx, sz);
+                                let ss =
+                                    (sn.x * sn.x + sn.z * sn.z).sqrt() / sn.y.max(0.01);
+                                sh > 3.0 && format!("{:?}", field.biome(sx, sz, sh, ss)) == b
+                            });
+                        if solid {
+                            println!("{b:10} --at {x:.0},{z:.0}");
+                            want.remove(i);
+                        }
+                    }
+                }
+                z += 40.0;
+            }
+            x += 40.0;
+        }
+        if !want.is_empty() {
+            println!("not found: {want:?}");
+        }
+    }
 
     /// Actual prop density per biome, measured from the shipped map.
     ///

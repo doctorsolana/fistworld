@@ -38,8 +38,22 @@ fn scatter_props(
     // resource availability: dense trees where wood is high, rock fields
     // where stone is high, ore-rock clusters on iron veins.
     let biomes = shared::worldgen::BiomeField::new(seed);
-    // Within-forest clumping so woods have glades instead of uniform fill.
+    // THREE masks, because "how many trees" and "where the openings are" are
+    // different questions and one mask cannot answer both.
+    //
+    // Within-forest density variation: thicker stands and thinner ones.
     let clump_mask = fbm(splitmix64(seed ^ 77) as u32, 3, 1.0 / 90.0);
+    // Forest CLEARINGS. Separate and much coarser, so a glade is a place you
+    // walk into rather than a statistical dip. Previously the clump mask did
+    // both jobs, which is why any patch of low clump became bare ground and a
+    // forest glade ended up emptier than open grassland -- the exact inversion
+    // of what those two words mean.
+    let glade_mask = fbm(splitmix64(seed ^ 0x61A_DE) as u32, 2, 1.0 / 150.0);
+    // Meadow COPSES. Coarser still: big open ground with occasional stands of
+    // trees, rather than the flat even sprinkle meadows had before. Meadows
+    // used to have no spatial term at all -- every cell rolled the same 0.240 --
+    // which is what made them read as scattered rather than as grassland.
+    let copse_mask = fbm(splitmix64(seed ^ 0xC0F_5E) as u32, 2, 1.0 / 230.0);
 
     const TREES_BROADLEAF: &[PropKind] = &[
         PropKind::Tree_01,
@@ -82,6 +96,12 @@ fn scatter_props(
     ];
 
     let pick = |pool: &[PropKind], r: f32| pool[((r * pool.len() as f32) as usize).min(pool.len() - 1)];
+    // Shapes a raw fbm sample into a 0..1 feature. The band is what decides how
+    // RARE the feature is: a narrow high band gives few, sharp-edged features.
+    let feature = |value: f32, lo: f32, hi: f32| {
+        let t = ((value - lo) / (hi - lo)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
 
     // Which tree grows here.
     //
@@ -152,6 +172,14 @@ fn scatter_props(
         // and the snowline are one fact rather than two that disagree.
         let climate = shared::worldgen::climate_at(seed, x, z, h, half_extent);
         let clump = (clump_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
+        let glade_raw = (glade_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
+        let copse_raw = (copse_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
+        // Glades sit in the top of the mask's range, so they are uncommon and
+        // have edges. Tune HERE to make clearings rarer or more frequent.
+        let glade = feature(glade_raw, 0.60, 0.86);
+        // Copses are the opposite reading: most of a meadow is open, and stands
+        // of trees are the exception.
+        let copse = feature(copse_raw, 0.52, 0.88);
         let roll = rand01(&mut rng);
 
         use shared::worldgen::WorldBiome;
@@ -165,19 +193,25 @@ fn scatter_props(
         } else {
             match biome {
                 WorldBiome::Forest => {
-                    // The wood biome: dense trees with clump-driven glades,
-                    // bushes at the clump fringes.
-                    if h > SEA_LEVEL + 2.0 && roll < 0.18 + clump * 0.50 {
-                        if clump < 0.35 && rand01(&mut rng) < 0.40 {
-                            (pick(BUSHES, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.5)
-                        } else {
-                            // Altitude still favours conifers on its own, so a
-                            // southern mountain forest is not all oak. Climate
-                            // adds the latitude half on top.
-                            let alt_bias = ((h - 16.0) / 45.0).clamp(0.0, 0.55);
-                            let pool = tree_pool(0.08 + alt_bias, &climate, &mut rng);
-                            (pick(pool, rand01(&mut rng)), 0.85 + rand01(&mut rng) * 0.45)
-                        }
+                    // Woodland: dense almost everywhere, with real clearings.
+                    //
+                    // The floor is 0.52 -- above a meadow's best copse -- so no
+                    // amount of thin stand can make the forest sparser than open
+                    // grassland. Glades cut it hard, but they are a separate,
+                    // rare mask rather than a side effect of low density.
+                    let density = (0.52 + clump * 0.36) * (1.0 - glade * 0.88);
+                    if h > SEA_LEVEL + 2.0 && roll < density {
+                        // Altitude still favours conifers on its own, so a
+                        // southern mountain forest is not all oak. Climate
+                        // adds the latitude half on top.
+                        let alt_bias = ((h - 16.0) / 45.0).clamp(0.0, 0.55);
+                        let pool = tree_pool(0.08 + alt_bias, &climate, &mut rng);
+                        (pick(pool, rand01(&mut rng)), 0.85 + rand01(&mut rng) * 0.45)
+                    // Bushes are ADDED at the fringes now, not substituted for
+                    // trees. Taking 40% of the trees in thin stands is what made
+                    // a glade barer than a field.
+                    } else if roll < density + 0.10 && glade > 0.25 {
+                        (pick(BUSHES, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.5)
                     } else if roll > 0.97 {
                         (pick(ROCKS, rand01(&mut rng)), 0.5 + rand01(&mut rng) * 0.5)
                     } else {
@@ -190,9 +224,16 @@ fn scatter_props(
                     // Grass is NOT authored any more -- ground cover is generated
                     // per chunk at runtime (shared::props::spawn), so this budget
                     // buys flowers instead of 38,578 map entries.
+                    //
+                    // Trees follow the COPSE mask. This used to be a flat 0.240
+                    // on every cell with no spatial term whatsoever, which is
+                    // precisely why meadows read as evenly sprinkled: they were.
+                    // Now most of a meadow is genuinely open ground and the
+                    // trees gather into stands.
+                    let density = 0.02 + copse * 0.62;
                     if roll < 0.085 {
                         (pick(FLOWERS, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.4)
-                    } else if roll < 0.325 && h > SEA_LEVEL + 2.0 {
+                    } else if roll < 0.085 + density && h > SEA_LEVEL + 2.0 {
                         // Lone meadow trees: broadleaf country, so the bias is
                         // near zero and only real cold or real drought moves it.
                         let pool = tree_pool(0.03, &climate, &mut rng);
