@@ -31,9 +31,5 @@ pub(crate) fn is_tree_kind(kind: PropKind) -> bool {
 /// cover could be drawn.
 pub(crate) fn uses_swap_mesh_lod(kind: PropKind) -> bool {
     use shared::props::PropKind::*;
-    is_tree_kind(kind)
-        || matches!(
-            kind,
-            GrassBlade_9v | Env_Grass_Tall_04 | Env_Grass_06 | Env_Grass_07
-        )
+    is_tree_kind(kind) || matches!(kind, Grass_Patch | Grass_Tall)
 }

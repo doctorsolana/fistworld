@@ -1142,21 +1142,15 @@ fn choose_forest_kind(preset: ForestBrushPreset, group: ForestPropGroup, roll: f
     ];
     const BUSHES: &[PropKind] = &[Bush_01, Bush_02, Bush_03, Bush_04];
     const ROCKS: &[PropKind] = &[Rock_1, Rock_2, Rock_3, Rock_4, Rock_5];
-    const FLOWERS: &[PropKind] = &[
-        Flower_01,
-        Flower_02,
-        Flower_03,
-        Flower_04,
-        Flower_05,
-        Spring_Flower_06,
-        Spring_Flower_07,
-        Spring_Flower_08,
-        Spring_Flower_09,
-    ];
+    const FLOWERS: &[PropKind] = &[Flower_01, Flower_03, Spring_Flower_06, Spring_Flower_08];
     // The leaf-litter meshes were deleted (corrupt: 283-357 m bounding boxes on a
     // ground-detail prop). Small flowers are the nearest surviving ground dressing.
-    const LEAVES: &[PropKind] = &[Flower_05, Spring_Flower_09];
-    const DEAD_GROUND: &[PropKind] = &[Flower_05, Rock_1, Rock_2, Rock_3];
+    //
+    // These named `Flower_05` and `Spring_Flower_09` before the flower kinds were
+    // de-duplicated. Those were aliases for `Flower_D.glb` and `Flower_B.glb`, so
+    // the kinds below draw exactly the same two meshes as before.
+    const LEAVES: &[PropKind] = &[Spring_Flower_08, Flower_03];
+    const DEAD_GROUND: &[PropKind] = &[Spring_Flower_08, Rock_1, Rock_2, Rock_3];
 
     match group {
         ForestPropGroup::Tree => match preset {

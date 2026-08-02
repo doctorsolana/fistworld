@@ -210,38 +210,37 @@ pub(super) fn apply_foliage_materials(
                             }
                         }
 
-                        let wind_handle = if let Some(existing) =
-                            cache.wind_materials.get(&handle.0.id())
-                        {
-                            existing.clone()
-                        } else {
-                            let Some(mut base) = materials.get(&handle.0).cloned() else {
-                                continue;
+                        let wind_handle =
+                            if let Some(existing) = cache.wind_materials.get(&handle.0.id()) {
+                                existing.clone()
+                            } else {
+                                let Some(mut base) = materials.get(&handle.0).cloned() else {
+                                    continue;
+                                };
+                                flatten_base(&mut base);
+                                let params = meshes
+                                    .get(&mesh_handle.0)
+                                    .map(|mesh| wind_params_for_mesh(mesh, strength, speed))
+                                    .unwrap_or(Vec4::new(strength, speed, 0.0, 1.0));
+                                let (height_jitter, height_stretch) =
+                                    if grass { (0.25, 1.3) } else { (0.0, 1.0) };
+                                let new_handle = wind_materials.add(ExtendedMaterial {
+                                    base,
+                                    extension: WindExtension {
+                                        params,
+                                        extra: Vec4::new(
+                                            height_jitter,
+                                            height_stretch,
+                                            climate_half,
+                                            climate_phase,
+                                        ),
+                                    },
+                                });
+                                cache
+                                    .wind_materials
+                                    .insert(handle.0.id(), new_handle.clone());
+                                new_handle
                             };
-                            flatten_base(&mut base);
-                            let params = meshes
-                                .get(&mesh_handle.0)
-                                .map(|mesh| wind_params_for_mesh(mesh, strength, speed))
-                                .unwrap_or(Vec4::new(strength, speed, 0.0, 1.0));
-                            let (height_jitter, height_stretch) =
-                                if grass { (0.25, 1.3) } else { (0.0, 1.0) };
-                            let new_handle = wind_materials.add(ExtendedMaterial {
-                                base,
-                                extension: WindExtension {
-                                    params,
-                                    extra: Vec4::new(
-                                        height_jitter,
-                                        height_stretch,
-                                        climate_half,
-                                        climate_phase,
-                                    ),
-                                },
-                            });
-                            cache
-                                .wind_materials
-                                .insert(handle.0.id(), new_handle.clone());
-                            new_handle
-                        };
 
                         commands
                             .entity(entity)
@@ -318,14 +317,9 @@ pub(super) fn needs_foliage_materials(kind: shared::props::PropKind) -> bool {
             | Bush_04
             // environment/flowers
             | Flower_01
-            | Flower_02
             | Flower_03
-            | Flower_04
-            | Flower_05
             | Spring_Flower_06
-            | Spring_Flower_07
             | Spring_Flower_08
-            | Spring_Flower_09
             // environment/grass
             | Grass_Patch
             | Grass_Tall

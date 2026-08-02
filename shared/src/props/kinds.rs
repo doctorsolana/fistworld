@@ -37,22 +37,25 @@ pub enum PropKind {
     Bush_03,
     Bush_04,
 
-    // environment/flowers
+    // environment/flowers — FOUR kinds, four meshes, one each.
+    //
+    // There used to be nine, mapped onto the same four `Flower_A..D.glb`: five
+    // of them were pure aliases (`Flower_02`/`_03`/`Spring_Flower_09` all drew
+    // Flower_B) and no world ever placed one. The shipped map contains 11,206
+    // flowers using exactly the four ids below and none of the other five, and
+    // the scatter pool had already been hand-picked down to these four. The ids
+    // keep their original numbering so the baked map still resolves.
     Flower_01,
-    Flower_02,
     Flower_03,
-    Flower_04,
-    Flower_05,
     Spring_Flower_06,
-    Spring_Flower_07,
     Spring_Flower_08,
-    Spring_Flower_09,
 
-    // environment/grass
-    GrassBlade_9v,
-    Env_Grass_Tall_04,
-    Env_Grass_06,
-    Env_Grass_07,
+    // environment/grass — built in-repo by asset_creation/vegetation/build_grass.py.
+    // Two kinds, two meshes. The four ids these replaced (`grass_blade_9v`, `env_grass_06`,
+    // `env_grass_07`, `env_grass_tall_04`) came from a bought pack and had drifted: all four
+    // resolved to the same two GLBs and two of them were never spawned by anything.
+    Grass_Patch,
+    Grass_Tall,
 
     // environment/crops — built in-repo by asset_creation/houses/build_wheat_field.py.
     // Deliberately has NO colliders_manifest.ron entry: a crop field must be walkable so farmers
@@ -61,6 +64,41 @@ pub enum PropKind {
 }
 
 impl PropKind {
+    /// Whether this prop is a living tree that a woodcutter can harvest.
+    pub const fn is_tree(self) -> bool {
+        matches!(
+            self,
+            PropKind::Tree_01
+                | PropKind::Tree_02
+                | PropKind::Tree_08
+                | PropKind::Tree_09
+                | PropKind::Tree_10
+                | PropKind::Tree_18
+                | PropKind::Tree_29
+                | PropKind::Pine_Tree_1
+                | PropKind::Pine_Tree_2
+                | PropKind::Pine_Tree_3
+                | PropKind::Pine_Tree_4
+        )
+    }
+
+    /// Large authored scenery a village path surveys around instead of
+    /// deleting. Low brush, flowers and grass are wear rather than barriers.
+    pub const fn blocks_village_road(self) -> bool {
+        self.is_tree()
+            || matches!(
+                self,
+                PropKind::Dead_tree_1
+                    | PropKind::Dead_tree_2
+                    | PropKind::Dead_tree_3
+                    | PropKind::Rock_1
+                    | PropKind::Rock_2
+                    | PropKind::Rock_3
+                    | PropKind::Rock_4
+                    | PropKind::Rock_5
+            )
+    }
+
     /// Resolve a stable string id to a prop kind.
     #[inline]
     pub fn from_id(id: &str) -> Option<Self> {
@@ -89,18 +127,11 @@ impl PropKind {
             "bush_03" => Some(PropKind::Bush_03),
             "bush_04" => Some(PropKind::Bush_04),
             "flower_01" => Some(PropKind::Flower_01),
-            "flower_02" => Some(PropKind::Flower_02),
             "flower_03" => Some(PropKind::Flower_03),
-            "flower_04" => Some(PropKind::Flower_04),
-            "flower_05" => Some(PropKind::Flower_05),
             "spring_flower_06" => Some(PropKind::Spring_Flower_06),
-            "spring_flower_07" => Some(PropKind::Spring_Flower_07),
             "spring_flower_08" => Some(PropKind::Spring_Flower_08),
-            "spring_flower_09" => Some(PropKind::Spring_Flower_09),
-            "grass_blade_9v" => Some(PropKind::GrassBlade_9v),
-            "env_grass_tall_04" => Some(PropKind::Env_Grass_Tall_04),
-            "env_grass_06" => Some(PropKind::Env_Grass_06),
-            "env_grass_07" => Some(PropKind::Env_Grass_07),
+            "grass_patch" => Some(PropKind::Grass_Patch),
+            "grass_tall" => Some(PropKind::Grass_Tall),
             "wheat_field" => Some(PropKind::Wheat_Field),
             _ => None,
         }
@@ -133,18 +164,11 @@ impl PropKind {
             PropKind::Bush_03 => "bush_03",
             PropKind::Bush_04 => "bush_04",
             PropKind::Flower_01 => "flower_01",
-            PropKind::Flower_02 => "flower_02",
             PropKind::Flower_03 => "flower_03",
-            PropKind::Flower_04 => "flower_04",
-            PropKind::Flower_05 => "flower_05",
             PropKind::Spring_Flower_06 => "spring_flower_06",
-            PropKind::Spring_Flower_07 => "spring_flower_07",
             PropKind::Spring_Flower_08 => "spring_flower_08",
-            PropKind::Spring_Flower_09 => "spring_flower_09",
-            PropKind::GrassBlade_9v => "grass_blade_9v",
-            PropKind::Env_Grass_Tall_04 => "env_grass_tall_04",
-            PropKind::Env_Grass_06 => "env_grass_06",
-            PropKind::Env_Grass_07 => "env_grass_07",
+            PropKind::Grass_Patch => "grass_patch",
+            PropKind::Grass_Tall => "grass_tall",
             PropKind::Wheat_Field => "wheat_field",
         }
     }
@@ -176,28 +200,11 @@ impl PropKind {
             PropKind::Bush_03 => "game_assets/environment/bushes/Bush_C.glb#Scene0",
             PropKind::Bush_04 => "game_assets/environment/bushes/Bush_A.glb#Scene0",
             PropKind::Flower_01 => "game_assets/environment/flowers/Flower_A.glb#Scene0",
-            PropKind::Flower_02 => "game_assets/environment/flowers/Flower_B.glb#Scene0",
             PropKind::Flower_03 => "game_assets/environment/flowers/Flower_B.glb#Scene0",
-            PropKind::Flower_04 => "game_assets/environment/flowers/Flower_C.glb#Scene0",
-            PropKind::Flower_05 => "game_assets/environment/flowers/Flower_D.glb#Scene0",
-            PropKind::Spring_Flower_06 => {
-                "game_assets/environment/flowers/Flower_C.glb#Scene0"
-            }
-            PropKind::Spring_Flower_07 => {
-                "game_assets/environment/flowers/Flower_A.glb#Scene0"
-            }
-            PropKind::Spring_Flower_08 => {
-                "game_assets/environment/flowers/Flower_D.glb#Scene0"
-            }
-            PropKind::Spring_Flower_09 => {
-                "game_assets/environment/flowers/Flower_B.glb#Scene0"
-            }
-            PropKind::GrassBlade_9v => "game_assets/environment/grass/Grass_Patch_A.glb#Scene0",
-            PropKind::Env_Grass_Tall_04 => {
-                "game_assets/environment/grass/Grass_Tall_A.glb#Scene0"
-            }
-            PropKind::Env_Grass_06 => "game_assets/environment/grass/Grass_Patch_A.glb#Scene0",
-            PropKind::Env_Grass_07 => "game_assets/environment/grass/Grass_Patch_A.glb#Scene0",
+            PropKind::Spring_Flower_06 => "game_assets/environment/flowers/Flower_C.glb#Scene0",
+            PropKind::Spring_Flower_08 => "game_assets/environment/flowers/Flower_D.glb#Scene0",
+            PropKind::Grass_Patch => "game_assets/environment/grass/Grass_Patch_A.glb#Scene0",
+            PropKind::Grass_Tall => "game_assets/environment/grass/Grass_Tall_A.glb#Scene0",
             PropKind::Wheat_Field => "game_assets/environment/crops/WheatField.glb#Scene0",
         }
     }
@@ -229,18 +236,11 @@ pub const ALL_PROP_KINDS: &[PropKind] = &[
     PropKind::Bush_03,
     PropKind::Bush_04,
     PropKind::Flower_01,
-    PropKind::Flower_02,
     PropKind::Flower_03,
-    PropKind::Flower_04,
-    PropKind::Flower_05,
     PropKind::Spring_Flower_06,
-    PropKind::Spring_Flower_07,
     PropKind::Spring_Flower_08,
-    PropKind::Spring_Flower_09,
-    PropKind::GrassBlade_9v,
-    PropKind::Env_Grass_Tall_04,
-    PropKind::Env_Grass_06,
-    PropKind::Env_Grass_07,
+    PropKind::Grass_Patch,
+    PropKind::Grass_Tall,
     PropKind::Wheat_Field,
 ];
 
