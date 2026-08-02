@@ -18,6 +18,65 @@ pub struct PropSpawn {
     pub render_tuning: PropRenderTuning,
 }
 
+/// How far from a river centreline the ground is kept clear of anything with a
+/// silhouette. The water is [`RIVER_HALF_WIDTH`] + 1.5 m wide, so this leaves a
+/// margin of bank beyond the waterline rather than letting trunks stand in the
+/// shallows.
+const RIVER_CLEARANCE: f32 = shared_river_half() + 4.0;
+
+/// Grass stops at the water's edge, not at the prop clearance.
+const GRASS_RIVER_CLEARANCE: f32 = shared_river_half() + 1.5;
+
+const fn shared_river_half() -> f32 {
+    crate::worldgen::RIVER_HALF_WIDTH
+}
+
+/// The river segments near one chunk, and a point test against them.
+///
+/// Built per chunk so the test is against a handful of segments rather than
+/// every segment of every river in the world: a 4 km river is ~450 segments and
+/// a chunk holds ~60 props, and the naive loop is 27,000 distance tests for a
+/// chunk that usually has no river in it at all.
+struct RiverReach {
+    segments: Vec<(Vec2, Vec2)>,
+    radius: f32,
+}
+
+impl RiverReach {
+    fn for_chunk(terrain: &TerrainGenerator, chunk: ChunkCoord, radius: f32) -> Self {
+        let rivers = &terrain.loaded_map().rivers;
+        let mut segments = Vec::new();
+        if rivers.is_empty() {
+            return Self { segments, radius };
+        }
+        let origin = chunk.world_pos();
+        let (min_x, min_z) = (origin.x - radius, origin.z - radius);
+        let (max_x, max_z) = (origin.x + CHUNK_SIZE + radius, origin.z + CHUNK_SIZE + radius);
+        for river in rivers.iter() {
+            for w in river.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                if a.x.min(b.x) > max_x
+                    || a.x.max(b.x) < min_x
+                    || a.z.min(b.z) > max_z
+                    || a.z.max(b.z) < min_z
+                {
+                    continue;
+                }
+                segments.push((Vec2::new(a.x, a.z), Vec2::new(b.x, b.z)));
+            }
+        }
+        Self { segments, radius }
+    }
+
+    fn contains(&self, point: Vec2) -> bool {
+        self.segments.iter().any(|(a, b)| {
+            let seg = *b - *a;
+            let t = ((point - *a).dot(seg) / seg.length_squared().max(1e-6)).clamp(0.0, 1.0);
+            point.distance_squared(*a + seg * t) < self.radius * self.radius
+        })
+    }
+}
+
 /// Deterministically generate all prop spawns for a given chunk.
 ///
 /// Two sources, and the split is deliberate.
@@ -37,6 +96,11 @@ pub fn generate_chunk_prop_spawns(terrain: &TerrainGenerator, chunk: ChunkCoord)
         return out;
     }
 
+    // Rivers are cut from the seed at load, but the props in `map.ron` were
+    // baked before the channel existed, so nothing in that list knows the
+    // ground moved. Without this, trees stand in the water.
+    let river_reach = RiverReach::for_chunk(terrain, chunk, RIVER_CLEARANCE);
+
     if let Some(indexed) = terrain
         .loaded_map()
         .objects_by_chunk
@@ -47,6 +111,9 @@ pub fn generate_chunk_prop_spawns(terrain: &TerrainGenerator, chunk: ChunkCoord)
         for object in indexed {
             let x = object.position[0];
             let z = object.position[2];
+            if river_reach.contains(Vec2::new(x, z)) {
+                continue;
+            }
             let ground_y = terrain.get_height(x, z);
             let y = ground_y + object.position[1];
             let render_tuning = object
@@ -150,6 +217,11 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
     let short_path = GRASS_PATCH.scene_path().to_string();
     let tall_path = GRASS_TALL.scene_path().to_string();
 
+    // Grass is cleared only to the waterline, not to the prop clearance: a
+    // riverbank with grass running down to the water is the point, and a bald
+    // strip either side would look like the road this used to be mistaken for.
+    let river_reach = RiverReach::for_chunk(terrain, chunk, GRASS_RIVER_CLEARANCE);
+
     let mut grown = 0usize;
     for iz in 0..steps {
         for ix in 0..steps {
@@ -169,6 +241,9 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
             let z = base_z + (iz as f32 + crate::worldgen::rand01(&mut rng)) * GRASS_CELL;
             let height = terrain.get_height(x, z);
             if height < water + 0.4 {
+                continue;
+            }
+            if river_reach.contains(Vec2::new(x, z)) {
                 continue;
             }
 

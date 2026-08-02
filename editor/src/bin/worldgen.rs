@@ -109,7 +109,6 @@ fn run(map_id: &str, style: WorldStyle, seed: u64, size: f32) -> Result<(), Stri
                 seed,
                 generator_version: WORLDGEN_VERSION,
                 half_extent: half,
-                strokes: Vec::new(),
             }),
             player_spawn: None,
             objects: Vec::new(),

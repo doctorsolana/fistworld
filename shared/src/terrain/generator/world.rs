@@ -86,7 +86,7 @@ impl TerrainGenerator {
     pub fn get_surface_weights(&self, x: f32, z: f32) -> [f32; 4] {
         // Generated worlds paint procedurally from the same formula the
         // generator used, so nothing needs baking: beaches from height,
-        // rock from slope, cobble along the replayed road mask.
+        // rock from slope.
         if self.loaded_map.definition.generated.is_some() {
             let h = self.get_height(x, z);
             let step = super::constants::VERTEX_SPACING;
@@ -94,12 +94,7 @@ impl TerrainGenerator {
             let dx = (hm.sample_height(x + step, z) - hm.sample_height(x - step, z)) / (2.0 * step);
             let dz = (hm.sample_height(x, z + step) - hm.sample_height(x, z - step)) / (2.0 * step);
             let slope = (dx * dx + dz * dz).sqrt();
-            let road = self
-                .loaded_map
-                .road_mask
-                .as_deref()
-                .map(|mask| mask.distance(x, z));
-            let weights = crate::worldgen::surface_weights_at(h, slope, road);
+            let weights = crate::worldgen::surface_weights_at(h, slope);
             if let Some(biomes) = self.loaded_map.biome_field.as_deref() {
                 let biome = biomes.biome(x, z, h, slope);
                 return crate::worldgen::biome_adjusted_weights(weights, biome);
@@ -188,6 +183,12 @@ impl WorldTerrain {
     #[inline]
     pub fn water_level(&self) -> Option<f32> {
         self.generator.loaded_map().heightmap.water_level
+    }
+
+    /// River centrelines as `(x, bed_height, z)`. Empty for authored maps.
+    #[inline]
+    pub fn rivers(&self) -> &[Vec<Vec3>] {
+        &self.generator.loaded_map().rivers
     }
 
     #[inline]

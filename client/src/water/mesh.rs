@@ -548,6 +548,17 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
         }
     }
 
+    add_river_ribbons(
+        terrain,
+        coord,
+        water_level,
+        &mut positions,
+        &mut normals,
+        &mut uvs,
+        &mut colors,
+        &mut indices,
+    );
+
     if indices.is_empty() {
         return None;
     }
@@ -572,4 +583,122 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
     mesh.insert_indices(Indices::U32(indices));
 
     Some(mesh)
+}
+
+/// How deep a river runs, in metres, once it is clear of the sea.
+///
+/// The bed is carved flat, so this is literally how far the surface floats
+/// above it. Shallow on purpose: a river reads as a river because you can see
+/// the bed through it, and the toon water shader fades toward transparent with
+/// depth.
+const RIVER_DEPTH: f32 = 0.55;
+
+/// Over how many metres of the final descent the river gives up its depth to
+/// meet the sea. Without this the surface arrives at the coast `RIVER_DEPTH`
+/// above the ocean and every river mouth ends in a small waterfall.
+const RIVER_MOUTH_BLEND: f32 = 6.0;
+
+/// Water half-width. Slightly wider than the flat bed so the edge of the
+/// surface tucks under the bank instead of ending in mid-air — the same trick
+/// `WATER_SHORE_OVERLAP` plays for the ocean.
+const RIVER_WATER_HALF_WIDTH: f32 = shared::worldgen::RIVER_HALF_WIDTH + 1.5;
+
+/// Lay a ribbon of water along each river channel crossing this chunk.
+///
+/// Rivers are carved into the terrain by generation but the world's water is a
+/// single plane at sea level, so before this every river above the waterline —
+/// which is nearly all of every river — was a dry ditch. A dry, smooth,
+/// even-width, gently-graded channel does not read as a river; it reads as a
+/// road, and that is exactly what they were being mistaken for.
+///
+/// Emitted into the ocean's own per-chunk mesh rather than as a separate
+/// system, so rivers inherit streaming, culling, the toon water material and
+/// chunk lifetime for free.
+#[allow(clippy::too_many_arguments)]
+fn add_river_ribbons(
+    terrain: &WorldTerrain,
+    coord: ChunkCoord,
+    water_level: f32,
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    uvs: &mut Vec<[f32; 2]>,
+    colors: &mut Vec<[f32; 4]>,
+    indices: &mut Vec<u32>,
+) {
+    let origin = coord.world_pos();
+    let ocean_y = water_level + WATER_SURFACE_OFFSET;
+
+    // A segment belongs to exactly ONE chunk: the one holding its midpoint.
+    // Emitting into every chunk the segment touches would draw the same quad
+    // twice wherever a river crosses a border, and two coplanar water surfaces
+    // z-fight along the seam.
+    let owns = |a: Vec3, b: Vec3| -> bool {
+        let mid = Vec2::new((a.x + b.x) * 0.5, (a.z + b.z) * 0.5);
+        ChunkCoord::from_world_pos(Vec3::new(mid.x, 0.0, mid.y)) == coord
+    };
+
+    // Surface height for a bed height: full depth inland, tapering to exactly
+    // the ocean surface at the mouth, and never below it.
+    let surface = |bed: f32| -> f32 {
+        let t = ((bed - water_level) / RIVER_MOUTH_BLEND).clamp(0.0, 1.0);
+        (bed + RIVER_DEPTH * t).max(ocean_y)
+    };
+
+    for river in terrain.rivers() {
+        for window in river.windows(2) {
+            let (a, b) = (window[0], window[1]);
+            if !owns(a, b) {
+                continue;
+            }
+            let along = Vec2::new(b.x - a.x, b.z - a.z).normalize_or(Vec2::X);
+            let side = Vec2::new(-along.y, along.x) * RIVER_WATER_HALF_WIDTH;
+
+            let (ya, yb) = (surface(a.y), surface(b.y));
+            // `sign` runs -1..1 across the channel. Depth comes from the actual
+            // ground under each corner rather than a constant, so the surface
+            // shades deep down the middle and thins to nothing where it meets
+            // the bank -- which is also what puts the shader's contact-foam
+            // line exactly on the waterline instead of somewhere near it.
+            let corner = |p: Vec3, y: f32, sign: f32| -> WaterVertex {
+                let world_x = p.x + side.x * sign;
+                let world_z = p.z + side.y * sign;
+                let ground = terrain.get_height(world_x, world_z);
+                let signed = (y - ground) / WATER_DEPTH_FADE_METERS;
+                WaterVertex {
+                    pos: [world_x - origin.x, y, world_z - origin.z],
+                    uv: [world_x / CHUNK_SIZE, world_z / CHUNK_SIZE],
+                    depth_norm: signed.clamp(0.0, 1.0),
+                    signed_depth_norm: signed.clamp(-1.0, 1.0),
+                    // Distance-to-bank, normalised the way the ocean's is, but
+                    // measured across the channel because a river's "coast" is
+                    // its own two banks and they are metres away, not tens.
+                    //
+                    // 0.78 in mid-channel is above the shader's shore-foam
+                    // cutoff and below its open-water crest threshold, so the
+                    // middle of a river is plain moving water. Feeding it 0
+                    // everywhere -- "a river is all shore" -- renders the whole
+                    // surface as breaking surf: an opaque white ribbon.
+                    shore_dist: (1.0 - sign.abs()) * 0.78,
+                }
+            };
+
+            // THREE vertices across, not two. `shore_dist` and depth both peak
+            // mid-channel and fall to zero at the banks, and a quad with only
+            // edge vertices interpolates 0 -> 0: the values never reach the
+            // middle they describe, and the river renders as two banks with no
+            // water between them.
+            let (al, ac, ar) = (corner(a, ya, 1.0), corner(a, ya, 0.0), corner(a, ya, -1.0));
+            let (bl, bc, br) = (corner(b, yb, 1.0), corner(b, yb, 0.0), corner(b, yb, -1.0));
+
+            // Wound clockwise-seen-from-above, because `add_triangle` reverses
+            // whatever it is given (see its comment). Passing the intuitive
+            // counter-clockwise order emits downward-facing triangles that
+            // back-face culling removes: the geometry is all there, correct,
+            // and completely invisible.
+            add_triangle(positions, normals, uvs, colors, indices, al, ac, bl);
+            add_triangle(positions, normals, uvs, colors, indices, ac, bc, bl);
+            add_triangle(positions, normals, uvs, colors, indices, ac, ar, bc);
+            add_triangle(positions, normals, uvs, colors, indices, ar, br, bc);
+        }
+    }
 }

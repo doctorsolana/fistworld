@@ -1,4 +1,4 @@
-use bevy::prelude::Quat;
+use bevy::prelude::{Quat, Vec3};
 use image::ImageReader;
 use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::fs;
@@ -22,13 +22,17 @@ pub struct LoadedMap {
     pub edits: MapEditsDefinition,
     pub terrain_deltas_by_chunk: HashMap<ChunkCoord, TerrainDeltaData>,
     pub objects_by_chunk: HashMap<(i32, i32), Vec<ResolvedMapObject>>,
-    /// Road-distance mask rebuilt from the generated-world recipe; drives
-    /// procedural surface painting. `None` for hand-authored maps.
-    pub road_mask: Option<std::sync::Arc<crate::worldgen::RoadMask>>,
     /// Biome/resource sampler rebuilt from the recipe seed; drives painting,
     /// the world map, and resource availability. `None` for hand-authored
     /// maps.
     pub biome_field: Option<std::sync::Arc<crate::worldgen::BiomeField>>,
+    /// River centrelines as `(x, bed_height, z)`, rebuilt from the recipe.
+    ///
+    /// Generation carves these into the terrain; the client needs the same
+    /// polylines to lay water in the channels it cut. Recomputed from the seed
+    /// rather than stored, exactly like the terrain itself — a river is not
+    /// data, it is a consequence of the seed.
+    pub rivers: std::sync::Arc<Vec<Vec<Vec3>>>,
     pub content_hash: u64,
     pub map_dir: PathBuf,
 }
@@ -193,7 +197,7 @@ fn build_loaded_map(
 
     // Generated worlds rebuild their terrain from the seed recipe — the
     // Valheim model. Hand-authored maps still decode a heightmap image.
-    let (heightmap, heightmap_bytes, road_mask, biome_field) = if let Some(generated) =
+    let (heightmap, heightmap_bytes, biome_field, rivers) = if let Some(generated) =
         &definition.generated
     {
         if generated.generator_version != crate::worldgen::WORLDGEN_VERSION {
@@ -210,8 +214,8 @@ fn build_loaded_map(
         let started = std::time::Instant::now();
         let heightmap =
             generated.build_heightmap(definition.bounds, definition.terrain.water_level)?;
-        let road_mask = generated.build_road_mask().map(std::sync::Arc::new);
         let biome_field = Some(std::sync::Arc::new(generated.build_biome_field()));
+        let rivers = std::sync::Arc::new(generated.build_rivers());
         bevy::log::info!(
             "Rebuilt '{}' terrain from seed {} ({}x{} grid) in {:.2}s",
             definition.map_id,
@@ -222,7 +226,7 @@ fn build_loaded_map(
         );
         // The recipe lives inside map.ron, so map_bytes already covers it
         // for the content hash; there are no heightmap bytes to hash.
-        (heightmap, Vec::new(), road_mask, biome_field)
+        (heightmap, Vec::new(), biome_field, rivers)
     } else {
         let heightmap_path =
             resolve_map_relative_file(&map_dir, &definition.map_id, &definition.terrain.heightmap)
@@ -244,7 +248,8 @@ fn build_loaded_map(
             definition.terrain.height_max,
             definition.terrain.water_level,
         )?;
-        (heightmap, heightmap_bytes, None, None)
+        // Hand-authored maps have no recipe, so no rivers to lay water in.
+        (heightmap, heightmap_bytes, None, std::sync::Arc::new(Vec::new()))
     };
 
     if let Some(minimap_rel) = definition.terrain.minimap.as_deref() {
@@ -271,8 +276,8 @@ fn build_loaded_map(
         edits,
         terrain_deltas_by_chunk,
         objects_by_chunk,
-        road_mask,
         biome_field,
+        rivers,
         content_hash,
         map_dir,
     })
@@ -435,31 +440,20 @@ mod tests {
     use super::*;
 
     /// The Valheim-mode fidelity guarantee: a generated map loaded through
-    /// the normal loader must sample bit-for-bit like the generation grid,
-    /// including replayed road strokes — no PNG or baked deltas involved.
+    /// the normal loader must sample like the generation grid, with no PNG
+    /// and no baked deltas involved — the recipe alone.
     #[test]
     fn loaded_generated_map_matches_generation_grid() {
         use crate::worldgen::{GeneratedWorld, WorldStyle};
-        use bevy::prelude::Vec2;
 
         let half = 512.0;
-        let base = GeneratedWorld {
+        let recipe = GeneratedWorld {
             style: WorldStyle::Showcase,
             seed: 2026,
             generator_version: crate::worldgen::WORLDGEN_VERSION,
             half_extent: half,
-            strokes: Vec::new(),
         };
-        // Record a road stroke the way generation does: flatten the live grid.
-        let mut grid = base.build_grid();
-        let path: Vec<Vec2> = (0..10)
-            .map(|i| Vec2::new(-180.0 + i as f32 * 40.0, (i as f32 * 0.9).cos() * 50.0))
-            .collect();
-        let stroke = grid.flatten_along_path(&path, 7.0, 16.0).unwrap();
-        let recipe = GeneratedWorld {
-            strokes: vec![stroke],
-            ..base
-        };
+        let grid = recipe.build_grid();
 
         let definition = MapDefinition {
             map_id: "gen_roundtrip".to_string(),
@@ -488,7 +482,6 @@ mod tests {
         )
         .expect("generated map must load without any baked terrain files");
 
-        assert!(loaded.road_mask.is_some(), "road mask must rebuild from strokes");
         for (x, z) in [
             (0.0, 0.0),
             (-180.0, 50.0),

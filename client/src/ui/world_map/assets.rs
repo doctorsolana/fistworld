@@ -105,6 +105,12 @@ fn build_live_map_image(
                         WorldBiome::Mountains => {
                             lerp3([0.58, 0.56, 0.52], [0.78, 0.78, 0.80], (above - 28.0) / 18.0)
                         }
+                        // Unreachable in practice — the branches above paint
+                        // anything at or below the waterline before we get
+                        // here. Spelled out anyway, and in sea colours, so that
+                        // if the ordering ever changes the map draws water as
+                        // water rather than as whatever the wildcard guessed.
+                        WorldBiome::Ocean => [0.16, 0.34, 0.52],
                     };
                     if matches!(biome, WorldBiome::Highlands | WorldBiome::Mountains) {
                         let vein = biomes.iron_vein(world_x, world_z);

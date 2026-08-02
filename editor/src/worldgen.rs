@@ -17,8 +17,8 @@ use shared::map::{load_map_from_parts, MapObjectSpawn};
 use shared::props::PropKind;
 use shared::terrain::WorldTerrain;
 pub use shared::worldgen::{
-    fbm, rand01, splitmix64, surface_weights, weights_to_bytes, FlattenStroke, GeneratedWorld,
-    HeightField, HeightGrid, RoadMask, WorldStyle, SEA_LEVEL,
+    fbm, rand01, splitmix64, surface_weights, weights_to_bytes, GeneratedWorld, HeightField,
+    HeightGrid, WorldStyle, SEA_LEVEL,
 };
 
 use crate::city::CityEditorState;
@@ -31,7 +31,6 @@ fn scatter_props(
     grid: &HeightGrid,
     seed: u64,
     half_extent: f32,
-    roads: Option<&RoadMask>,
 ) -> Vec<MapObjectSpawn> {
     // Vegetation follows the biome field — the same sampler the runtime
     // uses for painting and the world map — so what you see growing IS the
@@ -158,12 +157,6 @@ fn scatter_props(
         if h < SEA_LEVEL + 1.1 {
             return None; // no vegetation in the water or on the wet sand line
         }
-        // Keep the roads and their shoulders clear.
-        if let Some(roads) = roads {
-            if roads.distance(x, z) < 11.0 {
-                return None;
-            }
-        }
         let slope = grid.slope(x, z);
 
         let biome = biomes.biome(x, z, h, slope);
@@ -192,6 +185,11 @@ fn scatter_props(
             }
         } else {
             match biome {
+                // Nothing is scattered on the seabed. The height guard above
+                // already rejects underwater cells, so this arm is a formality
+                // -- but an explicit one, because a wildcard here would silently
+                // start planting forests in the sea the day that guard moves.
+                WorldBiome::Ocean => return None,
                 WorldBiome::Forest => {
                     // Woodland: dense almost everywhere, with real clearings.
                     //
@@ -413,14 +411,10 @@ pub fn generate_world(
         seed,
         generator_version: shared::worldgen::WORLDGEN_VERSION,
         half_extent,
-        // Terrain only for now: no preset roads/village means no recorded
-        // flatten strokes. Settlement generation will come back as its own
-        // pass and record strokes again then.
-        strokes: Vec::new(),
     });
 
     // --- Vegetation + water + spawn ---
-    session.map_definition.objects = scatter_props(&grid, seed, half_extent, None);
+    session.map_definition.objects = scatter_props(&grid, seed, half_extent);
     session.map_definition.terrain.water_level = Some(SEA_LEVEL);
     env_state.show_water = true;
     env_state.water_level = SEA_LEVEL;
@@ -507,7 +501,7 @@ mod tests {
             }
             let spawn = pick_spawn(&grid, seed, 700.0);
             assert!(spawn[1] > SEA_LEVEL, "seed {seed}: spawn underwater");
-            let props = scatter_props(&grid, seed, 700.0, None);
+            let props = scatter_props(&grid, seed, 700.0);
             assert!(props.len() > 400, "seed {seed}: only {} props", props.len());
         }
     }
@@ -578,7 +572,7 @@ mod tests {
         ] {
             let field = HeightField::new(style, seed, HALF);
             let grid = HeightGrid::build(&field, HALF);
-            let props = scatter_props(&grid, seed, HALF, None);
+            let props = scatter_props(&grid, seed, HALF);
             assert!(!props.is_empty(), "{style:?} seed {seed}: no props at all");
 
             // Land coverage per bucket, so ocean-only buckets are exempt.
@@ -654,7 +648,7 @@ mod tests {
         let noise_done = start.elapsed();
         let grid = HeightGrid::build(&field, half);
         let grid_done = start.elapsed();
-        let props = scatter_props(&grid, 2026, half, None);
+        let props = scatter_props(&grid, 2026, half);
         let props_done = start.elapsed();
         let (land, ocean, beach, max_h) = stats(&grid, half);
         println!(
@@ -681,7 +675,7 @@ mod tests {
         let mut saw_grass = false;
         for (x, z) in [(0.0f32, 0.0f32), (120.0, -80.0), (-300.0, 250.0), (500.0, 500.0)] {
             let h = grid.height(x, z);
-            let bytes = weights_to_bytes(surface_weights(&grid, x, z, h, None));
+            let bytes = weights_to_bytes(surface_weights(&grid, x, z, h));
             let sum: u16 = bytes.iter().map(|b| *b as u16).sum();
             assert_eq!(sum, 255);
             if bytes[2] > 128 {
