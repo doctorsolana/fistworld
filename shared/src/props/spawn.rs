@@ -22,14 +22,12 @@ pub struct PropSpawn {
 /// silhouette. The water is [`RIVER_HALF_WIDTH`] + 1.5 m wide, so this leaves a
 /// margin of bank beyond the waterline rather than letting trunks stand in the
 /// shallows.
-const RIVER_CLEARANCE: f32 = shared_river_half() + 4.0;
+const RIVER_CLEARANCE: f32 = crate::worldgen::RIVER_WATER_REACH;
 
-/// Grass stops at the water's edge, not at the prop clearance.
-const GRASS_RIVER_CLEARANCE: f32 = shared_river_half() + 1.5;
-
-const fn shared_river_half() -> f32 {
-    crate::worldgen::RIVER_HALF_WIDTH
-}
+/// Grass stops short of the prop clearance, so a bank keeps its grass right
+/// down to the waterline instead of showing a bald strip either side of the
+/// river — which is the road look this all exists to undo.
+const GRASS_RIVER_CLEARANCE: f32 = crate::worldgen::RIVER_HALF_WIDTH + 1.5;
 
 /// The river segments near one chunk, and a point test against them.
 ///

@@ -60,6 +60,16 @@ pub const RIVER_HALF_WIDTH: f32 = 5.0;
 /// How far the carve blends from bed to untouched terrain — the bank.
 pub const BANK_WIDTH: f32 = 16.0;
 
+/// How far either side of a centreline a river can put water on the ground.
+///
+/// The client uses it as the reach of the river water level, and prop/grass
+/// scattering uses it as the clearance to keep the banks free. Those two must
+/// agree: clear less than the water reaches and trees stand in the river; clear
+/// more and there is a bald strip either side, which is the road look this
+/// whole exercise was undoing. They were the same expression written out twice
+/// in two crates, which is a coincidence waiting to stop being one.
+pub const RIVER_WATER_REACH: f32 = RIVER_HALF_WIDTH + 4.0;
+
 /// Version of the terrain formula. A generated world is code + seed, so any
 /// change to the generation math silently produces a DIFFERENT world from
 /// the same recipe — including between binaries built before/after the
@@ -825,7 +835,14 @@ impl HeightField {
         };
 
         let mut rivers = Vec::new();
-        for _ in 0..count {
+        // Candidates, not rivers. Routing can fail to find the sea -- a spring
+        // behind a ridge, a basin with no outlet -- and those are thrown away
+        // below, so roll extra to keep the world's river count roughly what the
+        // style asked for.
+        for _ in 0..count * 3 {
+            if rivers.len() >= count {
+                break;
+            }
             // Start high inland; flow toward the sea.
             let interior = self.half_extent * 0.45;
             let mut pos = match self.style {
@@ -862,6 +879,15 @@ impl HeightField {
                     best_h = h;
                 }
             }
+            // A spring needs head. Below this there is not enough fall left to
+            // cut a channel, and the river spends kilometres crawling flat at
+            // sea level looking for the coast -- which carves a canal, not a
+            // river. Measured: a 15 m spring produced 2.2 km of dead-level
+            // trench before it found water.
+            const MIN_SPRING_HEIGHT: f32 = 22.0;
+            if best_h < MIN_SPRING_HEIGHT {
+                continue;
+            }
             pos = best;
 
             // Seaward bias. Steepest descent alone strands a river in the first
@@ -882,6 +908,9 @@ impl HeightField {
             let mut points: Vec<Vec3> = vec![Vec3::new(pos.x, bed, pos.y)];
             let meander_seed = rand01(&mut rng) * 100.0;
             let mut dir = to_sea;
+            let mut reached_sea = false;
+            // Steps spent at sea level without finding the sea.
+            let mut flat_steps = 0usize;
 
             const STEP: f32 = 9.0;
             /// Wide enough to read the valley rather than the noise in it.
@@ -909,21 +938,50 @@ impl HeightField {
 
                 let terrain = self.raw_height(pos.x, pos.y);
                 // The rule the whole routine turns on -- see the doc comment.
-                bed = (bed - MIN_FALL).min(terrain - INCISION);
+                // Never below sea level: once a river is down to the waterline
+                // it runs flat to the coast as an estuary. Letting it keep
+                // descending trenches the sea floor under water nobody can see.
+                bed = (bed - MIN_FALL).min(terrain - INCISION).max(SEA_LEVEL);
                 points.push(Vec3::new(pos.x, bed, pos.y));
 
-                // Stop AT the sea, not past it. Rivers used to keep going until
-                // the bed hit -2.5 m, which on this world meant two of the four
-                // carried on out across the seabed and trenched it under 30 m of
-                // water where nobody could ever see them.
-                if bed <= SEA_LEVEL
-                    || pos.x.abs() > self.half_extent * 1.02
+                // An estuary is a few hundred metres of flat water. Past that
+                // the river is not approaching a coast, it is tunnelling toward
+                // one, and the result reads as a canal cut across the country.
+                // Abandon it -- `reached_sea` stays false and it is discarded.
+                const MAX_FLAT_STEPS: usize = 32;
+                if bed <= SEA_LEVEL {
+                    flat_steps += 1;
+                    if flat_steps > MAX_FLAT_STEPS {
+                        break;
+                    }
+                } else {
+                    flat_steps = 0;
+                }
+
+                // Arrival is the GROUND going under, not the bed reaching zero.
+                //
+                // Those are wildly different places. The bed descends at a
+                // fixed rate regardless of terrain, so inland it grinds down to
+                // sea level while the ground is still 30 m up -- and stopping
+                // there left the river ending in a hollow in the middle of the
+                // country. Measured on the shipped world, only one of four
+                // rivers finished within 100 m of open water; one stopped
+                // 600 m short.
+                if terrain < SEA_LEVEL {
+                    reached_sea = true;
+                    break;
+                }
+                if pos.x.abs() > self.half_extent * 1.02
                     || pos.y.abs() > self.half_extent * 1.02
                 {
+                    // Off the edge of the world, which is open ocean.
+                    reached_sea = true;
                     break;
                 }
             }
-            if points.len() > 8 {
+            // A river that never found the sea is worse than no river: it is a
+            // channel of water lying in open country, connected to nothing.
+            if reached_sea && points.len() > 8 {
                 rivers.push(points);
             }
         }
@@ -1220,20 +1278,59 @@ pub fn surface_weights(grid: &HeightGrid, x: f32, z: f32, h: f32) -> [f32; 4] {
 mod tests {
     use super::*;
 
-    /// A river must actually arrive at the sea, not stop halfway up a hill.
+    /// A river must arrive at open water, not merely run out of height.
+    ///
+    /// The distinction is the whole bug this replaced. Routing stopped when the
+    /// BED reached sea level, which inland happens hundreds of metres from any
+    /// coast -- the bed falls at a fixed rate whatever the ground does. On the
+    /// shipped world that left three of four rivers ending in dry country, one
+    /// of them 600 m from the nearest open water: a channel full of water,
+    /// connected to nothing, starting and stopping in a field.
+    ///
+    /// So this asserts on reachable sea, not on the mouth's height.
     #[test]
-    fn every_river_reaches_the_sea() {
+    fn every_river_ends_at_open_water() {
         for seed in [91u64, 7, 2026, 55_555] {
             let field = HeightField::new(WorldStyle::Showcase, seed, 4096.0);
             for (i, r) in field.rivers.iter().enumerate() {
-                let end = r.last().unwrap();
-                let off_map = end.x.abs() > 4096.0 || end.z.abs() > 4096.0;
+                let mouth = r.last().unwrap();
+                if mouth.x.abs() > 4096.0 || mouth.z.abs() > 4096.0 {
+                    continue; // ran off the world edge, which is ocean
+                }
+                let mut distance = f32::MAX;
+                'search: for ring in 1..12 {
+                    let radius = ring as f32 * 10.0;
+                    for k in 0..24 {
+                        let a = std::f32::consts::TAU * k as f32 / 24.0;
+                        let (px, pz) = (mouth.x + a.cos() * radius, mouth.z + a.sin() * radius);
+                        if field.raw_height(px, pz) < SEA_LEVEL - 1.0 {
+                            distance = radius;
+                            break 'search;
+                        }
+                    }
+                }
                 assert!(
-                    end.y <= SEA_LEVEL || off_map,
-                    "seed {seed} river {i} stops inland at {:.1} m",
-                    end.y
+                    distance <= 60.0,
+                    "seed {seed} river {i} ends at ({:.0},{:.0}), {} m from open sea",
+                    mouth.x,
+                    mouth.z,
+                    if distance == f32::MAX { "120+".into() } else { format!("{distance:.0}") }
                 );
             }
+        }
+    }
+
+    /// Every world must actually get rivers. Candidates are discarded when they
+    /// fail to reach the sea, and a filter with no floor under it is one bad
+    /// tuning change away from a world with none at all.
+    #[test]
+    fn every_seed_still_gets_rivers() {
+        for seed in [91u64, 7, 2026, 55_555, 12, 900] {
+            let field = HeightField::new(WorldStyle::Showcase, seed, 4096.0);
+            assert!(
+                !field.rivers.is_empty(),
+                "seed {seed} produced no rivers at all"
+            );
         }
     }
 
@@ -1364,10 +1461,32 @@ mod tests {
                 r.len(), len, r[0].y, r.last().unwrap().y, r.len(), relief[relief.len()/2]
             );
             let mid = r[r.len() / 2];
+            // How far from the mouth is real open sea? Search outward for
+            // terrain the ocean actually covers, ignoring the river's own cut.
+            let mouth = r.last().unwrap();
+            let mut to_sea = f32::MAX;
+            for ring in 1..60 {
+                let rad = ring as f32 * 10.0;
+                let mut hit = false;
+                for k in 0..24 {
+                    let a = std::f32::consts::TAU * k as f32 / 24.0;
+                    let (px, pz) = (mouth.x + a.cos() * rad, mouth.z + a.sin() * rad);
+                    if field.raw_height(px, pz) < SEA_LEVEL - 1.0 {
+                        hit = true;
+                        break;
+                    }
+                }
+                if hit {
+                    to_sea = rad;
+                    break;
+                }
+            }
             println!(
-                "            spring ({:.0},{:.0})  mid ({:.0},{:.0})  mouth ({:.0},{:.0})",
-                r[0].x, r[0].z, mid.x, mid.z, r.last().unwrap().x, r.last().unwrap().z
+                "            spring ({:.0},{:.0}) h={:.0}  mouth ({:.0},{:.0})  open sea {} m away",
+                r[0].x, r[0].z, field.raw_height(r[0].x, r[0].z), mouth.x, mouth.z,
+                if to_sea == f32::MAX { "600+".to_string() } else { format!("{to_sea:.0}") }
             );
+            let _ = mid;
         }
     }
 

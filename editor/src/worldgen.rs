@@ -518,8 +518,14 @@ mod tests {
             assert!(!field.rivers.is_empty(), "seed {seed}: no rivers");
             for river in &field.rivers {
                 let last = river.last().unwrap();
+                // `<=`, not `<`. A bed strictly below sea level meant the river
+                // kept descending past the coast and cut a trench across the
+                // sea floor; it now flattens at the waterline and runs out as
+                // an estuary, so the last point sits exactly on it. That the
+                // mouth reaches real open water is asserted properly by
+                // `every_river_ends_at_open_water` in shared.
                 assert!(
-                    last.y < SEA_LEVEL,
+                    last.y <= SEA_LEVEL,
                     "seed {seed}: river bed ends above sea ({})",
                     last.y
                 );

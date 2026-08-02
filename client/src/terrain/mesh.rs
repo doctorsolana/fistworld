@@ -69,12 +69,68 @@ pub(crate) fn compute_chunk_tangents(
     Some(tangents)
 }
 
+/// Mark far-mesh vertices that a river runs through.
+///
+/// At map scale the far mesh has one vertex every ~16 m and a river is ~13 m
+/// wide, so a river usually passes cleanly BETWEEN vertices and colours none of
+/// them: zoom out and the rivers vanish. Every paper map ever printed has the
+/// same problem and the same answer — draw the river wider than scale. The
+/// widening is a rendering decision at map zoom only; the water surface, the
+/// carved channel and everything gameplay touches are untouched.
+///
+/// Rasterised into a flat mask rather than tested per vertex: 513x513 vertices
+/// against ~250 river segments is 66 million distance tests, and stamping the
+/// segments costs a few thousand.
+fn far_river_mask(
+    terrain: &shared::terrain::WorldTerrain,
+    origin: Vec2,
+    spacing: f32,
+    resolution: usize,
+) -> Vec<bool> {
+    let mut mask = vec![false; resolution * resolution];
+    // 1.5 vertices either side, so a river always lands on a run of vertices
+    // and draws as a continuous line rather than a dotted one.
+    let radius = spacing * 1.5;
+    let cells = (radius / spacing).ceil() as i32;
+
+    for river in terrain.rivers() {
+        for window in river.windows(2) {
+            let a = Vec2::new(window[0].x, window[0].z);
+            let b = Vec2::new(window[1].x, window[1].z);
+            // Walk the segment finely enough that the stamped discs overlap.
+            let steps = ((a.distance(b) / (spacing * 0.5)).ceil() as i32).max(1);
+            for step in 0..=steps {
+                let p = a.lerp(b, step as f32 / steps as f32);
+                let gx = ((p.x - origin.x) / spacing).round() as i32;
+                let gz = ((p.y - origin.y) / spacing).round() as i32;
+                for dz in -cells..=cells {
+                    for dx in -cells..=cells {
+                        let (cx, cz) = (gx + dx, gz + dz);
+                        if cx < 0 || cz < 0 || cx >= resolution as i32 || cz >= resolution as i32 {
+                            continue;
+                        }
+                        let world = Vec2::new(
+                            origin.x + cx as f32 * spacing,
+                            origin.y + cz as f32 * spacing,
+                        );
+                        if world.distance(p) <= radius {
+                            mask[cz as usize * resolution + cx as usize] = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    mask
+}
+
 pub(crate) fn build_far_terrain_mesh(
     terrain: &shared::terrain::WorldTerrain,
     origin: Vec2,
     spacing: f32,
     resolution: usize,
 ) -> Mesh {
+    let river_mask = far_river_mask(terrain, origin, spacing, resolution);
     let mut positions = Vec::with_capacity(resolution * resolution);
     let mut normals = Vec::with_capacity(resolution * resolution);
     let mut uvs = Vec::with_capacity(resolution * resolution);
@@ -105,6 +161,15 @@ pub(crate) fn build_far_terrain_mesh(
             let palette = crate::terrain::materials::stylized_palette();
             let water_level = terrain.generator.loaded_map().heightmap.water_level;
             let slope = 1.0 - normal.y.clamp(0.0, 1.0);
+
+            // Rivers first: they sit above sea level, so every branch below
+            // would call them land.
+            if river_mask[zi * resolution + xi] {
+                // The shallow end of the ocean ramp, so a river reads as the
+                // same substance as the sea it runs into.
+                colors.push([0.42, 0.66, 0.78, 1.0]);
+                continue;
+            }
 
             let color = match water_level {
                 // `<=`: vast areas of ocean floor sit exactly at sea level, and `<` left

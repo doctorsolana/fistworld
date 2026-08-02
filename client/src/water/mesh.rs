@@ -70,8 +70,19 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
     let mut uvs = Vec::new();
     let mut colors = Vec::new();
     let mut indices = Vec::new();
-    let waterline = water_level + WATER_SHORE_OVERLAP;
-    let water_y = water_level + WATER_SURFACE_OFFSET;
+    // The water level is no longer one number. Rivers raise it along their
+    // channels, so every place that used to compare against a constant now asks
+    // where it is standing. Chunks with no river nearby short-circuit to the
+    // ocean level and cost nothing extra.
+    let rivers = RiverSurface::for_chunk(terrain, coord, water_level);
+    let level_at = |wx: f32, wz: f32| -> f32 {
+        if rivers.is_empty() {
+            water_level
+        } else {
+            rivers.level_at(Vec2::new(wx, wz), water_level)
+        }
+    };
+    let waterline_at = |wx: f32, wz: f32| level_at(wx, wz) + WATER_SHORE_OVERLAP;
 
     // Pass 1: collect shoreline crossing points in and around the chunk so
     // every vertex can carry its horizontal distance to the coast.
@@ -84,26 +95,29 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
                 let x0 = origin_x + xi as f32 * VERTEX_SPACING;
                 let z0 = origin_z + zi as f32 * VERTEX_SPACING;
                 let h00 = terrain.get_height(x0, z0);
-                let above00 = h00 >= waterline;
+                let line00 = waterline_at(x0, z0);
+                let above00 = h00 >= line00;
                 // East edge
-                let h10 = terrain.get_height(x0 + VERTEX_SPACING, z0);
-                if above00 != (h10 >= waterline) {
+                let x1 = x0 + VERTEX_SPACING;
+                let h10 = terrain.get_height(x1, z0);
+                if above00 != (h10 >= waterline_at(x1, z0)) {
                     let denom = h10 - h00;
                     let t = if denom.abs() < 1e-6 {
                         0.5
                     } else {
-                        ((waterline - h00) / denom).clamp(0.0, 1.0)
+                        ((line00 - h00) / denom).clamp(0.0, 1.0)
                     };
                     shore_points.push(Vec2::new(x0 + t * VERTEX_SPACING, z0));
                 }
                 // South edge
-                let h01 = terrain.get_height(x0, z0 + VERTEX_SPACING);
-                if above00 != (h01 >= waterline) {
+                let z1 = z0 + VERTEX_SPACING;
+                let h01 = terrain.get_height(x0, z1);
+                if above00 != (h01 >= waterline_at(x0, z1)) {
                     let denom = h01 - h00;
                     let t = if denom.abs() < 1e-6 {
                         0.5
                     } else {
-                        ((waterline - h00) / denom).clamp(0.0, 1.0)
+                        ((line00 - h00) / denom).clamp(0.0, 1.0)
                     };
                     shore_points.push(Vec2::new(x0, z0 + t * VERTEX_SPACING));
                 }
@@ -126,10 +140,13 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
     let make_vertex = |local_x: f32, local_z: f32, terrain_height: f32| {
         let world_x = origin_x + local_x;
         let world_z = origin_z + local_z;
+        let level = level_at(world_x, world_z);
         let signed_depth_norm =
-            ((water_level - terrain_height) / WATER_DEPTH_FADE_METERS).clamp(-1.0, 1.0);
+            ((level - terrain_height) / WATER_DEPTH_FADE_METERS).clamp(-1.0, 1.0);
         WaterVertex {
-            pos: [local_x, water_y, local_z],
+            // Per-vertex height, so a river surface slopes down its valley
+            // instead of lying flat like the sea.
+            pos: [local_x, level + WATER_SURFACE_OFFSET, local_z],
             uv: [world_x / CHUNK_SIZE, world_z / CHUNK_SIZE],
             depth_norm: signed_depth_norm.max(0.0),
             signed_depth_norm,
@@ -138,16 +155,17 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
     };
 
     let edge_vertex = |a: Corner, b: Corner| {
+        let line = waterline_at(origin_x + a.local_x, origin_z + a.local_z);
         let denom = b.height - a.height;
         let mut t = if denom.abs() < 1e-6 {
             0.5
         } else {
-            (waterline - a.height) / denom
+            (line - a.height) / denom
         };
         t = t.clamp(0.0, 1.0);
         let local_x = a.local_x + (b.local_x - a.local_x) * t;
         let local_z = a.local_z + (b.local_z - a.local_z) * t;
-        make_vertex(local_x, local_z, waterline)
+        make_vertex(local_x, local_z, line)
     };
 
     for zi in 0..(CHUNK_RESOLUTION - 1) {
@@ -183,10 +201,10 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
                 height: h3,
             };
 
-            let w0 = h0 < waterline;
-            let w1 = h1 < waterline;
-            let w2 = h2 < waterline;
-            let w3 = h3 < waterline;
+            let w0 = h0 < waterline_at(origin.x + x0, origin.z + z0);
+            let w1 = h1 < waterline_at(origin.x + x1, origin.z + z0);
+            let w2 = h2 < waterline_at(origin.x + x1, origin.z + z1);
+            let w3 = h3 < waterline_at(origin.x + x0, origin.z + z1);
 
             let mask = (w0 as u8) | ((w1 as u8) << 1) | ((w2 as u8) << 2) | ((w3 as u8) << 3);
 
@@ -548,17 +566,6 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
         }
     }
 
-    add_river_ribbons(
-        terrain,
-        coord,
-        water_level,
-        &mut positions,
-        &mut normals,
-        &mut uvs,
-        &mut colors,
-        &mut indices,
-    );
-
     if indices.is_empty() {
         return None;
     }
@@ -598,107 +605,85 @@ const RIVER_DEPTH: f32 = 0.55;
 /// above the ocean and every river mouth ends in a small waterfall.
 const RIVER_MOUTH_BLEND: f32 = 6.0;
 
-/// Water half-width. Slightly wider than the flat bed so the edge of the
-/// surface tucks under the bank instead of ending in mid-air — the same trick
-/// `WATER_SHORE_OVERLAP` plays for the ocean.
-const RIVER_WATER_HALF_WIDTH: f32 = shared::worldgen::RIVER_HALF_WIDTH + 1.5;
+/// How far either side of a centreline a river still sets the water level.
+/// Beyond this the ocean level takes over, which everywhere inland means "no
+/// water". Shared with prop scattering, which clears the banks to exactly this
+/// reach — see [`shared::worldgen::RIVER_WATER_REACH`].
+use shared::worldgen::RIVER_WATER_REACH as RIVER_INFLUENCE;
 
-/// Lay a ribbon of water along each river channel crossing this chunk.
+/// The river water LEVEL near one chunk — not river geometry.
 ///
-/// Rivers are carved into the terrain by generation but the world's water is a
-/// single plane at sea level, so before this every river above the waterline —
-/// which is nearly all of every river — was a dry ditch. A dry, smooth,
-/// even-width, gently-graded channel does not read as a river; it reads as a
-/// road, and that is exactly what they were being mistaken for.
+/// This used to build its own ribbon of quads along each centreline, and that
+/// is the wrong shape of solution. A ribbon is a polyline offset either side by
+/// a fixed half-width, so at every bend the outer edges of two neighbouring
+/// segments fail to meet and the inner ones overlap: the river was notched all
+/// the way down both banks. Mitre joins would fix the notches and still leave a
+/// surface whose width had nothing to do with the channel underneath it.
 ///
-/// Emitted into the ocean's own per-chunk mesh rather than as a separate
-/// system, so rivers inherit streaming, culling, the toon water material and
-/// chunk lifetime for free.
-#[allow(clippy::too_many_arguments)]
-fn add_river_ribbons(
-    terrain: &WorldTerrain,
-    coord: ChunkCoord,
-    water_level: f32,
-    positions: &mut Vec<[f32; 3]>,
-    normals: &mut Vec<[f32; 3]>,
-    uvs: &mut Vec<[f32; 2]>,
-    colors: &mut Vec<[f32; 4]>,
-    indices: &mut Vec<u32>,
-) {
-    let origin = coord.world_pos();
-    let ocean_y = water_level + WATER_SURFACE_OFFSET;
+/// So rivers do not draw anything of their own any more. They only answer "how
+/// high is the water here", and the ocean's existing marching-squares pass —
+/// which already walks every cell comparing terrain against water — fills the
+/// channel that generation carved. The width becomes the channel's real width,
+/// bends are whatever the ground does, the junction with the sea is just two
+/// levels agreeing, and there are no seams because there is only one surface.
+struct RiverSurface {
+    /// `(a, b, surface_at_a, surface_at_b)` in world XZ.
+    segments: Vec<(Vec2, Vec2, f32, f32)>,
+}
 
-    // A segment belongs to exactly ONE chunk: the one holding its midpoint.
-    // Emitting into every chunk the segment touches would draw the same quad
-    // twice wherever a river crosses a border, and two coplanar water surfaces
-    // z-fight along the seam.
-    let owns = |a: Vec3, b: Vec3| -> bool {
-        let mid = Vec2::new((a.x + b.x) * 0.5, (a.z + b.z) * 0.5);
-        ChunkCoord::from_world_pos(Vec3::new(mid.x, 0.0, mid.y)) == coord
-    };
+impl RiverSurface {
+    fn for_chunk(terrain: &WorldTerrain, coord: ChunkCoord, ocean: f32) -> Self {
+        let mut segments = Vec::new();
+        let origin = coord.world_pos();
+        // The shore scan reaches SHORE_SCAN_MARGIN cells outside the chunk, so
+        // the level must be right out there too or the bank distance is wrong
+        // at the edges.
+        let margin = RIVER_INFLUENCE + SHORE_SCAN_MARGIN as f32 * VERTEX_SPACING;
+        let (min_x, min_z) = (origin.x - margin, origin.z - margin);
+        let (max_x, max_z) = (origin.x + CHUNK_SIZE + margin, origin.z + CHUNK_SIZE + margin);
 
-    // Surface height for a bed height: full depth inland, tapering to exactly
-    // the ocean surface at the mouth, and never below it.
-    let surface = |bed: f32| -> f32 {
-        let t = ((bed - water_level) / RIVER_MOUTH_BLEND).clamp(0.0, 1.0);
-        (bed + RIVER_DEPTH * t).max(ocean_y)
-    };
+        // Surface height for a bed height: full depth inland, tapering to
+        // exactly the ocean surface at the mouth, and never below it.
+        let surface = |bed: f32| -> f32 {
+            let t = ((bed - ocean) / RIVER_MOUTH_BLEND).clamp(0.0, 1.0);
+            (bed + RIVER_DEPTH * t).max(ocean)
+        };
 
-    for river in terrain.rivers() {
-        for window in river.windows(2) {
-            let (a, b) = (window[0], window[1]);
-            if !owns(a, b) {
-                continue;
-            }
-            let along = Vec2::new(b.x - a.x, b.z - a.z).normalize_or(Vec2::X);
-            let side = Vec2::new(-along.y, along.x) * RIVER_WATER_HALF_WIDTH;
-
-            let (ya, yb) = (surface(a.y), surface(b.y));
-            // `sign` runs -1..1 across the channel. Depth comes from the actual
-            // ground under each corner rather than a constant, so the surface
-            // shades deep down the middle and thins to nothing where it meets
-            // the bank -- which is also what puts the shader's contact-foam
-            // line exactly on the waterline instead of somewhere near it.
-            let corner = |p: Vec3, y: f32, sign: f32| -> WaterVertex {
-                let world_x = p.x + side.x * sign;
-                let world_z = p.z + side.y * sign;
-                let ground = terrain.get_height(world_x, world_z);
-                let signed = (y - ground) / WATER_DEPTH_FADE_METERS;
-                WaterVertex {
-                    pos: [world_x - origin.x, y, world_z - origin.z],
-                    uv: [world_x / CHUNK_SIZE, world_z / CHUNK_SIZE],
-                    depth_norm: signed.clamp(0.0, 1.0),
-                    signed_depth_norm: signed.clamp(-1.0, 1.0),
-                    // Distance-to-bank, normalised the way the ocean's is, but
-                    // measured across the channel because a river's "coast" is
-                    // its own two banks and they are metres away, not tens.
-                    //
-                    // 0.78 in mid-channel is above the shader's shore-foam
-                    // cutoff and below its open-water crest threshold, so the
-                    // middle of a river is plain moving water. Feeding it 0
-                    // everywhere -- "a river is all shore" -- renders the whole
-                    // surface as breaking surf: an opaque white ribbon.
-                    shore_dist: (1.0 - sign.abs()) * 0.78,
+        for river in terrain.rivers() {
+            for w in river.windows(2) {
+                let (a, b) = (w[0], w[1]);
+                if a.x.min(b.x) > max_x
+                    || a.x.max(b.x) < min_x
+                    || a.z.min(b.z) > max_z
+                    || a.z.max(b.z) < min_z
+                {
+                    continue;
                 }
-            };
-
-            // THREE vertices across, not two. `shore_dist` and depth both peak
-            // mid-channel and fall to zero at the banks, and a quad with only
-            // edge vertices interpolates 0 -> 0: the values never reach the
-            // middle they describe, and the river renders as two banks with no
-            // water between them.
-            let (al, ac, ar) = (corner(a, ya, 1.0), corner(a, ya, 0.0), corner(a, ya, -1.0));
-            let (bl, bc, br) = (corner(b, yb, 1.0), corner(b, yb, 0.0), corner(b, yb, -1.0));
-
-            // Wound clockwise-seen-from-above, because `add_triangle` reverses
-            // whatever it is given (see its comment). Passing the intuitive
-            // counter-clockwise order emits downward-facing triangles that
-            // back-face culling removes: the geometry is all there, correct,
-            // and completely invisible.
-            add_triangle(positions, normals, uvs, colors, indices, al, ac, bl);
-            add_triangle(positions, normals, uvs, colors, indices, ac, bc, bl);
-            add_triangle(positions, normals, uvs, colors, indices, ac, ar, bc);
-            add_triangle(positions, normals, uvs, colors, indices, ar, br, bc);
+                segments.push((
+                    Vec2::new(a.x, a.z),
+                    Vec2::new(b.x, b.z),
+                    surface(a.y),
+                    surface(b.y),
+                ));
+            }
         }
+        Self { segments }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    /// Water level at a world point: the ocean, raised wherever a river runs.
+    fn level_at(&self, p: Vec2, ocean: f32) -> f32 {
+        let mut level = ocean;
+        for (a, b, sa, sb) in &self.segments {
+            let seg = *b - *a;
+            let t = ((p - *a).dot(seg) / seg.length_squared().max(1e-6)).clamp(0.0, 1.0);
+            if p.distance_squared(*a + seg * t) < RIVER_INFLUENCE * RIVER_INFLUENCE {
+                level = level.max(sa + (sb - sa) * t);
+            }
+        }
+        level
     }
 }
