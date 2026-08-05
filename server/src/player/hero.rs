@@ -511,7 +511,7 @@ mod tests {
     #[test]
     fn warped_steps_land_on_target_instead_of_overshooting() {
         let distance = 3.0_f32;
-        for factor in [1.0_f32, 10.0, 100.0] {
+        for factor in [1.0_f32, 10.0, 25.0, 100.0] {
             let dt = factor / shared::protocol::FIXED_TIMESTEP_HZ as f32;
             let step = (HERO_MOVE_SPEED * dt).min(distance);
             assert!(

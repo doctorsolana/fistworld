@@ -18,8 +18,8 @@
 //! Two things here are deliberate and easy to undo by accident.
 //!
 //! **The god panel is ONE plate with hairline dividers**, not a stack of nested
-//! bordered boxes. It also has no `SIMULATION SPEED` or `HERO` captions: four
-//! buttons reading `II 1x 10x 100x` do not need a label telling you they are
+//! bordered boxes. It also has no `SIMULATION SPEED` or `HERO` captions: five
+//! buttons reading `II 1x 10x 25x 100x` do not need a label telling you they are
 //! speeds, and deleting the caption deletes a whole row of chrome.
 //!
 //! **The mode toggle lives INSIDE the clock row.** As its own bordered chip it
@@ -189,6 +189,7 @@ fn god_plate() -> impl Bundle {
                     warp_button("II", 0.0),
                     warp_button("1x", 1.0),
                     warp_button("10x", 10.0),
+                    warp_button("25x", 25.0),
                     warp_button("100x", 100.0),
                 ],
             ),

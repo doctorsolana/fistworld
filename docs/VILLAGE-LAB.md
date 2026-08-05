@@ -188,9 +188,11 @@ This starts the `secure` scenario at 1x, skips the login screens with the local
 Meadow on every run; the default day-2 wave adds eight more. Both map and
 placement use seed 3. Use WASD to pan, the
 mouse wheel to zoom, right-drag to orbit, and the HUD speed buttons to pause or
-switch between 1x, 10x and 100x whenever you want. The launcher prints a
+switch between 1x, 10x, 25x and 100x whenever you want. The launcher prints a
 timestamped `logs/testworld-*` directory containing `server.log` and
 `client.log`, and enables compact authoritative village diagnostics by default.
+Use 25x when 10x is too slow but individual work and delivery cycles should
+remain easy to follow; use 100x for longer soak testing.
 
 The rendered launcher accepts the same scenario and warp environment variables
 as the headless test:
