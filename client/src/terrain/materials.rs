@@ -6,9 +6,8 @@ use shared::water::{OCEAN_LOOP_SECONDS, WATER_SURFACE_OFFSET};
 
 use super::chunks::TerrainChunk;
 
-// The material, palette and samplers live in `shared` so the editor cannot declare a
-// different set of bindings against the same shader -- which is exactly how the editor
-// spent five weeks failing pipeline validation on startup. See shared/src/terrain/material.rs.
+// The material, palette and samplers live in `shared` so every renderer uses one
+// binding contract for the same shader. See shared/src/terrain/material.rs.
 // `TerrainPalette` is deliberately absent: the client never names the type, it only calls
 // `stylized_palette()`. Re-exporting it anyway would be an unused import, and silencing that
 // with an allow would hide the next one that means something.

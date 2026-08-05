@@ -158,7 +158,7 @@ impl PropKind {
         }
     }
 
-    /// Stable canonical string written by generated and editor-authored maps.
+    /// Stable canonical string written by generated and authored maps.
     pub const fn id(self) -> &'static str {
         match self {
             Self::SmallRockA => "small_rock_a",
@@ -199,7 +199,7 @@ impl PropKind {
         }
     }
 
-    /// Human-facing editor label. This is intentionally not derived from an
+    /// Human-facing display label. This is intentionally not derived from an
     /// old serialized id or a filename.
     pub const fn display_name(self) -> &'static str {
         match self {
@@ -293,7 +293,7 @@ impl PropKind {
     }
 }
 
-/// Every canonical prop asset, exactly once. Order is the editor catalog order.
+/// Every canonical prop asset, exactly once. Order is the authored catalog order.
 pub const ALL_PROP_KINDS: &[PropKind] = &[
     PropKind::SmallRockA,
     PropKind::SmallRockB,

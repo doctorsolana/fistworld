@@ -1,13 +1,12 @@
 # Contributing Guide
 
 This project is designed to be expanded without another rewrite. Use this guide for all
-feature work across `client`, `server`, `shared`, and `editor`.
+feature work across `client`, `server`, and `shared`.
 
-> **Context:** this repo was a first-person shooter until July 2026 and is now the base for a
-> top-down multiplayer unit-tactics game. The FPS layers were removed in a seven-phase strip
-> (see [`STRIP_PLAN.md`](STRIP_PLAN.md)); the world, terrain, editor and netcode foundation was
-> kept. If you find a reference to weapons, vehicles, NPCs or ragdolls, it is a leftover —
-> recover the original from the `citysim-final` tag rather than reviving it in place.
+> **Context:** the old first-person game is preserved at tag `citysim-final`. The live
+> repository is a top-down persistent living-world RTS with an implemented autonomous
+> settlement/economy slice. Do not revive removed combat, vehicle or legacy NPC systems as
+> shortcuts; new features must fit the current server-authoritative architecture.
 
 ## Core Rules
 
@@ -15,7 +14,6 @@ feature work across `client`, `server`, `shared`, and `editor`.
   - `shared` = contracts, deterministic math/sampling, protocol, shared data models.
   - `server` = authoritative simulation and persistence.
   - `client` = rendering, camera, input, UI, FX, local presentation.
-  - `editor` = offline authoring. It depends on `shared` only; nothing depends on it.
 - If a rule affects multiplayer correctness, it belongs in `shared` and/or `server`, not only in `client`.
 - Do not add compatibility aliases or temporary legacy bridges.
 - Keep `mod.rs` files as orchestration surfaces only.
@@ -29,24 +27,30 @@ feature work across `client`, `server`, `shared`, and `editor`.
 - Put visual-only behavior, camera, HUD, and cosmetic systems in `client`.
 - Prefer extending existing domain modules over adding generic buckets like `util`, `misc`, or `helpers`.
 
-Current domains:
+Current high-level domains:
 
-- `client`: `terrain`, `props`, `water`, `render`, `ui`, `audio`, `camera_rts`, `perf_overlay`, `city`
-- `server`: `world` (tick, map state, navgrid, pathfinding), `physics`, `collision`, `net`, `player`,
-  `persistence`, `telemetry`, `city`
-- `shared`: `terrain`, `map`, `city`, `building`, `props`, `protocol`, `components`, `spatial`, `physics`, `rng`, `worldgen`
-- `editor`: `tools`, `ui`, `worldgen`, `city`, `camera`, `session`
+- `client`: `terrain`, `props`, `water`, `render`, `selection`, `settlement`, `hero`,
+  `ui`, `audio`, `camera_rts`, `perf_overlay`, `city`
+- `server`: `world` (time, identity, regions, settlement development, villages,
+  roads and labs), `collision`, `net`, `player`, `persistence`, `telemetry`, `city`
+- `shared`: `terrain`, `map`, `city`, `building`, `props`, `protocol`, `components`,
+  `economy`, `character`, `region`, `spatial`, `physics`, `rng`, `worldgen`
+
+Within `server::world`, follow the explicit ownership map in
+[`server/README.md`](server/README.md). In particular, keep `village.rs` and
+`village_roads.rs` as facades and extend their focused submodules.
 
 **Generated worlds are recipes, not data (the Valheim model).** A generated map stores
-`generated: (style, seed, half_extent, road strokes)` in `map.ron` — a few KB — and every
-binary rebuilds the identical terrain grid from it at load time via `shared::worldgen`
+its style, seed, half extent and noise scale in `map.ron` — a few values — and every
+binary rebuilds the identical terrain grid from them at load time via `shared::worldgen`
 (`GeneratedWorld::build_grid`). Surface paint is computed procedurally from the same formula
 (`TerrainGenerator::get_surface_weights`); `edits.ron` holds only sparse hand edits, which
 still layer on top (deltas over the generated base, baked weightmaps over the procedural
 paint). Never bake generated terrain into `edits.ron` — that was 644MB for an 8km map and
 scales quadratically. Rules for code in `shared::worldgen`: all randomness derives from the
-world seed via `splitmix64`, and any step that reads grid state mutated by an earlier step
-must be recorded in the recipe (see `FlattenStroke`) instead of recomputed.
+world seed via `splitmix64`; generation stages read the immutable raw-height field, so order
+must not become hidden serialized state. Roads are settlement runtime infrastructure, not
+part of the terrain-generation recipe.
 
 ## Cross-Crate Feature Workflow
 
@@ -67,14 +71,18 @@ must be recorded in the recipe (see `FlattenStroke`) instead of recomputed.
 - Keep high-frequency network messages compact.
 - Keep verbose logs behind env flags; the default runtime should be quiet in hot loops.
 
-**Scale target.** This game is meant to run hundreds-to-thousands of units. Anything per-unit
-per-frame is a design decision, not a detail:
+**Scale target.** This game is meant to retain thousands of people while embodying only the
+observed subset. Anything per-person per-frame is a design decision, not a detail:
 
-- Per-agent A\* does not scale to a shared destination — use a flow field (one sweep from the goal,
-  every unit reads a direction). `server/src/world/pathfinding.rs` is for single-agent queries.
+- Ordinary off-screen people must carry durable identity/economic state without routes,
+  physics, door choreography, seats or animations. Extend aggregate strategic passes for
+  world-wide rules.
+- Local village routes use bounded surveys, an obstacle-versioned cache and the shared road
+  graph. Per-agent A\* does not scale to a commanded group or shared destination; future
+  formations require a flow field.
 - One `AnimationPlayer` per unit will not survive. Plan on instancing or vertex-animation textures.
-- One replicated entity per unit will not survive naive replication either — see the netcode
-  decision below.
+- Replicate global settlement summaries separately from region-scoped physical and economic
+  detail. Do not make new settlement detail globally visible.
 
 ## Rendering and Visibility Guardrails
 
@@ -100,7 +108,7 @@ per-frame is a design decision, not a detail:
   *after* deserialize and cannot catch a layout shift — old files decode into silent garbage.
 - **Map `.ron` files fail hard on unknown enum variants** (unknown struct *fields* are fine).
   Removing a `SpawnMarkerKind` variant that exists in a saved map panics `WorldTerrain` init in
-  client, server *and* editor. Boot the editor against a real map before committing schema changes.
+  both client and server. Preserve serialized variants or migrate authored maps first.
 
 ## World and Streaming Rules
 
@@ -120,7 +128,6 @@ Minimum before committing gameplay or shared changes:
 
 ```bash
 cargo check --workspace --all-targets   # NOT `check -p <crate>` — see below
-cargo check -p editor                   # nothing else depends on it, so nothing else catches it
 cargo test --workspace
 ```
 
@@ -136,6 +143,7 @@ Add regression tests when fixing:
 - Terrain/sampling/mesh bugs.
 - Spatial indexing/collision bugs.
 - Visibility/culling bugs.
+- Migration, household, economy, construction, route and time-warp bugs.
 
 ## Definition of Done
 
@@ -148,11 +156,12 @@ Add regression tests when fixing:
 ## Architecture
 
 The netcode model is **decided**: server-authoritative with interest management, not
-deterministic lockstep. The simulation is **two-tier** (a cheap always-on strategic layer
-and a 60 Hz tactical layer, with entities promoted/demoted between them), and **regions**
-are the single primitive for political ownership, interest management, simulation LOD and
-persistence.
+deterministic lockstep. The simulation is **two-tier**: a cheap always-on strategic layer
+and a 60 Hz tactical layer, with durable entities promoted/demoted between them. Regions
+currently own interest management and simulation LOD; settlements, not grid squares, are
+the future political and persistence unit.
 
 Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before writing simulation code. In
 particular: the strategic tick runs for the entire world forever, so it must contain no
-pathfinding, no physics and nothing per-soldier.
+pathfinding, no physics and no per-person embodied routine. Cheap durable person records are
+intentional; tactical bodies are conditional on observation.

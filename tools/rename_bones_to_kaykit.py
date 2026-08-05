@@ -7,7 +7,7 @@ the KayKit Adventurers bone naming convention so they can use KayKit animations.
 Usage in Blender:
 1. Open the .glb file in Blender
 2. Select the Armature object
-3. Run this script (Text Editor > Run Script or Alt+P)
+3. Run this script (Blender Scripting workspace > Run Script or Alt+P)
 4. Export as .glb (File > Export > glTF 2.0)
 
 The script handles the naming differences:

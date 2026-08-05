@@ -171,8 +171,8 @@ So:
 
 - `COLOR_0.a = 1.0` on every vertex, always.
 - **Wind weight goes in `TEXCOORD_1` (UV1), `.x`.** Nothing multiplies UV1 into colour, and glTF
-  carries it natively. Reserve it now even though wind is not implemented — the point of reserving
-  is to avoid re-authoring every asset later.
+  carries it natively. The live wind material reads this channel; keeping it in the
+  contract avoids family-specific authoring and shader branches.
 - `COLOR_1` is not an option: `bevy_gltf` rejects it outright.
 
 Weights, when wind arrives: `0.0` trunk base, `0.25–0.5` branches, `0.75–1.0` outer foliage.
@@ -280,7 +280,7 @@ Nothing past step 5 should start until step 5 has run.
 
 ---
 
-## 9. Open engine questions
+## 9. Engine decisions after integration
 
 These are decisions the assets cannot make for themselves:
 
@@ -288,5 +288,7 @@ These are decisions the assets cannot make for themselves:
   can come down a long way and the saving is immediate. Needs a visual call at several zooms.
 - **Is `TREE_LOD0_MAX_DISTANCE = 72 m` right** once LOD1 is authored properly rather than decimated?
   A better LOD1 could push the boundary closer and make LOD0 rarer still.
-- **Do grass patches need their own LOD?** They are `GroundDetail` today and never spawn. Making
-  them affordable is a placement problem (patch size, density, cutoff), not a mesh problem.
+- **Grass uses its own LOD and streaming layer.** It is generated only in a four-chunk ring,
+  spawned under a per-frame budget, cleared around buildings/roads and culled at 240 m.
+  Further range/density changes are placement and entity-budget decisions, not an asset
+  registration task.

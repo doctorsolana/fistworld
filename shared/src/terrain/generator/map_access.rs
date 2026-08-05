@@ -4,8 +4,8 @@ use crate::map::{load_map, LoadedMap, MapBounds, DEFAULT_MAP_ID};
 
 use super::WORLD_RADIUS_METERS;
 
-// RwLock, not OnceLock: the editor can RESIZE the map mid-session, and the
-// global bounds must follow or every in_world_bounds check goes stale.
+// The active bounds may be refreshed during map setup and isolated tests; every
+// in_world_bounds check must observe the same process-wide value.
 static ACTIVE_MAP_BOUNDS: RwLock<Option<MapBounds>> = RwLock::new(None);
 static ACTIVE_LOADED_MAP: OnceLock<Arc<LoadedMap>> = OnceLock::new();
 
@@ -28,7 +28,7 @@ pub(super) fn load_active_map() -> Arc<LoadedMap> {
     loaded
 }
 
-/// Update the process-wide active bounds (map load and editor resize).
+/// Update the process-wide active bounds during map setup.
 pub fn set_active_map_bounds(bounds: MapBounds) {
     if let Ok(mut slot) = ACTIVE_MAP_BOUNDS.write() {
         *slot = Some(bounds);

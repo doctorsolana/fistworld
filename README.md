@@ -1,132 +1,131 @@
 # Fistworld
 
-A persistent-world multiplayer RTS built with **Rust** and **Bevy 0.19** — one seed-generated
-round world of continents and biomes, seamless zoom from a single soldier to the whole map,
-villages growing into cities, clans contesting the realm. Design: [`docs/WORLD-DESIGN.md`](docs/WORLD-DESIGN.md),
-engine architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
-build order: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+A persistent-world multiplayer RTS built with **Rust** and **Bevy 0.19**. One
+seed-generated world contains autonomous settlements whose named residents migrate, form
+households, take jobs, produce and trade physical goods, build roads and grow their town.
+The long-term game expands that foundation into player businesses, caravans, clans,
+territory and war.
 
-> **This repo was a first-person shooter (FistForce) until July 2026.** It is mid-conversion:
-> the FPS layers have been stripped out and the world/terrain/editor foundation kept. The unit
-> simulation is not written yet.
->
-> - The complete FPS game is preserved at git tag **`citysim-final`**.
-> - Conversion status and remaining work: [`STRIP_PLAN.md`](STRIP_PLAN.md).
-> - Full analysis behind it: [`docs/strip/`](docs/strip/).
+The old first-person game is preserved at git tag `citysim-final`; the live workspace is
+the RTS/living-world codebase. Start with [WORLD-DESIGN.md](docs/WORLD-DESIGN.md) for the
+game, [ARCHITECTURE.md](docs/ARCHITECTURE.md) for its technical boundaries, and
+[ROADMAP.md](docs/ROADMAP.md) for implemented and future work.
 
----
+## Current playable foundation
 
-## What works today
+- A chunk-streamed generated world with biomes, rivers, coastlines, water, foliage,
+  atmospheric day/night lighting and a seamless commander camera.
+- Server-authoritative multiplayer, region interest management, player profiles and
+  stable `PersonId`, `SettlementId` and `BuildingId` relationships.
+- God-mode settlement founding and villager spawning. Unaffiliated people choose a
+  settlement, migrate to its hall and become residents.
+- Autonomous housing, employment, permits and geography-aware construction. Seeded
+  planning grammars create organic lanes, radial commons, grids, avenues or clustered
+  neighbourhoods without moving completed buildings.
+- Physical Wood supply and construction; Farmsteads with two wheat fields, Fisherman's
+  Huts with piers, Lumberjack Huts with reachable-tree checks, and repeated housing/food
+  construction driven by measured shortages.
+- Continuous visible work loops for farming, fishing and chopping, bounded personal and
+  building inventories, one early Market Porter, adaptive wages, business accounts,
+  household food purchases, Poor Relief and stock-sensitive Moot prices.
+- Door traversal, designated homes, night routines, occupied-window lighting, ambient
+  walking/sitting, character attributes and bounded life histories.
+- Builder-made obstacle-safe roads, a shared local travel graph and a paid Road Steward
+  who audits and repairs disconnected buildings.
+- Inspectable residents, households, buildings, worksites, markets, settlement progress,
+  inventories and prosperity in the selection UI and encyclopedia.
+- One authoritative simulation clock, the same ordered village schedule in the live game
+  and lab, aggregate off-screen village production, and summary/detail replication.
 
-- 🗺️ **Huge authored maps** — chunk-streamed terrain, resizable up to ~2.8 km²
-- 🎨 **Full map editor** — sculpt, texture paint, scatter brush, roads/plots, undo, live minimap
-- 🌍 **Procedural world generation** — Island / Mainland / "Great Open World" (A\*-pathed roads,
-  mountains, rivers, beaches, archipelagos, a village)
-- 🌊 **Water** — shore foam, caustics, wet sand, depth shading, wind-driven waves
-- 🌲 **Props & foliage** — wind sway, LOD, baked collider library
-- 🌅 **Day/night cycle** with atmospheric scattering and clouds
-- 🎥 **Top-down commander camera** — WASD pan, RMB orbit, wheel zoom, cursor→terrain picking
-- 🔌 **Multiplayer plumbing** — lightyear connection, replication, profile persistence
+The live tier ladder is **Hamlet → Village → Town → City**. Its current executable
+population gates are 4, 12 and 24 residents, combined with sustained food, prosperity,
+trade and civic-building requirements. Those values are prototype balance, not final
+design.
 
-## Not built yet
+## Major work still ahead
 
-Units, selection, orders, formations, combat, and the AI/economy that make it a game.
-See the netcode decision still open at the bottom of [`STRIP_PLAN.md`](STRIP_PLAN.md).
+- Versioned world-state persistence, migrations, backups and hosted durable storage.
+- Births, aging, deaths, decline, persistent tree depletion/regrowth and processed foods.
+- Player trading, business ownership, carts, caravans and inter-settlement markets.
+- Physical palisades, stone walls, gates, guards and patrols.
+- Strategic travelling parties and armies with lossless tactical promotion/demotion.
+- Retinues, formations, flow fields, combat, clans, political ownership and realm war.
 
----
+The checked state and dependencies for each item live in [ROADMAP.md](docs/ROADMAP.md).
 
-## Workspace Layout
+## Workspace
 
-| Crate | Description |
-|-------|-------------|
-| `client/` | Bevy app: rendering, camera, UI, terrain/prop streaming |
-| `server/` | Headless authoritative server: world tick, persistence, collider streaming, navigation |
-| `shared/` | Deterministic terrain/props, protocol, components, map schema |
-| `editor/` | Map editor (terrain sculpt, painting, prop placement, worldgen) |
-| `tools/collider_baker/` | Offline tool to bake convex-hull colliders from GLTF meshes |
+| Path | Responsibility |
+|---|---|
+| `client/` | Rendering, commander camera, selection, UI, settlement presentation and streaming |
+| `server/` | Authoritative world, people, settlements, economy, roads, navigation, networking and persistence |
+| `shared/` | Replicated contracts, stable identities, economy models, terrain/world generation and asset registries |
+| `tools/collider_baker/` | Offline convex-hull collider baker for GLTF assets |
 | `tools/terrain_ktx_builder/` | Offline terrain texture-array packer |
+| `asset_creation/` | Canonical Blender/export/validation pipelines and art contracts |
 
-Assets live in `client/assets/` (models, audio, `colliders.bin`).
+Runtime assets live in `client/assets/`. The server's domain map is in
+[server/README.md](server/README.md), contributor guardrails in
+[CONTRIBUTING.md](CONTRIBUTING.md), the current character contract in
+[character-animations.md](docs/character-animations.md), and asset naming in
+[ASSET_NAMING.md](asset_creation/ASSET_NAMING.md).
 
-Contributor workflow and architecture guardrails: [`CONTRIBUTING.md`](CONTRIBUTING.md).
-Character `.glb` animation indices: [`docs/character-animations.md`](docs/character-animations.md).
-
----
-
-## Quick Start
-
-```bash
-./run.sh              # server in background, then client
-./run.sh editor       # map editor
-```
-
-Or manually:
+## Run the game
 
 ```bash
-cargo run -p server --release     # terminal 1
-cargo run -p client --release     # terminal 2
-cargo run -p editor -- --map big_world
+./run.sh                 # server in the background, then the client
+./run.sh --dev           # faster compile, slower runtime
+./run.sh --release       # shipping/performance measurement profile
 ```
 
-### Village simulation lab
+The default `playtest` profile keeps release-grade optimisation without thin LTO and with
+incremental compilation. Use it for normal play and iteration.
 
-Full usage and failure-diagnosis notes: [`docs/VILLAGE-LAB.md`](docs/VILLAGE-LAB.md).
+### Deterministic Village Lab
 
-Run the deterministic dual-climate village world at 100x without rendering:
+The headless integration lab runs the real village systems against a fixed seed:
 
 ```bash
 cargo village-lab
 ```
 
-It spawns the same fixed-seed, eight-person meadow settlement on every run and
-runs 160 simulated minutes through the real collider, navigation, construction,
-road, household, food, prosperity and work systems. Set
-`FISTWORLD_LAB_SCENARIO=dual` when the second frozen inland control is useful.
-It prints five-minute inventory/progress reports and fails with the exact NPC
-state if active embodied work makes no progress for ten simulated minutes. Useful
-overrides are `FISTWORLD_LAB_MINUTES`, `FISTWORLD_LAB_WARP`, and
-`FISTWORLD_LAB_VERBOSE=1`.
+The default `secure` scenario runs 190 simulated minutes at 100x with eight founders and
+eight day-2 arrivals. It checks migration, construction supply, work, inventories,
+households, food, commerce, roads, doors, tier progress, wealth histories and stalls. The
+optional two-climate comparison adds the food-poor frozen control:
 
-To watch the simpler one-village fixture in the real client, already staged on
-the same compact seed-3 map:
+```bash
+FISTWORLD_LAB_SCENARIO=dual cargo village-lab
+```
+
+To watch the same one-village fixture through the real server, network and renderer:
 
 ```bash
 ./run.sh testworld
 ```
 
-The client opens over the eight-person Lab Meadow at 1x and connects as
-`LabObserver`. Use WASD to pan, the mouse wheel to zoom, right-drag to orbit,
-and the HUD buttons to pause or switch between 1x, 10x and 100x. Server and
-client evidence is retained under the timestamped `logs/testworld-*` directory
-printed by the launcher. The comparative fixture remains available with
-`FISTWORLD_LAB_SCENARIO=dual ./run.sh testworld`.
+It starts at 1x. Use the HUD to pause or switch between 1x, 10x, 25x and 100x. Each run
+prints a timestamped `logs/testworld-*` directory containing its server and client logs.
+See [VILLAGE-LAB.md](docs/VILLAGE-LAB.md) for scenarios, overrides, expected evidence and
+failure diagnosis.
 
-To reproduce a crowded god-mode founding on the ordinary generated world,
-with the real renderer and durable diagnostics, run:
+### Generated-world stress fixture
 
 ```bash
 ./run.sh realworld
 ```
 
-This stages 32 villagers at the reported Oakfell test location with an empty
-hall store and normal settlement policy. It starts at 1x; use the HUD speed
-controls when ready. Every run creates timestamped
-`logs/realworld-*/server.log` and `client.log` files. `VillageTrace` summarizes
-population, construction, roads, movement, work, inventories and failed routes
-every three real seconds, while `ServerPerf` separates navigation time from the
-core simulation. `VillageRoutePerf` reports route-cache hits, queue pressure,
-survey expansion and per-stage planner cost every ten seconds. Override the fixture with
-`FISTWORLD_REALWORLD_VILLAGERS=64`, `FISTWORLD_REALWORLD_AT=x,z`, or
-`FISTWORLD_RUN_LOG_DIR=/absolute/path`. Use
-`FISTWORLD_REALWORLD_RUST_LOG=...` only when you intentionally want a narrower
-log filter.
+This stages 32 villagers at Oakfell on the ordinary generated world with normal policy and
+an empty founding store. It starts at 1x and records `VillageTrace`, `ServerPerf` and route
+diagnostics under `logs/realworld-*`. Useful overrides include
+`FISTWORLD_REALWORLD_VILLAGERS=64`, `FISTWORLD_REALWORLD_AT=x,z` and
+`FISTWORLD_RUN_LOG_DIR=/absolute/path`.
 
-Press F3 near a settlement for its population and live planning-distance
-readout. Press F4 to draw the same planning rings in the world: green housing,
-amber workplaces and blue coastal reach. These are preferred search bands,
-not a political border.
+Press F3 near a settlement for population and planning-distance diagnostics. Press F4 to
+draw its housing, workplace and coastal planning bands. These are preferred search areas,
+not political borders.
 
-To inspect the compact map empty and found settlements manually with god mode:
+To open the compact map without a staged settlement and found one manually:
 
 ```bash
 CITYSIM_MAP_ID=village_lab ./run.sh
@@ -134,50 +133,49 @@ CITYSIM_MAP_ID=village_lab ./run.sh
 
 ### Visual capture
 
-Screenshot the real renderer with no server, for verifying how things actually look:
-
 ```bash
 cargo run -p client --bin capture -- --at -226,-163 --preset survey
 cargo run -p client --bin capture -- --at 0,0 --preset daycycle --out /tmp/shots
 cargo run -p client --bin capture -- --help
 ```
 
-Presets: `survey` (near/mid/far/horizon), `orbit` (4 yaws — catches one-sided geometry),
-`daycycle` (dawn/noon/dusk), `water` (low angle over water). Compiling proves nothing about
-winding order, shaders, foliage orientation or lighting; this does.
+Presets include `survey`, `orbit`, `daycycle` and `water`. Rendering is required to catch
+mesh winding, shader, foliage, lighting and anchor problems that compilation cannot.
 
-Useful env flags:
+## Verify changes
+
+```bash
+cargo check --workspace --all-targets
+cargo test --workspace
+cargo village-lab
+cargo village-scale-lab       # release-only 5,000-person / 30-settlement benchmark
+```
+
+The full lab is intentionally ignored by ordinary `cargo test` runs.
+
+## Important runtime flags
 
 | Flag | Effect |
-|------|--------|
-| `CITYSIM_MAP_ID=<id>` | Select authored map at startup (client/server/editor) |
-| `CITYSIM_TERRAIN_COLLIDER_RADIUS_CHUNKS=<n>` | Radius (in chunks) of streamed terrain colliders |
-| `CITYSIM_TERRAIN_COLLIDER_MAX_LOAD_PER_TICK=<n>` | Max collider chunks spawned per fixed tick |
-| `CITYSIM_TERRAIN_COLLIDER_RESOLUTION=<n>` | Per-chunk heightfield resolution for colliders |
-| `FISTFORCE_AUTOCONNECT=<name>` | Skip main menu + name entry (dev) |
-| `FISTFORCE_CLIENT_PERF=1` | Emit rolling `ClientPerf` frame-time lines |
-| `FISTFORCE_SERVER_PERF=1` | Emit `ServerPerf` tick/phase lines |
+|---|---|
+| `CITYSIM_MAP_ID=<id>` | Select the map for client and server |
+| `CITYSIM_TERRAIN_COLLIDER_RADIUS_CHUNKS=<n>` | Streamed terrain-collider radius |
+| `CITYSIM_TERRAIN_COLLIDER_MAX_LOAD_PER_TICK=<n>` | Collider chunks spawned per fixed tick |
+| `CITYSIM_TERRAIN_COLLIDER_RESOLUTION=<n>` | Heightfield resolution per collider chunk |
+| `FISTFORCE_AUTOCONNECT=<name>` | Skip local login/name entry |
+| `FISTFORCE_CLIENT_PERF=1` | Emit rolling client frame-time diagnostics |
+| `FISTFORCE_SERVER_PERF=1` | Emit server tick and phase diagnostics |
 
----
+## Architecture in one minute
 
-## Architecture notes
-
-### World
-
-- **Authored map data**: client, server and editor load the same map definition
-  (`shared/src/map/`) and sample the same heightmap.
-- **Chunk streaming**: terrain meshes and props load/unload around the commander camera focus.
-  This anchor is load-bearing — see the Danger notes in `STRIP_PLAN.md`.
-- **Runtime bounds**: active map bounds are authoritative and replicated server → client.
-
-### Server
-
-- **Single physics authority**: one Rapier world for terrain and static world colliders,
-  streamed around the commander view. Raycast helpers for line-of-sight live in
-  `server/src/collision/raycast.rs` and `server/src/physics/queries.rs`.
-- **Navigation groundwork**: `server/src/world/navgrid.rs` keeps a spatial obstacle grid fed
-  from authored buildings; `server/src/world/pathfinding.rs` is grid A\* over terrain +
-  obstacles. Both are agent-agnostic and awaiting the unit sim. Note that hundreds of units
-  moving to a shared goal want a flow field, not per-unit A\*.
-- **Persistence**: player profiles are bincode; `PROFILE_VERSION` must be bumped on any
-  layout change (bincode is positional and fails silently otherwise).
+- The server is authoritative; clients send intent and render replicated truth.
+- `SimulationDelta` captures real time, world time and global warp once per tick. Gameplay
+  systems consume that clock instead of applying speed independently.
+- Ordinary observed villagers use physical routes and animations. Unobserved ordinary
+  residents retain durable identity/economic state and contribute through aggregate
+  settlement production rather than pathfinding.
+- `SettlementSummary` is globally visible; halls, buildings, markets, roads, fields and
+  piers are region-scoped detail joined by stable IDs.
+- Tactical village travel uses bounded obstacle surveys plus a cached shared road graph.
+  Future large commanded groups still require regional flow fields.
+- Player profiles currently persist; full settlement/world persistence does not. Do not
+  mistake a long-running local simulation for a durable saved world yet.

@@ -229,7 +229,7 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
             }
             // Seeded from the CELL's world identity, not from a running
             // counter, so rejecting a cell never shifts what the next one
-            // rolls. Same discipline as the editor's scatter.
+            // rolls. Keep procedural scatter deterministic across processes.
             let key = ((chunk.z as u32 as u64) << 40)
                 ^ ((chunk.x as u32 as u64) << 16)
                 ^ ((iz as u64) << 8)

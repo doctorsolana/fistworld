@@ -1,7 +1,8 @@
 # Game architecture
 
-Decisions made 2026-07-27, before the simulation exists, because retrofitting any of them
-is expensive. If you are about to write simulation code, read this first.
+Decisions first recorded 2026-07-27 and reconciled with the live simulation on
+2026-08-05. Retrofitting these boundaries is expensive, so read this before extending
+simulation code.
 
 The companion document [WORLD-DESIGN.md](WORLD-DESIGN.md) describes what runs ON this
 architecture: settlements, goods, caravans, clans, and the player's climb from one guy
@@ -206,14 +207,14 @@ fixture and compare deltas whenever a world-wide rule is added.
   zoning, and `CityBuildingKind` is nine modern apartment blocks. The medieval GLBs exist on
   disk and in `BuildingType` but no plot can reference them. The shipped map also has
   `roads: []` and `plots: []`, so none of this pipeline has ever run on the current world.
-- ~~`server/src/world/navgrid.rs` + `pathfinding.rs` — tactical-layer movement.~~
-  **[not an asset — delete on sight].** `pathfinding.rs` has zero callers workspace-wide,
-  carries `#![allow(dead_code)]` to survive compilation, has no tests, and its scratch type
-  is never constructed. It is salvage from the deleted NPC AI with a node cap giving ~120m
-  of reach. `navgrid.rs` does run every tick, but its only consumer is that dead code and
-  its input is empty on the shipped map. The tactical layer wants flow fields; neither of
-  these is a step toward them.
-- Chunked terrain streaming, huge maps, and the map editor. **[done]**
+- `server/src/world/navgrid.rs` and village routing — **[live, bounded local use]**.
+  The navgrid keeps the shared building obstacle index current; village travel, trades,
+  ambient movement, construction and hero steps query it. `village_roads` owns the
+  obstacle surveys, route cache and road graph. The old generic `find_path` routine in
+  `pathfinding.rs` remains unused, although its wall-clock budget settings are shared by
+  the live queue. Future commanded groups still require regional flow fields rather than
+  multiplying these local searches.
+- Chunked terrain streaming and huge maps. **[done]**
 - lightyear replication + profile persistence. **[done]** — including heroes, which now
   survive disconnect and server restart.
 - Stable `PersonId`, `SettlementId` and `BuildingId` relationships, global settlement
@@ -276,9 +277,16 @@ The current village simulation uses these rules as hard boundaries:
 - **Off-screen simulation is aggregate.** A strategic person must not own a path, door
   timer, seat, shopping trip or resource animation. Add world-wide rules to the strategic
   settlement pass and cover tactical/strategic agreement with tests.
-- **Pure policy lives outside orchestration.** Wage decisions are in `village/economy.rs`,
-  household membership and provisioning in `village/households.rs`, physical trades in
-  `village/trades.rs`, production rates in `village/production.rs`, strategic LOD in
-  `village/strategic.rs`, shared ordering in `village/schedule.rs`, civic road repair in
-  `village_roads/steward.rs`, and road geometry in `village_roads/geometry.rs`. Keep
-  extending those seams instead of growing one monolith.
+- **Village domains have explicit owners.** `village.rs` is the public facade and shared
+  state model; migration and resident counts live in `village/population.rs`, demand and
+  geography-aware permits in `village/planning.rs`, material supply and building work in
+  `village/construction.rs`, vacancy matching in `village/employment.rs`, commercial work
+  and payroll in `village/commerce.rs`, aggregate food/prosperity in
+  `village/settlement_economy.rs`, household provisioning in `village/households.rs`,
+  physical trades in `village/trades.rs`, production rates in `village/production.rs`,
+  strategic LOD in `village/strategic.rs`, and shared ordering in `village/schedule.rs`.
+  `village_roads.rs` owns the local survey primitives and public road state; connector
+  construction lives in `village_roads/construction.rs`, graph routing and caches in
+  `village_roads/routing.rs`, civic repair in `village_roads/steward.rs`, and width/dryness
+  geometry in `village_roads/geometry.rs`. Keep extending those seams instead of growing
+  either facade into a monolith.

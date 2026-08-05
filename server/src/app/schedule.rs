@@ -1,6 +1,6 @@
 //! Fixed-update schedule sets and system wiring.
 //!
-//! The full simulation schedule (physics, AI, persistence).
+//! The full authoritative world, network, village and persistence schedule.
 
 use bevy::ecs::schedule::SystemSet;
 use bevy::prelude::*;
@@ -17,27 +17,27 @@ use crate::world;
 use super::bootstrap::server_is_started;
 
 pub(crate) fn configure_fixed_schedule(app: &mut App) {
-    configure_fps_fixed_schedule(app);
+    configure_server_fixed_schedule(app);
 }
 
 #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
-enum FpsServerSet {
+enum ServerSet {
     WorldTick,
     NetIngress,
     Indices,
     Persistence,
 }
 
-fn configure_fps_fixed_schedule(app: &mut App) {
+fn configure_server_fixed_schedule(app: &mut App) {
     world::village::schedule::configure_shared_village_simulation(app, FixedUpdate);
 
     app.configure_sets(
         FixedUpdate,
         (
-            FpsServerSet::WorldTick,
-            FpsServerSet::NetIngress,
-            FpsServerSet::Indices,
-            FpsServerSet::Persistence,
+            ServerSet::WorldTick,
+            ServerSet::NetIngress,
+            ServerSet::Indices,
+            ServerSet::Persistence,
         )
             .chain(),
     );
@@ -45,16 +45,16 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         FixedUpdate,
         (
             world::village::schedule::VillageSimulationSet::Time
-                .in_set(FpsServerSet::WorldTick)
+                .in_set(ServerSet::WorldTick)
                 .before(world::time::update_world_time)
                 .run_if(server_is_started),
             world::village::schedule::VillageSimulationSet::Core
-                .in_set(FpsServerSet::WorldTick)
+                .in_set(ServerSet::WorldTick)
                 .after(world::navgrid::sync_obstacle_grid)
                 .before(world::regions::tick_strategic_world)
                 .run_if(server_is_started),
             world::village::schedule::VillageSimulationSet::Navigation
-                .in_set(FpsServerSet::NetIngress)
+                .in_set(ServerSet::NetIngress)
                 .after(player::hero::handle_unit_move_orders)
                 .before(world::regions::update_client_interest)
                 .run_if(server_is_started),
@@ -78,7 +78,7 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             world::regions::log_region_telemetry,
         )
             .chain()
-            .in_set(FpsServerSet::WorldTick)
+            .in_set(ServerSet::WorldTick)
             .run_if(server_is_started),
     );
 
@@ -98,7 +98,7 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             world::regions::update_region_sim_levels,
         )
             .chain()
-            .in_set(FpsServerSet::NetIngress)
+            .in_set(ServerSet::NetIngress)
             .run_if(server_is_started),
     );
 
@@ -106,7 +106,7 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         FixedUpdate,
         (player::index::sync_player_entity_index,)
             .chain()
-            .in_set(FpsServerSet::Indices)
+            .in_set(ServerSet::Indices)
             .run_if(server_is_started),
     );
 
@@ -117,7 +117,7 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             persistence::io_queue::update_profile_io_acks,
         )
             .chain()
-            .in_set(FpsServerSet::Persistence)
+            .in_set(ServerSet::Persistence)
             .run_if(server_is_started),
     );
 
@@ -129,14 +129,14 @@ fn configure_fps_fixed_schedule(app: &mut App) {
                 .before(world::time::handle_set_time_of_day),
             // Phase brackets anchor on SystemSets, not individual systems, so that
             // deleting any single gameplay system cannot silently skew the timings.
-            telemetry::perf::handle_perf_core_phase_end.after(FpsServerSet::WorldTick),
+            telemetry::perf::handle_perf_core_phase_end.after(ServerSet::WorldTick),
             telemetry::perf::handle_perf_navigation_phase_begin
                 .before(world::village_roads::rebuild_village_road_graph),
             telemetry::perf::handle_perf_navigation_phase_end
                 .after(player::hero::step_units)
                 .before(world::regions::update_client_interest),
-            telemetry::perf::update_server_perf_log.after(FpsServerSet::Persistence),
-            telemetry::network::sample_replication_change_pressure.after(FpsServerSet::Persistence),
+            telemetry::perf::update_server_perf_log.after(ServerSet::Persistence),
+            telemetry::network::sample_replication_change_pressure.after(ServerSet::Persistence),
         )
             .run_if(server_is_started),
     );

@@ -16,7 +16,7 @@ pub struct MapEditsDefinition {
     pub version: u32,
     #[serde(default)]
     pub terrain_deltas: Vec<MapTerrainDeltaChunk>,
-    /// Legacy stroke history. Baked into `terrain_weightmaps` by the editor
+    /// Legacy stroke history. Baked into `terrain_weightmaps` by old authoring tools
     /// on load; kept so pre-bake map files still paint correctly.
     #[serde(default)]
     pub terrain_paint_ops: Vec<TerrainPaintOp>,

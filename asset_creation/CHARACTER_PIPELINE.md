@@ -3,9 +3,11 @@
 Everything learned turning a Tripo-generated blob into a rigged, animated, clothable base
 character. Written for the next time you do this, and for when you start wiring it into the game.
 
-**Current asset:** `character/humanoid.blend` — `Character_Base` (14 loose parts, 426 verts, rigged) +
-`Rig` (16 bones) + 9 clips in two layers (body + face). Built reproducibly by `build_basemodel_v2.py` then
-`rig_basemodel_v2.py`. No wardrobe yet. See section 13.
+**Current asset:** `character/humanoid.blend`, shipped as a 1.70 m character in
+`Humanoid.glb`: 18 joints (16 deform/rig bones plus two attachment joints), 14 actions,
+14 selectable wardrobe meshes and six skin tones. It is built reproducibly by the scripts
+listed in §15. The early 426-vertex/no-wardrobe figures retained later in this document are
+rebuild history, not the shipping mesh budget.
 
 **v1 (`tripo_boy.blend`) is deleted.** Everything v2 still reuses was distilled into
 `humanoid_legacy_donor.blend` (121 KB): the `arm.L/R` + `hand.L/R` geometry (190 verts) and the `WalkCycle`
@@ -20,8 +22,8 @@ names are unsuffixed. `humanoid.blend` has no external library links at all.
 
 **Ships as:** `client/assets/characters/Humanoid.glb`, built by `export_character_glb.py`
 (section 12). The `.blend` is the studio source; the `.glb` is the only thing the game reads.
-Note `export_character_glb.py` is still written against v1's scene (its hair list, `Wardrobe`
-collection and studio objects) and needs repointing at v2.
+`export_character_glb.py` exports the current v2 scene and the validator cross-checks all
+manifest wardrobe/clip names against the resulting GLB.
 
 ---
 
@@ -982,7 +984,7 @@ Authoring keeps it: body clips key 14 bones, face clips key 2, asserted by `fini
 The glb cannot. **Blender's glTF exporter emits channels for every joint of an armature in every
 animation, whatever the action contains.** Verified twice — filtering the export rewrite down to only
 the bones each action owns, and separately turning `export_bake_animation` off — both still produced
-17 animated nodes across all 12 clips.
+every joint in every clip (currently 18 animated nodes across all 14 clips).
 
 This is fine, and it is worth understanding why rather than trying to defeat it: Bevy's
 `AnimationGraph` mask blocks targets **at the graph node**, not by whether a clip has curves for them.
@@ -1049,34 +1051,22 @@ the face lead**. Geometry first, then taste.
 
 ---
 
-## 14. Known gaps before this ships in-game
+## 14. Current gaps
 
-1. **Wardrobe is nine items** — 2 shorts, 2 shirts, 5 hairstyles — plus 6 skin tones. No hats,
-   shoes or accessories yet. Because garments are fitted to
-   measured body bounds, **the base is now effectively frozen** — changing body proportions
-   invalidates every garment's numbers at once.
-2. **Nose.** v1 had one; v2 does not, so the frontmost geometry is now the eyes. Cosmetic, but note
-   `inspect_glb.py`'s facing check asserts "nose centred at x=0" and now passes *by accident*,
-   because two symmetric eyes average to zero.
-3. **Hands are the fattest non-body part** at 74 verts of 426 — more than the arms, for two small
-   blocks. They would go to ~16 as chamfered boxes, keeping the wrist split for articulation.
-4. **No edge loops at joints**, so group boundaries are positional. Fine for rigid binding; smooth
-   deformation would need loops.
-5. **Nine clips: body `idle`/`walk`/`sit_idle`/`sit_down`, face `idle`/`happy`/`angry`/`sad`/
-   `surprised`.** Missing `run`, `jump`, and `stand_up` to reverse `sit_down`. The face layer is
-   authored but nothing consumes it yet — the masked `AnimationGraph` still has to be built in
-   `client/`.
-6. **No knees or elbows**, as in v1. Section 6's ±4° heel/toe ceiling is tighter on v2's 48% longer
-   legs. Knees are the change that buys a livelier walk.
-7. **`Shorts_Athletic` in v1 has invalid geometry** from its Solidify pass. Irrelevant to v2, but
-   `export_character_glb.py` still repairs it with `mesh.validate()` on the way out.
-8. **Not yet loaded in the game.** The glb and manifest are written and verified, but nothing in
-   `client/` references them yet, and the masked `AnimationGraph` for the body/face layers still has
-   to be built.
-9. **LODs are parked deliberately.** Measured at 500 NPCs: 393k verts / 728k tris (nothing) but
-   **2000 draw calls, 4000 with shadows** — the real cost. A draw call is per *material*, so merging
-   meshes alone buys nothing; the prerequisite is one shared material, which `build_lods_v2.py`
-   does with a 64×64 palette atlas. Revisit only if frame numbers demand it.
+1. The live wardrobe has 14 items across bottom/top/hair plus six skin tones, but no hats,
+   shoes or accessories. Slot lists are append-only because replicated outfits store indices.
+2. There are no knees or elbows. Rigid binding is intentional; smoother/livelier movement
+   would require geometry and rig changes, not only another clip.
+3. Runtime body clips are `idle`, `walk`, `sit_idle`, `sit_down`, `build`, `chop`,
+   `harvest`, `carry` and `talk`; the five face clips are consumed by a masked
+   `AnimationGraph`. Missing presentation includes run/jump/stand-up, `carry_idle` and a
+   fishing-specific clip/tool.
+4. The current walk-speed normalisation still divides by the 3.2 m/s hero speed and clamps
+   playback at 1.6. The authored walk is slower, so locomotion can slide; see
+   `ASSET_HANDOVER.md` for the measured correction.
+5. LODs remain parked deliberately. At hundreds of characters draw calls and animation
+   players, not the base triangle count, become the real problem. Revisit instancing/VAT or
+   shared-material LOD only with a measured crowded-client profile.
 
 ---
 
@@ -1092,8 +1082,9 @@ the face lead**. Geometry first, then taste.
 > affected — `humanoid.blend` is the cleaned result and is intact, as is the shipped
 > `Humanoid.glb`. Re-running step 1 requires a fresh Tripo export; §13 covers which download to
 > take. Steps 2 onward all read `humanoid.blend` and run unchanged.
-| `rig_basemodel_v2.py` | Build the 16-bone rig, bind, retarget the donor's walk, re-derive the bounce |
-| `animate_basemodel_v2.py` | Author the body layer (`idle`, `sit_idle`, `sit_down`) and face layer (5 moods) |
+| `rig_basemodel_v2.py` | Build the 16-bone deform rig, bind, retarget the donor's walk and re-derive bounce |
+| `add_attach_bones.py` | Add `attach.carry` and `attach.tool.R` without changing skin deformation |
+| `animate_basemodel_v2.py` | Author all nine body clips and five face moods |
 | `wardrobe_items.py` | Wardrobe DATA — one block per item, no Blender imports |
 | `build_wardrobe_v2.py` | Build the wardrobe from that data, bake hair, emit the RON manifest |
 | `build_lods_v2.py` | LOD1 via a shared palette atlas (parked — see below) |
@@ -1101,7 +1092,7 @@ the face lead**. Geometry first, then taste.
 | `preview_wardrobe_v2.py` | Front/back sheet of outfit combinations |
 | `optimize_mesh.py` | Standalone coplanar cleanup; asserts bbox, part count and symmetry unchanged |
 | `render_studio.py` | Section 10 studio turnaround + close-ups of whatever is in the open `.blend` |
-| `export_character_glb.py` | `.blend` → `client/assets/characters/*.glb` (section 12) — still v1-shaped |
+| `export_character_glb.py` | current `.blend` → `client/assets/characters/Humanoid.glb` (section 12) |
 | `inspect_glb.py` | Verify an exported `.glb` against the Bevy contract, pure stdlib |
 
 **The habit that caught the most bugs:** assert the invariant, don't assume it. Every script here

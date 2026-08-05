@@ -336,7 +336,7 @@ pub fn asset_roots() -> Vec<PathBuf> {
         push_unique(PathBuf::from(root));
     }
 
-    // Support running binaries from subdirectories (e.g. `editor/`) where cwd-based
+    // Support running binaries from subdirectories (for example offline tools) where cwd-based
     // `assets` or `client/assets` roots may not resolve.
     let shared_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     if let Some(workspace_dir) = shared_dir.parent() {

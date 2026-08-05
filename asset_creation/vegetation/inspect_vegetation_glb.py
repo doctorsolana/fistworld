@@ -273,7 +273,7 @@ def validate(path, cls="any", allow_texture=False):
                             f"alpha_discard — anything below the mask cutoff is deleted, not shaded."
                         )
             if "TEXCOORD_1" not in attrs:
-                warnings.append(f"WIND: meshes[{mi}] has no TEXCOORD_1; wind weights unreserved (wind not yet implemented)")
+                warnings.append(f"WIND: meshes[{mi}] has no TEXCOORD_1; runtime wind weights are missing")
             if "NORMAL" not in attrs:
                 errors.append(f"NORMAL: meshes[{mi}] has no normals")
 

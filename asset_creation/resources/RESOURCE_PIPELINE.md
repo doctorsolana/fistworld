@@ -250,16 +250,16 @@ sits at. Solve these, don't eyeball them.
 
 ---
 
-## 5. Open questions for integration
+## 5. Integration status and open appearance question
 
-Both raised by the handoff and both still open — they are game-code decisions, not art ones.
+The attachment/orientation/base-transform work is integrated. One appearance-model question
+remains as more food trades are added.
 
 **`Good::Food` is generic but its appearance is not.** A fisherman carries fish; a baker would carry
 bread. Splitting the accounting resource from its look — `Good::Food` +
 `CarriedAppearance::{FishBasket, BreadBasket, MeatBundle}` — is the right shape, and only `FishBasket`
 exists so far.
 
-**Loaded villagers only use the carry pose while moving.** When they stop they return to `idle` while
-the prop stays attached, so a detailed bundle will visibly float at chest height. Either add a
-`carry_idle` clip or freeze `carry` on a standing frame. Now that the bundles are real models rather
-than a small cuboid, this will be much more obvious than it was.
+**Loaded villagers now keep the carry body layer at full weight while standing**, so the
+idle clip no longer pulls their arms away from an attached bundle. A purpose-authored
+`carry_idle` could still look more natural, but the floating-prop bug is closed.

@@ -1,14 +1,7 @@
 //! THE terrain splat material.
 //!
-//! One `AsBindGroup` definition, used by both the client and the editor.
-//!
-//! It lives in `shared` because it did not, and that cost five weeks. The editor kept its own
-//! `EditorTerrainSplatExtension` declaring bindings 100-105 and 120-123 while pointing at the
-//! same `terrain_splat.wgsl`. When commit `8b189ca` added `palette` at binding 124 to the shader
-//! and to the client's copy, the editor's copy was not updated -- so its pipeline layout no
-//! longer matched the shader it loads, both the forward and deferred pipelines failed
-//! validation, and Bevy 0.19 escalated that to a process exit ~20-40 s after launch. Nothing
-//! caught it, because two structs against one shader is a mismatch no compiler can see.
+//! One `AsBindGroup` definition shared by every terrain renderer. Multiple Rust
+//! binding layouts against one shader can drift without a compiler error.
 //!
 //! The rule that follows: **a binding is added here or not at all.**
 
@@ -30,13 +23,10 @@ use super::paint::TerrainLayer;
 ///
 /// The four-layer contract used to be spread across the KTX2 build order, the shader's
 /// `uv_grass`/`uv_dirt`/`uv_sand`/`uv_cobble` names, the palette literals, the `layer_tiling`
-/// vector (hardcoded identically in two crates), and the editor's paint-tool swatches -- with
-/// nothing cross-checking any of them. They had already drifted: the editor showed "Dark Ground"
-/// and "Dry Dirt" in colours sampled from the old photographic textures, which is not what the
-/// terrain renders.
+/// vector and display colours, with nothing cross-checking any of them.
 pub struct TerrainLayerDef {
     pub layer: TerrainLayer,
-    /// What a human calls it. Used by the editor's paint tools.
+    /// What a human calls it in tools and diagnostics.
     pub display_name: &'static str,
     /// Source image packed into this index of `terrain_albedo_array.ktx2`.
     /// `tools/terrain_ktx_builder` reads the order from here.
@@ -215,7 +205,7 @@ pub struct TerrainPalette {
 ///
 /// Slightly desaturated, slightly blue-shifted in shadow-facing values so the world reads
 /// storybook rather than photographic. The four layer colours come from [`TERRAIN_LAYERS`],
-/// so the editor's swatches and the rendered ground cannot disagree.
+/// so tools and the rendered ground cannot disagree.
 ///
 /// Authored values sit darker/richer than the intended on-screen result: the sun's exposure
 /// and the aerial haze both wash them out. A first pass used mid-value colours and the whole
@@ -327,7 +317,7 @@ mod tests {
         assert_eq!(t.w, TERRAIN_LAYERS[3].tile_metres);
     }
 
-    /// The palette the shader reads and the swatches the editor draws are the same numbers.
+    /// The palette and layer table expose the same numbers.
     #[test]
     fn palette_colors_come_from_the_table() {
         let p = stylized_palette();

@@ -333,24 +333,8 @@ pub fn capture_settlement_history(
             }
 
             let history_index = elapsed.saturating_sub(offset).saturating_sub(1) as usize;
-            let (food_produced, food_consumed) = economy_runtime
-                .by_settlement
-                .get(&entity)
-                .map(|state| {
-                    (
-                        state
-                            .production_history
-                            .get(history_index)
-                            .copied()
-                            .unwrap_or(0),
-                        state
-                            .consumption_history
-                            .get(history_index)
-                            .copied()
-                            .unwrap_or(0),
-                    )
-                })
-                .unwrap_or_default();
+            let (food_produced, food_consumed) =
+                economy_runtime.historical_food(entity, history_index);
             let market_total = market_cash.into_iter().fold(0u64, u64::saturating_add);
             let total_local_coin = settlement
                 .treasury

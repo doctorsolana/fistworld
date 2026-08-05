@@ -35,18 +35,6 @@ RUN mkdir -p tools/collider_baker/src && \
     echo 'edition = "2021"' >> tools/collider_baker/Cargo.toml && \
     echo 'fn main() {}' > tools/collider_baker/src/main.rs
 
-# Editor and tools/terrain_ktx_builder. Both are workspace members in Cargo.toml
-# but were added AFTER this file last stubbed its members, so cargo failed to
-# load the workspace ("failed to load manifest for workspace member") and the
-# image could not build at all. Every member needs a stub here or an exclude
-# there; adding a member without one breaks the deploy silently.
-RUN mkdir -p editor/src && \
-    echo '[package]' > editor/Cargo.toml && \
-    echo 'name = "editor"' >> editor/Cargo.toml && \
-    echo 'version = "0.1.0"' >> editor/Cargo.toml && \
-    echo 'edition = "2021"' >> editor/Cargo.toml && \
-    echo 'fn main() {}' > editor/src/main.rs
-
 RUN mkdir -p tools/terrain_ktx_builder/src && \
     echo '[package]' > tools/terrain_ktx_builder/Cargo.toml && \
     echo 'name = "terrain_ktx_builder"' >> tools/terrain_ktx_builder/Cargo.toml && \

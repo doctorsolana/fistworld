@@ -2,7 +2,7 @@
 
 This is the naming authority for shipped 3D art. A model has one canonical
 identity from its authoring file to its runtime path, shared enum, collider id,
-editor label, and internal GLB scene/node names.
+display label, and internal GLB scene/node names.
 
 ## Convention
 
@@ -12,7 +12,7 @@ editor label, and internal GLB scene/node names.
 | Runtime GLB | descriptive `UpperCamelCase.glb` | `MootHall.glb` |
 | Rust variant | `UpperCamelCase` | `BuildingType::MootHall` |
 | Serialized/collider id | `snake_case` | `building_moot_hall` |
-| Editor label | ordinary title case | `Moot Hall` |
+| Display label | ordinary title case | `Moot Hall` |
 | Variant suffix | `A`, `B`, `C` only for genuinely different meshes | `BirchA`, `BirchB` |
 
 Do not put store-pack numbers, build techniques, version numbers, or words
@@ -20,7 +20,7 @@ such as `Graft` in a live asset identity. Those facts belong in source history.
 Do not create two canonical prop kinds that point at one GLB.
 
 Old serialized map ids are accepted only in `PropKind::from_id`. The loader
-normalizes them immediately, so generated content and the editor always write
+normalizes them immediately, so generated and authored content always write
 the current id. This preserves existing maps without letting legacy vocabulary
 spread into new code.
 
@@ -98,10 +98,10 @@ Village or Town Hall should be a different asset rather than reusing that name.
 ## Adding or renaming an asset
 
 1. Give the model a descriptive source filename and runtime filename.
-2. Register one variant, canonical id, editor label, and scene path in
+2. Register one variant, canonical id, display label, and scene path in
    `shared/src/props/kinds.rs` or `shared/src/building/defs.rs`.
 3. Add render/LOD classification and, if solid, one collider-manifest entry.
-4. Update the world generator and editor pools if the asset should occur there.
+4. Update the world generator pools if the asset should occur there.
 5. If old serialized content exists, add a read alias; never keep an alias in
    `ALL_PROP_KINDS`.
 6. Normalize GLB metadata when a file was renamed:

@@ -4,7 +4,7 @@
 //! ([`GeneratedWorld`]): a style, a seed and the map size. Everything —
 //! coastline, mountains, rivers, beaches, lakes — is a pure function of those
 //! three numbers and is rebuilt identically at load time by every binary
-//! (client, server, editor) running this exact code.
+//! (client and server) running this exact code.
 //!
 //! The recipe used to carry a fourth thing: recorded road-flattening strokes,
 //! whose smoothed beds depended on grid state at generation time and so could

@@ -6,13 +6,14 @@ sword and ends up running a realm. Companion to [ARCHITECTURE.md](ARCHITECTURE.m
 which says how the engine carries this; this document says what the world *is*.
 The build order for both lives in [ROADMAP.md](ROADMAP.md).
 
-> **Status, updated 2026-08-04.** The autonomous village slice in §1b is now live:
-> settlements, named residents, permits, physical construction, builder-made village paths,
-> occupations, bounded goods inventories and observed wheat-farming and lumberjack routines
-> exist. Local prices, business payroll, shared household necessities budgets,
-> daily consumption and three Moot Hall jobs are live; persistence, caravans,
-> clans and the regional strategic economy still do not. Read §1b as the report of current code and the rest as design unless it
-> explicitly says otherwise.
+> **Status, updated 2026-08-05.** The autonomous village slice in §1b is live:
+> stable identities, named residents, seeded layouts, permits, physical construction,
+> builder-made roads, occupations, bounded inventories, farming/fishing/lumber work,
+> households, local prices, payroll, daily consumption and civic jobs. The positive tier
+> ladder reaches City with placeholder civic art. Ordinary off-screen residents now use
+> aggregate production and commerce. World-state persistence, caravans, travelling-party
+> promotion, physical walls, clans and combat remain future work. Read §1b as the report of
+> current code and the rest as design unless it explicitly says otherwise.
 
 The genre anchor: Mount & Blade's economic loop (trade → enterprises → retinue
 → fiefs) and The Guild's business ownership, but observed from an RTS camera in
@@ -34,7 +35,7 @@ one persistent, always-simulating multiplayer world.
    surface bands (grass/sand/rock, `surface_weights_at`) are pure seed-derived
    functions in the shared crate, so "can I farm here" / "is this buildable
    shoreline" are server-validated queries that agree bit-for-bit with what
-   the client renders. Editor-painted surface edits are cosmetic only and
+   the client renders. Authored surface edits are cosmetic only and
    must never gate gameplay.
    Climate is part of that surface truth (`shared::worldgen::climate_at`):
    signed latitude bands with deliberately asymmetric hemispheres — the
@@ -54,15 +55,13 @@ one persistent, always-simulating multiplayer world.
    on every client, cosmetic for now, but positioned so later mechanics
    (slowed caravans, delayed sailing) can read the exact same field.
 
-   > **[correction]** `BiomeField::resources()` — named above as the ground truth for
-   > production — has **zero production callers**. Its only callsites are its own unit
-   > tests; just `biome()` and `iron_vein()` are used, and only for colour. So the
-   > economic gradient this pillar describes is currently cosmetic, which is exactly
-   > what the pillar says it must not be. There is also no function anywhere that
-   > aggregates it over a radius, which settlement founding requires. Validate that it
-   > discriminates at the scale settlements care about BEFORE building site scoring on
-   > it (ROADMAP Phase 1). The climate and surface-band halves of this pillar, by
-   > contrast, are genuinely live and drive real rendering.
+   > **[current implementation]** `BiomeField::resources()` now drives Farmstead plot
+   > quality and therefore observed and strategic output. Lumber sites additionally
+   > require reachable generated trees, while fishing sites require a dry hut and broad
+   > open water at the authored pier end. There is not yet a radius aggregator for
+   > founding or future resource districts; current permit planning evaluates legal
+   > candidate plots directly. The climate and surface-band rules also drive rendering,
+   > so the first local economy is grounded in the same geography the player sees.
 3. **Statistical at distance, concrete when observed** — but this applies to
    BEHAVIOUR, not to IDENTITY. The strategic layer moves numbers (stocks,
    prices, positions along a route); the tactical layer spawns real bodies only
@@ -543,7 +542,7 @@ with a player who does nothing but found the hall and put people on the map.
    mutually exclusive forever.
 6. A resident applies. No residents, no permit — an empty foundation does not
    build itself, which is the whole point of §1's "a hall is a site, not a
-   village". The applicant becomes the building's owner, by name, and it is
+   village". The applicant becomes the building's owner, by durable `PersonId`, and it is
    whoever holds the FEWEST buildings already. That last part is not a detail:
    taking whichever resident the query returned first gave one villager the
    entire village and left the other two owning nothing, which makes the roster
@@ -554,12 +553,14 @@ with a player who does nothing but found the hall and put people on the map.
    Hut and Lumberjack Hut permits debit the applicant's wallet into the general
    settlement treasury; settlement-requested businesses are discounted and
    repeat holdings become progressively dearer.
-7. Ordinary siting is a deterministic ring search out from the hall: 12 bearings per ring,
-   6m steps, rejecting slope over 0.30, ground within 1.5m of the waterline, and
-   anything that would overlap what is already there. Houses ring 12–26m, work
-   buildings 30–60m, so the place reads as a village rather than a scatter.
-   Deterministic on purpose: the same village in the same state makes the same
-   choice, so a bug is reproducible rather than a story about what happened once.
+7. Ordinary siting is deterministic and charter-led. A settlement's name and
+   founding position choose organic lanes, radial commons, an ordered grid, a great
+   avenue or neighbourhood clusters plus a civic-centre form. Those grammars bias
+   frontage and preserve centre space; demand and geography still choose the building
+   count and winning plot. Candidate scoring rejects slope, wet ground, overlaps,
+   road reservations and adjunct fields/piers, rewards appropriate farmland/forest,
+   and faces completed roads when one is close. Completed buildings never relocate.
+   Determinism makes the same settlement state reproduce the same choice and bug.
    A coastal food search is geometry-led: it keeps the whole Fisherman's Hut
    and its side route dry, rotates the authored `Anchor_Pier` side seaward, and
    requires the working end to stand over broad submerged water. Biome does not
@@ -683,8 +684,8 @@ with a player who does nothing but found the hall and put people on the map.
     wood supply, staffing, storage, collision and door-connected roads; authored
     art can replace them without changing progression.
 22. Public positions are explicit named rosters at the hall. A Hamlet exposes
-    one guard and one city-worker position; Village and later rungs expose two
-    of each. Vacancies remain visible when population is too small, and further
+    one city-worker position and no guards; Village and later rungs expose two
+    city-worker and two guard positions. Vacancies remain visible when population is too small, and further
     civic hiring stops at population minus one so a tiny foundation does not
     consume every new arrival. The first city worker remains the Road
     Steward; guards are real employment but patrol/combat behaviour is pending.
@@ -774,38 +775,34 @@ certification time, and maximum planner-call time. The default planner allowance
 ceiling (`CITYSIM_PATHFINDING_REQUESTS_PER_TICK`). At least one request is served so
 an individually difficult route cannot leave the queue permanently stuck.
 
-This ambient LOD is deliberately the first half of §1a's embodiment boundary,
-not a claim that the whole boundary exists. Region interest already prevents
-unobserved villagers reaching clients, and ambient behaviour now stops outside
-tactical regions, but the authoritative server entities are not yet converted
-to compact `AtPlace`/`Travelling` person records. Phase 2 still owns that
-promotion/demotion seam.
+Ambient behaviour and ordinary-villager LOD now exercise the first half of §1a's
+embodiment boundary. Region interest prevents unobserved people reaching clients;
+outside tactical regions ordinary residents gain `StrategicPerson`, shed routes,
+doors, seats, shopping trips and work-animation state, and contribute through aggregate
+workplace/household passes. Re-observation rebuilds those routines from durable IDs and
+economic/social state. Phase 2 still owns derived-route `Travelling` records and the
+lossless traveller/army promotion contract.
 
 **Deliberately not in this slice:** births, boats, remote markets and caravans,
 processing Wheat into prepared Food, tree
-depletion/regrowth, decline, physical walls, guard patrol/combat behaviour, and
-the full scored settlement planner.
+depletion/regrowth, decline, physical walls and guard patrol/combat behaviour.
 The implemented local Moot is a dealer with physical stock, earmarked buying
 cash and inventory-aware bid/ask quotes; it is not yet a player trade screen or
 a regional economy. Wheat is temporarily edible
 directly, fishing lands prepared Food, and the shortage response can repeat
-cabins and Farmsteads, but this is not yet a complete economy. The ring search is
-emphatically NOT the final planner — it still knows nothing of frontage, forest
-proximity or choosing the best farmland among several valid plots. Paths react
-to where that ring search put buildings; they do not make the siting choice. The
-real planner replaces the ring search wholesale.
+cabins and Farmsteads, but this is not yet a complete regional economy. The seeded
+planner now handles frontage, layouts, farmland, reachable timber, coast geometry,
+roads and civic reservations; future districts/walls extend it rather than replacing it.
 
 **Where this slice diverges from the design above**, all of it deferred rather
 than decided against:
 
-- Buildings ARE standalone entities with a position and an owner, which §1 says
-  the model has no room for. That is a real tension, taken knowingly: three
-  buildings per village is nowhere near the tick cost §1 was protecting against,
-  and the owner-by-name is what makes "the wheat farm stopped because the farmer
-  died" expressible at all. It converges when the planner lands.
-- Residency is replicated per person (`Residence`), where §1a forbids replicating
-  people. Three villagers is not thirty thousand; the forbidding stands for the
-  strategic layer.
+- Buildings are standalone region-scoped entities with stable `BuildingId`, `BuildingOf`
+  and `OwnedBy` relationships. That is intentional tactical/detail state; the globally
+  replicated directory carries only compact settlement summaries.
+- Residency remains durable per person, but bodies and detailed components are interest
+  scoped. Strategic people retain identity, household and work joins without paying for
+  an embodied routine.
 - Positive progression now reaches Village, Town and City. Regression,
   abandonment and Ruins still have no implementation; promotion requirements
   are the current playable tuning, not a final balance promise.
@@ -837,12 +834,11 @@ reuse, then runs both the original-builder handoff and multi-waypoint travel at
 Wheat consumption, exact wallet-to-market payment, coin conservation, unmet
 demand and the three-secure-day promotion. `cargo
 village-lab` is the broader regression laboratory: it loads a dedicated 1km map
-with real baked prop colliders, founds two simultaneous eight-person settlements,
-and soaks the complete world for 160 simulated minutes at 100x by default. A
-fertile meadow coast can support both farming and fishing; frozen inland
-Coldbarrow begins on poor farmland and has no fishing access. Its resource
-search can eventually reach better outer soil, deliberately testing recovery
-rather than permanent scripted poverty. The lab reports structure and
+with real baked prop colliders, founds one deterministic eight-person meadow
+settlement and soaks the complete world for 190 simulated minutes at 100x by
+default. The opt-in `dual` scenario adds a simultaneous eight-person frozen
+inland control. The fertile meadow coast can support both farming and fishing;
+Coldbarrow begins on poor farmland and has no fishing access. The lab reports structure and
 inventory milestones every five simulated minutes and fails after ten minutes
 of unchanged active state with the villager's intent, routine, route and nearby
 obstacles. Its end-state contract checks that every completed building builds its
@@ -850,9 +846,8 @@ own door connector, even when an existing path is less than two metres away, all
 worksites were supplied incrementally, day/night thresholds were crossed, and no
 bounded inventory overflowed. It also requires the meadow settlement to build
 both food sources, feed everyone, sustain its reserve and advance to Village,
-while Coldbarrow records hunger, repeats Farmsteads in response, recovers and
-can advance on the same later day boundary as the meadow once its measured
-requirements hold. The full dual contract passes at the normal lab warp; a diagnostic
+while Coldbarrow records hunger, repeats Farmsteads in response and remains a
+Hamlet without a secure reserve. The full dual contract passes at the normal lab warp; a diagnostic
 1,000x run may skip sub-second door presentation while retaining authoritative
 threshold crossing and the same world-time accounting.
 

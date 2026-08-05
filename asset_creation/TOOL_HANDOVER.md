@@ -1,8 +1,9 @@
-# Handover — hand tools, the `harvest` clip, and three fixes to existing carry code
+# Implemented hand-tool and carried-resource reference
 
-Follows `ASSET_HANDOVER.md` (buildings, garments, the first work clips). Everything below is exported
-and verified. **Three items in this document are bugs in code that already shipped**, not new work —
-§4 and §5. Read those even if you skip the rest.
+Follows `ASSET_HANDOVER.md` (buildings, garments and work clips). The tools, `harvest`
+clip, attachment joints, carried-resource orientation and base-origin transform below are
+exported, verified and integrated. Historical failure explanations remain because they
+define the authoring contract; they are no longer an implementation checklist.
 
 Confirm any claim yourself:
 
@@ -57,14 +58,10 @@ the scene when the activity ends is fine and is cheaper than hiding it.
 
 ---
 
-## 3. `harvest` is new, and `Farming` currently plays the wrong clip
+## 3. `harvest` is live for farming
 
-[hero/mod.rs:943](../client/src/hero/mod.rs#L943) folds `Farming` and `Fishing` into `build_blend`, so
-a farmer currently swings a **hammer** motion at a wheat field. That was the honest choice when no
-harvest clip existed. It does now.
-
-Add `harvest` alongside the existing `chop`/`build` fields on `HeroAnim`
-([hero/mod.rs:157](../client/src/hero/mod.rs#L157)) and give it its own blend, mirroring `chop_blend`:
+`client/src/hero/mod.rs` loads `harvest` by name, gives it an independent body-layer
+weight and attaches `ScytheMowing` while `CharacterActivity::Farming` is visible:
 
 ```rust
 const CLIP_HARVEST: &str = "harvest";
@@ -79,8 +76,8 @@ let harvest_blend = if !carrying
 };
 ```
 
-then drop `Farming` out of the `field_work` test so it no longer feeds `build_blend`. Everything else
-in the blend tree is unchanged — this is one more weighted clip on the body layer, not a state machine.
+Fishing alone still uses the placeholder `build` motion. Farming no longer contributes to
+that blend, and focused client tests prevent the harvest weight leaking into `build`.
 
 `chop` and `build` were re-authored in the same pass and need no code change:
 
@@ -112,18 +109,20 @@ have silently found no joint.
 
 ---
 
-## 5. ⚠ `carried_bundle_transform` lifts every bundle off the joint
+## 5. The carried-bundle base transform is fixed
 
-[hero/mod.rs:847](../client/src/hero/mod.rs#L847):
+The previous implementation treated a base-origin bundle as centre-origin and lifted it.
+The live transform now keeps `y = 0`, adds only a small forward offset and retains the
+presentation scale:
 
 ```rust
-let centre_height = spec.height * CARRIED_BUNDLE_SCALE * 0.5;
-Transform::from_xyz(0.0, centre_height - spec.drop_from_joint, CARRIED_BUNDLE_FORWARD_OFFSET)
+Transform::from_xyz(0.0, 0.0, CARRIED_BUNDLE_FORWARD_OFFSET)
+    .with_scale(Vec3::splat(CARRIED_BUNDLE_SCALE))
 ```
 
-`centre_height` assumes the bundle's origin is at its **centre**. It is not — every bundle has its
-origin on its **base**, which the contract requires and the files confirm (`baseY = 0.000` for all
-five). So the term pushes each bundle up by half its scaled height:
+Every bundle's origin is on its **base**, which the contract requires and the files confirm
+(`baseY = 0.000` for all five). The removed centre-height term previously pushed each
+bundle up by half its scaled height:
 
 | | float above joint |
 |---|---|
@@ -131,9 +130,8 @@ five). So the term pushes each bundle up by half its scaled height:
 | IronBundle | +0.18 m |
 | WoodBundle | +0.14 m |
 
-`drop_from_joint` is a hand-tuned counter-fudge — note WheatSheaf got the largest value (0.26) because
-it floated worst. **The fix is to delete both**: the joint marks where the base goes, so the correct
-local transform is `y = 0.0`, and `drop_from_joint` can come off `CarriedAssetSpec` entirely.
+`drop_from_joint` and the per-asset placement heights are gone. The joint and the asset
+origin both mark the base, so `y = 0.0` is the invariant.
 
 Two heights in that table are also stale against the current files:
 
@@ -168,5 +166,5 @@ word and I will, but the current combination is visually correct and the icons a
 * **`carry_idle` still does not exist** (carried over from `ASSET_HANDOVER.md` §9). A loaded villager
   standing still holds the `carry` pose via `carry_blend = 1.0`, which works; a dedicated standing
   variant would look better.
-* **No Rust was written or compiled.** Everything above is an asset-side claim plus a reading of the
-  current client code; the blend-weight snippets are illustrative, not tested.
+The Rust integration is compiled and covered by focused tool-selection, farming-blend and
+carried-transform tests.

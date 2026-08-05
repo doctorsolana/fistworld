@@ -1,7 +1,9 @@
 # Vegetation: the plan, in plain terms
 
 Companion to [VEGETATION_PIPELINE.md](VEGETATION_PIPELINE.md), which is the technical contract.
-This file is the **plan**: what we are doing, in what order, and what we get for it.
+This file is the **historical plan and rationale** for the now-implemented replacement.
+Current names and runtime status live in `ASSET_NAMING.md` and
+`VEGETATION_HANDOVER.md`; the steps below explain why the shipped constraints exist.
 
 Everything below was read out of the engine or measured, not assumed. Where a number is still a
 guess, it says so.
@@ -10,9 +12,8 @@ guess, it says so.
 
 ## The short version
 
-We are rebuilding every plant in the game from scratch in Blender. Not editing the bought assets —
-making new ones. The old assets stay on screen as a colour and silhouette reference and nothing
-else.
+Every plant family was rebuilt from scratch in Blender rather than editing the bought
+assets. Legacy ids now resolve to the canonical replacement registry at load time.
 
 The reason is not that the old assets look bad. It is that **the way they are built stops the
 engine using its fast paths**, and no amount of tuning fixes that from the outside.
@@ -190,7 +191,9 @@ together and the test that would catch it passes too.
 
 ## Where things stand
 
-- `inspect_vegetation_glb.py` — the validator, working, enforces the whole contract
-- `build_vegetation.py` — generates a tree from a seed; first one passes every check
-- The first tree is a **lollipop** — proof the pipeline works, not proof the art does. Step 1 exists
-  because of that.
+- 33 replacement GLBs are shipped and registered under semantic canonical names.
+- Two-level swapped-mesh LOD and wind-aware materials are live for trees; grass has its
+  own bounded generated streaming layer and road/building clearance.
+- Legacy authored ids are accepted only at the loading boundary and normalize immediately.
+- `inspect_vegetation_glb.py` and the registry/runtime tests enforce the contract.
+- Remaining known visual/performance tradeoffs are tracked in `VEGETATION_HANDOVER.md` §8.

@@ -1,7 +1,10 @@
-# Asset handover — what is new and what the game must do with it
+# Implemented village asset reference
 
-Everything below is **shipped and verified**: exported, contract-checked, colliders baked, workspace
-compiles. Nothing here needs art work. What it needs is game code.
+Everything below is **shipped, verified and integrated**: exported, contract-checked,
+colliders baked and consumed by current character/village presentation. The remaining gaps
+are explicit: better walk-speed normalisation, `carry_idle`, a fishing clip/tool and
+authored art for later civic buildings. Treat these measurements and anchors as the live
+runtime contract, not as a pending handoff checklist.
 
 Verifiers, if you want to confirm any claim yourself:
 
@@ -37,16 +40,17 @@ unaffected because the new items were **appended**, never inserted.
 
 ---
 
-## 2. Character — 4 new body clips, and `walk` re-authored
+## 2. Character body clips
 
-`body_clips` is now **8**: `idle`, `walk`, `sit_down`, `sit_idle`, **`build`**, **`chop`**,
-**`carry`**, **`talk`**.
+`body_clips` is now **9**: `idle`, `walk`, `sit_down`, `sit_idle`, `build`, `chop`,
+`harvest`, `carry` and `talk`.
 
 | Clip | Frames | Duration | Loops | Use |
 |---|---|---|---|---|
 | `build` | 32 | 1.375 s | yes | hammering — construction |
 | `chop` | 32 | 1.375 s | yes | felling a tree |
 | `carry` | 18 | **0.75 s** | yes | walking with a load |
+| `harvest` | 32 | 1.375 s | yes | mowing/harvesting wheat |
 | `talk` | 72 | 3.0 s | yes | conversation |
 | `walk` | 18 | **0.75 s** | yes | **re-authored, was 24 frames** |
 
@@ -61,7 +65,8 @@ explain happily with no extra animation. Legs stay planted; it is a standing cli
 
 ### ⚠ `walk` needs a matching client change, or it still slides
 
-**This is the one item in this document that needs a code change rather than just wiring.**
+The live client still uses the normalisation below, so this presentation improvement
+remains open. Work clips, tools and carried goods are already wired.
 
 `client/src/hero/mod.rs` normalises playback as:
 
@@ -113,9 +118,10 @@ All three are full-body and loop exactly (verified frame-1-vs-frame-last delta =
 
 ---
 
-## 3. Character — a new attachment joint for carried resources
+## 3. Character attachment joints
 
-The skin now has **17 joints**; the new one is **`attach.carry`**.
+The skin now has **18 joints**, including **`attach.carry`** for physical goods and
+**`attach.tool.R`** for the axe, hammer and scythe.
 
 It weights **zero vertices** — it is a marker, not a deformer, and the skin is bit-for-bit unchanged.
 No clip poses it, so it simply inherits the chest's motion.
@@ -135,7 +141,7 @@ Find the joint entity by `Name` after the scene spawns, then parent the block to
 // block sits in front of the chest, in both arms
 commands.entity(attach_carry).with_child((
     SceneRoot(resource_block),
-    Transform::from_xyz(0.0, block_height * 0.5, 0.0),   // seat its BASE on the joint
+    Transform::from_xyz(0.0, 0.0, -0.08), // authored origin and joint both mark the base
 ));
 ```
 
@@ -144,7 +150,9 @@ Blocks between roughly **0.48 m and 0.58 m** land in the hands — much bigger c
 smaller and the hands float off its corners. Different resources should vary *material and proportion*
 within that range rather than scale wildly.
 
-Attach it **only while `carry` is playing**. In any other clip the arms are not around it.
+The client attaches it only while a replicated physical load is visible and suppresses a
+work tool while carrying. A stationary carrier currently holds the carry pose; a dedicated
+`carry_idle` would improve presentation.
 
 > The load is carried **in front, in both arms** — not on the shoulder. A shoulder carry was built
 > first and abandoned on measurement: this character is chibi-proportioned (head spans x ±0.19 against
@@ -152,7 +160,7 @@ Attach it **only while `carry` is playing**. In any other clip the arms are not 
 
 ---
 
-## 4. Four new buildings + a crop field
+## 4. Five village buildings, a crop field and a pier
 
 | Asset | `BuildingType` / `PropKind` | Footprint | Height | Collider |
 |---|---|---|---|---|
@@ -164,7 +172,8 @@ Attach it **only while `carry` is playing**. In any other clip the arms are not 
 | `WheatField.glb` | `PropKind::WheatField` | 8.00 × 11.00 | 0.86 | **none, by design** |
 | `FishingPier.glb` | `PropKind::FishingPier` | 1.60 × 7.09 | 2.81 | **none, by design** |
 
-All registered, all baked into `client/assets/colliders.bin`. Buildings live in
+All are registered and used by autonomous construction; solid buildings are baked into
+`client/assets/colliders.bin`. Buildings live in
 `game_assets/buildings/village/`; the field is in `game_assets/environment/crops/`.
 
 Colliders are **convex hulls sliced at the eaves**, not decompositions — this is a top-down RTS and
@@ -199,23 +208,23 @@ what units need is a footprint to walk around, not 30 convex pieces describing r
 
 ---
 
-## 5. Anchors — named empties the game should read, not hardcode
+## 5. Anchors — the live placement and presentation contract
 
 Every building ships mesh-less nodes that Bevy spawns as named entities. Use them instead of offsets
 in code; offsets silently go wrong the first time a building is resized, and nothing errors.
 
 | Anchor | On | Meaning |
 |---|---|---|
-| `Anchor_Door` | all four | where a unit stands to enter — verified **outside** the collider |
+| `Anchor_Door` | all five buildings | where a unit stands to enter — verified **outside** the collider |
 | `Anchor_Work` | LumberjackHut | where a villager stands to chop at the block |
 | `Anchor_Pier` | FishermansHut | where the pier's landward end goes |
 | `Anchor_Nets` | FishermansHut | where a villager stands to mend nets |
 | `Anchor_Field` | Farmstead | centre of the wheat field, 9.0 m off the door axis |
 | `Anchor_Notice` | MootHall | where someone stands to read the board |
-| `Light_Interior` | all four | room centre |
+| `Light_Interior` | all five buildings | room centre |
 | `Light_Upper` | MootHall | first floor |
 | `Light_Belfry` | MootHall | inside the bell cupola |
-| `Light_Window.L` / `.R` | all four | just inside each pane |
+| `Light_Window.L` / `.R` | all five buildings | just inside each pane |
 
 Every stand-on anchor was measured against the baked hull. Current clearances, all outside:
 
@@ -244,18 +253,21 @@ All **five** buildings ship `door_open` (0.667 s) and `door_close` (0.917 s) as 
 They are a matched pair, not one clip reversed: `door_open` overshoots slightly, `door_close` bounces
 off the jamb. Play without `.repeat()` so each holds its final pose.
 
-**Drive by proximity with a hold, not per-unit:**
+The server aggregates per-person threshold use into one replicated
+`BuildingDoorDemand`; the client plays each authored door once and holds it while demand
+remains:
 
 ```
-Shut → a unit within ~2 m wants to enter → play door_open
-Open → hold while ANY unit is in range → clear for ~0.5 s → play door_close → Shut
+Shut → authoritative crossing demand → play door_open
+Open → hold while ANY crossing demand remains → clear → play door_close → Shut
 ```
 
 Per-unit triggering breaks the moment two villagers arrive together: the second restarts `door_open`
 on an already-open door and it snaps back to 0°.
 
-Note the doorway is **solid** in the collider, as any hull's would be. Units path to `Anchor_Door` and
-stop outside — correct while interiors are empty shells.
+The doorway remains solid in the convex hull. Authoritative routines path to the exterior
+anchor, cross the shallow wall threshold under door demand, then become hidden in the
+abstract interior; interiors are not navigable rooms.
 
 ---
 
@@ -264,6 +276,10 @@ stop outside — correct while interiors are empty shells.
 Each building ships its window panes as their **own node** (`CabinGlass`, `HutGlass`, `FarmGlass`,
 `HallGlass`) with its own flat material, purely so you have something to write to. Raise `emissive` on
 that material at dusk and drop it at dawn; put the light itself on the `Light_Window.*` anchors.
+
+This is implemented for designated households: any occupied cabin fades its authored panes
+and tight window lights after dark, even when the resident bodies are outside the client's
+detail set. Empty cabins and daylight remain dark.
 
 This is not a stylistic choice. **glTF animation channels can only target translation, rotation, scale
 and morph weights** — material properties are not animatable in core glTF. Animating emissive is
@@ -275,10 +291,10 @@ be game logic, since it depends on time of day and occupancy, which a baked clip
 ## 8. Body/face animation layering — unchanged, but worth restating
 
 Two layers compose at runtime through an `AnimationGraph` mask: put `eye.L`/`eye.R` in their own mask
-group, mask them **out** of every body node and **in** on every face node. Then any of the 7 body clips
+group, mask them **out** of every body node and **in** on every face node. Then any of the 9 body clips
 plays with any of the 5 face clips.
 
-**The glb carries all 17 joints in all 12 clips regardless of what each clip authors.** Blender's
+**The glb carries all 18 joints in all 14 clips regardless of what each clip authors.** Blender's
 exporter emits every joint of an armature in every animation; that was verified twice and cannot be
 turned off. It does not matter, because the mask blocks targets *at the graph node*, not by whether a
 clip has curves for them. Do not try to "fix" this by editing the glb.

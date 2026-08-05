@@ -20,9 +20,10 @@ meant to meet. Terrain repeats a layer every 5-8 m, so using one of these unmodi
 visible grid across the entire map, and it would read as a shader bug rather than an art problem.
 
 To use one as a terrain layer it has to be made seamless first (offset-and-heal in an image
-editor, or a synthesis tool). Re-run the validator afterwards; the seam ratio should land near
+DCC application, or a synthesis tool). Re-run the validator afterwards; the seam ratio should land near
 1.0. `PathRocks_Diffuse.png` is also only 1024x1024, which is the builder's target size exactly,
 so it has no margin — prefer the 2048 ones as a starting point.
 
 Note there is **no matching normal map** for any of these, and no free layer slot to put them in
-(see the four-layer ceiling in [../TERRAIN_TEXTURE_PIPELINE.md](../TERRAIN_TEXTURE_PIPELINE.md)).
+(see the four-layer ceiling in
+[TERRAIN_TEXTURE_PIPELINE.md](../../TERRAIN_TEXTURE_PIPELINE.md)).

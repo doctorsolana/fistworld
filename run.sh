@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run script for Fistworld
-# Usage: ./run.sh [server|client|both|testworld|realworld|multi|editor] [--release|--dev]
+# Usage: ./run.sh [server|client|both|testworld|realworld|multi] [--release|--dev]
 #
 # BUILD PROFILE. This used to build --release every time, which meant a ten
 # minute wait for a one line change: release turns on thin LTO, which re-links
@@ -186,14 +186,10 @@ case $MODE in
         echo -e "${BLUE}Starting client...${NC}"
         cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
         ;;
-    editor)
-        echo -e "${BLUE}Starting map editor...${NC}"
-        cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p editor -- "${@:2}"
-        ;;
     both|testworld|testlab|realworld|reallab)
         cleanup_server
         if [[ "$MODE" == "testworld" || "$MODE" == "testlab" ]]; then
-            echo -e "${YELLOW}Village Lab: ${FISTWORLD_LAB_SCENARIO}, seed 3, starting at ${FISTWORLD_LAB_WARP}x (HUD: pause / 1x / 10x / 100x)${NC}"
+            echo -e "${YELLOW}Village Lab: ${FISTWORLD_LAB_SCENARIO}, seed 3, starting at ${FISTWORLD_LAB_WARP}x (HUD: pause / 1x / 10x / 25x / 100x)${NC}"
             echo -e "${YELLOW}Logs: ${VILLAGE_LOG_DIR}${NC}"
         fi
         if [[ "$MODE" == "realworld" || "$MODE" == "reallab" ]]; then
@@ -271,14 +267,13 @@ case $MODE in
         echo -e "${GREEN}Client closed. Stopping server...${NC}"
         ;;
     *)
-        echo "Usage: ./run.sh [server|client|both|testworld|realworld|multi|editor|windows] [--release|--dev]"
+        echo "Usage: ./run.sh [server|client|both|testworld|realworld|multi|windows] [--release|--dev]"
         echo "  server  - Start only the server"
         echo "  client  - Start only the client"
         echo "  both    - Start server then client (default)"
         echo "  testworld - Watch one deterministic logged Village Lab settlement (starts at 1x)"
         echo "  realworld - Watch a logged 32-villager stress village on big_world"
         echo "  multi   - Start server + 2 clients for multiplayer testing"
-        echo "  editor  - Start map editor (pass map via --map <id>)"
         echo "  windows - Build & run Windows client with GPU (for WSL2)"
         echo
         echo "Profiles: default=playtest (fast rebuilds, release-grade speed)"

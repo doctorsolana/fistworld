@@ -1,4 +1,4 @@
-//! Authored city layout primitives shared by editor, client, and server.
+//! Authored city layout primitives shared by client and server.
 
 mod buildings;
 mod geometry;

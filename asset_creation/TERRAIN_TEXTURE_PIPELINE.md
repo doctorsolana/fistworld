@@ -87,7 +87,7 @@ different files, with nothing connecting them. Now the table says it out loud.
 There is **no sand image in the repo**; dirt's stands in for slot 2's grain.
 
 Colours are **LINEAR**, not sRGB. They go straight to the shader as uniforms. Anything
-converting them for display (the editor's swatches, road materials) must use `linear_rgb`, never
+converting them for display (tool previews or road materials) must use `linear_rgb`, never
 `srgb`, or the curve is applied twice.
 
 ---
@@ -230,13 +230,9 @@ directly and the near terrain only indirectly.
 **Palette values are linear.** Feeding them through `Color::srgb` applies the transfer curve a
 second time and washes everything out.
 
-**Two bind groups against one shader is invisible.** The editor declared its own
-`TerrainSplatExtension` with bindings 100-105 and 120-123. When `palette` was added at binding
-124 the editor's copy was not updated, its pipeline layout stopped matching, and Bevy 0.19
-escalated the validation failure to a process exit ~20-40 s after launch. **The editor was dead
-for five weeks and nothing caught it** — not the compiler, not a test. There is now exactly one
-definition, in `shared`, and the editor's names are aliases to it. Add a binding there or not at
-all.
+**Two bind groups against one shader is invisible.** Rust cannot prove that two independently
+declared binding layouts match one WGSL shader. There is exactly one definition in `shared`;
+add a binding there or not at all.
 
 **Layer index is table position.** `TERRAIN_LAYERS[i]` must be the layer whose `index()` is `i`,
 because the KTX2 build order, the shader's branches and the weightmap channels all assume it.

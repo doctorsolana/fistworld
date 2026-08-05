@@ -90,7 +90,8 @@ def bones_touched(act):
     face clips key 2, asserted by animate_basemodel_v2.py's finish(). But Blender's glTF exporter
     emits channels for EVERY joint of an armature in EVERY animation, whatever the action contains.
     Verified twice: filtering the rewrite down to the owned bones, and then also turning
-    export_bake_animation off, both still produced 17 animated nodes in all 12 clips.
+    export_bake_animation off, both still produced every joint in every clip (currently 18
+    animated nodes in all 14 clips).
 
     That is fine, because Bevy's AnimationGraph mask blocks targets at the GRAPH NODE, not by whether
     a clip has curves for them: mask the two eye bones out of every body node and into every face

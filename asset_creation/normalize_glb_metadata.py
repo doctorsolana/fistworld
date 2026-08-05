@@ -1,6 +1,6 @@
 """Normalize human-facing names inside binary glTF files without touching geometry.
 
-File paths, shared ids and editor labels are the runtime contract, but node names
+File paths, shared ids and display labels are the runtime contract, but node names
 are what an artist sees after importing a GLB. Renaming only the file therefore
 leaves half the old asset identity behind. This utility rewrites the JSON chunk
 and copies every non-JSON chunk byte-for-byte.

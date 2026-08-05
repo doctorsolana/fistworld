@@ -4,7 +4,6 @@ members = [
     "shared",
     "server",
     "client",
-    "editor",
     "tools/collider_baker",
     "tools/terrain_ktx_builder",
 ]

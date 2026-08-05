@@ -4,8 +4,8 @@ The single build order. [ARCHITECTURE.md](ARCHITECTURE.md) says how the engine c
 game; [WORLD-DESIGN.md](WORLD-DESIGN.md) says what the world *is*. Both used to carry their
 own phase list, and the two disagreed — this file replaces both.
 
-Written 2026-07-30 against a full audit of the code, not against the previous docs. Where a
-doc claim and the code disagreed, the code won and the doc was corrected.
+Written 2026-07-30 and re-audited against the code on 2026-08-05. Where a doc claim and
+the code disagree, the executable state wins and the doc is corrected.
 
 **Ordering principle: risk first.** Phases are ordered by which unknown, discovered late,
 would invalidate the most already-built work — not by narrative order. The big reordering
@@ -24,7 +24,7 @@ infrastructure is a phase that cannot be tested.
 | 0 | Let me in | M | in progress |
 | 1 | The world remembers | L | in progress — stable identity, settlement directory, founding, picking and panels are live; world-state persistence is not |
 | 2 | The seam | L | in progress — ordinary villagers now demote to aggregate strategic work; the traveller/army promotion contract is not built |
-| 3 | They eat | M | in progress — physical food, daily consumption, prosperity and Hamlet → Village are live; births, decline and later tiers are not |
+| 3 | They eat | M | in progress — physical food, daily consumption, prosperity and Hamlet → Village → Town → City are live; births and decline are not |
 | 4 | Prices and the hand cart | M | in progress — NPC wallets and local Moot prices are live; player trading and carts are not |
 | 5 | Caravans | L | not started |
 | 6 | Command | XL | not started |
@@ -44,7 +44,7 @@ cannot boot — so every "playable" claim in the old build order was really a de
 on a local binary.
 
 - [x] Clamp client-supplied `view_radius` (was a one-message remote OOM)
-- [x] Fix the Docker build (workspace members `editor` + `tools/terrain_ktx_builder` unstubbed)
+- [x] Keep Docker workspace stubs aligned with non-server workspace members
 - [x] Copy map assets into the image (server panicked at boot without them)
 - [x] Decouple the strategic tick rate from time warp (ran 60x/sec at 100x warp)
 - [x] Add a release-only 5,000-resident / 30-settlement scale lab and remove
@@ -92,9 +92,11 @@ join keys or on-disk contracts that are ruinous to change later.
 - [x] **The replication split:** one globally replicated `SettlementSummary` entity and
       `RegionCoord`-scoped halls, buildings, markets, inventories, worksites, roads, fields
       and piers, joined client-side by `SettlementId`.
-- [ ] Radius aggregator over `BiomeField::resources` — does not exist in any form, and
-      `resources()` has never had a production caller, so validate it discriminates before
-      building site scoring on it
+- [x] Geography-aware site quality. Farmstead candidates score the live
+      `BiomeField::resources` farmland value; lumber sites also require reachable real
+      trees, and fishing sites require a valid dry-hut/open-water pair. A radius
+      aggregator may improve future district planning, but the current point scoring is
+      real production input rather than a stub.
 - [x] **`Person` and the settlement roster, before anything writes a population
       float.** WORLD-DESIGN 1a makes population a roster of named people rather
       than a number, and retrofitting that later means tearing out every
@@ -148,14 +150,16 @@ answer "can a village run itself?" before any of the economy above exists):
       worksites are still being supplied or built. Housing repeats until every
       resident has a bed; measured food shortage can repeat Farmsteads, and a
       viable shoreline settlement can ultimately support both farm and fish.
-- [x] A resident applies and becomes the building's owner, by name — whoever
+- [x] A resident applies and becomes the building's owner, by durable `PersonId` — whoever
       holds the fewest already, so each person has a stake rather than one
       villager owning the whole place. No residents, no permits: a foundation
       does not build itself. Needed housing permits are free; every business
       permit debits the applicant's wallet into the settlement treasury, with a
       need discount and progressively higher prices for repeat holdings.
-- [x] Deterministic ring siting: 12 bearings, 6m rings, rejecting slope, water
-      and overlap. Houses ring close, work buildings far.
+- [x] Deterministic seeded layout grammar. Organic lanes, radial commons, ordered
+      grids, great avenues and neighbourhood clusters bias future frontage while plot
+      scoring still rejects slope, water, overlap, roads and reserved civic space.
+      Geography and demand decide what is built; the seed influences where it fits.
 - [x] Geometry-led coastal siting: the whole Fisherman's Hut and side route stay
       dry, the authored pier side rotates seaward, and its work end must reach
       broad submerged water. Halls use footprint-wide water checks and may sit
@@ -266,12 +270,16 @@ answer "can a village run itself?" before any of the economy above exists):
 - [x] Explicit Poor Relief policy. Disabled settlements let insolvent residents
       go hungry; enabled settlements buy their ration from public treasury coin
       only when recent production covers the population and the purchase leaves
-      a three-day emergency reserve.
-      while both Moot stock and funds last. The panel and encyclopedia expose it.
+      a three-day emergency reserve, while both Moot stock and funds last. The panel
+      and encyclopedia expose it.
 - [x] First tier advancement: a Hamlet with at least four residents becomes a
       Village after three consecutive days with three reserve days, recent food
       production covering population, no hunger and prosperity at least 65.
-      Later tiers and all regression remain Phase 3 work.
+- [x] Later tier advancement: a Village with at least 12 residents, a Marketplace,
+      Tavern, sufficient Moot trade and prosperity 70 becomes a Town after three
+      sustained days. A Town with at least 24 residents, a Church and prosperity 75
+      becomes a City after five sustained days. Civic buildings use placeholder art
+      but real plots, material supply, staffing, storage and road connections.
 
 **Deliberately deferred:** a billboard/impostor/symbol renderer. Settlements read as
 screen-projected UI labels, using the world-to-panel projection the map already has. That
@@ -344,7 +352,13 @@ ordinary residents shed paths, door choreography and work-animation phases.
       are inadequate (currently capped at one Farmstead per four residents).
 - [x] Prosperity scalar with a panel breakdown: reserve 40, production 30,
       housing 20, employment 10, and hunger penalty down to -30.
-- [x] Hamlet → Village advancement after sustained measurable food security.
+- [x] Hamlet → Village → Town → City advancement with inspectable population,
+      food, prosperity, trade and civic-building gates. Current 4/12/24 population
+      values are prototype balance constants.
+- [ ] Rebalance the population gates before treating them as content targets. The
+      latest design direction is 12 residents for Village and roughly 30 for Town;
+      City remains to be tuned. Change the shared constants, panels and lab contracts
+      together rather than documenting those values as live before the code moves.
 - [x] Reconcile observed per-trip production with the distant strategic tick. Both use the
       same quality-scaled rates, worker counts, one-field/two-field Farmstead capacity,
       storage limits, sale policy and market transaction code.
@@ -353,10 +367,10 @@ ordinary residents shed paths, door choreography and work-animation phases.
 - [ ] Births against a food-supported cap, and deaths, as roster events
 - [ ] Food processing beyond direct-edible Wheat, household budgets and
       differentiated consumption
-- [ ] Later tier ladder requirements from WORLD-DESIGN 1 (trade and
-      administration -> regional pull and amenities), each needing a building,
-      a worker and sustained output. Military is deliberately NOT a rung
-      requirement -- it gates HOLDING a settlement, not growing one.
+- [x] Later tier ladder requirements: Marketplace and Tavern plus sustained trade
+      advance a Village to Town; Church plus sustained regional prosperity advances a
+      Town to City. Placeholder civic meshes preserve the semantic/build pipeline until
+      authored art replaces them. Military remains deliberately outside the growth gate.
 - [ ] Hysteresis on every transition
 - [ ] The decline ladder: struggling -> abandoned (recoverable) -> Ruins, where
       only the last needs destruction, deliberate razing, or long physical decay.
@@ -444,8 +458,10 @@ building it early would burn months without falsifying anything.
 - [ ] Group orders and order feedback
 - [ ] Per-region traversability cost field
 - [ ] Flow-field pathfinding
-- [ ] Delete `server/src/world/pathfinding.rs` and `navgrid.rs` — dead salvage from the
-      removed NPC AI, zero callers, `#![allow(dead_code)]` to survive compilation
+- [ ] Replace the unused generic `find_path` routine with the Phase 6 regional
+      flow-field implementation. Preserve the live `SpatialObstacleGrid` contract used by
+      village travel/trades and move its shared route-budget settings out of the old
+      pathfinding module when that replacement lands.
 
 **Exit:** twenty units cross a map together and it looks deliberate.
 
@@ -513,8 +529,6 @@ Things every phase touches, easy to discover too late:
       hashes replication-rule and event registration order and disconnects mismatched
       clients. Every phase registers new components and messages, so every deploy locks out
       every previously distributed client. Needs a version gate and a distribution story.
-- [ ] **The editor.** `editor/` is a live workspace member sharing the `shared` crate; it
-      breaks on foundational changes and is the only tool that authors maps.
 - [ ] **Replication backpressure.** No cap on entities per client, no priority scheme, no
       bandwidth ceiling. Every phase adds entity classes.
 - [ ] **The 13MB `map.ron`**, most of it ~74k baked prop spawns that are already derivable

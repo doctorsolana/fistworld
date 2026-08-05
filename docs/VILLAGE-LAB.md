@@ -17,9 +17,11 @@ cargo village-lab
 ```
 
 The default is the `secure` scenario: 190 simulated minutes at 100x, with eight
-founders and eight uncommitted arrivals at the start of day 2. This deliberately
-crosses the real 12-resident Hamlet → Village threshold and tests late immigration
-recovery on every run. The test is ignored by ordinary `cargo test` runs.
+founders and eight uncommitted arrivals at the start of day 2. This exercises the
+current four-resident Hamlet → Village population gate well above its minimum and tests
+late immigration, repeated housing and workforce recovery on every run. The 4/12/24
+Village/Town/City population constants are prototype balance and may be raised later.
+The test is ignored by ordinary `cargo test` runs.
 
 Useful overrides:
 
@@ -90,11 +92,10 @@ There is no per-day production cap. All three trades continue until the ordinary
 shift ends near 18:00, retain partial progress toward the next unit overnight,
 and then yield to ambient, household and home behaviour until the next shift.
 
-Once a settlement reaches Village, the Reeve supplies and raises public
-Marketplace, Tavern and Church projects one at a time. Essential farmers,
-fishers and woodcutters therefore keep producing; a tiny settlement cannot
-deadlock its own timber supply by assigning every trade worker to simultaneous
-civic construction.
+Once a settlement reaches Village, the Reeve supplies and raises Marketplace and
+Tavern projects one at a time; a Town later requests its Church. Essential farmers,
+fishers and woodcutters therefore keep producing, and a tiny settlement cannot deadlock
+its own timber supply by assigning every trade worker to simultaneous civic construction.
 
 The
 steward is unavailable for private permits and workplace vacancies, audits the
