@@ -191,9 +191,9 @@ Rough bands to design against:
 
 On budgeting: the strategic tick now has real settlement production and commerce work.
 `cargo village-scale-lab` is the regression gate: its 2026-08-05 reference fixture held
-5,000 NPCs in 30 settlements and measured the complete steady bundle at 1.186 ms, the
-daily economy burst at 1.796 ms, the full stable-identity/reconciliation pass at 0.053 ms
-and aggregate strategic villages at 0.268 ms on the development machine, with no entity or
+5,000 NPCs in 30 settlements and measured the complete steady bundle at 0.760 ms, the
+daily economy burst at 0.956 ms, the full stable-identity/reconciliation pass at 0.055 ms
+and aggregate strategic villages at 0.177 ms on the development machine, with no entity or
 route-queue growth. These are reference numbers, not a platform guarantee; retain the
 fixture and compare deltas whenever a world-wide rule is added.
 
@@ -263,9 +263,11 @@ The current village simulation uses these rules as hard boundaries:
   authoritative across regions, payroll, ownership, employment, housing, UI commands and
   serialized relationships. Legacy name rosters remain for readable panels and old-state
   migration only; the versioned world-state file itself is still a roadmap item.
-- **There is one simulation clock.** `SimulationTime` is the server-side source of real
-  seconds, world seconds and warp. Gameplay code must not multiply `Time` by `TimeWarp`
-  independently. Strategic steps consume accumulated world seconds from that clock.
+- **There is one simulation clock.** `SimulationDelta` captures real seconds, world
+  seconds and warp once at the start of the shared tick; `SimulationTime` is the read-only
+  system parameter used by gameplay. No gameplay system multiplies `Time` by `TimeWarp`
+  independently. Strategic work integrates the full elapsed interval, including exact
+  shift overlap at high warp.
 - **The live game and Village Lab share one ordered schedule.** Add village behaviour to
   `server/src/world/village/schedule.rs`; do not maintain a second hand-copied lab list.
 - **Summary and detail are different entities.** `SettlementSummary` is tiny and global.
@@ -275,6 +277,8 @@ The current village simulation uses these rules as hard boundaries:
   timer, seat, shopping trip or resource animation. Add world-wide rules to the strategic
   settlement pass and cover tactical/strategic agreement with tests.
 - **Pure policy lives outside orchestration.** Wage decisions are in `village/economy.rs`,
-  production rates in `village/production.rs`, strategic LOD in `village/strategic.rs`,
-  shared ordering in `village/schedule.rs`, and road geometry in
-  `village_roads/geometry.rs`. Keep extending those seams instead of growing one monolith.
+  household membership and provisioning in `village/households.rs`, physical trades in
+  `village/trades.rs`, production rates in `village/production.rs`, strategic LOD in
+  `village/strategic.rs`, shared ordering in `village/schedule.rs`, civic road repair in
+  `village_roads/steward.rs`, and road geometry in `village_roads/geometry.rs`. Keep
+  extending those seams instead of growing one monolith.

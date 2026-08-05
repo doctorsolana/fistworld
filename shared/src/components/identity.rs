@@ -63,6 +63,11 @@ pub struct ResidentOf(pub SettlementId);
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BuildingOf(pub SettlementId);
 
+/// Durable road-to-settlement relationship. `VillageRoad::settlement` remains
+/// a readable label for panels and logs only.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RoadOf(pub SettlementId);
+
 /// Durable parent link for a building's authored adjuncts such as wheat fields
 /// and fishing piers.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]

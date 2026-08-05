@@ -149,6 +149,11 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                         workers: Vec::new(),
                     },
                     Household {
+                        resident_ids: (0..roster.len())
+                            .map(|offset| {
+                                PersonId(next_person_id + (house_index * 4 + offset) as u64)
+                            })
+                            .collect(),
                         residents: roster.to_vec(),
                     },
                     HouseholdEconomy::default(),

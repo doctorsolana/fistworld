@@ -44,6 +44,10 @@ fn configure_fps_fixed_schedule(app: &mut App) {
     app.configure_sets(
         FixedUpdate,
         (
+            world::village::schedule::VillageSimulationSet::Time
+                .in_set(FpsServerSet::WorldTick)
+                .before(world::time::update_world_time)
+                .run_if(server_is_started),
             world::village::schedule::VillageSimulationSet::Core
                 .in_set(FpsServerSet::WorldTick)
                 .after(world::navgrid::sync_obstacle_grid)

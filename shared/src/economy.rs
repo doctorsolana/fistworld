@@ -103,7 +103,10 @@ impl Wallet {
 pub struct HouseholdEconomy {
     pub pennies: u64,
     pub pantry_target_days: u8,
-    pub shopper: Option<String>,
+    /// Stable identity of the resident currently responsible for provisions.
+    /// Character names are presentation and are never used to find a wallet.
+    #[serde(default)]
+    pub shopper: Option<crate::components::PersonId>,
     pub last_budget_day: u32,
 }
 

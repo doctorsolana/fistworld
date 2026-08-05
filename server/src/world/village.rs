@@ -17,14 +17,34 @@
 pub mod ambient;
 mod economy;
 pub mod history;
+mod households;
 mod production;
 #[cfg(test)]
 mod scale_lab;
 pub mod schedule;
 pub mod strategic;
+mod trades;
 
 pub(crate) use economy::review_automatic_wage_offer;
+pub use households::{
+    assign_households, ensure_households, run_household_schedules, run_household_shopping,
+    update_household_budgets_and_pantries,
+};
 pub(crate) use production::{farmer_seconds_per_wheat, fisher_seconds_per_food, lumber_tree_yield};
+pub(crate) use trades::lumber_plot_has_reachable_tree;
+#[cfg(test)]
+use trades::{
+    advance_failed_tree_candidate, fishing_deck_points, tree_approach_start, TREE_APPROACH_ANGLES,
+};
+pub use trades::{
+    assign_farmer_routines, assign_fishing_routines, assign_lumberjack_routines,
+    ensure_farm_fields, ensure_fishing_piers, run_farmer_routines, run_fishing_routines,
+    run_lumberjack_routines, sync_carried_load,
+};
+use trades::{
+    build_clip_facing, exterior_door_clearance_position, find_tree_for_cycle, ground_distance,
+    postpone_construction_store_route, postpone_construction_tree_search,
+};
 
 use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::{HashMap, HashSet};
@@ -53,8 +73,8 @@ use crate::player::hero::MoveTarget;
 use crate::world::navgrid::VILLAGER_PROP_RADIUS;
 use crate::world::regions::RegionRegistry;
 use crate::world::village_roads::{
-    NavigationRouteFailed, NavigationRoutePending, RoadBuilderRoutine, RoadRequest, RoadSteward,
-    RouteWaypoint, TravelRoute,
+    NavigationRouteFailed, NavigationRoutePending, RoadBuilderRoutine, RoadRequest, RouteWaypoint,
+    TravelRoute,
 };
 
 /// Terrain and collision truth needed while choosing a plot. Keeping these
@@ -160,16 +180,6 @@ const DOOR_OPEN_SECONDS: f32 = 0.667;
 /// physical inventory contains the building's full wood requirement.
 const BUILD_SECONDS: f32 = shared::components::SETTLEMENT_RAISE_SECONDS;
 
-type FarmsteadPositionKey = (u32, u32, u32);
-
-fn farmstead_position_key(position: Vec3) -> FarmsteadPositionKey {
-    (
-        position.x.to_bits(),
-        position.y.to_bits(),
-        position.z.to_bits(),
-    )
-}
-
 /// Where a villager is in the business of joining somewhere.
 #[derive(Component, Debug, Clone, PartialEq)]
 pub enum VillagerIntent {
@@ -272,11 +282,15 @@ pub struct UnderConstruction {
     pub position: Vec3,
     pub rotation: f32,
     pub owner: Option<String>,
+    /// Stable private owner. `owner` is only the readable permit label.
+    pub owner_id: Option<shared::components::PersonId>,
     /// Who is actually walking out there. Held as an entity rather than looked
     /// up by name because generated names repeat -- the first duplicate shows
     /// up around the fifty-first villager.
     pub builder: Option<Entity>,
     pub settlement: Entity,
+    /// Durable settlement membership for save/region boundaries.
+    pub settlement_id: shared::components::SettlementId,
     /// Where the builder stands to work. Arrival is judged against THIS, not
     /// the plot centre, or they would walk into the middle of the site.
     pub stand: Vec3,
@@ -485,11 +499,7 @@ pub fn ensure_business_economies(
         Option<&BusinessSalePolicy>,
         Option<&BusinessWagePolicy>,
     )>,
-    mut owners: Query<(
-        Option<&shared::components::PersonId>,
-        &CharacterName,
-        &mut Wallet,
-    )>,
+    mut owners: Query<(&shared::components::PersonId, &mut Wallet)>,
 ) {
     for (entity, building, owner_id, account, policy, wage_policy) in buildings.iter() {
         if business_output(building.kind).is_none() {
@@ -498,10 +508,10 @@ pub fn ensure_business_economies(
         let mut entity_commands = commands.entity(entity);
         if account.is_none() {
             let mut opening_cash = 0;
-            if let Some((_, _, mut wallet)) = owners.iter_mut().find(|(person_id, name, _)| {
-                owner_id.is_some_and(|owner| person_id.copied() == Some(owner.0))
-                    || (owner_id.is_none() && building.owner.as_deref() == Some(name.0.as_str()))
-            }) {
+            if let Some((_, mut wallet)) = owners
+                .iter_mut()
+                .find(|(person_id, _)| owner_id.is_some_and(|owner| **person_id == owner.0))
+            {
                 let wanted = 2 * PENNIES_PER_COIN;
                 if wallet.debit(wanted) {
                     opening_cash = wanted;
@@ -532,10 +542,11 @@ pub fn staff_moot_hall_roles(
         Entity,
         &mut Settlement,
         &mut MootAdministration,
-        Option<&shared::components::SettlementId>,
+        &shared::components::SettlementId,
     )>,
     mut villagers: Query<(
         Entity,
+        &shared::components::PersonId,
         &CharacterName,
         &VillagerIntent,
         &mut Occupation,
@@ -544,100 +555,92 @@ pub fn staff_moot_hall_roles(
         Option<&shared::components::EmployedAt>,
         Option<&shared::components::CivicEmployment>,
     )>,
-    mut wallets: Query<(
-        &CharacterName,
-        Option<&shared::components::CivicEmployment>,
-        &mut Wallet,
-    )>,
+    mut wallets: Query<&mut Wallet>,
 ) {
     let day = world_time.iter().next().map_or(0, |clock| clock.day);
     for (hall, mut settlement, mut administration, settlement_id) in halls.iter_mut() {
-        let valid = |wanted: &str, role: shared::components::CivicRole| {
+        let holder = |role: shared::components::CivicRole| {
             villagers
                 .iter()
-                .any(|(_, name, intent, _, _, _, _, civic_job)| {
-                    name.0 == wanted
-                        && intent.settlement() == Some(hall)
+                .filter(|(_, _, _, intent, _, _, _, _, civic_job)| {
+                    intent.settlement() == Some(hall)
                         && intent.counts_as_resident()
-                        && settlement_id.is_none_or(|settlement_id| {
-                            civic_job.is_some_and(|job| {
-                                job.settlement == *settlement_id && job.role == role
-                            })
-                        })
+                        && civic_job
+                            .is_some_and(|job| job.settlement == *settlement_id && job.role == role)
                 })
+                .min_by_key(|(_, person_id, ..)| **person_id)
+                .map(|(entity, _, name, ..)| (entity, name.0.clone()))
         };
-        if administration
-            .reeve
-            .as_deref()
-            .is_some_and(|name| !valid(name, shared::components::CivicRole::Reeve))
-        {
-            administration.reeve = None;
-        }
-        if administration
-            .market_porter
-            .as_deref()
-            .is_some_and(|name| !valid(name, shared::components::CivicRole::MarketPorter))
-        {
-            administration.market_porter = None;
-        }
+        let mut porter = holder(shared::components::CivicRole::MarketPorter);
+        let mut reeve = holder(shared::components::CivicRole::Reeve);
+        administration.market_porter = porter.as_ref().map(|(_, name)| name.clone());
+        administration.reeve = reeve.as_ref().map(|(_, name)| name.clone());
 
         // Logistics comes before clerical comfort in a tiny foundation. Keep
         // at least one resident outside the Moot staff so three founders can
         // still apply for permits and operate the first workplace.
-        for (title, porter_role) in [("Market Porter", true), ("Reeve", false)] {
-            let founding_staff = usize::from(administration.road_steward.is_some())
-                + usize::from(administration.market_porter.is_some())
-                + usize::from(administration.reeve.is_some());
+        for (title, role) in [
+            ("Market Porter", shared::components::CivicRole::MarketPorter),
+            ("Reeve", shared::components::CivicRole::Reeve),
+        ] {
+            let road_filled = villagers
+                .iter()
+                .any(|(_, _, _, intent, _, _, _, _, civic_job)| {
+                    intent.settlement() == Some(hall)
+                        && civic_job.is_some_and(|job| {
+                            job.settlement == *settlement_id
+                                && job.role == shared::components::CivicRole::RoadSteward
+                        })
+                });
+            let founding_staff = usize::from(road_filled)
+                + usize::from(porter.is_some())
+                + usize::from(reeve.is_some());
             if founding_staff >= settlement.residents.saturating_sub(1) as usize {
                 continue;
             }
-            let filled = if porter_role {
-                administration.market_porter.is_some()
-            } else {
-                administration.reeve.is_some()
+            let filled = match role {
+                shared::components::CivicRole::MarketPorter => porter.is_some(),
+                shared::components::CivicRole::Reeve => reeve.is_some(),
+                _ => unreachable!(),
             };
             if filled {
                 continue;
             }
             let candidate = villagers
                 .iter()
-                .filter(|(_, _, intent, occupation, status, _, employed_at, civic_job)| {
+                .filter(|(_, _, _, intent, occupation, status, _, employed_at, civic_job)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
                         && occupation.0.is_none()
                         && employed_at.is_none()
                         && civic_job.is_none()
                         && status.is_none_or(|status| *status == WorkStatus::LookingForWork)
                 })
-                .min_by(|a, b| a.1 .0.cmp(&b.1 .0))
+                .min_by_key(|(_, person_id, ..)| **person_id)
                 .map(|(entity, ..)| entity);
             let Some(candidate) = candidate else { continue };
-            let Ok((_, name, _, mut occupation, _, marker, _, _)) = villagers.get_mut(candidate)
+            let Ok((_, _, name, _, mut occupation, _, marker, _, _)) = villagers.get_mut(candidate)
             else {
                 continue;
             };
             occupation.0 = Some(title.to_string());
-            commands.entity(candidate).insert(WorkStatus::Employed);
-            if let Some(settlement_id) = settlement_id {
-                commands
-                    .entity(candidate)
-                    .insert(shared::components::CivicEmployment {
-                        settlement: *settlement_id,
-                        role: if porter_role {
-                            shared::components::CivicRole::MarketPorter
-                        } else {
-                            shared::components::CivicRole::Reeve
-                        },
-                    });
-            }
-            if porter_role {
+            commands.entity(candidate).insert((
+                WorkStatus::Employed,
+                shared::components::CivicEmployment {
+                    settlement: *settlement_id,
+                    role,
+                },
+            ));
+            if role == shared::components::CivicRole::MarketPorter {
                 administration.market_porter = Some(name.0.clone());
                 if marker.is_none_or(|porter| porter.settlement != hall) {
                     commands
                         .entity(candidate)
                         .insert(MarketPorter { settlement: hall });
                 }
+                porter = Some((candidate, name.0.clone()));
             } else {
                 administration.reeve = Some(name.0.clone());
+                reeve = Some((candidate, name.0.clone()));
             }
             info!(
                 "Village '{}': {} took the {} position",
@@ -650,29 +653,12 @@ pub fn staff_moot_hall_roles(
         if elapsed > 0 {
             *previous = day;
             let due = FOUNDING_DAILY_WAGE.saturating_mul(u64::from(elapsed));
-            for (employee, role) in [
-                (
-                    administration.reeve.as_deref(),
-                    shared::components::CivicRole::Reeve,
-                ),
-                (
-                    administration.market_porter.as_deref(),
-                    shared::components::CivicRole::MarketPorter,
-                ),
-            ]
-            .into_iter()
-            {
-                let Some(employee) = employee else { continue };
+            for employee in [reeve.as_ref(), porter.as_ref()].into_iter().flatten() {
                 let payment = settlement.treasury.min(due);
                 if payment == 0 {
                     break;
                 }
-                if let Some((_, _, mut wallet)) = wallets.iter_mut().find(|(name, civic_job, _)| {
-                    settlement_id.is_some_and(|settlement_id| {
-                        civic_job
-                            .is_some_and(|job| job.settlement == *settlement_id && job.role == role)
-                    }) || (settlement_id.is_none() && name.0 == employee)
-                }) {
+                if let Ok(mut wallet) = wallets.get_mut(employee.0) {
                     settlement.treasury -= payment;
                     wallet.credit(payment);
                 }
@@ -717,7 +703,7 @@ pub fn run_market_collections(
     mut commands: Commands,
     mut halls: Query<
         (
-            &Settlement,
+            &shared::components::SettlementId,
             &PlayerPosition,
             Option<&PlayerRotation>,
             &mut GoodsInventory,
@@ -729,6 +715,7 @@ pub fn run_market_collections(
         (
             Entity,
             &SettlementBuilding,
+            &shared::components::BuildingOf,
             &PlayerPosition,
             &PlayerRotation,
             &mut GoodsInventory,
@@ -771,7 +758,7 @@ pub fn run_market_collections(
         if home.is_some() || road_work.is_some() || shopping.is_some() {
             continue;
         }
-        let Ok((settlement, hall_position, hall_rotation, mut hall_store, mut market)) =
+        let Ok((settlement_id, hall_position, hall_rotation, mut hall_store, mut market)) =
             halls.get_mut(porter.settlement)
         else {
             continue;
@@ -850,28 +837,30 @@ pub fn run_market_collections(
             }
             let mut offers: Vec<(Entity, Good, u32, Vec3)> = businesses
                 .iter()
-                .filter_map(|(entity, building, at, rotation, inventory, policy, _)| {
-                    if building.settlement != settlement.name || !policy.collection_enabled {
-                        return None;
-                    }
-                    let good = business_output(building.kind)?;
-                    if market.pool(good).bid < policy.minimum_unit_price {
-                        return None;
-                    }
-                    let surplus = inventory.amount(good).saturating_sub(policy.keep_units);
-                    let carrier_room = carrier.free_bulk() / good.bulk_per_unit();
-                    let hall_room = hall_store.free_bulk() / good.bulk_per_unit();
-                    let units = surplus
-                        .min(policy.max_units_per_collection)
-                        .min(carrier_room)
-                        .min(hall_room);
-                    (units > 0).then_some((
-                        entity,
-                        good,
-                        units,
-                        building.kind.entrance_position(at.0, rotation.0),
-                    ))
-                })
+                .filter_map(
+                    |(entity, building, building_of, at, rotation, inventory, policy, _)| {
+                        if building_of.0 != *settlement_id || !policy.collection_enabled {
+                            return None;
+                        }
+                        let good = business_output(building.kind)?;
+                        if market.pool(good).bid < policy.minimum_unit_price {
+                            return None;
+                        }
+                        let surplus = inventory.amount(good).saturating_sub(policy.keep_units);
+                        let carrier_room = carrier.free_bulk() / good.bulk_per_unit();
+                        let hall_room = hall_store.free_bulk() / good.bulk_per_unit();
+                        let units = surplus
+                            .min(policy.max_units_per_collection)
+                            .min(carrier_room)
+                            .min(hall_room);
+                        (units > 0).then_some((
+                            entity,
+                            good,
+                            units,
+                            building.kind.entrance_position(at.0, rotation.0),
+                        ))
+                    },
+                )
                 .collect();
             offers.sort_unstable_by_key(|(entity, _, _, _)| entity.to_bits());
             let Some((business, good, offered, entrance)) = offers.into_iter().next() else {
@@ -907,7 +896,7 @@ pub fn run_market_collections(
         }
         match routine.phase {
             MarketCollectionPhase::GoingToBusiness => {
-                let Ok((_, building, at, rotation, mut store, _, _)) =
+                let Ok((_, building, _, at, rotation, mut store, _, _)) =
                     businesses.get_mut(routine.business)
                 else {
                     market.cancel_producer_purchase(
@@ -967,7 +956,8 @@ pub fn run_market_collections(
                 }
                 let delivered =
                     carrier.transfer_to(&mut hall_store, routine.good, routine.reserved_units);
-                if let Ok((_, _, _, _, _, _, mut account)) = businesses.get_mut(routine.business) {
+                if let Ok((_, _, _, _, _, _, _, mut account)) = businesses.get_mut(routine.business)
+                {
                     if delivered == routine.reserved_units {
                         account.cash = account.cash.saturating_add(routine.reserved_pennies);
                     }
@@ -988,20 +978,21 @@ pub fn run_market_collections(
 pub fn run_business_payroll_and_owner_leisure(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
-    settlements: Query<(Entity, &Settlement)>,
+    settlements: Query<(Entity, &shared::components::SettlementId)>,
     mut businesses: Query<(
         Entity,
-        &mut SettlementBuilding,
+        &SettlementBuilding,
         &mut BusinessAccount,
         &mut BusinessWagePolicy,
-        Option<&shared::components::BuildingId>,
+        &shared::components::BuildingId,
+        &shared::components::BuildingOf,
         Option<&shared::components::OwnedBy>,
     )>,
     mut villagers: Query<(
         Entity,
         &CharacterName,
         &VillagerIntent,
-        Option<&shared::components::PersonId>,
+        &shared::components::PersonId,
         Option<&shared::components::EmployedAt>,
         &mut Wallet,
         &mut Occupation,
@@ -1016,78 +1007,58 @@ pub fn run_business_payroll_and_owner_leisure(
         return;
     }
     *processed_day = Some(day);
-    let settlement_ids: HashMap<&str, Entity> = settlements
+    let settlements_by_id: HashMap<shared::components::SettlementId, Entity> = settlements
         .iter()
-        .map(|(entity, settlement)| (settlement.name.as_str(), entity))
+        .map(|(entity, settlement_id)| (*settlement_id, entity))
         .collect();
     // Build one daily index. Looking up every roster name by scanning all
     // villagers made payroll O(businesses * population), and the wealthy-owner
     // check repeated that cost even on ticks with no day boundary.
-    let mut people_by_settlement: HashMap<Entity, HashMap<String, Entity>> = HashMap::new();
     let mut people_by_id: HashMap<shared::components::PersonId, Entity> = HashMap::new();
     let mut workers_by_building: HashMap<shared::components::BuildingId, Vec<Entity>> =
         HashMap::new();
     let mut available_replacements: HashMap<Entity, usize> = HashMap::new();
-    for (entity, name, intent, person_id, employed_at, _, occupation, status) in villagers.iter() {
+    for (entity, _name, intent, person_id, employed_at, _, occupation, status) in villagers.iter() {
         let Some(settlement) = intent.settlement() else {
             continue;
         };
-        if let Some(person_id) = person_id {
-            people_by_id.insert(*person_id, entity);
-        }
+        people_by_id.insert(*person_id, entity);
         if let Some(employment) = employed_at {
             workers_by_building
                 .entry(employment.0)
                 .or_default()
                 .push(entity);
         }
-        people_by_settlement
-            .entry(settlement)
-            .or_default()
-            .entry(name.0.clone())
-            .or_insert(entity);
         if occupation.0.is_none() && employed_at.is_none() && *status == WorkStatus::LookingForWork
         {
             *available_replacements.entry(settlement).or_default() += 1;
         }
     }
 
-    for (business_entity, mut building, mut account, mut wage_policy, building_id, owner_id) in
-        businesses.iter_mut()
+    for (
+        business_entity,
+        building,
+        mut account,
+        mut wage_policy,
+        building_id,
+        building_of,
+        owner_id,
+    ) in businesses.iter_mut()
     {
         if business_output(building.kind).is_none() {
             continue;
         }
-        let Some(settlement) = settlement_ids.get(building.settlement.as_str()).copied() else {
+        let Some(settlement) = settlements_by_id.get(&building_of.0).copied() else {
             continue;
         };
-        let people = people_by_settlement.get(&settlement);
-        let mut worker_entities: Vec<Entity> = building_id
-            .and_then(|building_id| workers_by_building.get(building_id))
+        let mut worker_entities: Vec<Entity> = workers_by_building
+            .get(building_id)
             .cloned()
             .unwrap_or_default();
-        // Compatibility for focused tests and pre-identity saves. Once a
-        // building has durable assignments, display names never decide money.
-        if worker_entities.is_empty() {
-            let mut workers = building.workers.clone();
-            workers.sort();
-            worker_entities.extend(
-                workers
-                    .iter()
-                    .filter_map(|wanted| people.and_then(|people| people.get(wanted)).copied()),
-            );
-        }
         worker_entities.sort_unstable_by_key(|entity| entity.to_bits());
         worker_entities.dedup();
         let worker_count = worker_entities.len();
-        let owner_entity = owner_id
-            .and_then(|owner| people_by_id.get(&owner.0).copied())
-            .or_else(|| {
-                building
-                    .owner
-                    .as_deref()
-                    .and_then(|owner| people.and_then(|people| people.get(owner)).copied())
-            });
+        let owner_entity = owner_id.and_then(|owner| people_by_id.get(&owner.0).copied());
         if account.last_payroll_day == u32::MAX {
             account.last_payroll_day = day;
         }
@@ -1124,7 +1095,7 @@ pub fn run_business_payroll_and_owner_leisure(
                 account.wage_arrears = account.wage_arrears.saturating_sub(paid);
             }
 
-            if building.owner.is_some() {
+            if owner_id.is_some() {
                 let payroll_reserve = wage_policy
                     .daily_wage
                     .saturating_mul(worker_count as u64)
@@ -1154,19 +1125,18 @@ pub fn run_business_payroll_and_owner_leisure(
             );
         }
 
-        let Some(owner) = building.owner.clone() else {
+        let Some(_owner_id) = owner_id else {
             continue;
         };
         let Some(owner_entity) = owner_entity else {
             continue;
         };
-        let owner_is_worker = building_id.is_some_and(|building_id| {
+        let owner_is_worker =
             villagers
                 .get(owner_entity)
                 .is_ok_and(|(_, _, _, _, employed_at, _, _, _)| {
                     employed_at.copied() == Some(shared::components::EmployedAt(*building_id))
-                })
-        }) || building.workers.iter().any(|worker| worker == &owner);
+                });
         if !owner_is_worker {
             continue;
         }
@@ -1186,8 +1156,8 @@ pub fn run_business_payroll_and_owner_leisure(
         if !replacement_exists || !owner_is_wealthy || !payroll_secure {
             continue;
         }
-        building.workers.retain(|worker| worker != &owner);
-        if let Ok((_, _, _, _, _, _, mut occupation, mut status)) = villagers.get_mut(owner_entity)
+        if let Ok((_, owner_name, _, _, _, _, mut occupation, mut status)) =
+            villagers.get_mut(owner_entity)
         {
             occupation.0 = None;
             *status = WorkStatus::Chilling;
@@ -1202,7 +1172,7 @@ pub fn run_business_payroll_and_owner_leisure(
             info!(
                 "Village '{}': {} became a wealthy owner and left daily {} work",
                 building.settlement,
-                owner,
+                owner_name.0,
                 building.kind.trade().unwrap_or("business")
             );
         }
@@ -1631,20 +1601,20 @@ pub struct SettlementEconomyRuntime {
     by_settlement: HashMap<Entity, SettlementEconomyDay>,
 }
 
-/// Coin already removed from a market pool and waiting for a named owner's
+/// Coin already removed from a market pool and waiting for a specific owner's
 /// wallet. Keeping it as an entity makes the conservation boundary explicit:
 /// a deferred owner payment is still money, never a number hidden in a closure.
 #[derive(Component, Debug, Clone)]
 pub(crate) struct PendingMarketPayment {
     pub settlement: Entity,
-    pub recipient: String,
+    pub recipient: shared::components::PersonId,
     pub pennies: u64,
 }
 
 fn queue_credit(
     commands: &mut Commands,
     settlement: Entity,
-    recipient: &str,
+    recipient: shared::components::PersonId,
     wallet: Option<&mut Wallet>,
     pennies: u64,
 ) {
@@ -1656,7 +1626,7 @@ fn queue_credit(
     } else {
         commands.spawn(PendingMarketPayment {
             settlement,
-            recipient: recipient.to_string(),
+            recipient,
             pennies,
         });
     }
@@ -1668,36 +1638,30 @@ fn queue_credit(
 fn distribute_sale_proceeds(
     commands: &mut Commands,
     settlement: Entity,
-    worker_name: &str,
+    worker: shared::components::PersonId,
     worker_wallet: Option<&mut Wallet>,
-    owner: Option<&str>,
+    owner: Option<shared::components::PersonId>,
     pennies: u64,
 ) {
     if pennies == 0 {
         return;
     }
-    let Some(owner) = owner.filter(|owner| *owner != worker_name) else {
-        queue_credit(commands, settlement, worker_name, worker_wallet, pennies);
+    let Some(owner) = owner.filter(|owner| *owner != worker) else {
+        queue_credit(commands, settlement, worker, worker_wallet, pennies);
         return;
     };
     let worker_share = pennies.saturating_mul(80) / 100;
     let owner_share = pennies.saturating_sub(worker_share);
-    queue_credit(
-        commands,
-        settlement,
-        worker_name,
-        worker_wallet,
-        worker_share,
-    );
+    queue_credit(commands, settlement, worker, worker_wallet, worker_share);
     queue_credit(commands, settlement, owner, None, owner_share);
 }
 
 fn sell_carried_to_moot(
     commands: &mut Commands,
     settlement: Entity,
-    worker_name: &str,
+    worker: shared::components::PersonId,
     worker_wallet: Option<&mut Wallet>,
-    owner: Option<&str>,
+    owner: Option<shared::components::PersonId>,
     good: Good,
     carrier: &mut GoodsInventory,
     hall: &mut GoodsInventory,
@@ -1711,7 +1675,7 @@ fn sell_carried_to_moot(
     distribute_sale_proceeds(
         commands,
         settlement,
-        worker_name,
+        worker,
         worker_wallet,
         owner,
         trade.pennies,
@@ -1761,13 +1725,18 @@ pub fn ensure_village_finances(
 
 /// Reprice each Moot against real inventory and measurable local demand.
 pub fn update_moot_market_targets(
-    mut halls: Query<(Entity, &Settlement, &GoodsInventory, &mut MootMarket)>,
+    mut halls: Query<(
+        &shared::components::SettlementId,
+        &Settlement,
+        &GoodsInventory,
+        &mut MootMarket,
+    )>,
     sites: Query<(&UnderConstruction, &GoodsInventory)>,
 ) {
-    for (hall, settlement, inventory, mut market) in halls.iter_mut() {
+    for (settlement_id, settlement, inventory, mut market) in halls.iter_mut() {
         let outstanding_wood = sites
             .iter()
-            .filter(|(site, _)| site.settlement == hall)
+            .filter(|(site, _)| site.settlement_id == *settlement_id)
             .map(|(site, materials)| {
                 site.kind
                     .construction_wood_required()
@@ -1783,12 +1752,12 @@ pub fn update_moot_market_targets(
 pub fn settle_pending_market_payments(
     mut commands: Commands,
     payments: Query<(Entity, &PendingMarketPayment)>,
-    mut wallets: Query<(&CharacterName, &mut Wallet)>,
+    mut wallets: Query<(&shared::components::PersonId, &mut Wallet)>,
 ) {
     for (payment_entity, payment) in payments.iter() {
         let mut paid = false;
-        for (name, mut wallet) in wallets.iter_mut() {
-            if name.0 == payment.recipient {
+        for (person_id, mut wallet) in wallets.iter_mut() {
+            if *person_id == payment.recipient {
                 wallet.credit(payment.pennies);
                 paid = true;
                 break;
@@ -1831,12 +1800,21 @@ pub fn update_settlement_economies(
     mut runtime: ResMut<SettlementEconomyRuntime>,
     mut settlements: Query<(
         Entity,
+        &shared::components::SettlementId,
         &mut Settlement,
         &mut SettlementEconomy,
         Option<&mut MootMarket>,
         Option<&SettlementPolicies>,
     )>,
-    buildings: Query<(Entity, &SettlementBuilding)>,
+    buildings: Query<(Entity, &SettlementBuilding, &shared::components::BuildingOf)>,
+    employment: Query<
+        (
+            &shared::components::ResidentOf,
+            Option<&shared::components::EmployedAt>,
+            Option<&shared::components::CivicEmployment>,
+        ),
+        With<CharacterKind>,
+    >,
     mut residents: Query<
         (
             Entity,
@@ -1856,24 +1834,21 @@ pub fn update_settlement_economies(
         return;
     };
 
-    let mut stores: HashMap<&str, Vec<Entity>> = HashMap::new();
-    let mut pantries: HashMap<&str, Vec<Entity>> = HashMap::new();
-    let mut housing: HashMap<&str, u32> = HashMap::new();
-    let mut employed: HashMap<&str, u32> = HashMap::new();
-    for (entity, building) in buildings.iter() {
-        stores
-            .entry(building.settlement.as_str())
-            .or_default()
-            .push(entity);
+    let mut stores: HashMap<shared::components::SettlementId, Vec<Entity>> = HashMap::new();
+    let mut pantries: HashMap<shared::components::SettlementId, Vec<Entity>> = HashMap::new();
+    let mut housing: HashMap<shared::components::SettlementId, u32> = HashMap::new();
+    let mut employed: HashMap<shared::components::SettlementId, u32> = HashMap::new();
+    for (entity, building, building_of) in buildings.iter() {
+        stores.entry(building_of.0).or_default().push(entity);
         if building.kind == SettlementBuildingKind::House {
-            pantries
-                .entry(building.settlement.as_str())
-                .or_default()
-                .push(entity);
+            pantries.entry(building_of.0).or_default().push(entity);
         }
-        *housing.entry(building.settlement.as_str()).or_default() +=
-            u32::from(building.kind.housing_capacity());
-        *employed.entry(building.settlement.as_str()).or_default() += building.workers.len() as u32;
+        *housing.entry(building_of.0).or_default() += u32::from(building.kind.housing_capacity());
+    }
+    for (resident_of, employed_at, civic_job) in employment.iter() {
+        if employed_at.is_some() || civic_job.is_some() {
+            *employed.entry(resident_of.0).or_default() += 1;
+        }
     }
     for store_entities in stores.values_mut() {
         store_entities.sort_unstable_by_key(|entity| entity.to_bits());
@@ -1882,7 +1857,9 @@ pub fn update_settlement_economies(
         pantry_entities.sort_unstable_by_key(|entity| entity.to_bits());
     }
 
-    for (entity, mut settlement, mut economy, mut market, policies) in settlements.iter_mut() {
+    for (entity, settlement_id, mut settlement, mut economy, mut market, policies) in
+        settlements.iter_mut()
+    {
         let day_state = runtime
             .by_settlement
             .entry(entity)
@@ -2022,7 +1999,7 @@ pub fn update_settlement_economies(
                         remaining = remaining.saturating_sub(hall.remove_edible(remaining));
                     }
                     if remaining > 0 {
-                        for store in stores.get(settlement.name.as_str()).into_iter().flatten() {
+                        for store in stores.get(settlement_id).into_iter().flatten() {
                             if let Ok(mut inventory) = inventories.p1().get_mut(*store) {
                                 remaining =
                                     remaining.saturating_sub(inventory.remove_edible(remaining));
@@ -2065,7 +2042,7 @@ pub fn update_settlement_economies(
             .p0()
             .get_mut(entity)
             .map_or(0, |inventory| inventory.edible_amount());
-        for pantry in pantries.get(settlement.name.as_str()).into_iter().flatten() {
+        for pantry in pantries.get(settlement_id).into_iter().flatten() {
             stock = stock.saturating_add(
                 inventories
                     .p1()
@@ -2077,9 +2054,9 @@ pub fn update_settlement_economies(
         // focused unit tests. In a live market, only Moot-owned stock is a
         // reserve residents can actually purchase.
         if market.is_none() {
-            for store in stores.get(settlement.name.as_str()).into_iter().flatten() {
+            for store in stores.get(settlement_id).into_iter().flatten() {
                 if pantries
-                    .get(settlement.name.as_str())
+                    .get(settlement_id)
                     .is_some_and(|houses| houses.contains(store))
                 {
                     continue;
@@ -2118,12 +2095,10 @@ pub fn update_settlement_economies(
         economy.production_prosperity =
             (economy.recent_food_production / demand).clamp(0.0, 1.0) * 30.0;
         economy.housing_prosperity =
-            (housing.get(settlement.name.as_str()).copied().unwrap_or(0) as f32 / demand)
-                .clamp(0.0, 1.0)
+            (housing.get(settlement_id).copied().unwrap_or(0) as f32 / demand).clamp(0.0, 1.0)
                 * 20.0;
         economy.employment_prosperity =
-            (employed.get(settlement.name.as_str()).copied().unwrap_or(0) as f32 / demand)
-                .clamp(0.0, 1.0)
+            (employed.get(settlement_id).copied().unwrap_or(0) as f32 / demand).clamp(0.0, 1.0)
                 * 10.0;
         economy.hunger_penalty = -(economy.unmet_food as f32 / demand).clamp(0.0, 1.0) * 30.0;
         economy.prosperity = (economy.reserve_prosperity
@@ -2457,29 +2432,39 @@ pub fn consider_permits(
     mut clock: ResMut<VillageClock>,
     mut commands: Commands,
     planning: PermitPlanningResources,
-    mut settlements: Query<(Entity, &mut Settlement, &PlayerPosition)>,
+    mut settlements: Query<(
+        Entity,
+        &mut Settlement,
+        &PlayerPosition,
+        &shared::components::SettlementId,
+    )>,
     economies: Query<&SettlementEconomy>,
     developments: Query<&shared::components::SettlementDevelopment>,
-    buildings: Query<&SettlementBuilding>,
+    buildings: Query<(
+        &SettlementBuilding,
+        &shared::components::BuildingOf,
+        Option<&shared::components::OwnedBy>,
+    )>,
     pending: Query<&UnderConstruction>,
     placed: Query<(
         &SettlementBuilding,
+        &shared::components::BuildingOf,
         &PlayerPosition,
         Option<&PlayerRotation>,
     )>,
-    roads: Query<&VillageRoad>,
-    administrations: Query<&MootAdministration>,
+    roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
     // ONE query, read then written. Two -- a read of `&VillagerIntent` and a
     // write of `&mut VillagerIntent` -- is a genuine conflict Bevy refuses at
     // runtime, and iterating a mutable query gives read-only items anyway.
     mut villagers: Query<(
         Entity,
+        &shared::components::PersonId,
         &CharacterName,
         &mut VillagerIntent,
         Option<&WorkStatus>,
         Option<&strategic::StrategicPerson>,
+        Option<&shared::components::CivicEmployment>,
     )>,
-    road_stewards: Query<(), With<RoadSteward>>,
     mut wallets: Query<&mut Wallet>,
 ) {
     clock.permit += simulation_time.world_seconds();
@@ -2492,13 +2477,13 @@ pub fn consider_permits(
         return;
     };
 
-    for (settlement_entity, mut settlement, hall) in settlements.iter_mut() {
+    for (settlement_entity, mut settlement, hall, settlement_id) in settlements.iter_mut() {
         // Count what stands AND what is already approved, or three residents
         // deciding on successive permit ticks all build the same thing.
         let mut have: HashMap<SettlementBuildingKind, usize> = HashMap::new();
-        for building in buildings
+        for (building, _, _) in buildings
             .iter()
-            .filter(|building| building.settlement == settlement.name)
+            .filter(|(_, building_of, _)| building_of.0 == *settlement_id)
         {
             *have.entry(building.kind).or_default() += 1;
         }
@@ -2535,8 +2520,8 @@ pub fn consider_permits(
         // Occupied ground, so a new building does not land on an old one.
         let mut occupied: Vec<(Vec3, f32)> = placed
             .iter()
-            .filter(|(building, _, _)| building.settlement == settlement.name)
-            .map(|(building, position, _)| (position.0, building.kind.clearance()))
+            .filter(|(_, building_of, _, _)| building_of.0 == *settlement_id)
+            .map(|(building, _, position, _)| (position.0, building.kind.clearance()))
             .chain(std::iter::once((
                 hall.0,
                 SettlementBuildingKind::Hall.clearance(),
@@ -2553,8 +2538,8 @@ pub fn consider_permits(
         occupied.extend(
             placed
                 .iter()
-                .filter(|(building, _, _)| building.settlement == settlement.name)
-                .flat_map(|(building, position, rotation)| {
+                .filter(|(_, building_of, _, _)| building_of.0 == *settlement_id)
+                .flat_map(|(building, _, position, rotation)| {
                     let rotation = rotation.map_or(0.0, |rotation| rotation.0);
                     let radius = building
                         .kind
@@ -2588,7 +2573,7 @@ pub fn consider_permits(
 
         let village_roads: Vec<_> = roads
             .iter()
-            .filter(|road| road.settlement == settlement.name)
+            .filter_map(|(road, road_of)| (road_of.0 == *settlement_id).then_some(road))
             .collect();
         let missing = requested.unwrap_or(SettlementBuildingKind::FishermansHut);
         let search_signature = FailedSiteSearch {
@@ -2701,41 +2686,27 @@ pub fn consider_permits(
         // lumber prices or eligibility rules to a fallback house or farm.
         // The applicant is whoever holds the fewest completed and approved
         // plots, with stable name ordering for reproducible runs.
-        let holdings = |who: &str| -> usize {
+        let holdings = |who: shared::components::PersonId| -> usize {
             buildings
                 .iter()
-                .filter(|building| {
-                    building.settlement == settlement.name && building.owner.as_deref() == Some(who)
+                .filter(|(_, building_of, owner)| {
+                    building_of.0 == *settlement_id && owner.is_some_and(|owner| owner.0 == who)
                 })
                 .count()
                 + pending
                     .iter()
                     .filter(|under| {
-                        under.settlement == settlement_entity && under.owner.as_deref() == Some(who)
+                        under.settlement_id == *settlement_id && under.owner_id == Some(who)
                     })
                     .count()
         };
-        let administration = administrations.get(settlement_entity).ok();
-        let reeve = administration.and_then(|office| office.reeve.as_deref());
-        let civic_staff: HashSet<&str> = administration
-            .into_iter()
-            .flat_map(|office| {
-                office
-                    .reeve
-                    .iter()
-                    .chain(office.market_porter.iter())
-                    .chain(office.city_workers.iter())
-                    .chain(office.guards.iter())
-            })
-            .map(String::as_str)
-            .collect();
         let applicant = villagers
             .iter()
-            .filter(|(_, _, intent, _, strategic)| {
+            .filter(|(_, _, _, intent, _, strategic, _)| {
                 strategic.is_none()
                     && matches!(intent, VillagerIntent::Resident { settlement } if *settlement == settlement_entity)
             })
-            .filter_map(|(entity, name, _, status, _)| {
+            .filter_map(|(entity, person_id, name, _, status, _, civic_job)| {
                 // Owning a building does not create a second job, but its
                 // construction still needs the applicant's physical time.
                 // Never tear somebody out of a field, workplace doorway or
@@ -2745,15 +2716,16 @@ pub fn consider_permits(
                     return None;
                 }
                 if kind.is_civic() {
-                    if reeve != Some(name.0.as_str()) {
+                    if !civic_job.is_some_and(|job| {
+                        job.settlement == *settlement_id
+                            && job.role == shared::components::CivicRole::Reeve
+                    }) {
                         return None;
                     }
-                } else if road_stewards.get(entity).is_ok()
-                    || civic_staff.contains(name.0.as_str())
-                {
+                } else if civic_job.is_some() {
                     return None;
                 }
-                let holding_count = holdings(&name.0);
+                let holding_count = holdings(*person_id);
                 let fee = permit_price(kind, holding_count, requested.is_some());
                 let balance = wallets
                     .get(entity)
@@ -2764,17 +2736,18 @@ pub fn consider_permits(
                     && holding_count > 0;
                 (balance >= fee).then_some((
                     entity,
+                    *person_id,
                     name.0.clone(),
                     holding_count,
                     u8::from(!wealthy_investor),
                 ))
             })
             .min_by(|a, b| {
-                a.3.cmp(&b.3)
-                    .then_with(|| a.2.cmp(&b.2))
+                a.4.cmp(&b.4)
+                    .then_with(|| a.3.cmp(&b.3))
                     .then_with(|| a.1.cmp(&b.1))
             });
-        let Some((builder, applicant, applicant_holdings, _)) = applicant else {
+        let Some((builder, applicant_id, applicant, applicant_holdings, _)) = applicant else {
             info!(
                 "Village '{}': nobody can afford its next {} permit",
                 settlement.name,
@@ -2825,8 +2798,10 @@ pub fn consider_permits(
                     // supplies builder time, while the settlement owns the
                     // completed structure and its common-stock material bill.
                     owner: (!kind.is_civic()).then_some(applicant.clone()),
+                    owner_id: (!kind.is_civic()).then_some(applicant_id),
                     builder: Some(builder),
                     settlement: settlement_entity,
+                    settlement_id: *settlement_id,
                     stand,
                     stage: BuildStage::Supplying,
                     quality,
@@ -2868,7 +2843,7 @@ pub fn consider_permits(
             .remove::<ambient::AmbientRoutine>();
         if let Ok(mut intent) = villagers
             .get_mut(builder)
-            .map(|(_, _, intent, _, _)| intent)
+            .map(|(_, _, _, intent, ..)| intent)
         {
             *intent = VillagerIntent::Building {
                 settlement: settlement_entity,
@@ -2925,6 +2900,7 @@ pub fn run_construction_material_logistics(
         (
             Entity,
             &Settlement,
+            &shared::components::SettlementId,
             &PlayerPosition,
             Option<&PlayerRotation>,
         ),
@@ -2936,6 +2912,7 @@ pub fn run_construction_material_logistics(
     mut builders: Query<
         (
             Entity,
+            &shared::components::PersonId,
             &CharacterName,
             &PlayerPosition,
             &VillagerIntent,
@@ -2999,6 +2976,7 @@ pub fn run_construction_material_logistics(
 
     for (
         builder,
+        person_id,
         name,
         position,
         intent,
@@ -3136,9 +3114,9 @@ pub fn run_construction_material_logistics(
             continue;
         }
 
-        let Some((hall_entity, settlement, hall_position, hall_rotation)) = settlements
+        let Some((hall_entity, settlement, _, hall_position, hall_rotation)) = settlements
             .iter()
-            .find(|(entity, _, _, _)| *entity == site.settlement)
+            .find(|(entity, ..)| *entity == site.settlement)
         else {
             continue;
         };
@@ -3179,7 +3157,7 @@ pub fn run_construction_material_logistics(
                     };
                     continue;
                 }
-                let affordable = site.owner.is_none()
+                let affordable = site.owner_id.is_none()
                     || match (markets.get(hall_entity), wallet.as_deref()) {
                         (Ok(market), Some(wallet)) => {
                             wallet.can_afford(market.pool(Good::Wood).ask)
@@ -3273,7 +3251,7 @@ pub fn run_construction_material_logistics(
                                 sell_carried_to_moot(
                                     &mut commands,
                                     hall,
-                                    &name.0,
+                                    *person_id,
                                     wallet.as_deref_mut(),
                                     None,
                                     good,
@@ -3307,7 +3285,7 @@ pub fn run_construction_material_logistics(
                 {
                     let carry_room = carrier.free_bulk() / Good::Wood.bulk_per_unit();
                     let requested = remaining.min(carry_room);
-                    if site.owner.is_none() {
+                    if site.owner_id.is_none() {
                         source_store.transfer_to(&mut carrier, Good::Wood, requested)
                     } else {
                         match (markets.get_mut(source), wallet.as_deref_mut()) {
@@ -3424,7 +3402,7 @@ pub fn advance_construction(
     mut commands: Commands,
     mut terrain: Option<ResMut<WorldTerrain>>,
     mut deltas: ResMut<PublishedTerrainDeltas>,
-    settlements: Query<(&Settlement, Option<&shared::components::SettlementId>)>,
+    settlements: Query<(&Settlement, &shared::components::SettlementId)>,
     positions: Query<&PlayerPosition>,
     move_targets: Query<&MoveTarget>,
     home_routines: Query<(), With<HomeRoutine>>,
@@ -3432,7 +3410,6 @@ pub fn advance_construction(
     mut pending: Query<(Entity, &mut UnderConstruction, &GoodsInventory)>,
     mut sites: Query<&mut shared::components::ConstructionSite>,
     mut facings: Query<&mut PlayerRotation>,
-    person_ids: Query<&shared::components::PersonId>,
 ) {
     let world_dt = simulation_time.world_seconds();
     let daylight = world_time.iter().next().is_none_or(WorldTime::is_day);
@@ -3584,15 +3561,10 @@ pub fn advance_construction(
                         Replicate::to_clients(NetworkTarget::All),
                     ))
                     .id();
-                if let Some(settlement_id) = settlement_id {
-                    commands
-                        .entity(building_entity)
-                        .insert(shared::components::BuildingOf(*settlement_id));
-                }
-                if let Some(owner_id) = under
-                    .builder
-                    .and_then(|builder| person_ids.get(builder).ok().copied())
-                {
+                commands
+                    .entity(building_entity)
+                    .insert(shared::components::BuildingOf(*settlement_id));
+                if let Some(owner_id) = under.owner_id {
                     commands
                         .entity(building_entity)
                         .insert(shared::components::OwnedBy(owner_id));
@@ -3696,8 +3668,8 @@ fn clear_and_level(
 ///
 /// This is the smallest honest version of WORLD-DESIGN section 1a's rule that
 /// production is people in jobs rather than population times a multiplier. A
-/// position is held by a NAMED person, so when that person is gone the position
-/// is vacant again and its physical work routine stops.
+/// position is held by a durable PersonId, so renaming somebody cannot vacate,
+/// duplicate or transfer their job.
 ///
 /// Founding workplaces have no skill minimum. If a future specialist building
 /// carries [`WorkforceRequirements`], only matching residents can fill it.
@@ -3711,6 +3683,8 @@ pub fn fill_vacancies(
         &PlayerPosition,
         Option<&BusinessWagePolicy>,
         Option<&WorkforceRequirements>,
+        &shared::components::BuildingId,
+        &shared::components::BuildingOf,
     )>,
     mut villagers: Query<(
         Entity,
@@ -3722,31 +3696,11 @@ pub fn fill_vacancies(
         Option<&CharacterAttributes>,
         Option<&shared::components::EmployedAt>,
         Option<&shared::components::CivicEmployment>,
-        Option<&shared::components::PersonId>,
+        &shared::components::PersonId,
     )>,
-    building_ids: Query<&shared::components::BuildingId>,
-    settlements: Query<(Entity, &Settlement)>,
-    administrations: Query<&MootAdministration>,
+    settlements: Query<(Entity, &Settlement, &shared::components::SettlementId)>,
     active_builders: Query<(), Or<(With<ConstructionMaterialRoutine>, With<RoadBuilderRoutine>)>>,
 ) {
-    // Civic posts are jobs, not honorary labels. Give those explicit rosters
-    // priority when repairing an old save that contains the same person in a
-    // business roster as well.
-    let mut legacy_civic_names: HashSet<String> = HashSet::new();
-    for administration in administrations.iter() {
-        if let Some(reeve) = &administration.reeve {
-            legacy_civic_names.insert(reeve.clone());
-        }
-        if let Some(porter) = &administration.market_porter {
-            legacy_civic_names.insert(porter.clone());
-        }
-        if let Some(steward) = &administration.road_steward {
-            legacy_civic_names.insert(steward.clone());
-        }
-        legacy_civic_names.extend(administration.city_workers.iter().cloned());
-        legacy_civic_names.extend(administration.guards.iter().cloned());
-    }
-
     let mut assigned_entities = HashSet::new();
     let mut stable_workers_by_building: HashMap<
         shared::components::BuildingId,
@@ -3766,44 +3720,30 @@ pub fn fill_vacancies(
             stable_workers_by_building
                 .entry(employment.0)
                 .or_default()
-                .push((
-                    person_id.copied().unwrap_or_default(),
-                    entity,
-                    name.0.clone(),
-                ));
+                .push((*person_id, entity, name.0.clone()));
         }
     }
     for workers in stable_workers_by_building.values_mut() {
         workers.sort_unstable_by_key(|(person_id, entity, _)| (person_id.0, entity.to_bits()));
     }
+    let mut worker_counts: HashMap<shared::components::BuildingId, usize> =
+        stable_workers_by_building
+            .iter()
+            .map(|(building_id, workers)| (*building_id, workers.len()))
+            .collect();
 
     // Stable employment is authoritative and the readable roster is derived
     // from it. This preserves two different people with the same display name
     // and cleans civic/business double assignment without guessing by name.
-    for (building_entity, mut building, _, _, _) in buildings.iter_mut() {
-        if let Ok(building_id) = building_ids.get(building_entity) {
-            let roster: Vec<String> = stable_workers_by_building
-                .get(building_id)
-                .into_iter()
-                .flatten()
-                .map(|(_, _, name)| name.clone())
-                .collect();
-            if building.workers != roster {
-                building.workers = roster;
-            }
-        } else {
-            let settlement_name = building.settlement.clone();
-            let trade = building.kind.trade().unwrap_or("workplace");
-            building.workers.retain(|worker| {
-                let keeps_job = !legacy_civic_names.contains(worker);
-                if !keeps_job {
-                    warn!(
-                        "Village '{}': removed {worker} from the {} roster because they already hold a civic job",
-                        settlement_name, trade
-                    );
-                }
-                keeps_job
-            });
+    for (_, mut building, _, _, _, building_id, _) in buildings.iter_mut() {
+        let roster: Vec<String> = stable_workers_by_building
+            .get(building_id)
+            .into_iter()
+            .flatten()
+            .map(|(_, _, name)| name.clone())
+            .collect();
+        if building.workers != roster {
+            building.workers = roster;
         }
     }
     if !villagers.iter().any(
@@ -3820,38 +3760,42 @@ pub fn fill_vacancies(
         return;
     }
 
-    for (settlement_entity, settlement) in settlements.iter() {
+    for (settlement_entity, settlement, settlement_id) in settlements.iter() {
         loop {
             // Best offer in this settlement. Skill requirements remain absent
             // on every founding business, but are part of the vacancy now so
             // later specialist buildings do not need a parallel job system.
             let mut vacancies: Vec<_> = buildings
                 .iter()
-                .filter(|(_, building, _, _, _)| {
-                    building.settlement == settlement.name
-                        && (building.workers.len() as u8) < building.kind.positions()
+                .filter(|(_, building, _, _, _, building_id, building_of)| {
+                    building_of.0 == *settlement_id
+                        && worker_counts.get(*building_id).copied().unwrap_or(0)
+                            < building.kind.positions() as usize
                 })
-                .map(|(entity, building, at, wage, requirements)| {
-                    (
-                        entity,
-                        building.kind,
-                        at.0,
-                        wage.map_or(FOUNDING_DAILY_WAGE, |policy| policy.daily_wage),
-                        requirements.copied(),
-                    )
-                })
+                .map(
+                    |(entity, building, at, wage, requirements, building_id, _)| {
+                        (
+                            entity,
+                            *building_id,
+                            building.kind,
+                            at.0,
+                            wage.map_or(FOUNDING_DAILY_WAGE, |policy| policy.daily_wage),
+                            requirements.copied(),
+                        )
+                    },
+                )
                 .collect();
             vacancies.sort_by(|a, b| {
-                b.3.cmp(&a.3)
-                    .then_with(|| a.2.x.total_cmp(&b.2.x))
-                    .then_with(|| a.2.z.total_cmp(&b.2.z))
+                b.4.cmp(&a.4)
+                    .then_with(|| a.3.x.total_cmp(&b.3.x))
+                    .then_with(|| a.3.z.total_cmp(&b.3.z))
             });
 
             // Usually the best-paid offer finds somebody in one people scan.
             // Only an unfillable specialist offer falls through to the next;
             // ordinary jobs never scan the whole population once per building.
             let mut placement = None;
-            for (vacancy_entity, kind, plot, offered_wage, requirements) in vacancies {
+            for (vacancy_entity, vacancy_id, kind, plot, offered_wage, requirements) in vacancies {
                 let taker = villagers
                     .iter()
                     .filter(
@@ -3889,21 +3833,34 @@ pub fn fill_vacancies(
                     })
                     .map(|(entity, name, _, _, _, _, _, _, _, _)| (entity, name.0.clone()));
                 if let Some((taker_entity, taker)) = taker {
-                    placement = Some((vacancy_entity, kind, offered_wage, taker_entity, taker));
+                    placement = Some((
+                        vacancy_entity,
+                        vacancy_id,
+                        kind,
+                        offered_wage,
+                        taker_entity,
+                        taker,
+                    ));
                     break;
                 }
             }
-            let Some((vacancy_entity, kind, offered_wage, taker_entity, taker)) = placement else {
+            let Some((vacancy_entity, vacancy_id, kind, offered_wage, taker_entity, taker)) =
+                placement
+            else {
                 break;
             };
 
-            let Ok((_, mut building, _, _, _)) = buildings.get_mut(vacancy_entity) else {
+            let Ok((_, mut building, _, _, _, building_id, _)) = buildings.get_mut(vacancy_entity)
+            else {
                 break;
             };
-            if (building.workers.len() as u8) >= building.kind.positions() {
+            if worker_counts.get(&vacancy_id).copied().unwrap_or(0)
+                >= building.kind.positions() as usize
+            {
                 break;
             }
             building.workers.push(taker.clone());
+            *worker_counts.entry(vacancy_id).or_default() += 1;
             assigned_entities.insert(taker_entity);
             if let Ok((_, _, _, _, mut occupation, _, _, _, _, _)) = villagers.get_mut(taker_entity)
             {
@@ -3914,9 +3871,7 @@ pub fn fill_vacancies(
             }
             let mut employee = commands.entity(taker_entity);
             employee.insert(WorkStatus::Employed);
-            if let Ok(building_id) = building_ids.get(vacancy_entity) {
-                employee.insert(shared::components::EmployedAt(*building_id));
-            }
+            employee.insert(shared::components::EmployedAt(*building_id));
             info!(
                 "Village '{}': {taker} took work as a {} for {} coin/day",
                 settlement.name,
@@ -3925,2920 +3880,6 @@ pub fn fill_vacancies(
             );
         }
     }
-}
-
-/// Give every completed cabin a bounded, inspectable household roster.
-pub fn ensure_households(
-    mut commands: Commands,
-    houses: Query<(
-        Entity,
-        &SettlementBuilding,
-        Option<&Household>,
-        Option<&HouseholdEconomy>,
-    )>,
-) {
-    for (entity, building, household, economy) in houses.iter() {
-        if building.kind == SettlementBuildingKind::House {
-            let mut entity_commands = commands.entity(entity);
-            if household.is_none() {
-                entity_commands.insert(Household::default());
-            }
-            if economy.is_none() {
-                entity_commands.insert(HouseholdEconomy::default());
-            }
-        }
-    }
-}
-
-/// Fund each house's shared necessities purse and restock its bounded pantry.
-///
-/// This is intentionally one decision per household per world day. Tactical
-/// households send the named shopper on a visible trip; strategic settlements
-/// settle the same purchase directly so 5,000 people do not need 5,000 paths.
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn update_household_budgets_and_pantries(
-    mut commands: Commands,
-    world_time: Query<&WorldTime>,
-    regions: Option<Res<RegionRegistry>>,
-    mut halls: Query<
-        (
-            Entity,
-            &Settlement,
-            &PlayerPosition,
-            Option<&PlayerRotation>,
-            &mut GoodsInventory,
-            &mut MootMarket,
-        ),
-        (Without<SettlementBuilding>, Without<CharacterKind>),
-    >,
-    mut houses: Query<
-        (
-            Entity,
-            &SettlementBuilding,
-            &Household,
-            &mut HouseholdEconomy,
-            &mut GoodsInventory,
-        ),
-        Without<CharacterKind>,
-    >,
-    mut residents: Query<(
-        Entity,
-        &CharacterName,
-        &mut Wallet,
-        Option<&WorkStatus>,
-        Option<&HomeAssignment>,
-        Option<&RegionCoord>,
-        Option<&HouseholdShoppingRoutine>,
-    )>,
-    busy: Query<
-        (),
-        Or<(
-            With<ConstructionMaterialRoutine>,
-            With<RoadBuilderRoutine>,
-            With<HomeRoutine>,
-            With<WorkplaceDoorTransit>,
-            With<MarketCollectionRoutine>,
-        )>,
-    >,
-) {
-    let Some(clock) = world_time.iter().next() else {
-        return;
-    };
-    let day = clock.day;
-    let hall_by_name: HashMap<String, Entity> = halls
-        .iter()
-        .map(|(entity, settlement, _, _, _, _)| (settlement.name.clone(), entity))
-        .collect();
-    let resident_by_name: HashMap<String, Entity> = residents
-        .iter()
-        .map(|(entity, name, _, _, _, _, _)| (name.0.clone(), entity))
-        .collect();
-    for (house_entity, building, household, mut economy, mut pantry) in houses.iter_mut() {
-        if building.kind != SettlementBuildingKind::House || economy.last_budget_day == day {
-            continue;
-        }
-        let mut members: Vec<(String, WorkStatus)> = household
-            .residents
-            .iter()
-            .filter_map(|member| {
-                let entity = resident_by_name.get(member).copied()?;
-                let Ok((_, name, _, status, assignment, _, _)) = residents.get(entity) else {
-                    return None;
-                };
-                assignment
-                    .is_some_and(|assignment| assignment.home == house_entity)
-                    .then_some((name.0.clone(), status.copied().unwrap_or_default()))
-            })
-            .collect();
-        members.sort_by(|a, b| {
-            let rank = |status: WorkStatus| match status {
-                WorkStatus::Chilling => 0,
-                WorkStatus::LookingForWork => 1,
-                WorkStatus::Employed => 2,
-            };
-            rank(a.1).cmp(&rank(b.1)).then_with(|| a.0.cmp(&b.0))
-        });
-        economy.shopper = members.first().map(|(name, _)| name.clone());
-        if members.is_empty() {
-            economy.last_budget_day = day;
-            continue;
-        }
-        let target_units =
-            (members.len() as u32).saturating_mul(u32::from(economy.pantry_target_days));
-        let deficit = target_units.saturating_sub(pantry.edible_amount());
-        if deficit == 0 {
-            economy.last_budget_day = day;
-            continue;
-        }
-        let Some(hall_entity) = hall_by_name.get(&building.settlement).copied() else {
-            continue;
-        };
-        let Ok((_, _, hall_position, hall_rotation, mut hall_store, mut market)) =
-            halls.get_mut(hall_entity)
-        else {
-            continue;
-        };
-        let estimated_unit_price = [Good::Food, Good::Wheat]
-            .into_iter()
-            .filter(|good| hall_store.amount(*good) > 0)
-            .map(|good| market.pool(good).ask)
-            .min()
-            .unwrap_or(0);
-        let wanted_budget = u64::from(deficit).saturating_mul(estimated_unit_price);
-        let mut needed = wanted_budget.saturating_sub(economy.pennies);
-        if needed > 0 {
-            // All earners contribute toward the same concrete pantry target,
-            // while retaining two coins as personal discretionary money.
-            let mut contribution_order = members.clone();
-            contribution_order.sort_by(|a, b| a.0.cmp(&b.0));
-            for (member, _) in contribution_order {
-                let Some(member_entity) = resident_by_name.get(&member).copied() else {
-                    continue;
-                };
-                let Ok((_, _, mut wallet, _, _, _, _)) = residents.get_mut(member_entity) else {
-                    continue;
-                };
-                let available = wallet.balance().saturating_sub(2 * PENNIES_PER_COIN);
-                let contribution = available.min(needed);
-                if contribution > 0 && wallet.debit(contribution) {
-                    economy.pennies = economy.pennies.saturating_add(contribution);
-                    needed -= contribution;
-                }
-                if needed == 0 {
-                    break;
-                }
-            }
-        }
-
-        let shopper_entity = economy
-            .shopper
-            .as_ref()
-            .and_then(|shopper| resident_by_name.get(shopper).copied());
-        let tactical_shopper = shopper_entity.is_some_and(|shopper| {
-            let Ok((_, _, _, _, _, region, routine)) = residents.get(shopper) else {
-                return false;
-            };
-            routine.is_none()
-                && busy.get(shopper).is_err()
-                && region.is_some_and(|region| {
-                    regions.as_ref().is_some_and(|registry| {
-                        registry
-                            .get(*region)
-                            .is_some_and(|state| state.sim_level == SimLevel::Tactical)
-                    })
-                })
-        });
-        if tactical_shopper && clock.is_day() {
-            if let Some(shopper) = shopper_entity {
-                let entrance = SettlementBuildingKind::Hall.entrance_position(
-                    hall_position.0,
-                    hall_rotation.map_or(0.0, |rotation| rotation.0),
-                );
-                commands.entity(shopper).insert((
-                    HouseholdShoppingRoutine {
-                        home: house_entity,
-                        hall: hall_entity,
-                        phase: HouseholdShoppingPhase::GoingToMarket,
-                    },
-                    MoveTarget(entrance),
-                ));
-                economy.last_budget_day = day;
-                continue;
-            }
-        }
-
-        let mut remaining = deficit;
-        for good in [Good::Food, Good::Wheat] {
-            if remaining == 0 {
-                break;
-            }
-            let room = pantry.free_bulk() / good.bulk_per_unit();
-            let requested = remaining.min(room).min(hall_store.amount(good));
-            let trade =
-                market.sell_to_consumer(good, hall_store.amount(good), requested, economy.pennies);
-            if trade.units == 0 {
-                continue;
-            }
-            if economy.pennies < trade.pennies {
-                continue;
-            }
-            economy.pennies -= trade.pennies;
-            let moved = hall_store.transfer_to(&mut pantry, good, trade.units);
-            debug_assert_eq!(moved, trade.units);
-            remaining = remaining.saturating_sub(moved);
-        }
-        economy.last_budget_day = day;
-    }
-}
-
-/// Animate the tactical half of household restocking. The shopper pays from
-/// the house purse at the Moot, carries only what fits, and unloads at their
-/// own cabin; off-screen households use the aggregate branch above.
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn run_household_shopping(
-    mut commands: Commands,
-    mut halls: Query<
-        (
-            &PlayerPosition,
-            Option<&PlayerRotation>,
-            &mut GoodsInventory,
-            &mut MootMarket,
-        ),
-        (
-            With<Settlement>,
-            Without<SettlementBuilding>,
-            Without<CharacterKind>,
-        ),
-    >,
-    mut houses: Query<
-        (
-            &SettlementBuilding,
-            &PlayerPosition,
-            &PlayerRotation,
-            &Household,
-            &mut HouseholdEconomy,
-            &mut GoodsInventory,
-        ),
-        Without<CharacterKind>,
-    >,
-    mut shoppers: Query<
-        (
-            Entity,
-            &PlayerPosition,
-            &mut CharacterActivity,
-            &mut GoodsInventory,
-            &mut HouseholdShoppingRoutine,
-            Option<&MoveTarget>,
-            Option<&HomeRoutine>,
-        ),
-        (With<CharacterKind>, Without<strategic::StrategicPerson>),
-    >,
-) {
-    for (shopper, position, mut activity, mut carrier, mut routine, move_target, home) in
-        shoppers.iter_mut()
-    {
-        if home.is_some() {
-            continue;
-        }
-        let Ok((hall_position, hall_rotation, mut hall_store, mut market)) =
-            halls.get_mut(routine.hall)
-        else {
-            commands
-                .entity(shopper)
-                .remove::<HouseholdShoppingRoutine>()
-                .remove::<MoveTarget>();
-            continue;
-        };
-        let Ok((building, home_position, home_rotation, household, mut economy, mut pantry)) =
-            houses.get_mut(routine.home)
-        else {
-            commands
-                .entity(shopper)
-                .remove::<HouseholdShoppingRoutine>()
-                .remove::<MoveTarget>();
-            continue;
-        };
-        let hall_entrance = SettlementBuildingKind::Hall.entrance_position(
-            hall_position.0,
-            hall_rotation.map_or(0.0, |rotation| rotation.0),
-        );
-        let home_entrance = building
-            .kind
-            .entrance_position(home_position.0, home_rotation.0);
-        *activity = CharacterActivity::Idle;
-        match routine.phase {
-            HouseholdShoppingPhase::GoingToMarket => {
-                if ground_distance(position.0, hall_entrance) > WORK_REACH {
-                    ensure_move_target(&mut commands, shopper, move_target, hall_entrance);
-                    continue;
-                }
-                let target = (household.residents.len() as u32)
-                    .saturating_mul(u32::from(economy.pantry_target_days));
-                let mut remaining = target.saturating_sub(pantry.edible_amount());
-                for good in [Good::Food, Good::Wheat] {
-                    if remaining == 0 {
-                        break;
-                    }
-                    let requested = remaining
-                        .min(carrier.free_bulk() / good.bulk_per_unit())
-                        .min(hall_store.amount(good));
-                    let trade = market.sell_to_consumer(
-                        good,
-                        hall_store.amount(good),
-                        requested,
-                        economy.pennies,
-                    );
-                    if trade.units == 0 || economy.pennies < trade.pennies {
-                        continue;
-                    }
-                    economy.pennies -= trade.pennies;
-                    let moved = hall_store.transfer_to(&mut carrier, good, trade.units);
-                    debug_assert_eq!(moved, trade.units);
-                    remaining = remaining.saturating_sub(moved);
-                }
-                if carrier.edible_amount() == 0 {
-                    commands
-                        .entity(shopper)
-                        .remove::<HouseholdShoppingRoutine>()
-                        .remove::<MoveTarget>();
-                    continue;
-                }
-                commands.entity(shopper).insert(MoveTarget(home_entrance));
-                routine.phase = HouseholdShoppingPhase::ReturningHome;
-            }
-            HouseholdShoppingPhase::ReturningHome => {
-                if ground_distance(position.0, home_entrance) > DOOR_REACH {
-                    ensure_move_target(&mut commands, shopper, move_target, home_entrance);
-                    continue;
-                }
-                for good in [Good::Food, Good::Wheat] {
-                    carrier.transfer_to(&mut pantry, good, u32::MAX);
-                }
-                commands
-                    .entity(shopper)
-                    .remove::<HouseholdShoppingRoutine>()
-                    .remove::<MoveTarget>();
-            }
-        }
-    }
-}
-
-/// Assign every resident to one cabin in their settlement, up to its real bed
-/// capacity. Nearest-first keeps a household spatially coherent without yet
-/// inventing family relationships.
-pub fn assign_households(
-    mut commands: Commands,
-    settlements: Query<(Entity, &Settlement)>,
-    mut houses: Query<(Entity, &SettlementBuilding, &PlayerPosition, &mut Household)>,
-    villagers: Query<(
-        Entity,
-        &CharacterName,
-        &VillagerIntent,
-        &PlayerPosition,
-        Option<&HomeAssignment>,
-    )>,
-    changed_assignments: Query<(), Changed<HomeAssignment>>,
-    changed_names: Query<(), Changed<CharacterName>>,
-) {
-    let house_info: Vec<(Entity, String, Vec3, usize)> = houses
-        .iter()
-        .filter(|(_, building, _, _)| building.kind == SettlementBuildingKind::House)
-        .map(|(entity, building, position, _)| {
-            (
-                entity,
-                building.settlement.clone(),
-                position.0,
-                building.kind.housing_capacity() as usize,
-            )
-        })
-        .collect();
-    let house_lookup: HashMap<Entity, usize> = house_info
-        .iter()
-        .enumerate()
-        .map(|(index, (entity, _, _, _))| (*entity, index))
-        .collect();
-    let settlement_names: HashMap<Entity, String> = settlements
-        .iter()
-        .map(|(entity, settlement)| (entity, settlement.name.clone()))
-        .collect();
-
-    // The common case is a fully assigned, unchanged village. Validate it in
-    // O(people + houses) and leave every replicated roster untouched. The old
-    // implementation rebuilt names and searched every house for every person
-    // on all 60 server ticks, even though housing changes only when a person or
-    // cabin changes.
-    let mut occupancy: HashMap<Entity, usize> = HashMap::new();
-    let mut needs_rebuild = !changed_assignments.is_empty() || !changed_names.is_empty();
-    for (_, _, intent, _, assignment) in villagers.iter() {
-        if !intent.counts_as_resident() {
-            // Travelling villagers used to consume beds before they arrived,
-            // while recount_residents correctly excluded them. Remove any
-            // legacy assignment and rebuild its old cabin roster.
-            if assignment.is_some() {
-                needs_rebuild = true;
-            }
-            continue;
-        }
-        let Some(assignment) = assignment else {
-            needs_rebuild = true;
-            continue;
-        };
-        let Some(index) = house_lookup.get(&assignment.home).copied() else {
-            needs_rebuild = true;
-            continue;
-        };
-        let (_, place, _, capacity) = &house_info[index];
-        let same_settlement = intent
-            .settlement()
-            .and_then(|settlement| settlement_names.get(&settlement))
-            == Some(place);
-        let occupied = occupancy.entry(assignment.home).or_default();
-        if !same_settlement || *occupied >= *capacity {
-            needs_rebuild = true;
-            continue;
-        }
-        *occupied += 1;
-    }
-    if !needs_rebuild {
-        needs_rebuild = houses.iter().any(|(house, _, _, household)| {
-            occupancy.get(&house).copied().unwrap_or(0) != household.residents.len()
-        });
-    }
-    if !needs_rebuild {
-        return;
-    }
-
-    let mut rosters: HashMap<Entity, Vec<String>> = HashMap::new();
-    let mut assigned: HashSet<Entity> = HashSet::new();
-    for (villager, name, intent, _, assignment) in villagers.iter() {
-        let Some(assignment) = assignment else {
-            continue;
-        };
-        let valid = intent.counts_as_resident()
-            && house_lookup
-                .get(&assignment.home)
-                .and_then(|index| house_info.get(*index))
-                .is_some_and(|(house, place, _, capacity)| {
-                    intent
-                        .settlement()
-                        .and_then(|settlement| settlement_names.get(&settlement))
-                        == Some(place)
-                        && rosters.get(house).map_or(0, Vec::len) < *capacity
-                });
-        if valid {
-            assigned.insert(villager);
-            rosters
-                .entry(assignment.home)
-                .or_default()
-                .push(name.0.clone());
-        } else {
-            commands.entity(villager).remove::<HomeAssignment>();
-        }
-    }
-
-    for (house, place, house_position, capacity) in &house_info {
-        while rosters.get(house).map_or(0, Vec::len) < *capacity {
-            let resident = villagers
-                .iter()
-                .filter(|(entity, _, intent, _, _)| {
-                    !assigned.contains(entity)
-                        && intent.counts_as_resident()
-                        && intent
-                            .settlement()
-                            .and_then(|settlement| settlement_names.get(&settlement))
-                            == Some(place)
-                })
-                .min_by(|a, b| {
-                    a.3 .0
-                        .distance_squared(*house_position)
-                        .total_cmp(&b.3 .0.distance_squared(*house_position))
-                })
-                .map(|(entity, name, _, _, _)| (entity, name.0.clone()));
-            let Some((resident, name)) = resident else {
-                break;
-            };
-            assigned.insert(resident);
-            rosters.entry(*house).or_default().push(name.clone());
-            commands
-                .entity(resident)
-                .insert(HomeAssignment { home: *house });
-            info!("Village '{place}': {name} was assigned a bed in a cabin");
-        }
-    }
-
-    for (house, _, _, mut household) in houses.iter_mut() {
-        let next = rosters.remove(&house).unwrap_or_default();
-        if household.residents != next {
-            household.residents = next;
-        }
-    }
-}
-
-/// Send housed villagers through their cabin door at sunset and back out at
-/// sunrise. Work state is reset to its workplace approach, so morning resumes
-/// with a real journey instead of farming or chopping beside the bed.
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn run_household_schedules(
-    simulation_time: crate::world::simulation_time::SimulationTime,
-    obstacles: Option<Res<SpatialObstacleGrid>>,
-    world_time: Query<&WorldTime>,
-    mut commands: Commands,
-    homes: Query<
-        (
-            Entity,
-            &SettlementBuilding,
-            &PlayerPosition,
-            &PlayerRotation,
-            &Household,
-        ),
-        Without<CharacterKind>,
-    >,
-    workplaces: Query<
-        (&SettlementBuilding, &PlayerPosition, &PlayerRotation),
-        Without<CharacterKind>,
-    >,
-    roads: Query<&shared::components::VillageRoad>,
-    mut villagers: Query<
-        (
-            Entity,
-            &CharacterName,
-            &PlayerPosition,
-            &mut PlayerRotation,
-            &mut CharacterActivity,
-            &HomeAssignment,
-            Option<&MoveTarget>,
-            Option<&mut HomeRoutine>,
-            Option<&mut FarmerRoutine>,
-            Option<&mut LumberjackRoutine>,
-            Option<&mut FishingRoutine>,
-            Option<&mut RoadBuilderRoutine>,
-            Option<&WorkplaceDoorTransit>,
-        ),
-        (With<CharacterKind>, Without<strategic::StrategicPerson>),
-    >,
-) {
-    let Some(clock) = world_time.iter().next() else {
-        return;
-    };
-    let is_day = clock.is_day();
-    let dt = simulation_time.world_seconds();
-
-    for (
-        villager,
-        name,
-        position,
-        mut facing,
-        mut activity,
-        assignment,
-        move_target,
-        routine,
-        mut farmer,
-        mut lumberjack,
-        mut fisher,
-        mut road_builder,
-        workplace_transit,
-    ) in villagers.iter_mut()
-    {
-        let assigned_home = homes.get(assignment.home).ok();
-
-        let Some(mut routine) = routine else {
-            if is_day {
-                continue;
-            }
-            let Some((home, _, home_position, home_rotation, _)) = assigned_home else {
-                continue;
-            };
-            let door =
-                SettlementBuildingKind::House.entrance_position(home_position.0, home_rotation.0);
-            *activity = CharacterActivity::Idle;
-            let workplace_threshold = workplace_transit
-                .map(|transit| (transit.building, transit.door, transit.inside))
-                .or_else(|| {
-                    farmer.as_deref().and_then(|farmer| {
-                        matches!(farmer.phase, FarmerPhase::Inside { .. })
-                            .then(|| workplaces.get(farmer.farmstead).ok())
-                            .flatten()
-                            .map(|(building, position, rotation)| {
-                                (
-                                    position.0,
-                                    building.kind.entrance_position(position.0, rotation.0),
-                                    building.kind.interior_door_position(position.0, rotation.0),
-                                )
-                            })
-                    })
-                })
-                .or_else(|| {
-                    lumberjack.as_deref().and_then(|lumberjack| {
-                        matches!(lumberjack.phase, LumberjackPhase::Inside { .. })
-                            .then(|| workplaces.get(lumberjack.hut).ok())
-                            .flatten()
-                            .map(|(building, position, rotation)| {
-                                (
-                                    position.0,
-                                    building.kind.entrance_position(position.0, rotation.0),
-                                    building.kind.interior_door_position(position.0, rotation.0),
-                                )
-                            })
-                    })
-                })
-                .or_else(|| {
-                    fisher.as_deref().and_then(|fisher| {
-                        matches!(fisher.phase, FishingPhase::Inside { .. })
-                            .then(|| workplaces.get(fisher.hut).ok())
-                            .flatten()
-                            .map(|(building, position, rotation)| {
-                                (
-                                    position.0,
-                                    building.kind.entrance_position(position.0, rotation.0),
-                                    building.kind.interior_door_position(position.0, rotation.0),
-                                )
-                            })
-                    })
-                });
-
-            // Unfinished work waits for morning. Resetting the spatial phase is
-            // essential: otherwise an interrupted Chopping phase resumes at
-            // the cabin and the villager swings an axe beside their bed.
-            if let Some(farmer) = farmer.as_deref_mut() {
-                farmer.phase = FarmerPhase::GoingToFarmstead;
-            }
-            if let Some(lumberjack) = lumberjack.as_deref_mut() {
-                lumberjack.phase = LumberjackPhase::GoingToHut;
-            }
-            if let Some(fisher) = fisher.as_deref_mut() {
-                fisher.phase = FishingPhase::GoingToHut;
-                commands
-                    .entity(villager)
-                    .remove::<PierTraversal>()
-                    .remove::<TravelRoute>()
-                    .remove::<NavigationRoutePending>();
-            }
-            if let Some(road_builder) = road_builder.as_deref_mut() {
-                if let Ok(road) = roads.get(road_builder.road) {
-                    road_builder.restart_from_built_road(road);
-                }
-            }
-
-            // Night takes ownership of the destination. A failed daytime
-            // route must not remain attached: movement deliberately sleeps
-            // while NavigationRouteFailed exists, including during a doorway
-            // transit that is otherwise allowed to ignore the wall collider.
-            commands
-                .entity(villager)
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>();
-
-            let phase =
-                if let Some((building, workplace_door, workplace_inside)) = workplace_threshold {
-                    begin_workplace_exit(
-                        &mut commands,
-                        villager,
-                        building,
-                        workplace_door,
-                        workplace_inside,
-                        door,
-                    );
-                    HomePhase::LeavingWorkplace
-                } else {
-                    commands.entity(villager).insert(MoveTarget(door));
-                    HomePhase::GoingToDoor
-                };
-            commands
-                .entity(villager)
-                .insert(HomeRoutine { home, phase });
-            continue;
-        };
-
-        let Ok((_, building, home_position, home_rotation, household)) = homes.get(routine.home)
-        else {
-            *activity = CharacterActivity::Idle;
-            commands
-                .entity(villager)
-                .remove::<HomeRoutine>()
-                .remove::<BuildingDoorUse>()
-                .remove::<MoveTarget>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>();
-            continue;
-        };
-        if assignment.home != routine.home
-            || !household
-                .residents
-                .iter()
-                .any(|resident| resident == &name.0)
-        {
-            *activity = CharacterActivity::Idle;
-            commands
-                .entity(villager)
-                .remove::<HomeRoutine>()
-                .remove::<BuildingDoorUse>()
-                .remove::<MoveTarget>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>();
-            continue;
-        }
-
-        let door = building
-            .kind
-            .entrance_position(home_position.0, home_rotation.0);
-        let inside = building
-            .kind
-            .interior_door_position(home_position.0, home_rotation.0);
-        let outside = exterior_door_clearance_position(home_position.0, door);
-        let door_use = BuildingDoorUse {
-            building: home_position.0,
-        };
-
-        if is_day {
-            match routine.phase {
-                HomePhase::LeavingWorkplace => {
-                    // Finish crossing the workplace threshold first. Its
-                    // transit changes this to GoingToDoor, which releases the
-                    // villager back to work on the following daylight tick.
-                }
-                HomePhase::GoingToDoor | HomePhase::OpeningToEnter { .. } => {
-                    *activity = CharacterActivity::Idle;
-                    commands
-                        .entity(villager)
-                        .remove::<HomeRoutine>()
-                        .remove::<BuildingDoorUse>()
-                        .remove::<MoveTarget>()
-                        .remove::<TravelRoute>()
-                        .remove::<NavigationRoutePending>()
-                        .remove::<NavigationRouteFailed>();
-                }
-                HomePhase::Entering => {
-                    *activity = CharacterActivity::Idle;
-                    commands
-                        .entity(villager)
-                        .remove::<TravelRoute>()
-                        .remove::<NavigationRoutePending>()
-                        .remove::<NavigationRouteFailed>()
-                        .insert((door_use, MoveTarget(outside)));
-                    routine.phase = HomePhase::Leaving;
-                }
-                HomePhase::Sleeping => {
-                    *activity = CharacterActivity::Indoors;
-                    commands
-                        .entity(villager)
-                        .insert(door_use)
-                        .remove::<MoveTarget>();
-                    routine.phase = HomePhase::OpeningToLeave {
-                        seconds_left: DOOR_OPEN_SECONDS,
-                    };
-                }
-                HomePhase::OpeningToLeave { seconds_left } => {
-                    *activity = CharacterActivity::Indoors;
-                    commands
-                        .entity(villager)
-                        .insert(door_use)
-                        .remove::<MoveTarget>();
-                    let left = seconds_left - dt;
-                    if left > 0.0 {
-                        routine.phase = HomePhase::OpeningToLeave { seconds_left: left };
-                    } else {
-                        *activity = CharacterActivity::Idle;
-                        commands.entity(villager).insert(MoveTarget(outside));
-                        routine.phase = HomePhase::Leaving;
-                    }
-                }
-                HomePhase::Leaving => {
-                    *activity = CharacterActivity::Idle;
-                    commands.entity(villager).insert(door_use);
-                    let still_inside_blocker = obstacles.as_deref().is_some_and(|grid| {
-                        grid.point_blocked(Vec2::new(position.0.x, position.0.z))
-                    });
-                    if ground_distance(position.0, outside) <= DOOR_REACH && !still_inside_blocker {
-                        commands
-                            .entity(villager)
-                            .remove::<HomeRoutine>()
-                            .remove::<BuildingDoorUse>()
-                            .remove::<MoveTarget>()
-                            .remove::<TravelRoute>()
-                            .remove::<NavigationRoutePending>()
-                            .remove::<NavigationRouteFailed>();
-                    } else {
-                        ensure_move_target(&mut commands, villager, move_target, outside);
-                    }
-                }
-            }
-            continue;
-        }
-
-        match routine.phase {
-            HomePhase::LeavingWorkplace => {
-                // `run_workplace_door_transits` owns this threshold and changes
-                // the phase after the worker reaches the exterior door.
-                *activity = CharacterActivity::Idle;
-            }
-            HomePhase::GoingToDoor => {
-                *activity = CharacterActivity::Idle;
-                if ground_distance(position.0, door) <= DOOR_REACH {
-                    commands
-                        .entity(villager)
-                        .remove::<MoveTarget>()
-                        .insert(door_use);
-                    let to_house = home_position.0 - door;
-                    if to_house.length_squared() > 1e-4 {
-                        facing.0 = build_clip_facing(to_house);
-                    }
-                    routine.phase = HomePhase::OpeningToEnter {
-                        seconds_left: DOOR_OPEN_SECONDS,
-                    };
-                } else {
-                    ensure_move_target(&mut commands, villager, move_target, door);
-                }
-            }
-            HomePhase::OpeningToEnter { seconds_left } => {
-                *activity = CharacterActivity::Idle;
-                commands
-                    .entity(villager)
-                    .insert(door_use)
-                    .remove::<MoveTarget>();
-                let left = seconds_left - dt;
-                if left > 0.0 {
-                    routine.phase = HomePhase::OpeningToEnter { seconds_left: left };
-                } else {
-                    commands.entity(villager).insert(MoveTarget(inside));
-                    routine.phase = HomePhase::Entering;
-                }
-            }
-            HomePhase::Entering => {
-                *activity = CharacterActivity::Idle;
-                commands.entity(villager).insert(door_use);
-                if ground_distance(position.0, inside) <= DOOR_REACH {
-                    *activity = CharacterActivity::Indoors;
-                    commands
-                        .entity(villager)
-                        .remove::<BuildingDoorUse>()
-                        .remove::<MoveTarget>();
-                    routine.phase = HomePhase::Sleeping;
-                } else {
-                    ensure_move_target(&mut commands, villager, move_target, inside);
-                }
-            }
-            HomePhase::Sleeping => {
-                *activity = CharacterActivity::Indoors;
-                commands
-                    .entity(villager)
-                    .remove::<BuildingDoorUse>()
-                    .remove::<MoveTarget>();
-            }
-            HomePhase::OpeningToLeave { .. } | HomePhase::Leaving => {
-                // A debug jump back into night while leaving turns them around
-                // cleanly rather than stranding them in an impossible phase.
-                *activity = CharacterActivity::Idle;
-                commands
-                    .entity(villager)
-                    .insert((door_use, MoveTarget(inside)));
-                routine.phase = HomePhase::Entering;
-            }
-        }
-    }
-}
-
-/// Plant the two authored wheat fields beside every completed Farmstead.
-pub fn ensure_farm_fields(
-    mut commands: Commands,
-    terrain: Option<Res<WorldTerrain>>,
-    farms: Query<(
-        &SettlementBuilding,
-        &PlayerPosition,
-        &PlayerRotation,
-        Option<&shared::components::BuildingId>,
-    )>,
-    fields: Query<&FarmField>,
-) {
-    let Some(terrain) = terrain else {
-        return;
-    };
-    let planted: HashSet<(FarmsteadPositionKey, u8)> = fields
-        .iter()
-        .map(|field| (farmstead_position_key(field.farmstead), field.plot_index))
-        .collect();
-    for (farm, position, rotation, building_id) in farms.iter() {
-        if farm.kind != SettlementBuildingKind::Farmstead {
-            continue;
-        }
-        let key = farmstead_position_key(position.0);
-        for plot_index in 0..shared::components::FARM_FIELDS_PER_FARMSTEAD {
-            if planted.contains(&(key, plot_index)) {
-                continue;
-            }
-            let Some(mut field_position) = farm
-                .kind
-                .field_position_at(position.0, rotation.0, plot_index)
-            else {
-                continue;
-            };
-            field_position.y = terrain.get_height(field_position.x, field_position.z);
-            let field = commands
-                .spawn((
-                    FarmField {
-                        settlement: farm.settlement.clone(),
-                        farmstead: position.0,
-                        plot_index,
-                        quality: farm.quality,
-                    },
-                    PlayerPosition(field_position),
-                    PlayerRotation(rotation.0),
-                    Replicate::to_clients(NetworkTarget::All),
-                ))
-                .id();
-            if let Some(building_id) = building_id {
-                commands
-                    .entity(field)
-                    .insert(shared::components::AttachedTo(*building_id));
-            }
-            info!(
-                "Village '{}': planted wheat field {}/{} beside its Farmstead",
-                farm.settlement,
-                plot_index + 1,
-                shared::components::FARM_FIELDS_PER_FARMSTEAD,
-            );
-        }
-    }
-}
-
-/// Place the separate collider-free pier behind every completed Fisherman's
-/// Hut. The asset origin is its landward end; the authored piles extend below
-/// that origin, so water level is the stable placement plane on every coast.
-pub fn ensure_fishing_piers(
-    mut commands: Commands,
-    terrain: Option<Res<WorldTerrain>>,
-    huts: Query<(
-        &SettlementBuilding,
-        &PlayerPosition,
-        &PlayerRotation,
-        Option<&shared::components::BuildingId>,
-    )>,
-    piers: Query<&FishingPier>,
-) {
-    let Some(terrain) = terrain else {
-        return;
-    };
-    let Some(water) = terrain.water_level() else {
-        return;
-    };
-    for (hut, position, rotation, building_id) in huts.iter() {
-        if hut.kind != SettlementBuildingKind::FishermansHut
-            || piers.iter().any(|pier| pier.fishermans_hut == position.0)
-        {
-            continue;
-        }
-        let Some(mut pier_position) = hut.kind.pier_position(position.0, rotation.0) else {
-            continue;
-        };
-        pier_position.y = water;
-        let pier = commands
-            .spawn((
-                FishingPier {
-                    settlement: hut.settlement.clone(),
-                    fishermans_hut: position.0,
-                    quality: hut.quality,
-                },
-                PlayerPosition(pier_position),
-                PlayerRotation(rotation.0),
-                Replicate::to_clients(NetworkTarget::All),
-            ))
-            .id();
-        if let Some(building_id) = building_id {
-            commands
-                .entity(pier)
-                .insert(shared::components::AttachedTo(*building_id));
-        }
-        info!(
-            "Village '{}': set a fishing pier behind its Fisherman's Hut",
-            hut.settlement
-        );
-    }
-}
-
-pub fn assign_farmer_routines(
-    mut commands: Commands,
-    world_time: Query<&WorldTime>,
-    farms: Query<(
-        Entity,
-        &SettlementBuilding,
-        &PlayerPosition,
-        &PlayerRotation,
-        Option<&shared::components::BuildingId>,
-    )>,
-    fields: Query<(Entity, &FarmField)>,
-    settlements: Query<(Entity, &Settlement)>,
-    villagers: Query<
-        (
-            Entity,
-            &CharacterName,
-            &VillagerIntent,
-            &PlayerPosition,
-            Option<&WorkerOffDuty>,
-            Option<&FarmerHarvestProgress>,
-            Option<&shared::components::EmployedAt>,
-        ),
-        (
-            Without<FarmerRoutine>,
-            Without<FishingRoutine>,
-            Without<LumberjackRoutine>,
-            Without<strategic::StrategicPerson>,
-        ),
-    >,
-) {
-    let Some(clock) = world_time.iter().next() else {
-        return;
-    };
-    if villagers.is_empty() || !ordinary_workday(clock) {
-        return;
-    }
-    let mut eligible_by_building: HashMap<shared::components::BuildingId, Vec<Entity>> =
-        HashMap::new();
-    for (entity, _, _, _, _, _, employment) in villagers.iter() {
-        if let Some(employment) = employment {
-            eligible_by_building
-                .entry(employment.0)
-                .or_default()
-                .push(entity);
-        }
-    }
-    if eligible_by_building.is_empty()
-        && !farms.iter().any(|(_, building, _, _, building_id)| {
-            building.kind == SettlementBuildingKind::Farmstead && building_id.is_none()
-        })
-    {
-        return;
-    }
-    let mut fields_by_farm: HashMap<FarmsteadPositionKey, Vec<(Entity, u8)>> = HashMap::new();
-    for (field_entity, field) in fields.iter() {
-        fields_by_farm
-            .entry(farmstead_position_key(field.farmstead))
-            .or_default()
-            .push((field_entity, field.plot_index));
-    }
-    for farm_fields in fields_by_farm.values_mut() {
-        farm_fields.sort_by_key(|(_, plot_index)| *plot_index);
-    }
-    let mut claimed = HashSet::new();
-    for (farmstead, farm, position, rotation, building_id) in farms.iter() {
-        if farm.kind != SettlementBuildingKind::Farmstead {
-            continue;
-        }
-        let Some(farm_fields) = fields_by_farm.get(&farmstead_position_key(position.0)) else {
-            continue;
-        };
-        let Some((hall, _)) = settlements
-            .iter()
-            .find(|(_, settlement)| settlement.name == farm.settlement)
-        else {
-            continue;
-        };
-        for (worker_index, worker_name) in farm.workers.iter().enumerate() {
-            let field = farm_fields[worker_index % farm_fields.len()].0;
-            let candidate = if let Some(building_id) = building_id {
-                eligible_by_building
-                    .get(building_id)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|entity| villagers.get(*entity).ok())
-                    .filter(|(entity, _, intent, _, off_duty, _, _)| {
-                        !claimed.contains(entity)
-                            && intent.is_settled()
-                            && intent.settlement() == Some(hall)
-                            && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
-                    })
-                    .min_by(|a, b| {
-                        a.3 .0
-                            .distance_squared(position.0)
-                            .total_cmp(&b.3 .0.distance_squared(position.0))
-                    })
-                    .map(|candidate| candidate.0)
-            } else {
-                villagers
-                    .iter()
-                    .filter(|(entity, name, intent, _, off_duty, _, _)| {
-                        !claimed.contains(entity)
-                            && name.0 == *worker_name
-                            && intent.is_settled()
-                            && intent.settlement() == Some(hall)
-                            && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
-                    })
-                    .min_by(|a, b| {
-                        a.3 .0
-                            .distance_squared(position.0)
-                            .total_cmp(&b.3 .0.distance_squared(position.0))
-                    })
-                    .map(|candidate| candidate.0)
-            };
-            let Some(candidate) = candidate else { continue };
-            let Ok((worker, _, _, _, _, progress, _)) = villagers.get(candidate) else {
-                continue;
-            };
-            let harvest_seconds = progress
-                .filter(|progress| progress.farmstead == farmstead && progress.field == field)
-                .map_or(0.0, |progress| progress.seconds);
-            claimed.insert(worker);
-            commands
-                .entity(worker)
-                .remove::<WorkerOffDuty>()
-                .remove::<FarmerHarvestProgress>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>()
-                .insert((
-                    FarmerRoutine {
-                        farmstead,
-                        field,
-                        hall,
-                        harvest_seconds,
-                        production_day: u32::MAX,
-                        produced_today: 0,
-                        phase: FarmerPhase::GoingToFarmstead,
-                    },
-                    CharacterActivity::Idle,
-                    MoveTarget(farm.kind.entrance_position(position.0, rotation.0)),
-                ));
-        }
-    }
-}
-
-/// Run the producer-owned part of the physical wheat loop: field to Farmstead.
-/// Farmers never sell or haul to the Moot Hall. The market porter independently
-/// evaluates the Farmstead's sale policy and collects only approved surplus.
-#[allow(clippy::too_many_arguments)]
-pub fn run_farmer_routines(
-    simulation_time: crate::world::simulation_time::SimulationTime,
-    world_time: Query<&WorldTime>,
-    obstacles: Option<Res<SpatialObstacleGrid>>,
-    colliders: Option<Res<StaticColliders>>,
-    derived: Option<Res<DerivedColliderLibrary>>,
-    mut economy_runtime: ResMut<SettlementEconomyRuntime>,
-    mut commands: Commands,
-    farms: Query<(&SettlementBuilding, &PlayerPosition, &PlayerRotation), Without<CharacterKind>>,
-    fields: Query<(&FarmField, &PlayerPosition, &PlayerRotation), Without<CharacterKind>>,
-    halls: Query<&Settlement, Without<CharacterKind>>,
-    mut inventories: Query<&mut GoodsInventory>,
-    mut workers: Query<
-        (
-            Entity,
-            &CharacterName,
-            &PlayerPosition,
-            &VillagerIntent,
-            Option<&HomeRoutine>,
-            Option<&HouseholdShoppingRoutine>,
-            Option<&RoadBuilderRoutine>,
-            Option<&WorkplaceDoorTransit>,
-            &mut CharacterActivity,
-            Option<&mut CharacterAttributes>,
-            &mut FarmerRoutine,
-            Option<&MoveTarget>,
-            Option<&NavigationRouteFailed>,
-        ),
-        With<CharacterKind>,
-    >,
-) {
-    let dt = simulation_time.world_seconds();
-    let Some(clock) = world_time.iter().next() else {
-        return;
-    };
-    let production_day = clock.day;
-    let workday_active = ordinary_workday(clock);
-
-    for (
-        worker,
-        name,
-        position,
-        intent,
-        home_routine,
-        shopping,
-        road_builder,
-        door_transit,
-        mut activity,
-        mut attributes,
-        mut routine,
-        move_target,
-        route_failed,
-    ) in workers.iter_mut()
-    {
-        if routine.production_day != production_day {
-            routine.production_day = production_day;
-            routine.produced_today = 0;
-        }
-        if home_routine.is_some()
-            || shopping.is_some()
-            || road_builder.is_some()
-            || door_transit.is_some()
-        {
-            continue;
-        }
-        if !intent.is_settled() {
-            if *activity != CharacterActivity::Idle {
-                *activity = CharacterActivity::Idle;
-            }
-            continue;
-        }
-        let Ok((farm, farm_position, farm_rotation)) = farms.get(routine.farmstead) else {
-            commands
-                .entity(worker)
-                .remove::<FarmerRoutine>()
-                .remove::<WorkplaceDoorTransit>()
-                .remove::<BuildingDoorUse>()
-                .remove::<MoveTarget>();
-            *activity = CharacterActivity::Idle;
-            continue;
-        };
-        if farm.kind != SettlementBuildingKind::Farmstead
-            || !farm
-                .workers
-                .iter()
-                .any(|worker_name| worker_name == &name.0)
-        {
-            commands
-                .entity(worker)
-                .remove::<FarmerRoutine>()
-                .remove::<WorkplaceDoorTransit>()
-                .remove::<BuildingDoorUse>()
-                .remove::<MoveTarget>();
-            *activity = CharacterActivity::Idle;
-            continue;
-        }
-        let Ok((field, field_position, field_rotation)) = fields.get(routine.field) else {
-            continue;
-        };
-        let Ok(hall) = halls.get(routine.hall) else {
-            continue;
-        };
-        if field.settlement != farm.settlement || hall.name != farm.settlement {
-            continue;
-        }
-        let farm_entrance = farm
-            .kind
-            .entrance_position(farm_position.0, farm_rotation.0);
-        let farm_inside = farm
-            .kind
-            .interior_door_position(farm_position.0, farm_rotation.0);
-
-        if let Some(failed) = route_failed {
-            let retry_target = match routine.phase {
-                FarmerPhase::WalkingToField { stand } => Some(stand),
-                FarmerPhase::GoingToFarmstead | FarmerPhase::ReturningToFarmstead => {
-                    Some(farm_entrance)
-                }
-                FarmerPhase::Inside { .. } | FarmerPhase::Farming | FarmerPhase::EndingShift => {
-                    None
-                }
-            };
-            commands
-                .entity(worker)
-                .remove::<NavigationRouteFailed>()
-                .remove::<NavigationRoutePending>()
-                .remove::<TravelRoute>();
-            if let Some(target) = retry_target {
-                // One failed commute must not turn an employed farmer into an
-                // ambient idler for the rest of the day. Keep the exact work
-                // phase (and any carried Wheat), then let the route planner
-                // try a different certified corridor.
-                commands.entity(worker).insert(MoveTarget(target));
-                *activity = CharacterActivity::Idle;
-            } else {
-                warn!(
-                    "Farmer {} discarded stale route failure for {:.1},{:.1} while {:?}",
-                    name.0, failed.goal.x, failed.goal.z, routine.phase
-                );
-            }
-            continue;
-        }
-
-        if !workday_active {
-            match routine.phase {
-                FarmerPhase::Inside { .. } => {
-                    *activity = CharacterActivity::Idle;
-                    begin_workplace_exit(
-                        &mut commands,
-                        worker,
-                        farm_position.0,
-                        farm_entrance,
-                        farm_inside,
-                        farm_entrance,
-                    );
-                    routine.phase = FarmerPhase::EndingShift;
-                    continue;
-                }
-                FarmerPhase::WalkingToField { .. } | FarmerPhase::Farming => {
-                    *activity = CharacterActivity::Idle;
-                    ensure_move_target(&mut commands, worker, move_target, farm_entrance);
-                    routine.phase = FarmerPhase::ReturningToFarmstead;
-                    continue;
-                }
-                FarmerPhase::GoingToFarmstead
-                    if ground_distance(position.0, farm_entrance) <= DOOR_REACH =>
-                {
-                    finish_farmer_shift(
-                        &mut commands,
-                        worker,
-                        production_day,
-                        &routine,
-                        &mut activity,
-                    );
-                    continue;
-                }
-                FarmerPhase::EndingShift => {
-                    finish_farmer_shift(
-                        &mut commands,
-                        worker,
-                        production_day,
-                        &routine,
-                        &mut activity,
-                    );
-                    continue;
-                }
-                FarmerPhase::GoingToFarmstead | FarmerPhase::ReturningToFarmstead => {}
-            }
-        }
-
-        match routine.phase {
-            FarmerPhase::GoingToFarmstead => {
-                if ground_distance(position.0, farm_entrance) <= DOOR_REACH {
-                    if !workday_active {
-                        finish_farmer_shift(
-                            &mut commands,
-                            worker,
-                            production_day,
-                            &routine,
-                            &mut activity,
-                        );
-                        continue;
-                    }
-                    *activity = CharacterActivity::Idle;
-                    begin_workplace_entry(
-                        &mut commands,
-                        worker,
-                        farm_position.0,
-                        farm_entrance,
-                        farm_inside,
-                    );
-                    routine.phase = FarmerPhase::Inside {
-                        seconds_left: INDOOR_REST_SECONDS,
-                    };
-                } else {
-                    ensure_move_target(&mut commands, worker, move_target, farm_entrance);
-                }
-            }
-            FarmerPhase::Inside { seconds_left } => {
-                *activity = CharacterActivity::Indoors;
-                let left = seconds_left - dt;
-                if left > 0.0 {
-                    routine.phase = FarmerPhase::Inside { seconds_left: left };
-                    continue;
-                }
-                let Some(stand) = farm_work_stand(
-                    field_position.0,
-                    field_rotation.0,
-                    stable_name_hash(&name.0),
-                    obstacles.as_deref(),
-                    colliders.as_deref(),
-                    derived.as_deref(),
-                ) else {
-                    // Legacy worlds can contain a field planted before crop
-                    // plots reserved prop-free ground. Stay safely inside and
-                    // periodically re-evaluate instead of walking into a tree
-                    // or abandoning the entire paid shift.
-                    routine.phase = FarmerPhase::Inside {
-                        seconds_left: INDOOR_REST_SECONDS,
-                    };
-                    continue;
-                };
-                *activity = CharacterActivity::Idle;
-                begin_workplace_exit(
-                    &mut commands,
-                    worker,
-                    farm_position.0,
-                    farm_entrance,
-                    farm_inside,
-                    stand,
-                );
-                routine.phase = FarmerPhase::WalkingToField { stand };
-            }
-            FarmerPhase::WalkingToField { stand } => {
-                if ground_distance(position.0, stand) <= WORK_REACH {
-                    commands.entity(worker).remove::<MoveTarget>();
-                    *activity = CharacterActivity::Farming;
-                    routine.phase = FarmerPhase::Farming;
-                } else {
-                    ensure_move_target(&mut commands, worker, move_target, stand);
-                }
-            }
-            FarmerPhase::Farming => {
-                *activity = CharacterActivity::Farming;
-                routine.harvest_seconds += dt;
-                let seconds_per_wheat = farmer_seconds_per_wheat(field.quality);
-                if let Ok(mut carrier) = inventories.get_mut(worker) {
-                    // The carried bundle is a completed field basket, not a
-                    // frame-by-frame progress meter. Publishing the first of
-                    // two Wheat immediately made the client replace the
-                    // harvest animation with a stationary carry pose for the
-                    // entire second production interval. Retain continuous
-                    // labour internally, then materialise the full batch and
-                    // leave the field on the same tick.
-                    let carried = carrier.amount(Good::Wheat);
-                    let needed = FARM_CARRY_BATCH_UNITS.saturating_sub(carried);
-                    let batch_seconds = seconds_per_wheat * needed as f32;
-                    if needed > 0 && routine.harvest_seconds < batch_seconds {
-                        continue;
-                    }
-                    let first_harvest_today = routine.produced_today == 0;
-                    let produced = carrier.add(Good::Wheat, needed);
-                    if produced > 0 {
-                        routine.harvest_seconds = (routine.harvest_seconds
-                            - seconds_per_wheat * produced as f32)
-                            .max(0.0);
-                    }
-                    routine.produced_today = routine.produced_today.saturating_add(produced);
-                    economy_runtime.record_food_production(routine.hall, produced);
-                    // Attribute progression remains once per productive day
-                    // even though production itself has no daily cap.
-                    if produced > 0 && first_harvest_today {
-                        if let Some(attributes) = attributes.as_deref_mut() {
-                            attributes.train_physique(1);
-                        }
-                    }
-                    let batch_ready = carrier.amount(Good::Wheat) >= FARM_CARRY_BATCH_UNITS;
-                    let can_keep_harvesting =
-                        !batch_ready && carrier.free_bulk() >= Good::Wheat.bulk_per_unit();
-                    if can_keep_harvesting {
-                        continue;
-                    }
-                }
-                *activity = CharacterActivity::Idle;
-                commands.entity(worker).insert(MoveTarget(farm_entrance));
-                routine.phase = FarmerPhase::ReturningToFarmstead;
-            }
-            FarmerPhase::ReturningToFarmstead => {
-                if ground_distance(position.0, farm_entrance) > DOOR_REACH {
-                    ensure_move_target(&mut commands, worker, move_target, farm_entrance);
-                    continue;
-                }
-                commands.entity(worker).remove::<MoveTarget>();
-                if let Ok([mut carrier, mut farm_store]) =
-                    inventories.get_many_mut([worker, routine.farmstead])
-                {
-                    carrier.transfer_to(&mut farm_store, Good::Wheat, u32::MAX);
-                }
-                if !workday_active {
-                    finish_farmer_shift(
-                        &mut commands,
-                        worker,
-                        production_day,
-                        &routine,
-                        &mut activity,
-                    );
-                    continue;
-                }
-                *activity = CharacterActivity::Idle;
-                begin_workplace_entry(
-                    &mut commands,
-                    worker,
-                    farm_position.0,
-                    farm_entrance,
-                    farm_inside,
-                );
-                routine.phase = FarmerPhase::Inside {
-                    seconds_left: INDOOR_REST_SECONDS,
-                };
-            }
-            FarmerPhase::EndingShift => {
-                finish_farmer_shift(
-                    &mut commands,
-                    worker,
-                    production_day,
-                    &routine,
-                    &mut activity,
-                );
-            }
-        }
-    }
-}
-
-/// Attach the physical hut-to-pier loop to each named fisher.
-pub fn assign_fishing_routines(
-    mut commands: Commands,
-    world_time: Query<&WorldTime>,
-    huts: Query<(
-        Entity,
-        &SettlementBuilding,
-        &PlayerPosition,
-        &PlayerRotation,
-        Option<&shared::components::BuildingId>,
-    )>,
-    piers: Query<(Entity, &FishingPier)>,
-    settlements: Query<(Entity, &Settlement)>,
-    villagers: Query<
-        (
-            Entity,
-            &CharacterName,
-            &VillagerIntent,
-            &PlayerPosition,
-            Option<&WorkerOffDuty>,
-            Option<&FishingWorkProgress>,
-            Option<&shared::components::EmployedAt>,
-        ),
-        (
-            Without<FarmerRoutine>,
-            Without<FishingRoutine>,
-            Without<LumberjackRoutine>,
-            Without<strategic::StrategicPerson>,
-        ),
-    >,
-) {
-    let Some(clock) = world_time.iter().next() else {
-        return;
-    };
-    if villagers.is_empty() || !ordinary_workday(clock) {
-        return;
-    }
-    let mut eligible_by_building: HashMap<shared::components::BuildingId, Vec<Entity>> =
-        HashMap::new();
-    for (entity, _, _, _, _, _, employment) in villagers.iter() {
-        if let Some(employment) = employment {
-            eligible_by_building
-                .entry(employment.0)
-                .or_default()
-                .push(entity);
-        }
-    }
-    if eligible_by_building.is_empty()
-        && !huts.iter().any(|(_, building, _, _, building_id)| {
-            building.kind == SettlementBuildingKind::FishermansHut && building_id.is_none()
-        })
-    {
-        return;
-    }
-    let mut claimed = HashSet::new();
-    for (hut_entity, hut, hut_position, hut_rotation, building_id) in huts.iter() {
-        if hut.kind != SettlementBuildingKind::FishermansHut {
-            continue;
-        }
-        let Some((pier, _)) = piers
-            .iter()
-            .find(|(_, pier)| pier.fishermans_hut == hut_position.0)
-        else {
-            continue;
-        };
-        let Some((hall, _)) = settlements
-            .iter()
-            .find(|(_, settlement)| settlement.name == hut.settlement)
-        else {
-            continue;
-        };
-        for worker_name in &hut.workers {
-            let candidate = if let Some(building_id) = building_id {
-                eligible_by_building
-                    .get(building_id)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|entity| villagers.get(*entity).ok())
-                    .filter(|(entity, _, intent, _, off_duty, _, _)| {
-                        !claimed.contains(entity)
-                            && intent.is_settled()
-                            && intent.settlement() == Some(hall)
-                            && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
-                    })
-                    .min_by(|a, b| {
-                        a.3 .0
-                            .distance_squared(hut_position.0)
-                            .total_cmp(&b.3 .0.distance_squared(hut_position.0))
-                    })
-                    .map(|candidate| candidate.0)
-            } else {
-                villagers
-                    .iter()
-                    .filter(|(entity, name, intent, _, off_duty, _, _)| {
-                        !claimed.contains(entity)
-                            && name.0 == *worker_name
-                            && intent.is_settled()
-                            && intent.settlement() == Some(hall)
-                            && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
-                    })
-                    .min_by(|a, b| {
-                        a.3 .0
-                            .distance_squared(hut_position.0)
-                            .total_cmp(&b.3 .0.distance_squared(hut_position.0))
-                    })
-                    .map(|candidate| candidate.0)
-            };
-            let Some(candidate) = candidate else { continue };
-            let Ok((worker, worker_display_name, _, _, _, progress, _)) = villagers.get(candidate)
-            else {
-                continue;
-            };
-            let catch_seconds = progress
-                .filter(|progress| progress.hut == hut_entity && progress.pier == pier)
-                .map_or(0.0, |progress| progress.seconds);
-            claimed.insert(worker);
-            commands
-                .entity(worker)
-                .remove::<WorkerOffDuty>()
-                .remove::<FishingWorkProgress>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>()
-                .insert((
-                    FishingRoutine {
-                        hut: hut_entity,
-                        pier,
-                        hall,
-                        catch_seconds,
-                        production_day: u32::MAX,
-                        produced_today: 0,
-                        phase: FishingPhase::GoingToHut,
-                    },
-                    CharacterActivity::Idle,
-                    MoveTarget(hut.kind.entrance_position(hut_position.0, hut_rotation.0)),
-                ));
-            info!(
-                "Village '{}': {} began fishing from the new pier",
-                hut.settlement, worker_display_name.0,
-            );
-        }
-    }
-}
-
-fn fishing_land_point(terrain: &WorldTerrain, hut: Vec3, rotation: f32, local: Vec2) -> Vec3 {
-    let offset = shared::rotation::local_to_world_xz(local, rotation);
-    let x = hut.x + offset.x;
-    let z = hut.z + offset.y;
-    Vec3::new(x, terrain.get_height(x, z), z)
-}
-
-fn fishing_deck_points(pier: Vec3, rotation: f32) -> (Vec3, Vec3) {
-    const DECK_HEIGHT: f32 = 0.52;
-    let deck_start = Vec3::new(pier.x, pier.y + DECK_HEIGHT, pier.z);
-    let offset = shared::rotation::local_to_world_xz(Vec2::new(0.0, 6.25), rotation);
-    let fish_spot = Vec3::new(pier.x + offset.x, pier.y + DECK_HEIGHT, pier.z + offset.y);
-    (deck_start, fish_spot)
-}
-
-fn install_fishing_route(
-    commands: &mut Commands,
-    worker: Entity,
-    goal: Vec3,
-    waypoints: impl IntoIterator<Item = Vec3>,
-    traversal: PierTraversal,
-) {
-    commands
-        .entity(worker)
-        .remove::<NavigationRoutePending>()
-        .remove::<NavigationRouteFailed>()
-        .insert((
-            MoveTarget(goal),
-            TravelRoute {
-                goal,
-                waypoints: waypoints
-                    .into_iter()
-                    .map(|position| RouteWaypoint {
-                        position,
-                        on_road: false,
-                    })
-                    .collect(),
-                next: 0,
-            },
-            traversal,
-        ));
-}
-
-/// Run the visible direct-food loop:
-/// hut -> safe side route -> pier -> fish until a carry batch is full -> hut.
-/// The fisher deposits only into the private hut store; the Moot porter later
-/// collects policy-approved surplus as a separate job.
-#[allow(clippy::too_many_arguments)]
-pub fn run_fishing_routines(
-    simulation_time: crate::world::simulation_time::SimulationTime,
-    terrain: Option<Res<WorldTerrain>>,
-    world_time: Query<&WorldTime>,
-    mut economy_runtime: ResMut<SettlementEconomyRuntime>,
-    mut commands: Commands,
-    huts: Query<(&SettlementBuilding, &PlayerPosition, &PlayerRotation), Without<CharacterKind>>,
-    piers: Query<(&FishingPier, &PlayerPosition, &PlayerRotation), Without<CharacterKind>>,
-    halls: Query<&Settlement, Without<CharacterKind>>,
-    mut inventories: Query<&mut GoodsInventory>,
-    mut workers: Query<
-        (
-            Entity,
-            &CharacterName,
-            &PlayerPosition,
-            &VillagerIntent,
-            Option<&HomeRoutine>,
-            Option<&HouseholdShoppingRoutine>,
-            Option<&RoadBuilderRoutine>,
-            Option<&WorkplaceDoorTransit>,
-            &mut PlayerRotation,
-            &mut CharacterActivity,
-            &mut FishingRoutine,
-            Option<&MoveTarget>,
-        ),
-        With<CharacterKind>,
-    >,
-) {
-    let Some(terrain) = terrain else {
-        return;
-    };
-    let dt = simulation_time.world_seconds();
-    let Some(clock) = world_time.iter().next() else {
-        return;
-    };
-    let production_day = clock.day;
-    let workday_active = ordinary_workday(clock);
-
-    for (
-        worker,
-        name,
-        position,
-        intent,
-        home_routine,
-        shopping,
-        road_builder,
-        door_transit,
-        mut facing,
-        mut activity,
-        mut routine,
-        move_target,
-    ) in workers.iter_mut()
-    {
-        if routine.production_day != production_day {
-            routine.production_day = production_day;
-            routine.produced_today = 0;
-        }
-        if home_routine.is_some()
-            || shopping.is_some()
-            || road_builder.is_some()
-            || door_transit.is_some()
-        {
-            continue;
-        }
-        if !intent.is_settled() {
-            *activity = CharacterActivity::Idle;
-            continue;
-        }
-        let Ok((hut, hut_position, hut_rotation)) = huts.get(routine.hut) else {
-            commands
-                .entity(worker)
-                .remove::<FishingRoutine>()
-                .remove::<PierTraversal>()
-                .remove::<WorkplaceDoorTransit>()
-                .remove::<BuildingDoorUse>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<MoveTarget>();
-            *activity = CharacterActivity::Idle;
-            continue;
-        };
-        if hut.kind != SettlementBuildingKind::FishermansHut
-            || !hut.workers.iter().any(|worker_name| worker_name == &name.0)
-        {
-            commands
-                .entity(worker)
-                .remove::<FishingRoutine>()
-                .remove::<PierTraversal>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<MoveTarget>();
-            *activity = CharacterActivity::Idle;
-            continue;
-        }
-        let Ok((pier, pier_position, pier_rotation)) = piers.get(routine.pier) else {
-            continue;
-        };
-        let Ok(hall) = halls.get(routine.hall) else {
-            continue;
-        };
-        if pier.settlement != hut.settlement || hall.name != hut.settlement {
-            continue;
-        }
-
-        let entrance = hut.kind.entrance_position(hut_position.0, hut_rotation.0);
-        let inside = hut
-            .kind
-            .interior_door_position(hut_position.0, hut_rotation.0);
-        let staging = fishing_land_point(
-            &terrain,
-            hut_position.0,
-            hut_rotation.0,
-            Vec2::new(-4.15, -4.45),
-        );
-        let nets = fishing_land_point(
-            &terrain,
-            hut_position.0,
-            hut_rotation.0,
-            Vec2::new(-4.15, -0.35),
-        );
-        let rear = fishing_land_point(
-            &terrain,
-            hut_position.0,
-            hut_rotation.0,
-            Vec2::new(-4.15, 2.85),
-        );
-        let (deck_start, fish_spot) = fishing_deck_points(pier_position.0, pier_rotation.0);
-        let traversal = PierTraversal {
-            deck_start,
-            deck_end: fish_spot,
-        };
-
-        if !workday_active {
-            match routine.phase {
-                FishingPhase::Inside { .. } => {
-                    *activity = CharacterActivity::Idle;
-                    begin_workplace_exit(
-                        &mut commands,
-                        worker,
-                        hut_position.0,
-                        entrance,
-                        inside,
-                        entrance,
-                    );
-                    routine.phase = FishingPhase::EndingShift;
-                    continue;
-                }
-                FishingPhase::Fishing | FishingPhase::WalkingToPier => {
-                    *activity = CharacterActivity::Idle;
-                    install_fishing_route(
-                        &mut commands,
-                        worker,
-                        staging,
-                        [deck_start, rear, nets, staging],
-                        traversal,
-                    );
-                    routine.phase = FishingPhase::ReturningFromPier { staging };
-                    continue;
-                }
-                FishingPhase::StagingForPier { .. } => {
-                    commands
-                        .entity(worker)
-                        .remove::<PierTraversal>()
-                        .remove::<TravelRoute>()
-                        .remove::<NavigationRoutePending>();
-                    ensure_move_target(&mut commands, worker, move_target, entrance);
-                    routine.phase = FishingPhase::ReturningToHut;
-                    continue;
-                }
-                FishingPhase::GoingToHut if ground_distance(position.0, entrance) <= DOOR_REACH => {
-                    finish_fishing_shift(
-                        &mut commands,
-                        worker,
-                        production_day,
-                        &routine,
-                        &mut activity,
-                    );
-                    continue;
-                }
-                FishingPhase::EndingShift => {
-                    finish_fishing_shift(
-                        &mut commands,
-                        worker,
-                        production_day,
-                        &routine,
-                        &mut activity,
-                    );
-                    continue;
-                }
-                FishingPhase::GoingToHut
-                | FishingPhase::ReturningFromPier { .. }
-                | FishingPhase::ReturningToHut => {}
-            }
-        }
-
-        match routine.phase {
-            FishingPhase::GoingToHut => {
-                if ground_distance(position.0, entrance) <= DOOR_REACH {
-                    if !workday_active {
-                        finish_fishing_shift(
-                            &mut commands,
-                            worker,
-                            production_day,
-                            &routine,
-                            &mut activity,
-                        );
-                        continue;
-                    }
-                    *activity = CharacterActivity::Idle;
-                    begin_workplace_entry(&mut commands, worker, hut_position.0, entrance, inside);
-                    routine.phase = FishingPhase::Inside {
-                        seconds_left: INDOOR_REST_SECONDS,
-                    };
-                } else {
-                    ensure_move_target(&mut commands, worker, move_target, entrance);
-                }
-            }
-            FishingPhase::Inside { seconds_left } => {
-                *activity = CharacterActivity::Indoors;
-                let left = seconds_left - dt;
-                if left > 0.0 {
-                    routine.phase = FishingPhase::Inside { seconds_left: left };
-                    continue;
-                }
-                *activity = CharacterActivity::Idle;
-                begin_workplace_exit(
-                    &mut commands,
-                    worker,
-                    hut_position.0,
-                    entrance,
-                    inside,
-                    staging,
-                );
-                routine.phase = FishingPhase::StagingForPier { staging };
-            }
-            FishingPhase::StagingForPier { staging } => {
-                if ground_distance(position.0, staging) > WORK_REACH {
-                    ensure_move_target(&mut commands, worker, move_target, staging);
-                    continue;
-                }
-                install_fishing_route(
-                    &mut commands,
-                    worker,
-                    fish_spot,
-                    [nets, rear, deck_start, fish_spot],
-                    traversal,
-                );
-                routine.phase = FishingPhase::WalkingToPier;
-            }
-            FishingPhase::WalkingToPier => {
-                if ground_distance(position.0, fish_spot) <= WORK_REACH {
-                    commands
-                        .entity(worker)
-                        .remove::<MoveTarget>()
-                        .remove::<TravelRoute>()
-                        .remove::<NavigationRoutePending>()
-                        .remove::<PierTraversal>();
-                    let outward = Vec2::new(fish_spot.x - deck_start.x, fish_spot.z - deck_start.z);
-                    if outward.length_squared() > 1e-4 {
-                        facing.0 = f32::atan2(-outward.x, -outward.y);
-                    }
-                    *activity = CharacterActivity::Fishing;
-                    routine.phase = FishingPhase::Fishing;
-                }
-            }
-            FishingPhase::Fishing => {
-                *activity = CharacterActivity::Fishing;
-                routine.catch_seconds += dt;
-                let seconds_per_food = fisher_seconds_per_food(pier.quality);
-                if let Ok(mut carrier) = inventories.get_mut(worker) {
-                    let carried = carrier.amount(Good::Food);
-                    let needed = FISH_CARRY_BATCH_UNITS.saturating_sub(carried);
-                    let batch_seconds = seconds_per_food * needed as f32;
-                    if needed > 0 && routine.catch_seconds < batch_seconds {
-                        continue;
-                    }
-                    let produced = carrier.add(Good::Food, needed);
-                    if produced > 0 {
-                        routine.catch_seconds =
-                            (routine.catch_seconds - seconds_per_food * produced as f32).max(0.0);
-                    }
-                    routine.produced_today = routine.produced_today.saturating_add(produced);
-                    economy_runtime.record_food_production(routine.hall, produced);
-                    if carrier.amount(Good::Food) < FISH_CARRY_BATCH_UNITS
-                        && carrier.free_bulk() >= Good::Food.bulk_per_unit()
-                    {
-                        continue;
-                    }
-                }
-                *activity = CharacterActivity::Idle;
-                install_fishing_route(
-                    &mut commands,
-                    worker,
-                    staging,
-                    [deck_start, rear, nets, staging],
-                    traversal,
-                );
-                routine.phase = FishingPhase::ReturningFromPier { staging };
-            }
-            FishingPhase::ReturningFromPier { staging } => {
-                if ground_distance(position.0, staging) > WORK_REACH {
-                    continue;
-                }
-                commands
-                    .entity(worker)
-                    .remove::<PierTraversal>()
-                    .remove::<TravelRoute>()
-                    .remove::<NavigationRoutePending>()
-                    .insert(MoveTarget(entrance));
-                routine.phase = FishingPhase::ReturningToHut;
-            }
-            FishingPhase::ReturningToHut => {
-                if ground_distance(position.0, entrance) > DOOR_REACH {
-                    ensure_move_target(&mut commands, worker, move_target, entrance);
-                    continue;
-                }
-                commands.entity(worker).remove::<MoveTarget>();
-                if let Ok([mut carrier, mut hut_store]) =
-                    inventories.get_many_mut([worker, routine.hut])
-                {
-                    carrier.transfer_to(&mut hut_store, Good::Food, u32::MAX);
-                }
-                if !workday_active {
-                    finish_fishing_shift(
-                        &mut commands,
-                        worker,
-                        production_day,
-                        &routine,
-                        &mut activity,
-                    );
-                    continue;
-                }
-                begin_workplace_entry(&mut commands, worker, hut_position.0, entrance, inside);
-                routine.phase = FishingPhase::Inside {
-                    seconds_left: INDOOR_REST_SECONDS,
-                };
-            }
-            FishingPhase::EndingShift => {
-                finish_fishing_shift(
-                    &mut commands,
-                    worker,
-                    production_day,
-                    &routine,
-                    &mut activity,
-                );
-            }
-        }
-    }
-}
-
-/// Attach a physical work routine to every staffed lumberjack hut.
-///
-/// `EmployedAt(BuildingId)` is authoritative. The readable name roster is only
-/// a compatibility path for buildings loaded before durable relationships.
-pub fn assign_lumberjack_routines(
-    mut commands: Commands,
-    world_time: Query<&WorldTime>,
-    huts: Query<(
-        Entity,
-        &SettlementBuilding,
-        &PlayerPosition,
-        &PlayerRotation,
-        Option<&shared::components::BuildingId>,
-    )>,
-    settlements: Query<(Entity, &Settlement)>,
-    villagers: Query<
-        (
-            Entity,
-            &CharacterName,
-            &VillagerIntent,
-            &PlayerPosition,
-            Option<&WorkerOffDuty>,
-            Option<&LumberjackWorkProgress>,
-            Option<&shared::components::EmployedAt>,
-        ),
-        (
-            Without<FarmerRoutine>,
-            Without<FishingRoutine>,
-            Without<LumberjackRoutine>,
-            Without<strategic::StrategicPerson>,
-        ),
-    >,
-) {
-    let Some(clock) = world_time.iter().next() else {
-        return;
-    };
-    if villagers.is_empty() || !ordinary_workday(clock) {
-        return;
-    }
-    let mut eligible_by_building: HashMap<shared::components::BuildingId, Vec<Entity>> =
-        HashMap::new();
-    for (entity, _, _, _, _, _, employment) in villagers.iter() {
-        if let Some(employment) = employment {
-            eligible_by_building
-                .entry(employment.0)
-                .or_default()
-                .push(entity);
-        }
-    }
-    if eligible_by_building.is_empty()
-        && !huts.iter().any(|(_, building, _, _, building_id)| {
-            building.kind == SettlementBuildingKind::LumberjackHut && building_id.is_none()
-        })
-    {
-        return;
-    }
-    let mut claimed = HashSet::new();
-    for (hut_entity, building, hut_position, hut_rotation, building_id) in huts.iter() {
-        if building.kind != SettlementBuildingKind::LumberjackHut {
-            continue;
-        }
-        let Some((hall, _)) = settlements
-            .iter()
-            .find(|(_, settlement)| settlement.name == building.settlement)
-        else {
-            continue;
-        };
-        for worker_name in &building.workers {
-            let candidate = if let Some(building_id) = building_id {
-                eligible_by_building
-                    .get(building_id)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|entity| villagers.get(*entity).ok())
-                    .filter(|(entity, _, intent, _, off_duty, _, _)| {
-                        !claimed.contains(entity)
-                            && intent.is_settled()
-                            && intent.settlement() == Some(hall)
-                            && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
-                    })
-                    .min_by(|a, b| {
-                        a.3 .0
-                            .distance_squared(hut_position.0)
-                            .total_cmp(&b.3 .0.distance_squared(hut_position.0))
-                    })
-                    .map(|candidate| candidate.0)
-            } else {
-                villagers
-                    .iter()
-                    .filter(|(entity, name, intent, _, off_duty, _, _)| {
-                        !claimed.contains(entity)
-                            && name.0 == *worker_name
-                            && intent.is_settled()
-                            && intent.settlement() == Some(hall)
-                            && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
-                    })
-                    .min_by(|a, b| {
-                        a.3 .0
-                            .distance_squared(hut_position.0)
-                            .total_cmp(&b.3 .0.distance_squared(hut_position.0))
-                    })
-                    .map(|candidate| candidate.0)
-            };
-            let Some(candidate) = candidate else { continue };
-            let Ok((worker, worker_display_name, _, _, _, progress, _)) = villagers.get(candidate)
-            else {
-                continue;
-            };
-            let (cycle, chop_seconds) = progress
-                .filter(|progress| progress.hut == hut_entity)
-                .map_or((0, 0.0), |progress| (progress.cycle, progress.chop_seconds));
-            claimed.insert(worker);
-            let entrance = building
-                .kind
-                .entrance_position(hut_position.0, hut_rotation.0);
-            commands
-                .entity(worker)
-                .remove::<WorkerOffDuty>()
-                .remove::<LumberjackWorkProgress>()
-                .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>()
-                .remove::<NavigationRouteFailed>()
-                .insert((
-                    LumberjackRoutine {
-                        hut: hut_entity,
-                        hall,
-                        cycle,
-                        failed_tree_routes: 0,
-                        chop_seconds,
-                        production_day: u32::MAX,
-                        produced_today: 0,
-                        phase: LumberjackPhase::GoingToHut,
-                    },
-                    CharacterActivity::Idle,
-                    MoveTarget(entrance),
-                ));
-            info!(
-                "Village '{}': {} began working from the lumberjack hut",
-                building.settlement, worker_display_name.0
-            );
-        }
-    }
-}
-
-/// Run the observed woodcutting loop:
-/// hut -> tree -> chop -> carry -> hut, with periodic hauling to the hall.
-///
-/// Every transfer uses bounded inventories. A full destination leaves the
-/// remainder in the source, so congestion is visible as a worker who cannot
-/// complete the next leg rather than as deleted resources.
-#[allow(clippy::too_many_arguments)]
-pub fn run_lumberjack_routines(
-    simulation_time: crate::world::simulation_time::SimulationTime,
-    terrain: Option<Res<WorldTerrain>>,
-    derived: Option<Res<DerivedColliderLibrary>>,
-    obstacles: Option<Res<SpatialObstacleGrid>>,
-    world_time: Query<&WorldTime>,
-    mut commands: Commands,
-    huts: Query<(&SettlementBuilding, &PlayerPosition, &PlayerRotation), Without<CharacterKind>>,
-    halls: Query<&Settlement, Without<CharacterKind>>,
-    mut inventories: Query<&mut GoodsInventory>,
-    mut workers: Query<
-        (
-            Entity,
-            &CharacterName,
-            &PlayerPosition,
-            &VillagerIntent,
-            Option<&HomeRoutine>,
-            Option<&HouseholdShoppingRoutine>,
-            Option<&RoadBuilderRoutine>,
-            Option<&WorkplaceDoorTransit>,
-            &mut PlayerRotation,
-            &mut CharacterActivity,
-            &mut LumberjackRoutine,
-            Option<&MoveTarget>,
-            Option<&NavigationRoutePending>,
-            Option<&NavigationRouteFailed>,
-        ),
-        With<CharacterKind>,
-    >,
-) {
-    let Some(terrain) = terrain else {
-        return;
-    };
-    let dt = simulation_time.world_seconds();
-    let Some(clock) = world_time.iter().next() else {
-        return;
-    };
-    let production_day = clock.day;
-    let workday_active = ordinary_workday(clock);
-
-    for (
-        worker,
-        name,
-        position,
-        intent,
-        home_routine,
-        shopping,
-        road_builder,
-        door_transit,
-        mut facing,
-        mut activity,
-        mut routine,
-        move_target,
-        route_pending,
-        route_failed,
-    ) in workers.iter_mut()
-    {
-        if routine.production_day != production_day {
-            routine.production_day = production_day;
-            routine.produced_today = 0;
-        }
-        if home_routine.is_some()
-            || shopping.is_some()
-            || road_builder.is_some()
-            || door_transit.is_some()
-        {
-            continue;
-        }
-        // A permit temporarily takes this person's builder time. Construction
-        // owns their destination until it releases them back to residency;
-        // their ordinary job then resumes from the same physical phase.
-        if !intent.is_settled() {
-            if *activity != CharacterActivity::Idle {
-                *activity = CharacterActivity::Idle;
-            }
-            continue;
-        }
-        let Ok((hut, hut_position, hut_rotation)) = huts.get(routine.hut) else {
-            commands
-                .entity(worker)
-                .remove::<LumberjackRoutine>()
-                .remove::<WorkplaceDoorTransit>()
-                .remove::<BuildingDoorUse>()
-                .remove::<MoveTarget>();
-            if *activity != CharacterActivity::Idle {
-                *activity = CharacterActivity::Idle;
-            }
-            continue;
-        };
-        if hut.kind != SettlementBuildingKind::LumberjackHut
-            || !hut.workers.iter().any(|worker_name| worker_name == &name.0)
-        {
-            commands
-                .entity(worker)
-                .remove::<LumberjackRoutine>()
-                .remove::<WorkplaceDoorTransit>()
-                .remove::<BuildingDoorUse>()
-                .remove::<MoveTarget>();
-            if *activity != CharacterActivity::Idle {
-                *activity = CharacterActivity::Idle;
-            }
-            continue;
-        }
-        let Ok(hall) = halls.get(routine.hall) else {
-            continue;
-        };
-        if hall.name != hut.settlement {
-            continue;
-        }
-
-        let hut_entrance = hut.kind.entrance_position(hut_position.0, hut_rotation.0);
-        let hut_inside = hut
-            .kind
-            .interior_door_position(hut_position.0, hut_rotation.0);
-
-        if route_failed.is_some()
-            && matches!(
-                routine.phase,
-                LumberjackPhase::GoingToHut | LumberjackPhase::ReturningToHut
-            )
-        {
-            // A failed route used to be handled only while walking to a tree.
-            // A woodcutter carrying Wood home could therefore retain the
-            // terminal failure forever and silently disable the business.
-            // Clear the terminal navigation state and submit the hut entrance
-            // again; the planner can then use updated obstacle geometry or a
-            // different A* corridor without losing the carried goods.
-            commands
-                .entity(worker)
-                .remove::<NavigationRouteFailed>()
-                .remove::<NavigationRoutePending>()
-                .remove::<TravelRoute>()
-                .insert(MoveTarget(hut_entrance));
-            *activity = CharacterActivity::Idle;
-            continue;
-        }
-
-        if !workday_active {
-            match routine.phase {
-                LumberjackPhase::Inside { .. } => {
-                    *activity = CharacterActivity::Idle;
-                    begin_workplace_exit(
-                        &mut commands,
-                        worker,
-                        hut_position.0,
-                        hut_entrance,
-                        hut_inside,
-                        hut_entrance,
-                    );
-                    routine.phase = LumberjackPhase::EndingShift;
-                    continue;
-                }
-                LumberjackPhase::WalkingToTree { .. } | LumberjackPhase::Chopping => {
-                    commands
-                        .entity(worker)
-                        .remove::<TravelRoute>()
-                        .remove::<NavigationRoutePending>()
-                        .remove::<NavigationRouteFailed>();
-                    *activity = CharacterActivity::Idle;
-                    ensure_move_target(&mut commands, worker, move_target, hut_entrance);
-                    routine.phase = LumberjackPhase::ReturningToHut;
-                    continue;
-                }
-                LumberjackPhase::GoingToHut
-                    if ground_distance(position.0, hut_entrance) <= DOOR_REACH =>
-                {
-                    finish_lumberjack_shift(
-                        &mut commands,
-                        worker,
-                        production_day,
-                        &routine,
-                        &mut activity,
-                    );
-                    continue;
-                }
-                LumberjackPhase::EndingShift => {
-                    finish_lumberjack_shift(
-                        &mut commands,
-                        worker,
-                        production_day,
-                        &routine,
-                        &mut activity,
-                    );
-                    continue;
-                }
-                LumberjackPhase::GoingToHut | LumberjackPhase::ReturningToHut => {}
-            }
-        }
-
-        match routine.phase {
-            LumberjackPhase::GoingToHut => {
-                if ground_distance(position.0, hut_entrance) <= DOOR_REACH {
-                    if !workday_active {
-                        finish_lumberjack_shift(
-                            &mut commands,
-                            worker,
-                            production_day,
-                            &routine,
-                            &mut activity,
-                        );
-                        continue;
-                    }
-                    *activity = CharacterActivity::Idle;
-                    begin_workplace_entry(
-                        &mut commands,
-                        worker,
-                        hut_position.0,
-                        hut_entrance,
-                        hut_inside,
-                    );
-                    routine.phase = LumberjackPhase::Inside {
-                        seconds_left: INDOOR_REST_SECONDS,
-                    };
-                } else {
-                    ensure_move_target(&mut commands, worker, move_target, hut_entrance);
-                }
-            }
-            LumberjackPhase::Inside { seconds_left } => {
-                if *activity != CharacterActivity::Indoors {
-                    *activity = CharacterActivity::Indoors;
-                }
-                let left = seconds_left - dt;
-                if left > 0.0 {
-                    routine.phase = LumberjackPhase::Inside { seconds_left: left };
-                    continue;
-                }
-                let salt = stable_name_hash(&name.0);
-                let Some((tree, stand)) = find_tree_for_cycle(
-                    &terrain,
-                    derived.as_deref(),
-                    obstacles.as_deref(),
-                    hut_position.0,
-                    routine.cycle,
-                    salt,
-                ) else {
-                    // Move through the deterministic pool when a tree has no
-                    // collision-free interaction point. Retrying the same
-                    // cycle here previously created a permanent indoor loop.
-                    routine.cycle = routine.cycle.wrapping_add(1);
-                    routine.phase = LumberjackPhase::Inside {
-                        seconds_left: INDOOR_REST_SECONDS,
-                    };
-                    continue;
-                };
-                *activity = CharacterActivity::Idle;
-                begin_workplace_exit(
-                    &mut commands,
-                    worker,
-                    hut_position.0,
-                    hut_entrance,
-                    hut_inside,
-                    stand,
-                );
-                routine.phase = LumberjackPhase::WalkingToTree { tree, stand };
-            }
-            LumberjackPhase::WalkingToTree { tree, stand } => {
-                if let Some(failed) = route_failed {
-                    let (cycle, failed_routes, widened) =
-                        advance_failed_tree_candidate(routine.cycle, routine.failed_tree_routes);
-                    routine.cycle = cycle;
-                    routine.failed_tree_routes = failed_routes;
-                    if widened {
-                        warn!(
-                            "Woodcutter {} exhausted twelve tree approaches after {:.1},{:.1}; widening the search instead of stopping",
-                            name.0, failed.goal.x, failed.goal.z
-                        );
-                    }
-                    commands
-                        .entity(worker)
-                        .remove::<MoveTarget>()
-                        .remove::<NavigationRouteFailed>()
-                        .remove::<NavigationRoutePending>()
-                        .remove::<TravelRoute>()
-                        .insert(MoveTarget(hut_entrance));
-                    routine.phase = LumberjackPhase::GoingToHut;
-                    *activity = CharacterActivity::Idle;
-                    continue;
-                }
-                if route_pending.is_some_and(NavigationRoutePending::exhausted) {
-                    // A coastline or cliff can put the deterministic nearest
-                    // tree on a different landmass. Abandon that target and
-                    // advance the stable search salt instead of staring at an
-                    // exhausted path request forever.
-                    commands
-                        .entity(worker)
-                        .remove::<MoveTarget>()
-                        .remove::<NavigationRoutePending>()
-                        .remove::<TravelRoute>();
-                    routine.cycle = routine.cycle.wrapping_add(1);
-                    routine.phase = LumberjackPhase::GoingToHut;
-                    commands.entity(worker).insert(MoveTarget(hut_entrance));
-                    *activity = CharacterActivity::Idle;
-                    continue;
-                }
-                if ground_distance(position.0, stand) <= WORK_REACH {
-                    routine.failed_tree_routes = 0;
-                    commands.entity(worker).remove::<MoveTarget>();
-                    let to_tree = tree - position.0;
-                    if to_tree.length_squared() > 1e-4 {
-                        facing.0 = f32::atan2(-to_tree.x, -to_tree.z);
-                    }
-                    *activity = CharacterActivity::Chopping;
-                    routine.phase = LumberjackPhase::Chopping;
-                } else {
-                    ensure_move_target(&mut commands, worker, move_target, stand);
-                }
-            }
-            LumberjackPhase::Chopping => {
-                if *activity != CharacterActivity::Chopping {
-                    *activity = CharacterActivity::Chopping;
-                }
-                routine.chop_seconds += dt;
-                if routine.chop_seconds < CHOP_SECONDS {
-                    continue;
-                }
-                let yield_units = lumber_tree_yield(hut.quality);
-                if let Ok(mut carrier) = inventories.get_mut(worker) {
-                    let produced = carrier.add(Good::Wood, yield_units);
-                    if produced > 0 {
-                        routine.chop_seconds = (routine.chop_seconds - CHOP_SECONDS).max(0.0);
-                    }
-                    routine.produced_today = routine.produced_today.saturating_add(produced);
-                }
-                routine.cycle = routine.cycle.wrapping_add(1);
-                *activity = CharacterActivity::Idle;
-                commands.entity(worker).insert(MoveTarget(hut_entrance));
-                routine.phase = LumberjackPhase::ReturningToHut;
-            }
-            LumberjackPhase::ReturningToHut => {
-                if ground_distance(position.0, hut_entrance) > DOOR_REACH {
-                    ensure_move_target(&mut commands, worker, move_target, hut_entrance);
-                    continue;
-                }
-                commands.entity(worker).remove::<MoveTarget>();
-                if let Ok([mut carrier, mut hut_store]) =
-                    inventories.get_many_mut([worker, routine.hut])
-                {
-                    carrier.transfer_to(&mut hut_store, Good::Wood, u32::MAX);
-                }
-                if !workday_active {
-                    finish_lumberjack_shift(
-                        &mut commands,
-                        worker,
-                        production_day,
-                        &routine,
-                        &mut activity,
-                    );
-                    continue;
-                }
-                *activity = CharacterActivity::Idle;
-                begin_workplace_entry(
-                    &mut commands,
-                    worker,
-                    hut_position.0,
-                    hut_entrance,
-                    hut_inside,
-                );
-                routine.phase = LumberjackPhase::Inside {
-                    seconds_left: INDOOR_REST_SECONDS,
-                };
-            }
-            LumberjackPhase::EndingShift => {
-                finish_lumberjack_shift(
-                    &mut commands,
-                    worker,
-                    production_day,
-                    &routine,
-                    &mut activity,
-                );
-            }
-        }
-    }
-}
-
-/// Keep the small replicated carried-load view in sync with private inventory.
-pub fn sync_carried_load(
-    mut carriers: Query<(&GoodsInventory, &mut CarriedLoad), With<CharacterKind>>,
-) {
-    for (inventory, mut carried) in carriers.iter_mut() {
-        let next = CarriedLoad::from_inventory(inventory);
-        if *carried != next {
-            *carried = next;
-        }
-    }
-}
-
-/// Pick a real deterministic tree prop and a collision-free chopping point.
-///
-/// Tree removal/regrowth needs stable resource-node ids and a sparse depletion
-/// map. Until that layer exists, the worker uses the same authored tree the
-/// client already draws but does not yet remove it after harvesting.
-fn advance_failed_tree_candidate(mut cycle: u32, mut failed_routes: u8) -> (u32, u8, bool) {
-    failed_routes = failed_routes.saturating_add(1);
-    cycle = cycle.wrapping_add(1);
-    if failed_routes < 12 {
-        return (cycle, failed_routes, false);
-    }
-    // `cycle` is the deterministic search salt. Jump farther after a whole
-    // failed batch so the next search does not immediately revisit the same
-    // local candidate set. Resetting the diagnostic counter keeps failure
-    // bounded without turning twelve bad trees into a terminal AI state.
-    cycle = cycle.wrapping_add(12);
-    failed_routes = 0;
-    (cycle, failed_routes, true)
-}
-
-fn timber_retry_delay(failures: u8) -> f64 {
-    let exponent = u32::from(failures.saturating_sub(1)).min(8);
-    (TIMBER_RETRY_BASE_SECONDS * 2_f64.powi(exponent as i32)).min(TIMBER_RETRY_MAX_SECONDS)
-}
-
-fn postpone_construction_tree_search(routine: &mut ConstructionMaterialRoutine, now: f64) -> bool {
-    let retry_failures = routine.failed_tree_routes.saturating_add(1);
-    let (cycle, failed_routes, widened) =
-        advance_failed_tree_candidate(routine.cycle, routine.failed_tree_routes);
-    routine.cycle = cycle;
-    routine.failed_tree_routes = failed_routes;
-    routine.tree_retry_after = now + timber_retry_delay(retry_failures);
-    routine.phase = ConstructionMaterialPhase::Seeking;
-    widened
-}
-
-fn postpone_construction_store_route(routine: &mut ConstructionMaterialRoutine, now: f64) {
-    routine.failed_store_routes = routine.failed_store_routes.saturating_add(1);
-    routine.store_retry_after = now + timber_retry_delay(routine.failed_store_routes);
-    routine.phase = ConstructionMaterialPhase::Seeking;
-}
-
-const TREE_APPROACH_ANGLES: [f32; 8] = [
-    0.0,
-    std::f32::consts::FRAC_PI_4,
-    -std::f32::consts::FRAC_PI_4,
-    std::f32::consts::FRAC_PI_2,
-    -std::f32::consts::FRAC_PI_2,
-    3.0 * std::f32::consts::FRAC_PI_4,
-    -3.0 * std::f32::consts::FRAC_PI_4,
-    std::f32::consts::PI,
-];
-
-/// A failed route must not recreate the same interaction goal on the next
-/// visit. `cycle` advances once per failed goal; after the routine has tried
-/// every candidate tree, the preferred side of each trunk rotates as well.
-fn tree_approach_start(cycle: u32, choice_count: usize) -> usize {
-    (cycle as usize / choice_count.max(1)) % TREE_APPROACH_ANGLES.len()
-}
-
-fn collect_tree_work_candidates(
-    terrain: &WorldTerrain,
-    hut: Vec3,
-) -> (Vec<shared::props::PropSpawn>, Vec<usize>) {
-    let origin = ChunkCoord::from_world_pos(hut);
-    let spawns: Vec<_> = origin
-        .chunks_in_radius(2)
-        .into_iter()
-        .flat_map(|chunk| shared::props::generate_chunk_prop_spawns(&terrain.generator, chunk))
-        .collect();
-    let mut trees: Vec<usize> = spawns
-        .iter()
-        .enumerate()
-        .filter(|(_, spawn)| spawn.kind.is_some_and(|kind| kind.is_tree()))
-        .filter(|(_, spawn)| {
-            let distance = Vec2::new(spawn.position.x - hut.x, spawn.position.z - hut.z).length();
-            (TREE_MIN_DISTANCE..=TREE_MAX_DISTANCE).contains(&distance)
-        })
-        .map(|(index, _)| index)
-        .collect();
-    trees.sort_by(|a, b| {
-        let a = spawns[*a].position;
-        let b = spawns[*b].position;
-        a.distance_squared(hut)
-            .total_cmp(&b.distance_squared(hut))
-            .then_with(|| a.x.total_cmp(&b.x))
-            .then_with(|| a.z.total_cmp(&b.z))
-    });
-    (spawns, trees)
-}
-
-fn find_tree_in_candidates(
-    terrain: &WorldTerrain,
-    derived: Option<&DerivedColliderLibrary>,
-    obstacles: Option<&SpatialObstacleGrid>,
-    hut: Vec3,
-    cycle: u32,
-    salt: u32,
-    spawns: &[shared::props::PropSpawn],
-    trees: &[usize],
-) -> Option<(Vec3, Vec3)> {
-    // Keep a comfortably large deterministic candidate pool. Sparse coastal
-    // groves may only contain two usable trees, while a dense forest should
-    // not trap all workers on the same nearest twelve trunks.
-    let choice_count = trees.len().min(48);
-    if choice_count == 0 {
-        return None;
-    }
-    let tree_index = trees[(cycle.wrapping_add(salt) as usize) % choice_count];
-    let tree_spawn = &spawns[tree_index];
-    let tree = tree_spawn.position;
-    let toward_hut = Vec2::new(hut.x - tree.x, hut.z - tree.z).normalize_or(Vec2::Y);
-    let tree_radius = tree_spawn
-        .kind
-        .and_then(|kind| derived.and_then(|library| library.by_kind.get(&kind)))
-        .map_or(0.75, |shape| shape.horizontal_radius)
-        * tree_spawn.scale;
-    let stand_distance = (tree_radius + VILLAGER_PROP_RADIUS + 0.25).max(2.4);
-
-    // The natural first choice faces back toward the workplace. If its route
-    // fails, the next pass starts on a different side of the trunk instead of
-    // returning the identical locally-clear but globally-unreachable goal.
-    // The ordering remains deterministic for reproducible simulation runs.
-    let approach_start = tree_approach_start(cycle, choice_count);
-    for step in 0..TREE_APPROACH_ANGLES.len() {
-        let angle = TREE_APPROACH_ANGLES[(approach_start + step) % TREE_APPROACH_ANGLES.len()];
-        let (sin, cos) = angle.sin_cos();
-        let direction = Vec2::new(
-            toward_hut.x * cos - toward_hut.y * sin,
-            toward_hut.x * sin + toward_hut.y * cos,
-        );
-        let stand_xz = Vec2::new(tree.x, tree.z) + direction * stand_distance;
-        if obstacles.is_some_and(|grid| grid.point_blocked(stand_xz)) {
-            continue;
-        }
-        let overlaps_prop = spawns.iter().enumerate().any(|(index, spawn)| {
-            if index == tree_index {
-                return false;
-            }
-            let Some(kind) = spawn.kind.filter(|kind| kind.blocks_village_road()) else {
-                return false;
-            };
-            let radius = derived
-                .and_then(|library| library.by_kind.get(&kind))
-                .map_or(0.75, |shape| shape.horizontal_radius)
-                * spawn.scale
-                + VILLAGER_PROP_RADIUS;
-            Vec2::new(spawn.position.x, spawn.position.z).distance_squared(stand_xz)
-                < radius * radius
-        });
-        if overlaps_prop {
-            continue;
-        }
-        let stand = Vec3::new(
-            stand_xz.x,
-            terrain.get_height(stand_xz.x, stand_xz.y),
-            stand_xz.y,
-        );
-        return Some((tree, stand));
-    }
-    None
-}
-
-fn find_tree_for_cycle(
-    terrain: &WorldTerrain,
-    derived: Option<&DerivedColliderLibrary>,
-    obstacles: Option<&SpatialObstacleGrid>,
-    hut: Vec3,
-    cycle: u32,
-    salt: u32,
-) -> Option<(Vec3, Vec3)> {
-    let (spawns, trees) = collect_tree_work_candidates(terrain, hut);
-    find_tree_in_candidates(
-        terrain, derived, obstacles, hut, cycle, salt, &spawns, &trees,
-    )
-}
-
-/// Permit-time proof that a lumber workplace has at least one usable tree on
-/// its own walkable landmass. Resource density alone is insufficient on a
-/// coast: a tree 30 metres away across a channel is not timber supply.
-///
-/// Candidate props are generated once, and only the nearest bounded set pays a
-/// terrain-only route check. This runs when the plot decision changes, not per
-/// villager or simulation tick.
-pub(crate) fn lumber_plot_has_reachable_tree(terrain: &WorldTerrain, hut: Vec3) -> bool {
-    const PERMIT_TREE_CANDIDATES: usize = 12;
-    let (spawns, trees) = collect_tree_work_candidates(terrain, hut);
-    let attempts = trees.len().min(PERMIT_TREE_CANDIDATES);
-    (0..attempts).any(|cycle| {
-        find_tree_in_candidates(terrain, None, None, hut, cycle as u32, 0, &spawns, &trees)
-            .is_some_and(|(_, stand)| {
-                crate::world::village_roads::embodied_land_route_exists(terrain, hut, stand)
-            })
-    })
-}
-
-fn ground_distance(a: Vec3, b: Vec3) -> f32 {
-    Vec2::new(a.x - b.x, a.z - b.z).length()
-}
-
-fn farm_work_stand(
-    field: Vec3,
-    rotation: f32,
-    worker_salt: u32,
-    obstacles: Option<&SpatialObstacleGrid>,
-    colliders: Option<&StaticColliders>,
-    derived: Option<&DerivedColliderLibrary>,
-) -> Option<Vec3> {
-    let side = if worker_salt & 1 == 0 { -1.5 } else { 1.5 };
-    let candidates = [
-        Vec2::new(side, 0.0),
-        Vec2::new(-side, 0.0),
-        Vec2::new(0.0, 2.0),
-        Vec2::new(0.0, -2.0),
-        Vec2::new(side, 2.5),
-        Vec2::new(-side, 2.5),
-        Vec2::new(side, -2.5),
-        Vec2::new(-side, -2.5),
-    ];
-    candidates.into_iter().find_map(|local| {
-        let offset = shared::rotation::local_to_world_xz(local, rotation);
-        let point = Vec2::new(field.x + offset.x, field.z + offset.y);
-        if obstacles.is_some_and(|obstacles| obstacles.point_blocked(point)) {
-            return None;
-        }
-        if colliders.zip(derived).is_some_and(|(colliders, derived)| {
-            !crate::world::village_roads::navigation_point_is_clear_of_props(
-                point, colliders, derived,
-            )
-        }) {
-            return None;
-        }
-        Some(Vec3::new(point.x, field.y, point.y))
-    })
-}
-
-fn build_clip_facing(to_work: Vec3) -> f32 {
-    f32::atan2(-to_work.x, -to_work.z)
-}
-
-/// A collision-safe point beyond an authored threshold.
-///
-/// The door anchor sits only a few centimetres outside some inflated building
-/// footprints. Stopping merely within `DOOR_REACH` of that anchor can therefore
-/// leave an actor inside the blocker forever. Door-controlled movement may
-/// cross the wall, so finish the crossing a short distance beyond the anchor
-/// before ordinary navigation takes ownership again.
-fn exterior_door_clearance_position(building: Vec3, door: Vec3) -> Vec3 {
-    let outward = Vec2::new(door.x - building.x, door.z - building.z).normalize_or_zero();
-    Vec3::new(
-        door.x + outward.x * (DOOR_REACH + 0.35),
-        door.y,
-        door.z + outward.y * (DOOR_REACH + 0.35),
-    )
-}
-
-fn ordinary_workday(clock: &WorldTime) -> bool {
-    clock.is_day() && clock.day_t() < WORKDAY_END_DAY_T
-}
-
-fn finish_farmer_shift(
-    commands: &mut Commands,
-    worker: Entity,
-    day: u32,
-    routine: &FarmerRoutine,
-    activity: &mut CharacterActivity,
-) {
-    *activity = CharacterActivity::Idle;
-    commands
-        .entity(worker)
-        .remove::<FarmerRoutine>()
-        .remove::<WorkplaceDoorTransit>()
-        .remove::<BuildingDoorUse>()
-        .remove::<MoveTarget>()
-        .remove::<TravelRoute>()
-        .remove::<NavigationRoutePending>()
-        .remove::<NavigationRouteFailed>()
-        .insert((
-            WorkerOffDuty { day },
-            FarmerHarvestProgress {
-                farmstead: routine.farmstead,
-                field: routine.field,
-                seconds: routine.harvest_seconds,
-            },
-        ));
-}
-
-fn finish_fishing_shift(
-    commands: &mut Commands,
-    worker: Entity,
-    day: u32,
-    routine: &FishingRoutine,
-    activity: &mut CharacterActivity,
-) {
-    *activity = CharacterActivity::Idle;
-    commands
-        .entity(worker)
-        .remove::<FishingRoutine>()
-        .remove::<PierTraversal>()
-        .remove::<WorkplaceDoorTransit>()
-        .remove::<BuildingDoorUse>()
-        .remove::<MoveTarget>()
-        .remove::<TravelRoute>()
-        .remove::<NavigationRoutePending>()
-        .remove::<NavigationRouteFailed>()
-        .insert((
-            WorkerOffDuty { day },
-            FishingWorkProgress {
-                hut: routine.hut,
-                pier: routine.pier,
-                seconds: routine.catch_seconds,
-            },
-        ));
-}
-
-fn finish_lumberjack_shift(
-    commands: &mut Commands,
-    worker: Entity,
-    day: u32,
-    routine: &LumberjackRoutine,
-    activity: &mut CharacterActivity,
-) {
-    *activity = CharacterActivity::Idle;
-    commands
-        .entity(worker)
-        .remove::<LumberjackRoutine>()
-        .remove::<WorkplaceDoorTransit>()
-        .remove::<BuildingDoorUse>()
-        .remove::<MoveTarget>()
-        .remove::<TravelRoute>()
-        .remove::<NavigationRoutePending>()
-        .remove::<NavigationRouteFailed>()
-        .insert((
-            WorkerOffDuty { day },
-            LumberjackWorkProgress {
-                hut: routine.hut,
-                cycle: routine.cycle,
-                chop_seconds: routine.chop_seconds,
-            },
-        ));
 }
 
 fn stable_name_hash(name: &str) -> u32 {
@@ -7450,6 +4491,25 @@ fn find_site_with_plan(
 mod tests {
     use super::*;
 
+    fn village_test_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<crate::world::identity::WorldIdAllocator>()
+            .init_resource::<crate::world::identity::WorldIdentityIndex>()
+            .add_systems(
+                PreUpdate,
+                (
+                    crate::world::identity::assign_stable_world_ids,
+                    crate::world::identity::rebuild_world_identity_index,
+                    crate::world::identity::reconcile_stable_world_relationships,
+                    crate::world::identity::reconcile_stable_adjunct_relationships,
+                    crate::world::identity::reconcile_stable_road_relationships,
+                    crate::world::identity::reconcile_stable_civic_employment,
+                )
+                    .chain(),
+            );
+        app
+    }
+
     #[test]
     fn field_quality_controls_continuous_wheat_rate() {
         assert!((farmer_seconds_per_wheat(1.0) - 170.0).abs() < 0.01);
@@ -7482,7 +4542,7 @@ mod tests {
 
     #[test]
     fn higher_wage_and_skill_requirements_shape_recruitment() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.add_systems(Update, fill_vacancies);
         let settlement = app
             .world_mut()
@@ -7562,7 +4622,7 @@ mod tests {
 
     #[test]
     fn payroll_catches_up_arrears_instead_of_stranding_them() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.add_systems(Update, run_business_payroll_and_owner_leisure);
         let mut clock = WorldTime::new_default();
         clock.day = 2;
@@ -7614,7 +4674,7 @@ mod tests {
 
     #[test]
     fn transient_actor_requests_are_aggregated_on_the_stable_building() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.add_systems(Update, sync_building_door_demands);
         let position = Vec3::new(12.0, 3.0, -8.0);
         let hall = app
@@ -7895,7 +4955,7 @@ mod tests {
 
     #[test]
     fn settlement_seek_targets_the_authored_hall_entrance() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.init_resource::<VillageClock>();
         app.add_systems(Update, seek_settlement);
@@ -7936,7 +4996,7 @@ mod tests {
 
     #[test]
     fn migration_repairs_an_obsolete_hall_centre_target() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.add_systems(Update, arrive_at_settlement);
 
         let hall_position = Vec3::new(120.0, 8.0, -40.0);
@@ -7977,7 +5037,7 @@ mod tests {
     fn thirty_then_thirty_immigrants_recover_across_day_two_and_warp_changes() {
         use shared::components::TimeWarp;
 
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.init_resource::<VillageClock>();
         app.add_systems(
@@ -8113,7 +5173,7 @@ mod tests {
         use shared::components::{CharacterKind, TimeWarp};
         use shared::region::RegionCoord;
 
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.init_resource::<VillageClock>();
         app.init_resource::<crate::world::village_roads::VillageRoadGraph>();
@@ -8221,7 +5281,7 @@ mod tests {
 
     #[test]
     fn construction_stops_walking_before_it_turns_the_builder_inward() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.init_resource::<PublishedTerrainDeltas>();
         app.insert_resource(WorldTerrain::default());
@@ -8257,8 +5317,10 @@ mod tests {
                 position: plot,
                 rotation: 0.0,
                 owner: Some("Ada".to_string()),
+                owner_id: Some(shared::components::PersonId(1)),
                 builder: Some(builder),
                 settlement,
+                settlement_id: shared::components::SettlementId(1),
                 stand,
                 stage: BuildStage::Walking,
                 quality: 0.5,
@@ -8299,7 +5361,7 @@ mod tests {
         use shared::components::{CharacterKind, TimeWarp};
         use shared::region::RegionCoord;
 
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.insert_resource(WorldTerrain::default());
         app.add_systems(
@@ -8361,8 +5423,10 @@ mod tests {
                     position: site_position,
                     rotation: 0.0,
                     owner: Some("Ada".to_string()),
+                    owner_id: Some(shared::components::PersonId(1)),
                     builder: Some(builder),
                     settlement,
+                    settlement_id: shared::components::SettlementId(1),
                     stand,
                     stage: BuildStage::Supplying,
                     quality: 0.5,
@@ -8448,7 +5512,7 @@ mod tests {
     fn failed_market_route_releases_a_construction_supplier_to_gather_wood() {
         use shared::components::CharacterKind;
 
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.insert_resource(WorldTerrain::default());
         app.add_systems(Update, run_construction_material_logistics);
@@ -8502,8 +5566,10 @@ mod tests {
                     position: site_position,
                     rotation: 0.0,
                     owner: Some("Ada".to_string()),
+                    owner_id: Some(shared::components::PersonId(1)),
                     builder: Some(builder),
                     settlement,
+                    settlement_id: shared::components::SettlementId(1),
                     stand,
                     stage: BuildStage::Supplying,
                     quality: 0.5,
@@ -8550,7 +5616,7 @@ mod tests {
 
     #[test]
     fn construction_waits_for_the_last_required_wood_bundle() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.init_resource::<PublishedTerrainDeltas>();
         app.insert_resource(WorldTerrain::default());
@@ -8590,8 +5656,10 @@ mod tests {
                     position: plot,
                     rotation: 0.0,
                     owner: Some("Ada".to_string()),
+                    owner_id: Some(shared::components::PersonId(1)),
                     builder: Some(builder),
                     settlement,
+                    settlement_id: shared::components::SettlementId(1),
                     stand,
                     stage: BuildStage::Supplying,
                     quality: 0.5,
@@ -8660,7 +5728,7 @@ mod tests {
         use shared::components::{CharacterKind, TimeWarp};
         use shared::region::RegionCoord;
 
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.insert_resource(WorldTerrain::default());
         app.add_systems(
@@ -8811,7 +5879,7 @@ mod tests {
 
     #[test]
     fn household_capacity_is_entity_safe_when_names_repeat() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.add_systems(Update, (ensure_households, assign_households).chain());
 
         let settlement = app
@@ -8855,10 +5923,10 @@ mod tests {
         app.update();
 
         let mut assignments = HashMap::<Entity, usize>::new();
-        for villager in villagers {
+        for villager in &villagers {
             let assignment = app
                 .world()
-                .entity(villager)
+                .entity(*villager)
                 .get::<HomeAssignment>()
                 .expect("every resident fits across the two cabins");
             *assignments.entry(assignment.home).or_default() += 1;
@@ -8880,11 +5948,89 @@ mod tests {
             })
             .sum();
         assert_eq!(rostered, 5);
+
+        let stable_roster: HashSet<_> = houses
+            .iter()
+            .flat_map(|house| {
+                app.world()
+                    .entity(*house)
+                    .get::<Household>()
+                    .unwrap()
+                    .resident_ids
+                    .clone()
+            })
+            .collect();
+        app.world_mut()
+            .entity_mut(villagers[0])
+            .get_mut::<CharacterName>()
+            .unwrap()
+            .0 = "Marian".to_string();
+        app.update();
+        let renamed_roster: HashSet<_> = houses
+            .iter()
+            .flat_map(|house| {
+                app.world()
+                    .entity(*house)
+                    .get::<Household>()
+                    .unwrap()
+                    .resident_ids
+                    .clone()
+            })
+            .collect();
+        assert_eq!(stable_roster, renamed_roster);
+        assert!(houses.iter().any(|house| app
+            .world()
+            .entity(*house)
+            .get::<Household>()
+            .unwrap()
+            .residents
+            .iter()
+            .any(|name| name == "Marian")));
+    }
+
+    #[test]
+    fn deferred_market_payment_uses_person_id_when_names_repeat() {
+        let mut app = village_test_app();
+        app.add_systems(Update, settle_pending_market_payments);
+        let settlement = app.world_mut().spawn_empty().id();
+        let first = app
+            .world_mut()
+            .spawn((
+                CharacterName("Robin".into()),
+                shared::components::PersonId(10),
+                Wallet::new(0),
+            ))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((
+                CharacterName("Robin".into()),
+                shared::components::PersonId(11),
+                Wallet::new(0),
+            ))
+            .id();
+        app.world_mut().spawn(PendingMarketPayment {
+            settlement,
+            recipient: shared::components::PersonId(11),
+            pennies: 77,
+        });
+
+        app.update();
+
+        assert_eq!(app.world().get::<Wallet>(first).unwrap().balance(), 0);
+        assert_eq!(app.world().get::<Wallet>(second).unwrap().balance(), 77);
+        assert_eq!(
+            app.world_mut()
+                .query::<&PendingMarketPayment>()
+                .iter(app.world())
+                .count(),
+            0
+        );
     }
 
     #[test]
     fn travelling_villagers_do_not_occupy_resident_beds() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.add_systems(Update, (ensure_households, assign_households).chain());
 
         let settlement = app
@@ -9002,7 +6148,7 @@ mod tests {
 
     #[test]
     fn residents_eat_food_then_wheat_once_per_world_day() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<SettlementEconomyRuntime>();
         app.add_systems(
             Update,
@@ -9049,7 +6195,7 @@ mod tests {
 
     #[test]
     fn a_daily_market_ration_moves_food_and_exactly_conserves_coin() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<SettlementEconomyRuntime>();
         app.add_systems(
             Update,
@@ -9116,7 +6262,7 @@ mod tests {
 
     #[test]
     fn poor_relief_buys_a_ration_from_public_money() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<SettlementEconomyRuntime>();
         app.add_systems(
             Update,
@@ -9188,7 +6334,7 @@ mod tests {
     #[test]
     fn poor_relief_protects_an_unsustainable_or_thin_reserve() {
         fn run_case(stock: u32, production: u32) -> (u32, u32, u64) {
-            let mut app = App::new();
+            let mut app = village_test_app();
             app.init_resource::<SettlementEconomyRuntime>();
             app.add_systems(
                 Update,
@@ -9256,7 +6402,7 @@ mod tests {
 
     #[test]
     fn a_broke_resident_goes_hungry_when_relief_is_disabled() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<SettlementEconomyRuntime>();
         app.add_systems(
             Update,
@@ -9326,7 +6472,7 @@ mod tests {
 
     #[test]
     fn three_secure_days_advance_a_hamlet_to_village() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<SettlementEconomyRuntime>();
         app.add_systems(
             Update,
@@ -9381,7 +6527,7 @@ mod tests {
 
     #[test]
     fn distinct_permits_are_approved_without_waiting_for_construction() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.init_resource::<VillageClock>();
         app.insert_resource(WorldTerrain::default());
@@ -9460,7 +6606,7 @@ mod tests {
 
     #[test]
     fn a_permit_does_not_interrupt_an_active_fisher_mid_shift() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.init_resource::<VillageClock>();
         app.insert_resource(WorldTerrain::default());
@@ -9526,7 +6672,7 @@ mod tests {
 
     #[test]
     fn the_reeve_builds_public_progression_without_stopping_essential_trades() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.init_resource::<VillageClock>();
         app.insert_resource(WorldTerrain::default());
@@ -9616,7 +6762,7 @@ mod tests {
 
     #[test]
     fn a_market_porter_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.insert_resource(WorldTerrain::default());
         app.add_systems(Update, (run_market_collections, sync_carried_load).chain());
@@ -9779,7 +6925,7 @@ mod tests {
 
     #[test]
     fn a_farmer_carries_wheat_only_to_the_farmstead_store() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.init_resource::<SettlementEconomyRuntime>();
         app.add_systems(Update, run_farmer_routines);
@@ -9986,7 +7132,7 @@ mod tests {
 
     #[test]
     fn a_fisher_fills_a_two_food_batch_at_the_pier_then_deposits_at_the_hut() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.init_resource::<SettlementEconomyRuntime>();
         app.insert_resource(WorldTerrain::default());
@@ -10118,7 +7264,7 @@ mod tests {
 
     #[test]
     fn completed_tree_interactions_keep_producing_without_a_daily_cap() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.insert_resource(WorldTerrain::default());
         app.add_systems(Update, run_lumberjack_routines);
@@ -10254,7 +7400,7 @@ mod tests {
 
     #[test]
     fn a_wealthy_owner_leaves_daily_work_only_when_payroll_and_a_replacement_are_ready() {
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.add_systems(
             Update,
             (run_business_payroll_and_owner_leisure, fill_vacancies).chain(),
@@ -10351,7 +7497,7 @@ mod tests {
         use shared::components::{CharacterKind, TimeWarp};
         use shared::region::RegionCoord;
 
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.init_resource::<VillageClock>();
         app.init_resource::<SettlementEconomyRuntime>();
@@ -10615,7 +7761,7 @@ mod tests {
         use shared::components::CharacterKind;
         use shared::region::RegionCoord;
 
-        let mut app = App::new();
+        let mut app = village_test_app();
         app.init_resource::<Time>();
         app.init_resource::<VillageClock>();
         app.init_resource::<SettlementEconomyRuntime>();

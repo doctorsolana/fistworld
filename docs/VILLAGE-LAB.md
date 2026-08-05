@@ -311,17 +311,17 @@ physical production cycle succeeds, not in a per-NPC decision loop every frame.
 Reference 60-sample measurement on the 10-core Apple Silicon development
 machine on 2026-08-05:
 
-- the steady village bundle averaged 1.186 ms, p99 was 1.244 ms and the maximum
-  was 1.244 ms — 7.1% of one 60 Hz tick on average;
+- the steady village bundle averaged 0.760 ms, p99 was 0.793 ms and the maximum
+  was 0.794 ms — 4.6% of one 60 Hz tick on average;
 - the once-per-world-day 5,000-person food, adaptive-wage, household-budget and
-  business-payroll burst averaged 1.796 ms, p99 was 1.898 ms and the maximum
-  was 1.941 ms;
-- full stable identity and legacy-relationship reconciliation averaged 0.053 ms
+  business-payroll burst averaged 0.956 ms, p99 was 1.065 ms and the maximum
+  was 1.085 ms;
+- full stable identity and legacy-relationship reconciliation averaged 0.055 ms
   (0.3% of a tick), while the real aggregate strategic-village pass averaged
-  0.268 ms, p99 was 0.287 ms and the maximum was 0.299 ms;
-- the capped 512-person local route burst averaged 0.038 ms, p99 was 0.053 ms,
-  the maximum was 0.057 ms, and all requests drained;
-- the test process rose from 215.3 to 224.2 MiB RSS for 16,384 ECS entities,
+  0.177 ms, p99 was 0.213 ms and the maximum was 0.255 ms;
+- the capped 512-person local route burst averaged 0.034 ms, p99 was 0.046 ms,
+  the maximum was 0.053 ms, and all requests drained;
+- the test process rose from 216.7 to 225.5 MiB RSS for 16,384 ECS entities,
   with no entity growth.
 
 These are machine-specific reference numbers, not pass/fail thresholds; the

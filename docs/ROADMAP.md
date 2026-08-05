@@ -364,8 +364,11 @@ ordinary residents shed paths, door choreography and work-animation phases.
 - [ ] Stagger economy work per settlement (30-60s) rather than sweeping every region
 - [x] Measure the tick at full world scale and write the real numbers into ARCHITECTURE.
       `cargo village-scale-lab` holds 5,000 NPCs in 30 towns and fails on entity/route growth.
-- [ ] **Decide the warp policy.** At 100x the tick hands the economy a 100-simulated-second
-      integration step, so nonlinear growth drifts from a 1x world. Sub-step, or cap warp.
+- [x] **Make current strategic production warp-invariant.** `SimulationDelta` captures the
+      master speed once, and strategic trades integrate exact elapsed work-shift overlap,
+      so a 100x step cannot skip dawn, shift end or a whole short work window.
+- [ ] Decide a sub-step policy before adding future nonlinear population or disease models;
+      the current linear production, commerce and daily boundaries do not need one.
 - [ ] **Decide who may warp.** `TimeWarp` is a single replicated global set by a dev
       command: on a shared persistent world, one player warping is a world-altering action.
 

@@ -11,14 +11,26 @@ use crate::{player, world};
 
 #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum VillageSimulationSet {
+    Time,
     Core,
     Navigation,
 }
 
 pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut App, schedule: M) {
+    app.init_resource::<world::simulation_time::SimulationDelta>();
     app.configure_sets(
         schedule.clone(),
-        (VillageSimulationSet::Core, VillageSimulationSet::Navigation).chain(),
+        (
+            VillageSimulationSet::Time,
+            VillageSimulationSet::Core,
+            VillageSimulationSet::Navigation,
+        )
+            .chain(),
+    );
+
+    app.add_systems(
+        schedule.clone(),
+        world::simulation_time::refresh_simulation_delta.in_set(VillageSimulationSet::Time),
     );
 
     app.add_systems(
@@ -33,6 +45,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 super::arrive_at_settlement,
                 world::identity::reconcile_stable_world_relationships,
                 world::identity::reconcile_stable_adjunct_relationships,
+                world::identity::reconcile_stable_road_relationships,
                 super::recount_residents,
                 super::ensure_village_finances,
                 super::ensure_settlement_economies,

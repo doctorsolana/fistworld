@@ -359,6 +359,7 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                     },
                     shared::components::Household {
                         residents: people.clone(),
+                        ..default()
                     },
                     shared::components::PlayerPosition(Vec3::new(
                         house_at.x,

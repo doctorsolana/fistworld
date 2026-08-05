@@ -382,11 +382,9 @@ pub fn tick_strategic_world(
     // until the tick body had work in it; with a real economy over 289 regions it
     // would have been a 60x cost multiplier that only appeared under warp.
     //
-    // NOTE for the economy: at high warp `elapsed` is a large integration step
-    // (100 simulated seconds at 100x), so nonlinear dynamics — logistic
-    // population growth, tier thresholds — will drift from what a 1x world
-    // produces. Sub-stepping or a warp cap is the fix when that starts to
-    // matter; it is a balance decision, not a bug here.
+    // Strategic consumers integrate the elapsed interval rather than sampling
+    // only its endpoint, including exact overlap with work shifts. This keeps
+    // high warp from skipping dawn, dusk or an entire short event window.
     let Some(elapsed) = clock.advance(simulation_time.real_seconds_f64(), factor as f64) else {
         return;
     };

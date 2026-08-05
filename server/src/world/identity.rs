@@ -6,11 +6,13 @@
 //! retain those ids while runtime AI remains free to cache Entity handles.
 
 use bevy::prelude::*;
+#[cfg(test)]
+use shared::components::CharacterKind;
 use shared::components::{
-    AttachedTo, BuildingId, BuildingOf, CharacterKind, CharacterName, CivicEmployment, CivicRole,
-    EmployedAt, FarmField, FishingPier, LivesAt, MootAdministration, OwnedBy, PersonId,
-    PlayerPosition, ResidentOf, Settlement, SettlementBuilding, SettlementBuildingKind,
-    SettlementId,
+    AttachedTo, BuildingId, BuildingOf, CharacterName, CivicEmployment, CivicRole, EmployedAt,
+    FarmField, FishingPier, LivesAt, MootAdministration, OwnedBy, PersonId, PlayerPosition,
+    ResidentOf, RoadOf, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
+    VillageRoad,
 };
 
 use super::village::{HomeAssignment, VillagerIntent};
@@ -49,6 +51,27 @@ pub fn reconcile_stable_adjunct_relationships(
         });
         if let (Some(first), None) = (matches.next().map(|(id, ..)| *id), matches.next()) {
             commands.entity(entity).insert(AttachedTo(first));
+        }
+    }
+}
+
+/// Migrate legacy road labels once. Ambiguous duplicate settlement names are
+/// deliberately left unresolved; newly planned roads receive `RoadOf`
+/// immediately and never depend on this compatibility boundary.
+pub fn reconcile_stable_road_relationships(
+    mut commands: Commands,
+    settlements: Query<(&Settlement, &SettlementId)>,
+    roads: Query<(Entity, &VillageRoad), Without<RoadOf>>,
+) {
+    for (entity, road) in roads.iter() {
+        let mut matches = settlements
+            .iter()
+            .filter(|(settlement, _)| settlement.name == road.settlement);
+        if let (Some(first), None) = (
+            matches.next().map(|(_, settlement_id)| *settlement_id),
+            matches.next(),
+        ) {
+            commands.entity(entity).insert(RoadOf(first));
         }
     }
 }
@@ -121,19 +144,19 @@ pub fn reconcile_stable_civic_employment(
                 }
                 continue;
             }
+            // Durable employment is authoritative. The readable legacy roster
+            // must never erase or transfer a post merely because its holder
+            // was renamed (or shares a display name with somebody else).
+            if current.is_some() {
+                continue;
+            }
             let Some(role) = role_for_name(&name.0) else {
-                if current.is_some_and(|job| job.settlement == *settlement_id) {
-                    commands.entity(entity).remove::<CivicEmployment>();
-                }
                 continue;
             };
             let desired = CivicEmployment {
                 settlement: *settlement_id,
                 role,
             };
-            if current.copied() == Some(desired) {
-                continue;
-            }
             let matches = people
                 .iter()
                 .filter(|(_, other_name, other_intent, _)| {
@@ -206,7 +229,7 @@ pub fn assign_stable_world_ids(
     existing_people: Query<&PersonId, Added<PersonId>>,
     existing_settlements: Query<&SettlementId, Added<SettlementId>>,
     existing_buildings: Query<&BuildingId, Added<BuildingId>>,
-    new_people: Query<Entity, (With<CharacterKind>, Without<PersonId>)>,
+    new_people: Query<Entity, (With<CharacterName>, Without<PersonId>)>,
     new_settlements: Query<Entity, (With<Settlement>, Without<SettlementId>)>,
     new_buildings: Query<Entity, (With<SettlementBuilding>, Without<BuildingId>)>,
 ) {
@@ -234,7 +257,7 @@ pub fn assign_stable_world_ids(
 /// Rebuild the cheap Entity lookup tables only when identity components change.
 pub fn rebuild_world_identity_index(
     mut index: ResMut<WorldIdentityIndex>,
-    people: Query<(Entity, &PersonId), With<CharacterKind>>,
+    people: Query<(Entity, &PersonId), With<CharacterName>>,
     settlements: Query<(Entity, &SettlementId), With<Settlement>>,
     buildings: Query<(Entity, &BuildingId), With<SettlementBuilding>>,
     changed_people: Query<(), Changed<PersonId>>,
@@ -438,10 +461,20 @@ mod tests {
             .add_systems(Update, assign_stable_world_ids);
         let loaded = app
             .world_mut()
-            .spawn((CharacterKind::Villager, PersonId(100)))
+            .spawn((
+                CharacterKind::Villager,
+                CharacterName("Loaded".into()),
+                PersonId(100),
+            ))
             .id();
-        let first_new = app.world_mut().spawn(CharacterKind::Villager).id();
-        let second_new = app.world_mut().spawn(CharacterKind::Villager).id();
+        let first_new = app
+            .world_mut()
+            .spawn((CharacterKind::Villager, CharacterName("First".into())))
+            .id();
+        let second_new = app
+            .world_mut()
+            .spawn((CharacterKind::Villager, CharacterName("Second".into())))
+            .id();
 
         app.update();
         let ids = [loaded, first_new, second_new].map(|entity| {
@@ -464,10 +497,16 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<WorldIdentityIndex>()
             .add_systems(Update, rebuild_world_identity_index);
-        app.world_mut()
-            .spawn((CharacterKind::Villager, PersonId(9)));
-        app.world_mut()
-            .spawn((CharacterKind::Villager, PersonId(9)));
+        app.world_mut().spawn((
+            CharacterKind::Villager,
+            CharacterName("First".into()),
+            PersonId(9),
+        ));
+        app.world_mut().spawn((
+            CharacterKind::Villager,
+            CharacterName("Second".into()),
+            PersonId(9),
+        ));
 
         app.update();
     }

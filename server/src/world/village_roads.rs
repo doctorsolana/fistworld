@@ -7,6 +7,12 @@
 //! reuse the complete obstacle-versioned route in either certified direction.
 
 mod geometry;
+mod steward;
+
+pub use steward::{
+    audit_village_roads, ensure_moot_administrations, staff_and_pay_road_stewards,
+    staff_public_positions,
+};
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -1428,14 +1434,12 @@ struct HallRoadNetwork {
 /// Planned and half-built roads are deliberately excluded. Paths are raised
 /// from a building outward, so their visible prefix is not public network yet;
 /// letting another house connect to it is how detached road islands formed.
-fn hall_road_network(settlement: &str, hall_door: Vec2, roads: &[&VillageRoad]) -> HallRoadNetwork {
+/// Build connectivity for a caller-provided stable SettlementId partition.
+/// The replicated road name is deliberately ignored here.
+fn hall_road_network(hall_door: Vec2, roads: &[&VillageRoad]) -> HallRoadNetwork {
     let mut points = HashMap::<(i32, i32), Vec2>::new();
     let mut edges = HashMap::<(i32, i32), HashSet<(i32, i32)>>::new();
-    for road in roads
-        .iter()
-        .copied()
-        .filter(|road| road.settlement == settlement && road.is_complete())
-    {
+    for road in roads.iter().copied().filter(|road| road.is_complete()) {
         let mut previous = None;
         for point in road.built_points().iter().copied() {
             let key = graph_key(point);
@@ -1516,7 +1520,6 @@ fn absolute_world_seconds(clock: &WorldTime) -> f64 {
 }
 
 fn building_road_status(
-    settlement: &str,
     door: Vec2,
     roads: &[&VillageRoad],
     network: &HallRoadNetwork,
@@ -1525,7 +1528,7 @@ fn building_road_status(
     let touching: Vec<_> = roads
         .iter()
         .copied()
-        .filter(|road| road.settlement == settlement && road_starts_at(road, door))
+        .filter(|road| road_starts_at(road, door))
         .collect();
     if touching.iter().any(|road| {
         road.is_complete()
@@ -1546,614 +1549,6 @@ fn building_road_status(
     }
 }
 
-/// Add the Moot Hall's first public office without bloating the founding path.
-pub fn ensure_moot_administrations(
-    mut commands: Commands,
-    world_time: Query<&WorldTime>,
-    halls: Query<
-        (
-            Entity,
-            Option<&MootAdministration>,
-            Option<&MootAdministrationRuntime>,
-        ),
-        With<Settlement>,
-    >,
-) {
-    let day = world_time.iter().next().map_or(0, |clock| clock.day);
-    for (hall, administration, runtime) in halls.iter() {
-        let mut entity = commands.entity(hall);
-        if administration.is_none() {
-            entity.insert(MootAdministration::default());
-        }
-        if runtime.is_none() {
-            entity.insert(MootAdministrationRuntime {
-                last_paid_day: day,
-                last_audit_at: None,
-                road_progress: HashMap::new(),
-            });
-        }
-    }
-}
-
-/// Reserve one resident for civic road work and pay their daily public wage.
-///
-/// Unpaid wages remain explicit arrears when the treasury is short. Coin is
-/// transferred directly from the public treasury to the worker's wallet, so
-/// the salary neither creates money nor drains a commodity market pool.
-pub fn staff_and_pay_road_stewards(
-    mut commands: Commands,
-    world_time: Query<&WorldTime>,
-    mut halls: Query<(
-        Entity,
-        &mut Settlement,
-        &mut MootAdministration,
-        &mut MootAdministrationRuntime,
-        Option<&shared::components::SettlementId>,
-    )>,
-    mut villagers: Query<(
-        Entity,
-        &CharacterName,
-        &VillagerIntent,
-        &mut Occupation,
-        &mut Wallet,
-        Option<&RoadSteward>,
-        Option<&shared::components::EmployedAt>,
-        Option<&shared::components::CivicEmployment>,
-    )>,
-) {
-    let Some(day) = world_time.iter().next().map(|clock| clock.day) else {
-        return;
-    };
-    for (hall, mut settlement, mut administration, mut runtime, settlement_id) in halls.iter_mut() {
-        let current_name = administration.road_steward.clone();
-        let current = current_name.as_deref().and_then(|wanted| {
-            villagers
-                .iter()
-                .find(|(_, name, intent, _, _, _, _, civic_job)| {
-                    name.0 == wanted
-                        && intent.settlement() == Some(hall)
-                        && intent.counts_as_resident()
-                        && settlement_id.is_none_or(|settlement_id| {
-                            civic_job.is_some_and(|job| {
-                                job.settlement == *settlement_id
-                                    && job.role == shared::components::CivicRole::RoadSteward
-                            })
-                        })
-                })
-                .map(|(entity, ..)| entity)
-        });
-
-        if administration.road_steward.is_some() && current.is_none() {
-            if let Some(wanted) = current_name.as_deref() {
-                if let Some(entity) = villagers
-                    .iter()
-                    .find(|(_, name, ..)| name.0 == wanted)
-                    .map(|(entity, ..)| entity)
-                {
-                    if let Ok((_, _, _, mut occupation, _, _, _, _)) = villagers.get_mut(entity) {
-                        if occupation.0.as_deref() == Some("Road Steward") {
-                            occupation.0 = None;
-                        }
-                    }
-                    commands
-                        .entity(entity)
-                        .remove::<RoadSteward>()
-                        .remove::<shared::components::CivicEmployment>();
-                }
-            }
-            administration.road_steward = None;
-            administration.wage_arrears = 0;
-            runtime.last_paid_day = day;
-        }
-
-        let worker = if let Some(worker) = current {
-            worker
-        } else {
-            let candidate = villagers
-                .iter()
-                .filter(|(_, _, intent, occupation, _, steward, employed_at, civic_job)| {
-                    matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
-                        && occupation.0.is_none()
-                        && steward.is_none()
-                        && employed_at.is_none()
-                        && civic_job.is_none()
-                })
-                .min_by(|a, b| a.1 .0.cmp(&b.1 .0))
-                .map(|(entity, ..)| entity);
-            let Some(candidate) = candidate else {
-                runtime.last_paid_day = day;
-                continue;
-            };
-            let Ok((_, name, _, mut occupation, _, _, _, _)) = villagers.get_mut(candidate) else {
-                continue;
-            };
-            occupation.0 = Some("Road Steward".to_string());
-            administration.road_steward = Some(name.0.clone());
-            administration.road_steward_daily_salary = ROAD_STEWARD_DAILY_SALARY;
-            administration.wage_arrears = 0;
-            runtime.last_paid_day = day;
-            runtime.last_audit_at = None;
-            commands
-                .entity(candidate)
-                .insert(RoadSteward { settlement: hall });
-            if let Some(settlement_id) = settlement_id {
-                commands
-                    .entity(candidate)
-                    .insert(shared::components::CivicEmployment {
-                        settlement: *settlement_id,
-                        role: shared::components::CivicRole::RoadSteward,
-                    });
-            }
-            info!(
-                "Village '{}': {} took the public Road Steward position at the Moot Hall",
-                settlement.name, name.0
-            );
-            candidate
-        };
-
-        if let Ok((_, _, _, mut occupation, _, steward, _, civic_job)) = villagers.get_mut(worker) {
-            if occupation.0.as_deref() != Some("Road Steward") {
-                occupation.0 = Some("Road Steward".to_string());
-            }
-            if steward.is_none_or(|steward| steward.settlement != hall) {
-                commands
-                    .entity(worker)
-                    .insert(RoadSteward { settlement: hall });
-            }
-            if let Some(settlement_id) = settlement_id {
-                if civic_job.is_none_or(|job| {
-                    job.settlement != *settlement_id
-                        || job.role != shared::components::CivicRole::RoadSteward
-                }) {
-                    commands
-                        .entity(worker)
-                        .insert(shared::components::CivicEmployment {
-                            settlement: *settlement_id,
-                            role: shared::components::CivicRole::RoadSteward,
-                        });
-                }
-            }
-        }
-
-        let elapsed_days = day.saturating_sub(runtime.last_paid_day);
-        if elapsed_days > 0 {
-            administration.wage_arrears = administration.wage_arrears.saturating_add(
-                administration
-                    .road_steward_daily_salary
-                    .saturating_mul(u64::from(elapsed_days)),
-            );
-            runtime.last_paid_day = day;
-        }
-        let payment = settlement.treasury.min(administration.wage_arrears);
-        if payment > 0 {
-            if let Ok((_, name, _, _, mut wallet, _, _, _)) = villagers.get_mut(worker) {
-                settlement.treasury -= payment;
-                administration.wage_arrears -= payment;
-                wallet.credit(payment);
-                info!(
-                    "Village '{}': paid {} {:.2} coin in Road Steward wages{}",
-                    settlement.name,
-                    name.0,
-                    payment as f64 / 100.0,
-                    if administration.wage_arrears > 0 {
-                        " (some wages remain in arrears)"
-                    } else {
-                        ""
-                    }
-                );
-            }
-        }
-    }
-}
-
-/// Fill the tier-bounded public roster with named residents.
-///
-/// Guards are intentionally jobs before they are combat AI: the vacancy is
-/// visible, it consumes one person's time, and later patrol behaviour can be
-/// attached without changing the settlement model. The first city worker is
-/// the existing accountable Road Steward.
-pub fn staff_public_positions(
-    mut commands: Commands,
-    mut halls: Query<(
-        Entity,
-        &Settlement,
-        &mut MootAdministration,
-        Option<&shared::components::SettlementId>,
-    )>,
-    mut villagers: Query<(
-        Entity,
-        &CharacterName,
-        &VillagerIntent,
-        &mut Occupation,
-        Option<&RoadSteward>,
-        Option<&shared::components::EmployedAt>,
-        Option<&shared::components::CivicEmployment>,
-    )>,
-) {
-    for (hall, settlement, mut administration, settlement_id) in halls.iter_mut() {
-        let has_civic_role = |wanted: &str, role: shared::components::CivicRole| {
-            villagers
-                .iter()
-                .any(|(_, name, intent, _, _, _, civic_job)| {
-                    name.0 == wanted
-                        && intent.settlement() == Some(hall)
-                        && intent.counts_as_resident()
-                        && settlement_id.is_none_or(|settlement_id| {
-                            civic_job.is_some_and(|job| {
-                                job.settlement == *settlement_id && job.role == role
-                            })
-                        })
-                })
-        };
-        let mut city_workers = administration.city_workers.clone();
-        let mut guards = administration.guards.clone();
-        city_workers.retain(|name| {
-            has_civic_role(name, shared::components::CivicRole::CityWorker)
-                || has_civic_role(name, shared::components::CivicRole::RoadSteward)
-        });
-        guards.retain(|name| has_civic_role(name, shared::components::CivicRole::Guard));
-
-        if let Some(steward) = administration.road_steward.clone() {
-            if !city_workers.contains(&steward) {
-                city_workers.insert(0, steward);
-            }
-        }
-
-        let desired_workers = usize::from(settlement.tier.public_worker_positions());
-        let desired_guards = usize::from(settlement.tier.public_guard_positions());
-        // A settlement may advertise jobs it cannot yet fill. Do not add
-        // further civic hires past population minus one; vacancies are safer
-        // than letting a tiny foundation consume every new arrival at the hall.
-        let staffing_budget = settlement.residents.saturating_sub(1) as usize;
-        city_workers.truncate(desired_workers);
-        guards.truncate(desired_guards);
-
-        while city_workers.len() < desired_workers
-            && city_workers.len() + guards.len() < staffing_budget
-        {
-            let candidate = villagers
-                .iter()
-                .filter(|(_, _, intent, occupation, _, employed_at, civic_job)| {
-                    matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
-                        && occupation.0.is_none()
-                        && employed_at.is_none()
-                        && civic_job.is_none()
-                })
-                .min_by(|a, b| a.1 .0.cmp(&b.1 .0))
-                .map(|(entity, name, _, _, _, _, _)| (entity, name.0.clone()));
-            let Some((entity, name)) = candidate else {
-                break;
-            };
-            if let Ok((_, _, _, mut occupation, steward, _, _)) = villagers.get_mut(entity) {
-                if steward.is_none() {
-                    occupation.0 = Some("City Worker".to_string());
-                    commands.entity(entity).insert(WorkStatus::Employed);
-                    if let Some(settlement_id) = settlement_id {
-                        commands
-                            .entity(entity)
-                            .insert(shared::components::CivicEmployment {
-                                settlement: *settlement_id,
-                                role: shared::components::CivicRole::CityWorker,
-                            });
-                    }
-                }
-            }
-            city_workers.push(name);
-        }
-
-        while guards.len() < desired_guards && city_workers.len() + guards.len() < staffing_budget {
-            let candidate = villagers
-                .iter()
-                .filter(|(_, _, intent, occupation, _, employed_at, civic_job)| {
-                    matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
-                        && occupation.0.is_none()
-                        && employed_at.is_none()
-                        && civic_job.is_none()
-                })
-                .min_by(|a, b| a.1 .0.cmp(&b.1 .0))
-                .map(|(entity, name, _, _, _, _, _)| (entity, name.0.clone()));
-            let Some((entity, name)) = candidate else {
-                break;
-            };
-            if let Ok((_, _, _, mut occupation, _, _, _)) = villagers.get_mut(entity) {
-                occupation.0 = Some("Town Guard".to_string());
-                commands.entity(entity).insert(WorkStatus::Employed);
-                if let Some(settlement_id) = settlement_id {
-                    commands
-                        .entity(entity)
-                        .insert(shared::components::CivicEmployment {
-                            settlement: *settlement_id,
-                            role: shared::components::CivicRole::Guard,
-                        });
-                }
-            }
-            guards.push(name);
-        }
-
-        if administration.city_workers != city_workers {
-            administration.city_workers = city_workers;
-        }
-        if administration.guards != guards {
-            administration.guards = guards;
-        }
-    }
-}
-
-/// Periodically audit every completed building against the hall-connected road
-/// component and adopt one repair at a time.
-///
-/// Wages remain daily, but civic safety is not a once-per-day lottery. An
-/// unfinished road only counts as active pending work while a live builder
-/// still owns its routine; abandoned ribbons are removed before classification
-/// so they can never hide a roadless building forever.
-#[allow(clippy::too_many_arguments)]
-pub fn audit_village_roads(
-    mut commands: Commands,
-    world_time: Query<&WorldTime>,
-    mut halls: Query<(
-        Entity,
-        &Settlement,
-        &PlayerPosition,
-        Option<&PlayerRotation>,
-        &mut MootAdministration,
-        &mut MootAdministrationRuntime,
-    )>,
-    buildings: Query<(
-        Entity,
-        &SettlementBuilding,
-        &PlayerPosition,
-        &PlayerRotation,
-        Option<&RoadRequest>,
-    )>,
-    roads: Query<(Entity, &VillageRoad)>,
-    road_workers: Query<(
-        Entity,
-        &VillagerIntent,
-        Option<&RoadBuilderRoutine>,
-        &PlayerPosition,
-        Has<HomeRoutine>,
-    )>,
-    stewards: Query<
-        (
-            Entity,
-            &CharacterName,
-            &VillagerIntent,
-            &RoadSteward,
-            Option<&RoadBuilderRoutine>,
-        ),
-        Without<crate::world::village::strategic::StrategicPerson>,
-    >,
-) {
-    let Some(clock) = world_time.iter().next() else {
-        return;
-    };
-    let day = clock.day;
-    let now = absolute_world_seconds(clock);
-    let road_owners: HashMap<_, _> = road_workers
-        .iter()
-        .filter_map(|(builder, intent, routine, position, at_home)| {
-            let routine = routine?;
-            let owns_current_intent = matches!(
-                intent,
-                VillagerIntent::RoadBuilding { road, .. } if *road == routine.road
-            );
-            Some((
-                routine.road,
-                (
-                    builder,
-                    Vec2::new(position.0.x, position.0.z),
-                    at_home,
-                    owns_current_intent,
-                ),
-            ))
-        })
-        .collect();
-
-    for (hall, settlement, hall_position, hall_rotation, mut administration, mut runtime) in
-        halls.iter_mut()
-    {
-        if runtime
-            .last_audit_at
-            .is_some_and(|last| now - last < ROAD_AUDIT_INTERVAL_SECONDS)
-        {
-            continue;
-        }
-        let Some((steward, steward_name, intent, _, road_work)) =
-            stewards.iter().find(|(_, name, intent, steward, _)| {
-                steward.settlement == hall
-                    && administration.road_steward.as_deref() == Some(name.0.as_str())
-                    && intent.settlement() == Some(hall)
-            })
-        else {
-            continue;
-        };
-        if road_work.is_some() || !intent.is_settled() {
-            continue;
-        }
-
-        let mut abandoned_roads = 0usize;
-        let mut stalled_roads = 0usize;
-        let mut observed_roads = HashSet::new();
-        let mut settlement_roads = Vec::new();
-        for (entity, road) in roads.iter() {
-            if road.settlement != settlement.name {
-                continue;
-            }
-            if road.is_complete() {
-                runtime.road_progress.remove(&entity);
-                settlement_roads.push(road);
-                continue;
-            }
-
-            let Some((builder, builder_position, at_home, owns_current_intent)) =
-                road_owners.get(&entity).copied()
-            else {
-                commands.entity(entity).despawn();
-                runtime.road_progress.remove(&entity);
-                abandoned_roads += 1;
-                continue;
-            };
-            if !owns_current_intent {
-                // An old road task must never survive after another system has
-                // legitimately given the actor a newer commitment.
-                commands.entity(entity).despawn();
-                commands.entity(builder).remove::<RoadBuilderRoutine>();
-                runtime.road_progress.remove(&entity);
-                abandoned_roads += 1;
-                continue;
-            }
-
-            let observation =
-                runtime
-                    .road_progress
-                    .entry(entity)
-                    .or_insert(RoadProgressObservation {
-                        built_through: road.built_through,
-                        builder_position,
-                        last_progress_at: now,
-                    });
-            let made_progress = observation.built_through != road.built_through
-                || observation
-                    .builder_position
-                    .distance_squared(builder_position)
-                    > 0.5f32.powi(2);
-            if made_progress || !clock.is_day() {
-                *observation = RoadProgressObservation {
-                    built_through: road.built_through,
-                    builder_position,
-                    last_progress_at: now,
-                };
-            }
-            let stalled =
-                clock.is_day() && now - observation.last_progress_at >= ROAD_BUILDER_STALL_SECONDS;
-            if stalled {
-                commands.entity(entity).despawn();
-                let mut builder_commands = commands.entity(builder);
-                builder_commands
-                    .insert(VillagerIntent::Resident { settlement: hall })
-                    .remove::<RoadBuilderRoutine>();
-                if !at_home {
-                    builder_commands
-                        .remove::<MoveTarget>()
-                        .remove::<TravelRoute>()
-                        .remove::<NavigationRoutePending>()
-                        .remove::<NavigationRouteFailed>();
-                }
-                runtime.road_progress.remove(&entity);
-                stalled_roads += 1;
-                continue;
-            }
-            observed_roads.insert(entity);
-            settlement_roads.push(road);
-        }
-        runtime
-            .road_progress
-            .retain(|road, _| observed_roads.contains(road));
-        let hall_door3 = SettlementBuildingKind::Hall.entrance_position(
-            hall_position.0,
-            hall_rotation.map_or(0.0, |rotation| rotation.0),
-        );
-        let hall_door = Vec2::new(hall_door3.x, hall_door3.z);
-        let network = hall_road_network(&settlement.name, hall_door, &settlement_roads);
-        let mut roadless = 0usize;
-        let mut disconnected = 0usize;
-        let mut pending = 0usize;
-        let mut repairs = Vec::new();
-        for (building_entity, building, position, rotation, request) in buildings
-            .iter()
-            .filter(|(_, building, ..)| building.settlement == settlement.name)
-        {
-            let door3 = building.kind.entrance_position(position.0, rotation.0);
-            let request_is_active = request.is_some_and(|request| {
-                road_workers
-                    .get(request.builder)
-                    .is_ok_and(|(_, intent, routine, _, _)| {
-                        routine.is_none()
-                            && (matches!(
-                                intent,
-                                VillagerIntent::Resident { settlement }
-                                    if *settlement == hall
-                            ) || matches!(
-                                intent,
-                                VillagerIntent::Building { settlement, site }
-                                    if *settlement == hall && *site == request.completed_site
-                            ))
-                    })
-            });
-            let status = building_road_status(
-                &settlement.name,
-                Vec2::new(door3.x, door3.z),
-                &settlement_roads,
-                &network,
-                request_is_active,
-            );
-            match status {
-                BuildingRoadStatus::Disconnected => {
-                    disconnected += 1;
-                    repairs.push((0u8, building_entity, building.kind));
-                }
-                BuildingRoadStatus::Roadless => {
-                    roadless += 1;
-                    repairs.push((1u8, building_entity, building.kind));
-                }
-                BuildingRoadStatus::Pending => pending += 1,
-                BuildingRoadStatus::Connected => {}
-            }
-        }
-        administration.roadless_buildings = roadless.min(u16::MAX as usize) as u16;
-        administration.disconnected_buildings = disconnected.min(u16::MAX as usize) as u16;
-        administration.pending_road_buildings = pending.min(u16::MAX as usize) as u16;
-        administration.last_road_audit_day = day;
-        runtime.last_audit_at = Some(now);
-
-        if abandoned_roads > 0 {
-            warn!(
-                "Village '{}': Road Steward {} cleared {} abandoned unfinished road(s)",
-                settlement.name, steward_name.0, abandoned_roads
-            );
-        }
-        if stalled_roads > 0 {
-            warn!(
-                "Village '{}': Road Steward {} reclaimed {} connector(s) with no daylight progress for {:.0} world seconds",
-                settlement.name,
-                steward_name.0,
-                stalled_roads,
-                ROAD_BUILDER_STALL_SECONDS,
-            );
-        }
-
-        repairs.sort_unstable_by_key(|(priority, entity, _)| (*priority, entity.to_bits()));
-        if let Some((_, building, kind)) = repairs.first().copied() {
-            commands.entity(building).insert(RoadRequest {
-                builder: steward,
-                settlement: hall,
-                completed_site: building,
-                attempt: 0,
-            });
-            info!(
-                "Village '{}': Road Steward {} found {} roadless, {} disconnected and {} actively pending building(s) across {} detached road component(s); repairing the {}",
-                settlement.name,
-                steward_name.0,
-                roadless,
-                disconnected,
-                pending,
-                network.disconnected_components,
-                kind.label(),
-            );
-        } else if pending > 0 {
-            info!(
-                "Village '{}': Road Steward {} found every completed connector healthy, with {} building connector(s) still actively under construction",
-                settlement.name, steward_name.0, pending
-            );
-        } else {
-            info!(
-                "Village '{}': Road Steward {} completed the road audit; every building reaches the Moot Hall",
-                settlement.name, steward_name.0
-            );
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn plan_requested_roads(
     mut commands: Commands,
@@ -2165,6 +1560,7 @@ pub fn plan_requested_roads(
         Entity,
         &RoadRequest,
         &SettlementBuilding,
+        &shared::components::BuildingId,
         &PlayerPosition,
         &PlayerRotation,
         Option<&RoadSurveyBackoff>,
@@ -2173,9 +1569,23 @@ pub fn plan_requested_roads(
         &shared::building::PlacedBuilding,
         &shared::building::BuildingPosition,
     )>,
-    fields: Query<(&FarmField, &PlayerPosition, &PlayerRotation)>,
-    settlements: Query<(&Settlement, &PlayerPosition, Option<&PlayerRotation>)>,
-    roads: Query<&VillageRoad>,
+    fields: Query<(
+        &FarmField,
+        &PlayerPosition,
+        &PlayerRotation,
+        &shared::components::AttachedTo,
+    )>,
+    building_scopes: Query<(
+        &shared::components::BuildingId,
+        &shared::components::BuildingOf,
+    )>,
+    settlements: Query<(
+        &Settlement,
+        &shared::components::SettlementId,
+        &PlayerPosition,
+        Option<&PlayerRotation>,
+    )>,
+    roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
     mut builders: Query<
         (
             &CharacterName,
@@ -2190,7 +1600,13 @@ pub fn plan_requested_roads(
 ) {
     let Some(terrain) = terrain else { return };
     let now = simulation_time.elapsed_real_seconds_f64();
-    for (building_entity, request, building, position, rotation, backoff) in requests.iter() {
+    let building_settlements: HashMap<_, _> = building_scopes
+        .iter()
+        .map(|(building_id, building_of)| (*building_id, building_of.0))
+        .collect();
+    for (building_entity, request, building, building_id, position, rotation, backoff) in
+        requests.iter()
+    {
         if backoff.is_some_and(|backoff| now < backoff.retry_after) {
             continue;
         }
@@ -2202,7 +1618,7 @@ pub fn plan_requested_roads(
         if building.kind == SettlementBuildingKind::Farmstead
             && fields
                 .iter()
-                .filter(|(field, _, _)| field.farmstead == position.0)
+                .filter(|(_, _, _, attached_to)| attached_to.0 == *building_id)
                 .count()
                 < shared::components::FARM_FIELDS_PER_FARMSTEAD as usize
         {
@@ -2232,7 +1648,8 @@ pub fn plan_requested_roads(
             // old request cannot overwrite that newer Building intent.
             continue;
         }
-        let Ok((settlement, hall_position, hall_rotation)) = settlements.get(request.settlement)
+        let Ok((settlement, settlement_id, hall_position, hall_rotation)) =
+            settlements.get(request.settlement)
         else {
             commands
                 .entity(building_entity)
@@ -2267,9 +1684,9 @@ pub fn plan_requested_roads(
         );
         let settlement_roads: Vec<_> = roads
             .iter()
-            .filter(|road| road.settlement == settlement.name)
+            .filter_map(|(road, road_of)| (road_of.0 == *settlement_id).then_some(road))
             .collect();
-        let network = hall_road_network(&settlement.name, hall_door, &settlement_roads);
+        let network = hall_road_network(hall_door, &settlement_roads);
         let mut existing_goals = network.connected_points;
         existing_goals.sort_by(|a, b| {
             a.distance_squared(start)
@@ -2341,8 +1758,10 @@ pub fn plan_requested_roads(
                 building_blockers.extend(
                     fields
                         .iter()
-                        .filter(|(field, _, _)| field.settlement == settlement.name)
-                        .map(|(_, field_position, field_rotation)| BuildingBlocker {
+                        .filter(|(_, _, _, attached_to)| {
+                            building_settlements.get(&attached_to.0) == Some(settlement_id)
+                        })
+                        .map(|(_, field_position, field_rotation, _)| BuildingBlocker {
                             center: Vec2::new(field_position.0.x, field_position.0.z),
                             half: SettlementBuildingKind::Farmstead
                                 .field_half_extents()
@@ -2406,8 +1825,10 @@ pub fn plan_requested_roads(
                 };
                 let crosses_field = fields
                     .iter()
-                    .filter(|(field, _, _)| field.settlement == settlement.name)
-                    .any(|(_, field_position, field_rotation)| {
+                    .filter(|(_, _, _, attached_to)| {
+                        building_settlements.get(&attached_to.0) == Some(settlement_id)
+                    })
+                    .any(|(_, field_position, field_rotation, _)| {
                         certified.intersects_rotated_rect(
                             Vec2::new(field_position.0.x, field_position.0.z),
                             SettlementBuildingKind::Farmstead
@@ -2489,6 +1910,7 @@ pub fn plan_requested_roads(
                     class,
                     stone_committed: 0,
                 },
+                shared::components::RoadOf(*settlement_id),
                 Replicate::to_clients(NetworkTarget::All),
             ))
             .id();
@@ -2531,13 +1953,14 @@ pub fn build_village_roads(
     simulation_time: crate::world::simulation_time::SimulationTime,
     terrain: Option<Res<WorldTerrain>>,
     mut commands: Commands,
-    mut roads: Query<&mut VillageRoad>,
+    mut roads: Query<(&mut VillageRoad, &shared::components::RoadOf)>,
     buildings: Query<
         (
             Entity,
             &SettlementBuilding,
             &PlayerPosition,
             &PlayerRotation,
+            &shared::components::BuildingOf,
         ),
         Without<CharacterKind>,
     >,
@@ -2573,7 +1996,7 @@ pub fn build_village_roads(
         if home.is_some() {
             continue;
         }
-        let Ok(mut road) = roads.get_mut(routine.road) else {
+        let Ok((mut road, road_of)) = roads.get_mut(routine.road) else {
             *activity = CharacterActivity::Idle;
             *intent = VillagerIntent::Resident {
                 settlement: routine.settlement,
@@ -2649,8 +2072,8 @@ pub fn build_village_roads(
                 let next_attempt = routine.attempt.saturating_add(1);
                 let building = buildings
                     .iter()
-                    .find(|(_, building, position, rotation)| {
-                        if building.settlement != road.settlement {
+                    .find(|(_, building, position, rotation, building_of)| {
+                        if building_of.0 != road_of.0 {
                             return false;
                         }
                         let door = building.kind.entrance_position(position.0, rotation.0);
@@ -3811,6 +3234,25 @@ mod tests {
     use shared::props::PropKind;
     use shared::region::RegionCoord;
 
+    fn road_test_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<crate::world::identity::WorldIdAllocator>()
+            .init_resource::<crate::world::identity::WorldIdentityIndex>()
+            .add_systems(
+                PreUpdate,
+                (
+                    crate::world::identity::assign_stable_world_ids,
+                    crate::world::identity::rebuild_world_identity_index,
+                    crate::world::identity::reconcile_stable_world_relationships,
+                    crate::world::identity::reconcile_stable_adjunct_relationships,
+                    crate::world::identity::reconcile_stable_road_relationships,
+                    crate::world::identity::reconcile_stable_civic_employment,
+                )
+                    .chain(),
+            );
+        app
+    }
+
     fn one_static_prop(
         kind: PropKind,
         position: Vec3,
@@ -3955,7 +3397,7 @@ mod tests {
     #[test]
     #[ignore = "diagnostic: run explicitly with --ignored --nocapture"]
     fn real_world_village_route_profile() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.insert_resource(WorldTerrain::default());
         app.init_resource::<VillageRoadGraph>();
         app.init_resource::<SpatialObstacleGrid>();
@@ -4080,7 +3522,7 @@ mod tests {
 
     #[test]
     fn a_failed_route_retries_only_after_its_destination_changes() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.add_systems(Update, retry_failed_routes_after_obstacle_change);
         let goal = Vec3::new(20.0, 0.0, 12.0);
         let mover = app
@@ -4102,7 +3544,7 @@ mod tests {
 
     #[test]
     fn an_out_of_bounds_agent_goal_is_cancelled_before_route_survey() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.insert_resource(WorldTerrain::default());
         app.init_resource::<VillageRoadGraph>();
         app.insert_resource(PathfindingBudgetSettings {
@@ -4292,12 +3734,13 @@ mod tests {
 
     #[test]
     fn a_farmstead_retains_its_road_request_until_both_fields_exist() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.insert_resource(WorldTerrain::default());
         app.add_systems(Update, plan_requested_roads);
         let settlement = app
             .world_mut()
             .spawn((
+                shared::components::SettlementId(1),
                 Settlement {
                     name: "Fieldford".into(),
                     tier: SettlementTier::Hamlet,
@@ -4527,7 +3970,7 @@ mod tests {
 
     #[test]
     fn villager_route_uses_the_road_and_never_crosses_a_building() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.insert_resource(WorldTerrain::default());
         app.insert_resource(PathfindingBudgetSettings {
             max_requests_per_tick: 8,
@@ -4615,7 +4058,7 @@ mod tests {
 
     #[test]
     fn bounded_route_planning_serves_every_pending_villager_fairly() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.insert_resource(WorldTerrain::default());
         app.insert_resource(PathfindingBudgetSettings {
             max_requests_per_tick: 1,
@@ -4652,7 +4095,7 @@ mod tests {
 
     #[test]
     fn the_building_builder_owns_and_finishes_its_road_at_100x() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.init_resource::<Time>();
         app.insert_resource(WorldTerrain::default());
         app.add_systems(
@@ -4670,6 +4113,7 @@ mod tests {
         let settlement = app
             .world_mut()
             .spawn((
+                shared::components::SettlementId(1),
                 Settlement {
                     name: "Oakmead".into(),
                     tier: SettlementTier::Hamlet,
@@ -4700,6 +4144,8 @@ mod tests {
             ))
             .id();
         app.world_mut().spawn((
+            shared::components::BuildingId(78),
+            shared::components::BuildingOf(shared::components::SettlementId(1)),
             SettlementBuilding {
                 kind: SettlementBuildingKind::House,
                 settlement: "Oakmead".into(),
@@ -4716,6 +4162,20 @@ mod tests {
                 attempt: 0,
             },
         ));
+        let farmstead_position = Vec3::new(1720.0, 0.0, 4.5);
+        app.world_mut().spawn((
+            shared::components::BuildingId(77),
+            shared::components::BuildingOf(shared::components::SettlementId(1)),
+            SettlementBuilding {
+                kind: SettlementBuildingKind::Farmstead,
+                settlement: "Oakmead".into(),
+                owner: Some("Farmer".into()),
+                quality: 0.7,
+                workers: Vec::new(),
+            },
+            PlayerPosition(farmstead_position),
+            PlayerRotation(0.0),
+        ));
         let field_position = Vec3::new(1720.0, 0.0, -4.5);
         app.world_mut().spawn((
             FarmField {
@@ -4724,6 +4184,7 @@ mod tests {
                 plot_index: 0,
                 quality: 0.7,
             },
+            shared::components::AttachedTo(shared::components::BuildingId(77)),
             PlayerPosition(field_position),
             PlayerRotation(0.0),
         ));
@@ -4808,7 +4269,7 @@ mod tests {
 
     #[test]
     fn a_building_beside_the_network_still_gets_its_own_short_road() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.insert_resource(WorldTerrain::default());
         app.add_systems(Update, plan_requested_roads);
 
@@ -4937,7 +4398,7 @@ mod tests {
         };
         let roads = [&connected, &detached, &unfinished];
 
-        let network = hall_road_network("Oakmead", hall_door, &roads);
+        let network = hall_road_network(hall_door, &roads);
 
         assert_eq!(network.disconnected_components, 1);
         assert!(network.connected_keys.contains(&graph_key(hall_door)));
@@ -4954,7 +4415,7 @@ mod tests {
 
     #[test]
     fn road_steward_audits_repairs_and_is_paid_from_the_treasury() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.add_systems(
             Update,
             (
@@ -5017,6 +4478,21 @@ mod tests {
             Some("Road Steward")
         );
 
+        app.world_mut()
+            .entity_mut(steward)
+            .get_mut::<CharacterName>()
+            .unwrap()
+            .0 = "Brina".into();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<MootAdministration>(settlement)
+                .unwrap()
+                .road_steward
+                .as_deref(),
+            Some("Brina")
+        );
+
         app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 1;
         app.update();
 
@@ -5036,7 +4512,7 @@ mod tests {
 
     #[test]
     fn road_steward_reclaims_an_abandoned_unfinished_connector() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.add_systems(
             Update,
             (
@@ -5116,7 +4592,7 @@ mod tests {
 
     #[test]
     fn road_steward_reclaims_a_live_connector_that_makes_no_daylight_progress() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.add_systems(
             Update,
             (
@@ -5222,7 +4698,7 @@ mod tests {
 
     #[test]
     fn active_road_builder_is_not_hired_for_a_production_job() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.add_systems(Update, crate::world::village::fill_vacancies);
         let settlement = app
             .world_mut()
@@ -5281,7 +4757,7 @@ mod tests {
 
     #[test]
     fn road_steward_cannot_also_be_hired_as_a_farmer() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.add_systems(Update, crate::world::village::fill_vacancies);
         let settlement = app
             .world_mut()
@@ -5345,7 +4821,7 @@ mod tests {
 
     #[test]
     fn road_steward_reclaims_a_stale_request_from_a_builder_with_a_new_permit() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.add_systems(
             Update,
             (
@@ -5423,30 +4899,36 @@ mod tests {
 
     #[test]
     fn road_builder_skips_a_failed_already_built_door_anchor() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.init_resource::<Time>();
         app.insert_resource(WorldTerrain::default());
         app.add_systems(Update, build_village_roads);
         app.world_mut()
             .spawn(shared::components::TimeWarp::clamped(100.0));
-        let settlement = app.world_mut().spawn_empty().id();
+        let settlement = app
+            .world_mut()
+            .spawn(shared::components::SettlementId(1))
+            .id();
         let terrain = app.world().resource::<WorldTerrain>();
         let first = Vec2::new(1_700.0, 0.0);
         let second = first + Vec2::X * 5.0;
         let first3 = Vec3::new(first.x, terrain.get_height(first.x, first.y), first.y);
         let road = app
             .world_mut()
-            .spawn(VillageRoad {
-                settlement: "Anchorham".into(),
-                builder: "Aud".into(),
-                points: vec![first, second],
-                built_through: 1,
-                width: VILLAGE_ROAD_WIDTH,
-                reserved_width: RoadClass::Lane.initial_reserved_width(),
-                surface: RoadSurface::Dirt,
-                class: RoadClass::Lane,
-                stone_committed: 0,
-            })
+            .spawn((
+                VillageRoad {
+                    settlement: "Anchorham".into(),
+                    builder: "Aud".into(),
+                    points: vec![first, second],
+                    built_through: 1,
+                    width: VILLAGE_ROAD_WIDTH,
+                    reserved_width: RoadClass::Lane.initial_reserved_width(),
+                    surface: RoadSurface::Dirt,
+                    class: RoadClass::Lane,
+                    stone_committed: 0,
+                },
+                shared::components::RoadOf(shared::components::SettlementId(1)),
+            ))
             .id();
         let builder = app
             .world_mut()
@@ -5485,11 +4967,14 @@ mod tests {
 
     #[test]
     fn road_builder_discards_a_failed_route_from_an_older_destination() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.init_resource::<Time>();
         app.insert_resource(WorldTerrain::default());
         app.add_systems(Update, build_village_roads);
-        let settlement = app.world_mut().spawn_empty().id();
+        let settlement = app
+            .world_mut()
+            .spawn(shared::components::SettlementId(1))
+            .id();
         let terrain = app.world().resource::<WorldTerrain>();
         let first = Vec2::new(1_700.0, 0.0);
         let second = first + Vec2::X * 5.0;
@@ -5497,17 +4982,20 @@ mod tests {
         let second3 = Vec3::new(second.x, terrain.get_height(second.x, second.y), second.y);
         let road = app
             .world_mut()
-            .spawn(VillageRoad {
-                settlement: "Freshroad".into(),
-                builder: "Bryn".into(),
-                points: vec![first, second],
-                built_through: 1,
-                width: VILLAGE_ROAD_WIDTH,
-                reserved_width: RoadClass::Lane.initial_reserved_width(),
-                surface: RoadSurface::Dirt,
-                class: RoadClass::Lane,
-                stone_committed: 0,
-            })
+            .spawn((
+                VillageRoad {
+                    settlement: "Freshroad".into(),
+                    builder: "Bryn".into(),
+                    points: vec![first, second],
+                    built_through: 1,
+                    width: VILLAGE_ROAD_WIDTH,
+                    reserved_width: RoadClass::Lane.initial_reserved_width(),
+                    surface: RoadSurface::Dirt,
+                    class: RoadClass::Lane,
+                    stone_committed: 0,
+                },
+                shared::components::RoadOf(shared::components::SettlementId(1)),
+            ))
             .id();
         let builder = app
             .world_mut()
@@ -5543,7 +5031,7 @@ mod tests {
 
     #[test]
     fn a_retained_road_request_cannot_steal_a_builder_from_a_new_site() {
-        let mut app = App::new();
+        let mut app = road_test_app();
         app.insert_resource(WorldTerrain::default());
         app.add_systems(Update, plan_requested_roads);
 

@@ -12,8 +12,8 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, MessageSender};
 
 use shared::components::{
-    MootAdministration, Nutrition, Occupation, Residence, Settlement, SettlementBuilding,
-    SettlementBuildingKind, WorldTime,
+    BuildingId, BuildingOf, CivicEmployment, EmployedAt, MootAdministration, Nutrition, ResidentOf,
+    Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId, WorldTime,
 };
 use shared::economy::{
     BusinessAccount, Good, GoodsInventory, HouseholdEconomy, MarketGoodHistoryDay, MootMarket,
@@ -179,6 +179,7 @@ pub fn capture_settlement_history(
     mut history: ResMut<SettlementHistoryRuntime>,
     mut halls: Query<(
         Entity,
+        &SettlementId,
         &Settlement,
         &GoodsInventory,
         &mut MootMarket,
@@ -186,18 +187,22 @@ pub fn capture_settlement_history(
         Option<&MootAdministration>,
     )>,
     buildings: Query<(
+        &BuildingId,
+        &BuildingOf,
         &SettlementBuilding,
         Option<&GoodsInventory>,
         Option<&BusinessAccount>,
         Option<&HouseholdEconomy>,
     )>,
     residents: Query<(
-        &Residence,
-        Option<&Occupation>,
+        &ResidentOf,
+        Option<&EmployedAt>,
+        Option<&CivicEmployment>,
         Option<&Wallet>,
         Option<&Nutrition>,
         Option<&GoodsInventory>,
     )>,
+    employment: Query<&EmployedAt>,
     pending: Query<&PendingMarketPayment>,
     collections: Query<&MarketCollectionRoutine>,
 ) {
@@ -205,9 +210,16 @@ pub fn capture_settlement_history(
         return;
     };
 
-    let mut aggregates: HashMap<String, SettlementAggregate> = HashMap::new();
-    for (building, inventory, business_account, household_economy) in buildings.iter() {
-        let aggregate = aggregates.entry(building.settlement.clone()).or_default();
+    let mut filled_jobs: HashMap<BuildingId, u16> = HashMap::new();
+    for employed_at in employment.iter() {
+        let count = filled_jobs.entry(employed_at.0).or_default();
+        *count = count.saturating_add(1);
+    }
+    let mut aggregates: HashMap<SettlementId, SettlementAggregate> = HashMap::new();
+    for (building_id, building_of, building, inventory, business_account, household_economy) in
+        buildings.iter()
+    {
+        let aggregate = aggregates.entry(building_of.0).or_default();
         aggregate.buildings = aggregate.buildings.saturating_add(1);
         if matches!(
             building.kind,
@@ -222,7 +234,7 @@ pub fn capture_settlement_history(
             .saturating_add(u16::from(building.kind.positions()));
         aggregate.filled_jobs = aggregate
             .filled_jobs
-            .saturating_add(building.workers.len().min(u16::MAX as usize) as u16);
+            .saturating_add(filled_jobs.get(building_id).copied().unwrap_or(0));
         add_inventory(&mut aggregate.stock, inventory);
         // Keep the existing private-money band conservation-complete as coin
         // moves from personal wallets into household and business ledgers.
@@ -231,17 +243,17 @@ pub fn capture_settlement_history(
             .saturating_add(business_account.map_or(0, |account| account.cash))
             .saturating_add(household_economy.map_or(0, |economy| economy.pennies));
     }
-    for (residence, occupation, wallet, nutrition, inventory) in residents.iter() {
-        let aggregate = aggregates.entry(residence.0.clone()).or_default();
+    for (resident_of, employed_at, civic_job, wallet, nutrition, inventory) in residents.iter() {
+        let aggregate = aggregates.entry(resident_of.0).or_default();
         aggregate.resident_wallets = aggregate
             .resident_wallets
             .saturating_add(wallet.copied().map_or(0, Wallet::balance));
         aggregate.hungry = aggregate
             .hungry
             .saturating_add(u32::from(nutrition.is_some_and(|value| value.is_hungry())));
-        aggregate.employed = aggregate.employed.saturating_add(u32::from(
-            occupation.is_some_and(|occupation| occupation.0.is_some()),
-        ));
+        aggregate.employed = aggregate
+            .employed
+            .saturating_add(u32::from(employed_at.is_some() || civic_job.is_some()));
         add_inventory(&mut aggregate.stock, inventory);
     }
     let mut pending_by_settlement: HashMap<Entity, u64> = HashMap::new();
@@ -255,7 +267,7 @@ pub fn capture_settlement_history(
     }
 
     let mut completed_days = HashSet::new();
-    for (entity, settlement, hall_inventory, mut market, economy, administration) in
+    for (entity, settlement_id, settlement, hall_inventory, mut market, economy, administration) in
         halls.iter_mut()
     {
         let previous = history.last_world_day.insert(entity, day);
@@ -267,7 +279,7 @@ pub fn capture_settlement_history(
             continue;
         }
 
-        let aggregate = aggregates.remove(&settlement.name).unwrap_or_default();
+        let aggregate = aggregates.remove(settlement_id).unwrap_or_default();
         let mut physical_stock = aggregate.stock;
         add_inventory(&mut physical_stock, Some(hall_inventory));
         let pending_payments = pending_by_settlement

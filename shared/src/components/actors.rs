@@ -1091,14 +1091,19 @@ pub struct FishingPier {
     pub quality: f32,
 }
 
-/// The named residents assigned to one house.
+/// The residents assigned to one house.
 ///
 /// A household is attached only to completed [`SettlementBuildingKind::House`]
-/// entities. Keeping the roster on the cabin makes housing inspectable and
-/// capacity-bounded without pretending that settlement residency alone tells
-/// us where somebody sleeps.
+/// entities. [`resident_ids`](Self::resident_ids) is authoritative. The
+/// readable `residents` list is a derived UI/old-save mirror only: duplicate
+/// or changed display names must never move a bed, a pantry contribution, or
+/// a shopper assignment between people.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Household {
+    #[serde(default)]
+    pub resident_ids: Vec<super::PersonId>,
+    /// Display-only roster derived from `resident_ids`.
+    #[serde(default)]
     pub residents: Vec<String>,
 }
 

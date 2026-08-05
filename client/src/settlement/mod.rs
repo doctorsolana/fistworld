@@ -1244,6 +1244,7 @@ mod door_tests {
             .spawn((
                 Household {
                     residents: vec!["Alda".into()],
+                    ..default()
                 },
                 HouseWindowLighting {
                     glass: glass.clone(),

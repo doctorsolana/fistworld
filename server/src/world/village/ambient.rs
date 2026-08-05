@@ -166,21 +166,22 @@ fn gathering_spots(
         (
             Entity,
             &Settlement,
+            &shared::components::SettlementId,
             &PlayerPosition,
             Option<&PlayerRotation>,
         ),
         Without<CharacterKind>,
     >,
-    roads: &Query<&VillageRoad>,
+    roads: &Query<(&VillageRoad, &shared::components::RoadOf)>,
     obstacles: Option<&SpatialObstacleGrid>,
     colliders: Option<&StaticColliders>,
     derived: Option<&DerivedColliderLibrary>,
 ) -> HashMap<Entity, Vec<AmbientSpot>> {
     let mut by_settlement = HashMap::new();
-    let mut entity_by_name = HashMap::new();
+    let mut entity_by_id = HashMap::new();
 
-    for (entity, settlement, hall, rotation) in settlements.iter() {
-        entity_by_name.insert(settlement.name.as_str(), entity);
+    for (entity, _settlement, settlement_id, hall, rotation) in settlements.iter() {
+        entity_by_id.insert(*settlement_id, entity);
         let yaw = rotation.map_or(0.0, |rotation| rotation.0);
         let door = SettlementBuildingKind::Hall.entrance_position(hall.0, yaw);
         let side_axis = shared::rotation::local_to_world_xz(Vec2::X, yaw);
@@ -197,8 +198,8 @@ fn gathering_spots(
         by_settlement.insert(entity, spots);
     }
 
-    for road in roads.iter() {
-        let Some(entity) = entity_by_name.get(road.settlement.as_str()).copied() else {
+    for (road, road_of) in roads.iter() {
+        let Some(entity) = entity_by_id.get(&road_of.0).copied() else {
             continue;
         };
         let destination = by_settlement.entry(entity).or_insert_with(Vec::new);
@@ -217,26 +218,27 @@ fn spot_geometry_signature(
         (
             Entity,
             &Settlement,
+            &shared::components::SettlementId,
             &PlayerPosition,
             Option<&PlayerRotation>,
         ),
         Without<CharacterKind>,
     >,
-    roads: &Query<&VillageRoad>,
+    roads: &Query<(&VillageRoad, &shared::components::RoadOf)>,
     obstacle_version: u64,
     collider_version: u64,
 ) -> u64 {
     let mut signature = mix(obstacle_version ^ collider_version.rotate_left(17));
-    for (entity, settlement, position, rotation) in settlements.iter() {
+    for (entity, _settlement, settlement_id, position, rotation) in settlements.iter() {
         let value = entity.to_bits()
-            ^ stable_hash(&settlement.name)
+            ^ settlement_id.0
             ^ u64::from(position.0.x.to_bits()).rotate_left(7)
             ^ u64::from(position.0.z.to_bits()).rotate_left(19)
             ^ u64::from(rotation.map_or(0.0, |rotation| rotation.0).to_bits()).rotate_left(31);
         signature = signature.wrapping_add(mix(value));
     }
-    for road in roads.iter() {
-        let value = stable_hash(&road.settlement)
+    for (road, road_of) in roads.iter() {
+        let value = road_of.0 .0
             ^ u64::from(road.built_through).rotate_left(11)
             ^ (road.points.len() as u64).rotate_left(29)
             ^ u64::from(road.width.to_bits()).rotate_left(43);
@@ -296,12 +298,13 @@ pub fn run_ambient_routines(
         (
             Entity,
             &Settlement,
+            &shared::components::SettlementId,
             &PlayerPosition,
             Option<&PlayerRotation>,
         ),
         Without<CharacterKind>,
     >,
-    roads: Query<&VillageRoad>,
+    roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
     busy: Query<
         (),
         Or<(
@@ -454,7 +457,7 @@ pub fn run_ambient_routines(
 
         let hall = settlements.get(settlement).ok();
         if !daylight && home.is_none() {
-            let Some((_, _, hall_position, hall_rotation)) = hall else {
+            let Some((_, _, _, hall_position, hall_rotation)) = hall else {
                 continue;
             };
             let destination = SettlementBuildingKind::Hall.entrance_position(

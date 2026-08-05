@@ -5,8 +5,10 @@
 //! that already exists.
 
 use bevy::prelude::*;
+#[cfg(test)]
+use shared::components::MootAdministration;
 use shared::components::{
-    MootAdministration, PlayerPosition, PlayerRotation, RoadClass, RoadSurface, Settlement,
+    CivicEmployment, CivicRole, PlayerPosition, PlayerRotation, RoadClass, RoadSurface, Settlement,
     SettlementBuilding, SettlementBuildingKind, SettlementDevelopment, SettlementProgressGate,
     SettlementTier, VillageRoad, WorldTime,
 };
@@ -36,13 +38,13 @@ pub fn ensure_settlement_developments(
 }
 
 fn has_building(
-    buildings: &Query<&SettlementBuilding>,
-    settlement: &str,
+    buildings: &Query<(&SettlementBuilding, &shared::components::BuildingOf)>,
+    settlement: shared::components::SettlementId,
     kind: SettlementBuildingKind,
 ) -> bool {
     buildings
         .iter()
-        .any(|building| building.settlement == settlement && building.kind == kind)
+        .any(|(building, building_of)| building_of.0 == settlement && building.kind == kind)
 }
 
 /// Keep the promotion ledger current and promote only after all visible
@@ -50,26 +52,28 @@ fn has_building(
 pub fn update_settlement_developments(
     clock: Query<&WorldTime>,
     mut settlements: Query<(
+        &shared::components::SettlementId,
         &mut Settlement,
         &SettlementEconomy,
         &MootMarket,
         &mut SettlementDevelopment,
     )>,
-    buildings: Query<&SettlementBuilding>,
-    roads: Query<&VillageRoad>,
+    buildings: Query<(&SettlementBuilding, &shared::components::BuildingOf)>,
+    roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
 ) {
     let Some(day) = clock.iter().next().map(|clock| clock.day) else {
         return;
     };
 
-    for (mut settlement, economy, market, mut development) in settlements.iter_mut() {
+    for (settlement_id, mut settlement, economy, market, mut development) in settlements.iter_mut()
+    {
         let mut dirt = 0u16;
         let mut stone = 0u16;
         let mut committed = 0u32;
         let mut stone_needed = 0u32;
-        for road in roads
+        for (road, _) in roads
             .iter()
-            .filter(|road| road.settlement == settlement.name && road.is_complete())
+            .filter(|(road, road_of)| road_of.0 == *settlement_id && road.is_complete())
         {
             committed = committed.saturating_add(road.stone_committed);
             match road.surface {
@@ -128,9 +132,9 @@ pub fn update_settlement_developments(
             }
             SettlementTier::Village => {
                 let market_built =
-                    has_building(&buildings, &settlement.name, SettlementBuildingKind::Market);
+                    has_building(&buildings, *settlement_id, SettlementBuildingKind::Market);
                 let tavern_built =
-                    has_building(&buildings, &settlement.name, SettlementBuildingKind::Tavern);
+                    has_building(&buildings, *settlement_id, SettlementBuildingKind::Tavern);
                 let gate = if settlement.residents < TOWN_MIN_RESIDENTS {
                     SettlementProgressGate::Population
                 } else if !market_built {
@@ -152,7 +156,7 @@ pub fn update_settlement_developments(
             }
             SettlementTier::Town => {
                 let church_built =
-                    has_building(&buildings, &settlement.name, SettlementBuildingKind::Church);
+                    has_building(&buildings, *settlement_id, SettlementBuildingKind::Church);
                 let gate = if settlement.residents < CITY_MIN_RESIDENTS {
                     SettlementProgressGate::Population
                 } else if !church_built {
@@ -220,22 +224,30 @@ pub fn upgrade_town_roads(
     clock: Query<&WorldTime>,
     mut halls: Query<(
         &Settlement,
+        &shared::components::SettlementId,
         &PlayerPosition,
         Option<&PlayerRotation>,
-        &MootAdministration,
         &mut SettlementDevelopment,
         &mut GoodsInventory,
     )>,
-    mut roads: Query<(Entity, &mut VillageRoad)>,
+    mut roads: Query<(Entity, &mut VillageRoad, &shared::components::RoadOf)>,
+    civic_workers: Query<&CivicEmployment>,
 ) {
     let Some(day) = clock.iter().next().map(|clock| clock.day) else {
         return;
     };
 
-    for (settlement, hall, rotation, administration, mut development, mut inventory) in
+    for (settlement, settlement_id, hall, rotation, mut development, mut inventory) in
         halls.iter_mut()
     {
-        if settlement.tier < SettlementTier::Town || administration.city_workers.is_empty() {
+        let has_city_worker = civic_workers.iter().any(|employment| {
+            employment.settlement == *settlement_id
+                && matches!(
+                    employment.role,
+                    CivicRole::RoadSteward | CivicRole::CityWorker
+                )
+        });
+        if settlement.tier < SettlementTier::Town || !has_city_worker {
             if development.last_road_work_day != day {
                 development.last_road_work_day = day;
             }
@@ -249,10 +261,8 @@ pub fn upgrade_town_roads(
 
         // Old roads predate hierarchy metadata. Promote the hall connector
         // rather than leaving an upgraded save with no eligible main street.
-        let has_main = roads.iter().any(|(_, road)| {
-            road.settlement == settlement.name
-                && road.is_complete()
-                && road.class == RoadClass::Main
+        let has_main = roads.iter().any(|(_, road, road_of)| {
+            road_of.0 == *settlement_id && road.is_complete() && road.class == RoadClass::Main
         });
         if !has_main {
             let door = SettlementBuildingKind::Hall
@@ -260,8 +270,8 @@ pub fn upgrade_town_roads(
             let door = Vec2::new(door.x, door.z);
             let candidate = roads
                 .iter()
-                .filter(|(_, road)| road.settlement == settlement.name && road.is_complete())
-                .min_by(|(_, a), (_, b)| {
+                .filter(|(_, road, road_of)| road_of.0 == *settlement_id && road.is_complete())
+                .min_by(|(_, a, _), (_, b, _)| {
                     let distance = |road: &VillageRoad| {
                         road.built_points()
                             .iter()
@@ -270,9 +280,9 @@ pub fn upgrade_town_roads(
                     };
                     distance(a).total_cmp(&distance(b))
                 })
-                .map(|(entity, _)| entity);
+                .map(|(entity, _, _)| entity);
             if let Some(candidate) = candidate {
-                if let Ok((_, mut road)) = roads.get_mut(candidate) {
+                if let Ok((_, mut road, _)) = roads.get_mut(candidate) {
                     road.class = RoadClass::Main;
                     road.widen_within_reservation(4.0);
                 }
@@ -281,16 +291,16 @@ pub fn upgrade_town_roads(
 
         let candidate = roads
             .iter()
-            .filter(|(_, road)| {
-                road.settlement == settlement.name
+            .filter(|(_, road, road_of)| {
+                road_of.0 == *settlement_id
                     && road.is_complete()
                     && road.class == RoadClass::Main
                     && road.surface == RoadSurface::Dirt
             })
-            .min_by_key(|(entity, _)| entity.to_bits())
-            .map(|(entity, _)| entity);
+            .min_by_key(|(entity, _, _)| entity.to_bits())
+            .map(|(entity, _, _)| entity);
         let Some(candidate) = candidate else { continue };
-        let Ok((_, mut road)) = roads.get_mut(candidate) else {
+        let Ok((_, mut road, _)) = roads.get_mut(candidate) else {
             continue;
         };
         let required = road.stone_required();
@@ -315,6 +325,23 @@ pub fn upgrade_town_roads(
 mod tests {
     use super::*;
 
+    fn development_test_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<crate::world::identity::WorldIdAllocator>()
+            .init_resource::<crate::world::identity::WorldIdentityIndex>()
+            .add_systems(
+                PreUpdate,
+                (
+                    crate::world::identity::assign_stable_world_ids,
+                    crate::world::identity::rebuild_world_identity_index,
+                    crate::world::identity::reconcile_stable_world_relationships,
+                    crate::world::identity::reconcile_stable_road_relationships,
+                )
+                    .chain(),
+            );
+        app
+    }
+
     #[test]
     fn charter_is_deterministic_and_uses_independent_wall_choices() {
         let a = SettlementDevelopment::from_foundation("Oakmead", Vec3::new(2.0, 0.0, 7.0), 0);
@@ -326,7 +353,7 @@ mod tests {
 
     #[test]
     fn stone_main_road_waits_for_physical_stone() {
-        let mut app = App::new();
+        let mut app = development_test_app();
         app.add_systems(Update, upgrade_town_roads);
         let clock = app.world_mut().spawn(WorldTime::new_default()).id();
         app.world_mut()
@@ -340,6 +367,7 @@ mod tests {
         let hall = app
             .world_mut()
             .spawn((
+                shared::components::SettlementId(1),
                 Settlement {
                     name: "Stoneford".into(),
                     tier: SettlementTier::Town,
@@ -358,18 +386,25 @@ mod tests {
             .id();
         let road = app
             .world_mut()
-            .spawn(VillageRoad {
-                settlement: "Stoneford".into(),
-                builder: "Mara".into(),
-                points: vec![Vec2::ZERO, Vec2::new(2.0, 0.0)],
-                built_through: 2,
-                width: 2.6,
-                reserved_width: RoadClass::Main.initial_reserved_width(),
-                surface: RoadSurface::Dirt,
-                class: RoadClass::Main,
-                stone_committed: 0,
-            })
+            .spawn((
+                VillageRoad {
+                    settlement: "Stoneford".into(),
+                    builder: "Mara".into(),
+                    points: vec![Vec2::ZERO, Vec2::new(2.0, 0.0)],
+                    built_through: 2,
+                    width: 2.6,
+                    reserved_width: RoadClass::Main.initial_reserved_width(),
+                    surface: RoadSurface::Dirt,
+                    class: RoadClass::Main,
+                    stone_committed: 0,
+                },
+                shared::components::RoadOf(shared::components::SettlementId(1)),
+            ))
             .id();
+        app.world_mut().spawn(CivicEmployment {
+            settlement: shared::components::SettlementId(1),
+            role: CivicRole::CityWorker,
+        });
 
         app.update();
         assert_eq!(app.world().get::<VillageRoad>(road).unwrap().width, 2.6);
@@ -411,7 +446,7 @@ mod tests {
 
     #[test]
     fn village_promotion_is_sustained_and_uses_real_market_volume() {
-        let mut app = App::new();
+        let mut app = development_test_app();
         app.add_systems(Update, update_settlement_developments);
         let clock = app.world_mut().spawn(WorldTime::new_default()).id();
         let mut market = MootMarket::founding();
@@ -468,7 +503,7 @@ mod tests {
 
     #[test]
     fn town_promotion_reaches_city_after_real_amenity_and_sustained_pull() {
-        let mut app = App::new();
+        let mut app = development_test_app();
         app.add_systems(Update, update_settlement_developments);
         let clock = app.world_mut().spawn(WorldTime::new_default()).id();
         let mut economy = SettlementEconomy::default();

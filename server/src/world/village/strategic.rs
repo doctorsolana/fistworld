@@ -8,9 +8,11 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use shared::components::{
     AttachedTo, BuildingDoorUse, BuildingId, BuildingOf, CharacterActivity, CharacterKind,
-    CivicEmployment, CivicRole, EmployedAt, FarmField, MootAdministration, PlayerPosition,
-    Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId, WorldTime,
+    CivicEmployment, CivicRole, EmployedAt, FarmField, Settlement, SettlementBuilding,
+    SettlementBuildingKind, SettlementId, WorldTime,
 };
+#[cfg(test)]
+use shared::components::{MootAdministration, PlayerPosition};
 use shared::economy::{BusinessAccount, BusinessSalePolicy, Good, GoodsInventory, MootMarket};
 use shared::region::{RegionCoord, SimLevel};
 
@@ -22,10 +24,10 @@ use crate::world::village_roads::{
 
 use super::{
     ambient, business_output, farmer_seconds_per_wheat, fisher_seconds_per_food, lumber_tree_yield,
-    ordinary_workday, ConstructionMaterialRoutine, FarmerHarvestProgress, FarmerRoutine,
-    FishingRoutine, FishingWorkProgress, HomeRoutine, HouseholdShoppingRoutine, LumberjackRoutine,
+    ConstructionMaterialRoutine, FarmerHarvestProgress, FarmerRoutine, FishingRoutine,
+    FishingWorkProgress, HomeRoutine, HouseholdShoppingRoutine, LumberjackRoutine,
     LumberjackWorkProgress, MarketCollectionRoutine, PierTraversal, SettlementEconomyRuntime,
-    WorkerOffDuty, WorkplaceDoorTransit, CHOP_SECONDS,
+    WorkerOffDuty, WorkplaceDoorTransit, CHOP_SECONDS, WORKDAY_END_DAY_T,
 };
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -39,6 +41,25 @@ pub(crate) struct PendingStrategicDemotion;
 #[derive(Resource, Default)]
 pub struct StrategicProductionProgress {
     seconds: HashMap<BuildingId, f64>,
+}
+
+/// Exact overlap between the elapsed strategic interval and ordinary shifts.
+/// This keeps one 100x integration step equivalent to many smaller 1x steps at
+/// dawn, shift end and across whole day/night cycles.
+fn productive_seconds_ending_at(clock: &WorldTime, elapsed: f64) -> f64 {
+    let cycle = f64::from(clock.cycle_duration());
+    if cycle <= 0.0 || elapsed <= 0.0 {
+        return 0.0;
+    }
+    let work_end = f64::from(clock.day_duration * WORKDAY_END_DAY_T).clamp(0.0, cycle);
+    let end = f64::from(clock.day) * cycle + f64::from(clock.seconds_in_cycle);
+    let start = (end - elapsed).max(0.0);
+    let cumulative = |seconds: f64| {
+        let cycles = (seconds / cycle).floor();
+        let within = seconds.rem_euclid(cycle);
+        cycles * work_end + within.min(work_end)
+    };
+    (cumulative(end) - cumulative(start)).max(0.0)
 }
 
 #[allow(clippy::type_complexity)]
@@ -191,10 +212,10 @@ pub fn advance_strategic_villages(
     mut economy_runtime: ResMut<SettlementEconomyRuntime>,
     workers: Query<(&EmployedAt, Option<&StrategicPerson>)>,
     civic_workers: Query<(&CivicEmployment, Option<&StrategicPerson>)>,
-    fields: Query<(&FarmField, Option<&AttachedTo>)>,
+    fields: Query<(&FarmField, &AttachedTo)>,
     hall_index: Query<(Entity, &SettlementId), With<Settlement>>,
     mut halls: Query<
-        (&MootAdministration, &mut GoodsInventory, &mut MootMarket),
+        (&mut GoodsInventory, &mut MootMarket),
         (With<Settlement>, Without<SettlementBuilding>),
     >,
     mut businesses: Query<
@@ -202,7 +223,6 @@ pub fn advance_strategic_villages(
             &BuildingId,
             &BuildingOf,
             &SettlementBuilding,
-            &PlayerPosition,
             &mut GoodsInventory,
             &BusinessSalePolicy,
             &mut BusinessAccount,
@@ -217,7 +237,8 @@ pub fn advance_strategic_villages(
     let Some(clock) = world_time.iter().next() else {
         return;
     };
-    if !ordinary_workday(clock) {
+    let productive_seconds = productive_seconds_ending_at(clock, step.elapsed_world_seconds);
+    if productive_seconds <= 0.0 {
         return;
     }
 
@@ -239,23 +260,12 @@ pub fn advance_strategic_villages(
         })
         .collect();
     let mut fields_by_building: HashMap<BuildingId, u32> = HashMap::new();
-    let field_counts: HashMap<(u32, u32, u32), u32> =
-        fields
-            .iter()
-            .fold(HashMap::new(), |mut counts, (field, attached)| {
-                if let Some(attached) = attached {
-                    *fields_by_building.entry(attached.0).or_default() += 1;
-                }
-                *counts
-                    .entry(super::farmstead_position_key(field.farmstead))
-                    .or_default() += 1;
-                counts
-            });
+    for (_, attached) in fields.iter() {
+        *fields_by_building.entry(attached.0).or_default() += 1;
+    }
     let mut live_buildings = HashSet::new();
 
-    for (id, building_of, building, position, mut store, policy, mut account) in
-        businesses.iter_mut()
-    {
+    for (id, building_of, building, mut store, policy, mut account) in businesses.iter_mut() {
         live_buildings.insert(*id);
         let worker_count = worker_counts.get(id).copied().unwrap_or(0);
         if worker_count == 0 {
@@ -265,17 +275,7 @@ pub fn advance_strategic_villages(
             continue;
         };
         let field_factor = if building.kind == SettlementBuildingKind::Farmstead {
-            fields_by_building
-                .get(id)
-                .copied()
-                .or_else(|| {
-                    field_counts
-                        .get(&super::farmstead_position_key(position.0))
-                        .copied()
-                })
-                .unwrap_or(0)
-                .min(2) as f64
-                / 2.0
+            fields_by_building.get(id).copied().unwrap_or(0).min(2) as f64 / 2.0
         } else {
             1.0
         };
@@ -286,8 +286,7 @@ pub fn advance_strategic_villages(
             _ => continue,
         } as f64;
         let accumulated = progress.seconds.entry(*id).or_default();
-        *accumulated +=
-            step.elapsed_world_seconds * f64::from(worker_count) * field_factor.max(0.0);
+        *accumulated += productive_seconds * f64::from(worker_count) * field_factor.max(0.0);
         let cycles = (*accumulated / seconds_per_unit).floor() as u32;
         if cycles > 0 {
             *accumulated -= f64::from(cycles) * seconds_per_unit;
@@ -307,13 +306,12 @@ pub fn advance_strategic_villages(
         let Some(hall_entity) = halls_by_id.get(&building_of.0).copied() else {
             continue;
         };
-        let Ok((administration, mut hall_store, mut market)) = halls.get_mut(hall_entity) else {
+        let Ok((mut hall_store, mut market)) = halls.get_mut(hall_entity) else {
             continue;
         };
         // A porter finishing a real delivery is transition-critical and has
         // not demoted yet. Do not simultaneously execute its abstract haul.
-        if administration.market_porter.is_none()
-            || !strategic_porters.contains(&building_of.0)
+        if !strategic_porters.contains(&building_of.0)
             || !policy.collection_enabled
             || market.pool(good).bid < policy.minimum_unit_price
         {
@@ -344,6 +342,16 @@ pub fn advance_strategic_villages(
 mod tests {
     use super::*;
     use shared::components::{CharacterName, SettlementTier};
+
+    #[test]
+    fn strategic_work_overlap_is_warp_step_invariant() {
+        let mut clock = WorldTime::new(1_440.0, 240.0, 200.0);
+        clock.day = 1;
+        assert!((productive_seconds_ending_at(&clock, 1_680.0) - 1_080.0).abs() < 0.01);
+        // The 800 seconds ending 200 seconds into the new day contain 600
+        // seconds of night and exactly 200 seconds of the new shift.
+        assert!((productive_seconds_ending_at(&clock, 800.0) - 200.0).abs() < 0.01);
+    }
 
     #[test]
     fn offscreen_people_drop_routes_but_migrants_finish_their_journey() {
@@ -398,7 +406,7 @@ mod tests {
         app.init_resource::<StrategicProductionProgress>();
         app.init_resource::<SettlementEconomyRuntime>();
         app.add_systems(Update, advance_strategic_villages);
-        app.world_mut().spawn(WorldTime::new_default());
+        let clock = app.world_mut().spawn(WorldTime::new_default()).id();
 
         let settlement_id = SettlementId(1);
         app.world_mut().spawn((
@@ -467,6 +475,10 @@ mod tests {
         app.world_mut()
             .resource_mut::<StrategicStep>()
             .elapsed_world_seconds = 340.0;
+        app.world_mut()
+            .get_mut::<WorldTime>(clock)
+            .unwrap()
+            .advance(340.0, 0.0);
         app.update();
         assert_eq!(
             app.world()
@@ -481,6 +493,10 @@ mod tests {
         app.world_mut()
             .resource_mut::<StrategicStep>()
             .elapsed_world_seconds = 340.0;
+        app.world_mut()
+            .get_mut::<WorldTime>(clock)
+            .unwrap()
+            .advance(340.0, 0.0);
         app.update();
         assert_eq!(
             app.world()
