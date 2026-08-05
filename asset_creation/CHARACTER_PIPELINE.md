@@ -3,12 +3,12 @@
 Everything learned turning a Tripo-generated blob into a rigged, animated, clothable base
 character. Written for the next time you do this, and for when you start wiring it into the game.
 
-**Current asset:** `basemodel_v2.blend` — `Character_Base` (14 loose parts, 426 verts, rigged) +
+**Current asset:** `character/humanoid.blend` — `Character_Base` (14 loose parts, 426 verts, rigged) +
 `Rig` (16 bones) + 9 clips in two layers (body + face). Built reproducibly by `build_basemodel_v2.py` then
 `rig_basemodel_v2.py`. No wardrobe yet. See section 13.
 
 **v1 (`tripo_boy.blend`) is deleted.** Everything v2 still reuses was distilled into
-`v1_donor.blend` (121 KB): the `arm.L/R` + `hand.L/R` geometry (190 verts) and the `WalkCycle`
+`humanoid_legacy_donor.blend` (121 KB): the `arm.L/R` + `hand.L/R` geometry (190 verts) and the `WalkCycle`
 action. Its hair and garments were built against v1's body and did not fit v2 anyway — v1's head is
 x ±0.2041 against v2's ±0.1904, and v2's torso is 20% shorter. Recover it from git history
 (commit `8174161`) if ever needed.
@@ -16,9 +16,9 @@ x ±0.2041 against v2's ±0.1904, and v2's torso is 20% shorter. Recover it from
 The donor deliberately carries **no materials**: appending v1's full `Character_Base` dragged its
 `Skin`/`Eye` materials in as orphans, so `bpy.data.materials.new("Skin")` collided and yielded
 `Skin.001` — which would ship as the glTF material name. Both build scripts now assert their output
-names are unsuffixed. `basemodel_v2.blend` has no external library links at all.
+names are unsuffixed. `humanoid.blend` has no external library links at all.
 
-**Ships as:** `client/assets/characters/voxel_boy.glb`, built by `export_character_glb.py`
+**Ships as:** `client/assets/characters/Humanoid.glb`, built by `export_character_glb.py`
 (section 12). The `.blend` is the studio source; the `.glb` is the only thing the game reads.
 Note `export_character_glb.py` is still written against v1's scene (its hair list, `Wardrobe`
 collection and studio objects) and needs repointing at v2.
@@ -384,7 +384,7 @@ poses and actually look at them.
 
 ```bash
 blender asset_creation/tripo_boy.blend --background --python asset_creation/character/export_character_glb.py
-python3 asset_creation/character/inspect_glb.py client/assets/characters/voxel_boy.glb   # numeric contract
+python3 asset_creation/character/inspect_glb.py client/assets/characters/Humanoid.glb   # numeric contract
 blender --background --factory-startup --python asset_creation/character/render_glb_check.py  # look at it
 ```
 
@@ -459,7 +459,7 @@ convincing, fully-lit picture of the back of its head.
 
 v1's Tripo generation had shorts modelled into the body, which is what drove the positional-threshold
 bug in section 2. v2 was regenerated **plain** and rebuilt by `build_basemodel_v2.py` into
-`basemodel_v2.blend`: 14 loose parts, 426 verts, provably symmetric, jointed and rigged.
+`humanoid.blend`: 14 loose parts, 426 verts, provably symmetric, jointed and rigged.
 
 ### Which download to take
 
@@ -824,7 +824,7 @@ rig appended to bind against and the body present to check fit. Instead the *dat
 machinery that walks it. Adding a hairstyle is ~6 lines in one file, and both the builder and the
 preview catalogue pick it up.
 
-`build_wardrobe_v2.py` also emits **`client/assets/characters/voxel_boy.ron`**, in the same RON style
+`build_wardrobe_v2.py` also emits **`client/assets/characters/Humanoid.ron`**, in the same RON style
 as `colliders_manifest.ron`, listing slots, per-slot items and defaults, skin tones, and the body and
 face clip names. The game enumerates the wardrobe from that instead of hardcoding node names in Rust,
 and because it is generated it cannot drift from the glb.
@@ -894,7 +894,7 @@ Both were invisible in the code and obvious in the render:
 
 ### The directory reorg left a script writing to nowhere
 
-`build_wardrobe_v2.py` saved to `asset_creation/basemodel_v2.blend` after the file moved into
+`build_wardrobe_v2.py` once saved outside `asset_creation/character/` after the file moved into
 `character/`. It would have written a new `.blend` at a path nothing reads while the exporter kept
 consuming the stale one — a wardrobe that builds cleanly, previews correctly and ships without the
 new items. Scripts that live beside their `.blend` should derive the path from `__file__`, not from
@@ -1085,13 +1085,13 @@ the face lead**. Geometry first, then taste.
 | Script | Does |
 |---|---|
 | `triage_tripo.py` | Inspect any fresh Tripo download: loose parts, UVs, quads vs tris, vertex colours, orientation, scale |
-| `build_basemodel_v2.py` | `basemodelv2.glb` + `v1_donor.blend` → cleaned, symmetric, jointed `basemodel_v2.blend` |
+| `build_basemodel_v2.py` | a fresh `humanoid_raw.glb` + `humanoid_legacy_donor.blend` → cleaned, symmetric, jointed `humanoid.blend` |
 
 > **`basemodelv2.glb` is no longer in the repo.** It was the raw Tripo download feeding step 1 and
 > was deleted during a 2026-08-01 cleanup that mistook it for a stale export. Nothing downstream is
-> affected — `basemodel_v2.blend` is the cleaned result and is intact, as is the shipped
-> `voxel_boy.glb`. Re-running step 1 requires a fresh Tripo export; §13 covers which download to
-> take. Steps 2 onward all read `basemodel_v2.blend` and run unchanged.
+> affected — `humanoid.blend` is the cleaned result and is intact, as is the shipped
+> `Humanoid.glb`. Re-running step 1 requires a fresh Tripo export; §13 covers which download to
+> take. Steps 2 onward all read `humanoid.blend` and run unchanged.
 | `rig_basemodel_v2.py` | Build the 16-bone rig, bind, retarget the donor's walk, re-derive the bounce |
 | `animate_basemodel_v2.py` | Author the body layer (`idle`, `sit_idle`, `sit_down`) and face layer (5 moods) |
 | `wardrobe_items.py` | Wardrobe DATA — one block per item, no Blender imports |

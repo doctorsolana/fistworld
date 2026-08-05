@@ -15,7 +15,7 @@ from mathutils import Vector
 
 # Three levels: <repo>/asset_creation/<family>/<script>.py
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-GLB = os.path.join(REPO, "client", "assets", "characters", "voxel_boy.glb")
+GLB = os.path.join(REPO, "client", "assets", "characters", "Humanoid.glb")
 OUT = os.path.join(REPO, "asset_creation", "renders")
 RES = 460
 SAMPLES = 40

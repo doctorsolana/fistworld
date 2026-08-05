@@ -1,7 +1,7 @@
 """Build the small scatter props — rocks, bushes, flowers — to the vegetation contract.
 
     blender --background --factory-startup --python asset_creation/vegetation/build_scatter.py -- \
-        --kind flower --seed 1 --name Flower_A
+        --kind flower --seed 1 --name FlowerA
 
     # live, in the Blender MCP session
     import sys; sys.argv = ['x', '--', '--kind', 'rock', '--seed', '1']
@@ -82,7 +82,14 @@ KINDS = {
 
 KIND = arg("--kind", "rock")
 SEED = int(arg("--seed", "1"))
-NAME = arg("--name", f"{KIND.capitalize()}_{SEED}")
+LETTER = chr(ord("A") + max(0, SEED - 1))
+DEFAULT_NAMES = {
+    "rock": f"SmallRock{LETTER}",
+    "boulder": f"Boulder{LETTER}",
+    "bush": f"Bush{LETTER}",
+    "flower": f"Flower{LETTER}",
+}
+NAME = arg("--name", DEFAULT_NAMES[KIND])
 OUT = arg("--out", "/Users/terminator2/Coding/fistworld/asset_creation/vegetation")
 PROFILE = KINDS[KIND]
 WORK_SCENE = "Scatter"
@@ -167,7 +174,7 @@ def bed_to_ground(objs, sink):
     shifts = []
     for o in objs:
         # PER OBJECT, not on the joint minimum. Normalising both LODs by LOD0's lowest point left
-        # Boulder_B's LOD0 floating 0.21 m up, because its coarser LOD1 hull dips lower and took
+        # BoulderB's LOD0 floating 0.21 m up, because its coarser LOD1 hull dips lower and took
         # the minimum with it. Each mesh has to meet the ground on its own terms; the two then sit
         # at the same ground level rather than at the same offset from a shared low point.
         lowest = min((v.co.z for v in o.data.vertices), default=0.0)

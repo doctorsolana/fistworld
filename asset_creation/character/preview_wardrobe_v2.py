@@ -1,6 +1,6 @@
 """Front/back sheet of wardrobe combinations.
 
-    blender asset_creation/basemodel_v2.blend --background --python asset_creation/character/preview_wardrobe_v2.py
+    blender asset_creation/character/humanoid.blend --background --python asset_creation/character/preview_wardrobe_v2.py
 
 Back views are not optional: a garment built from front-facing measurements can look perfect head-on
 and leave the body showing behind. Rotates the RIG (which parents the wardrobe), never the camera,

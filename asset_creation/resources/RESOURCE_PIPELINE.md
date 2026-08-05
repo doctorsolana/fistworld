@@ -5,14 +5,14 @@ Third pipeline in `asset_creation/`, alongside `CHARACTER_PIPELINE.md` (rigged, 
 single-mesh objects with no rig, no animation and no collider.
 
 ```
-build_resources.py        all five bundles      -> resources.blend
+build_resources.py        all five bundles      -> carried_resources.blend
 export_resources_glb.py   one .glb per bundle   -> client/assets/game_assets/resources/carried/
 render_icons.py           one 512px RGBA icon   -> client/assets/ui/goods/
 inspect_resource_glb.py   contract check
 ```
 
 Run in that order. `render_icons.py` and `export_resources_glb.py` both strip the workbench first, so
-either can run on a freshly built `resources.blend`.
+either can run on a freshly built `carried_resources.blend`.
 
 ---
 
@@ -41,7 +41,7 @@ This shipped backwards in all five bundles for a while. The reasoning that put i
 
 Every step of that is true and the conclusion is still false, because **a carried item is never placed
 in the world — it is parented to a joint, and it inherits that joint's basis.** Read straight out of
-`voxel_boy.glb`:
+`Humanoid.glb`:
 
 ```
 attach.carry   local +X -> world (-1, 0,  0)
@@ -208,7 +208,7 @@ instead of shipping.
 
 ## 4a. Hand tools
 
-`build_tools.py` → `tools.blend` → the same exporter and icon renderer, via `item_manifest.py`.
+`build_tools.py` → `work_tools.blend` → the same exporter and icon renderer, via `item_manifest.py`.
 
 | Tool | length | tris | glb | clip |
 |---|---|---|---|---|

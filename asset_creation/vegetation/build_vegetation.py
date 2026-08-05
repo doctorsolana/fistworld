@@ -1,7 +1,7 @@
 """Build a low-poly tree to the vegetation contract. Both LODs, from a seed.
 
     blender --background --factory-startup --python asset_creation/vegetation/build_vegetation.py -- \
-        --species oak [--seed 1] [--name Oak_A]
+        --species oak [--seed 1] [--name OakA]
 
     # live, in the Blender MCP session -- builds into its own "Vegetation" scene, touches nothing else
     import sys; sys.argv = ['x', '--', '--species', 'oak', '--seed', '1']
@@ -9,7 +9,7 @@
 
 Verify what actually landed on disk -- several traps below are only visible post-export:
 
-    python3 asset_creation/vegetation/inspect_vegetation_glb.py --class small_tree asset_creation/vegetation/Oak_A.glb
+    python3 asset_creation/vegetation/inspect_vegetation_glb.py --class small_tree asset_creation/vegetation/OakA.glb
 
 THE CROWN IS ONE CONVEX HULL OF A LUMPY POINT CLOUD.
 
@@ -255,7 +255,18 @@ SPECIES = {
 
 SPECIES_NAME = arg("--species", "oak")
 SEED = int(arg("--seed", "1"))
-NAME = arg("--name", f"{SPECIES_NAME.capitalize()}_{SEED}")
+LETTER = chr(ord("A") + max(0, SEED - 1))
+DEFAULT_PREFIXES = {
+    "oak": "Oak",
+    "chestnut": "Chestnut",
+    "birch": "Birch",
+    "pine": "Pine",
+    "pine_tall": "PineTall",
+    "pine_small": "PineYoung",
+    "tree01": "BroadleafNarrow",
+    "tree09": "BroadleafSpreading",
+}
+NAME = arg("--name", f"{DEFAULT_PREFIXES.get(SPECIES_NAME, SPECIES_NAME.title())}{LETTER}")
 REPO = "/Users/terminator2/Coding/fistworld"
 OUT = arg("--out", os.path.join(REPO, "asset_creation", "vegetation"))
 PROFILE = SPECIES[SPECIES_NAME]
@@ -655,7 +666,7 @@ def bed_to_ground(objs, sink):
     shifts = []
     for o in objs:
         # PER OBJECT, not on the joint minimum. Normalising both LODs by LOD0's lowest point left
-        # Boulder_B's LOD0 floating 0.21 m up, because its coarser LOD1 hull dips lower and took
+        # BoulderB's LOD0 floating 0.21 m up, because its coarser LOD1 hull dips lower and took
         # the minimum with it. Each mesh has to meet the ground on its own terms; the two then sit
         # at the same ground level rather than at the same offset from a shared low point.
         lowest = min((v.co.z for v in o.data.vertices), default=0.0)

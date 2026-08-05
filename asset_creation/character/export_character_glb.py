@@ -1,7 +1,7 @@
-"""basemodel_v2.blend -> client/assets/characters/voxel_boy.glb (Bevy 0.19 conventions).
+"""humanoid.blend -> client/assets/characters/Humanoid.glb (Bevy 0.19 conventions).
 
-    blender asset_creation/basemodel_v2.blend --background --python asset_creation/character/export_character_glb.py
-    python3 asset_creation/character/inspect_glb.py client/assets/characters/voxel_boy.glb
+    blender asset_creation/character/humanoid.blend --background --python asset_creation/character/export_character_glb.py
+    python3 asset_creation/character/inspect_glb.py client/assets/characters/Humanoid.glb
 
 The .blend stays a STUDIO file: ~1 unit tall, facing -Y. This script owns the conversion into game
 space so the source never has to be re-fitted, and nothing is saved back.
@@ -35,7 +35,7 @@ from mathutils import Matrix, Vector
 TARGET_HEIGHT_M = 1.70
 # Three levels: <repo>/asset_creation/<family>/<script>.py
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OUT = os.path.join(REPO, "client", "assets", "characters", "voxel_boy.glb")
+OUT = os.path.join(REPO, "client", "assets", "characters", "Humanoid.glb")
 
 
 def log(m):

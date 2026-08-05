@@ -175,11 +175,8 @@ const GRASS_DENSITY_SCALE: f32 = 0.685;
 /// the tall tufts break up the repeat, which is what the asset pair was built
 /// for.
 ///
-/// Named for the kinds they hold rather than for their height. Both ARE
-/// patches; the difference is how tall the blades stand, and the kind names
-/// are the ones that appear in `map.ron` ids and asset filenames.
-const GRASS_PATCH: PropKind = PropKind::Grass_Patch;
-const GRASS_TALL: PropKind = PropKind::Grass_Tall;
+const GRASS_PATCH: PropKind = PropKind::GrassShortA;
+const GRASS_TALL: PropKind = PropKind::GrassTallA;
 
 /// Grow the ground cover for a chunk.
 ///

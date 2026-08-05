@@ -1,6 +1,6 @@
 """Every clip, with the item it is meant to be holding.
 
-    blender asset_creation/character/basemodel_v2.blend --background --python asset_creation/character/preview_animations.py
+    blender asset_creation/character/humanoid.blend --background --python asset_creation/character/preview_animations.py
 
 One row per (clip, item) pair, four evenly spaced frames each. This is the sheet that answers "does
 the animation still read once there is something in their hands", which no amount of looking at a
@@ -72,8 +72,8 @@ print(f"[anim] body {max(_zs) - min(_zs):.4f} rig units = {TARGET_HEIGHT_M} m ->
 
 # --- bring in every item -----------------------------------------------------------------------------
 items = {}
-for blend, names in ((os.path.join(RES_DIR, "resources.blend"), sorted(CARRIED)),
-                     (os.path.join(RES_DIR, "tools.blend"),
+for blend, names in ((os.path.join(RES_DIR, "carried_resources.blend"), sorted(CARRIED)),
+                     (os.path.join(RES_DIR, "work_tools.blend"),
                       ["AxeFelling", "HammerFraming", "ScytheMowing"])):
     with bpy.data.libraries.load(blend) as (src, dst):
         dst.objects = [n for n in src.objects if n in names]

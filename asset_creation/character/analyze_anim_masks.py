@@ -1,6 +1,6 @@
 """Empirically derive Bevy animation mask groups from a .glb. Pure stdlib.
 
-    python3 asset_creation/character/analyze_anim_masks.py client/assets/characters/voxel_boy.glb
+    python3 asset_creation/character/analyze_anim_masks.py client/assets/characters/Humanoid.glb
 
 Reports, per animation: targeted node names x animated property, keyframe count,
 duration, and first-vs-last keyframe delta per channel (loopability), plus the
@@ -13,7 +13,7 @@ import struct
 import sys
 from collections import defaultdict
 
-PATH = sys.argv[1] if len(sys.argv) > 1 else "client/assets/characters/voxel_boy.glb"
+PATH = sys.argv[1] if len(sys.argv) > 1 else "client/assets/characters/Humanoid.glb"
 
 COMPONENT = {
     5120: ("b", 1), 5121: ("B", 1), 5122: ("h", 2),

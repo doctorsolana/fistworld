@@ -1,6 +1,6 @@
 """Rig basemodel_v2 and retarget v1's walk onto it.
 
-    blender asset_creation/basemodel_v2.blend --background --python asset_creation/character/rig_basemodel_v2.py
+    blender asset_creation/character/humanoid.blend --background --python asset_creation/character/rig_basemodel_v2.py
 
 Nothing of v1's wardrobe comes across -- only the rig layout and the WalkCycle action, which is
 worth keeping because it is entirely rotations about each bone's local X plus a root translation.
@@ -25,8 +25,9 @@ from mathutils import Vector
 
 # Three levels: <repo>/asset_creation/<family>/<script>.py
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DONOR = os.path.join(REPO, "asset_creation", "v1_donor.blend")
-OUT = os.path.join(REPO, "asset_creation", "basemodel_v2.blend")
+HERE = os.path.dirname(os.path.abspath(__file__))
+DONOR = os.path.join(HERE, "humanoid_legacy_donor.blend")
+OUT = os.path.join(HERE, "humanoid.blend")
 
 Y = 0.0283          # v2's torso y-centre (v1 used 0.04; its body sat further back)
 EXAGGERATE = 1.6    # section 6: amplify the derived bounce about its minimum

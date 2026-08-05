@@ -1,6 +1,6 @@
 """Render the canonical preview set for basemodel_v2.
 
-    blender asset_creation/basemodel_v2.blend --background --python asset_creation/character/preview_basemodel_v2.py
+    blender asset_creation/character/humanoid.blend --background --python asset_creation/character/preview_basemodel_v2.py
 
 Produces a small, fixed set of deliverables rather than a pile of frames:
 

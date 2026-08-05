@@ -321,7 +321,7 @@ fn attach_farm_field_visuals(
     fields: Query<(Entity, &FarmField, &PlayerPosition, &PlayerRotation), Without<FarmFieldVisual>>,
 ) {
     for (entity, field, position, rotation) in fields.iter() {
-        let scene = shared::props::PropKind::Wheat_Field.scene_path();
+        let scene = shared::props::PropKind::WheatField.scene_path();
         commands.entity(entity).insert((
             FarmFieldVisual,
             Name::new(format!("Wheat field ({})", field.settlement)),
@@ -343,7 +343,7 @@ fn attach_fishing_pier_visuals(
     >,
 ) {
     for (entity, pier, position, rotation) in piers.iter() {
-        let scene = shared::props::PropKind::Fishing_Pier.scene_path();
+        let scene = shared::props::PropKind::FishingPier.scene_path();
         commands.entity(entity).insert((
             FishingPierVisual,
             Name::new(format!("Fishing pier ({})", pier.settlement)),
@@ -623,7 +623,7 @@ fn attach_settlement_visuals(
         // snapped it once at founding, but terrain deltas can move under it.
         let ground = terrain.get_height(position.0.x, position.0.z);
         // Through the KIND, not a hardcoded model: the hall was a LogCabin
-        // placeholder and is now the TownHall, and a second copy of that fact
+        // placeholder and is now the Moot Hall, and a second copy of that fact
         // here is how the hall and the panel end up disagreeing about what a
         // hall is.
         let Some(scene) = SettlementBuildingKind::Hall.art().scene_path() else {

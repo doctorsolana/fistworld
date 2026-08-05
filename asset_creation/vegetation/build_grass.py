@@ -97,7 +97,7 @@ VARIANTS = {
 
 VARIANT = arg("--variant", "short")
 SEED = int(arg("--seed", "1"))
-NAME = arg("--name", f"Grass_Patch_{VARIANT.capitalize()}_A")
+NAME = arg("--name", "GrassShortA" if VARIANT == "short" else "GrassTallA")
 V = VARIANTS[VARIANT]
 REPO = "/Users/terminator2/Coding/fistworld/asset_creation"
 OUT = arg("--out", os.path.join(REPO, "vegetation"))

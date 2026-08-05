@@ -3,7 +3,7 @@
     blender --background --factory-startup --python asset_creation/houses/build_lumberjack_hut.py
     # or, in the live session:  exec(open(".../build_lumberjack_hut.py").read())
 
-Deliberately the SAME parts as build_cabin_lowpoly.py — squared beams one box each, interlocked
+Deliberately the SAME parts as build_log_cabin.py — squared beams one box each, interlocked
 projecting corner ends with end grain, per-course depth offset, stepped shingle roof, chinking behind
 the logs. A settlement reads as one place because its buildings are built the same way; changing the
 vocabulary between buildings is what makes an asset set look bought rather than made.

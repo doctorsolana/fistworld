@@ -1,6 +1,6 @@
 """Add ATTACHMENT bones to the rig. Idempotent -- safe to re-run.
 
-    blender asset_creation/character/basemodel_v2.blend --background --python asset_creation/character/add_attach_bones.py
+    blender asset_creation/character/humanoid.blend --background --python asset_creation/character/add_attach_bones.py
 
 WHY BONES AND NOT EMPTIES. Props on a building attach to empties (PROP_PIPELINE section 4), because a
 building is a static node tree. A character is SKINNED: its parts have no node of their own, they are
@@ -29,7 +29,7 @@ import os
 import bpy
 from mathutils import Vector
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "basemodel_v2.blend")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "humanoid.blend")
 Y = 0.0283          # the rig's torso y-centre, from rig_basemodel_v2.py
 
 # name -> (head, tail, roll reference axis, parent)

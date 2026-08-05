@@ -1,6 +1,6 @@
 //! Character manifest: the wardrobe + animation contract for the player model.
 //!
-//! `client/assets/characters/voxel_boy.ron` is EMITTED BY THE ART BUILD
+//! `client/assets/characters/Humanoid.ron` is EMITTED BY THE ART BUILD
 //! (asset_creation/build_wardrobe_v2.py) alongside the glb, so node names,
 //! slot contents, skin tones and clip names cannot drift from the asset.
 //! Nothing in the game may hardcode those names — enumerate them from here.
@@ -69,7 +69,7 @@ pub struct CharacterSkin {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct CharacterManifest {
     pub version: u32,
-    /// Asset path of the scene, e.g. "characters/voxel_boy.glb#Scene0".
+    /// Asset path of the scene, e.g. "characters/Humanoid.glb#Scene0".
     pub scene: String,
     /// Body mesh node name; wears the skin material.
     pub body: String,
@@ -82,7 +82,7 @@ pub struct CharacterManifest {
 }
 
 /// Where the manifest sits relative to an asset root.
-const MANIFEST_RELATIVE: &str = "characters/voxel_boy.ron";
+const MANIFEST_RELATIVE: &str = "characters/Humanoid.ron";
 
 impl CharacterManifest {
     /// Load the shipped manifest, searching the same asset roots as maps.
@@ -198,7 +198,15 @@ mod tests {
     fn shipped_manifest_is_valid() {
         let manifest = CharacterManifest::load().expect("shipped manifest loads");
         assert_eq!(manifest.version, 1);
-        assert!(manifest.scene.contains("voxel_boy.glb"));
+        assert_eq!(manifest.scene, "characters/Humanoid.glb#Scene0");
+
+        let glb_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../client/assets/characters/Humanoid.glb");
+        let bytes = std::fs::read(&glb_path).expect("shipped humanoid GLB exists");
+        let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        let document: serde_json::Value =
+            serde_json::from_slice(&bytes[20..20 + json_len]).expect("humanoid GLB JSON parses");
+        assert_eq!(document["scenes"][0]["name"], "Humanoid");
         assert!(manifest.slot_index("hair").is_some());
         // Every slot fits the replicated component's capacity.
         assert!(

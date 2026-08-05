@@ -1,7 +1,7 @@
 """Graft: keep a shipped tree's TRUNK, replace its foliage with a generated watertight crown.
 
     blender --background --factory-startup --python asset_creation/vegetation/graft_vegetation.py -- \
-        --donor Tree_09 [--name Tree09_Graft]
+        --donor Tree_09 --from-dir /path/to/legacy/donors [--name BroadleafSpreadingA]
 
     # live, in the Blender MCP session
     import sys; sys.argv = ['x', '--', '--donor', 'Tree_09']
@@ -72,14 +72,21 @@ C_BARK = srgb_to_linear("594429")     # r0c1, the cell Tree_09's trunk samples
 C_LEAF = srgb_to_linear("5E8037")     # r1c1, the cell its canopy samples
 
 REPO = "/Users/terminator2/Coding/fistworld"
-TREES = os.path.join(REPO, "client/assets/game_assets/environment/trees")
-DEAD = os.path.join(REPO, "client/assets/game_assets/environment/trees_dead")
 OUT = os.path.join(REPO, "asset_creation/vegetation")
 WORK_SCENE = "Graft"
 
 DONOR = arg("--donor", "Tree_09")
-DONOR_DIR = DEAD if arg("--from", "trees") == "dead" else TREES
-NAME = arg("--name", f"{DONOR.replace('_', '')}_Graft")
+DONOR_DIR = arg(
+    "--from-dir",
+    os.path.join(REPO, "asset_creation", "vegetation", "legacy_donors"),
+)
+CANONICAL_NAMES = {
+    "Tree_01": "BroadleafNarrowA",
+    "Tree_09": "BroadleafSpreadingA",
+    "Tree_29": "BroadleafHighCrownA",
+    "Tree_08": "DeadGnarledA",
+}
+NAME = arg("--name", CANONICAL_NAMES.get(DONOR, f"Legacy{DONOR.replace('_', '')}"))
 SEED = int(arg("--seed", "1"))
 BASE_SINK = -0.15
 
@@ -105,8 +112,14 @@ def work_scene():
 
 def import_donor(sc, lod):
     """Import the donor and return the object for the requested LOD node."""
+    donor_path = os.path.join(DONOR_DIR, f"{DONOR}.glb")
+    if not os.path.isfile(donor_path):
+        raise FileNotFoundError(
+            f"legacy donor not found: {donor_path}; recover the removed donor from git history "
+            "and pass its directory with --from-dir"
+        )
     before = set(sc.objects)
-    bpy.ops.import_scene.gltf(filepath=os.path.join(DONOR_DIR, f"{DONOR}.glb"))
+    bpy.ops.import_scene.gltf(filepath=donor_path)
     fresh = [o for o in sc.objects if o not in before and o.type == "MESH"]
     # The dead trees ship a SINGLE node with no LOD marker at all, so fall back to the only mesh
     # rather than raising -- "no LOD1" is a fact about the donor, not a bad argument.
@@ -389,7 +402,7 @@ def bed_to_ground(objs, sink):
     shifts = []
     for o in objs:
         # PER OBJECT, not on the joint minimum. Normalising both LODs by LOD0's lowest point left
-        # Boulder_B's LOD0 floating 0.21 m up, because its coarser LOD1 hull dips lower and took
+        # BoulderB's LOD0 floating 0.21 m up, because its coarser LOD1 hull dips lower and took
         # the minimum with it. Each mesh has to meet the ground on its own terms; the two then sit
         # at the same ground level rather than at the same offset from a shared low point.
         lowest = min((v.co.z for v in o.data.vertices), default=0.0)

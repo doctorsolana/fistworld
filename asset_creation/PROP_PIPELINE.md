@@ -224,7 +224,7 @@ glass), metallic 0, and the base bedding into the ground.
 Two bugs today were found by it and by a log line, not by looking at the model:
 
 - **`door_close` missing** — the render looked perfect; the glb had one clip.
-- **the factory-startup `Cube` shipping inside the building.** `build_cabin_lowpoly.py` runs with
+- **the factory-startup `Cube` shipping inside the building.** `build_log_cabin.py` runs with
   `--factory-startup`, which opens with a Cube, a Camera and a Light. The texture step used to delete
   them as a side effect of purging everything that was not a bake target. Narrowing that purge so it
   would stop eating the new anchor empties let the Cube sail straight through into the glb. The

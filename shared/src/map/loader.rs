@@ -181,6 +181,13 @@ fn build_loaded_map(
     map_bytes: &[u8],
     edits_bytes: Option<&[u8]>,
 ) -> Result<LoadedMap, String> {
+    let normalized_props = definition.normalize_prop_ids();
+    if normalized_props > 0 {
+        bevy::log::info!(
+            "Normalized {normalized_props} legacy prop ids while loading map '{}'",
+            definition.map_id
+        );
+    }
     if definition.map_id.trim().is_empty() {
         definition.map_id = map_dir
             .file_name()
@@ -533,10 +540,10 @@ mod tests {
             .and_then(|v| v.first())
             .cloned()
             .unwrap();
-        assert_eq!(item.kind.map(|kind| kind.id()), Some("rock_1"));
+        assert_eq!(item.kind.map(|kind| kind.id()), Some("small_rock_a"));
         // The kind's own path, not a filename literal -- see the note in
         // schema.rs: swapping the art must not break resolution tests.
-        assert_eq!(item.scene_path.as_str(), PropKind::Rock_1.scene_path());
+        assert_eq!(item.scene_path.as_str(), PropKind::SmallRockA.scene_path());
         let rotated_forward = item.rotation * bevy::prelude::Vec3::Z;
         assert!((rotated_forward.x - 1.0).abs() < 1e-6);
         assert!(rotated_forward.z.abs() < 1e-6);

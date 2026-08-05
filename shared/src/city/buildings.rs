@@ -12,14 +12,15 @@ pub enum CityBuildingKind {
     LogCabin,
     Farmstead,
     LumberjackHut,
-    TownHall,
+    #[serde(alias = "TownHall")]
+    MootHall,
 }
 
 pub const ALL_CITY_BUILDING_KINDS: &[CityBuildingKind] = &[
     CityBuildingKind::LogCabin,
     CityBuildingKind::Farmstead,
     CityBuildingKind::LumberjackHut,
-    CityBuildingKind::TownHall,
+    CityBuildingKind::MootHall,
 ];
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,11 +115,11 @@ impl CityBuildingKind {
                 BuildingFrontAxis::PositiveZ,
                 0.0,
             ),
-            CityBuildingKind::TownHall => village_spec(
+            CityBuildingKind::MootHall => village_spec(
                 self,
-                "Town Hall",
-                "game_assets/buildings/village/TownHall.glb#Scene0",
-                BuildingType::TownHall,
+                "Moot Hall",
+                "game_assets/buildings/village/MootHall.glb#Scene0",
+                BuildingType::MootHall,
                 PlotZone::Civic,
                 PlotArchetype::Civic,
                 Vec2::new(6.4500, 8.7400),

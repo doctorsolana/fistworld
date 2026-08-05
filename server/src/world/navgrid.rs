@@ -87,7 +87,7 @@ mod tests {
                     SettlementBuildingKind::LumberjackHut,
                 ),
                 (BuildingType::Farmstead, SettlementBuildingKind::Farmstead),
-                (BuildingType::TownHall, SettlementBuildingKind::Hall),
+                (BuildingType::MootHall, SettlementBuildingKind::Hall),
             ] {
                 let mut grid = SpatialObstacleGrid::default();
                 let definition = building_type.definition();

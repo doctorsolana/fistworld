@@ -1,6 +1,6 @@
 """One 512x512 transparent icon per resource bundle, from an identical studio.
 
-    blender asset_creation/resources/resources.blend --background --python asset_creation/resources/render_icons.py
+    blender asset_creation/resources/carried_resources.blend --background --python asset_creation/resources/render_icons.py
 
 The point of this script is CONSISTENCY, not beauty. Icons sit next to each other in an inventory, so
 any difference in angle, light direction or apparent size reads as a mistake in the item rather than a

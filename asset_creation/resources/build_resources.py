@@ -25,7 +25,7 @@ export_yup to glTF -Z, the character also ends up facing glTF -Z, so +Y is right
 is true and the conclusion is still wrong, because a carried item is not placed in the world -- it is
 parented to a JOINT, and it inherits that joint's basis.
 
-What actually decides it is the attach bone's ROLL axis. Read straight out of voxel_boy.glb:
+What actually decides it is the attach bone's ROLL axis. Read straight out of Humanoid.glb:
 
     attach.carry  local +X -> world (-1, 0,  0)
                   local +Y -> world ( 0, 1,  0)
@@ -58,7 +58,7 @@ from mathutils import Matrix, Vector
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from item_kit import CHAMFER, FACES, Item, TOP, shade, wipe   # noqa: E402  -- shared with build_tools.py
 
-OUT_BLEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources.blend")
+OUT_BLEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), "carried_resources.blend")
 
 # The number every model is sized against. See the docstring.
 HAND_GAP = 0.432

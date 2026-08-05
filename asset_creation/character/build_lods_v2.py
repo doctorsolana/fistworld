@@ -1,6 +1,6 @@
 """Build LOD1 for the character and wardrobe: one shared palette material.
 
-    blender asset_creation/basemodel_v2.blend --background --python asset_creation/character/build_lods_v2.py
+    blender asset_creation/character/humanoid.blend --background --python asset_creation/character/build_lods_v2.py
 
 LOD0 is what already exists -- full geometry, one material per item, procedural voxel hair. It is
 the close-up asset and is left untouched.
@@ -29,7 +29,7 @@ import bpy
 
 # Three levels: <repo>/asset_creation/<family>/<script>.py
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OUT = os.path.join(REPO, "asset_creation", "basemodel_v2.blend")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "humanoid.blend")
 CELLS = 4
 CELL_PX = 16
 SIZE = CELLS * CELL_PX

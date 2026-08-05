@@ -36,10 +36,10 @@ for d in (FRAMES, SHEETS):
 
 # tag, source .blend, display name
 BUILDINGS = [
-    ("cabin",     "cabin_lowpoly.blend",  "Log Cabin"),
+    ("cabin",     "log_cabin.blend",      "Log Cabin"),
     ("hut",       "lumberjack_hut.blend", "Lumberjack Hut"),
     ("farmstead", "farmstead.blend",      "Farmstead"),
-    ("hall",      "town_hall.blend",      "Town Hall"),
+    ("hall",      "moot_hall.blend",      "Moot Hall"),
     ("fisher",    "fishermans_hut.blend",  "Fisherman's Hut"),
 ]
 SPACING = 9.0          # metres along Y; the widest building is 6.45 across
@@ -137,7 +137,7 @@ scene.camera = cam
 scene.render.engine = "CYCLES"
 scene.cycles.samples = 96
 # ortho_scale applies to the LARGER dimension, so the vertical extent is scale * H/W. At 1500x420
-# that was 10.2 m and the 8.18 m Town Hall lost its bell cupola off the top of frame.
+# that was 10.2 m and the 8.18 m Moot Hall lost its bell cupola off the top of frame.
 scene.render.resolution_x, scene.render.resolution_y = 1500, 560
 scene.view_settings.view_transform = "Khronos PBR Neutral"
 prefs = bpy.context.preferences.addons["cycles"].preferences

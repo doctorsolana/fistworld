@@ -24,9 +24,10 @@ from mathutils import Vector, kdtree
 
 # Three levels: <repo>/asset_creation/<family>/<script>.py
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SRC_GLB = os.path.join(REPO, "asset_creation", "basemodelv2.glb")
-SRC_BLEND = os.path.join(REPO, "asset_creation", "v1_donor.blend")
-OUT_BLEND = os.path.join(REPO, "asset_creation", "basemodel_v2.blend")
+HERE = os.path.dirname(os.path.abspath(__file__))
+SRC_GLB = os.path.join(HERE, "humanoid_raw.glb")
+SRC_BLEND = os.path.join(HERE, "humanoid_legacy_donor.blend")
+OUT_BLEND = os.path.join(HERE, "humanoid.blend")
 
 # Offsets that seat v1's parts in v2's body. Derived from measured bounds, not eyeballed:
 #   arm  x: v1 inner edge +0.1475 -> v2 socket inner edge +0.1396   (v1 arm would leave a
@@ -114,7 +115,8 @@ bm.verts.ensure_lookup_table()
 
 
 # --- 2. pull the arms and hands out of the donor ---------------------------------------------------
-# v1_donor.blend holds only what v2 actually reuses: arm.L/R + hand.L/R (190 verts) and the walk
+# humanoid_legacy_donor.blend holds only what the current model reuses: arm.L/R + hand.L/R
+# (190 verts) and the walk
 # action. It carries NO materials on purpose -- appending v1's full Character_Base dragged its
 # Skin/Eye materials in as orphans, so bpy.data.materials.new("Skin") collided and produced
 # "Skin.001", which would have shipped as the glTF material name exactly like "WalkCycle.001" did.

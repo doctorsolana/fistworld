@@ -51,43 +51,43 @@ fn scatter_props(grid: &HeightGrid, seed: u64, half_extent: f32) -> Vec<MapObjec
     let copse_mask = fbm(splitmix64(seed ^ 0xC0F_5E) as u32, 2, 1.0 / 230.0);
 
     const TREES_BROADLEAF: &[PropKind] = &[
-        PropKind::Tree_01,
-        PropKind::Tree_02,
-        PropKind::Tree_08,
-        PropKind::Tree_09,
-        PropKind::Tree_29,
+        PropKind::BroadleafNarrowA,
+        PropKind::OakA,
+        PropKind::BroadleafLargeA,
+        PropKind::BroadleafSpreadingA,
+        PropKind::BirchA,
+        PropKind::BirchB,
+        PropKind::ChestnutA,
+        PropKind::BroadleafHighCrownA,
+        PropKind::BroadleafTallA,
     ];
     const TREES_PINE: &[PropKind] = &[
-        PropKind::Pine_Tree_1,
-        PropKind::Pine_Tree_2,
-        PropKind::Pine_Tree_3,
-        PropKind::Pine_Tree_4,
+        PropKind::PineA,
+        PropKind::PineB,
+        PropKind::PineTallA,
+        PropKind::PineTallB,
+        PropKind::PineYoungA,
+        PropKind::PineYoungB,
     ];
-    const BUSHES: &[PropKind] = &[
-        PropKind::Bush_01,
-        PropKind::Bush_02,
-        PropKind::Bush_03,
-        PropKind::Bush_04,
-    ];
+    const BUSHES: &[PropKind] = &[PropKind::BushA, PropKind::BushB, PropKind::BushC];
     const ROCKS: &[PropKind] = &[
-        PropKind::Rock_1,
-        PropKind::Rock_2,
-        PropKind::Rock_3,
-        PropKind::Rock_4,
-        PropKind::Rock_5,
+        PropKind::SmallRockA,
+        PropKind::SmallRockB,
+        PropKind::SmallRockC,
     ];
     /// Bare, dead wood. Zero of these existed in the world before: the pool
     /// was never wired up, so the assets shipped and nothing placed them.
     const TREES_DEAD: &[PropKind] = &[
-        PropKind::Dead_tree_1,
-        PropKind::Dead_tree_2,
-        PropKind::Dead_tree_3,
+        PropKind::DeadTreeA,
+        PropKind::DeadTreeB,
+        PropKind::DeadTreeC,
+        PropKind::DeadGnarledA,
     ];
     const FLOWERS: &[PropKind] = &[
-        PropKind::Flower_01,
-        PropKind::Flower_03,
-        PropKind::Spring_Flower_06,
-        PropKind::Spring_Flower_08,
+        PropKind::FlowerA,
+        PropKind::FlowerB,
+        PropKind::FlowerC,
+        PropKind::FlowerD,
     ];
 
     let pick =
@@ -249,7 +249,7 @@ fn scatter_props(grid: &HeightGrid, seed: u64, half_extent: f32) -> Vec<MapObjec
                     if vein > 0.55 && roll < 0.45 {
                         // Ore outcrop: boulder-sized so a deposit reads from
                         // gameplay zoom (the rock assets are pebbles at 1.0).
-                        (PropKind::Rock_5, 3.6 + rand01(&mut rng) * 2.2)
+                        (PropKind::BoulderB, 0.9 + rand01(&mut rng) * 0.6)
                     } else if roll < 0.12 {
                         (pick(ROCKS, rand01(&mut rng)), 1.6 + rand01(&mut rng) * 1.6)
                     } else if roll < 0.165 && h > SEA_LEVEL + 2.0 {
@@ -265,7 +265,7 @@ fn scatter_props(grid: &HeightGrid, seed: u64, half_extent: f32) -> Vec<MapObjec
                 WorldBiome::Mountains => {
                     let vein = biomes.iron_vein(x, z);
                     if vein > 0.55 && roll < 0.50 {
-                        (PropKind::Rock_5, 4.0 + rand01(&mut rng) * 2.5)
+                        (PropKind::BoulderB, 1.0 + rand01(&mut rng) * 0.7)
                     } else if roll < 0.14 {
                         (pick(ROCKS, rand01(&mut rng)), 2.0 + rand01(&mut rng) * 1.8)
                     } else if roll < 0.155 && h < 42.0 {

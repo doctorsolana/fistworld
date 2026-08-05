@@ -1,4 +1,4 @@
-"""Old tree beside its replacement, both LODs, same camera and light.
+"""Compare current vegetation silhouettes, both LODs, under one camera and light.
 
     blender --background --factory-startup --python asset_creation/vegetation/compare_vegetation.py
 
@@ -7,13 +7,8 @@
 
 Writes asset_creation/renders/vegetation/compare.png.
 
-One row per pairing, four tiles across: the shipped LOD0 and LOD1, then the replacement's. Both
-LODs are shown because LOD1 is the mesh the game actually draws -- trees switch to it at 72 m and
-the default camera sits at 280 m -- so comparing only the close-up meshes would compare the halves
-nobody looks at.
-
-Instance counts are from a sampling run over the authored map; the frame cost printed per tile is
-instances x triangles, which is the number that decides whether a swap is worth doing.
+Each row groups related current silhouettes. Both LODs are shown because LOD1 is the mesh the game
+actually draws at ordinary camera distance.
 """
 
 import math
@@ -24,34 +19,32 @@ import bpy
 from mathutils import Matrix, Vector
 
 REPO = "/Users/terminator2/Coding/fistworld"
-TREES = os.path.join(REPO, "client/assets/game_assets/environment/trees")
-PINES = os.path.join(REPO, "client/assets/game_assets/environment/trees_pine")
 VEG = os.path.join(REPO, "asset_creation/vegetation")
 OUT = os.path.join(REPO, "asset_creation/renders/vegetation")
 WIDTH = 2400
 WORK_SCENE = "VegCompare"
 
-# Each row: the shipped tree, the graft that reuses its authored mesh, and the fully generated
-# replacement -- both LODs of each, so six tiles across. Instances are of the ORIGINAL in the map.
+# Both LODs of each entry are shown, so three entries make six tiles across.
 ROWS = [
-    dict(count=3869, entries=[
-        (TREES, "Tree_09.glb", "old"),
-        (VEG, "Tree09_Graft.glb", "graft"),
-        (VEG, "Broadleaf_Big_A.glb", "new"),
-    ]),
-    dict(count=3963, entries=[
-        (TREES, "Tree_01.glb", "old"),
-        (VEG, "Tree01_Graft.glb", "graft"),
-        (VEG, "Broadleaf_Tall_A.glb", "new"),
-    ]),
-    dict(count=2834, entries=[
-        (PINES, "Pine_Tree_1.glb", "old"),
-        (PINES, "Pine_Tree_3.glb", "old"),
-        (VEG, "Pine_A.glb", "new"),
+    dict(count=0, entries=[
+        (VEG, "BroadleafSpreadingA.glb", "spreading"),
+        (VEG, "BroadleafLargeA.glb", "large"),
+        (VEG, "OakA.glb", "oak"),
     ]),
     dict(count=0, entries=[
-        (VEG, "Oak_A.glb", "new"),
-        (VEG, "Chestnut_A.glb", "new"),
+        (VEG, "BroadleafNarrowA.glb", "narrow"),
+        (VEG, "BroadleafTallA.glb", "tall"),
+        (VEG, "BroadleafHighCrownA.glb", "high crown"),
+    ]),
+    dict(count=0, entries=[
+        (VEG, "PineA.glb", "pine"),
+        (VEG, "PineTallA.glb", "tall"),
+        (VEG, "PineYoungA.glb", "young"),
+    ]),
+    dict(count=0, entries=[
+        (VEG, "BirchA.glb", "birch A"),
+        (VEG, "BirchB.glb", "birch B"),
+        (VEG, "ChestnutA.glb", "chestnut"),
     ]),
 ]
 

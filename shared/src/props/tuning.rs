@@ -29,16 +29,15 @@ pub enum PropVisualRole {
 
 pub fn visual_role(kind: PropKind) -> PropVisualRole {
     match kind {
-        PropKind::Grass_Patch | PropKind::Grass_Tall => PropVisualRole::GroundDetail,
+        PropKind::GrassShortA | PropKind::GrassTallA => PropVisualRole::GroundDetail,
 
-        PropKind::Flower_01
-        | PropKind::Flower_03
-        | PropKind::Spring_Flower_06
-        | PropKind::Spring_Flower_08
-        | PropKind::Bush_01
-        | PropKind::Bush_02
-        | PropKind::Bush_03
-        | PropKind::Bush_04 => PropVisualRole::Accent,
+        PropKind::FlowerA
+        | PropKind::FlowerB
+        | PropKind::FlowerC
+        | PropKind::FlowerD
+        | PropKind::BushA
+        | PropKind::BushB
+        | PropKind::BushC => PropVisualRole::Accent,
 
         _ => PropVisualRole::Landmark,
     }

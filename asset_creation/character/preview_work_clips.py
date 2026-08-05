@@ -1,6 +1,6 @@
 """Contact sheets for the work clips: build, chop, carry.
 
-    blender asset_creation/character/basemodel_v2.blend --background --python asset_creation/character/preview_work_clips.py
+    blender asset_creation/character/humanoid.blend --background --python asset_creation/character/preview_work_clips.py
 
 A loop check proves a clip CLOSES; it says nothing about whether the motion reads. These strips are
 how the arc gets judged -- section 11, verify visually rather than numerically.

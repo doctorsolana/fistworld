@@ -1,4 +1,9 @@
-# Vegetation swap — handover
+# Vegetation replacement — implemented handover
+
+> The replacement is live and its canonical names are now defined in
+> `ASSET_NAMING.md`. Names such as `Tree_09` below refer only to legacy map ids
+> or the removed donor assets; they are accepted at the map-loading boundary
+> and are never written by current tools.
 
 For whoever integrates these into the game. The assets are **built and validated**; nothing is
 wired in. This is what to do and, more usefully, what will silently go wrong if you don't.
@@ -19,21 +24,21 @@ colour in `COLOR_0`, wind weight reserved in `TEXCOORD_1.x`, base bedded −0.15
 
 | new asset | LOD0 / LOD1 | replaces | old cost | placed |
 |---|---|---|---|---|
-| `Tree09_Graft` | 580 / 294 | `Tree_09` | 1872 / 580 | 3,869 |
-| `Tree01_Graft` | 278 / 192 | `Tree_01` | 1030 / 278 | 3,963 |
-| `Tree29_Graft` | 574 / 216 | `Tree_29` | 1216 / 574 | 3,953 |
-| `Bare_Gnarled_A` | 500 / 310 | `Tree_08` | 952 / 500 | 3,928 |
-| `Pine_A`, `Pine_B` | 372 / 105 | `Pine_Tree_1/2` | 1258 / **no LOD1** | ~1,400 |
-| `Pine_Tall_A/B` | 352 / 97 | `Pine_Tree_3` | 1698 / **no LOD1** | 753 |
-| `Pine_Small_A/B` | 242 / 69 | `Pine_Tree_4` | 1646 / **no LOD1** | 686 |
-| `Dead_A/B/C` | 404–634 / 250–392 | `Dead_tree_1/2/3` | same, untextured | 0 |
-| `Rock_A/B/C` | 24 / 12 | `Rock_1..5` | 34–86 | 7,857 |
-| `Boulder_A/B` | 36 / 16 | `BigRock_01/02` | 68–78 | 0 |
-| `Bush_A/B/C` | 84 / 26 | `Bush_01..04` | 60–104 | 869 |
-| `Flower_A..D` | **14 / 14** | `Flower_*`, `Spring_Flower_*` | **212–806** | 4,166 |
-| `Oak_A`, `Chestnut_A`, `Birch_A/B`, `Broadleaf_Big_A`, `Broadleaf_Tall_A` | 386–604 / 81–103 | new species, no counterpart | — | — |
-| `Grass_Patch_A` (short) | **36 / 12** | `Env_Grass_Tall_04` | 738, **never drawn** | 38,578 |
-| `Grass_Tall_A` (tall, bright) | **36 / 12** | — | — | — |
+| `BroadleafSpreadingA` | 580 / 294 | `Tree_09` | 1872 / 580 | 3,869 |
+| `BroadleafNarrowA` | 278 / 192 | `Tree_01` | 1030 / 278 | 3,963 |
+| `BroadleafHighCrownA` | 574 / 216 | `Tree_29` | 1216 / 574 | 3,953 |
+| `DeadGnarledA` | 500 / 310 | `Tree_08` donor | 952 / 500 | dead-tree pool |
+| `PineA`, `PineB` | 372 / 105 | `Pine_Tree_1/2` | 1258 / **no LOD1** | ~1,400 |
+| `PineTallA/B` | 352 / 97 | `Pine_Tree_3` | 1698 / **no LOD1** | 753 |
+| `PineYoungA/B` | 242 / 69 | `Pine_Tree_4` | 1646 / **no LOD1** | 686 |
+| `DeadTreeA/B/C` | 404–634 / 250–392 | `Dead_tree_1/2/3` | same, untextured | 0 |
+| `SmallRockA/B/C` | 24 / 12 | `Rock_1..5` | 34–86 | 7,857 |
+| `BoulderA/B` | 36 / 16 | `BigRock_01/02` | 68–78 | 0 |
+| `BushA/B/C` | 84 / 26 | `Bush_01..04` | 60–104 | 869 |
+| `FlowerA..D` | **14 / 14** | `Flower_*`, `Spring_Flower_*` | **212–806** | 4,166 |
+| `OakA`, `ChestnutA`, `BirchA/B`, `BroadleafLargeA`, `BroadleafTallA` | 386–604 / 81–103 | new species, no counterpart | — | — |
+| `GrassShortA` (short) | **36 / 12** | `Env_Grass_Tall_04` | 738, **never drawn** | 38,578 |
+| `GrassTallA` (tall, bright) | **36 / 12** | — | — | — |
 
 The flowers are the largest single ratio: **806 → 14 triangles**, ×4,166 placed.
 
@@ -47,23 +52,24 @@ and are trade-offs, not defects.
 
 ---
 
-## 2. THE SWAP THAT AVOIDS TOUCHING map.ron
+## 2. Legacy maps remain compatible
 
 `client/assets/maps/big_world/map.ron` is **14 MB, 739,294 lines, 73,926 objects**, and every
 entry names a kind string (`tree_09`, `rock_5`, …). Rewriting it is the obvious approach and the
 wrong one.
 
-**Keep the `PropKind` ids and repoint `scene_path()` at the new files.** One line per kind in
-`shared/src/props/kinds.rs`, no map edit, no risk of a partial rewrite, and it reverts by
-reverting one file:
+The live registry now has semantic variants and ids. `PropKind::from_id` accepts
+the old strings and `MapDefinition::normalize_prop_ids` converts them in memory,
+so the 14 MB authored map did not need a noisy one-time rewrite:
 
 ```rust
 // was: "game_assets/environment/trees/Tree_09.glb#Scene0"
-PropKind::Tree_09 => "game_assets/environment/trees/Tree09_Graft.glb#Scene0",
+PropKind::BroadleafSpreadingA =>
+    "game_assets/environment/trees/broadleaf/BroadleafSpreadingA.glb#Scene0",
 ```
 
-Do the whole swap this way first, confirm it in game, and only rename kinds later if you want to.
-The names are cosmetic; the paths are what load.
+Newly generated or editor-saved content writes `broadleaf_spreading_a`. The
+legacy `tree_09` spelling exists only as accepted input.
 
 ---
 
@@ -82,14 +88,12 @@ Verified by grepping what an existing kind touches. Missing any one of these fai
 Also check `client/src/props/kinds.rs`, `client/src/props/foliage.rs`, `editor/src/tools.rs` and
 `editor/src/worldgen.rs` — all four name prop kinds and may need the new variant.
 
-### The trap the compiler will not catch
+### Registry checks
 
-`id()` and `scene_path()` are `match self`, so the compiler catches a missing arm. **`from_id` and
-`ALL_PROP_KINDS` are not.** The test that would catch a missing `from_id`
-(`from_id_matches_all_known_kinds`, `shared/src/props/kinds.rs:276`) iterates `ALL_PROP_KINDS` —
-so if you skip **both**, the test iterates a list that never mentions your kind and passes green.
-
-**Always add to `ALL_PROP_KINDS`, and append at the end — do not insert mid-list.**
+`canonical_prop_registry_is_complete_unique_and_loadable` checks that every listed kind has a
+unique canonical id, unique scene path, resolvable id, and real file on disk. It cannot infer that
+an entirely unregistered GLB was intended for gameplay, so the asset catalog in `ASSET_NAMING.md`
+remains the review checklist.
 
 ### tree_mesh_labels is not optional
 
@@ -97,7 +101,7 @@ so if you skip **both**, the test iterates a list that never mentions your kind 
 renders LOD0 from 0 m to the far cutoff, exactly the bug the pines have today. Use:
 
 ```rust
-Pine_A | Pine_B | ... => Some(TreeMeshLabels {
+PineA | PineB | ... => Some(TreeMeshLabels {
     lod0_label: "Mesh0/Primitive0",
     lod1_label: Some("Mesh1/Primitive0"),   // every new asset HAS a LOD1
     material_label: "Material0",
@@ -106,40 +110,17 @@ Pine_A | Pine_B | ... => Some(TreeMeshLabels {
 
 ---
 
-## 4. WIND WORKS — BUT IT WILL PAINT THESE ASSETS GREY
+## 4. Wind and vertex colour
 
-**The good news.** Wind is already implemented (`client/assets/shaders/wind_foliage.wgsl`,
+Wind is implemented (`client/assets/shaders/wind_foliage.wgsl`,
 `client/src/props/wind.rs`) and it derives the bend from the mesh's OWN Y bounds —
 `sway_min_y = min_y + range * 0.25`. Nothing in the asset drives it, so every one of these sways
 correctly the moment it is registered. The `TEXCOORD_1` weights they carry are unused by this
 system; they cost a few bytes and are left in place for a future per-vertex one.
 
-**The landmine.** `bake_foliage_color_ramp` (`client/src/props/wind.rs:64`, called from
-`client/src/props/foliage.rs:194`) **overwrites `Mesh::ATTRIBUTE_COLOR` entirely** with a grey
-root-to-tip ramp. That is correct for the shipped trees, whose colour lives in a texture and whose
-vertex colour is only a multiplier — the shader says as much: *"Canopy color lives in the material
-texture (NOT vertex colors)"*.
-
-**Every asset in this handover keeps ALL of its colour in `COLOR_0`.** Run that bake over one and
-the bark and leaves are replaced by grey.
-
-It applies to any kind listed in `needs_foliage_materials` (`client/src/props/foliage.rs:281`),
-which today includes `Tree_01`, `Tree_02`, `Tree_08`, `Tree_09`, `Tree_10`, `Tree_18`, `Tree_29`
-and the dead trees. **So the swap in section 2 — repointing `scene_path()` while keeping the kind ids — walks
-straight into it**, because those ids are already on the list.
-
-Pick one:
-
-- **(a) Skip the ramp for vertex-coloured assets.** Add a check in `foliage.rs` before line 194 —
-  if the mesh already carries a `COLOR_0` that is not the flat white default, leave it alone. Best
-  option: it fixes the class of problem rather than one instance, and lets both asset styles
-  coexist.
-- **(b) Remove the swapped kinds from `needs_foliage_materials`.** Costs the wind sway too, since
-  the same list drives both. Not worth it.
-- **(c) Register new kinds and leave the old ones alone.** Then only the new kinds need excluding
-  from the list, and the ramp keeps working for anything still using the old textured assets.
-
-Whichever you choose, **verify by looking**, not by compiling — a grey tree compiles perfectly.
+Every replacement keeps its colour in `COLOR_0`. The live foliage path therefore applies the
+root-to-tip colour-ramp bake only to grass; trees and bushes retain their authored vertex colours
+while still receiving wind sway. Keep that distinction if new foliage is added.
 
 ---
 
@@ -162,13 +143,13 @@ use unpadded `_LOD0` / `_LOD1`; keep it that way.
 get **no collider ever**, no LOD swapping, no wind material, and a full `SceneRoot` hierarchy per
 instance. Always go through a registered `PropKind` id.
 
-**Deleting an old GLB before repointing breaks the map.** 73,926 entries name the old kinds.
+Old map ids no longer name files directly; they resolve through the canonical registry.
 
 ---
 
-## 6. Safe to delete right now
+## 6. Removed legacy assets
 
-Referenced by nothing (verified by repo-wide grep):
+The following unreferenced or corrupt assets were removed during integration:
 
 ```
 environment/trees/Env_Tree_01.glb  Env_Tree_02.glb  Env_Tree_03.glb
@@ -181,7 +162,7 @@ environment/leaves/    Env_Leaves_02.glb  Env_Leaves_03.glb
 copies — on a 688-triangle tree nothing places. `Env_Ivy_*` and `Env_Leaves_*` have bounding boxes
 of **283–357 m**; they are corrupt, not merely unused.
 
-Do **not** delete anything the map still names until §2 is done.
+The map compatibility aliases in §2 are why their removal is safe.
 
 ---
 
@@ -201,11 +182,11 @@ Do **not** delete anything the map still names until §2 is done.
 
 ## 8. Known issues, honestly
 
-- **`Tree01_Graft` LOD1 is 69% of LOD0** (contract wants ≤55%). The graft keeps the artist's bark,
+- **`BroadleafNarrowA` LOD1 is 69% of LOD0** (contract wants ≤55%). The graft keeps the artist's bark,
   which is already minimal at 102 triangles — there is nothing left to remove without shattering
   the branch forks. Accepted trade.
-- **`Pine_Tall_B` silhouette is 16% off** between LODs against a 15% tolerance. Marginal.
-- **`Pine_Small_B` LOD1** shows a speck of trunk through the crown. Small trees keep the same LOD1
+- **`PineTallB` silhouette is 16% off** between LODs against a 15% tolerance. Marginal.
+- **`PineYoungB` LOD1** shows a speck of trunk through the crown. Small trees keep the same LOD1
   voxel size as large ones, so their thinner tiers get erased by the remesh. Fix is a voxel that
   scales with tree size.
 - **Birch lenticels are rectangular** — they are painted onto quad faces, not a texture. Reads at
@@ -217,7 +198,7 @@ Do **not** delete anything the map still names until §2 is done.
   does not let `GroundDetail` through.
 - **Flower LOD1 equals LOD0** (14 tris both). There is no second level of detail to author for a
   stem and a head; the `flower` class permits it.
-- **`Pine_Small_B` LOD1** shows a speck of trunk through the crown — small trees keep the same LOD1
+- **`PineYoungB` LOD1** shows a speck of trunk through the crown — small trees keep the same LOD1
   voxel as large ones, so their thinner tiers get erased by the remesh.
 
 ## 9. What actually scales when you increase density
@@ -228,7 +209,7 @@ In order of what breaks first, which is not the order people expect:
    **880 MB resident**, because each GLB embeds its own copy and a 1024² PNG of flat colour is
    still 4 MB uncompressed on the GPU. The new assets have none.
 2. **Overdraw.** Alpha-masked foliage has no early-Z. The shipped pines are `alphaMode: MASK`;
-   `Pine_A` is opaque.
+   `PineA` is opaque.
 3. **Shadow pass** — geometry is paid roughly twice.
 4. **Triangles** — the ~11M → 4M win, linear in density.
 5. **Entity count.** 3× trees is 3× transforms and visibility checks, and `map.ron` as a flat list
@@ -238,7 +219,7 @@ In order of what breaks first, which is not the order people expect:
 
 ## 10. GRASS — the one textured family, and it needs a code change to appear
 
-`Grass_Patch_A` (short, darker) and `Grass_Tall_A` (taller, brighter) are meant to be **mixed**,
+`GrassShortA` (short, darker) and `GrassTallA` (taller, brighter) are meant to be **mixed**,
 roughly 2:1. Both are 36 tris over a 2 × 2 m patch, so they cost the same and only look different.
 
 **Copy only the GLBs — the textures are EMBEDDED.** The `Grass_Blades_*.png` files beside them are

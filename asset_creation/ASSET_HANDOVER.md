@@ -6,19 +6,19 @@ compiles. Nothing here needs art work. What it needs is game code.
 Verifiers, if you want to confirm any claim yourself:
 
 ```
-python3 asset_creation/character/inspect_glb.py client/assets/characters/voxel_boy.glb
-python3 asset_creation/inspect_prop_glb.py client/assets/game_assets/buildings/village/TownHall.glb
+python3 asset_creation/character/inspect_glb.py client/assets/characters/Humanoid.glb
+python3 asset_creation/inspect_prop_glb.py client/assets/game_assets/buildings/village/MootHall.glb
 ```
 
-> **Naming warning.** The character source is `asset_creation/character/basemodel_v2.blend` ("base
-> character v2") but it ships as **`voxel_boy.glb`** — a v1-era filename that stuck. They are the same
-> asset. There is no other character in the repo.
+> **Naming authority.** The current source is `asset_creation/character/humanoid.blend` and it ships
+> as `client/assets/characters/Humanoid.glb` with `Humanoid.ron`. See `ASSET_NAMING.md` for the
+> canonical catalog and legacy compatibility names.
 
 ---
 
 ## 1. Character — 4 new garments
 
-`client/assets/characters/voxel_boy.ron` now lists **14 items across 3 slots**:
+`client/assets/characters/Humanoid.ron` now lists **14 items across 3 slots**:
 
 | Slot | Index 0 | 1 | 2 | 3 |
 |---|---|---|---|---|
@@ -159,10 +159,10 @@ Attach it **only while `carry` is playing**. In any other clip the arms are not 
 | `LogCabin.glb` | `BuildingType::LogCabin` | 6.00 × 6.94 | 4.33 | hull, 45 pts |
 | `LumberjackHut.glb` | `BuildingType::LumberjackHut` | 5.16 × 5.40 | 3.76 | hull, 60 pts |
 | `Farmstead.glb` | `BuildingType::Farmstead` | 5.41 × 6.62 | 4.07 | hull, 51 pts |
-| `TownHall.glb` | `BuildingType::TownHall` | 6.45 × 8.74 | 8.18 | hull, 57 pts |
+| `MootHall.glb` | `BuildingType::MootHall` | 6.45 × 8.74 | 8.18 | hull, 57 pts |
 | `FishermansHut.glb` | `BuildingType::FishermansHut` | 6.44 × 6.51 | 3.86 | hull, 71 pts |
-| `WheatField.glb` | `PropKind::Wheat_Field` | 8.00 × 11.00 | 0.86 | **none, by design** |
-| `FishingPier.glb` | `PropKind::Fishing_Pier` | 1.60 × 7.09 | 2.81 | **none, by design** |
+| `WheatField.glb` | `PropKind::WheatField` | 8.00 × 11.00 | 0.86 | **none, by design** |
+| `FishingPier.glb` | `PropKind::FishingPier` | 1.60 × 7.09 | 2.81 | **none, by design** |
 
 All registered, all baked into `client/assets/colliders.bin`. Buildings live in
 `game_assets/buildings/village/`; the field is in `game_assets/environment/crops/`.
@@ -182,7 +182,7 @@ what units need is a footprint to walk around, not 30 convex pieces describing r
 > ### The fishing pier is separate for the same reason
 > Units must be able to **walk out along the deck**. A convex hull over a hut plus a 7 m jetty
 > encloses every metre of open water between them — nobody could stand on it and units would path
-> around a large invisible box floating on the sea. So the pier is `PropKind::Fishing_Pier`, its own
+> around a large invisible box floating on the sea. So the pier is `PropKind::FishingPier`, its own
 > glb, with no manifest entry.
 >
 > `FishermansHut.glb` ships **`Anchor_Pier`** marking where the pier's LANDWARD END butts on; the
@@ -211,10 +211,10 @@ in code; offsets silently go wrong the first time a building is resized, and not
 | `Anchor_Pier` | FishermansHut | where the pier's landward end goes |
 | `Anchor_Nets` | FishermansHut | where a villager stands to mend nets |
 | `Anchor_Field` | Farmstead | centre of the wheat field, 9.0 m off the door axis |
-| `Anchor_Notice` | TownHall | where someone stands to read the board |
+| `Anchor_Notice` | MootHall | where someone stands to read the board |
 | `Light_Interior` | all four | room centre |
-| `Light_Upper` | TownHall | first floor |
-| `Light_Belfry` | TownHall | inside the bell cupola |
+| `Light_Upper` | MootHall | first floor |
+| `Light_Belfry` | MootHall | inside the bell cupola |
 | `Light_Window.L` / `.R` | all four | just inside each pane |
 
 Every stand-on anchor was measured against the baked hull. Current clearances, all outside:
@@ -223,7 +223,7 @@ Every stand-on anchor was measured against the baked hull. Current clearances, a
 LogCabin       Anchor_Door   +0.33      FishermansHut  Anchor_Door   +0.68
 LumberjackHut  Anchor_Door   +0.63                     Anchor_Nets   +0.53
                Anchor_Work   +0.42                     Anchor_Pier   +0.11
-Farmstead      Anchor_Door   +0.56      TownHall       Anchor_Door   +0.71
+Farmstead      Anchor_Door   +0.56      MootHall       Anchor_Door   +0.71
                Anchor_Field  +5.86                     Anchor_Notice +0.65
 ```
 
@@ -292,7 +292,7 @@ Give each villager a random time offset into its face clip, or a hundred of them
 
 ## 9. Two things to watch
 
-**`voxel_boy.ron` is contested.** It is emitted by `build_wardrobe_v2.py` and was rolled back to its
+**`Humanoid.ron` is generated.** It is emitted by `build_wardrobe_v2.py` and was rolled back to its
 committed state once during this session — it lost both new bottoms, both new tops and all three new
 clips while the `.glb` still contained them. Symptom: items or clips missing in game while the model
 looks correct. `inspect_glb.py` cross-checks the manifest against the glb and catches it in a second.

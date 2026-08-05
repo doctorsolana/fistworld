@@ -674,7 +674,7 @@ fn open_capture_history(
 /// server.
 ///
 /// Spec: `slot0,slot1,...,skin` per hero, semicolon-separated, all indices
-/// into the manifest's slot items / skin tones (order as in voxel_boy.ron:
+/// into the manifest's slot items / skin tones (order as in Humanoid.ron:
 /// bottom, top, hair). Missing or unparsable fields use the manifest default.
 /// `FISTFORCE_CAPTURE_HERO=default` spawns one hero in the declared default.
 fn spawn_capture_heroes(

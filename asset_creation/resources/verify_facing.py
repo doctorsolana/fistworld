@@ -27,7 +27,7 @@ import struct
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CHAR = os.path.join(REPO, "client", "assets", "characters", "voxel_boy.glb")
+CHAR = os.path.join(REPO, "client", "assets", "characters", "Humanoid.glb")
 CARRIED = os.path.join(REPO, "client", "assets", "game_assets", "resources", "carried")
 TOOLS = os.path.join(REPO, "client", "assets", "game_assets", "tools")
 
@@ -91,7 +91,7 @@ def main():
     for joint, what in JOINTS.items():
         basis = joint_basis(doc, joint)
         if basis is None:
-            print(f"FAIL  joint {joint!r} is missing from voxel_boy.glb -- {what} have nothing to "
+            print(f"FAIL  joint {joint!r} is missing from Humanoid.glb -- {what} have nothing to "
                   f"attach to. Re-run export_character_glb.py.")
             bad += 1
             continue

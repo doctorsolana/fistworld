@@ -25,6 +25,22 @@ pub struct MapDefinition {
 }
 
 impl MapDefinition {
+    /// Replace accepted historical prop ids with the canonical ids written by
+    /// current tools. Direct custom scene paths are left untouched.
+    pub fn normalize_prop_ids(&mut self) -> usize {
+        let mut changed = 0;
+        for object in &mut self.objects {
+            let Some(kind) = PropKind::from_id(object.kind.trim()) else {
+                continue;
+            };
+            if object.kind != kind.id() {
+                object.kind = kind.id().to_string();
+                changed += 1;
+            }
+        }
+        changed
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.map_id.trim().is_empty() {
             return Err("map_id must not be empty".to_string());
@@ -145,7 +161,7 @@ fn default_height_max() -> f32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MapObjectSpawn {
-    /// Either a stable shared prop id (e.g. `rock_1`) or a direct scene path
+    /// Either a stable shared prop id (e.g. `small_rock_a`) or a direct scene path
     /// (e.g. `game_assets/buildings/village/House_05.glb#Scene0`).
     pub kind: String,
     pub position: [f32; 3],
@@ -386,11 +402,11 @@ mod tests {
             scale: 1.0,
         };
         // Asserted against the KIND's own registered path rather than a filename.
-        // A hardcoded "Rock_1.glb" here fails the day the art is replaced, which
+        // A hardcoded model filename here fails the day the art is replaced, which
         // says nothing about whether resolution works -- and it has now happened.
         assert_eq!(
             known.resolved_scene_path().as_deref(),
-            Some(PropKind::Rock_1.scene_path()),
+            Some(PropKind::SmallRockA.scene_path()),
             "a registered kind must resolve to that kind's own scene path"
         );
 
@@ -404,6 +420,68 @@ mod tests {
             custom.resolved_scene_path().as_deref(),
             Some("game_assets/buildings/village/House_05.glb#Scene0")
         );
+    }
+
+    #[test]
+    fn legacy_prop_ids_normalize_at_the_map_boundary() {
+        let mut map = MapDefinition {
+            map_id: "compatibility_test".to_string(),
+            bounds: MapBounds {
+                min: [-10.0, -10.0],
+                max: [10.0, 10.0],
+            },
+            terrain: MapTerrain {
+                heightmap: "height.png".to_string(),
+                minimap: None,
+                water_level: None,
+                height_min: 0.0,
+                height_max: 10.0,
+            },
+            generated: None,
+            player_spawn: None,
+            objects: vec![MapObjectSpawn {
+                kind: "tree_09".to_string(),
+                position: [0.0, 0.0, 0.0],
+                rotation_degrees: 0.0,
+                scale: 1.0,
+            }],
+            blockers: Vec::new(),
+        };
+
+        assert_eq!(map.normalize_prop_ids(), 1);
+        assert_eq!(map.objects[0].kind, "broadleaf_spreading_a");
+        assert_eq!(map.normalize_prop_ids(), 0);
+    }
+
+    #[test]
+    fn shipped_world_legacy_ids_all_have_a_canonical_destination() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../client/assets/maps/big_world/map.ron");
+        let text = std::fs::read_to_string(&path).expect("shipped world map exists");
+        let mut map: MapDefinition = ron::from_str(&text).expect("shipped world map parses");
+        let expected_changes = map
+            .objects
+            .iter()
+            .filter(|object| {
+                object
+                    .prop_kind()
+                    .is_some_and(|kind| object.kind != kind.id())
+            })
+            .count();
+        let changed = map.normalize_prop_ids();
+        assert_eq!(changed, expected_changes);
+
+        for object in &map.objects {
+            if let Some(kind) = object.prop_kind() {
+                assert_eq!(object.kind, kind.id(), "legacy id survived normalization");
+            } else {
+                assert!(
+                    object.kind.ends_with(".glb") || object.kind.contains(".glb#"),
+                    "unregistered object id '{}' has no compatibility alias",
+                    object.kind
+                );
+            }
+        }
     }
 
     #[test]

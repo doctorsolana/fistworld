@@ -22,7 +22,7 @@ TMP = "/tmp/_hallcmp"
 os.makedirs(OUT, exist_ok=True)
 os.makedirs(TMP, exist_ok=True)
 
-HALLS = [("town_hall.blend", "TownHall", "moot hall  (hamlet)"),
+HALLS = [("moot_hall.blend", "MootHall", "moot hall  (hamlet)"),
          ("village_hall.blend", "VillageHall", "village hall  (village)")]
 # Two viewpoints: the angle the game actually uses, and a low one that shows the ground floor.
 VIEWS = [("rts", Vector((0, 0, 3.0)), Vector((-13.0, -14.0, 11.5)), 55),

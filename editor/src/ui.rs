@@ -56,10 +56,13 @@ pub fn build_prop_catalog(mut commands: Commands) {
     let mut seen = HashSet::new();
     for path in &discovered_assets {
         let category = asset_category_from_path(path);
+        let mapped_index = known_scene_paths.get(path).copied();
         let entry = PropCatalogAssetEntry {
             scene_path: path.clone(),
-            display_name: asset_display_name(path),
-            mapped_index: known_scene_paths.get(path).copied(),
+            display_name: mapped_index
+                .map(|index| ALL_PROP_KINDS[index].display_name().to_string())
+                .unwrap_or_else(|| asset_display_name(path)),
+            mapped_index,
         };
         grouped.entry(category).or_default().push(entry);
         seen.insert(path.clone());
@@ -75,7 +78,7 @@ pub fn build_prop_catalog(mut commands: Commands) {
             .or_default()
             .push(PropCatalogAssetEntry {
                 scene_path: path.clone(),
-                display_name: asset_display_name(path),
+                display_name: ALL_PROP_KINDS[*index].display_name().to_string(),
                 mapped_index: Some(*index),
             });
     }
@@ -1242,7 +1245,24 @@ fn scene_path_without_scene(path: &str) -> &str {
 
 fn asset_display_name(path: &str) -> String {
     let file = path.rsplit('/').next().unwrap_or(path);
-    file.strip_suffix(".glb").unwrap_or(file).to_string()
+    let stem = file.strip_suffix(".glb").unwrap_or(file);
+    let mut label = String::with_capacity(stem.len() + 4);
+    let mut previous_lowercase = false;
+    for ch in stem.chars() {
+        if ch == '_' || ch == '-' {
+            if !label.ends_with(' ') {
+                label.push(' ');
+            }
+            previous_lowercase = false;
+            continue;
+        }
+        if ch.is_uppercase() && previous_lowercase {
+            label.push(' ');
+        }
+        previous_lowercase = ch.is_lowercase() || ch.is_ascii_digit();
+        label.push(ch);
+    }
+    label
 }
 
 fn asset_category_from_path(path: &str) -> String {

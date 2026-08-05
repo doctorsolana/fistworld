@@ -36,7 +36,7 @@ from mathutils import Vector
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from item_kit import CHAMFER, FACES, Item, TOP, shade, wipe   # noqa: E402
 
-OUT_BLEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools.blend")
+OUT_BLEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), "work_tools.blend")
 
 # --- palette (linear) --------------------------------------------------------------------------------
 C_HAFT      = (0.2350, 0.1380, 0.0560)     # ash handle

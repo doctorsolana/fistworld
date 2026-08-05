@@ -7580,6 +7580,7 @@ dependencies = [
  "rand 0.8.5",
  "ron 0.8.1",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

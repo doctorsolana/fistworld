@@ -1,6 +1,6 @@
 """Author the animation set for basemodel_v2, split into a BODY layer and a FACE layer.
 
-    blender asset_creation/basemodel_v2.blend --background --python asset_creation/character/animate_basemodel_v2.py
+    blender asset_creation/character/humanoid.blend --background --python asset_creation/character/animate_basemodel_v2.py
 
 Two layers, so mood and action combine freely at runtime:
 
@@ -35,7 +35,7 @@ import bpy
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Beside this script. The reorg into character/ left this pointing one level up, at a
 # path nothing reads -- clips would be authored into a file the exporter never opens.
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "basemodel_v2.blend")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "humanoid.blend")
 
 D = math.radians
 BODY_LOOP = 96        # 4 s at 24 fps -- a relaxed idle needs room to hold between glances; frame BODY_LOOP+1 duplicates frame 1

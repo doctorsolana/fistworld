@@ -234,7 +234,7 @@ impl EditorUiState {
             return format!("{path} (direct-path)");
         }
         self.selected_prop_kind()
-            .map(|kind| kind.id().to_string())
+            .map(|kind| format!("{} ({})", kind.display_name(), kind.id()))
             .unwrap_or_else(|| "unknown".to_string())
     }
 

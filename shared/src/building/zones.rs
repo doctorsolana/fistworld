@@ -127,7 +127,7 @@ mod tests {
         let buildings = vec![
             (
                 Vec3::new(4.0, 0.0, 6.0),
-                BuildingType::TownHall,
+                BuildingType::MootHall,
                 30.0f32.to_radians(),
             ),
             (
@@ -178,7 +178,7 @@ mod rotation_tests {
     /// standing inside a finished house.
     #[test]
     fn the_zone_covers_the_ground_the_model_actually_stands_on() {
-        let kind = BuildingType::TownHall;
+        let kind = BuildingType::MootHall;
         let def = kind.definition();
         let centre = Vec3::new(137.0, 0.0, -64.0);
 
@@ -213,7 +213,7 @@ mod rotation_tests {
     /// looks at the chunk the tree is in.
     #[test]
     fn chunk_bounds_cover_every_rotated_corner() {
-        let kind = BuildingType::TownHall;
+        let kind = BuildingType::MootHall;
         let centre = Vec3::new(137.0, 0.0, -64.0);
         for step in 0..16 {
             let rotation = std::f32::consts::TAU * step as f32 / 16.0;
@@ -248,7 +248,7 @@ mod rotation_tests {
     /// transform actually INVERT the quaternion the renderer used?
     #[test]
     fn world_to_local_is_the_exact_inverse_of_the_model_rotation() {
-        let kind = BuildingType::TownHall;
+        let kind = BuildingType::MootHall;
         let centre = Vec3::new(137.0, 0.0, -64.0);
         // Deliberately asymmetric, and not on an axis, so any sign or transpose
         // error shows up instead of cancelling.

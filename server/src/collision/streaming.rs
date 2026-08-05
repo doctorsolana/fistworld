@@ -257,7 +257,7 @@ mod tests {
             chunk_a,
             vec![BuildZoneEntry::from_building(
                 Vec3::new(4.0, 0.0, 4.0),
-                BuildingType::TownHall,
+                BuildingType::MootHall,
                 0.0,
             )],
         );

@@ -1,6 +1,6 @@
 """Verify a .glb against this repo's Bevy 0.19 character conventions. Pure stdlib, no Blender.
 
-    python3 asset_creation/character/inspect_glb.py client/assets/characters/voxel_boy.glb
+    python3 asset_creation/character/inspect_glb.py client/assets/characters/Humanoid.glb
 """
 
 import json

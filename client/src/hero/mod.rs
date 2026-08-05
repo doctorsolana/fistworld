@@ -1,7 +1,7 @@
 //! Hero rendering + control: the client half of the embodied character.
 //!
 //! The server owns hero position/rotation (see server/src/player/hero.rs);
-//! this module attaches the voxel_boy glb to replicated Hero entities,
+//! this module attaches the canonical humanoid glb to replicated Hero entities,
 //! dresses them from their replicated [`HeroOutfit`], drives the walk
 //! animation from observed velocity, smooths the streamed transform, and
 //! turns clicks into spawn/move commands.

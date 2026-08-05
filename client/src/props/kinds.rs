@@ -6,20 +6,25 @@ pub(crate) fn is_tree_kind(kind: PropKind) -> bool {
     use shared::props::PropKind::*;
     matches!(
         kind,
-        Tree_01
-            | Tree_02
-            | Tree_08
-            | Tree_09
-            | Tree_10
-            | Tree_18
-            | Tree_29
-            | Dead_tree_1
-            | Dead_tree_2
-            | Dead_tree_3
-            | Pine_Tree_1
-            | Pine_Tree_2
-            | Pine_Tree_3
-            | Pine_Tree_4
+        BroadleafNarrowA
+            | OakA
+            | BroadleafLargeA
+            | BroadleafSpreadingA
+            | BirchA
+            | BirchB
+            | ChestnutA
+            | BroadleafHighCrownA
+            | BroadleafTallA
+            | DeadTreeA
+            | DeadTreeB
+            | DeadTreeC
+            | DeadGnarledA
+            | PineA
+            | PineB
+            | PineTallA
+            | PineTallB
+            | PineYoungA
+            | PineYoungB
     )
 }
 
@@ -31,5 +36,5 @@ pub(crate) fn is_tree_kind(kind: PropKind) -> bool {
 /// cover could be drawn.
 pub(crate) fn uses_swap_mesh_lod(kind: PropKind) -> bool {
     use shared::props::PropKind::*;
-    is_tree_kind(kind) || matches!(kind, Grass_Patch | Grass_Tall)
+    is_tree_kind(kind) || matches!(kind, GrassShortA | GrassTallA)
 }

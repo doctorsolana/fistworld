@@ -17,16 +17,15 @@ struct TreeMeshLabels {
 fn tree_mesh_labels(kind: shared::props::PropKind) -> Option<TreeMeshLabels> {
     use shared::props::PropKind::*;
     match kind {
-        Tree_01 | Tree_02 | Tree_08 | Tree_09 | Tree_10 | Tree_18 | Tree_29 => {
-            Some(TreeMeshLabels {
-                lod0_label: "Mesh0/Primitive0",
-                lod1_label: Some("Mesh1/Primitive0"),
-                material_label: "Material0",
-            })
-        }
+        BroadleafNarrowA | OakA | BroadleafLargeA | BroadleafSpreadingA | BirchA | BirchB
+        | ChestnutA | BroadleafHighCrownA | BroadleafTallA => Some(TreeMeshLabels {
+            lod0_label: "Mesh0/Primitive0",
+            lod1_label: Some("Mesh1/Primitive0"),
+            material_label: "Material0",
+        }),
         // Dead trees now HAVE a LOD1. They did not when this table was written:
         // the bought ones were a single mesh, so lod1_label had to be None.
-        Dead_tree_1 | Dead_tree_2 | Dead_tree_3 => Some(TreeMeshLabels {
+        DeadTreeA | DeadTreeB | DeadTreeC | DeadGnarledA => Some(TreeMeshLabels {
             lod0_label: "Mesh0/Primitive0",
             lod1_label: Some("Mesh1/Primitive0"),
             material_label: "Material0",
@@ -46,7 +45,7 @@ fn tree_mesh_labels(kind: shared::props::PropKind) -> Option<TreeMeshLabels> {
         // objection is gone -- and with it the reason the pines rendered full detail
         // from 0 m to the far cutoff, which made 2,834 of them cost more than all
         // 19,622 broadleaf trees combined.
-        Pine_Tree_1 | Pine_Tree_2 | Pine_Tree_3 | Pine_Tree_4 => Some(TreeMeshLabels {
+        PineA | PineB | PineTallA | PineTallB | PineYoungA | PineYoungB => Some(TreeMeshLabels {
             lod0_label: "Mesh0/Primitive0",
             lod1_label: Some("Mesh1/Primitive0"),
             material_label: "Material0",
@@ -77,7 +76,7 @@ fn tree_mesh_labels(kind: shared::props::PropKind) -> Option<TreeMeshLabels> {
         // Cost of never swapping, measured: ~640k triangles in view against
         // ~250k, on a world whose trees are 30 MILLION. It buys uniform ground
         // for 1.3% of what the forest already costs.
-        Grass_Patch | Grass_Tall => Some(TreeMeshLabels {
+        GrassShortA | GrassTallA => Some(TreeMeshLabels {
             lod0_label: "Mesh0/Primitive0",
             lod1_label: None,
             material_label: "Material0",

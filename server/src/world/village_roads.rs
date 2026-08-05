@@ -1290,7 +1290,7 @@ fn settlement_kind_for_art(building_type: BuildingType) -> SettlementBuildingKin
         BuildingType::LumberjackHut => SettlementBuildingKind::LumberjackHut,
         BuildingType::Farmstead => SettlementBuildingKind::Farmstead,
         BuildingType::FishermansHut => SettlementBuildingKind::FishermansHut,
-        BuildingType::TownHall => SettlementBuildingKind::Hall,
+        BuildingType::MootHall => SettlementBuildingKind::Hall,
         BuildingType::PlaceholderMarket => SettlementBuildingKind::Market,
         BuildingType::PlaceholderTavern => SettlementBuildingKind::Tavern,
         BuildingType::PlaceholderChurch => SettlementBuildingKind::Church,
@@ -3852,8 +3852,11 @@ mod tests {
         let rotation = 0.0;
         let (door, approach) = doorway_approach(kind, position, rotation);
         let tree = door.lerp(approach, 0.55);
-        let (colliders, derived) =
-            one_static_prop(PropKind::Tree_08, Vec3::new(tree.x, 0.0, tree.y), 0.9);
+        let (colliders, derived) = one_static_prop(
+            PropKind::BroadleafLargeA,
+            Vec3::new(tree.x, 0.0, tree.y),
+            0.9,
+        );
 
         assert!(!doorway_road_apron_is_clear_of_props(
             kind, position, rotation, &colliders, &derived,
@@ -3873,8 +3876,11 @@ mod tests {
         let center = Vec2::new(20.0, -10.0);
         let local_tree = Vec2::new(3.7, 4.9);
         let tree = center + shared::rotation::local_to_world_xz(local_tree, rotation);
-        let (colliders, derived) =
-            one_static_prop(PropKind::Tree_09, Vec3::new(tree.x, 0.0, tree.y), 0.7);
+        let (colliders, derived) = one_static_prop(
+            PropKind::BroadleafSpreadingA,
+            Vec3::new(tree.x, 0.0, tree.y),
+            0.7,
+        );
 
         assert!(!rotated_rect_is_clear_of_props(
             center,
@@ -3896,7 +3902,7 @@ mod tests {
 
     #[test]
     fn route_certification_uses_the_same_tree_collision_as_movement() {
-        let (colliders, derived) = one_static_prop(PropKind::Tree_08, Vec3::ZERO, 1.0);
+        let (colliders, derived) = one_static_prop(PropKind::BroadleafLargeA, Vec3::ZERO, 1.0);
         let blocked = [Vec2::new(-4.0, 0.0), Vec2::new(4.0, 0.0)];
         let detour = [
             Vec2::new(-4.0, 0.0),

@@ -8,7 +8,7 @@ Confirm any claim yourself:
 
 ```
 python3 asset_creation/resources/verify_facing.py
-python3 asset_creation/character/inspect_glb.py client/assets/characters/voxel_boy.glb
+python3 asset_creation/character/inspect_glb.py client/assets/characters/Humanoid.glb
 ```
 
 ---
@@ -21,10 +21,10 @@ python3 asset_creation/character/inspect_glb.py client/assets/characters/voxel_b
 | Hammer | `game_assets/tools/HammerFraming.glb` | 0.48 m, 120 tri |
 | Scythe | `game_assets/tools/ScytheMowing.glb` | 1.32 m, 276 tri |
 | Icons | `ui/goods/{axe,hammer,scythe}.png` | 512², RGBA, transparent |
-| Joint | `attach.tool.R` on `voxel_boy.glb` | **did not previously exist in the glb** |
-| Clip | `harvest` | 32 frames, 1.33 s, in `voxel_boy.ron` |
+| Joint | `attach.tool.R` on `Humanoid.glb` | **did not previously exist in the glb** |
+| Clip | `harvest` | 32 frames, 1.33 s, in `Humanoid.ron` |
 
-`voxel_boy.glb` is 994 KB, 18 joints, 14 actions. `chop` and `build` were **re-authored** — see §3.
+`Humanoid.glb` is 994 KB, 18 joints, 14 actions. `chop` and `build` were **re-authored** — see §3.
 
 ---
 

@@ -43,11 +43,11 @@ STEM = os.path.splitext(os.path.basename(bpy.data.filepath))[0]
 # Explicit, because the .blend stem is a working name and the shipped path is a game-facing one.
 # The wheat field is not a building and does not live with them.
 GLB_PATH = {
-    "cabin_lowpoly": "game_assets/buildings/village/LogCabin.glb",
+    "log_cabin": "game_assets/buildings/village/LogCabin.glb",
     "lumberjack_hut": "game_assets/buildings/village/LumberjackHut.glb",
     "farmstead": "game_assets/buildings/village/Farmstead.glb",
     "wheat_field": "game_assets/environment/crops/WheatField.glb",
-    "town_hall": "game_assets/buildings/village/TownHall.glb",
+    "moot_hall": "game_assets/buildings/village/MootHall.glb",
     "fishermans_hut": "game_assets/buildings/village/FishermansHut.glb",
     "fishing_pier": "game_assets/environment/shore/FishingPier.glb",
 }

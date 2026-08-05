@@ -1123,34 +1123,45 @@ fn choose_forest_kind(preset: ForestBrushPreset, group: ForestPropGroup, roll: f
     use PropKind::*;
 
     const BROADLEAF_TREES: &[PropKind] = &[
-        Tree_01, Tree_02, Tree_08, Tree_09, Tree_10, Tree_18, Tree_29,
+        BroadleafNarrowA,
+        OakA,
+        BroadleafLargeA,
+        BroadleafSpreadingA,
+        BirchA,
+        BirchB,
+        ChestnutA,
+        BroadleafHighCrownA,
+        BroadleafTallA,
     ];
-    const PINE_TREES: &[PropKind] = &[Pine_Tree_1, Pine_Tree_2, Pine_Tree_3, Pine_Tree_4];
-    const DEAD_TREES: &[PropKind] = &[Dead_tree_1, Dead_tree_2, Dead_tree_3];
+    const PINE_TREES: &[PropKind] = &[PineA, PineB, PineTallA, PineTallB, PineYoungA, PineYoungB];
+    const DEAD_TREES: &[PropKind] = &[DeadTreeA, DeadTreeB, DeadTreeC, DeadGnarledA];
     const MIXED_TREES: &[PropKind] = &[
-        Tree_01,
-        Tree_02,
-        Tree_08,
-        Tree_09,
-        Tree_10,
-        Tree_18,
-        Tree_29,
-        Pine_Tree_1,
-        Pine_Tree_2,
-        Pine_Tree_3,
-        Pine_Tree_4,
+        BroadleafNarrowA,
+        OakA,
+        BroadleafLargeA,
+        BroadleafSpreadingA,
+        BirchA,
+        BirchB,
+        ChestnutA,
+        BroadleafHighCrownA,
+        BroadleafTallA,
+        PineA,
+        PineB,
+        PineTallA,
+        PineTallB,
+        PineYoungA,
+        PineYoungB,
     ];
-    const BUSHES: &[PropKind] = &[Bush_01, Bush_02, Bush_03, Bush_04];
-    const ROCKS: &[PropKind] = &[Rock_1, Rock_2, Rock_3, Rock_4, Rock_5];
-    const FLOWERS: &[PropKind] = &[Flower_01, Flower_03, Spring_Flower_06, Spring_Flower_08];
+    const BUSHES: &[PropKind] = &[BushA, BushB, BushC];
+    const ROCKS: &[PropKind] = &[SmallRockA, SmallRockB, SmallRockC, BoulderA, BoulderB];
+    const FLOWERS: &[PropKind] = &[FlowerA, FlowerB, FlowerC, FlowerD];
     // The leaf-litter meshes were deleted (corrupt: 283-357 m bounding boxes on a
     // ground-detail prop). Small flowers are the nearest surviving ground dressing.
     //
-    // These named `Flower_05` and `Spring_Flower_09` before the flower kinds were
-    // de-duplicated. Those were aliases for `Flower_D.glb` and `Flower_B.glb`, so
-    // the kinds below draw exactly the same two meshes as before.
-    const LEAVES: &[PropKind] = &[Spring_Flower_08, Flower_03];
-    const DEAD_GROUND: &[PropKind] = &[Spring_Flower_08, Rock_1, Rock_2, Rock_3];
+    // The removed leaf-litter meshes were corrupt. Small flowers and stones are
+    // the nearest surviving ground dressing.
+    const LEAVES: &[PropKind] = &[FlowerD, FlowerB];
+    const DEAD_GROUND: &[PropKind] = &[FlowerD, SmallRockA, SmallRockB, SmallRockC];
 
     match group {
         ForestPropGroup::Tree => match preset {
@@ -1165,7 +1176,7 @@ fn choose_forest_kind(preset: ForestBrushPreset, group: ForestPropGroup, roll: f
         // which is what a brush stroke wants. The old comment here described
         // three grass kinds that no longer exist -- the bought 06/07 tufts and
         // the single blade were replaced by the two repo-built patches.
-        ForestPropGroup::Grass => Grass_Tall,
+        ForestPropGroup::Grass => GrassTallA,
         ForestPropGroup::GroundCover => match preset {
             ForestBrushPreset::Deadwood => choose_from(DEAD_GROUND, roll),
             _ => {

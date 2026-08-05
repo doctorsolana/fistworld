@@ -15,16 +15,14 @@ use super::{
 /// per-instance height jitter; trees/bushes keep their authored colors.
 pub(super) fn is_grass_kind(kind: shared::props::PropKind) -> bool {
     use shared::props::PropKind::*;
-    matches!(kind, Grass_Patch | Grass_Tall)
+    matches!(kind, GrassShortA | GrassTallA)
 }
 
 /// Kinds that get wind sway (trunk-rooted plants; flowers and ground clutter
 /// are too small to read).
 fn is_swayable(kind: shared::props::PropKind) -> bool {
     use shared::props::PropKind::*;
-    is_tree_kind(kind)
-        || is_grass_kind(kind)
-        || matches!(kind, Bush_01 | Bush_02 | Bush_03 | Bush_04)
+    is_tree_kind(kind) || is_grass_kind(kind) || matches!(kind, BushA | BushB | BushC)
 }
 
 /// Per-kind sway: amplitude in metres at the tip, and FLUTTER rate.
@@ -42,7 +40,7 @@ fn sway_strength(kind: shared::props::PropKind) -> (f32, f32) {
         return (0.22, 1.4);
     }
     match kind {
-        Bush_01 | Bush_02 | Bush_03 | Bush_04 => (0.030, 1.25),
+        BushA | BushB | BushC => (0.030, 1.25),
         // Trees. The first number is METRES AT THE TIP, so 0.055 was 5.5 cm on
         // a canopy 6-8 m up -- physically defensible and visually nothing,
         // especially from an RTS camera where that is a fraction of a pixel.
@@ -294,34 +292,38 @@ pub(super) fn needs_foliage_materials(kind: shared::props::PropKind) -> bool {
     matches!(
         kind,
         // environment/trees
-        Tree_01
-            | Tree_02
-            | Tree_08
-            | Tree_09
-            | Tree_10
-            | Tree_18
-            | Tree_29
-            // environment/trees_dead
-            | Dead_tree_1
-            | Dead_tree_2
-            | Dead_tree_3
-            // environment/trees_pine
-            | Pine_Tree_1
-            | Pine_Tree_2
-            | Pine_Tree_3
-            | Pine_Tree_4
+        BroadleafNarrowA
+            | OakA
+            | BroadleafLargeA
+            | BroadleafSpreadingA
+            | BirchA
+            | BirchB
+            | ChestnutA
+            | BroadleafHighCrownA
+            | BroadleafTallA
+            // environment/trees/dead
+            | DeadTreeA
+            | DeadTreeB
+            | DeadTreeC
+            | DeadGnarledA
+            // environment/trees/conifer
+            | PineA
+            | PineB
+            | PineTallA
+            | PineTallB
+            | PineYoungA
+            | PineYoungB
             // environment/bushes
-            | Bush_01
-            | Bush_02
-            | Bush_03
-            | Bush_04
+            | BushA
+            | BushB
+            | BushC
             // environment/flowers
-            | Flower_01
-            | Flower_03
-            | Spring_Flower_06
-            | Spring_Flower_08
+            | FlowerA
+            | FlowerB
+            | FlowerC
+            | FlowerD
             // environment/grass
-            | Grass_Patch
-            | Grass_Tall
+            | GrassShortA
+            | GrassTallA
     )
 }

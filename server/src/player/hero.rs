@@ -648,7 +648,7 @@ mod tests {
 
         let mut app = App::new();
         app.insert_resource(WorldTerrain::default());
-        let tree_kind = PropKind::Tree_01;
+        let tree_kind = PropKind::BroadleafNarrowA;
         let tree_position = Vec3::new(5.0, 0.0, 0.0);
         let mut colliders = StaticColliders::default();
         colliders.cells.insert((0, 0), vec![1]);

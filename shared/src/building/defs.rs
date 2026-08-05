@@ -11,7 +11,8 @@ pub enum BuildingType {
     LogCabin,
     LumberjackHut,
     Farmstead,
-    TownHall,
+    #[serde(alias = "TownHall")]
+    MootHall,
     FishermansHut,
     /// Generated blockouts used by the settlement simulation until authored
     /// civic art arrives. They deliberately have no scene path: the client
@@ -26,7 +27,7 @@ pub const ALL_BUILDING_TYPES: &[BuildingType] = &[
     BuildingType::LogCabin,
     BuildingType::LumberjackHut,
     BuildingType::Farmstead,
-    BuildingType::TownHall,
+    BuildingType::MootHall,
     BuildingType::FishermansHut,
 ];
 
@@ -41,7 +42,7 @@ impl BuildingType {
             BuildingType::LogCabin => "building_log_cabin",
             BuildingType::LumberjackHut => "building_lumberjack_hut",
             BuildingType::Farmstead => "building_farmstead",
-            BuildingType::TownHall => "building_town_hall",
+            BuildingType::MootHall => "building_moot_hall",
             BuildingType::FishermansHut => "building_fishermans_hut",
             BuildingType::PlaceholderMarket => "placeholder_market",
             BuildingType::PlaceholderTavern => "placeholder_tavern",
@@ -57,7 +58,7 @@ impl BuildingType {
                 Some("game_assets/buildings/village/LumberjackHut.glb#Scene0")
             }
             BuildingType::Farmstead => Some("game_assets/buildings/village/Farmstead.glb#Scene0"),
-            BuildingType::TownHall => Some("game_assets/buildings/village/TownHall.glb#Scene0"),
+            BuildingType::MootHall => Some("game_assets/buildings/village/MootHall.glb#Scene0"),
             BuildingType::FishermansHut => {
                 Some("game_assets/buildings/village/FishermansHut.glb#Scene0")
             }
@@ -97,7 +98,7 @@ impl BuildingType {
                 color: Color::srgb(0.40, 0.27, 0.17),
                 model_path: Some("game_assets/buildings/village/LumberjackHut.glb#Scene0"),
             },
-            // The FIELD is a separate asset (PropKind::Wheat_Field) because it must be walkable —
+            // The FIELD is a separate asset (PropKind::WheatField) because it must be walkable —
             // see the note on its manifest absence. This footprint is the house and farmyard only;
             // Farmstead.glb ships an `Anchor_Field` empty marking where the field belongs.
             BuildingType::Farmstead => BuildingDef {
@@ -111,16 +112,16 @@ impl BuildingType {
             },
             // Two storeys, but a village hall rather than a courthouse: 6.45 x 8.74 on the ground,
             // 8.18 m to the tip of the bell cupola's finial. Measured off the glb.
-            BuildingType::TownHall => BuildingDef {
+            BuildingType::MootHall => BuildingDef {
                 building_type: *self,
-                display_name: "Town Hall",
+                display_name: "Moot Hall",
                 footprint: Vec2::new(6.45, 8.74),
                 height: 8.18,
                 flatten_radius: 2.2,
                 color: Color::srgb(0.43, 0.29, 0.18),
-                model_path: Some("game_assets/buildings/village/TownHall.glb#Scene0"),
+                model_path: Some("game_assets/buildings/village/MootHall.glb#Scene0"),
             },
-            // The PIER is a separate asset (PropKind::Fishing_Pier) because it must be walkable —
+            // The PIER is a separate asset (PropKind::FishingPier) because it must be walkable —
             // a convex hull over hut + jetty would enclose the open water between them. This
             // footprint is the hut and its shore yard; FishermansHut.glb ships `Anchor_Pier`
             // marking where the pier's landward end butts on.

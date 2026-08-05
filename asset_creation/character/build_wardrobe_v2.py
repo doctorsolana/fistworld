@@ -1,6 +1,6 @@
 """Build the v2 wardrobe: shorts, shirts and hair.
 
-    blender asset_creation/basemodel_v2.blend --background --python asset_creation/character/build_wardrobe_v2.py
+    blender asset_creation/character/humanoid.blend --background --python asset_creation/character/build_wardrobe_v2.py
 
 Garments are PARAMETRIC CHAMFERED BOXES, not copies of the body bisected and Solidified as in v1.
 The body is boxes, so a garment is a slightly larger box, and building them directly sidesteps every
@@ -37,9 +37,9 @@ import wardrobe_items as W   # noqa: E402  -- pure data; see that file to add an
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # The .blend sits BESIDE this script. It used to live one level up, and the reorg into
 # character/ left this path pointing at a file that no longer exists — the build would have
-# saved to asset_creation/basemodel_v2.blend and the exporter would have kept reading the
+# saved outside asset_creation/character and the exporter would have kept reading the
 # stale one, silently shipping a wardrobe without the new items.
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "basemodel_v2.blend")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "humanoid.blend")
 CHAMFER = 0.008
 
 # Measured body parts this wardrobe is fitted to:
@@ -402,12 +402,12 @@ log(f"wardrobe: {sorted(o.name for o in wardrobe.objects)}")
 log(f"default outfit: {sorted(DEFAULT)}")
 # A manifest, so the game enumerates the wardrobe instead of hardcoding node names. RON to match
 # the repo's other manifests (client/assets/colliders_manifest.ron).
-manifest = os.path.join(REPO, "client", "assets", "characters", "voxel_boy.ron")
+manifest = os.path.join(REPO, "client", "assets", "characters", "Humanoid.ron")
 os.makedirs(os.path.dirname(manifest), exist_ok=True)
 anims = sorted(a.name for a in bpy.data.actions)
 with open(manifest, "w") as fh:
     fh.write("(\n  version: 1,\n")
-    fh.write('  scene: "characters/voxel_boy.glb#Scene0",\n')
+    fh.write('  scene: "characters/Humanoid.glb#Scene0",\n')
     fh.write("  body: \"Character_Base\",\n")
     fh.write("  slots: [\n")
     for slot, names in W.SLOTS.items():

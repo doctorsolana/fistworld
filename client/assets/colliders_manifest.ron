@@ -2,149 +2,184 @@
   version: 1,
   entries: [
     // =========================================================================
-    // environment/rocks - collidable rocks
+    // environment/rocks
     // =========================================================================
     (
-      kind: "rock_1",
-      gltf_path: "game_assets/environment/rocks/Rock_A.glb#Scene0",
+      kind: "small_rock_a",
+      gltf_path: "game_assets/environment/rocks/SmallRockA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: XZRadiusPercentile(percentile: 0.90),
       collidable: true,
     ),
     (
-      kind: "rock_2",
-      gltf_path: "game_assets/environment/rocks/Rock_B.glb#Scene0",
+      kind: "small_rock_b",
+      gltf_path: "game_assets/environment/rocks/SmallRockB.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: XZRadiusPercentile(percentile: 0.90),
       collidable: true,
     ),
     (
-      kind: "rock_3",
-      gltf_path: "game_assets/environment/rocks/Rock_C.glb#Scene0",
+      kind: "small_rock_c",
+      gltf_path: "game_assets/environment/rocks/SmallRockC.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: XZRadiusPercentile(percentile: 0.90),
       collidable: true,
     ),
     (
-      kind: "rock_4",
-      gltf_path: "game_assets/environment/rocks/Rock_A.glb#Scene0",
+      kind: "boulder_a",
+      gltf_path: "game_assets/environment/rocks/BoulderA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: XZRadiusPercentile(percentile: 0.90),
       collidable: true,
     ),
     (
-      kind: "rock_5",
-      gltf_path: "game_assets/environment/rocks/Rock_B.glb#Scene0",
+      kind: "boulder_b",
+      gltf_path: "game_assets/environment/rocks/BoulderB.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: XZRadiusPercentile(percentile: 0.90),
       collidable: true,
     ),
 
     // =========================================================================
-    // environment/trees (trunk core: lower Y + XZ percentile to exclude twigs)
+    // environment/trees/broadleaf (trunk core)
     // =========================================================================
     (
-      kind: "tree_01",
-      gltf_path: "game_assets/environment/trees/Tree01_Graft.glb#Scene0",
+      kind: "broadleaf_narrow_a",
+      gltf_path: "game_assets/environment/trees/broadleaf/BroadleafNarrowA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
     (
-      kind: "tree_02",
-      gltf_path: "game_assets/environment/trees/Oak_A.glb#Scene0",
+      kind: "oak_a",
+      gltf_path: "game_assets/environment/trees/broadleaf/OakA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
     (
-      kind: "tree_08",
-      gltf_path: "game_assets/environment/trees/Broadleaf_Big_A.glb#Scene0",
+      kind: "broadleaf_large_a",
+      gltf_path: "game_assets/environment/trees/broadleaf/BroadleafLargeA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
     (
-      kind: "tree_09",
-      gltf_path: "game_assets/environment/trees/Tree09_Graft.glb#Scene0",
+      kind: "broadleaf_spreading_a",
+      gltf_path: "game_assets/environment/trees/broadleaf/BroadleafSpreadingA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
     (
-      kind: "tree_10",
-      gltf_path: "game_assets/environment/trees/Birch_A.glb#Scene0",
+      kind: "birch_a",
+      gltf_path: "game_assets/environment/trees/broadleaf/BirchA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
     (
-      kind: "tree_18",
-      gltf_path: "game_assets/environment/trees/Chestnut_A.glb#Scene0",
+      kind: "birch_b",
+      gltf_path: "game_assets/environment/trees/broadleaf/BirchB.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
     (
-      kind: "tree_29",
-      gltf_path: "game_assets/environment/trees/Tree29_Graft.glb#Scene0",
+      kind: "chestnut_a",
+      gltf_path: "game_assets/environment/trees/broadleaf/ChestnutA.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "broadleaf_high_crown_a",
+      gltf_path: "game_assets/environment/trees/broadleaf/BroadleafHighCrownA.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "broadleaf_tall_a",
+      gltf_path: "game_assets/environment/trees/broadleaf/BroadleafTallA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
 
     // =========================================================================
-    // environment/trees_dead (trunk core)
+    // environment/trees/dead (trunk core)
     // =========================================================================
     (
-      kind: "dead_tree_1",
-      gltf_path: "game_assets/environment/trees_dead/Dead_A.glb#Scene0",
+      kind: "dead_tree_a",
+      gltf_path: "game_assets/environment/trees/dead/DeadTreeA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
     (
-      kind: "dead_tree_2",
-      gltf_path: "game_assets/environment/trees_dead/Dead_B.glb#Scene0",
+      kind: "dead_tree_b",
+      gltf_path: "game_assets/environment/trees/dead/DeadTreeB.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
     (
-      kind: "dead_tree_3",
-      gltf_path: "game_assets/environment/trees_dead/Dead_C.glb#Scene0",
+      kind: "dead_tree_c",
+      gltf_path: "game_assets/environment/trees/dead/DeadTreeC.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "dead_gnarled_a",
+      gltf_path: "game_assets/environment/trees/dead/DeadGnarledA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
 
     // =========================================================================
-    // environment/trees_pine (trunk core)
+    // environment/trees/conifer (trunk core)
     // =========================================================================
     (
-      kind: "pine_tree_1",
-      gltf_path: "game_assets/environment/trees_pine/Pine_A.glb#Scene0",
+      kind: "pine_a",
+      gltf_path: "game_assets/environment/trees/conifer/PineA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
     (
-      kind: "pine_tree_2",
-      gltf_path: "game_assets/environment/trees_pine/Pine_B.glb#Scene0",
+      kind: "pine_b",
+      gltf_path: "game_assets/environment/trees/conifer/PineB.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
     (
-      kind: "pine_tree_3",
-      gltf_path: "game_assets/environment/trees_pine/Pine_Tall_A.glb#Scene0",
+      kind: "pine_tall_a",
+      gltf_path: "game_assets/environment/trees/conifer/PineTallA.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
     ),
     (
-      kind: "pine_tree_4",
-      gltf_path: "game_assets/environment/trees_pine/Pine_Small_A.glb#Scene0",
+      kind: "pine_tall_b",
+      gltf_path: "game_assets/environment/trees/conifer/PineTallB.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "pine_young_a",
+      gltf_path: "game_assets/environment/trees/conifer/PineYoungA.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
+      collidable: true,
+    ),
+    (
+      kind: "pine_young_b",
+      gltf_path: "game_assets/environment/trees/conifer/PineYoungB.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: TrunkCore(y_percent: 0.35, xz_percentile: 0.85),
       collidable: true,
@@ -153,7 +188,7 @@
     // =========================================================================
     // buildings/village
     // =========================================================================
-    // Built in-repo by asset_creation/houses/build_cabin_lowpoly.py, not a purchased asset.
+    // Built in-repo by asset_creation/houses/build_log_cabin.py, not a purchased asset.
     //
     // A HULL, not decomposition, because this is a top-down RTS: the thing units need is a footprint
     // to walk around. VHACD would spend dozens of convex pieces describing log ends and roof steps
@@ -189,7 +224,7 @@
     // takes in the farmyard (hay bales, sheaves, scythe) as well as the house, which is intended —
     // units should walk round them.
     //
-    // NOTE the WHEAT FIELD is deliberately absent from this file. It is PropKind::Wheat_Field, a
+    // NOTE the WHEAT FIELD is deliberately absent from this file. It is PropKind::WheatField, a
     // separate glb, and a crop field must be WALKABLE so farmers can stand in it to harvest. An
     // asset with no entry here has no collider, which is how it says so. It is also why the field
     // is not part of Farmstead.glb: the baker gathers every mesh in a scene and VertexFilter has no
@@ -201,7 +236,7 @@
     // takes in the shore yard (net rack, fish line, crates, oars) as well as the hut.
     //
     // NOTE the PIER is deliberately absent from this file, exactly like the wheat field. It is
-    // PropKind::Fishing_Pier, its own glb, and units must be able to WALK OUT ALONG IT. It is also
+    // PropKind::FishingPier, its own glb, and units must be able to WALK OUT ALONG IT. It is also
     // why the pier is not part of FishermansHut.glb: one convex hull over a hut and a 7 m jetty
     // encloses every metre of open water between them.
     (
@@ -212,8 +247,8 @@
       collidable: true,
     ),
     (
-      kind: "building_town_hall",
-      gltf_path: "game_assets/buildings/village/TownHall.glb#Scene0",
+      kind: "building_moot_hall",
+      gltf_path: "game_assets/buildings/village/MootHall.glb#Scene0",
       mode: ConvexHull,
       vertex_filter: LowerYPercent ( percent: 0.558 ),
       collidable: true,

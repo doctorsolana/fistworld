@@ -1731,7 +1731,7 @@ fn village_simulation_lab() {
                             shared::building::BuildingType::FishermansHut => {
                                 SettlementBuildingKind::FishermansHut
                             }
-                            shared::building::BuildingType::TownHall => {
+                            shared::building::BuildingType::MootHall => {
                                 SettlementBuildingKind::Hall
                             }
                             shared::building::BuildingType::PlaceholderMarket => {

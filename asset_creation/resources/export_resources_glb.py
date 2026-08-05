@@ -1,6 +1,6 @@
-"""resources.blend -> one .glb per carried bundle, under game_assets/resources/carried/.
+"""carried_resources.blend or work_tools.blend -> one .glb per item.
 
-    blender asset_creation/resources/resources.blend --background --python asset_creation/resources/export_resources_glb.py
+    blender asset_creation/resources/carried_resources.blend --background --python asset_creation/resources/export_resources_glb.py
     python3 asset_creation/resources/inspect_resource_glb.py client/assets/game_assets/resources/carried/WoodBundle.glb
 
 NO ROTATION, unlike the building exporter. Buildings are authored facing -X and turned -90 deg about Z
@@ -24,7 +24,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 from item_manifest import ITEMS as MANIFEST   # noqa: E402
 
-# Whatever this .blend happens to hold. resources.blend and tools.blend both go through here.
+# Whatever this .blend holds. Both canonical item workbenches go through here.
 ITEMS = [n for n in MANIFEST if n in bpy.data.objects]
 assert ITEMS, f"none of {sorted(MANIFEST)} are in {os.path.basename(bpy.data.filepath)}"
 
