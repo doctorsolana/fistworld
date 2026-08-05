@@ -28,7 +28,12 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<crate::world::regions::ClientInterest>();
     app.init_resource::<crate::world::regions::StrategicClock>();
     app.init_resource::<crate::world::village::VillageClock>();
+    app.init_resource::<crate::world::village::SettlementEconomyRuntime>();
+    app.init_resource::<crate::world::village::history::SettlementHistoryRuntime>();
+    app.init_resource::<crate::world::village::ambient::AmbientClock>();
+    app.init_resource::<crate::world::village::ambient::AmbientSpotCache>();
     app.init_resource::<crate::world::village::PublishedTerrainDeltas>();
+    app.init_resource::<crate::world::village_roads::VillageRoadGraph>();
     app.init_resource::<crate::world::pathfinding::PathfindingBudgetSettings>();
     app.init_resource::<crate::world::dev::DevMode>();
     app.init_resource::<collision::building_index::BuildingSpatialIndex>();

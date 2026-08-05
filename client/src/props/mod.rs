@@ -4,8 +4,8 @@
 
 mod assets;
 mod debug;
-mod ground_cover;
 pub(crate) mod foliage;
+mod ground_cover;
 mod kinds;
 mod lod;
 mod plugin;

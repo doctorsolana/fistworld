@@ -7,6 +7,7 @@
 //! cursor.
 
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::picking::hover::HoverMap;
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageSender};
 
@@ -113,35 +114,74 @@ pub(super) fn handle_person_rows(
     }
 }
 
-/// Mouse wheel scrolls the people list. Bevy 0.19 gives the scrolling
-/// viewport (`Overflow::scroll_y`) but not the input that drives it.
-pub(super) fn scroll_people_list(
+const SCROLL_LINE_HEIGHT: f32 = 28.0;
+
+/// Send wheel input into the UI hierarchy under the pointer.
+///
+/// This follows Bevy 0.19's official scroll example: the event starts at the
+/// hovered leaf and bubbles until a scrollable ancestor consumes it. That is
+/// what lets the file tree and detail sheet scroll independently instead of a
+/// global wheel handler guessing which pane the player meant.
+pub(super) fn send_scroll_events(
     mut wheel: MessageReader<MouseWheel>,
-    mut viewports: Query<(&mut ScrollPosition, &ComputedNode), With<PeopleListViewport>>,
-    content: Query<&ComputedNode, With<PeopleListContent>>,
+    hover_map: Res<HoverMap>,
+    mut commands: Commands,
 ) {
-    let mut delta = 0.0;
     for event in wheel.read() {
-        delta += match event.unit {
-            // Line deltas are ~1 per notch; give them a usable row-sized step.
-            MouseScrollUnit::Line => event.y * 28.0,
-            MouseScrollUnit::Pixel => event.y,
-        };
-    }
-    if delta == 0.0 {
-        return;
-    }
-    for (mut scroll, viewport) in viewports.iter_mut() {
-        // Clamp so the list cannot be flung past its own content.
-        let content_height = content
-            .iter()
-            .map(|node| node.size().y)
-            .fold(0.0_f32, f32::max);
-        let max_scroll = (content_height - viewport.size().y).max(0.0);
-        let next = (scroll.0.y - delta).clamp(0.0, max_scroll);
-        if scroll.0.y != next {
-            scroll.0.y = next;
+        let mut delta = -Vec2::new(event.x, event.y);
+        if event.unit == MouseScrollUnit::Line {
+            delta *= SCROLL_LINE_HEIGHT;
         }
+        for pointer_map in hover_map.values() {
+            for entity in pointer_map.keys().copied() {
+                commands.trigger(EncyclopediaScroll { entity, delta });
+            }
+        }
+    }
+}
+
+/// Wheel delta in logical UI pixels, bubbling toward a scrollable ancestor.
+#[derive(EntityEvent, Debug)]
+#[entity_event(propagate, auto_propagate)]
+pub(super) struct EncyclopediaScroll {
+    entity: Entity,
+    delta: Vec2,
+}
+
+pub(super) fn on_scroll(
+    mut event: On<EncyclopediaScroll>,
+    mut nodes: Query<(&mut ScrollPosition, &Node, &ComputedNode)>,
+) {
+    let Ok((mut position, node, computed)) = nodes.get_mut(event.entity) else {
+        return;
+    };
+    let max_offset = (computed.content_size() - computed.size()) * computed.inverse_scale_factor();
+    let delta = &mut event.delta;
+
+    if node.overflow.x == OverflowAxis::Scroll && delta.x != 0.0 {
+        let at_edge = if delta.x > 0.0 {
+            position.x >= max_offset.x
+        } else {
+            position.x <= 0.0
+        };
+        if !at_edge {
+            position.x = (position.x + delta.x).clamp(0.0, max_offset.x.max(0.0));
+            delta.x = 0.0;
+        }
+    }
+    if node.overflow.y == OverflowAxis::Scroll && delta.y != 0.0 {
+        let at_edge = if delta.y > 0.0 {
+            position.y >= max_offset.y
+        } else {
+            position.y <= 0.0
+        };
+        if !at_edge {
+            position.y = (position.y + delta.y).clamp(0.0, max_offset.y.max(0.0));
+            delta.y = 0.0;
+        }
+    }
+    if *delta == Vec2::ZERO {
+        event.propagate(false);
     }
 }
 
@@ -150,11 +190,16 @@ pub(super) fn close_on_escape_or_backdrop(
     guard: Res<ClickGuard>,
     mouse: Res<ButtonInput<MouseButton>>,
     backdrop: Query<&Interaction, (With<EncyclopediaBackdrop>, Changed<Interaction>)>,
+    close_button: Query<&Interaction, (With<EncyclopediaCloseButton>, Changed<Interaction>)>,
     mut open: ResMut<EncyclopediaOpen>,
 ) {
-    let clicked_out =
-        guard.0 && mouse.just_pressed(MouseButton::Left) && handle_backdrop_pressed(&backdrop);
-    if keyboard.just_pressed(KeyCode::Escape) || clicked_out {
+    let clicked = guard.0 && mouse.just_pressed(MouseButton::Left);
+    let clicked_out = clicked && handle_backdrop_pressed(&backdrop);
+    let clicked_close = clicked
+        && close_button
+            .iter()
+            .any(|interaction| *interaction == Interaction::Pressed);
+    if keyboard.just_pressed(KeyCode::Escape) || clicked_out || clicked_close {
         open.0 = false;
     }
 }
@@ -251,5 +296,67 @@ pub(super) fn handle_retinue_button(
             unit: entity,
             commanded: !already_mine,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::ecs::system::RunSystemOnce;
+
+    use super::*;
+
+    #[test]
+    fn close_button_closes_the_encyclopedia() {
+        let mut world = World::new();
+        let mut mouse = ButtonInput::<MouseButton>::default();
+        mouse.press(MouseButton::Left);
+        world.insert_resource(mouse);
+        world.insert_resource(ButtonInput::<KeyCode>::default());
+        world.insert_resource(ClickGuard(true));
+        world.insert_resource(EncyclopediaOpen(true));
+        world.spawn((EncyclopediaBackdrop, Interaction::None));
+        world.spawn((EncyclopediaCloseButton, Interaction::Pressed));
+
+        world.run_system_once(close_on_escape_or_backdrop).unwrap();
+
+        assert!(!world.resource::<EncyclopediaOpen>().0);
+    }
+
+    #[test]
+    fn wheel_event_bubbles_to_and_scrolls_the_people_viewport() {
+        let mut app = App::new();
+        app.add_observer(on_scroll);
+
+        let viewport = app
+            .world_mut()
+            .spawn((
+                Node {
+                    overflow: Overflow::scroll_y(),
+                    ..default()
+                },
+                ComputedNode {
+                    size: Vec2::new(320.0, 100.0),
+                    content_size: Vec2::new(320.0, 300.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+            ))
+            .id();
+        let hovered_row = app
+            .world_mut()
+            .spawn((Node::default(), ChildOf(viewport)))
+            .id();
+
+        app.world_mut()
+            .entity_mut(hovered_row)
+            .trigger(|entity| EncyclopediaScroll {
+                entity,
+                delta: Vec2::new(0.0, SCROLL_LINE_HEIGHT),
+            });
+
+        assert_eq!(
+            app.world().get::<ScrollPosition>(viewport).unwrap().y,
+            SCROLL_LINE_HEIGHT
+        );
     }
 }

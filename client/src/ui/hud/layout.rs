@@ -398,8 +398,8 @@ fn selection_plate() -> impl Bundle {
             position_type: PositionType::Absolute,
             bottom: Val::Px(26.0),
             left: Val::Percent(50.0),
-            margin: UiRect::left(Val::Px(-112.0)),
-            width: Val::Px(224.0),
+            margin: UiRect::left(Val::Px(-148.0)),
+            width: Val::Px(296.0),
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             column_gap: Val::Px(10.0),
@@ -447,6 +447,31 @@ fn selection_plate() -> impl Bundle {
                     ..default()
                 },
                 TextColor(INK_MUTED),
+            ),
+            (
+                SelectionExpandButton,
+                Button,
+                Node {
+                    display: Display::None,
+                    height: Val::Px(27.0),
+                    padding: UiRect::axes(Val::Px(9.0), Val::Px(5.0)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                    ..default()
+                },
+                BackgroundColor(BUTTON_NORMAL),
+                BorderColor::from(PLATE_RULE_SOFT),
+                children![(
+                    Text::new("EXPAND"),
+                    TextFont {
+                        font_size: FontSize::Px(9.0),
+                        ..default()
+                    },
+                    TextColor(INK),
+                    Pickable::IGNORE,
+                )],
             ),
         ],
     )

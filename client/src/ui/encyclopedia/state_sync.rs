@@ -15,10 +15,7 @@ use crate::ui::hud::GodCapability;
 use crate::ui::styles::{ACCENT_COLOR, TEXT_COLOR, TEXT_MUTED};
 
 /// The camera must not pan and world clicks must not fire underneath.
-pub(super) fn sync_input_state(
-    open: Res<EncyclopediaOpen>,
-    mut input_state: ResMut<InputState>,
-) {
+pub(super) fn sync_input_state(open: Res<EncyclopediaOpen>, mut input_state: ResMut<InputState>) {
     if input_state.encyclopedia_open != open.0 {
         input_state.encyclopedia_open = open.0;
     }
@@ -51,6 +48,7 @@ pub(super) fn receive_character_roster(
                     existing.affiliation = entry.affiliation;
                     existing.online = entry.online;
                     existing.is_self = entry.is_self;
+                    existing.attributes = Some(entry.attributes);
                     // Knowing OF someone from the roster does not make them
                     // known -- god mode reveals unknown records still marked
                     // unknown, so the fog stays visible rather than being
@@ -67,6 +65,19 @@ pub(super) fn receive_character_roster(
                         prestige: 0,
                         online: entry.online,
                         commanded_by: None,
+                        residence: None,
+                        home: None,
+                        occupation: None,
+                        workplace: None,
+                        wallet: None,
+                        nutrition: None,
+                        activity: None,
+                        attributes: Some(entry.attributes),
+                        work_status: None,
+                        daily_wage: None,
+                        workforce_requirements: None,
+                        inventory: None,
+                        carried: None,
                     });
                 }
             }
@@ -119,7 +130,163 @@ pub(super) fn learn_visible_characters(
                 known: true,
                 is_self: false,
                 commanded_by: commanded.map(|c| c.0.clone()),
+                residence: None,
+                home: None,
+                occupation: None,
+                workplace: None,
+                wallet: None,
+                nutrition: None,
+                activity: None,
+                attributes: None,
+                work_status: None,
+                daily_wage: None,
+                workforce_requirements: None,
+                inventory: None,
+                carried: None,
             });
+        }
+    }
+}
+
+/// Refresh the last-known life facts for characters currently replicated.
+///
+/// Workplace and cabin are derived from the building rosters themselves, so
+/// the encyclopedia cannot claim a job or bed that the corresponding building
+/// does not also show.
+pub(super) fn refresh_visible_person_facts(
+    seen: Query<(
+        &shared::components::CharacterName,
+        Option<&shared::components::Residence>,
+        Option<&shared::components::Occupation>,
+        Option<&shared::components::WorkStatus>,
+        Option<&shared::economy::Wallet>,
+        Option<&shared::components::Nutrition>,
+        Option<&shared::components::CharacterActivity>,
+        Option<&shared::components::CharacterAttributes>,
+        Option<&shared::economy::GoodsInventory>,
+        Option<&shared::economy::CarriedLoad>,
+    )>,
+    buildings: Query<(
+        &shared::components::SettlementBuilding,
+        Option<&shared::economy::BusinessWagePolicy>,
+        Option<&shared::economy::WorkforceRequirements>,
+    )>,
+    households: Query<(
+        &shared::components::SettlementBuilding,
+        &shared::components::Household,
+    )>,
+    administrations: Query<(
+        &shared::components::Settlement,
+        &shared::components::MootAdministration,
+    )>,
+    mut people: ResMut<KnownPeople>,
+) {
+    for (
+        name,
+        residence,
+        occupation,
+        work_status,
+        wallet,
+        nutrition,
+        activity,
+        attributes,
+        inventory,
+        carried,
+    ) in seen.iter()
+    {
+        let employment = buildings
+            .iter()
+            .find(|(building, _, _)| building.workers.iter().any(|worker| worker == &name.0));
+        let workplace = employment.map(|(building, _, _)| {
+            format!("{} in {}", building.kind.label(), building.settlement)
+        });
+        let next_daily_wage = employment
+            .and_then(|(_, wage, _)| wage)
+            .map(|wage| wage.daily_wage);
+        let next_requirements = employment
+            .and_then(|(_, _, requirements)| requirements)
+            .copied();
+        let civic_employment = administrations.iter().find_map(|(settlement, office)| {
+            let role = if office.reeve.as_deref() == Some(name.0.as_str()) {
+                Some(("Reeve", Some(shared::economy::FOUNDING_DAILY_WAGE)))
+            } else if office.market_porter.as_deref() == Some(name.0.as_str()) {
+                Some(("Market Porter", Some(shared::economy::FOUNDING_DAILY_WAGE)))
+            } else if office.road_steward.as_deref() == Some(name.0.as_str()) {
+                Some(("Road Steward", Some(office.road_steward_daily_salary)))
+            } else if office.guards.iter().any(|guard| guard == &name.0) {
+                Some(("Guard", None))
+            } else if office.city_workers.iter().any(|worker| worker == &name.0) {
+                Some(("City Worker", None))
+            } else {
+                None
+            }?;
+            Some((
+                format!("{} at the Moot Hall in {}", role.0, settlement.name),
+                role.1,
+            ))
+        });
+        let workplace =
+            workplace.or_else(|| civic_employment.as_ref().map(|(place, _)| place.clone()));
+        let next_daily_wage =
+            next_daily_wage.or_else(|| civic_employment.and_then(|(_, wage)| wage));
+        let home = households
+            .iter()
+            .find(|(_, household)| {
+                household
+                    .residents
+                    .iter()
+                    .any(|resident| resident == &name.0)
+            })
+            .map(|(building, _)| format!("Cabin in {}", building.settlement));
+        let next_residence = residence.map(|residence| residence.0.clone());
+        let next_occupation = occupation
+            .and_then(|occupation| occupation.0.clone())
+            .or_else(|| work_status.map(|status| status.label().to_string()));
+        let next_wallet = wallet.map(|wallet| wallet.balance());
+        let next_nutrition = nutrition.copied();
+        let next_activity = activity.copied();
+        let next_attributes = attributes.copied();
+        let next_work_status = work_status.copied();
+        let next_inventory = inventory.cloned();
+        let next_carried = carried.copied();
+
+        let Some(current) = people.records.iter().find(|record| record.name == name.0) else {
+            continue;
+        };
+        let changed = current.residence != next_residence
+            || current.home != home
+            || current.occupation != next_occupation
+            || current.workplace != workplace
+            || current.wallet != next_wallet
+            || current.nutrition != next_nutrition
+            || current.activity != next_activity
+            || current.attributes != next_attributes
+            || current.work_status != next_work_status
+            || current.daily_wage != next_daily_wage
+            || current.workforce_requirements != next_requirements
+            || current.inventory != next_inventory
+            || current.carried != next_carried;
+        if !changed {
+            continue;
+        }
+        if let Some(record) = people
+            .records
+            .iter_mut()
+            .find(|record| record.name == name.0)
+        {
+            record.residence = next_residence;
+            record.home = home;
+            record.occupation = next_occupation;
+            record.workplace = workplace;
+            record.wallet = next_wallet;
+            record.nutrition = next_nutrition;
+            record.activity = next_activity;
+            record.attributes = next_attributes;
+            record.work_status = next_work_status;
+            record.daily_wage = next_daily_wage;
+            record.workforce_requirements = next_requirements;
+            record.inventory = next_inventory;
+            record.carried = next_carried;
         }
     }
 }
@@ -228,6 +395,7 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
+            flex_shrink: 0.0,
             column_gap: Val::Px(9.0),
             padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
             border_radius: BorderRadius::all(Val::Px(5.0)),
@@ -270,7 +438,15 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
         ));
         row.spawn((
             Text::new(if record.known {
-                record.affiliation.label().to_string()
+                if record.kind == PersonKind::Villager {
+                    record
+                        .occupation
+                        .as_deref()
+                        .unwrap_or("Unemployed")
+                        .to_uppercase()
+                } else {
+                    record.affiliation.label().to_string()
+                }
             } else {
                 "UNKNOWN".to_string()
             }),
@@ -396,13 +572,21 @@ pub(super) fn sync_detail_panel(
 
     let show_card = record.is_some();
     for mut node in card.iter_mut() {
-        let display = if show_card { Display::Flex } else { Display::None };
+        let display = if show_card {
+            Display::Flex
+        } else {
+            Display::None
+        };
         if node.display != display {
             node.display = display;
         }
     }
     for mut node in empty.iter_mut() {
-        let display = if show_card { Display::None } else { Display::Flex };
+        let display = if show_card {
+            Display::None
+        } else {
+            Display::Flex
+        };
         if node.display != display {
             node.display = display;
         }
@@ -429,6 +613,117 @@ pub(super) fn sync_detail_panel(
     }
     for (DetailStat(field), mut text) in stats.iter_mut() {
         let value = match field {
+            DetailField::Attributes => record.attributes.map_or_else(
+                || "No recent reading".to_string(),
+                |attributes| {
+                    format!(
+                        "Physique {} / Intelligence {} / Charm {} (max {})",
+                        attributes.physique(),
+                        attributes.intelligence(),
+                        attributes.charm(),
+                        shared::components::CharacterAttributes::MAX,
+                    )
+                },
+            ),
+            DetailField::Home => {
+                if !record.known {
+                    "Unrecorded".to_string()
+                } else if let Some(home) = &record.home {
+                    home.clone()
+                } else if let Some(place) = &record.residence {
+                    format!("Unhoused in {place}")
+                } else {
+                    "No settled home".to_string()
+                }
+            }
+            DetailField::Work => {
+                if !record.known {
+                    "Unrecorded".to_string()
+                } else if let Some(workplace) = &record.workplace {
+                    match &record.occupation {
+                        Some(job) => format!("{job} / {workplace}"),
+                        None => workplace.clone(),
+                    }
+                } else {
+                    record
+                        .occupation
+                        .clone()
+                        .unwrap_or_else(|| "Unemployed".to_string())
+                }
+            }
+            DetailField::Employment => {
+                let status = record
+                    .work_status
+                    .map(|status| status.label())
+                    .unwrap_or("Not assessed");
+                let wage = record.daily_wage.map_or_else(
+                    || "no recorded wage".to_string(),
+                    |wage| format!("{} coin/day", shared::economy::format_money(wage)),
+                );
+                let requirements = record.workforce_requirements.map_or_else(
+                    || "open to all skill levels".to_string(),
+                    |requirements| {
+                        format!(
+                            "requires P{} I{} C{}",
+                            requirements.minimum_physique.min(100),
+                            requirements.minimum_intelligence.min(100),
+                            requirements.minimum_charm.min(100),
+                        )
+                    },
+                );
+                format!("{status} / {wage} / {requirements}")
+            }
+            DetailField::Hunger => match record.nutrition {
+                Some(nutrition) if nutrition.is_hungry() => format!(
+                    "Hungry / missed {} meal{}",
+                    nutrition.consecutive_missed_meals,
+                    if nutrition.consecutive_missed_meals == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                ),
+                Some(nutrition) if nutrition.last_meal_day.is_some() => {
+                    format!("Fed / last ate day {}", nutrition.last_meal_day.unwrap())
+                }
+                Some(_) => "Not yet assessed".to_string(),
+                None => "No recent reading".to_string(),
+            },
+            DetailField::Wealth => record
+                .wallet
+                .map(|money| format!("{} coin", shared::economy::format_money(money)))
+                .unwrap_or_else(|| "No recent reading".to_string()),
+            DetailField::Inventory => record.inventory.as_ref().map_or_else(
+                || "No recent reading".to_string(),
+                |inventory| {
+                    let mut goods: Vec<_> = shared::economy::Good::ALL
+                        .iter()
+                        .filter_map(|good| {
+                            let amount = inventory.amount(*good);
+                            (amount > 0).then(|| format!("{} {amount}", good.label()))
+                        })
+                        .collect();
+                    if let Some(load) = record.carried.filter(|load| !load.is_empty()) {
+                        if let Some(good) = load.good {
+                            goods.push(format!("carrying {} {}", good.label(), load.amount));
+                        }
+                    }
+                    let contents = if goods.is_empty() {
+                        "empty".to_string()
+                    } else {
+                        goods.join(", ")
+                    };
+                    format!(
+                        "{} / {} bulk / {contents}",
+                        inventory.used_bulk(),
+                        inventory.bulk_capacity(),
+                    )
+                },
+            ),
+            DetailField::Activity => record
+                .activity
+                .map(|activity| activity.label().to_string())
+                .unwrap_or_else(|| "Not nearby".to_string()),
             DetailField::Affiliation => {
                 if record.known {
                     record.affiliation.label().to_string()
@@ -485,7 +780,11 @@ pub(super) fn sync_banner_controls(
     for (mut node, interaction, mut border) in buttons.iter_mut() {
         // Editable only in god mode, and only when the row it lives on is shown.
         let visible = god.0 && kind.is_some_and(|k| DetailField::Affiliation.applies_to(k));
-        let display = if visible { Display::Flex } else { Display::None };
+        let display = if visible {
+            Display::Flex
+        } else {
+            Display::None
+        };
         if node.display != display {
             node.display = display;
         }
@@ -552,7 +851,11 @@ pub(super) fn sync_retinue_button(
     let record = selected.0.as_deref().and_then(|name| people.find(name));
     let offerable = god.0 && record.is_some_and(|r| r.kind == PersonKind::Villager);
     for mut node in buttons.iter_mut() {
-        let display = if offerable { Display::Flex } else { Display::None };
+        let display = if offerable {
+            Display::Flex
+        } else {
+            Display::None
+        };
         if node.display != display {
             node.display = display;
         }

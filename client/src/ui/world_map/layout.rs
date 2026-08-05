@@ -56,11 +56,14 @@ pub(super) fn sync_map_open_state(
     sync_modal_cursor(map_open.0, &input_state, &windows, &mut cursor_opts);
 }
 
-pub(super) fn ensure_map_bounds(mut map_config: ResMut<MapUiConfig>) {
+pub(super) fn ensure_map_bounds(
+    mut map_config: ResMut<MapUiConfig>,
+    terrain: Res<shared::terrain::WorldTerrain>,
+) {
     if map_config.bounds.is_some() {
         return;
     }
-    map_config.bounds = Some(load_active_map_bounds());
+    map_config.bounds = Some(terrain.generator.active_map_bounds());
 }
 
 pub(super) fn spawn_map_ui(

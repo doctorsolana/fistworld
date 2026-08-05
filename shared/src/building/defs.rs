@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-
 /// Types of buildings that can be constructed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum BuildingType {
@@ -13,6 +12,13 @@ pub enum BuildingType {
     LumberjackHut,
     Farmstead,
     TownHall,
+    FishermansHut,
+    /// Generated blockouts used by the settlement simulation until authored
+    /// civic art arrives. They deliberately have no scene path: the client
+    /// draws their definitions as simple coloured boxes.
+    PlaceholderMarket,
+    PlaceholderTavern,
+    PlaceholderChurch,
 }
 
 /// All building types with GLTF models (for collider baking).
@@ -21,6 +27,7 @@ pub const ALL_BUILDING_TYPES: &[BuildingType] = &[
     BuildingType::LumberjackHut,
     BuildingType::Farmstead,
     BuildingType::TownHall,
+    BuildingType::FishermansHut,
 ];
 
 impl BuildingType {
@@ -35,24 +42,28 @@ impl BuildingType {
             BuildingType::LumberjackHut => "building_lumberjack_hut",
             BuildingType::Farmstead => "building_farmstead",
             BuildingType::TownHall => "building_town_hall",
+            BuildingType::FishermansHut => "building_fishermans_hut",
+            BuildingType::PlaceholderMarket => "placeholder_market",
+            BuildingType::PlaceholderTavern => "placeholder_tavern",
+            BuildingType::PlaceholderChurch => "placeholder_church",
         }
     }
 
     /// GLTF scene path for this building type.
     pub const fn scene_path(&self) -> Option<&'static str> {
         match self {
-            BuildingType::LogCabin => {
-                Some("game_assets/buildings/village/LogCabin.glb#Scene0")
-            }
+            BuildingType::LogCabin => Some("game_assets/buildings/village/LogCabin.glb#Scene0"),
             BuildingType::LumberjackHut => {
                 Some("game_assets/buildings/village/LumberjackHut.glb#Scene0")
             }
-            BuildingType::Farmstead => {
-                Some("game_assets/buildings/village/Farmstead.glb#Scene0")
+            BuildingType::Farmstead => Some("game_assets/buildings/village/Farmstead.glb#Scene0"),
+            BuildingType::TownHall => Some("game_assets/buildings/village/TownHall.glb#Scene0"),
+            BuildingType::FishermansHut => {
+                Some("game_assets/buildings/village/FishermansHut.glb#Scene0")
             }
-            BuildingType::TownHall => {
-                Some("game_assets/buildings/village/TownHall.glb#Scene0")
-            }
+            BuildingType::PlaceholderMarket
+            | BuildingType::PlaceholderTavern
+            | BuildingType::PlaceholderChurch => None,
         }
     }
 
@@ -108,6 +119,46 @@ impl BuildingType {
                 flatten_radius: 2.2,
                 color: Color::srgb(0.43, 0.29, 0.18),
                 model_path: Some("game_assets/buildings/village/TownHall.glb#Scene0"),
+            },
+            // The PIER is a separate asset (PropKind::Fishing_Pier) because it must be walkable —
+            // a convex hull over hut + jetty would enclose the open water between them. This
+            // footprint is the hut and its shore yard; FishermansHut.glb ships `Anchor_Pier`
+            // marking where the pier's landward end butts on.
+            BuildingType::FishermansHut => BuildingDef {
+                building_type: *self,
+                display_name: "Fisherman's Hut",
+                footprint: Vec2::new(6.44, 6.51),
+                height: 3.86,
+                flatten_radius: 1.4,
+                color: Color::srgb(0.41, 0.28, 0.18),
+                model_path: Some("game_assets/buildings/village/FishermansHut.glb#Scene0"),
+            },
+            BuildingType::PlaceholderMarket => BuildingDef {
+                building_type: *self,
+                display_name: "Marketplace (blockout)",
+                footprint: Vec2::new(9.0, 7.0),
+                height: 3.2,
+                flatten_radius: 1.8,
+                color: Color::srgb(0.67, 0.48, 0.23),
+                model_path: None,
+            },
+            BuildingType::PlaceholderTavern => BuildingDef {
+                building_type: *self,
+                display_name: "Tavern (blockout)",
+                footprint: Vec2::new(8.0, 7.0),
+                height: 4.4,
+                flatten_radius: 1.7,
+                color: Color::srgb(0.52, 0.25, 0.16),
+                model_path: None,
+            },
+            BuildingType::PlaceholderChurch => BuildingDef {
+                building_type: *self,
+                display_name: "Church (blockout)",
+                footprint: Vec2::new(8.0, 12.0),
+                height: 7.0,
+                flatten_radius: 2.0,
+                color: Color::srgb(0.58, 0.58, 0.54),
+                model_path: None,
             },
         }
     }

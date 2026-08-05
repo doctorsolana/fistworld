@@ -141,7 +141,13 @@ pub fn spawn_cloud_plane(
         CloudLayerPlane,
         NotShadowCaster,
         NotShadowReceiver,
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(CLOUD_PLANE_SIZE, CLOUD_PLANE_SIZE))),
+        Mesh3d(
+            meshes.add(
+                Plane3d::default()
+                    .mesh()
+                    .size(CLOUD_PLANE_SIZE, CLOUD_PLANE_SIZE),
+            ),
+        ),
         MeshMaterial3d(material),
         Transform::from_xyz(0.0, CLOUD_LAYER_HEIGHT, 0.0),
         GlobalTransform::default(),
@@ -268,8 +274,7 @@ pub fn update_cloud_plane(
             (b.max[0] - b.min[0]) * 0.5
         })
         .unwrap_or(4096.0);
-    let storm_anchor =
-        super::clouds::storm_center(seed_phase, world_seconds, half_extent);
+    let storm_anchor = super::clouds::storm_center(seed_phase, world_seconds, half_extent);
     let storm = Vec4::new(storm_anchor.x, storm_anchor.y, cover.storminess, 0.0);
 
     let sun_dir = sun

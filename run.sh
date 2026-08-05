@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run script for Fistworld
-# Usage: ./run.sh [server|client|both|multi|editor] [--release|--dev]
+# Usage: ./run.sh [server|client|both|testworld|realworld|multi|editor] [--release|--dev]
 #
 # BUILD PROFILE. This used to build --release every time, which meant a ten
 # minute wait for a one line change: release turns on thin LTO, which re-links
@@ -44,6 +44,60 @@ done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 
 MODE=${1:-both}
+
+# Rendered village fixtures retain both process logs so a visual observation can
+# be matched to authoritative server state after the window closes.
+CAPTURE_VILLAGE_LOGS=0
+VILLAGE_LOG_DIR=""
+
+# The rendered Village Lab is explicit rather than tied to the map id. This
+# preserves `CITYSIM_MAP_ID=village_lab ./run.sh` as an empty god-mode sandbox.
+if [[ "$MODE" == "testworld" || "$MODE" == "testlab" ]]; then
+    export CITYSIM_MAP_ID="village_lab"
+    export FISTWORLD_VILLAGE_LAB_RUNTIME="${FISTWORLD_VILLAGE_LAB_RUNTIME:-1}"
+    # One seeded village is the default visual debugging fixture. The dual
+    # climate comparison remains available with FISTWORLD_LAB_SCENARIO=dual.
+    export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-secure}"
+    export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-1}"
+    export FISTWORLD_VILLAGE_TRACE="${FISTWORLD_VILLAGE_TRACE:-1}"
+    export RUST_LOG="${FISTWORLD_TESTWORLD_RUST_LOG:-info}"
+    # Open directly over the fertile settlement at a useful inspection scale.
+    # These remain overridable for debugging another part of the map.
+    export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:-112,-158}"
+    export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-190}"
+    export FISTFORCE_AUTOCONNECT="${FISTFORCE_AUTOCONNECT:-LabObserver}"
+    CAPTURE_VILLAGE_LOGS=1
+    VILLAGE_LOG_DIR="${FISTWORLD_RUN_LOG_DIR:-$(pwd)/logs/testworld-$(date +%Y%m%d-%H%M%S)}"
+    mkdir -p "$VILLAGE_LOG_DIR"
+fi
+
+# A dense, uncurated reproduction on the ordinary generated world. Unlike the
+# compact Village Lab this mirrors a god-mode founding: empty store, normal
+# policy, and villagers who must gather their own first timber. Both processes
+# are tee'd so a visual playtest always leaves evidence behind.
+if [[ "$MODE" == "realworld" || "$MODE" == "reallab" ]]; then
+    export CITYSIM_MAP_ID="big_world"
+    export FISTWORLD_REALWORLD_LAB_RUNTIME="${FISTWORLD_REALWORLD_LAB_RUNTIME:-1}"
+    export FISTWORLD_REALWORLD_VILLAGERS="${FISTWORLD_REALWORLD_VILLAGERS:-32}"
+    export FISTWORLD_REALWORLD_AT="${FISTWORLD_REALWORLD_AT:--346,306}"
+    export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-1}"
+    export FISTWORLD_VILLAGE_TRACE="${FISTWORLD_VILLAGE_TRACE:-1}"
+    export FISTFORCE_SERVER_PERF="${FISTFORCE_SERVER_PERF:-1}"
+    export FISTFORCE_CLIENT_PERF="${FISTFORCE_CLIENT_PERF:-1}"
+    export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:--346,306}"
+    export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-240}"
+    export FISTFORCE_AUTOCONNECT="${FISTFORCE_AUTOCONNECT:-RealworldObserver}"
+    # Do not inherit a global warn-only RUST_LOG: the whole point of this mode
+    # is to leave a complete village record. Use the dedicated override when a
+    # narrower capture is intentional.
+    # INFO already records permits, deliveries, construction, work, roads,
+    # diagnostics and perf. Per-door DEBUG transitions become their own source
+    # of terminal/tee lag at 100x, so opt into them with the dedicated override.
+    export RUST_LOG="${FISTWORLD_REALWORLD_RUST_LOG:-info}"
+    CAPTURE_VILLAGE_LOGS=1
+    VILLAGE_LOG_DIR="${FISTWORLD_RUN_LOG_DIR:-$(pwd)/logs/realworld-$(date +%Y%m%d-%H%M%S)}"
+    mkdir -p "$VILLAGE_LOG_DIR"
+fi
 
 # `dev` is the one profile cargo names with a flag rather than a value.
 if [[ "$PROFILE" == "dev" ]]; then
@@ -136,10 +190,22 @@ case $MODE in
         echo -e "${BLUE}Starting map editor...${NC}"
         cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p editor -- "${@:2}"
         ;;
-    both)
+    both|testworld|testlab|realworld|reallab)
         cleanup_server
+        if [[ "$MODE" == "testworld" || "$MODE" == "testlab" ]]; then
+            echo -e "${YELLOW}Village Lab: ${FISTWORLD_LAB_SCENARIO}, seed 3, starting at ${FISTWORLD_LAB_WARP}x (HUD: pause / 1x / 10x / 100x)${NC}"
+            echo -e "${YELLOW}Logs: ${VILLAGE_LOG_DIR}${NC}"
+        fi
+        if [[ "$MODE" == "realworld" || "$MODE" == "reallab" ]]; then
+            echo -e "${YELLOW}Realworld Village Lab: ${FISTWORLD_REALWORLD_VILLAGERS} villagers at ${FISTWORLD_REALWORLD_AT}, starting at ${FISTWORLD_LAB_WARP}x${NC}"
+            echo -e "${YELLOW}Logs: ${VILLAGE_LOG_DIR}${NC}"
+        fi
         echo -e "${GREEN}Starting server in background...${NC}"
-        cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p server &
+        if [[ "$CAPTURE_VILLAGE_LOGS" -eq 1 ]]; then
+            cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p server 2>&1 | tee "$VILLAGE_LOG_DIR/server.log" &
+        else
+            cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p server &
+        fi
         SERVER_PID=$!
         STARTED_SERVER=1
         
@@ -147,7 +213,11 @@ case $MODE in
         sleep 2
         
         echo -e "${BLUE}Starting client...${NC}"
-        cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
+        if [[ "$CAPTURE_VILLAGE_LOGS" -eq 1 ]]; then
+            cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client 2>&1 | tee "$VILLAGE_LOG_DIR/client.log"
+        else
+            cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
+        fi
         
         # When client exits, kill the server
         echo -e "${GREEN}Client closed. Stopping server...${NC}"
@@ -201,10 +271,12 @@ case $MODE in
         echo -e "${GREEN}Client closed. Stopping server...${NC}"
         ;;
     *)
-        echo "Usage: ./run.sh [server|client|both|multi|editor|windows] [--release|--dev]"
+        echo "Usage: ./run.sh [server|client|both|testworld|realworld|multi|editor|windows] [--release|--dev]"
         echo "  server  - Start only the server"
         echo "  client  - Start only the client"
         echo "  both    - Start server then client (default)"
+        echo "  testworld - Watch one deterministic logged Village Lab settlement (starts at 1x)"
+        echo "  realworld - Watch a logged 32-villager stress village on big_world"
         echo "  multi   - Start server + 2 clients for multiplayer testing"
         echo "  editor  - Start map editor (pass map via --map <id>)"
         echo "  windows - Build & run Windows client with GPU (for WSL2)"

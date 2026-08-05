@@ -22,6 +22,8 @@ pub struct InputState {
     pub hero_creator_open: bool,
     /// True when the encyclopedia window is open.
     pub encyclopedia_open: bool,
+    /// True while an on-demand settlement/market history ledger is open.
+    pub history_open: bool,
 }
 
 impl InputState {
@@ -32,5 +34,6 @@ impl InputState {
             || self.debug_menu_open
             || self.hero_creator_open
             || self.encyclopedia_open
+            || self.history_open
     }
 }

@@ -2,7 +2,8 @@
 
 use bevy::prelude::*;
 use shared::components::{
-    Hero, HeroOutfit, Player, PlayerPosition, PlayerProgression, PlayerRotation,
+    CharacterAttributes, Hero, HeroOutfit, Player, PlayerPosition, PlayerProgression,
+    PlayerRotation,
 };
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 
@@ -25,7 +26,13 @@ pub fn update_periodic_player_save(
         &PlayerRotation,
         &PlayerProgression,
     )>,
-    heroes: Query<(&Hero, &PlayerPosition, &PlayerRotation, &HeroOutfit)>,
+    heroes: Query<(
+        &Hero,
+        &PlayerPosition,
+        &PlayerRotation,
+        &HeroOutfit,
+        &CharacterAttributes,
+    )>,
     time: Res<Time>,
     mut last_save_time: Local<f32>,
 ) {
@@ -37,25 +44,20 @@ pub fn update_periodic_player_save(
     *last_save_time = now;
 
     let mut saved_count = 0;
-    for (
-        player,
-        pos,
-        rot,
-        progression,
-    ) in players.iter()
-    {
+    for (player, pos, rot, progression) in players.iter() {
         let Some(name_lower) = profiles.peer_to_name.get(&player.client_id) else {
             continue;
         };
 
         // Heroes outlive connections, so the snapshot is only needed to
         // survive a server restart -- but it must be current when one happens.
-        let hero_state = heroes
+        let hero_snapshot = heroes
             .iter()
-            .find(|(hero, _, _, _)| hero.owner == player.client_id)
-            .map(|(_, position, rotation, outfit)| {
-                crate::player::hero::hero_save(position, rotation, outfit)
-            });
+            .find(|(hero, ..)| hero.owner == player.client_id);
+        let hero_state = hero_snapshot.map(|(_, position, rotation, outfit, _)| {
+            crate::player::hero::hero_save(position, rotation, outfit)
+        });
+        let attributes = hero_snapshot.map(|(_, _, _, _, attributes)| *attributes);
 
         let profile = PlayerProfile {
             version: PROFILE_VERSION,
@@ -70,8 +72,15 @@ pub fn update_periodic_player_save(
             level: progression.level,
             prestige: progression.prestige,
             reputation: progression.reputation,
-            stamina: progression.stamina,
-            intelligence: progression.intelligence,
+            stamina: attributes
+                .map(|attributes| u32::from(attributes.physique()))
+                .unwrap_or(progression.stamina),
+            intelligence: attributes
+                .map(|attributes| u32::from(attributes.intelligence()))
+                .unwrap_or(progression.intelligence),
+            charm: attributes
+                .map(|attributes| u32::from(attributes.charm()))
+                .unwrap_or(progression.charm),
             bank_gold: profiles
                 .profiles
                 .get(name_lower)

@@ -8,13 +8,12 @@ pub mod layout;
 pub mod state_sync;
 
 use actions::{
-    handle_mode_chip_button, handle_mode_toggle_key, handle_spawn_hero_button,
-    handle_warp_buttons,
+    handle_mode_chip_button, handle_mode_toggle_key, handle_spawn_hero_button, handle_warp_buttons,
 };
 use layout::{despawn_hud, spawn_hud};
 use state_sync::{
-    receive_dev_status, reset_dev_grant, style_warp_buttons, sync_clock_chip,
-    sync_god_panel, sync_mode_chip, sync_spawn_hero_button,
+    receive_dev_status, reset_dev_grant, style_warp_buttons, sync_clock_chip, sync_god_panel,
+    sync_mode_chip, sync_spawn_hero_button,
 };
 
 use bevy::prelude::*;
@@ -51,6 +50,7 @@ impl Plugin for HudPlugin {
                 handle_spawn_hero_button,
                 actions::handle_spawn_npc_button,
                 actions::handle_found_village_button,
+                actions::handle_selection_expand_button,
                 sync_clock_chip,
                 sync_mode_chip,
                 sync_god_panel,
@@ -100,7 +100,11 @@ fn tick_god_notice(
     }
     let showing = notice.seconds_left > 0.0;
     for (mut text, mut node) in labels.iter_mut() {
-        let wanted = if showing { Display::Flex } else { Display::None };
+        let wanted = if showing {
+            Display::Flex
+        } else {
+            Display::None
+        };
         if node.display != wanted {
             node.display = wanted;
         }
@@ -199,3 +203,6 @@ struct SelectionNameText;
 
 #[derive(Component)]
 struct SelectionStatusText;
+
+#[derive(Component)]
+struct SelectionExpandButton;

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use shared::building::{build_zones_by_chunk, point_in_any_build_zone_entries, BuildZoneEntry};
 use shared::building::{BuildingPosition, PlacedBuilding};
+use shared::components::VillageRoad;
 use shared::props::PropSpawn;
 use shared::terrain::{WorldTerrain, CHUNK_SIZE};
 use std::collections::HashSet;
@@ -154,6 +155,7 @@ pub(super) fn spawn_chunk_props(
     mut pending_spawns: ResMut<PendingPropSpawns>,
     mut prop_chunk_index: ResMut<PropChunkIndex>,
     build_zone_index: Res<BuildZoneChunkIndex>,
+    roads: Query<&VillageRoad>,
     world_root_query: Query<Entity, With<ClientWorldRoot>>,
     settings: Res<GraphicsSettings>,
     mut perf: ResMut<PerfHitchStats>,
@@ -199,16 +201,29 @@ pub(super) fn spawn_chunk_props(
         // 38,578 of those were pure cost from a camera 200 m up.
         //
         // Both halves of that changed. The patches are 36 triangles at LOD0 and
-        // 12 at LOD1, opaque and untextured, and they carry a 80 m
-        // `visible_end_distance` (props::tuning) so nothing outside a tight ring
-        // around the focus is ever submitted. What is left is the carpet you see
-        // when you actually zoom in, which is the thing that was missing.
+        // 12 at LOD1, and they carry a 240 m `visible_end_distance`
+        // (props::tuning) so nothing outside that ring is ever submitted. What
+        // is left is the carpet you see when you zoom in, which was missing.
+        //
+        // They are NOT untextured: each carries a 128x128 blade atlas with
+        // `alphaMode: MASK` (cutoff 0.5). MASK and not BLEND is the load-bearing
+        // part -- cutout keeps depth writes and needs no back-to-front sort,
+        // which is what makes thousands of overlapping patches affordable.
         if let Some(chunk_zones) = chunk_zones {
             spawns.retain(|spawn| {
                 let point_xz = Vec2::new(spawn.position.x, spawn.position.z);
                 !point_in_any_build_zone_entries(point_xz, chunk_zones)
             });
         }
+        spawns.retain(|spawn| {
+            // Mature obstacles are part of the road survey and must not blink
+            // away. Everything light enough to trample yields to the built
+            // prefix, including items queued before this road existed.
+            spawn.kind.is_some_and(|kind| kind.blocks_village_road())
+                || !roads.iter().any(|road| {
+                    road.contains_built_point(Vec2::new(spawn.position.x, spawn.position.z), 0.12)
+                })
+        });
         // Mark loaded immediately so the chunk is not re-enqueued while its
         // instances trickle in from the queue.
         loaded_prop_chunks.chunks.insert(coord);
@@ -262,6 +277,85 @@ pub(super) fn spawn_chunk_props(
         perf.props_instances_spawned += spawned_instances;
     }
     perf.props_spawn_ms += start.elapsed().as_secs_f32() * 1000.0;
+}
+
+/// Remove only light vegetation covered by newly completed road sections.
+///
+/// Trees and rocks remain because the server planned around them. Chunk
+/// indexes keep this bounded to the few chunks touched by the path rather than
+/// scanning every prop in view after each two-metre addition.
+pub(super) fn clear_props_for_built_village_roads(
+    mut commands: Commands,
+    changed_roads: Query<&VillageRoad, Changed<VillageRoad>>,
+    mut pending: ResMut<PendingPropSpawns>,
+    mut index: ResMut<PropChunkIndex>,
+    props: Query<(&GlobalTransform, Option<&PropKindTag>)>,
+) {
+    for road in changed_roads.iter() {
+        let Some((min_chunk, max_chunk)) = road_chunk_bounds(road, 0.25) else {
+            continue;
+        };
+        for cx in min_chunk.x..=max_chunk.x {
+            for cz in min_chunk.z..=max_chunk.z {
+                let coord = shared::terrain::ChunkCoord::new(cx, cz);
+                if let Some(entities) = index.by_chunk.get_mut(&coord) {
+                    entities.retain(|entity| {
+                        let Ok((transform, kind)) = props.get(*entity) else {
+                            return true;
+                        };
+                        if kind.is_some_and(|kind| kind.0.blocks_village_road()) {
+                            return true;
+                        }
+                        let at = transform.translation();
+                        if road.contains_built_point(Vec2::new(at.x, at.z), 0.12) {
+                            commands.entity(*entity).despawn();
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
+                for (queued, spawns) in pending.queue.iter_mut() {
+                    if *queued != coord {
+                        continue;
+                    }
+                    spawns.retain(|spawn| {
+                        spawn.kind.is_some_and(|kind| kind.blocks_village_road())
+                            || !road.contains_built_point(
+                                Vec2::new(spawn.position.x, spawn.position.z),
+                                0.12,
+                            )
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn road_chunk_bounds(
+    road: &VillageRoad,
+    padding: f32,
+) -> Option<(shared::terrain::ChunkCoord, shared::terrain::ChunkCoord)> {
+    let mut points = road.built_points().iter().copied();
+    let first = points.next()?;
+    let (mut min, mut max) = (first, first);
+    for point in points {
+        min = min.min(point);
+        max = max.max(point);
+    }
+    let extent = road.width * 0.5 + padding;
+    min -= Vec2::splat(extent);
+    max += Vec2::splat(extent);
+    Some((
+        shared::terrain::ChunkCoord::new(
+            (min.x / CHUNK_SIZE).floor() as i32,
+            (min.y / CHUNK_SIZE).floor() as i32,
+        ),
+        shared::terrain::ChunkCoord::new(
+            (max.x / CHUNK_SIZE).floor() as i32,
+            (max.y / CHUNK_SIZE).floor() as i32,
+        ),
+    ))
 }
 
 pub(super) fn spawn_prop_instance(

@@ -164,7 +164,8 @@ pub fn update_client_interest(
     // claimed to describe could silently drift apart.
     let mut keys: Vec<(Entity, RegionCoord, i32)> = Vec::with_capacity(commanders.iter().len());
     for (player, position, controlled_by) in commanders.iter() {
-        let rings = view_radius_to_rings(inputs.latest.get(&player.client_id).map(|i| i.view_radius));
+        let rings =
+            view_radius_to_rings(inputs.latest.get(&player.client_id).map(|i| i.view_radius));
         keys.push((
             controlled_by.owner,
             RegionCoord::from_world_pos(position.0),

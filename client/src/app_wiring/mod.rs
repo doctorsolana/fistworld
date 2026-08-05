@@ -7,9 +7,9 @@ pub mod systems;
 pub mod window;
 
 pub use plugins::setup_plugins;
-pub(crate) use window::apply_window_mode;
 pub use resources::setup_resources;
 pub use systems::setup_systems;
+pub(crate) use window::apply_window_mode;
 
 use window::apply_connect_window_settings;
 
@@ -28,8 +28,8 @@ use bevy::window::{
     Monitor, MonitorSelection, PrimaryMonitor, PrimaryWindow, WindowMode, WindowResolution,
 };
 use lightyear::prelude::client::ClientPlugins;
-use shared::protocol::{tick_duration, ProtocolPlugin};
 use shared::debug::DebugGizmoMode;
+use shared::protocol::{tick_duration, ProtocolPlugin};
 
 use crate::{
     audio, camera_rts, city, input, perf_overlay, profiling, props, render,

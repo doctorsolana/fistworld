@@ -2,6 +2,7 @@
 
 use super::*;
 use shared::water::{WATER_DEPTH_FADE_METERS, WATER_SURFACE_OFFSET};
+use std::collections::HashMap;
 
 /// Keep the animated shoreline mesh hidden beneath the bank at its outer edge.
 /// This must remain comfortably larger than the maximum shore-lap crest.
@@ -11,9 +12,24 @@ const WATER_SHORE_OVERLAP: f32 = 0.18;
 /// the coast — vertical depth alone fails on steep banks, where deep water
 /// starts a meter from the shoreline.
 const SHORE_DIST_MAX: f32 = 28.0;
-/// Cells scanned beyond the chunk when collecting shoreline points, so
+/// Cells scanned beyond the chunk when collecting shoreline segments, so
 /// distances stay correct across chunk borders (32m at 2m spacing).
 const SHORE_SCAN_MARGIN: i32 = 16;
+/// Two inexpensive Laplacian passes take the hard 2m-grid corners out of the
+/// distance contour used by foam. The actual water cut remains on the terrain
+/// crossing, so smoothing cannot uncover dry wedges along a bank.
+const SHORE_SMOOTH_PASSES: usize = 2;
+/// Never let smoothing pull a bank far enough to change a narrow channel's
+/// shape or jump across a terrain cell. This is deliberately below half of
+/// the 2m terrain spacing.
+const SHORE_SMOOTH_MAX_OFFSET: f32 = VERTEX_SPACING * 0.42;
+/// A crossing calculated from either of its two neighbouring cells needs the
+/// same identity, including around negative world coordinates. Millimetre
+/// quantisation is much finer than f32 terrain precision at the map edge.
+const SHORE_KEY_SCALE: f32 = 1024.0;
+
+type ShoreSegment = (Vec2, Vec2);
+type ShoreKey = (i32, i32);
 
 #[derive(Clone, Copy)]
 struct Corner {
@@ -29,6 +45,197 @@ struct WaterVertex {
     depth_norm: f32,
     signed_depth_norm: f32,
     shore_dist: f32,
+}
+
+/// Crossing of a signed terrain-minus-waterline field along one cell edge.
+///
+/// Using the signed field, rather than interpolating terrain toward the water
+/// level at only the first endpoint, matters for rivers: their surface slopes
+/// along the channel, so both the terrain and the local waterline can change
+/// across the same two-metre edge.
+fn shore_crossing(a: Vec2, a_delta: f32, b: Vec2, b_delta: f32) -> Option<Vec2> {
+    if (a_delta < 0.0) == (b_delta < 0.0) {
+        return None;
+    }
+    let denom = a_delta - b_delta;
+    let t = if denom.abs() < 1.0e-6 {
+        0.5
+    } else {
+        (a_delta / denom).clamp(0.0, 1.0)
+    };
+    Some(a.lerp(b, t))
+}
+
+fn push_shore_segment(
+    segments: &mut Vec<ShoreSegment>,
+    edges: &[Option<Vec2>; 4],
+    a: usize,
+    b: usize,
+) {
+    if let (Some(a), Some(b)) = (edges[a], edges[b]) {
+        segments.push((a, b));
+    }
+}
+
+/// Connect this marching-squares cell's crossings with the same topology used
+/// by the water triangles below. Keeping real line segments instead of an
+/// unordered cloud of edge points removes the small Voronoi scallops that used
+/// to make the wash and foam masks look blocky along otherwise smooth coasts.
+fn append_shore_segments(segments: &mut Vec<ShoreSegment>, mask: u8, edges: [Option<Vec2>; 4]) {
+    match mask {
+        1 | 14 => push_shore_segment(segments, &edges, 0, 3),
+        2 | 13 => push_shore_segment(segments, &edges, 0, 1),
+        3 | 12 => push_shore_segment(segments, &edges, 1, 3),
+        4 | 11 => push_shore_segment(segments, &edges, 1, 2),
+        5 => {
+            push_shore_segment(segments, &edges, 0, 3);
+            push_shore_segment(segments, &edges, 1, 2);
+        }
+        6 | 9 => push_shore_segment(segments, &edges, 0, 2),
+        7 | 8 => push_shore_segment(segments, &edges, 2, 3),
+        10 => {
+            push_shore_segment(segments, &edges, 0, 1);
+            push_shore_segment(segments, &edges, 2, 3);
+        }
+        _ => {}
+    }
+}
+
+fn distance_squared_to_segment(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let segment = b - a;
+    let t = ((p - a).dot(segment) / segment.length_squared().max(1.0e-6)).clamp(0.0, 1.0);
+    p.distance_squared(a + segment * t)
+}
+
+fn shore_key(point: Vec2) -> ShoreKey {
+    (
+        (point.x * SHORE_KEY_SCALE).round() as i32,
+        (point.y * SHORE_KEY_SCALE).round() as i32,
+    )
+}
+
+/// Smooth a connected marching-squares contour without increasing its vertex
+/// count. The scan margin means every edge used by this chunk has both of its
+/// neighbours available, including at chunk boundaries; therefore adjacent
+/// chunks calculate byte-for-byte matching seam positions independently.
+fn smooth_shore_segments(
+    raw_segments: &[ShoreSegment],
+) -> (HashMap<ShoreKey, Vec2>, HashMap<ShoreKey, Vec<ShoreKey>>) {
+    let mut original = HashMap::<ShoreKey, Vec2>::new();
+    let mut neighbours = HashMap::<ShoreKey, Vec<ShoreKey>>::new();
+
+    for &(a, b) in raw_segments {
+        let a_key = shore_key(a);
+        let b_key = shore_key(b);
+        original.entry(a_key).or_insert(a);
+        original.entry(b_key).or_insert(b);
+
+        let a_neighbours = neighbours.entry(a_key).or_default();
+        if !a_neighbours.contains(&b_key) {
+            a_neighbours.push(b_key);
+        }
+        let b_neighbours = neighbours.entry(b_key).or_default();
+        if !b_neighbours.contains(&a_key) {
+            b_neighbours.push(a_key);
+        }
+    }
+    for connected in neighbours.values_mut() {
+        connected.sort_unstable();
+    }
+
+    let mut positions = original.clone();
+    for _ in 0..SHORE_SMOOTH_PASSES {
+        let mut next = positions.clone();
+        for (&key, connected) in &neighbours {
+            if connected.len() != 2 {
+                continue;
+            }
+            let Some(&point) = positions.get(&key) else {
+                continue;
+            };
+            let (Some(&previous), Some(&following)) =
+                (positions.get(&connected[0]), positions.get(&connected[1]))
+            else {
+                continue;
+            };
+            let candidate = point * 0.5 + (previous + following) * 0.25;
+            let anchor = original[&key];
+            let offset = candidate - anchor;
+            next.insert(
+                key,
+                anchor + offset.clamp_length_max(SHORE_SMOOTH_MAX_OFFSET),
+            );
+        }
+        positions = next;
+    }
+
+    (positions, neighbours)
+}
+
+/// Four points for one rounded shoreline segment. Endpoints remain shared
+/// between cells, while the two interior points follow the connected contour's
+/// tangent. The small offset clamp prevents overshoot in tight river bends.
+fn shore_curve_points(
+    raw_a: Vec2,
+    raw_b: Vec2,
+    positions: &HashMap<ShoreKey, Vec2>,
+    neighbours: &HashMap<ShoreKey, Vec<ShoreKey>>,
+) -> [Vec2; 4] {
+    const CURVE_MAX_OFFSET: f32 = VERTEX_SPACING * 0.18;
+
+    let a_key = shore_key(raw_a);
+    let b_key = shore_key(raw_b);
+    let a = positions.get(&a_key).copied().unwrap_or(raw_a);
+    let b = positions.get(&b_key).copied().unwrap_or(raw_b);
+    let previous = neighbours
+        .get(&a_key)
+        .and_then(|keys| keys.iter().find(|&&key| key != b_key))
+        .and_then(|key| positions.get(key))
+        .copied()
+        .unwrap_or(a);
+    let following = neighbours
+        .get(&b_key)
+        .and_then(|keys| keys.iter().find(|&&key| key != a_key))
+        .and_then(|key| positions.get(key))
+        .copied()
+        .unwrap_or(b);
+    let tangent_a = (b - previous) * 0.5;
+    let tangent_b = (following - a) * 0.5;
+
+    let at = |t: f32| {
+        let t2 = t * t;
+        let t3 = t2 * t;
+        let curved = a * (2.0 * t3 - 3.0 * t2 + 1.0)
+            + tangent_a * (t3 - 2.0 * t2 + t)
+            + b * (-2.0 * t3 + 3.0 * t2)
+            + tangent_b * (t3 - t2);
+        let linear = a.lerp(b, t);
+        linear + (curved - linear).clamp_length_max(CURVE_MAX_OFFSET)
+    };
+
+    [a, at(1.0 / 3.0), at(2.0 / 3.0), b]
+}
+
+fn add_polygon(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    uvs: &mut Vec<[f32; 2]>,
+    colors: &mut Vec<[f32; 4]>,
+    indices: &mut Vec<u32>,
+    vertices: &[WaterVertex],
+) {
+    for i in 1..vertices.len() - 1 {
+        add_triangle(
+            positions,
+            normals,
+            uvs,
+            colors,
+            indices,
+            vertices[0],
+            vertices[i],
+            vertices[i + 1],
+        );
+    }
 }
 
 fn add_triangle(
@@ -84,9 +291,9 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
     };
     let waterline_at = |wx: f32, wz: f32| level_at(wx, wz) + WATER_SHORE_OVERLAP;
 
-    // Pass 1: collect shoreline crossing points in and around the chunk so
-    // every vertex can carry its horizontal distance to the coast.
-    let mut shore_points: Vec<Vec2> = Vec::new();
+    // Pass 1: collect connected shoreline segments in and around the chunk so
+    // every vertex can carry a continuous horizontal distance to the coast.
+    let mut shore_segments: Vec<ShoreSegment> = Vec::new();
     {
         let scan_min = -SHORE_SCAN_MARGIN;
         let scan_max = (CHUNK_RESOLUTION as i32 - 1) + SHORE_SCAN_MARGIN;
@@ -94,45 +301,55 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
             for xi in scan_min..=scan_max {
                 let x0 = origin_x + xi as f32 * VERTEX_SPACING;
                 let z0 = origin_z + zi as f32 * VERTEX_SPACING;
-                let h00 = terrain.get_height(x0, z0);
-                let line00 = waterline_at(x0, z0);
-                let above00 = h00 >= line00;
-                // East edge
                 let x1 = x0 + VERTEX_SPACING;
-                let h10 = terrain.get_height(x1, z0);
-                if above00 != (h10 >= waterline_at(x1, z0)) {
-                    let denom = h10 - h00;
-                    let t = if denom.abs() < 1e-6 {
-                        0.5
-                    } else {
-                        ((line00 - h00) / denom).clamp(0.0, 1.0)
-                    };
-                    shore_points.push(Vec2::new(x0 + t * VERTEX_SPACING, z0));
-                }
-                // South edge
                 let z1 = z0 + VERTEX_SPACING;
-                let h01 = terrain.get_height(x0, z1);
-                if above00 != (h01 >= waterline_at(x0, z1)) {
-                    let denom = h01 - h00;
-                    let t = if denom.abs() < 1e-6 {
-                        0.5
-                    } else {
-                        ((line00 - h00) / denom).clamp(0.0, 1.0)
-                    };
-                    shore_points.push(Vec2::new(x0, z0 + t * VERTEX_SPACING));
+                let points = [
+                    Vec2::new(x0, z0),
+                    Vec2::new(x1, z0),
+                    Vec2::new(x1, z1),
+                    Vec2::new(x0, z1),
+                ];
+                let deltas = points.map(|p| terrain.get_height(p.x, p.y) - waterline_at(p.x, p.y));
+                let wet = deltas.map(|delta| delta < 0.0);
+                let mask = (wet[0] as u8)
+                    | ((wet[1] as u8) << 1)
+                    | ((wet[2] as u8) << 2)
+                    | ((wet[3] as u8) << 3);
+                if mask == 0 || mask == 15 {
+                    continue;
                 }
+                let edges = [
+                    shore_crossing(points[0], deltas[0], points[1], deltas[1]),
+                    shore_crossing(points[1], deltas[1], points[2], deltas[2]),
+                    shore_crossing(points[2], deltas[2], points[3], deltas[3]),
+                    shore_crossing(points[3], deltas[3], points[0], deltas[0]),
+                ];
+                append_shore_segments(&mut shore_segments, mask, edges);
             }
         }
     }
 
+    let (smoothed_shore_points, shore_neighbours) = smooth_shore_segments(&shore_segments);
+    // Distance queries follow a rounded version of the terrain contour. The
+    // rendered cut stays exact, while this smoother field keeps diagonal foam
+    // fronts parallel to the bank instead of snapping to X/Z depth bands.
+    let mut curved_shore_segments = Vec::with_capacity(shore_segments.len() * 3);
+    for &(a, b) in &shore_segments {
+        let curve = shore_curve_points(a, b, &smoothed_shore_points, &shore_neighbours);
+        for pair in curve.windows(2) {
+            curved_shore_segments.push((pair[0], pair[1]));
+        }
+    }
+    let shore_segments = curved_shore_segments;
+
     let shore_dist_norm = |world_x: f32, world_z: f32| -> f32 {
-        if shore_points.is_empty() {
+        if shore_segments.is_empty() {
             return 1.0;
         }
         let p = Vec2::new(world_x, world_z);
         let mut best = f32::MAX;
-        for point in &shore_points {
-            best = best.min(point.distance_squared(p));
+        for &(a, b) in &shore_segments {
+            best = best.min(distance_squared_to_segment(p, a, b));
         }
         (best.sqrt() / SHORE_DIST_MAX).clamp(0.0, 1.0)
     };
@@ -154,18 +371,45 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
         }
     };
 
-    let edge_vertex = |a: Corner, b: Corner| {
-        let line = waterline_at(origin_x + a.local_x, origin_z + a.local_z);
-        let denom = b.height - a.height;
-        let mut t = if denom.abs() < 1e-6 {
+    let edge_crossing = |a: Corner, b: Corner| {
+        let a_world = Vec2::new(origin_x + a.local_x, origin_z + a.local_z);
+        let b_world = Vec2::new(origin_x + b.local_x, origin_z + b.local_z);
+        let a_delta = a.height - waterline_at(a_world.x, a_world.y);
+        let b_delta = b.height - waterline_at(b_world.x, b_world.y);
+        let denom = a_delta - b_delta;
+        let t = if denom.abs() < 1.0e-6 {
             0.5
         } else {
-            (line - a.height) / denom
+            (a_delta / denom).clamp(0.0, 1.0)
         };
-        t = t.clamp(0.0, 1.0);
-        let local_x = a.local_x + (b.local_x - a.local_x) * t;
-        let local_z = a.local_z + (b.local_z - a.local_z) * t;
+        a_world.lerp(b_world, t)
+    };
+
+    let boundary_vertex = |raw_world: Vec2| {
+        // Keep geometry on the terrain's exact marching-squares crossing.
+        // Moving this cut exposes dry triangular wedges at some wave phases.
+        let world = raw_world;
+        let local_x = world.x - origin_x;
+        let local_z = world.y - origin_z;
+        let line = waterline_at(origin_x + local_x, origin_z + local_z);
         make_vertex(local_x, local_z, line)
+    };
+
+    // Keep the cut on the exact terrain crossing, but sample its animated
+    // displacement more finely than the 2m source grid.
+    let subdivided_boundary = |raw_a: Vec2, raw_b: Vec2| {
+        [
+            raw_a,
+            raw_a.lerp(raw_b, 1.0 / 3.0),
+            raw_a.lerp(raw_b, 2.0 / 3.0),
+            raw_b,
+        ]
+        .map(|world| {
+            let local_x = world.x - origin_x;
+            let local_z = world.y - origin_z;
+            let line = waterline_at(world.x, world.y);
+            make_vertex(local_x, local_z, line)
+        })
     };
 
     for zi in 0..(CHUNK_RESOLUTION - 1) {
@@ -217,26 +461,110 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
             let v2 = make_vertex(c2.local_x, c2.local_z, c2.height);
             let v3 = make_vertex(c3.local_x, c3.local_z, c3.height);
 
-            let e0 = if w0 != w1 {
-                Some(edge_vertex(c0, c1))
+            let r0 = if w0 != w1 {
+                Some(edge_crossing(c0, c1))
             } else {
                 None
             };
-            let e1 = if w1 != w2 {
-                Some(edge_vertex(c1, c2))
+            let r1 = if w1 != w2 {
+                Some(edge_crossing(c1, c2))
             } else {
                 None
             };
-            let e2 = if w2 != w3 {
-                Some(edge_vertex(c2, c3))
+            let r2 = if w2 != w3 {
+                Some(edge_crossing(c2, c3))
             } else {
                 None
             };
-            let e3 = if w3 != w0 {
-                Some(edge_vertex(c3, c0))
+            let r3 = if w3 != w0 {
+                Some(edge_crossing(c3, c0))
             } else {
                 None
             };
+            let e0 = r0.map(boundary_vertex);
+            let e1 = r1.map(boundary_vertex);
+            let e2 = r2.map(boundary_vertex);
+            let e3 = r3.map(boundary_vertex);
+
+            // Boundary cells get two extra points along their exact terrain
+            // crossing. Fully wet cells keep the original two triangles, so
+            // ocean rendering cost is unchanged away from the bank.
+            if mask != 15 {
+                let mut polygon = |vertices: &[WaterVertex]| {
+                    add_polygon(
+                        &mut positions,
+                        &mut normals,
+                        &mut uvs,
+                        &mut colors,
+                        &mut indices,
+                        vertices,
+                    )
+                };
+                match mask {
+                    1 => {
+                        let c = subdivided_boundary(r0.unwrap(), r3.unwrap());
+                        polygon(&[v0, c[0], c[1], c[2], c[3]]);
+                    }
+                    2 => {
+                        let c = subdivided_boundary(r1.unwrap(), r0.unwrap());
+                        polygon(&[v1, c[0], c[1], c[2], c[3]]);
+                    }
+                    3 => {
+                        let c = subdivided_boundary(r1.unwrap(), r3.unwrap());
+                        polygon(&[v0, v1, c[0], c[1], c[2], c[3]]);
+                    }
+                    4 => {
+                        let c = subdivided_boundary(r2.unwrap(), r1.unwrap());
+                        polygon(&[v2, c[0], c[1], c[2], c[3]]);
+                    }
+                    5 => {
+                        let a = subdivided_boundary(r0.unwrap(), r3.unwrap());
+                        polygon(&[v0, a[0], a[1], a[2], a[3]]);
+                        let b = subdivided_boundary(r2.unwrap(), r1.unwrap());
+                        polygon(&[v2, b[0], b[1], b[2], b[3]]);
+                    }
+                    6 => {
+                        let c = subdivided_boundary(r2.unwrap(), r0.unwrap());
+                        polygon(&[v1, v2, c[0], c[1], c[2], c[3]]);
+                    }
+                    7 => {
+                        let c = subdivided_boundary(r2.unwrap(), r3.unwrap());
+                        polygon(&[v0, v1, v2, c[0], c[1], c[2], c[3]]);
+                    }
+                    8 => {
+                        let c = subdivided_boundary(r3.unwrap(), r2.unwrap());
+                        polygon(&[v3, c[0], c[1], c[2], c[3]]);
+                    }
+                    9 => {
+                        let c = subdivided_boundary(r0.unwrap(), r2.unwrap());
+                        polygon(&[v0, c[0], c[1], c[2], c[3], v3]);
+                    }
+                    10 => {
+                        let a = subdivided_boundary(r1.unwrap(), r0.unwrap());
+                        polygon(&[v1, a[0], a[1], a[2], a[3]]);
+                        let b = subdivided_boundary(r3.unwrap(), r2.unwrap());
+                        polygon(&[v3, b[0], b[1], b[2], b[3]]);
+                    }
+                    11 => {
+                        let c = subdivided_boundary(r1.unwrap(), r2.unwrap());
+                        polygon(&[v0, v1, c[0], c[1], c[2], c[3], v3]);
+                    }
+                    12 => {
+                        let c = subdivided_boundary(r3.unwrap(), r1.unwrap());
+                        polygon(&[v2, v3, c[0], c[1], c[2], c[3]]);
+                    }
+                    13 => {
+                        let c = subdivided_boundary(r0.unwrap(), r1.unwrap());
+                        polygon(&[v0, c[0], c[1], c[2], c[3], v2, v3]);
+                    }
+                    14 => {
+                        let c = subdivided_boundary(r3.unwrap(), r0.unwrap());
+                        polygon(&[v1, v2, v3, c[0], c[1], c[2], c[3]]);
+                    }
+                    _ => {}
+                }
+                continue;
+            }
 
             match mask {
                 1 => add_triangle(
@@ -592,24 +920,13 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
     Some(mesh)
 }
 
-/// How deep a river runs, in metres, once it is clear of the sea.
-///
-/// The bed is carved flat, so this is literally how far the surface floats
-/// above it. Shallow on purpose: a river reads as a river because you can see
-/// the bed through it, and the toon water shader fades toward transparent with
-/// depth.
-const RIVER_DEPTH: f32 = 0.55;
-
-/// Over how many metres of the final descent the river gives up its depth to
-/// meet the sea. Without this the surface arrives at the coast `RIVER_DEPTH`
-/// above the ocean and every river mouth ends in a small waterfall.
-const RIVER_MOUTH_BLEND: f32 = 6.0;
-
-/// How far either side of a centreline a river still sets the water level.
-/// Beyond this the ocean level takes over, which everywhere inland means "no
-/// water". Shared with prop scattering, which clears the banks to exactly this
-/// reach — see [`shared::worldgen::RIVER_WATER_REACH`].
-use shared::worldgen::RIVER_WATER_REACH as RIVER_INFLUENCE;
+/// Maximum distance either side of a centreline a river sets the water level;
+/// individual headwater segments taper below it.
+/// Beyond this maximum the ocean level takes over, which everywhere inland
+/// means "no water". See [`shared::worldgen::RIVER_WATER_REACH`].
+use shared::worldgen::{
+    river_surface_height, river_water_reach_at, RIVER_WATER_REACH as RIVER_INFLUENCE,
+};
 
 /// The river water LEVEL near one chunk — not river geometry.
 ///
@@ -627,8 +944,8 @@ use shared::worldgen::RIVER_WATER_REACH as RIVER_INFLUENCE;
 /// bends are whatever the ground does, the junction with the sea is just two
 /// levels agreeing, and there are no seams because there is only one surface.
 struct RiverSurface {
-    /// `(a, b, surface_at_a, surface_at_b)` in world XZ.
-    segments: Vec<(Vec2, Vec2, f32, f32)>,
+    /// `(a, b, surface_at_a, surface_at_b, reach_at_a, reach_at_b)` in world XZ.
+    segments: Vec<(Vec2, Vec2, f32, f32, f32, f32)>,
 }
 
 impl RiverSurface {
@@ -640,17 +957,13 @@ impl RiverSurface {
         // at the edges.
         let margin = RIVER_INFLUENCE + SHORE_SCAN_MARGIN as f32 * VERTEX_SPACING;
         let (min_x, min_z) = (origin.x - margin, origin.z - margin);
-        let (max_x, max_z) = (origin.x + CHUNK_SIZE + margin, origin.z + CHUNK_SIZE + margin);
-
-        // Surface height for a bed height: full depth inland, tapering to
-        // exactly the ocean surface at the mouth, and never below it.
-        let surface = |bed: f32| -> f32 {
-            let t = ((bed - ocean) / RIVER_MOUTH_BLEND).clamp(0.0, 1.0);
-            (bed + RIVER_DEPTH * t).max(ocean)
-        };
+        let (max_x, max_z) = (
+            origin.x + CHUNK_SIZE + margin,
+            origin.z + CHUNK_SIZE + margin,
+        );
 
         for river in terrain.rivers() {
-            for w in river.windows(2) {
+            for (segment_index, w) in river.windows(2).enumerate() {
                 let (a, b) = (w[0], w[1]);
                 if a.x.min(b.x) > max_x
                     || a.x.max(b.x) < min_x
@@ -662,8 +975,10 @@ impl RiverSurface {
                 segments.push((
                     Vec2::new(a.x, a.z),
                     Vec2::new(b.x, b.z),
-                    surface(a.y),
-                    surface(b.y),
+                    river_surface_height(a.y, ocean),
+                    river_surface_height(b.y, ocean),
+                    river_water_reach_at(segment_index, river.len()),
+                    river_water_reach_at(segment_index + 1, river.len()),
                 ));
             }
         }
@@ -677,13 +992,98 @@ impl RiverSurface {
     /// Water level at a world point: the ocean, raised wherever a river runs.
     fn level_at(&self, p: Vec2, ocean: f32) -> f32 {
         let mut level = ocean;
-        for (a, b, sa, sb) in &self.segments {
+        for (a, b, sa, sb, reach_a, reach_b) in &self.segments {
             let seg = *b - *a;
             let t = ((p - *a).dot(seg) / seg.length_squared().max(1e-6)).clamp(0.0, 1.0);
-            if p.distance_squared(*a + seg * t) < RIVER_INFLUENCE * RIVER_INFLUENCE {
+            let reach = reach_a + (reach_b - reach_a) * t;
+            if p.distance_squared(*a + seg * t) < reach * reach {
                 level = level.max(sa + (sb - sa) * t);
             }
         }
         level
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crossing_uses_the_full_signed_waterline_field() {
+        let crossing =
+            shore_crossing(Vec2::new(0.0, 0.0), -0.25, Vec2::new(2.0, 0.0), 0.75).unwrap();
+
+        assert!((crossing.x - 0.5).abs() < 1.0e-6);
+        assert_eq!(crossing.y, 0.0);
+    }
+
+    #[test]
+    fn segment_distance_does_not_scallop_between_edge_samples() {
+        let distance = distance_squared_to_segment(
+            Vec2::new(1.0, 1.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(2.0, 0.0),
+        );
+
+        assert!((distance - 1.0).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn shoreline_segments_follow_water_mesh_topology() {
+        let edges = [
+            Some(Vec2::new(1.0, 0.0)),
+            Some(Vec2::new(2.0, 1.0)),
+            Some(Vec2::new(1.0, 2.0)),
+            Some(Vec2::new(0.0, 1.0)),
+        ];
+        let mut segments = Vec::new();
+
+        append_shore_segments(&mut segments, 5, edges);
+
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0], (edges[0].unwrap(), edges[3].unwrap()));
+        assert_eq!(segments[1], (edges[1].unwrap(), edges[2].unwrap()));
+    }
+
+    #[test]
+    fn smoothing_removes_grid_zigzags_but_preserves_straight_shores() {
+        let zigzag = [
+            (Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0)),
+            (Vec2::new(1.0, 1.0), Vec2::new(2.0, 0.0)),
+            (Vec2::new(2.0, 0.0), Vec2::new(3.0, 1.0)),
+        ];
+        let (smoothed, _) = smooth_shore_segments(&zigzag);
+        assert!(smoothed[&shore_key(Vec2::new(1.0, 1.0))].y < 1.0);
+        assert!(smoothed[&shore_key(Vec2::new(2.0, 0.0))].y > 0.0);
+
+        let straight = [
+            (Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0)),
+            (Vec2::new(1.0, 0.0), Vec2::new(2.0, 0.0)),
+            (Vec2::new(2.0, 0.0), Vec2::new(3.0, 0.0)),
+        ];
+        let (smoothed, _) = smooth_shore_segments(&straight);
+        assert_eq!(
+            smoothed[&shore_key(Vec2::new(1.0, 0.0))],
+            Vec2::new(1.0, 0.0)
+        );
+        assert_eq!(
+            smoothed[&shore_key(Vec2::new(2.0, 0.0))],
+            Vec2::new(2.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn curved_segments_share_the_smoothed_endpoints() {
+        let segments = [
+            (Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0)),
+            (Vec2::new(1.0, 1.0), Vec2::new(2.0, 1.0)),
+            (Vec2::new(2.0, 1.0), Vec2::new(3.0, 0.0)),
+        ];
+        let (positions, neighbours) = smooth_shore_segments(&segments);
+        let curve = shore_curve_points(segments[1].0, segments[1].1, &positions, &neighbours);
+
+        assert_eq!(curve[0], positions[&shore_key(segments[1].0)]);
+        assert_eq!(curve[3], positions[&shore_key(segments[1].1)]);
+        assert!(curve[1].is_finite() && curve[2].is_finite());
     }
 }

@@ -218,7 +218,6 @@ fn is_safe_relative_glb_path(path_part: &str) -> bool {
     })
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MapBlocker {
     pub min: [f32; 2],
@@ -447,5 +446,4 @@ mod tests {
             Some("buildings/village/House_05.glb#Scene0")
         );
     }
-
 }

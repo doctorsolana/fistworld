@@ -44,6 +44,9 @@ pub struct DerivedHull {
 pub struct DerivedCollider {
     /// Bounding radius for broad-phase rejection
     pub bounding_radius: f32,
+    /// Conservative X/Z radius used by navigation and ground movement. Unlike
+    /// `bounding_radius`, a tall tree does not become a six-metre-wide blocker.
+    pub horizontal_radius: f32,
     /// One or more convex hulls for this collider
     pub hulls: Vec<DerivedHull>,
 }
@@ -80,9 +83,18 @@ pub struct StaticColliders {
 ///
 /// For now we load from the workspace path `client/assets/colliders.bin`.
 pub fn setup_baked_colliders(mut commands: Commands) {
-    let path = "client/assets/colliders.bin";
-    let db = shared::colliders::load_baked_collider_db_from_file(path)
-        .unwrap_or_else(|e| panic!("Failed to load baked colliders from {path}: {e}"));
+    // Anchor to this crate rather than the process working directory. `cargo
+    // run` from the workspace happened to make the old relative path work,
+    // while tests and diagnostic binaries launched from `server/` could not
+    // load the exact same collision world.
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../client/assets/colliders.bin");
+    let db = shared::colliders::load_baked_collider_db_from_file(&path).unwrap_or_else(|e| {
+        panic!(
+            "Failed to load baked colliders from {}: {e}",
+            path.display()
+        )
+    });
 
     // Load prop colliders.
     let mut by_kind = HashMap::new();
@@ -161,22 +173,32 @@ fn build_hull_from_points(points: &[[f32; 3]]) -> Option<DerivedHull> {
 }
 
 fn derive_collider(baked: &shared::colliders::BakedCollider) -> Option<DerivedCollider> {
+    let horizontal_radius = |points: &[[f32; 3]]| {
+        points
+            .iter()
+            .map(|point| point[0] * point[0] + point[2] * point[2])
+            .fold(0.0f32, f32::max)
+            .sqrt()
+    };
     match baked {
         shared::colliders::BakedCollider::ConvexHull { points } => {
             let hull = build_hull_from_points(points)?;
             Some(DerivedCollider {
                 bounding_radius: hull.bounding_radius,
+                horizontal_radius: horizontal_radius(points),
                 hulls: vec![hull],
             })
         }
         shared::colliders::BakedCollider::CompoundConvex { hulls } => {
             let mut derived = Vec::new();
             let mut max_r = 0.0f32;
+            let mut max_horizontal = 0.0f32;
             for hull_points in hulls {
                 let Some(hull) = build_hull_from_points(hull_points) else {
                     continue;
                 };
                 max_r = max_r.max(hull.bounding_radius);
+                max_horizontal = max_horizontal.max(horizontal_radius(hull_points));
                 derived.push(hull);
             }
             if derived.is_empty() {
@@ -184,6 +206,7 @@ fn derive_collider(baked: &shared::colliders::BakedCollider) -> Option<DerivedCo
             }
             Some(DerivedCollider {
                 bounding_radius: max_r,
+                horizontal_radius: max_horizontal,
                 hulls: derived,
             })
         }

@@ -3,34 +3,279 @@ use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 
-use shared::terrain::{ChunkMeshData, CHUNK_SIZE, MAX_HEIGHT};
+use shared::terrain::{ChunkCoord, ChunkMeshData, TerrainGenerator, CHUNK_RESOLUTION, CHUNK_SIZE};
+use shared::worldgen::{
+    river_surface_height, river_water_reach_at, RIVER_WATER_REACH as RIVER_INFLUENCE,
+};
+
+/// Terrain is normally one vertex every 2m. Only cells that touch a moving
+/// waterline are split to 0.5m, removing diagonal shoreline teeth without
+/// multiplying the geometry of whole chunks.
+const SHORE_TERRAIN_SUBDIVISIONS: usize = 4;
+/// Covers the full shore-lap range plus a little room for interpolation.
+const SHORE_TERRAIN_REFINE_BAND: f32 = 0.40;
+
+type RiverRenderSegment = (Vec2, Vec2, f32, f32, f32, f32);
+
+struct TerrainMeshBuffers {
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    uvs: Vec<[f32; 2]>,
+    tangents: Option<Vec<[f32; 4]>>,
+    indices: Vec<u32>,
+}
+
+fn lerp2(a: [f32; 2], b: [f32; 2], t: f32) -> [f32; 2] {
+    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+}
+
+fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
+}
+
+fn lerp4(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+        a[3] + (b[3] - a[3]) * t,
+    ]
+}
+
+fn bilerp2(corners: [[f32; 2]; 4], u: f32, v: f32) -> [f32; 2] {
+    lerp2(
+        lerp2(corners[0], corners[1], u),
+        lerp2(corners[2], corners[3], u),
+        v,
+    )
+}
+
+fn bilerp3(corners: [[f32; 3]; 4], u: f32, v: f32) -> [f32; 3] {
+    lerp3(
+        lerp3(corners[0], corners[1], u),
+        lerp3(corners[2], corners[3], u),
+        v,
+    )
+}
+
+fn bilerp4(corners: [[f32; 4]; 4], u: f32, v: f32) -> [f32; 4] {
+    lerp4(
+        lerp4(corners[0], corners[1], u),
+        lerp4(corners[2], corners[3], u),
+        v,
+    )
+}
+
+fn cell_touches_shore_band(signed_heights: [f32; 4]) -> bool {
+    let min_height = signed_heights.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_height = signed_heights
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
+    min_height <= SHORE_TERRAIN_REFINE_BAND && max_height >= -SHORE_TERRAIN_REFINE_BAND
+}
+
+fn river_segments_for_chunk(
+    generator: &TerrainGenerator,
+    coord: ChunkCoord,
+    ocean: f32,
+) -> Vec<RiverRenderSegment> {
+    let mut segments = Vec::new();
+    let origin = coord.world_pos();
+    let margin = RIVER_INFLUENCE;
+    let min = Vec2::new(origin.x - margin, origin.z - margin);
+    let max = Vec2::new(
+        origin.x + CHUNK_SIZE + margin,
+        origin.z + CHUNK_SIZE + margin,
+    );
+
+    for river in generator.loaded_map().rivers.iter() {
+        for (segment_index, window) in river.windows(2).enumerate() {
+            let a = Vec2::new(window[0].x, window[0].z);
+            let b = Vec2::new(window[1].x, window[1].z);
+            if a.x.min(b.x) > max.x
+                || a.x.max(b.x) < min.x
+                || a.y.min(b.y) > max.y
+                || a.y.max(b.y) < min.y
+            {
+                continue;
+            }
+            segments.push((
+                a,
+                b,
+                river_surface_height(window[0].y, ocean),
+                river_surface_height(window[1].y, ocean),
+                river_water_reach_at(segment_index, river.len()),
+                river_water_reach_at(segment_index + 1, river.len()),
+            ));
+        }
+    }
+    segments
+}
+
+fn water_level_at(point: Vec2, ocean: f32, rivers: &[RiverRenderSegment]) -> f32 {
+    let mut level = ocean;
+    for &(a, b, surface_a, surface_b, reach_a, reach_b) in rivers {
+        let segment = b - a;
+        let t = ((point - a).dot(segment) / segment.length_squared().max(1.0e-6)).clamp(0.0, 1.0);
+        let reach = reach_a + (reach_b - reach_a) * t;
+        if point.distance_squared(a + segment * t) < reach * reach {
+            level = level.max(surface_a + (surface_b - surface_a) * t);
+        }
+    }
+    level
+}
+
+fn shore_refined_buffers(
+    mesh_data: &ChunkMeshData,
+    tangents: Option<&Vec<[f32; 4]>>,
+    generator: &TerrainGenerator,
+    coord: ChunkCoord,
+) -> TerrainMeshBuffers {
+    let Some(ocean) = generator.loaded_map().heightmap.water_level else {
+        return TerrainMeshBuffers {
+            positions: mesh_data.positions.clone(),
+            normals: mesh_data.normals.clone(),
+            uvs: mesh_data.uvs.clone(),
+            tangents: tangents.cloned(),
+            indices: mesh_data.indices.clone(),
+        };
+    };
+
+    let rivers = river_segments_for_chunk(generator, coord, ocean);
+    let origin = coord.world_pos();
+    // Compute the signed waterline field once. Most chunks are wholly dry or
+    // wholly deep water, so this also lets them retain the original mesh with
+    // no subdivision work at all.
+    let signed_vertex_heights: Vec<f32> = mesh_data
+        .positions
+        .iter()
+        .map(|position| {
+            let world = Vec2::new(origin.x + position[0], origin.z + position[2]);
+            position[1] - water_level_at(world, ocean, &rivers)
+        })
+        .collect();
+    let chunk_min = signed_vertex_heights
+        .iter()
+        .copied()
+        .fold(f32::INFINITY, f32::min);
+    let chunk_max = signed_vertex_heights
+        .iter()
+        .copied()
+        .fold(f32::NEG_INFINITY, f32::max);
+    if chunk_min > SHORE_TERRAIN_REFINE_BAND || chunk_max < -SHORE_TERRAIN_REFINE_BAND {
+        return TerrainMeshBuffers {
+            positions: mesh_data.positions.clone(),
+            normals: mesh_data.normals.clone(),
+            uvs: mesh_data.uvs.clone(),
+            tangents: tangents.cloned(),
+            indices: mesh_data.indices.clone(),
+        };
+    }
+
+    let mut buffers = TerrainMeshBuffers {
+        positions: mesh_data.positions.clone(),
+        normals: mesh_data.normals.clone(),
+        uvs: mesh_data.uvs.clone(),
+        tangents: tangents.cloned(),
+        indices: Vec::with_capacity(mesh_data.indices.len()),
+    };
+
+    for zi in 0..(CHUNK_RESOLUTION - 1) {
+        for xi in 0..(CHUNK_RESOLUTION - 1) {
+            let i0 = zi * CHUNK_RESOLUTION + xi;
+            let i1 = i0 + 1;
+            let i2 = i0 + CHUNK_RESOLUTION;
+            let i3 = i2 + 1;
+            let corner_indices = [i0, i1, i2, i3];
+            let positions = corner_indices.map(|index| mesh_data.positions[index]);
+
+            let signed_heights = corner_indices.map(|index| signed_vertex_heights[index]);
+            if !cell_touches_shore_band(signed_heights) {
+                buffers.indices.extend_from_slice(&[
+                    i0 as u32, i2 as u32, i1 as u32, i1 as u32, i2 as u32, i3 as u32,
+                ]);
+                continue;
+            }
+
+            let normals = corner_indices.map(|index| mesh_data.normals[index]);
+            let uvs = corner_indices.map(|index| mesh_data.uvs[index]);
+            let tangent_corners = tangents.map(|values| corner_indices.map(|index| values[index]));
+            let row = SHORE_TERRAIN_SUBDIVISIONS + 1;
+            let base = buffers.positions.len() as u32;
+
+            for sub_z in 0..=SHORE_TERRAIN_SUBDIVISIONS {
+                let v = sub_z as f32 / SHORE_TERRAIN_SUBDIVISIONS as f32;
+                for sub_x in 0..=SHORE_TERRAIN_SUBDIVISIONS {
+                    let u = sub_x as f32 / SHORE_TERRAIN_SUBDIVISIONS as f32;
+                    buffers.positions.push(bilerp3(positions, u, v));
+                    let normal = Vec3::from_array(bilerp3(normals, u, v)).normalize_or_zero();
+                    buffers.normals.push(normal.to_array());
+                    buffers.uvs.push(bilerp2(uvs, u, v));
+                    if let (Some(target), Some(corners)) =
+                        (buffers.tangents.as_mut(), tangent_corners)
+                    {
+                        let tangent = bilerp4(corners, u, v);
+                        let direction =
+                            Vec3::new(tangent[0], tangent[1], tangent[2]).normalize_or_zero();
+                        target.push([
+                            direction.x,
+                            direction.y,
+                            direction.z,
+                            if tangent[3] < 0.0 { -1.0 } else { 1.0 },
+                        ]);
+                    }
+                }
+            }
+
+            for sub_z in 0..SHORE_TERRAIN_SUBDIVISIONS {
+                for sub_x in 0..SHORE_TERRAIN_SUBDIVISIONS {
+                    let m0 = base + (sub_z * row + sub_x) as u32;
+                    let m1 = m0 + 1;
+                    let m2 = m0 + row as u32;
+                    let m3 = m2 + 1;
+                    buffers.indices.extend_from_slice(&[m0, m2, m1, m1, m2, m3]);
+                }
+            }
+        }
+    }
+
+    buffers
+}
 
 pub(crate) fn build_terrain_mesh(
     mesh_data: &ChunkMeshData,
     tangents: Option<&Vec<[f32; 4]>>,
+    generator: &TerrainGenerator,
+    coord: ChunkCoord,
     meshes: &mut Assets<Mesh>,
 ) -> Handle<Mesh> {
+    let buffers = shore_refined_buffers(mesh_data, tangents, generator, coord);
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD,
     );
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_POSITION,
-        VertexAttributeValues::Float32x3(mesh_data.positions.clone()),
+        VertexAttributeValues::Float32x3(buffers.positions),
     );
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_NORMAL,
-        VertexAttributeValues::Float32x3(mesh_data.normals.clone()),
+        VertexAttributeValues::Float32x3(buffers.normals),
     );
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_UV_0,
-        VertexAttributeValues::Float32x2(mesh_data.uvs.clone()),
+        VertexAttributeValues::Float32x2(buffers.uvs),
     );
-    mesh.insert_indices(Indices::U32(mesh_data.indices.clone()));
-    if let Some(tangents) = tangents {
+    mesh.insert_indices(Indices::U32(buffers.indices));
+    if let Some(tangents) = buffers.tangents {
         mesh.insert_attribute(
             Mesh::ATTRIBUTE_TANGENT,
-            VertexAttributeValues::Float32x4(tangents.clone()),
+            VertexAttributeValues::Float32x4(tangents),
         );
     } else {
         let _ = mesh.generate_tangents();
@@ -192,19 +437,17 @@ pub(crate) fn build_far_terrain_mesh(
                     let deep = Vec3::new(0.14, 0.26, 0.45);
                     shallow.lerp(deep, depth.powf(0.55))
                 }
-                Some(level) if height < level + 1.2 => Vec3::new(
-                    palette.sand.x,
-                    palette.sand.y,
-                    palette.sand.z,
-                ),
+                Some(level) if height < level + 1.2 => {
+                    Vec3::new(palette.sand.x, palette.sand.y, palette.sand.z)
+                }
                 _ => {
                     // Biome tint so the zoomed-out map reads like the world's
                     // resource layout (matches the minimap's colour language);
                     // legacy maps without a biome field keep the plain grass.
                     // BiomeField expects a gradient-magnitude slope (rise per
                     // metre), not the shader's 1-normal.y measure.
-                    let gradient = (normal.x * normal.x + normal.z * normal.z).sqrt()
-                        / normal.y.max(0.01);
+                    let gradient =
+                        (normal.x * normal.x + normal.z * normal.z).sqrt() / normal.y.max(0.01);
                     let grass = match terrain
                         .generator
                         .loaded_map()
@@ -244,8 +487,7 @@ pub(crate) fn build_far_terrain_mesh(
                     .unwrap_or(0);
                 let bounds = terrain.generator.active_map_bounds();
                 let half = (bounds.max[0] - bounds.min[0]) * 0.5;
-                let climate =
-                    shared::worldgen::climate_at(seed, world_x, world_z, height, half);
+                let climate = shared::worldgen::climate_at(seed, world_x, world_z, height, half);
                 let underwater = matches!(water_level, Some(level) if height <= level);
                 if underwater {
                     color
@@ -329,4 +571,31 @@ pub(crate) fn build_far_terrain_indices(
     }
 
     indices
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shoreline_band_refines_crossings_and_moving_lap_margin_only() {
+        assert!(cell_touches_shore_band([-0.8, -0.2, 0.2, 0.8]));
+        assert!(cell_touches_shore_band([-0.7, -0.5, -0.3, -0.2]));
+        assert!(!cell_touches_shore_band([0.41, 0.8, 1.2, 1.6]));
+        assert!(!cell_touches_shore_band([-1.6, -1.2, -0.8, -0.41]));
+    }
+
+    #[test]
+    fn refined_positions_follow_the_heightmaps_bilinear_surface() {
+        let corners = [
+            [0.0, 0.0, 0.0],
+            [2.0, 2.0, 0.0],
+            [0.0, 4.0, 2.0],
+            [2.0, 8.0, 2.0],
+        ];
+
+        assert_eq!(bilerp3(corners, 0.0, 0.0), corners[0]);
+        assert_eq!(bilerp3(corners, 1.0, 1.0), corners[3]);
+        assert_eq!(bilerp3(corners, 0.5, 0.5), [1.0, 3.5, 1.0]);
+    }
 }

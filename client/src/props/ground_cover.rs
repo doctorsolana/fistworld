@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use shared::building::point_in_any_build_zone_entries;
+use shared::components::VillageRoad;
 use shared::terrain::{ChunkCoord, WorldTerrain};
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
@@ -85,6 +86,7 @@ pub(super) fn stream_ground_cover(
     world_root_query: Query<Entity, With<ClientWorldRoot>>,
     settings: Res<GraphicsSettings>,
     build_zone_index: Res<super::BuildZoneChunkIndex>,
+    roads: Query<&VillageRoad>,
 ) {
     let Some(terrain) = terrain else { return };
     let (player_query, camera_query) = anchor;
@@ -109,7 +111,9 @@ pub(super) fn stream_ground_cover(
         .filter(|coord| loaded_chunks.chunks.contains(coord) && !loaded.chunks.contains(coord))
         .collect();
     desired.sort_by_key(|coord| {
-        (coord.x - anchor_chunk.x).abs().max((coord.z - anchor_chunk.z).abs())
+        (coord.x - anchor_chunk.x)
+            .abs()
+            .max((coord.z - anchor_chunk.z).abs())
     });
 
     if let Some(coord) = desired.first().copied() {
@@ -126,6 +130,11 @@ pub(super) fn stream_ground_cover(
                 )
             });
         }
+        spawns.retain(|spawn| {
+            !roads.iter().any(|road| {
+                road.contains_built_point(Vec2::new(spawn.position.x, spawn.position.z), 0.22)
+            })
+        });
         loaded.chunks.insert(coord);
         if !spawns.is_empty() {
             pending.queue.push_back((coord, spawns));
@@ -163,6 +172,74 @@ pub(super) fn stream_ground_cover(
     }
 }
 
+/// Trample grass as a path grows, without unloading or blinking whole chunks.
+pub(super) fn clear_ground_cover_for_built_village_roads(
+    mut commands: Commands,
+    changed_roads: Query<&VillageRoad, Changed<VillageRoad>>,
+    mut pending: ResMut<PendingGroundCover>,
+    mut index: ResMut<GroundCoverIndex>,
+    transforms: Query<&GlobalTransform, With<GroundCover>>,
+) {
+    for road in changed_roads.iter() {
+        let Some((min_chunk, max_chunk)) = road_chunk_bounds(road, 0.32) else {
+            continue;
+        };
+        for cx in min_chunk.x..=max_chunk.x {
+            for cz in min_chunk.z..=max_chunk.z {
+                let coord = ChunkCoord::new(cx, cz);
+                if let Some(entities) = index.by_chunk.get_mut(&coord) {
+                    entities.retain(|entity| {
+                        let Ok(transform) = transforms.get(*entity) else {
+                            return true;
+                        };
+                        let at = transform.translation();
+                        if road.contains_built_point(Vec2::new(at.x, at.z), 0.22) {
+                            commands.entity(*entity).despawn();
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
+                for (queued, spawns) in pending.queue.iter_mut() {
+                    if *queued != coord {
+                        continue;
+                    }
+                    spawns.retain(|spawn| {
+                        !road.contains_built_point(
+                            Vec2::new(spawn.position.x, spawn.position.z),
+                            0.22,
+                        )
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn road_chunk_bounds(road: &VillageRoad, padding: f32) -> Option<(ChunkCoord, ChunkCoord)> {
+    let mut points = road.built_points().iter().copied();
+    let first = points.next()?;
+    let (mut min, mut max) = (first, first);
+    for point in points {
+        min = min.min(point);
+        max = max.max(point);
+    }
+    let extent = road.width * 0.5 + padding;
+    min -= Vec2::splat(extent);
+    max += Vec2::splat(extent);
+    Some((
+        ChunkCoord::new(
+            (min.x / shared::terrain::CHUNK_SIZE).floor() as i32,
+            (min.y / shared::terrain::CHUNK_SIZE).floor() as i32,
+        ),
+        ChunkCoord::new(
+            (max.x / shared::terrain::CHUNK_SIZE).floor() as i32,
+            (max.y / shared::terrain::CHUNK_SIZE).floor() as i32,
+        ),
+    ))
+}
+
 /// Re-grow a chunk's cover when a building claims ground in it.
 ///
 /// The prop streamer has had this since buildings existed; ground cover needed
@@ -171,7 +248,10 @@ pub(super) fn stream_ground_cover(
 pub(super) fn clear_ground_cover_for_new_buildings(
     mut commands: Commands,
     added: Query<
-        (&shared::building::PlacedBuilding, &shared::building::BuildingPosition),
+        (
+            &shared::building::PlacedBuilding,
+            &shared::building::BuildingPosition,
+        ),
         Added<shared::building::PlacedBuilding>,
     >,
     mut pending: ResMut<PendingGroundCover>,

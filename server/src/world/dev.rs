@@ -4,9 +4,12 @@ use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, RemoteId};
 
-use shared::components::{Hero, TimeWarp};
+use shared::components::{settlement_founding_refusal, Hero, TimeWarp};
 use shared::protocol::DevCommand;
-use shared::terrain::WorldTerrain;
+use shared::spatial::SpatialObstacleGrid;
+use shared::terrain::{world_pos_in_bounds, WorldTerrain};
+
+use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 
 /// Whether this server honours god commands. Read once from `FISTWORLD_DEV` at startup;
 /// production deployments simply never set the variable.
@@ -36,17 +39,80 @@ fn parse_dev_flag(raw: Option<String>) -> bool {
 #[derive(Resource, Default)]
 pub struct VillagerSeed(pub u64);
 
-/// How far apart settlements must be, in metres.
-///
-/// Two settlements closer than this would fight over the same plan footprint
-/// and the same working radius of land, and it is what stops the map being
-/// carpeted in halls.
-pub use shared::components::MIN_SETTLEMENT_SPACING;
+/// God-mode clicks can land inside a tree, a completed building, water, or on
+/// a crowd's exact shared point. Starting inside a static collider makes the
+/// route planner correctly reject every migration route, which looked like an
+/// AI decision failure. Scatter the requested point slightly and choose the
+/// nearest genuinely navigable sample before the villager exists.
+fn safe_villager_spawn_position(
+    requested: Vec3,
+    seed: u64,
+    terrain: &WorldTerrain,
+    obstacles: Option<&SpatialObstacleGrid>,
+    colliders: Option<&StaticColliders>,
+    derived: Option<&DerivedColliderLibrary>,
+) -> Vec3 {
+    const RING_STEP: f32 = 0.75;
+    const RINGS: usize = 16;
+    const SAMPLES_PER_RING: usize = 16;
+    const GOLDEN_ANGLE: f32 = 2.399_963_1;
+
+    // A burst of villagers receives a small deterministic disc distribution,
+    // preventing a hundred identical starts while keeping them close to the
+    // player's click.
+    let scatter_index = (seed % 97) as f32;
+    let scatter_radius = scatter_index.sqrt() * 0.48;
+    let scatter_angle = seed as f32 * GOLDEN_ANGLE;
+    let centre = Vec2::new(requested.x, requested.z)
+        + Vec2::new(scatter_angle.cos(), scatter_angle.sin()) * scatter_radius;
+
+    for ring in 0..=RINGS {
+        let samples = if ring == 0 { 1 } else { SAMPLES_PER_RING };
+        for sample in 0..samples {
+            let angle = scatter_angle
+                + sample as f32 * std::f32::consts::TAU / samples as f32
+                + ring as f32 * 0.31;
+            let radius = ring as f32 * RING_STEP;
+            let point = centre + Vec2::new(angle.cos(), angle.sin()) * radius;
+            if !world_pos_in_bounds(point.x, point.y) {
+                continue;
+            }
+            let height = terrain.get_height(point.x, point.y);
+            if terrain
+                .water_surface_height(point.x, point.y)
+                .is_some_and(|water| height < water + crate::world::village::FREEBOARD)
+            {
+                continue;
+            }
+            if 1.0 - terrain.get_normal(point.x, point.y).y.clamp(0.0, 1.0) > 0.24 {
+                continue;
+            }
+            if !crate::player::hero::navigation_segment_clear(
+                point, point, obstacles, colliders, derived,
+            ) {
+                continue;
+            }
+            return Vec3::new(point.x, height, point.y);
+        }
+    }
+
+    // Preserve the old finite, terrain-grounded behavior if an exceptionally
+    // hostile click has no safe sample nearby. The migration state machine
+    // will report its route failure instead of silently deleting the person.
+    Vec3::new(
+        requested.x,
+        terrain.get_height(requested.x, requested.z),
+        requested.z,
+    )
+}
 
 pub fn handle_dev_commands(
     mut commands: Commands,
     dev: Res<DevMode>,
     terrain: Option<Res<WorldTerrain>>,
+    obstacles: Option<Res<SpatialObstacleGrid>>,
+    colliders: Option<Res<StaticColliders>>,
+    derived: Option<Res<DerivedColliderLibrary>>,
     profiles: Res<crate::persistence::profiles::PlayerProfiles>,
     mut hero_index: ResMut<crate::player::hero::HeroIndex>,
     heroes: Query<&Hero>,
@@ -106,7 +172,10 @@ pub fn handle_dev_commands(
                         || hero_index.by_name.contains_key(&name_lower)
                         || heroes.iter().any(|h| h.owner == remote_id.0)
                     {
-                        info!("Dev: ignoring SpawnHero from {:?}: hero exists", remote_id.0);
+                        info!(
+                            "Dev: ignoring SpawnHero from {:?}: hero exists",
+                            remote_id.0
+                        );
                         continue;
                     }
                     if !pos.is_finite() {
@@ -132,6 +201,11 @@ pub fn handle_dev_commands(
                         pos,
                         0.0,
                         outfit,
+                        profiles
+                            .profiles
+                            .get(&name_lower)
+                            .map(|profile| profile.character_attributes())
+                            .unwrap_or_default(),
                     );
                     spawned_this_run.insert(remote_id.0);
                     info!("Dev: hero {entity:?} spawned for '{name_lower}' at {pos:?}");
@@ -148,13 +222,23 @@ pub fn handle_dev_commands(
                     // person, and a villager must keep its name if the world is
                     // later rebuilt around it.
                     villager_seed.0 = villager_seed.0.wrapping_add(1);
+                    let safe_position = safe_villager_spawn_position(
+                        pos,
+                        villager_seed.0,
+                        terrain,
+                        obstacles.as_deref(),
+                        colliders.as_deref(),
+                        derived.as_deref(),
+                    );
                     let entity = crate::player::hero::spawn_villager(
                         &mut commands,
                         terrain,
                         villager_seed.0,
-                        pos,
+                        safe_position,
                     );
-                    info!("Dev: villager {entity:?} spawned at {pos:?}");
+                    info!(
+                        "Dev: villager {entity:?} spawned at {safe_position:?} (requested {pos:?})"
+                    );
                 }
                 DevCommand::SetAffiliation { character, banner } => {
                     // Reject out-of-range indices rather than storing one: a
@@ -196,29 +280,20 @@ pub fn handle_dev_commands(
                     let Some(terrain) = terrain.as_ref() else {
                         continue;
                     };
-                    // Spacing is enforced HERE, not on the client: it is what
-                    // stops the map being carpeted, so it cannot be advisory.
-                    if let Some(existing) = settlements
-                        .iter()
-                        .find(|(_, p)| p.0.distance(pos) < MIN_SETTLEMENT_SPACING)
-                    {
-                        info!(
-                            "Dev: too close to '{}' to found here ({:.0}m, need {MIN_SETTLEMENT_SPACING:.0}m)",
-                            existing.0.name,
-                            existing.1 .0.distance(pos)
-                        );
-                        continue;
-                    }
-                    // Dry land only. A hall founded in a lake would look
-                    // fine and then never build anything, because every site
-                    // its residents tried would be refused as underwater -- a
-                    // silent failure that reads as "the village is broken".
                     let ground = terrain.get_height(pos.x, pos.z);
-                    if terrain
-                        .water_level()
-                        .is_some_and(|level| ground < level + crate::world::village::FREEBOARD)
-                    {
-                        info!("Dev: cannot found a settlement in the water here");
+                    let grounded = Vec3::new(pos.x, ground, pos.z);
+                    let nearest = settlements
+                        .iter()
+                        .map(|(settlement, position)| {
+                            (settlement.name.as_str(), position.0.distance(pos))
+                        })
+                        .min_by(|a, b| a.1.total_cmp(&b.1));
+                    // The server remains authoritative. The identical shared
+                    // footprint test also drives the client's placement hint,
+                    // so a dry centre with a wet hall corner cannot slip
+                    // through either side of the network boundary.
+                    if let Some(reason) = settlement_founding_refusal(terrain, grounded, nearest) {
+                        info!("Dev: cannot found a settlement here: {reason}");
                         continue;
                     }
                     let name = name.trim().to_string();
@@ -231,17 +306,25 @@ pub fn handle_dev_commands(
                     } else {
                         name
                     };
-                    let grounded = Vec3::new(pos.x, ground, pos.z);
                     let entity = commands
                         .spawn((
                             shared::components::Settlement {
                                 residents: 0,
-                                treasury: 0,
+                                treasury: shared::economy::STARTING_TREASURY_MONEY,
                                 name: name.clone(),
                                 // Founding lands you at the bottom LIVING tier.
                                 // Ruins is only ever reached by destruction.
                                 tier: shared::components::SettlementTier::Hamlet,
                             },
+                            // At hamlet tier the moot hall is also the common
+                            // store. This is physical stock, not a claim that
+                            // the hall bought the goods or minted the payment.
+                            shared::economy::GoodsInventory::new(
+                                shared::components::SettlementBuildingKind::Hall
+                                    .storage_bulk_capacity(),
+                            ),
+                            shared::economy::MootMarket::founding(),
+                            shared::components::SettlementPolicies::default(),
                             shared::components::PlayerPosition(grounded),
                             // NO RegionCoord, deliberately. Region tagging is
                             // what opts an entity into interest management, and
@@ -288,7 +371,9 @@ pub fn handle_dev_commands(
                         // Dropping the order too: a dismissed villager should
                         // stop where it stands, not finish an errand for someone
                         // who no longer commands it.
-                        commands.entity(unit).remove::<crate::player::hero::MoveTarget>();
+                        commands
+                            .entity(unit)
+                            .remove::<crate::player::hero::MoveTarget>();
                         info!("Dev: {unit:?} dismissed from '{account}'s retinue");
                     }
                 }
@@ -300,6 +385,7 @@ pub fn handle_dev_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shared::spatial::ObstacleEntry;
 
     #[test]
     fn dev_flag_only_accepts_explicit_enables() {
@@ -311,5 +397,25 @@ mod tests {
         assert!(!parse_dev_flag(Some("yes".to_string())));
         assert!(!parse_dev_flag(Some(String::new())));
         assert!(!parse_dev_flag(None));
+    }
+
+    #[test]
+    fn god_spawn_moves_a_villager_out_of_a_blocked_click() {
+        let terrain = WorldTerrain::default();
+        let requested = Vec3::new(1_700.0, terrain.get_height(1_700.0, 0.0), 0.0);
+        let mut obstacles = SpatialObstacleGrid::default();
+        obstacles.insert(ObstacleEntry {
+            center: Vec2::new(requested.x, requested.z),
+            half_extents: Vec2::splat(6.0),
+            rotation: 0.0,
+            obstacle_type: 1,
+        });
+
+        let safe =
+            safe_villager_spawn_position(requested, 97, &terrain, Some(&obstacles), None, None);
+
+        assert!(safe.is_finite());
+        assert!(!obstacles.point_blocked(Vec2::new(safe.x, safe.z)));
+        assert!(safe.distance(requested) > 5.0);
     }
 }

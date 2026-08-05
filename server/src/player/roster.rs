@@ -10,7 +10,9 @@ use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, MessageSender, RemoteId};
 
-use shared::components::{CharacterAffiliation, CharacterKind, CharacterName, Hero};
+use shared::components::{
+    CharacterAffiliation, CharacterAttributes, CharacterKind, CharacterName, Hero,
+};
 use shared::protocol::{
     CharacterRoster, CharacterRosterEntry, ReliableChannel, RequestCharacterRoster,
 };
@@ -20,7 +22,13 @@ use crate::persistence::profiles::PlayerProfiles;
 /// Answer roster requests with every named character in the world.
 pub fn handle_character_roster_requests(
     profiles: Res<PlayerProfiles>,
-    characters: Query<(&CharacterName, &CharacterKind, &CharacterAffiliation, Option<&Hero>)>,
+    characters: Query<(
+        &CharacterName,
+        &CharacterKind,
+        &CharacterAffiliation,
+        Option<&CharacterAttributes>,
+        Option<&Hero>,
+    )>,
     mut client_links: Query<
         (
             &RemoteId,
@@ -37,15 +45,17 @@ pub fn handle_character_roster_requests(
 
         let mut entries: Vec<CharacterRosterEntry> = characters
             .iter()
-            .map(|(name, kind, affiliation, hero)| {
+            .map(|(name, kind, affiliation, attributes, hero)| {
                 // A hero is "online" when its owner is connected. A villager is
                 // never online -- it is simply present, which is a different
                 // thing and must not render as an away marker.
-                let online = hero.is_some_and(|hero| profiles.peer_to_name.contains_key(&hero.owner));
+                let online =
+                    hero.is_some_and(|hero| profiles.peer_to_name.contains_key(&hero.owner));
                 CharacterRosterEntry {
                     name: name.0.clone(),
                     kind: *kind,
                     affiliation: *affiliation,
+                    attributes: attributes.copied().unwrap_or_default(),
                     online,
                     is_self: hero.is_some_and(|hero| hero.owner == remote_id.0),
                 }

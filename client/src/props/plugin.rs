@@ -5,10 +5,8 @@ use bevy::prelude::*;
 
 use crate::states::GameState;
 
+use super::ground_cover::{GroundCoverIndex, LoadedGroundCoverChunks, PendingGroundCover};
 use super::PropLodDebugMode;
-use super::ground_cover::{
-    GroundCoverIndex, LoadedGroundCoverChunks, PendingGroundCover,
-};
 use super::{
     assets, debug, foliage, ground_cover, lod, spawn, BuildZoneChunkIndex, FoliageMaterialCache,
     LoadedPropChunks, PendingPropSpawns, PropChunkIndex, SimplePropMeshCache,
@@ -42,8 +40,10 @@ impl Plugin for PropsPlugin {
                 debug::log_prop_density_snapshot,
                 spawn::invalidate_props_for_new_buildings,
                 spawn::sync_build_zone_chunk_index,
+                spawn::clear_props_for_built_village_roads,
                 spawn::spawn_chunk_props,
                 ground_cover::clear_ground_cover_for_new_buildings,
+                ground_cover::clear_ground_cover_for_built_village_roads,
                 ground_cover::stream_ground_cover,
                 spawn::sync_props_enabled_state,
                 lod::apply_prop_render_tuning,

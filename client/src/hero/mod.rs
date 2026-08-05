@@ -13,7 +13,10 @@ use bevy::gltf::{Gltf, GltfMaterialName};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use shared::character::CharacterManifest;
-use shared::components::{CharacterKind, HeroOutfit, PlayerPosition, PlayerRotation};
+use shared::components::{
+    CharacterActivity, CharacterKind, HeroOutfit, PlayerPosition, PlayerRotation,
+};
+use shared::economy::{CarriedAppearance, CarriedLoad};
 use shared::player::HERO_MOVE_SPEED;
 
 use crate::states::GameState;
@@ -40,9 +43,13 @@ impl Plugin for HeroPlugin {
             manifest.face_clips.len()
         );
         // The creator starts on the look the art build declares as default.
-        app.insert_resource(control::SelectedOutfit(HeroOutfit::from_manifest(&manifest)));
+        app.insert_resource(control::SelectedOutfit(HeroOutfit::from_manifest(
+            &manifest,
+        )));
         app.insert_resource(HeroManifest(manifest));
         app.init_resource::<HeroAssets>();
+        app.init_resource::<CarriedLoadAssets>();
+        app.init_resource::<ToolAssets>();
         app.init_resource::<control::HeroSpawnArm>();
         app.add_systems(
             Update,
@@ -55,8 +62,20 @@ impl Plugin for HeroPlugin {
                     setup_hero_animation,
                     sync_hero_transforms,
                 ),
-                (tag_builders, drive_hero_locomotion),
-                (control::handle_world_clicks, control::auto_spawn_hero),
+                (
+                    tag_builders,
+                    tag_carry_attachments,
+                    tag_tool_attachments,
+                    sync_indoor_visibility,
+                    sync_carried_load_visuals,
+                    sync_tool_visuals,
+                    drive_hero_locomotion,
+                ),
+                (
+                    control::handle_world_clicks,
+                    control::auto_spawn_hero,
+                    control::auto_set_time_warp_after,
+                ),
             )
                 .chain()
                 .run_if(in_state(GameState::Playing)),
@@ -76,6 +95,18 @@ pub struct HeroAssets {
     skin_materials: HashMap<u8, Handle<StandardMaterial>>,
     /// Materials already matted, so the GPU upload happens once each.
     matted: bevy::platform::collections::HashSet<AssetId<StandardMaterial>>,
+}
+
+/// Authored carried-goods scenes, loaded once and shared by every character.
+#[derive(Resource, Default)]
+struct CarriedLoadAssets {
+    scenes: HashMap<CarriedAppearance, Handle<WorldAsset>>,
+}
+
+/// Authored hand-tool scenes, loaded once and shared by every character.
+#[derive(Resource, Default)]
+struct ToolAssets {
+    scenes: HashMap<ToolKind, Handle<WorldAsset>>,
 }
 
 /// Animation graph handles, shared by every hero.
@@ -137,7 +168,52 @@ struct HeroAnim {
     idle: Option<AnimationNodeIndex>,
     walk: Option<AnimationNodeIndex>,
     build: Option<AnimationNodeIndex>,
+    chop: Option<AnimationNodeIndex>,
+    harvest: Option<AnimationNodeIndex>,
+    carry: Option<AnimationNodeIndex>,
+    sit_idle: Option<AnimationNodeIndex>,
 }
+
+/// The authored resource scene parented to the rig's `attach.carry` joint.
+#[derive(Component)]
+struct CarriedLoadVisual(CarriedAppearance);
+
+/// An authored rig node that accepts the current carried-goods visual.
+#[derive(Component)]
+struct CarryAttachment;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ToolKind {
+    Axe,
+    Hammer,
+    Scythe,
+}
+
+impl ToolKind {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Axe => "Felling axe",
+            Self::Hammer => "Framing hammer",
+            Self::Scythe => "Mowing scythe",
+        }
+    }
+
+    const fn scene_path(self) -> &'static str {
+        match self {
+            Self::Axe => "game_assets/tools/AxeFelling.glb#Scene0",
+            Self::Hammer => "game_assets/tools/HammerFraming.glb#Scene0",
+            Self::Scythe => "game_assets/tools/ScytheMowing.glb#Scene0",
+        }
+    }
+}
+
+/// The authored tool scene parented to the rig's `attach.tool.R` joint.
+#[derive(Component)]
+struct ToolVisual(ToolKind);
+
+/// The authored right-hand joint that accepts the active work tool.
+#[derive(Component)]
+struct ToolAttachment;
 
 /// Marks a character the client believes is working on a building.
 ///
@@ -371,6 +447,12 @@ const CLIP_IDLE: &str = "idle";
 const CLIP_WALK: &str = "walk";
 /// Played while a villager works on a construction site.
 const CLIP_BUILD: &str = "build";
+/// Played while working a tree and while walking with a physical load.
+const CLIP_CHOP: &str = "chop";
+/// Played while cutting and gathering a wheat field.
+const CLIP_HARVEST: &str = "harvest";
+const CLIP_CARRY: &str = "carry";
+const CLIP_SIT_IDLE: &str = "sit_idle";
 /// Resting expression; face clips play on their own masked layer.
 const CLIP_FACE_IDLE: &str = "face_idle";
 
@@ -434,7 +516,13 @@ fn setup_hero_animation(
     names: Query<&Name>,
     children_q: Query<&Children>,
     rigs: Query<(), Or<(With<CharacterKind>, With<HeroPreviewRig>)>>,
-    rig_roots: Query<Entity, (Or<(With<CharacterKind>, With<HeroPreviewRig>)>, Without<HeroAnim>)>,
+    rig_roots: Query<
+        Entity,
+        (
+            Or<(With<CharacterKind>, With<HeroPreviewRig>)>,
+            Without<HeroAnim>,
+        ),
+    >,
 ) {
     if players.is_empty() {
         return;
@@ -549,6 +637,10 @@ fn setup_hero_animation(
         let idle = hero_graph.body.get(CLIP_IDLE).copied();
         let walk = hero_graph.body.get(CLIP_WALK).copied();
         let build = hero_graph.body.get(CLIP_BUILD).copied();
+        let chop = hero_graph.body.get(CLIP_CHOP).copied();
+        let harvest = hero_graph.body.get(CLIP_HARVEST).copied();
+        let carry = hero_graph.body.get(CLIP_CARRY).copied();
+        let sit_idle = hero_graph.body.get(CLIP_SIT_IDLE).copied();
         if let Some(idle) = idle {
             player.play(idle).repeat().set_weight(1.0);
         }
@@ -561,6 +653,18 @@ fn setup_hero_animation(
         if let Some(build) = build {
             player.play(build).repeat().set_weight(0.0);
         }
+        if let Some(chop) = chop {
+            player.play(chop).repeat().set_weight(0.0);
+        }
+        if let Some(harvest) = harvest {
+            player.play(harvest).repeat().set_weight(0.0);
+        }
+        if let Some(carry) = carry {
+            player.play(carry).repeat().set_weight(0.0);
+        }
+        if let Some(sit_idle) = sit_idle {
+            player.play(sit_idle).repeat().set_weight(0.0);
+        }
         // Resting expression on the face layer; body clips cannot touch it.
         if let Some(face_idle) = hero_graph.face.get(CLIP_FACE_IDLE).copied() {
             player.play(face_idle).repeat().set_weight(1.0);
@@ -572,6 +676,10 @@ fn setup_hero_animation(
                 idle,
                 walk,
                 build,
+                chop,
+                harvest,
+                carry,
+                sit_idle,
             });
         }
         info!("Hero animation configured for {rig_root:?}");
@@ -673,34 +781,314 @@ fn tag_builders(
     }
 }
 
+/// A building is still an exterior shell today, so crossing its authored door
+/// hides the character until they come back out. The simulation keeps them at
+/// a shallow point beyond the threshold; visible interiors can later replace
+/// this with an interior scene without changing the worker state machine.
+fn sync_indoor_visibility(
+    characters: Query<(Option<&CharacterActivity>, Has<HeroDressed>), With<HeroVisual>>,
+    mut scene_roots: Query<(&ChildOf, &mut Visibility), With<HeroSceneRoot>>,
+) {
+    for (parent, mut visibility) in scene_roots.iter_mut() {
+        let Ok((activity, dressed)) = characters.get(parent.parent()) else {
+            continue;
+        };
+        if !dressed {
+            continue;
+        }
+        let target = if activity.is_some_and(|activity| *activity == CharacterActivity::Indoors) {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        if *visibility != target {
+            *visibility = target;
+        }
+    }
+}
+
+/// Parent the matching authored resource bundle to the rig's carry attachment.
+fn tag_carry_attachments(
+    mut commands: Commands,
+    named: Query<(Entity, &Name), (Added<Name>, Without<CarryAttachment>)>,
+) {
+    for (entity, name) in named.iter() {
+        if name.as_str() == "attach.carry" {
+            commands.entity(entity).insert(CarryAttachment);
+        }
+    }
+}
+
+/// Tag the authored right-hand tool joint once its glTF node is instantiated.
+fn tag_tool_attachments(
+    mut commands: Commands,
+    named: Query<(Entity, &Name), (Added<Name>, Without<ToolAttachment>)>,
+) {
+    for (entity, name) in named.iter() {
+        if name.as_str() == "attach.tool.R" {
+            commands.entity(entity).insert(ToolAttachment);
+        }
+    }
+}
+
+fn sync_carried_load_visuals(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut assets: ResMut<CarriedLoadAssets>,
+    attachments: Query<Entity, With<CarryAttachment>>,
+    parents: Query<&ChildOf>,
+    children: Query<&Children>,
+    loads: Query<&CarriedLoad, With<CharacterKind>>,
+    existing_visuals: Query<&CarriedLoadVisual>,
+) {
+    for attachment in attachments.iter() {
+        let mut ancestor = attachment;
+        let desired = loop {
+            let Ok(parent) = parents.get(ancestor) else {
+                break None;
+            };
+            ancestor = parent.parent();
+            if let Ok(load) = loads.get(ancestor) {
+                break load.visible_appearance();
+            }
+        };
+        let existing = children.get(attachment).ok().and_then(|children| {
+            children.iter().find_map(|child| {
+                existing_visuals
+                    .get(child)
+                    .ok()
+                    .map(|visual| (child, visual.0))
+            })
+        });
+
+        if existing.is_some_and(|(_, appearance)| Some(appearance) == desired) {
+            continue;
+        }
+        if let Some((entity, _)) = existing {
+            commands.entity(entity).despawn();
+        }
+        let Some(appearance) = desired else {
+            continue;
+        };
+
+        let spec = carried_asset_spec(appearance);
+        let scene = assets
+            .scenes
+            .entry(appearance)
+            .or_insert_with(|| asset_server.load(spec.scene_path))
+            .clone();
+
+        commands.entity(attachment).with_children(|bone| {
+            bone.spawn((
+                Name::new(format!("Carried {}", appearance.label())),
+                CarriedLoadVisual(appearance),
+                WorldAssetRoot(scene),
+                // Every authored bundle has its origin on its base, and the
+                // joint marks that same base. No height correction belongs here.
+                carried_bundle_transform(),
+            ));
+        });
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct CarriedAssetSpec {
+    scene_path: &'static str,
+}
+
+/// The authored measurements were intentionally conservative. In the actual
+/// isometric game view they read as parcels rather than work loads, so carried
+/// presentation is enlarged without changing inventory bulk or the source GLBs.
+const CARRIED_BUNDLE_SCALE: f32 = 1.35;
+/// Bevy/character forward is -Z. Pull the load slightly away from the torso so
+/// its centre sits in the cupped hands instead of clipping into the chest.
+const CARRIED_BUNDLE_FORWARD_OFFSET: f32 = -0.08;
+
+fn carried_bundle_transform() -> Transform {
+    Transform::from_xyz(0.0, 0.0, CARRIED_BUNDLE_FORWARD_OFFSET)
+        .with_scale(Vec3::splat(CARRIED_BUNDLE_SCALE))
+}
+
+fn carried_asset_spec(appearance: CarriedAppearance) -> CarriedAssetSpec {
+    match appearance {
+        CarriedAppearance::WoodBundle => CarriedAssetSpec {
+            scene_path: "game_assets/resources/carried/WoodBundle.glb#Scene0",
+        },
+        CarriedAppearance::WheatSheaf => CarriedAssetSpec {
+            scene_path: "game_assets/resources/carried/WheatSheaf.glb#Scene0",
+        },
+        CarriedAppearance::FishBasket => CarriedAssetSpec {
+            scene_path: "game_assets/resources/carried/FishBasket.glb#Scene0",
+        },
+        CarriedAppearance::StoneBundle => CarriedAssetSpec {
+            scene_path: "game_assets/resources/carried/StoneBundle.glb#Scene0",
+        },
+        CarriedAppearance::IronBundle => CarriedAssetSpec {
+            scene_path: "game_assets/resources/carried/IronBundle.glb#Scene0",
+        },
+    }
+}
+
+fn desired_tool(
+    activity: Option<CharacterActivity>,
+    building: bool,
+    carrying: bool,
+) -> Option<ToolKind> {
+    if carrying {
+        return None;
+    }
+    match activity {
+        Some(CharacterActivity::Chopping) => Some(ToolKind::Axe),
+        Some(CharacterActivity::Farming) => Some(ToolKind::Scythe),
+        Some(CharacterActivity::Building) => Some(ToolKind::Hammer),
+        _ if building => Some(ToolKind::Hammer),
+        _ => None,
+    }
+}
+
+/// Attach only the tool required by the character's current visible work.
+///
+/// Construction-site building is still derived client-side from proximity, so
+/// the `Building` marker participates alongside the replicated activity. A
+/// physical load always wins: a villager carrying wood cannot also hold a tool.
+fn sync_tool_visuals(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut assets: ResMut<ToolAssets>,
+    attachments: Query<Entity, With<ToolAttachment>>,
+    parents: Query<&ChildOf>,
+    children: Query<&Children>,
+    characters: Query<
+        (
+            Option<&CharacterActivity>,
+            Has<Building>,
+            Option<&CarriedLoad>,
+        ),
+        With<CharacterKind>,
+    >,
+    existing_visuals: Query<&ToolVisual>,
+) {
+    for attachment in attachments.iter() {
+        let mut ancestor = attachment;
+        let desired = loop {
+            let Ok(parent) = parents.get(ancestor) else {
+                break None;
+            };
+            ancestor = parent.parent();
+            if let Ok((activity, building, carried)) = characters.get(ancestor) {
+                break desired_tool(
+                    activity.copied(),
+                    building,
+                    carried.is_some_and(|load| !load.is_empty()),
+                );
+            }
+        };
+        let existing = children.get(attachment).ok().and_then(|children| {
+            children.iter().find_map(|child| {
+                existing_visuals
+                    .get(child)
+                    .ok()
+                    .map(|visual| (child, visual.0))
+            })
+        });
+
+        if existing.is_some_and(|(_, tool)| Some(tool) == desired) {
+            continue;
+        }
+        if let Some((entity, _)) = existing {
+            commands.entity(entity).despawn();
+        }
+        let Some(tool) = desired else {
+            continue;
+        };
+
+        let scene = assets
+            .scenes
+            .entry(tool)
+            .or_insert_with(|| asset_server.load(tool.scene_path()))
+            .clone();
+        commands.entity(attachment).with_children(|joint| {
+            joint.spawn((
+                Name::new(tool.label()),
+                ToolVisual(tool),
+                WorldAssetRoot(scene),
+                // Tools are authored grip-at-origin in the attachment joint's
+                // basis. Any correction here would conceal an asset contract bug.
+                Transform::IDENTITY,
+            ));
+        });
+    }
+}
+
 fn drive_hero_locomotion(
     heroes: Query<(
         &HeroVisual,
         &HeroAnim,
         Option<&InheritedVisibility>,
         Option<&Building>,
+        Option<&CharacterActivity>,
+        Option<&CarriedLoad>,
     )>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    for (visual, anim, inherited, building) in heroes.iter() {
-        let hidden = inherited.is_some_and(|visibility| !visibility.get());
+    for (visual, anim, inherited, building, activity, carried) in heroes.iter() {
+        let hidden = inherited.is_some_and(|visibility| !visibility.get())
+            || activity.is_some_and(|activity| *activity == CharacterActivity::Indoors);
         let Ok(mut player) = players.get_mut(anim.player) else {
             continue;
         };
 
         // 0 standing .. 1 full stride, with a small dead zone so replication
         // jitter cannot flutter the blend.
-        let walk_blend = if hidden {
+        let motion_blend = if hidden {
             0.0
         } else {
             ((visual.speed - 0.15) / (HERO_MOVE_SPEED * 0.6)).clamp(0.0, 1.0)
+        };
+        let carrying = carried.is_some_and(|load| !load.is_empty()) && !hidden;
+        let walk_blend = if carrying { 0.0 } else { motion_blend };
+        // A loaded character owns the whole body layer even while standing.
+        // Otherwise the old idle clip pulls both arms away while the bundle
+        // remains attached at chest height.
+        let carry_blend = if carrying { 1.0 } else { 0.0 };
+        let sit_blend = if !carrying
+            && !hidden
+            && activity.is_some_and(|activity| *activity == CharacterActivity::Sitting)
+        {
+            1.0 - motion_blend
+        } else {
+            0.0
+        };
+        let chop_blend = if !carrying
+            && !hidden
+            && activity.is_some_and(|activity| *activity == CharacterActivity::Chopping)
+        {
+            1.0 - motion_blend
+        } else {
+            0.0
+        };
+        let harvest_blend = if !carrying
+            && !hidden
+            && activity.is_some_and(|activity| *activity == CharacterActivity::Farming)
+        {
+            1.0 - motion_blend
+        } else {
+            0.0
         };
         // Building wins over standing but NOT over walking: someone still
         // crossing the plot should be seen walking, and the hammer starts when
         // they stop. Falls out of the blend for free rather than needing a
         // state machine.
-        let build_blend = if building.is_some() && !hidden {
-            1.0 - walk_blend
+        let field_work = activity.is_some_and(|activity| *activity == CharacterActivity::Fishing);
+        let road_building =
+            activity.is_some_and(|activity| *activity == CharacterActivity::Building);
+        let build_blend = if !carrying
+            && (building.is_some() || field_work || road_building)
+            && !hidden
+            && chop_blend == 0.0
+            && harvest_blend == 0.0
+        {
+            1.0 - motion_blend
         } else {
             0.0
         };
@@ -731,11 +1119,69 @@ fn drive_hero_locomotion(
                 }
             }
         }
+        if let Some(chop) = anim.chop {
+            if let Some(active) = player.animation_mut(chop) {
+                if (active.weight() - chop_blend).abs() > 0.01 {
+                    active.set_weight(chop_blend);
+                }
+                let chop_speed = if hidden { 0.0 } else { 1.0 };
+                if (active.speed() - chop_speed).abs() > 0.01 {
+                    active.set_speed(chop_speed);
+                }
+            }
+        }
+        if let Some(harvest) = anim.harvest {
+            if let Some(active) = player.animation_mut(harvest) {
+                if (active.weight() - harvest_blend).abs() > 0.01 {
+                    active.set_weight(harvest_blend);
+                }
+                let harvest_speed = if hidden { 0.0 } else { 1.0 };
+                if (active.speed() - harvest_speed).abs() > 0.01 {
+                    active.set_speed(harvest_speed);
+                }
+            }
+        }
+        if let Some(carry) = anim.carry {
+            if let Some(active) = player.animation_mut(carry) {
+                if (active.weight() - carry_blend).abs() > 0.01 {
+                    active.set_weight(carry_blend);
+                }
+                let carry_speed = if carrying && motion_blend > 0.0 {
+                    stride_speed
+                } else {
+                    0.0
+                };
+                if carrying && motion_blend == 0.0 && active.seek_time() != 0.0 {
+                    // Frame one is the neutral contact pose: legs centred,
+                    // both arms closed around the load. Freeze there until the
+                    // villager actually moves again.
+                    active.set_seek_time(0.0);
+                }
+                if (active.speed() - carry_speed).abs() > 0.01 {
+                    active.set_speed(carry_speed);
+                }
+            }
+        }
+        if let Some(sit_idle) = anim.sit_idle {
+            if let Some(active) = player.animation_mut(sit_idle) {
+                if (active.weight() - sit_blend).abs() > 0.01 {
+                    active.set_weight(sit_blend);
+                }
+                let sit_speed = if hidden { 0.0 } else { 1.0 };
+                if (active.speed() - sit_speed).abs() > 0.01 {
+                    active.set_speed(sit_speed);
+                }
+            }
+        }
         if let Some(idle) = anim.idle {
             if let Some(active) = player.animation_mut(idle) {
-                // Whatever the build lane takes comes out of idle, so the three
-                // weights always sum to one.
-                let idle_weight = 1.0 - walk_blend - build_blend;
+                let idle_weight = 1.0
+                    - walk_blend
+                    - carry_blend
+                    - build_blend
+                    - chop_blend
+                    - harvest_blend
+                    - sit_blend;
                 if (active.weight() - idle_weight).abs() > 0.01 {
                     active.set_weight(idle_weight);
                 }
@@ -746,5 +1192,131 @@ fn drive_hero_locomotion(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod carried_tests {
+    use bevy::ecs::system::RunSystemOnce;
+
+    use super::*;
+
+    #[test]
+    fn every_carried_appearance_has_an_authored_scene() {
+        for appearance in [
+            CarriedAppearance::WoodBundle,
+            CarriedAppearance::WheatSheaf,
+            CarriedAppearance::FishBasket,
+            CarriedAppearance::StoneBundle,
+            CarriedAppearance::IronBundle,
+        ] {
+            let spec = carried_asset_spec(appearance);
+            assert!(spec.scene_path.ends_with(".glb#Scene0"));
+        }
+        let wood = carried_bundle_transform();
+        assert_eq!(wood.scale, Vec3::splat(1.35));
+        assert_eq!(wood.translation.y, 0.0);
+        assert_eq!(wood.translation.z, -0.08);
+    }
+
+    #[test]
+    fn work_activity_selects_one_tool_and_carrying_selects_none() {
+        assert_eq!(
+            desired_tool(Some(CharacterActivity::Chopping), false, false),
+            Some(ToolKind::Axe)
+        );
+        assert_eq!(
+            desired_tool(Some(CharacterActivity::Farming), false, false),
+            Some(ToolKind::Scythe)
+        );
+        assert_eq!(
+            desired_tool(Some(CharacterActivity::Building), false, false),
+            Some(ToolKind::Hammer)
+        );
+        assert_eq!(desired_tool(None, true, false), Some(ToolKind::Hammer));
+        assert_eq!(
+            desired_tool(Some(CharacterActivity::Chopping), false, true),
+            None
+        );
+        assert_eq!(
+            desired_tool(Some(CharacterActivity::Fishing), false, false),
+            None
+        );
+    }
+
+    #[test]
+    fn farming_uses_harvest_without_leaking_into_the_build_clip() {
+        let mut world = World::new();
+        let idle = AnimationNodeIndex::new(0);
+        let build = AnimationNodeIndex::new(1);
+        let harvest = AnimationNodeIndex::new(2);
+        let mut player = AnimationPlayer::default();
+        player.play(idle).repeat().set_weight(1.0);
+        player.play(build).repeat().set_weight(0.0);
+        player.play(harvest).repeat().set_weight(0.0);
+        let player_entity = world.spawn(player).id();
+        world.spawn((
+            HeroVisual { speed: 0.0 },
+            HeroAnim {
+                player: player_entity,
+                idle: Some(idle),
+                walk: None,
+                build: Some(build),
+                chop: None,
+                harvest: Some(harvest),
+                carry: None,
+                sit_idle: None,
+            },
+            CharacterActivity::Farming,
+        ));
+
+        world.run_system_once(drive_hero_locomotion).unwrap();
+
+        let player = world.get::<AnimationPlayer>(player_entity).unwrap();
+        assert_eq!(player.animation(harvest).unwrap().weight(), 1.0);
+        assert_eq!(player.animation(build).unwrap().weight(), 0.0);
+        assert_eq!(player.animation(idle).unwrap().weight(), 0.0);
+    }
+
+    #[test]
+    fn a_loaded_stationary_villager_freezes_in_the_carry_pose() {
+        let mut world = World::new();
+        let carry = AnimationNodeIndex::new(0);
+        let idle = AnimationNodeIndex::new(1);
+        let mut player = AnimationPlayer::default();
+        player
+            .play(carry)
+            .repeat()
+            .set_weight(0.0)
+            .set_seek_time(0.5);
+        player.play(idle).repeat().set_weight(1.0);
+        let player_entity = world.spawn(player).id();
+        world.spawn((
+            HeroVisual { speed: 0.0 },
+            HeroAnim {
+                player: player_entity,
+                idle: Some(idle),
+                walk: None,
+                build: None,
+                chop: None,
+                harvest: None,
+                carry: Some(carry),
+                sit_idle: None,
+            },
+            CarriedLoad {
+                good: Some(shared::economy::Good::Wood),
+                amount: 1,
+                appearance: Some(CarriedAppearance::WoodBundle),
+            },
+        ));
+
+        world.run_system_once(drive_hero_locomotion).unwrap();
+
+        let player = world.get::<AnimationPlayer>(player_entity).unwrap();
+        let active_carry = player.animation(carry).unwrap();
+        assert_eq!(active_carry.weight(), 1.0);
+        assert_eq!(active_carry.speed(), 0.0);
+        assert_eq!(active_carry.seek_time(), 0.0);
+        assert_eq!(player.animation(idle).unwrap().weight(), 0.0);
     }
 }

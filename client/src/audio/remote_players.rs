@@ -49,7 +49,6 @@ pub fn ensure_remote_footstep_emitters(
         }
     }
 
-
     if candidate_cache.len() > available_slots {
         candidate_cache.select_nth_unstable_by(available_slots, |a, b| a.2.total_cmp(&b.2));
         candidate_cache.truncate(available_slots);

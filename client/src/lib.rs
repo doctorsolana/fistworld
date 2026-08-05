@@ -13,15 +13,15 @@ pub mod input;
 pub mod perf_overlay;
 pub mod profiling;
 pub mod props;
+pub mod render;
 pub mod selection;
 pub mod settlement;
-pub mod render;
 pub mod states;
-pub mod wind;
 pub mod streaming;
 pub mod terrain;
 pub mod ui;
 pub mod water;
+pub mod wind;
 
 use bevy::prelude::*;
 use shared::protocol::{SERVER_ADDR, SERVER_PORT};

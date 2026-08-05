@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-use shared::terrain::ChunkCoord;
 use shared::debug::DebugGizmoMode;
+use shared::terrain::ChunkCoord;
 
 use crate::props::is_tree_kind;
 

@@ -56,9 +56,28 @@ const PLACE_TAIL: &[&str] = &[
 
 /// Occupational bynames. Trades a settlement in this economy would actually have.
 const TRADES: &[&str] = &[
-    "Cooper", "Fletcher", "Smith", "Miller", "Mason", "Tanner", "Carter", "Shepherd", "Thatcher",
-    "Wright", "Baker", "Brewer", "Chandler", "Dyer", "Fisher", "Forester", "Reeve", "Salter",
-    "Turner", "Weaver", "Warden", "Ploughman",
+    "Cooper",
+    "Fletcher",
+    "Smith",
+    "Miller",
+    "Mason",
+    "Tanner",
+    "Carter",
+    "Shepherd",
+    "Thatcher",
+    "Wright",
+    "Baker",
+    "Brewer",
+    "Chandler",
+    "Dyer",
+    "Fisher",
+    "Forester",
+    "Reeve",
+    "Salter",
+    "Turner",
+    "Weaver",
+    "Warden",
+    "Ploughman",
 ];
 
 /// Descriptive bynames.
@@ -96,7 +115,11 @@ fn pick<'a>(rng: &mut XorShift64, list: &'a [&'a str]) -> &'a str {
 /// A place name, e.g. "Brackwater", "Ashfell".
 pub fn place_name(seed: u64) -> String {
     let mut rng = XorShift64::new(seed ^ 0x9E37_79B9_7F4A_7C15);
-    format!("{}{}", pick(&mut rng, PLACE_HEAD), pick(&mut rng, PLACE_TAIL))
+    format!(
+        "{}{}",
+        pick(&mut rng, PLACE_HEAD),
+        pick(&mut rng, PLACE_TAIL)
+    )
 }
 
 /// A full person name, e.g. "Sigrun of Brackwater", "Osric the Cooper".

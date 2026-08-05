@@ -8,7 +8,7 @@
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageSender};
 
-use shared::components::{Hero, HeroOutfit};
+use shared::components::{settlement_founding_refusal, Hero, HeroOutfit};
 use shared::player::peer_id_to_u64;
 use shared::protocol::{DevCommand, ReliableChannel, UnitMoveOrder};
 
@@ -47,10 +47,7 @@ pub fn local_hero_exists(heroes: &Query<&Hero>, local: &LocalPeerId) -> bool {
 }
 
 /// The local player's hero entity, if it has replicated in.
-pub fn local_hero_entity(
-    heroes: &Query<(Entity, &Hero)>,
-    local: &LocalPeerId,
-) -> Option<Entity> {
+pub fn local_hero_entity(heroes: &Query<(Entity, &Hero)>, local: &LocalPeerId) -> Option<Entity> {
     heroes
         .iter()
         .find(|(_, h)| peer_id_to_u64(h.owner) == local.0)
@@ -153,19 +150,13 @@ pub(super) fn handle_world_clicks(
         // The client has everything needed to predict it: it holds the terrain
         // and every settlement replicates to it. Same constants, from `shared`,
         // so the prediction cannot drift from the enforcement.
-        let ground = terrain
-            .as_ref()
-            .map(|terrain| terrain.get_height(target.x, target.z));
         let nearest = settlements
             .iter()
             .map(|(settlement, at)| (settlement.name.as_str(), at.0.distance(target)))
             .min_by(|a, b| a.1.total_cmp(&b.1));
-        let refusal = ground.and_then(|ground| {
-            shared::components::founding_refusal(
-                ground,
-                terrain.as_ref().and_then(|terrain| terrain.water_level()),
-                nearest,
-            )
+        let refusal = terrain.as_ref().and_then(|terrain| {
+            let centre = Vec3::new(target.x, terrain.get_height(target.x, target.z), target.z);
+            settlement_founding_refusal(terrain, centre, nearest)
         });
         if let Some(reason) = refusal {
             // Stay ARMED. The player meant to found something; make them pick a
@@ -291,7 +282,61 @@ pub(super) fn auto_spawn_hero(
                     info!("AUTOSPAWN: {count} villager spawn(s) sent");
                 }
             }
+            if let Some(factor) = std::env::var("FISTWORLD_AUTOSPEED")
+                .ok()
+                .and_then(|value| value.parse::<f32>().ok())
+                .filter(|factor| factor.is_finite() && *factor > 0.0)
+            {
+                if let Ok(mut dev) = dev_sender.single_mut() {
+                    dev.send::<ReliableChannel>(DevCommand::SetTimeWarp(factor));
+                    info!("AUTOSPAWN: requested {factor}x simulation speed");
+                }
+            }
             *state = 2;
         }
+    }
+}
+
+/// Optional second stage for unattended visual tests.
+///
+/// `FISTWORLD_AUTOSPEED_AFTER="12,1"` waits twelve real seconds after entering
+/// the world, then requests 1x. This lets a lab build rapidly before a recorder
+/// watches animation timing at normal speed.
+pub(super) fn auto_set_time_warp_after(
+    time: Res<Time>,
+    capability: Res<GodCapability>,
+    mut dev_sender: Query<
+        &mut MessageSender<DevCommand>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+    mut state: Local<(f32, bool)>,
+) {
+    if state.1 || !capability.0 {
+        return;
+    }
+    let Some((after, factor)) = std::env::var("FISTWORLD_AUTOSPEED_AFTER")
+        .ok()
+        .and_then(|raw| {
+            let mut parts = raw.split(',').map(|part| part.trim().parse::<f32>().ok());
+            match (parts.next().flatten(), parts.next().flatten()) {
+                (Some(after), Some(factor))
+                    if after.is_finite() && after >= 0.0 && factor.is_finite() && factor > 0.0 =>
+                {
+                    Some((after, factor))
+                }
+                _ => None,
+            }
+        })
+    else {
+        return;
+    };
+    state.0 += time.delta_secs();
+    if state.0 < after {
+        return;
+    }
+    if let Ok(mut dev) = dev_sender.single_mut() {
+        dev.send::<ReliableChannel>(DevCommand::SetTimeWarp(factor));
+        info!("AUTOSPAWN: requested {factor}x simulation speed after {after}s");
+        state.1 = true;
     }
 }

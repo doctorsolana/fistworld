@@ -13,7 +13,6 @@ use crate::collision;
 use crate::net;
 use crate::world;
 
-
 /// Marker for the server host entity.
 #[derive(Component)]
 pub(crate) struct GameServer;
@@ -84,8 +83,11 @@ pub(crate) fn configure_bootstrap(app: &mut App) {
             world::map_state::spawn_cloud_seed_once,
             world::map_state::spawn_active_map_state_once,
             world::regions::build_region_registry,
+            world::village_lab_scenario::stage_rendered_lab_once,
+            world::village_lab_scenario::stage_rendered_lab_day_two_arrivals,
+            world::village_lab_scenario::log_rendered_village_diagnostics,
         )
+            .chain()
             .run_if(server_is_started),
     );
-
 }

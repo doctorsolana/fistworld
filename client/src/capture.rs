@@ -114,14 +114,41 @@ pub fn run(config: CaptureConfig) {
         Update,
         (
             spawn_capture_heroes,
+            exercise_capture_door,
             select_capture_person,
             select_capture_place,
+            open_capture_history,
             force_capture_drag_box,
             drive_capture,
         ),
     );
 
     app.run();
+}
+
+/// `FISTFORCE_CAPTURE_DOOR=open` holds the offline settlement's town-hall
+/// door open through the same stable building-side state used in a live game.
+/// This is intentionally independent of villager AI and networking: a capture
+/// made with it is a smoke test for scene instantiation, graph wiring, the
+/// replicated demand consumer, and the authored glTF clip in one repeatable run.
+fn exercise_capture_door(
+    mut commands: Commands,
+    settlements: Query<Entity, With<shared::components::Settlement>>,
+    mut applied: Local<bool>,
+) {
+    if std::env::var("FISTFORCE_CAPTURE_DOOR").as_deref() != Ok("open") {
+        return;
+    }
+    if *applied {
+        return;
+    }
+    let Some(settlement) = settlements.iter().next() else {
+        return;
+    };
+    commands
+        .entity(settlement)
+        .insert(shared::components::BuildingDoorDemand { open: true });
+    *applied = true;
 }
 
 /// Jump straight into the world and provide the world state the server normally sends.
@@ -171,8 +198,11 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
 
     // FISTFORCE_CAPTURE_SETTLEMENT=1 founds a settlement at the shot's focus so
     // the moot hall can be photographed without a server.
-    // "village" additionally populates the first one; see below.
-    if std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").is_ok_and(|v| v == "1" || v == "village") {
+    // "village" additionally populates the first one; "coast" stages the
+    // deterministic Village Lab hut/pier pair for shoreline inspection.
+    if std::env::var("FISTFORCE_CAPTURE_SETTLEMENT")
+        .is_ok_and(|v| v == "1" || v == "village" || v == "coast")
+    {
         commands.queue(|world: &mut World| {
             // The FIRST SHOT's focus, not the camera's: this runs in Startup,
             // before `apply_shot` has moved the camera, so reading the camera
@@ -182,10 +212,18 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                 .get_resource::<CaptureConfig>()
                 .and_then(|c| c.shots.first().map(|s| s.focus))
                 .unwrap_or_default();
+            let mode = std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").unwrap_or_default();
+            let settlement_focus = if mode == "coast" {
+                // The requested focus is the hut. This is its deterministic
+                // offset from the lab hall selected on village_lab seed 3.
+                focus - Vec3::new(53.94803, 0.0, -41.39578)
+            } else {
+                focus
+            };
             let ground = world
                 .get_resource::<shared::terrain::WorldTerrain>()
-                .map(|t| t.get_height(focus.x, focus.z))
-                .unwrap_or(focus.y);
+                .map(|t| t.get_height(settlement_focus.x, settlement_focus.z))
+                .unwrap_or(settlement_focus.y);
             use shared::components::SettlementTier as T;
             // A spread of rungs, so the list's ordering and the detail pane's
             // per-rung wording can both be photographed.
@@ -198,17 +236,56 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
             .into_iter()
             .enumerate()
             {
-                let at = focus + offset;
+                let at = settlement_focus + offset;
                 let y = if i == 0 { ground } else { at.y };
-                world.spawn((
-                    shared::components::Settlement {
-                        name: name.to_string(),
-                        tier,
-                        residents: (i as u32) * 3,
-                        treasury: 0,
-                    },
-                    shared::components::PlayerPosition(Vec3::new(at.x, y, at.z)),
-                ));
+                let hall = world
+                    .spawn((
+                        shared::components::Settlement {
+                            name: name.to_string(),
+                            tier,
+                            residents: (i as u32) * 3,
+                            treasury: 0,
+                        },
+                        shared::components::PlayerPosition(Vec3::new(at.x, y, at.z)),
+                    ))
+                    .id();
+                if i == 0 && mode == "village" {
+                    let mut store =
+                        shared::economy::GoodsInventory::new(shared::economy::capacity::HALL);
+                    store.add(shared::economy::Good::Food, 9);
+                    store.add(shared::economy::Good::Wheat, 18);
+                    store.add(shared::economy::Good::Wood, 7);
+                    store.add(shared::economy::Good::Stone, 2);
+                    let mut market = shared::economy::MootMarket::founding();
+                    market.refresh_all(&store);
+                    world.entity_mut(hall).insert((
+                        store,
+                        market,
+                        shared::components::MootAdministration {
+                            road_steward: Some(shared::names::person_name(7_002)),
+                            roadless_buildings: 1,
+                            disconnected_buildings: 0,
+                            last_road_audit_day: 12,
+                            ..default()
+                        },
+                        shared::components::SettlementPolicies::poor_relief(),
+                        shared::economy::SettlementEconomy {
+                            edible_stock: 27,
+                            reserve_days: 4.5,
+                            recent_food_production: 3.7,
+                            recent_food_consumption: 3.0,
+                            unmet_food: 0,
+                            observed_days: 8,
+                            food_secure_days: 5,
+                            reserve_prosperity: 22.0,
+                            production_prosperity: 20.0,
+                            housing_prosperity: 18.0,
+                            employment_prosperity: 18.0,
+                            hunger_penalty: 0.0,
+                            prosperity: 78.0,
+                        },
+                    ));
+                }
             }
 
             // FISTFORCE_CAPTURE_SETTLEMENT=village also populates the FIRST
@@ -218,12 +295,23 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
             // waiting out a live village.
             if std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").is_ok_and(|v| v == "village") {
                 use shared::components::SettlementBuildingKind as K;
-                let people: Vec<String> =
-                    (0..3).map(|i| shared::names::person_name(7_000 + i)).collect();
-                for name in &people {
+                let people: Vec<String> = (0..3)
+                    .map(|i| shared::names::person_name(7_000 + i))
+                    .collect();
+                for (index, name) in people.iter().enumerate() {
                     world.spawn((
                         shared::components::CharacterName(name.clone()),
+                        shared::components::CharacterKind::Villager,
                         shared::components::Residence("Brackwater".to_string()),
+                        shared::components::Occupation(Some(
+                            ["Farmer", "Lumberjack", "Road Steward"][index].to_string(),
+                        )),
+                        shared::economy::Wallet::new((650 + index as u64 * 275) * 100),
+                        shared::components::Nutrition {
+                            last_meal_day: Some(12),
+                            consecutive_missed_meals: if index == 1 { 1 } else { 0 },
+                        },
+                        shared::components::CharacterActivity::Indoors,
                     ));
                 }
                 for (index, kind) in [K::Farmstead, K::LumberjackHut].into_iter().enumerate() {
@@ -232,6 +320,13 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                         .get_resource::<shared::terrain::WorldTerrain>()
                         .map(|t| t.get_height(at.x, at.z))
                         .unwrap_or(at.y);
+                    let mut store =
+                        shared::economy::GoodsInventory::new(kind.storage_bulk_capacity());
+                    if kind == K::Farmstead {
+                        store.add(shared::economy::Good::Wheat, 11);
+                    } else {
+                        store.add(shared::economy::Good::Wood, 6);
+                    }
                     world.spawn((
                         shared::components::SettlementBuilding {
                             kind,
@@ -246,8 +341,35 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                         },
                         shared::components::PlayerPosition(Vec3::new(at.x, ground, at.z)),
                         shared::components::PlayerRotation(0.0),
+                        store,
                     ));
                 }
+                let house_at = focus + Vec3::new(15.0, 0.0, -12.0);
+                let house_ground = world
+                    .get_resource::<shared::terrain::WorldTerrain>()
+                    .map(|t| t.get_height(house_at.x, house_at.z))
+                    .unwrap_or(house_at.y);
+                world.spawn((
+                    shared::components::SettlementBuilding {
+                        kind: K::House,
+                        settlement: "Brackwater".to_string(),
+                        owner: Some(people[2].clone()),
+                        quality: 0.5,
+                        workers: Vec::new(),
+                    },
+                    shared::components::Household {
+                        residents: people.clone(),
+                    },
+                    shared::components::PlayerPosition(Vec3::new(
+                        house_at.x,
+                        house_ground,
+                        house_at.z,
+                    )),
+                    // Broadside to the default capture camera so the authored
+                    // pane, rather than only its edge, is available for visual
+                    // day/night comparison.
+                    shared::components::PlayerRotation(1.02),
+                ));
                 // A site needs a POSITION as well as its record -- the raise
                 // visual is placed from it, and without one the frame has
                 // nowhere to come out of.
@@ -273,6 +395,16 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                         // finished building would show.
                         rotation: 0.9,
                     },
+                    {
+                        let mut materials = shared::economy::GoodsInventory::new(
+                            K::House.construction_storage_bulk(),
+                        );
+                        materials.add(
+                            shared::economy::Good::Wood,
+                            K::House.construction_wood_required(),
+                        );
+                        materials
+                    },
                     shared::components::PlayerPosition(Vec3::new(
                         site_at.x,
                         site_ground,
@@ -285,7 +417,86 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                     .find(|s| s.name == "Brackwater")
                 {
                     settlement.residents = people.len() as u32;
+                    settlement.treasury = 2_750;
                 }
+                if std::env::var("FISTFORCE_CAPTURE_TRADE").is_ok_and(|value| value == "1") {
+                    let hall = world
+                        .query_filtered::<Entity, With<shared::components::Settlement>>()
+                        .iter(world)
+                        .find(|entity| {
+                            world
+                                .get::<shared::components::Settlement>(*entity)
+                                .is_some_and(|settlement| settlement.name == "Brackwater")
+                        });
+                    if let Some(hall) = hall {
+                        world.insert_resource(crate::ui::settlement_panel::TradePanelTarget(Some(
+                            hall,
+                        )));
+                    }
+                }
+                if let Ok(mode) = std::env::var("FISTFORCE_CAPTURE_HISTORY") {
+                    let hall = world
+                        .query_filtered::<Entity, With<shared::components::Settlement>>()
+                        .iter(world)
+                        .find(|entity| {
+                            world
+                                .get::<shared::components::Settlement>(*entity)
+                                .is_some_and(|settlement| settlement.name == "Brackwater")
+                        });
+                    if let Some(hall) = hall {
+                        if mode != "empty" {
+                            let mut cache =
+                                world.resource_mut::<crate::ui::history::SettlementHistoryCache>();
+                            cache.archives.insert(
+                                "Brackwater".to_string(),
+                                synthetic_settlement_history("Brackwater"),
+                            );
+                            cache.world = Some(synthetic_world_history());
+                        }
+                        let _ = hall;
+                    }
+                }
+            } else if mode == "coast" {
+                use shared::components::SettlementBuildingKind as K;
+                let rotation = 1.309_f32;
+                let hut_ground = world
+                    .get_resource::<shared::terrain::WorldTerrain>()
+                    .map(|terrain| terrain.get_height(focus.x, focus.z))
+                    .unwrap_or(focus.y);
+                let hut = Vec3::new(focus.x, hut_ground, focus.z);
+                let fisher = shared::names::person_name(8_001);
+                let mut hut_store =
+                    shared::economy::GoodsInventory::new(K::FishermansHut.storage_bulk_capacity());
+                hut_store.add(shared::economy::Good::Food, 14);
+                world.spawn((
+                    shared::components::SettlementBuilding {
+                        kind: K::FishermansHut,
+                        settlement: "Brackwater".to_string(),
+                        owner: Some(fisher.clone()),
+                        quality: 0.43,
+                        workers: vec![fisher],
+                    },
+                    hut_store,
+                    shared::components::PlayerPosition(hut),
+                    shared::components::PlayerRotation(rotation),
+                ));
+
+                let mut pier_at = K::FishermansHut
+                    .pier_position(hut, rotation)
+                    .expect("fisherman's hut has a pier anchor");
+                pier_at.y = world
+                    .get_resource::<shared::terrain::WorldTerrain>()
+                    .and_then(|terrain| terrain.water_level())
+                    .unwrap_or(0.0);
+                world.spawn((
+                    shared::components::FishingPier {
+                        settlement: "Brackwater".to_string(),
+                        fishermans_hut: hut,
+                        quality: 0.43,
+                    },
+                    shared::components::PlayerPosition(pier_at),
+                    shared::components::PlayerRotation(rotation),
+                ));
             }
         });
     }
@@ -315,8 +526,8 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
             }
             return;
         }
-        let sample = |name: &str, level, prestige, online, known, is_self, affiliation| {
-            PersonRecord {
+        let sample =
+            |name: &str, level, prestige, online, known, is_self, affiliation| PersonRecord {
                 name: name.to_string(),
                 kind: PersonKind::Hero,
                 affiliation,
@@ -326,20 +537,66 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                 known,
                 is_self,
                 commanded_by: None,
-            }
-        };
+                residence: None,
+                home: None,
+                occupation: None,
+                workplace: None,
+                wallet: None,
+                nutrition: None,
+                activity: None,
+                attributes: Some(shared::components::CharacterAttributes::default()),
+                work_status: Some(shared::components::WorkStatus::LookingForWork),
+                daily_wage: None,
+                workforce_requirements: None,
+                inventory: Some(shared::economy::GoodsInventory::new(
+                    shared::economy::capacity::VILLAGER,
+                )),
+                carried: Some(shared::economy::CarriedLoad::default()),
+            };
         commands.insert_resource(KnownPeople {
             records: vec![
                 sample("Aldric", 7, 2, true, true, true, Affiliation::default()),
                 sample("Bryn", 4, 0, true, true, false, Affiliation::default()),
-                sample("Cassia", 11, 5, false, true, false, shared::components::CharacterAffiliation(Some(0))),
+                sample(
+                    "Cassia",
+                    11,
+                    5,
+                    false,
+                    true,
+                    false,
+                    shared::components::CharacterAffiliation(Some(0)),
+                ),
                 sample("Dunstan", 2, 0, false, true, false, Affiliation::default()),
-                sample("Eirwen", 9, 3, true, true, false, shared::components::CharacterAffiliation(Some(0))),
+                sample(
+                    "Eirwen",
+                    9,
+                    3,
+                    true,
+                    true,
+                    false,
+                    shared::components::CharacterAffiliation(Some(0)),
+                ),
                 sample("Faelan", 1, 0, false, false, false, Affiliation::default()),
-                sample("Gwyneth", 14, 8, false, false, false, shared::components::CharacterAffiliation(Some(0))),
+                sample(
+                    "Gwyneth",
+                    14,
+                    8,
+                    false,
+                    false,
+                    false,
+                    shared::components::CharacterAffiliation(Some(0)),
+                ),
                 sample("Hollis", 5, 1, false, true, false, Affiliation::default()),
                 sample("Ivo", 3, 0, false, false, false, Affiliation::default()),
-                sample("Jorunn", 8, 4, true, true, false, shared::components::CharacterAffiliation(Some(0))),
+                sample(
+                    "Jorunn",
+                    8,
+                    4,
+                    true,
+                    true,
+                    false,
+                    shared::components::CharacterAffiliation(Some(0)),
+                ),
                 sample("Kelda", 6, 2, false, true, false, Affiliation::default()),
                 sample("Lorcan", 12, 6, false, false, false, Affiliation::default()),
             ],
@@ -362,6 +619,54 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
     info!("capture: entering world offline (no server)");
 }
 
+/// Open history after the commander camera has rendered ordinary world frames.
+/// A modal present on the very first offline capture frame prevents the capture
+/// harness's camera from completing its initial convergence; real players can
+/// only open this after entering the world, so the delay mirrors actual use.
+fn open_capture_history(
+    settlements: Query<(Entity, &shared::components::Settlement)>,
+    mut target: ResMut<crate::ui::history::HistoryPanelTarget>,
+    mut frames: Local<u8>,
+) {
+    let Ok(mode) = std::env::var("FISTFORCE_CAPTURE_HISTORY") else {
+        return;
+    };
+    if target.0.is_some() {
+        return;
+    }
+    *frames = frames.saturating_add(1);
+    if *frames < 30 {
+        return;
+    }
+    let hall = settlements
+        .iter()
+        .find(|(_, settlement)| settlement.name == "Brackwater")
+        .map(|(entity, _)| entity);
+    let view = match mode.as_str() {
+        "market" => crate::ui::history::HistoryView::Market(shared::economy::Good::Wood),
+        "world" => crate::ui::history::HistoryView::World,
+        _ => crate::ui::history::HistoryView::Village,
+    };
+    let settlement = if view == crate::ui::history::HistoryView::World {
+        None
+    } else {
+        hall
+    };
+    if view != crate::ui::history::HistoryView::World && settlement.is_none() {
+        return;
+    }
+    target.0 = Some(crate::ui::history::HistoryTarget {
+        settlement,
+        place: if view == crate::ui::history::HistoryView::World {
+            "World".to_string()
+        } else {
+            "Brackwater".to_string()
+        },
+        view,
+        return_to_trade: false,
+    });
+}
+
 /// FISTFORCE_CAPTURE_HERO spawns stand-in heroes (offline fakes of the
 /// replicated entity) in a line at the first shot's focus, terrain-snapped, so
 /// captures can verify the character model, wardrobe and pose without a
@@ -380,13 +685,73 @@ fn spawn_capture_heroes(
     if *spawned {
         return;
     }
-    let hero_spec = std::env::var("FISTFORCE_CAPTURE_HERO").ok();
+    let mut hero_spec = std::env::var("FISTFORCE_CAPTURE_HERO").ok();
     let villager_count = std::env::var("FISTFORCE_CAPTURE_VILLAGERS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok());
-    if hero_spec.is_none() && villager_count.is_none() {
+    // Comma-separated authored bundle appearances. Supplying this alone
+    // creates one default hero, making the first-integration WoodBundle shot a
+    // one-flag exercise rather than a bespoke capture path.
+    let carried = std::env::var("FISTFORCE_CAPTURE_CARRIED")
+        .ok()
+        .map(|spec| {
+            spec.split(',')
+                .filter_map(|raw| match raw.trim().to_ascii_lowercase().as_str() {
+                    "wood" => Some((
+                        shared::economy::Good::Wood,
+                        shared::economy::CarriedAppearance::WoodBundle,
+                    )),
+                    "wheat" => Some((
+                        shared::economy::Good::Wheat,
+                        shared::economy::CarriedAppearance::WheatSheaf,
+                    )),
+                    "fish" | "food" => Some((
+                        shared::economy::Good::Food,
+                        shared::economy::CarriedAppearance::FishBasket,
+                    )),
+                    "stone" => Some((
+                        shared::economy::Good::Stone,
+                        shared::economy::CarriedAppearance::StoneBundle,
+                    )),
+                    "iron" => Some((
+                        shared::economy::Good::Iron,
+                        shared::economy::CarriedAppearance::IronBundle,
+                    )),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    // Comma-separated visible work states. This drives the same replicated
+    // activity component as a live village, so authored clips and hand tools
+    // can be reviewed offline without waiting for a worker cycle.
+    let activities = std::env::var("FISTFORCE_CAPTURE_ACTIVITY")
+        .ok()
+        .map(|spec| {
+            spec.split(',')
+                .filter_map(|raw| match raw.trim().to_ascii_lowercase().as_str() {
+                    "build" | "building" => Some(shared::components::CharacterActivity::Building),
+                    "chop" | "chopping" => Some(shared::components::CharacterActivity::Chopping),
+                    "farm" | "farming" | "harvest" => {
+                        Some(shared::components::CharacterActivity::Farming)
+                    }
+                    "fish" | "fishing" => Some(shared::components::CharacterActivity::Fishing),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if hero_spec.is_none()
+        && villager_count.is_none()
+        && carried.is_empty()
+        && activities.is_empty()
+    {
         *spawned = true;
         return;
+    }
+    if hero_spec.is_none() && (!carried.is_empty() || !activities.is_empty()) {
+        let fixture_count = carried.len().max(activities.len()).max(1);
+        hero_spec = Some(vec!["default"; fixture_count].join(";"));
     }
     let Some(terrain) = terrain else {
         return;
@@ -422,17 +787,31 @@ fn spawn_capture_heroes(
         let x = base.x + i as f32 * 1.4;
         let z = base.z;
         let pos = Vec3::new(x, terrain.get_height(x, z), z);
-        commands.spawn((
-            shared::components::Hero {
-                owner: lightyear::prelude::PeerId::Netcode(1000 + i as u64),
-            },
-            shared::components::CharacterName(format!("Capture Hero {}", i + 1)),
-            shared::components::CharacterKind::Hero,
-            shared::components::CharacterAffiliation::default(),
-            outfit,
-            shared::components::PlayerPosition(pos),
-            shared::components::PlayerRotation(std::f32::consts::PI),
-        ));
+        let entity = commands
+            .spawn((
+                shared::components::Hero {
+                    owner: lightyear::prelude::PeerId::Netcode(1000 + i as u64),
+                },
+                shared::components::CharacterName(format!("Capture Hero {}", i + 1)),
+                shared::components::CharacterKind::Hero,
+                shared::components::CharacterAffiliation::default(),
+                outfit,
+                shared::components::PlayerPosition(pos),
+                shared::components::PlayerRotation(std::f32::consts::PI),
+            ))
+            .id();
+        if let Some((good, appearance)) = carried.get(i % carried.len().max(1)).copied() {
+            commands
+                .entity(entity)
+                .insert(shared::economy::CarriedLoad {
+                    good: Some(good),
+                    amount: 1,
+                    appearance: Some(appearance),
+                });
+        }
+        if let Some(activity) = activities.get(i % activities.len().max(1)).copied() {
+            commands.entity(entity).insert(activity);
+        }
     }
     // FISTFORCE_CAPTURE_VILLAGERS=<n> drops n named villagers in a row behind the
     // heroes, so the encyclopedia and the character visuals can be verified
@@ -443,14 +822,28 @@ fn spawn_capture_heroes(
             let z = base.z + 3.0;
             let pos = Vec3::new(x, terrain.get_height(x, z), z);
             let seed = 1_000 + i as u64;
-            commands.spawn((
-                shared::components::CharacterName(shared::names::person_name(seed)),
-                shared::components::CharacterKind::Villager,
-                shared::components::CharacterAffiliation::default(),
-                shared::components::HeroOutfit::varied(seed),
-                shared::components::PlayerPosition(pos),
-                shared::components::PlayerRotation(std::f32::consts::PI),
-            ));
+            let entity = commands
+                .spawn((
+                    shared::components::CharacterName(shared::names::person_name(seed)),
+                    shared::components::CharacterKind::Villager,
+                    shared::components::CharacterAffiliation::default(),
+                    shared::components::HeroOutfit::varied(seed),
+                    shared::components::PlayerPosition(pos),
+                    shared::components::PlayerRotation(std::f32::consts::PI),
+                ))
+                .id();
+            if let Some((good, appearance)) = carried.get(i % carried.len().max(1)).copied() {
+                commands
+                    .entity(entity)
+                    .insert(shared::economy::CarriedLoad {
+                        good: Some(good),
+                        amount: 1,
+                        appearance: Some(appearance),
+                    });
+            }
+            if let Some(activity) = activities.get(i % activities.len().max(1)).copied() {
+                commands.entity(entity).insert(activity);
+            }
         }
     }
 
@@ -463,8 +856,7 @@ fn spawn_capture_heroes(
     // your own units (see selection::pick). Do not read it as the game's rule.
     if std::env::var("FISTFORCE_CAPTURE_SELECT").is_ok_and(|v| v == "all") {
         commands.queue(|world: &mut World| {
-            let mut all = world
-                .query_filtered::<Entity, With<shared::components::CharacterName>>();
+            let mut all = world.query_filtered::<Entity, With<shared::components::CharacterName>>();
             let entities: Vec<Entity> = all.iter(world).collect();
             if let Some((first, hero)) = world
                 .query::<(Entity, &shared::components::Hero)>()
@@ -476,6 +868,21 @@ fn spawn_capture_heroes(
                 world.insert_resource(crate::camera_rts::LocalPeerId(owner));
             }
             world.resource_mut::<crate::selection::Selection>().entities = entities;
+        });
+    } else if std::env::var("FISTFORCE_CAPTURE_SELECT").is_ok_and(|v| v == "market") {
+        // Prefer the hall carrying the actual market components. Useful when a
+        // staged capture also contains several distant list-only settlements.
+        commands.queue(|world: &mut World| {
+            let entity = world
+                .query_filtered::<Entity, (
+                    With<shared::components::Settlement>,
+                    With<shared::economy::MootMarket>,
+                )>()
+                .iter(world)
+                .next();
+            if let Some(entity) = entity {
+                world.resource_mut::<crate::selection::Selection>().entities = vec![entity];
+            }
         });
     } else if std::env::var("FISTFORCE_CAPTURE_SELECT").is_ok_and(|v| v == "hall") {
         // Selects the first SETTLEMENT rather than a person, so the settlement
@@ -492,8 +899,7 @@ fn spawn_capture_heroes(
         });
     } else if std::env::var("FISTFORCE_CAPTURE_SELECT").is_ok_and(|v| v == "1") {
         commands.queue(|world: &mut World| {
-            let mut heroes = world
-                .query_filtered::<(Entity, &shared::components::Hero), ()>();
+            let mut heroes = world.query_filtered::<(Entity, &shared::components::Hero), ()>();
             if let Some((first, hero)) = heroes.iter(world).next() {
                 let owner = shared::player::peer_id_to_u64(hero.owner);
                 world.resource_mut::<crate::selection::Selection>().entities = vec![first];
@@ -522,7 +928,10 @@ fn force_capture_drag_box(
     let Ok(spec) = std::env::var("FISTFORCE_CAPTURE_DRAG_BOX") else {
         return;
     };
-    let parts: Vec<f32> = spec.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+    let parts: Vec<f32> = spec
+        .split(',')
+        .filter_map(|p| p.trim().parse().ok())
+        .collect();
     if parts.len() < 4 {
         return;
     }
@@ -548,15 +957,34 @@ fn force_capture_drag_box(
 fn select_capture_place(
     places: Res<crate::ui::encyclopedia::places::KnownPlaces>,
     mut selected: ResMut<crate::ui::encyclopedia::places::SelectedPlace>,
+    mut entry: ResMut<crate::ui::encyclopedia::places::SelectedPlaceEntry>,
 ) {
-    if selected.0.is_some() {
-        return;
-    }
     let Ok(wanted) = std::env::var("FISTFORCE_CAPTURE_SELECT_PLACE") else {
         return;
     };
-    if places.find(&wanted).is_some() {
+    let Some(place) = places.find(&wanted) else {
+        return;
+    };
+    if selected.0.as_deref() != Some(wanted.as_str()) {
         selected.0 = Some(wanted);
+        *entry = crate::ui::encyclopedia::places::SelectedPlaceEntry::Overview;
+    }
+    let Ok(building) = std::env::var("FISTFORCE_CAPTURE_SELECT_BUILDING") else {
+        return;
+    };
+    if building.eq_ignore_ascii_case("overview") {
+        *entry = crate::ui::encyclopedia::places::SelectedPlaceEntry::Overview;
+    } else if building.eq_ignore_ascii_case("hall")
+        || building.eq_ignore_ascii_case(shared::components::SettlementBuildingKind::Hall.label())
+    {
+        *entry = crate::ui::encyclopedia::places::SelectedPlaceEntry::Hall;
+    } else if let Some((index, _)) = place
+        .buildings
+        .iter()
+        .enumerate()
+        .find(|(_, record)| record.kind.label().eq_ignore_ascii_case(&building))
+    {
+        *entry = crate::ui::encyclopedia::places::SelectedPlaceEntry::Building(index);
     }
 }
 
@@ -570,6 +998,22 @@ fn select_capture_person(
     let Ok(wanted) = std::env::var("FISTFORCE_CAPTURE_SELECT_PERSON") else {
         return;
     };
+    if wanted.eq_ignore_ascii_case("first") {
+        if let Some(record) = people.records.iter().find(|record| record.known) {
+            selected.0 = Some(record.name.clone());
+        }
+        return;
+    }
+    if wanted.eq_ignore_ascii_case("hungry") {
+        if let Some(record) = people.records.iter().find(|record| {
+            record
+                .nutrition
+                .is_some_and(|nutrition| nutrition.is_hungry())
+        }) {
+            selected.0 = Some(record.name.clone());
+        }
+        return;
+    }
     if people.find(&wanted).is_some() {
         selected.0 = Some(wanted);
     }
@@ -720,6 +1164,142 @@ fn normalized_to_seconds(normalized: f32, time: &WorldTime) -> f32 {
     let mut scratch = time.clone();
     scratch.set_normalized_time(normalized);
     scratch.seconds_in_cycle
+}
+
+fn synthetic_settlement_history(name: &str) -> shared::economy::SettlementHistoryArchive {
+    use shared::economy::{Good, MarketGoodHistoryDay, SettlementHistoryDay};
+
+    let mut days = Vec::with_capacity(shared::economy::SETTLEMENT_HISTORY_DAYS);
+    for day in 1..=shared::economy::SETTLEMENT_HISTORY_DAYS as u32 {
+        let mut market = [MarketGoodHistoryDay::default(); Good::COUNT];
+        let mut market_cash = [0u64; Good::COUNT];
+        let mut physical_stock = [0u32; Good::COUNT];
+        for good in Good::ALL {
+            let wave =
+                ((day as f32 * 0.071 + good.index() as f32).sin() * 0.18 + 1.0).clamp(0.6, 1.4);
+            let midpoint = (good.base_price() as f32 * wave) as u64;
+            let producer_units = if (day + good.index() as u32) % 3 == 0 {
+                0
+            } else {
+                2 + u64::from(day % 5)
+            };
+            let consumer_units = 1 + u64::from((day + good.index() as u32) % 4);
+            let producer_price = midpoint.saturating_mul(92) / 100;
+            let consumer_price = midpoint.saturating_mul(108).div_ceil(100);
+            let stock = 5 + ((day * (good.index() as u32 + 2)) % 24);
+            let target = match good {
+                Good::Food | Good::Wheat => 14,
+                Good::Wood => 20,
+                Good::Stone | Good::Iron => 5,
+            };
+            let cash = 2_000 + u64::from(day) * 9 + good.index() as u64 * 375;
+            market[good.index()] = MarketGoodHistoryDay {
+                opening_bid: producer_price.saturating_sub(3),
+                opening_ask: consumer_price.saturating_sub(2),
+                closing_bid: producer_price,
+                closing_ask: consumer_price,
+                high_bid: producer_price.saturating_add(8),
+                low_bid: producer_price.saturating_sub(9),
+                high_ask: consumer_price.saturating_add(10),
+                low_ask: consumer_price.saturating_sub(7),
+                producer_units,
+                producer_coin: producer_price.saturating_mul(producer_units),
+                consumer_units,
+                consumer_coin: consumer_price.saturating_mul(consumer_units),
+                closing_stock: stock,
+                target_stock: target,
+                pool_cash: cash,
+            };
+            market_cash[good.index()] = cash;
+            physical_stock[good.index()] = stock + 3;
+        }
+        let population = 3 + day / 38;
+        let employed = population.saturating_sub(if day % 47 < 8 { 2 } else { 1 });
+        let hungry = u32::from(day % 53 < 5);
+        let prosperity =
+            (55.0 + day as f32 * 0.085 + (day as f32 * 0.12).sin() * 8.0).clamp(0.0, 100.0);
+        let market_total = market_cash.iter().sum::<u64>();
+        let resident_wallets = u64::from(population) * (900 + u64::from(day) * 4);
+        let treasury = 2_000 + u64::from(day) * 12;
+        let liquidation = Good::ALL
+            .into_iter()
+            .map(|good| u64::from(physical_stock[good.index()]) * market[good.index()].closing_bid)
+            .sum();
+        days.push(SettlementHistoryDay {
+            day,
+            market,
+            civic_treasury: treasury,
+            market_cash,
+            resident_wallet_money: resident_wallets,
+            pending_payments: if day % 11 == 0 { 125 } else { 0 },
+            physical_stock,
+            stock_liquidation_value: liquidation,
+            total_local_coin: treasury + market_total + resident_wallets,
+            population,
+            employed,
+            hungry,
+            food_reserves: physical_stock[Good::Food.index()] + physical_stock[Good::Wheat.index()],
+            food_produced: 3 + day % 7,
+            food_consumed: population,
+            buildings: (4 + day / 55) as u16,
+            productive_buildings: (2 + day / 100) as u16,
+            work_positions: (4 + day / 45) as u16,
+            filled_jobs: employed.min(u16::MAX as u32) as u16,
+            prosperity,
+            reserve_prosperity: (prosperity * 0.38).min(40.0),
+            production_prosperity: (prosperity * 0.29).min(30.0),
+            housing_prosperity: (prosperity * 0.2).min(20.0),
+            employment_prosperity: (prosperity * 0.1).min(10.0),
+            hunger_penalty: -(hungry as f32 * 4.0),
+        });
+    }
+    shared::economy::SettlementHistoryArchive {
+        settlement: name.to_string(),
+        days,
+    }
+}
+
+fn synthetic_world_history() -> shared::economy::WorldHistoryArchive {
+    use shared::economy::{Good, WorldHistoryDay};
+
+    let days = (1..=shared::economy::SETTLEMENT_HISTORY_DAYS as u32)
+        .map(|day| {
+            let settlements = 2 + day / 90;
+            let population = 18 + day / 8 + (day / 70) * 5;
+            let employed = population.saturating_sub(3 + day % 4);
+            let hungry = if day % 61 < 8 { 2 + day % 3 } else { day % 2 };
+            let mut physical_stock = [0u32; Good::COUNT];
+            for good in Good::ALL {
+                physical_stock[good.index()] = 15 + day / 5 + good.index() as u32 * 9 + day % 13;
+            }
+            let market_cash = 28_000 + u64::from(day) * 37;
+            let wallets = u64::from(population) * (850 + u64::from(day) * 3);
+            let treasury = u64::from(settlements) * 2_500 + u64::from(day) * 18;
+            WorldHistoryDay {
+                day,
+                settlements,
+                population,
+                employed,
+                hungry,
+                civic_treasury: treasury,
+                market_cash,
+                resident_wallet_money: wallets,
+                pending_payments: if day % 17 == 0 { 220 } else { 0 },
+                total_local_coin: treasury + market_cash + wallets,
+                stock_liquidation_value: 18_000 + u64::from(day) * 91,
+                physical_stock,
+                food_reserves: physical_stock[Good::Food.index()]
+                    + physical_stock[Good::Wheat.index()],
+                food_produced: population + 5 + day % 12,
+                food_consumed: population.saturating_sub(hungry),
+                buildings: 8 + day / 17,
+                productive_buildings: 4 + day / 43,
+                prosperity: (48.0 + day as f32 * 0.1 + (day as f32 * 0.085).sin() * 6.0)
+                    .clamp(0.0, 100.0),
+            }
+        })
+        .collect();
+    shared::economy::WorldHistoryArchive { days }
 }
 
 #[cfg(test)]

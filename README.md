@@ -68,6 +68,70 @@ cargo run -p client --release     # terminal 2
 cargo run -p editor -- --map big_world
 ```
 
+### Village simulation lab
+
+Full usage and failure-diagnosis notes: [`docs/VILLAGE-LAB.md`](docs/VILLAGE-LAB.md).
+
+Run the deterministic dual-climate village world at 100x without rendering:
+
+```bash
+cargo village-lab
+```
+
+It spawns the same fixed-seed, eight-person meadow settlement on every run and
+runs 160 simulated minutes through the real collider, navigation, construction,
+road, household, food, prosperity and work systems. Set
+`FISTWORLD_LAB_SCENARIO=dual` when the second frozen inland control is useful.
+It prints five-minute inventory/progress reports and fails with the exact NPC
+state if active embodied work makes no progress for ten simulated minutes. Useful
+overrides are `FISTWORLD_LAB_MINUTES`, `FISTWORLD_LAB_WARP`, and
+`FISTWORLD_LAB_VERBOSE=1`.
+
+To watch the simpler one-village fixture in the real client, already staged on
+the same compact seed-3 map:
+
+```bash
+./run.sh testworld
+```
+
+The client opens over the eight-person Lab Meadow at 1x and connects as
+`LabObserver`. Use WASD to pan, the mouse wheel to zoom, right-drag to orbit,
+and the HUD buttons to pause or switch between 1x, 10x and 100x. Server and
+client evidence is retained under the timestamped `logs/testworld-*` directory
+printed by the launcher. The comparative fixture remains available with
+`FISTWORLD_LAB_SCENARIO=dual ./run.sh testworld`.
+
+To reproduce a crowded god-mode founding on the ordinary generated world,
+with the real renderer and durable diagnostics, run:
+
+```bash
+./run.sh realworld
+```
+
+This stages 32 villagers at the reported Oakfell test location with an empty
+hall store and normal settlement policy. It starts at 1x; use the HUD speed
+controls when ready. Every run creates timestamped
+`logs/realworld-*/server.log` and `client.log` files. `VillageTrace` summarizes
+population, construction, roads, movement, work, inventories and failed routes
+every three real seconds, while `ServerPerf` separates navigation time from the
+core simulation. `VillageRoutePerf` reports route-cache hits, queue pressure,
+survey expansion and per-stage planner cost every ten seconds. Override the fixture with
+`FISTWORLD_REALWORLD_VILLAGERS=64`, `FISTWORLD_REALWORLD_AT=x,z`, or
+`FISTWORLD_RUN_LOG_DIR=/absolute/path`. Use
+`FISTWORLD_REALWORLD_RUST_LOG=...` only when you intentionally want a narrower
+log filter.
+
+Press F3 near a settlement for its population and live planning-distance
+readout. Press F4 to draw the same planning rings in the world: green housing,
+amber workplaces and blue coastal reach. These are preferred search bands,
+not a political border.
+
+To inspect the compact map empty and found settlements manually with god mode:
+
+```bash
+CITYSIM_MAP_ID=village_lab ./run.sh
+```
+
 ### Visual capture
 
 Screenshot the real renderer with no server, for verifying how things actually look:

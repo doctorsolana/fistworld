@@ -6,8 +6,7 @@ pub mod markers;
 pub mod projection;
 
 use assets::{
-    ensure_map_texture, ensure_marker_assets, load_active_map_bounds, update_map_image_handle,
-    update_marker_image_handle,
+    ensure_map_texture, ensure_marker_assets, update_map_image_handle, update_marker_image_handle,
 };
 use layout::{
     close_map_on_escape, despawn_map_ui, ensure_map_bounds, handle_backdrop_click, spawn_map_ui,
@@ -25,7 +24,6 @@ use bevy::window::{CursorOptions, PrimaryWindow};
 
 use shared::components::{LocalPlayer, PlayerPosition, PlayerRotation};
 use shared::map::MapBounds;
-use shared::terrain::{TerrainGenerator, WORLD_SEED};
 
 use super::modal::sync_modal_cursor;
 use super::styles::{ACCENT_COLOR, BUTTON_BORDER, MENU_BACKGROUND, TEXT_COLOR};

@@ -324,7 +324,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // --- Shoreline (BotW-style): a solid contact line at the waterline,
     // crisp thin foam lines traveling in toward the coast, and a soft wash
-    // underneath. All in shore-depth space, wobbled so lines undulate along
+    // underneath. All in shoreline space, wobbled so lines undulate along
     // the coast instead of tracing perfect contours.
     let line_wobble = wave_field(in.world_position.xz * 0.22, globals.time * 1.4, 1.0, 1.0);
     let shore_zone = 1.0 - smoothstep(0.0, 0.5, shore_dist);
@@ -334,14 +334,31 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let shore_submersion = signed_depth * WATER_DEPTH_FADE_METERS
         + WATER_SURFACE_OFFSET
         + surface_displacement;
-    let contact = (1.0 - smoothstep(0.018, 0.13, abs(shore_submersion)))
+    // Preserve the authored world-space softness up close, but widen it to at
+    // least a pixel at distance. Without derivative AA the otherwise smooth
+    // contour stair-steps as it crosses the screen's pixel grid.
+    let contact_half_width = min(max(0.056, fwidth(shore_submersion) * 0.75), 0.10);
+    let contact = (1.0 - smoothstep(
+        max(0.074 - contact_half_width, 0.0),
+        0.074 + contact_half_width,
+        abs(shore_submersion),
+    ))
         * (1.0 - smoothstep(0.30, 0.62, shore_dist));
 
-    // Traveling foam lines: thin bands in DEPTH space, so they follow the
-    // same shore-parallel contours as the lap crests, drifting shoreward
-    // and breaking up in slow patches like arriving wavelets.
-    let band = fract(depth * 3.4 + line_wobble * 0.05 + globals.time * 0.14);
-    let line_core = smoothstep(0.34, 0.46, band) * (1.0 - smoothstep(0.54, 0.66, band));
+    // Traveling foam lines use true horizontal distance from the connected,
+    // smoothed shoreline. Vertical depth inherits the terrain grid and turns
+    // diagonal beaches into serrated two-axis contours; Euclidean shore
+    // distance gives every bank orientation the same shore-normal motion.
+    // 6.8 cycles across the normalized 28m field preserves the old ~4m line
+    // spacing in the visible near-shore half of that field.
+    let band_phase = shore_dist * 6.8 + line_wobble * 0.05 + globals.time * 0.14;
+    let band = fract(band_phase);
+    // Same line profile as before when nearby (0.34..0.46 and 0.54..0.66),
+    // with a screen-space floor that prevents thin distant sections breaking
+    // into a jagged dotted staircase.
+    let band_half_width = min(max(0.06, fwidth(band_phase) * 0.75), 0.12);
+    let line_core = smoothstep(0.40 - band_half_width, 0.40 + band_half_width, band)
+        * (1.0 - smoothstep(0.60 - band_half_width, 0.60 + band_half_width, band));
     let breakup = smoothstep(
         0.2,
         0.8,

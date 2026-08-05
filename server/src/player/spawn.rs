@@ -109,6 +109,7 @@ pub fn handle_player_name_submission(
                 reputation: profile.reputation,
                 stamina: profile.stamina,
                 intelligence: profile.intelligence,
+                charm: profile.charm,
             };
 
             let _player_entity = commands
@@ -166,6 +167,7 @@ pub fn handle_player_name_submission(
                         Vec3::from(saved.position),
                         saved.rotation,
                         saved.outfit(),
+                        profile.character_attributes(),
                     );
                     info!("Restored hero {entity:?} for '{}' from profile", name_lower);
                 }

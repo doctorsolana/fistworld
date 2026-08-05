@@ -65,7 +65,6 @@ pub const REMOTE_FOOTSTEP_START_SPEED: f32 = 0.6;
 pub const REMOTE_FOOTSTEP_STOP_SPEED: f32 = 0.25;
 pub const REMOTE_FOOTSTEP_VOLUME: f32 = 0.22;
 
-
 /// Incremental cache for remote audio emitter ownership/membership.
 #[derive(Resource, Default)]
 pub struct RemoteAudioEmitterIndex {

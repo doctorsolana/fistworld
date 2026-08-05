@@ -80,8 +80,7 @@ impl ShadowQuality {
         CascadeShadowConfigBuilder {
             num_cascades,
             maximum_distance,
-            first_cascade_far_bound: base_first_bound
-                * (maximum_distance / self.base_distance()),
+            first_cascade_far_bound: base_first_bound * (maximum_distance / self.base_distance()),
             overlap_proportion,
             ..Default::default()
         }
@@ -282,14 +281,14 @@ pub fn save_graphics_settings(
         return;
     }
     *deadline = None;
-    let serialized =
-        match ron::ser::to_string_pretty(&*settings, ron::ser::PrettyConfig::default()) {
-            Ok(text) => text,
-            Err(err) => {
-                warn!("Could not serialize graphics settings: {err}");
-                return;
-            }
-        };
+    let serialized = match ron::ser::to_string_pretty(&*settings, ron::ser::PrettyConfig::default())
+    {
+        Ok(text) => text,
+        Err(err) => {
+            warn!("Could not serialize graphics settings: {err}");
+            return;
+        }
+    };
     if let Some(parent) = std::path::Path::new(SETTINGS_FILE).parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -365,14 +364,8 @@ pub fn apply_graphics_settings(
     );
 
     // Toggle bloom component (avoid running the bloom pass when disabled).
-    for (
-        entity,
-        bloom_opt,
-        ssao_opt,
-        has_contact_shadows,
-        mut color_grading,
-        mut tonemapping,
-    ) in camera_query.iter_mut()
+    for (entity, bloom_opt, ssao_opt, has_contact_shadows, mut color_grading, mut tonemapping) in
+        camera_query.iter_mut()
     {
         let has_bloom = bloom_opt.is_some();
         if settings.bloom_enabled {

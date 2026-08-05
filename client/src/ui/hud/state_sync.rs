@@ -196,11 +196,7 @@ pub(super) fn style_warp_buttons(
         if bg.0 != background {
             bg.0 = background;
         }
-        let text_color = if is_active {
-            WARP_ACTIVE_TEXT
-        } else {
-            INK
-        };
+        let text_color = if is_active { WARP_ACTIVE_TEXT } else { INK };
         for child in children.iter() {
             if let Ok(mut color) = labels.get_mut(child) {
                 if color.0 != text_color {
@@ -262,9 +258,8 @@ pub(super) fn sync_spawn_hero_button(
 /// world now has a name, so a selected villager is named as themselves instead
 /// of showing an empty plate.
 ///
-/// There is deliberately no health or stamina bar. A character carries position,
-/// rotation, a name and an outfit and nothing else, so any bar would be a lie or
-/// a hardcoded 100%, and a fake gauge is worse than an absent one.
+/// A single selected person exposes the three real shared attributes immediately;
+/// EXPAND opens the complete live record (job, wage, home, food and inventory).
 pub(super) fn sync_selection_plate(
     selection: Res<crate::selection::Selection>,
     account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
@@ -273,11 +268,13 @@ pub(super) fn sync_selection_plate(
         &shared::components::CharacterKind,
         &shared::components::PlayerPosition,
         Option<&shared::components::CommandedBy>,
+        Option<&shared::components::CharacterAttributes>,
     )>,
-    mut plates: Query<&mut Node, With<SelectionPlate>>,
+    mut plates: Query<&mut Node, (With<SelectionPlate>, Without<SelectionExpandButton>)>,
     mut glyphs: Query<&mut BorderColor, With<SelectionRingGlyph>>,
     mut names: Query<&mut Text, (With<SelectionNameText>, Without<SelectionStatusText>)>,
     mut statuses: Query<&mut Text, (With<SelectionStatusText>, Without<SelectionNameText>)>,
+    mut expand: Query<&mut Node, (With<SelectionExpandButton>, Without<SelectionPlate>)>,
     visuals: Query<&crate::hero::HeroVisual>,
 ) {
     let count = selection.len();
@@ -297,14 +294,27 @@ pub(super) fn sync_selection_plate(
             node.display = display;
         }
     }
+    let show_expand = count == 1 && is_person;
+    for mut node in expand.iter_mut() {
+        let display = if show_expand {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != display {
+            node.display = display;
+        }
+    }
     let Some(primary) = selection.primary().and_then(|e| characters.get(e).ok()) else {
         return;
     };
     // Position is no longer read here: movement comes from the smoothed
     // visual, not from diffing the replicated position frame to frame.
-    let (name, kind, _position, commanded) = primary;
+    let (name, kind, _position, commanded, attributes) = primary;
 
-    let my_account = account.as_ref().map(|input| input.name.trim().to_lowercase());
+    let my_account = account
+        .as_ref()
+        .map(|input| input.name.trim().to_lowercase());
     let owns = |commanded: Option<&shared::components::CommandedBy>| {
         crate::selection::can_command(commanded, my_account.as_deref())
     };
@@ -315,12 +325,20 @@ pub(super) fn sync_selection_plate(
     let commandable = selection
         .entities
         .iter()
-        .filter(|entity| characters.get(**entity).is_ok_and(|(_, _, _, c)| owns(c)))
+        .filter(|entity| {
+            characters
+                .get(**entity)
+                .is_ok_and(|(_, _, _, c, _)| owns(c))
+        })
         .count();
 
     // The one saturated colour means "you command this". Grey means you are
     // merely looking at someone.
-    let glyph_color = if commandable > 0 { EMBER_RULE } else { INK_MUTED };
+    let glyph_color = if commandable > 0 {
+        EMBER_RULE
+    } else {
+        INK_MUTED
+    };
     for mut border in glyphs.iter_mut() {
         let next = BorderColor::from(glyph_color);
         if *border != next {
@@ -372,8 +390,19 @@ pub(super) fn sync_selection_plate(
             n if n == count => format!("{n} WILL MOVE"),
             n => format!("{n} OF {count} WILL MOVE"),
         }
+    } else if let Some(attributes) = attributes {
+        format!(
+            "P{} I{} C{}",
+            attributes.physique(),
+            attributes.intelligence(),
+            attributes.charm(),
+        )
     } else if is_mine {
-        if moved { "ON THE MOVE".to_string() } else { "HOLDING".to_string() }
+        if moved {
+            "ON THE MOVE".to_string()
+        } else {
+            "HOLDING".to_string()
+        }
     } else {
         kind.label().to_string()
     };
@@ -442,7 +471,11 @@ pub(super) fn sync_spawn_npc_button(
         ("SPAWN VILLAGER", INK, PLATE_RULE_SOFT)
     };
     for (mut bg, mut border_color) in buttons.iter_mut() {
-        let background = if npc_arm.0 { BUTTON_PRESSED } else { BUTTON_NORMAL };
+        let background = if npc_arm.0 {
+            BUTTON_PRESSED
+        } else {
+            BUTTON_NORMAL
+        };
         if bg.0 != background {
             bg.0 = background;
         }
@@ -473,7 +506,11 @@ pub(super) fn sync_found_village_button(
         ("FOUND VILLAGE", INK, PLATE_RULE_SOFT)
     };
     for (mut bg, mut border_color) in buttons.iter_mut() {
-        let background = if found_arm.0 { BUTTON_PRESSED } else { BUTTON_NORMAL };
+        let background = if found_arm.0 {
+            BUTTON_PRESSED
+        } else {
+            BUTTON_NORMAL
+        };
         if bg.0 != background {
             bg.0 = background;
         }

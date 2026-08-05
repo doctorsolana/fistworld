@@ -27,11 +27,11 @@
 //!    mainland: a warped directional gradient forms one coastline
 //!  - beach shelf: heights near sea level are compressed, producing wide
 //!    walkable beaches and shallow wading water
-//!  - rivers: channels routed by searching for the lowest ground ahead, with
-//!    monotonically descending beds incised below their banks, guaranteed to
-//!    reach the sea — planned from `raw_height` only, so they are recomputable
-//!    from the seed. Where one meets rising ground it cuts a gorge, which is
-//!    what puts passes through the mountains.
+//!  - rivers: a coarse priority-flood builds boundary-connected drainage
+//!    basins, accumulated runoff reveals natural channels, and seeded rainfall
+//!    decides how many of those channels are visible (including none). Their
+//!    monotonically descending beds reach true ocean rather than inland lakes;
+//!    all planning reads `raw_height`, so it remains reproducible from a seed.
 //!
 //! Determinism rules for anything that lives here:
 //!  - all randomness must come from [`splitmix64`]/[`rand01`] seeded from
@@ -40,6 +40,11 @@
 //!    Road strokes used to, which is why the recipe had to store their beds;
 //!    with roads gone, every stage reads only `raw_height` and the recipe is
 //!    four numbers. Keep it that way.
+
+use std::{
+    cmp::Reverse,
+    collections::{BinaryHeap, VecDeque},
+};
 
 use bevy::prelude::*;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
@@ -50,25 +55,69 @@ use crate::terrain::VERTEX_SPACING;
 
 pub const SEA_LEVEL: f32 = 0.0;
 
-/// Half-width of a river's flat bed, in metres. The channel carved by
-/// generation and the water surface the client lays in it are two different
-/// binaries reading this one number; if they ever disagree the water sits in
-/// mid-air beside its own riverbed, which is why this is not a private const in
-/// each of them.
+/// Maximum half-width of a mature river's flat bed, in metres. The channel
+/// carved by generation and the water surface the client lays in it are two
+/// different binaries reading this one number; if they ever disagree the water
+/// sits in mid-air beside its own riverbed, which is why this is not a private
+/// const in each of them.
 pub const RIVER_HALF_WIDTH: f32 = 5.0;
+
+/// A river begins as a narrow headwater and grows toward
+/// [`RIVER_HALF_WIDTH`] as more of its catchment joins it downstream.
+pub const RIVER_SOURCE_HALF_WIDTH: f32 = 1.5;
+
+/// Water column above the generated bed once a river is clear of its mouth.
+/// Kept here with the bed recipe so rendering and terrain cannot disagree.
+pub const RIVER_WATER_DEPTH: f32 = 0.75;
+
+/// Vertical distance over which river level blends down to the ocean plane.
+pub const RIVER_MOUTH_BLEND: f32 = 6.0;
 
 /// How far the carve blends from bed to untouched terrain — the bank.
 pub const BANK_WIDTH: f32 = 16.0;
 
-/// How far either side of a centreline a river can put water on the ground.
+/// Maximum distance either side of a centreline a mature river can put water
+/// on the ground. Headwaters taper below this via [`river_water_reach_at`].
 ///
-/// The client uses it as the reach of the river water level, and prop/grass
-/// scattering uses it as the clearance to keep the banks free. Those two must
-/// agree: clear less than the water reaches and trees stand in the river; clear
-/// more and there is a bald strip either side, which is the road look this
-/// whole exercise was undoing. They were the same expression written out twice
-/// in two crates, which is a coincidence waiting to stop being one.
+/// The client uses it for conservative chunk culling, and prop scattering uses
+/// it as the maximum clearance that keeps trees out of mature channels. Actual
+/// segment water reach comes from [`river_water_reach_at`].
 pub const RIVER_WATER_REACH: f32 = RIVER_HALF_WIDTH + 4.0;
+
+/// Normalized downstream growth for a point on a generated river.
+///
+/// Smoothing `sqrt(progress)` grows a spring decisively enough to remain
+/// visible without giving the entire upstream half its mature width.
+fn river_growth_at(point_index: usize, point_count: usize) -> f32 {
+    if point_count <= 1 {
+        return 1.0;
+    }
+    let progress = point_index.min(point_count - 1) as f32 / (point_count - 1) as f32;
+    smoothstep01(progress.sqrt())
+}
+
+pub fn river_half_width_at(point_index: usize, point_count: usize) -> f32 {
+    RIVER_SOURCE_HALF_WIDTH
+        + (RIVER_HALF_WIDTH - RIVER_SOURCE_HALF_WIDTH) * river_growth_at(point_index, point_count)
+}
+
+/// Water-level influence follows the tapered channel. The extra margin lets
+/// marching squares fill the bank contour without restoring a full-width disc
+/// at the spring.
+pub fn river_water_reach_at(point_index: usize, point_count: usize) -> f32 {
+    let growth = river_growth_at(point_index, point_count);
+    river_half_width_at(point_index, point_count) + 1.5 + 2.5 * growth
+}
+
+fn river_bank_width_at(point_index: usize, point_count: usize) -> f32 {
+    BANK_WIDTH * (0.55 + 0.45 * river_growth_at(point_index, point_count))
+}
+
+/// Surface level corresponding to a generated river-bed height.
+pub fn river_surface_height(bed: f32, ocean: f32) -> f32 {
+    let mouth_blend = ((bed - ocean) / RIVER_MOUTH_BLEND).clamp(0.0, 1.0);
+    (bed + RIVER_WATER_DEPTH * mouth_blend).max(ocean)
+}
 
 /// Version of the terrain formula. A generated world is code + seed, so any
 /// change to the generation math silently produces a DIFFERENT world from
@@ -76,7 +125,7 @@ pub const RIVER_WATER_REACH: f32 = RIVER_HALF_WIDTH + 4.0;
 /// change (client vs server desync). Bump this whenever generation output
 /// changes; the loader logs an error when a recipe was generated by a
 /// different version.
-pub const WORLDGEN_VERSION: u32 = 6;
+pub const WORLDGEN_VERSION: u32 = 8;
 
 // ============================================================================
 // The recipe
@@ -295,8 +344,7 @@ impl BiomeField {
         // temperate middle is the breadbasket, and both poles must trade for
         // food. (Pillar 2: what you see is what the simulation enforces; the
         // visuals sample the same fn.)
-        let climate =
-            climate_at_with_phase(self.climate_phase, x, z, height, self.half_extent);
+        let climate = climate_at_with_phase(self.climate_phase, x, z, height, self.half_extent);
         profile.farmland *= (1.0 - climate.frost).max(0.0) * (1.0 - climate.snow);
         profile.wood *= 1.0 - climate.snow * 0.45;
         profile.stone = (profile.stone * (1.0 + climate.frost * 0.20)).min(1.0);
@@ -400,15 +448,11 @@ pub fn climate_at_with_phase(
     let effective_lat = north_lat + alt_push;
 
     let snow_start = CLIMATE_SNOW_LAT;
-    let snow = smoothstep01(
-        (effective_lat - snow_start) / CLIMATE_SNOW_BAND,
-    );
-    let frost = smoothstep01(
-        (effective_lat - (snow_start - CLIMATE_FROST_LEAD)) / CLIMATE_SNOW_BAND,
-    );
-    let dry = smoothstep01(
-        (south_lat - alt_push - CLIMATE_DESERT_LAT) / CLIMATE_DESERT_BAND,
-    ) * (1.0 - frost);
+    let snow = smoothstep01((effective_lat - snow_start) / CLIMATE_SNOW_BAND);
+    let frost =
+        smoothstep01((effective_lat - (snow_start - CLIMATE_FROST_LEAD)) / CLIMATE_SNOW_BAND);
+    let dry = smoothstep01((south_lat - alt_push - CLIMATE_DESERT_LAT) / CLIMATE_DESERT_BAND)
+        * (1.0 - frost);
     ClimateSample { snow, frost, dry }
 }
 
@@ -466,6 +510,321 @@ pub struct LakeSeed {
     pub center: Vec2,
     pub radius: f32,
     pub depth: f32,
+}
+
+// ============================================================================
+// Coarse drainage field
+// ============================================================================
+
+/// River planning happens on a coarse lattice rather than by sending several
+/// unrelated walkers in approximately the direction of the coast. The lattice
+/// gives every land cell one deterministic route to boundary-connected ocean;
+/// accumulating those routes reveals the world's real catchments.
+const DRAINAGE_TARGET_SPACING: f32 = 16.0;
+/// Keeps continent-sized recipes from allocating a multi-million-cell
+/// hydrology graph. An 8 km world still gets the full 16 m lattice; larger
+/// worlds trade some planning detail for bounded generation memory.
+const DRAINAGE_MAX_INTERVALS: usize = 768;
+
+const DRAINAGE_NEIGHBORS: [(i32, i32); 8] = [
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (-1, 0),
+    (1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+];
+
+const DRAINAGE_CARDINAL_NEIGHBORS: [(i32, i32); 4] = [(0, -1), (-1, 0), (1, 0), (0, 1)];
+
+struct DrainageField {
+    min: f32,
+    spacing: f32,
+    size: usize,
+    raw: Vec<f32>,
+    ocean: Vec<bool>,
+    ocean_receiver: Vec<usize>,
+    receiver: Vec<usize>,
+    accumulation: Vec<u32>,
+    distance_to_ocean: Vec<f32>,
+    mouth: Vec<usize>,
+}
+
+impl DrainageField {
+    fn build(field: &HeightField) -> Self {
+        let min = -field.half_extent;
+        let intervals = (((field.half_extent * 2.0) / DRAINAGE_TARGET_SPACING)
+            .ceil()
+            .max(2.0) as usize)
+            .min(DRAINAGE_MAX_INTERVALS);
+        let size = intervals + 1;
+        let spacing = field.half_extent * 2.0 / intervals as f32;
+        let count = size * size;
+
+        let mut raw = vec![0.0; count];
+        for z in 0..size {
+            for x in 0..size {
+                raw[z * size + x] =
+                    field.raw_height(min + x as f32 * spacing, min + z as f32 * spacing);
+            }
+        }
+
+        // A below-water inland lake is not the sea. Start at submerged border
+        // cells and flood through submerged neighbours so only water connected
+        // to the edge can be a river mouth.
+        let mut ocean = vec![false; count];
+        let mut ocean_receiver = vec![usize::MAX; count];
+        let mut queue = VecDeque::new();
+        for z in 0..size {
+            for x in 0..size {
+                if x != 0 && z != 0 && x + 1 != size && z + 1 != size {
+                    continue;
+                }
+                let idx = z * size + x;
+                if raw[idx] < SEA_LEVEL {
+                    ocean[idx] = true;
+                    ocean_receiver[idx] = idx;
+                    queue.push_back(idx);
+                }
+            }
+        }
+        while let Some(idx) = queue.pop_front() {
+            // Cardinal connectivity only. Two submerged cells touching at one
+            // corner can have a full dry terrain cell between them at the 2 m
+            // render grid; treating that diagonal as ocean made a river stop
+            // at a puddle visibly separated from the coast by sand.
+            for next in Self::cardinal_neighbors(size, idx).into_iter().flatten() {
+                if !ocean[next] && raw[next] < SEA_LEVEL {
+                    ocean[next] = true;
+                    ocean_receiver[next] = idx;
+                    queue.push_back(next);
+                }
+            }
+        }
+
+        // All current styles guarantee edge ocean. Keep a deterministic edge
+        // outlet as a defensive fallback for future styles rather than leaving
+        // the drainage graph partly uninitialised.
+        if !ocean.iter().any(|is_ocean| *is_ocean) {
+            let mut edge = 0usize;
+            for z in 0..size {
+                for x in 0..size {
+                    if (x == 0 || z == 0 || x + 1 == size || z + 1 == size)
+                        && raw[z * size + x] < raw[edge]
+                    {
+                        edge = z * size + x;
+                    }
+                }
+            }
+            ocean[edge] = true;
+            ocean_receiver[edge] = edge;
+        }
+
+        // Priority-flood the terrain outward from the true ocean. `spill` is
+        // the lowest water level at which a cell can reach that ocean. It lets
+        // routes cross a basin's lowest saddle instead of getting trapped in
+        // the first local hollow, while receivers always point toward a cell
+        // resolved earlier and therefore cannot form loops.
+        let mut spill = vec![i32::MAX; count];
+        let mut flood_distance = vec![u32::MAX; count];
+        let mut receiver = vec![usize::MAX; count];
+        let mut settled = vec![false; count];
+        let mut order = Vec::with_capacity(count);
+        let mut heap = BinaryHeap::new();
+
+        for idx in 0..count {
+            if ocean[idx] {
+                spill[idx] = (raw[idx] * 1000.0).round() as i32;
+                flood_distance[idx] = 0;
+                receiver[idx] = idx;
+                heap.push(Reverse((spill[idx], 0u32, splitmix64(idx as u64), idx)));
+            }
+        }
+
+        while let Some(Reverse((level, distance, _tie, idx))) = heap.pop() {
+            if settled[idx] || level != spill[idx] || distance != flood_distance[idx] {
+                continue;
+            }
+            settled[idx] = true;
+            order.push(idx);
+
+            let x = idx % size;
+            let z = idx / size;
+            for next in Self::neighbors(size, idx).into_iter().flatten() {
+                if settled[next] {
+                    continue;
+                }
+                let nx = next % size;
+                let nz = next / size;
+                let step = if nx != x && nz != z { 1414 } else { 1000 };
+                let next_level = level.max((raw[next] * 1000.0).round() as i32);
+                let next_distance = distance.saturating_add(step);
+                if (next_level, next_distance) < (spill[next], flood_distance[next]) {
+                    spill[next] = next_level;
+                    flood_distance[next] = next_distance;
+                    receiver[next] = idx;
+                    heap.push(Reverse((
+                        next_level,
+                        next_distance,
+                        splitmix64(next as u64 ^ 0xD4A1_6A6E),
+                        next,
+                    )));
+                }
+            }
+        }
+
+        debug_assert_eq!(order.len(), count);
+
+        // The flood solves the hard global question (which saddle eventually
+        // reaches ocean). Within that valid basin, choose the locally lowest
+        // already-resolved neighbour. The flood-distance tie alone prefers a
+        // geometrically short coast route and can shave diagonally across a
+        // hillside; this second pass is what puts the centreline onto the
+        // valley floor while preserving an acyclic route through depressions.
+        let mut rank = vec![usize::MAX; count];
+        for (position, &idx) in order.iter().enumerate() {
+            rank[idx] = position;
+        }
+        for &idx in &order {
+            if ocean[idx] {
+                continue;
+            }
+            let mut best = receiver[idx];
+            let mut best_key = (
+                (raw[best] * 1000.0).round() as i32,
+                flood_distance[best],
+                rank[best],
+            );
+            for next in Self::neighbors(size, idx).into_iter().flatten() {
+                if rank[next] >= rank[idx] || spill[next] > spill[idx] {
+                    continue;
+                }
+                let key = (
+                    (raw[next] * 1000.0).round() as i32,
+                    flood_distance[next],
+                    rank[next],
+                );
+                if key < best_key {
+                    best = next;
+                    best_key = key;
+                }
+            }
+            receiver[idx] = best;
+        }
+
+        // Each dry cell contributes one unit of runoff. Summing from leaves
+        // toward the ocean makes large values appear exactly where separate
+        // slopes have converged into a drainage channel.
+        let mut accumulation = ocean
+            .iter()
+            .map(|is_ocean| u32::from(!*is_ocean))
+            .collect::<Vec<_>>();
+        for &idx in order.iter().rev() {
+            let downstream = receiver[idx];
+            if downstream != idx && downstream != usize::MAX {
+                accumulation[downstream] =
+                    accumulation[downstream].saturating_add(accumulation[idx]);
+            }
+        }
+
+        let mut distance_to_ocean = vec![0.0; count];
+        let mut mouth = (0..count).collect::<Vec<_>>();
+        for &idx in &order {
+            if ocean[idx] {
+                continue;
+            }
+            let downstream = receiver[idx];
+            let a = Self::point_for(min, spacing, size, idx);
+            let b = Self::point_for(min, spacing, size, downstream);
+            distance_to_ocean[idx] = distance_to_ocean[downstream] + a.distance(b);
+            mouth[idx] = mouth[downstream];
+        }
+
+        Self {
+            min,
+            spacing,
+            size,
+            raw,
+            ocean,
+            ocean_receiver,
+            receiver,
+            accumulation,
+            distance_to_ocean,
+            mouth,
+        }
+    }
+
+    fn neighbors(size: usize, idx: usize) -> [Option<usize>; 8] {
+        let x = (idx % size) as i32;
+        let z = (idx / size) as i32;
+        let mut result = [None; 8];
+        for (slot, (dx, dz)) in result.iter_mut().zip(DRAINAGE_NEIGHBORS) {
+            let nx = x + dx;
+            let nz = z + dz;
+            if nx >= 0 && nz >= 0 && nx < size as i32 && nz < size as i32 {
+                *slot = Some(nz as usize * size + nx as usize);
+            }
+        }
+        result
+    }
+
+    fn cardinal_neighbors(size: usize, idx: usize) -> [Option<usize>; 4] {
+        let x = (idx % size) as i32;
+        let z = (idx / size) as i32;
+        let mut result = [None; 4];
+        for (slot, (dx, dz)) in result.iter_mut().zip(DRAINAGE_CARDINAL_NEIGHBORS) {
+            let nx = x + dx;
+            let nz = z + dz;
+            if nx >= 0 && nz >= 0 && nx < size as i32 && nz < size as i32 {
+                *slot = Some(nz as usize * size + nx as usize);
+            }
+        }
+        result
+    }
+
+    fn point(&self, idx: usize) -> Vec2 {
+        Self::point_for(self.min, self.spacing, self.size, idx)
+    }
+
+    fn point_for(min: f32, spacing: f32, size: usize, idx: usize) -> Vec2 {
+        Vec2::new(
+            min + (idx % size) as f32 * spacing,
+            min + (idx / size) as f32 * spacing,
+        )
+    }
+
+    fn trace(&self, source: usize) -> Vec<usize> {
+        let mut path = Vec::new();
+        let mut current = source;
+        let mut ocean_steps = 0usize;
+        for _ in 0..self.receiver.len() {
+            path.push(current);
+            if self.ocean[current] {
+                // Continue briefly along the exact boundary-connected ocean
+                // path. Ending at its first submerged coarse cell can leave a
+                // narrow positive sand saddle between the river surface and
+                // the detailed 2 m coastline. These sea-level segments cut
+                // that last outlet without lowering already-submerged seabed.
+                const MAX_OCEAN_EXTENSION_STEPS: usize = 8;
+                let next = self.ocean_receiver[current];
+                if ocean_steps >= MAX_OCEAN_EXTENSION_STEPS || next == current || next == usize::MAX
+                {
+                    break;
+                }
+                ocean_steps += 1;
+                current = next;
+                continue;
+            }
+            let next = self.receiver[current];
+            if next == current || next == usize::MAX {
+                break;
+            }
+            current = next;
+        }
+        path
+    }
 }
 
 // ============================================================================
@@ -751,241 +1110,205 @@ impl HeightField {
         height
     }
 
-    /// The direction of lowest ground within a forward arc, `probe` metres out.
+    /// Derive rivers from the world's drainage basins.
     ///
-    /// Deliberately a **search**, not a gradient. A finite-difference gradient
-    /// gives the steepest local descent, which is the direction water
-    /// accelerates -- but it is not the direction water *goes*. On a valley
-    /// side the steepest descent points at the valley floor, across the
-    /// channel, and once you are on the floor it points nowhere useful because
-    /// the floor is flat. Following it, a river crabs down one flank and never
-    /// settles into the bottom.
-    ///
-    /// Measured on the shipped world, gradient-following put river 0 in a
-    /// valley only 36% of its length and it trenched a median of 14.4 m to get
-    /// to the sea. The rivers that did find valleys cut 1.6 m. Sampling the arc
-    /// and taking the lowest probe asks the question that actually matters --
-    /// "of the places I could be next, which is lowest" -- and a channel found
-    /// that way needs almost no carving, because the landscape already had one.
-    ///
-    /// `seaward` breaks ties toward open water. Terrain built from noise is
-    /// full of enclosed hollows, and a pure descent search sits in the first
-    /// one it meets forever.
-    fn lowest_ahead(&self, at: Vec2, heading: Vec2, probe: f32, seaward: Vec2) -> Vec2 {
-        /// Half-angle of the search arc. Wide enough to turn into a side
-        /// valley, narrow enough that a river never doubles back uphill.
-        const ARC: f32 = 1.15;
-        const SAMPLES: usize = 11;
-        /// Metres of "height" a fully seaward step is worth in the comparison.
-        const SEAWARD_PULL: f32 = 2.2;
-
-        let mut best = heading;
-        let mut best_score = f32::MAX;
-        for i in 0..SAMPLES {
-            let t = (i as f32 / (SAMPLES - 1) as f32) * 2.0 - 1.0;
-            let (sin_a, cos_a) = (t * ARC).sin_cos();
-            let dir = Vec2::new(
-                heading.x * cos_a - heading.y * sin_a,
-                heading.x * sin_a + heading.y * cos_a,
-            );
-            let p = at + dir * probe;
-            let score = self.raw_height(p.x, p.y) - dir.dot(seaward) * SEAWARD_PULL;
-            if score < best_score {
-                best_score = score;
-                best = dir;
-            }
-        }
-        best
-    }
-
-    /// Plan meandering rivers with monotonically descending beds that end at
-    /// the sea (mainland gets 2-3, island gets 0-1 short streams).
-    /// Reads only `raw_height`, so rivers are recomputable from the seed.
-    ///
-    /// # Why these follow the ground
-    ///
-    /// The first version of this walked a fixed compass bearing with a sine
-    /// wiggle on top and dropped its bed a constant 0.28 m per step, never
-    /// once reading the terrain it crossed. That produces something with the
-    /// wrong silhouette in a specific and recognisable way: real water picks
-    /// its way down the lowest ground available, so a channel that ignores the
-    /// ground reads as *cut* rather than *found* — which is to say it reads as
-    /// a road. It also meant a river was equally likely to trench along a
-    /// ridgeline as to run down the valley beside it.
-    ///
-    /// Now the path steers toward [`Self::downhill`], and the bed is
-    /// `min(previous - MIN_FALL, terrain)`. That one expression does both jobs:
-    ///
-    ///  - where the ground falls faster than `MIN_FALL`, the bed sits ON the
-    ///    terrain, so the river lies in the valley it found and the carve is
-    ///    shallow — a stream in a dell, not a trench.
-    ///  - where the ground rises, the bed keeps descending anyway and the carve
-    ///    deepens into a gorge. That is a water gap, the real landform where a
-    ///    river cuts through a ridge, and it is what makes a mountain passage.
-    ///
-    /// So the dramatic gorges are not a special case bolted on; they are what
-    /// this rule does when a descending river meets rising ground.
+    /// `rainfall` is deliberately independent of the terrain-noise streams: it
+    /// decides only how much of the drainage network is visible. The same land
+    /// can therefore be born dry, carry one dominant river, or expose several
+    /// catchments, including the valid result of no rivers at all.
     pub fn plan_rivers(&self, seed: u64) -> Vec<Vec<Vec3>> {
-        let mut rng = splitmix64(seed ^ 0x11FE);
-        let count = match self.style {
-            WorldStyle::Mainland => 2 + (rand01(&mut rng) * 2.0) as usize,
-            WorldStyle::Island => (rand01(&mut rng) * 2.0) as usize,
-            // Several rivers draining the spine toward the bay.
-            WorldStyle::Showcase => 3 + (rand01(&mut rng) * 3.0) as usize,
+        let rainfall_bits = splitmix64(seed ^ 0x52_49_56_45_52);
+        let rainfall = ((rainfall_bits >> 40) as f32) / ((1u64 << 24) as f32);
+        let max_rivers = match self.style {
+            WorldStyle::Island => 2,
+            WorldStyle::Mainland => 4,
+            WorldStyle::Showcase => 5,
         };
+        let requested = (rainfall * (max_rivers + 1) as f32).floor() as usize;
+        if requested == 0 {
+            return Vec::new();
+        }
 
-        let mut rivers = Vec::new();
-        // Candidates, not rivers. Routing can fail to find the sea -- a spring
-        // behind a ridge, a basin with no outlet -- and those are thrown away
-        // below, so roll extra to keep the world's river count roughly what the
-        // style asked for.
-        for _ in 0..count * 3 {
-            if rivers.len() >= count {
-                break;
-            }
-            // Start high inland; flow toward the sea.
-            let interior = self.half_extent * 0.45;
-            let mut pos = match self.style {
-                WorldStyle::Mainland => {
-                    // Opposite the coast, offset laterally.
-                    let lateral = Vec2::new(-self.coast_dir.y, self.coast_dir.x);
-                    -self.coast_dir * interior
-                        + lateral * ((rand01(&mut rng) - 0.5) * self.half_extent * 1.2)
-                }
-                WorldStyle::Island => {
-                    let a = rand01(&mut rng) * std::f32::consts::TAU;
-                    Vec2::new(a.cos(), a.sin()) * self.half_extent * 0.25
-                }
-                WorldStyle::Showcase => {
-                    // Springs along the mountain spine.
-                    let across = Vec2::new(-self.range_dir.y, self.range_dir.x);
-                    across * self.range_offset
-                        + self.range_dir * ((rand01(&mut rng) - 0.5) * self.half_extent * 1.4)
-                }
-            };
-            // A spring wants high ground: a river that starts halfway down has
-            // nothing to cut through and never makes a gorge. Take the highest
-            // of a few candidates around the nominal start rather than the
-            // first roll, which also stops a spring landing in the sea.
-            let mut best = pos;
-            let mut best_h = self.raw_height(pos.x, pos.y);
-            for _ in 0..6 {
-                let a = rand01(&mut rng) * std::f32::consts::TAU;
-                let r = rand01(&mut rng) * self.half_extent * 0.18;
-                let cand = pos + Vec2::new(a.cos(), a.sin()) * r;
-                let h = self.raw_height(cand.x, cand.y);
-                if h > best_h {
-                    best = cand;
-                    best_h = h;
-                }
-            }
-            // A spring needs head. Below this there is not enough fall left to
-            // cut a channel, and the river spends kilometres crawling flat at
-            // sea level looking for the coast -- which carves a canal, not a
-            // river. Measured: a 15 m spring produced 2.2 km of dead-level
-            // trench before it found water.
-            const MIN_SPRING_HEIGHT: f32 = 22.0;
-            if best_h < MIN_SPRING_HEIGHT {
+        let drainage = DrainageField::build(self);
+        let world_area = (self.half_extent * 2.0).powi(2);
+        let catchment_area =
+            (world_area * 0.0035).clamp(35_000.0, 220_000.0) * (1.20 - rainfall * 0.55);
+        let channel_cells = (catchment_area / drainage.spacing.powi(2)).ceil().max(12.0) as u32;
+
+        // A visible channel begins at the first cell whose accumulated runoff
+        // crosses the threshold. This produces tributary heads at natural
+        // convergence points instead of rolling several arbitrary springs in
+        // the same mountain patch.
+        let mut has_channel_upstream = vec![false; drainage.receiver.len()];
+        for idx in 0..drainage.receiver.len() {
+            if drainage.accumulation[idx] < channel_cells {
                 continue;
             }
-            pos = best;
-
-            // Seaward bias. Steepest descent alone strands a river in the first
-            // enclosed hollow it meets -- the terrain is noise, so it is full of
-            // them. A steady pull toward open water is what "guaranteed to
-            // reach the sea" costs, and it is small enough that the downhill
-            // term still chooses the route.
-            let to_sea = match self.style {
-                WorldStyle::Mainland | WorldStyle::Showcase => self.coast_dir,
-                WorldStyle::Island => pos.normalize_or(Vec2::X),
-            };
-
-            // The spring is incised like every other point. Left at ground
-            // level it is the one place on the river where the bed equals the
-            // terrain, so the carve there is nothing and the water sits in a
-            // slab on open hillside -- a pool with no basin, at the source.
-            let mut bed = self.raw_height(pos.x, pos.y) - INCISION;
-            let mut points: Vec<Vec3> = vec![Vec3::new(pos.x, bed, pos.y)];
-            let meander_seed = rand01(&mut rng) * 100.0;
-            let mut dir = to_sea;
-            let mut reached_sea = false;
-            // Steps spent at sea level without finding the sea.
-            let mut flat_steps = 0usize;
-
-            const STEP: f32 = 9.0;
-            /// Wide enough to read the valley rather than the noise in it.
-            const PROBE: f32 = 42.0;
-            /// The gentlest the bed may fall per step. Also the depth the carve
-            /// gains per step when it has to cut through rising ground.
-            const MIN_FALL: f32 = 0.16;
-            /// How far below the surrounding ground the bed always sits.
-            ///
-            /// Without this the bed tracks the terrain exactly wherever the
-            /// ground is already falling — a perfectly reasonable-looking rule
-            /// that carves nothing at all there, so the water ends up lying on
-            /// open hillside like a ribbon dropped on it. A river is a channel;
-            /// it needs banks even where it did not have to cut its way down.
-            const INCISION: f32 = 1.4;
-
-            for step in 0..400 {
-                let downhill = self.lowest_ahead(pos, dir, PROBE, to_sea);
-                let lateral = Vec2::new(-dir.y, dir.x);
-                let wiggle = ((step as f32 * 0.09) + meander_seed).sin();
-                // Momentum first, or the path corners sharply on every noise
-                // bump and reads as a zigzag rather than a river.
-                dir = (dir * 0.55 + downhill * 0.95 + lateral * wiggle * 0.18).normalize_or(dir);
-                pos += dir * STEP;
-
-                let terrain = self.raw_height(pos.x, pos.y);
-                // The rule the whole routine turns on -- see the doc comment.
-                // Never below sea level: once a river is down to the waterline
-                // it runs flat to the coast as an estuary. Letting it keep
-                // descending trenches the sea floor under water nobody can see.
-                bed = (bed - MIN_FALL).min(terrain - INCISION).max(SEA_LEVEL);
-                points.push(Vec3::new(pos.x, bed, pos.y));
-
-                // An estuary is a few hundred metres of flat water. Past that
-                // the river is not approaching a coast, it is tunnelling toward
-                // one, and the result reads as a canal cut across the country.
-                // Abandon it -- `reached_sea` stays false and it is discarded.
-                const MAX_FLAT_STEPS: usize = 32;
-                if bed <= SEA_LEVEL {
-                    flat_steps += 1;
-                    if flat_steps > MAX_FLAT_STEPS {
-                        break;
-                    }
-                } else {
-                    flat_steps = 0;
-                }
-
-                // Arrival is the GROUND going under, not the bed reaching zero.
-                //
-                // Those are wildly different places. The bed descends at a
-                // fixed rate regardless of terrain, so inland it grinds down to
-                // sea level while the ground is still 30 m up -- and stopping
-                // there left the river ending in a hollow in the middle of the
-                // country. Measured on the shipped world, only one of four
-                // rivers finished within 100 m of open water; one stopped
-                // 600 m short.
-                if terrain < SEA_LEVEL {
-                    reached_sea = true;
-                    break;
-                }
-                if pos.x.abs() > self.half_extent * 1.02
-                    || pos.y.abs() > self.half_extent * 1.02
-                {
-                    // Off the edge of the world, which is open ocean.
-                    reached_sea = true;
-                    break;
-                }
-            }
-            // A river that never found the sea is worse than no river: it is a
-            // channel of water lying in open country, connected to nothing.
-            if reached_sea && points.len() > 8 {
-                rivers.push(points);
+            let downstream = drainage.receiver[idx];
+            if downstream != idx && downstream != usize::MAX {
+                has_channel_upstream[downstream] = true;
             }
         }
+
+        let min_spring_height = match self.style {
+            WorldStyle::Island => 6.0,
+            WorldStyle::Mainland | WorldStyle::Showcase => 10.0,
+        };
+        let min_length = (self.half_extent * 0.10).clamp(220.0, 500.0);
+        let mut candidates = Vec::new();
+        for idx in 0..drainage.receiver.len() {
+            if drainage.ocean[idx]
+                || drainage.accumulation[idx] < channel_cells
+                || has_channel_upstream[idx]
+                || drainage.raw[idx] < min_spring_height
+                || drainage.distance_to_ocean[idx] < min_length
+            {
+                continue;
+            }
+            let score = (drainage.distance_to_ocean[idx] * 10.0
+                + drainage.raw[idx].max(0.0) * 80.0
+                + (drainage.accumulation[idx] as f32).sqrt() * 20.0) as i64;
+            candidates.push((idx, score, splitmix64(seed ^ idx as u64 ^ 0xCA7C_4E17)));
+        }
+        candidates.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
+
+        let source_separation = (self.half_extent * 0.10).clamp(240.0, 650.0);
+        let mouth_separation = (self.half_extent * 0.04).clamp(120.0, 300.0);
+        let route_clearance_cells = (64.0 / drainage.spacing).ceil() as i32;
+        let mut reserved_route = vec![false; drainage.receiver.len()];
+        let mut chosen_sources = Vec::new();
+        let mut chosen_mouths = Vec::new();
+        let mut rivers = Vec::new();
+
+        for (source, _, _) in candidates {
+            if rivers.len() >= requested {
+                break;
+            }
+            let source_point = drainage.point(source);
+            let mouth = drainage.mouth[source];
+            let mouth_point = drainage.point(mouth);
+            if chosen_sources
+                .iter()
+                .any(|other: &Vec2| other.distance(source_point) < source_separation)
+                || chosen_mouths
+                    .iter()
+                    .any(|other: &Vec2| other.distance(mouth_point) < mouth_separation)
+            {
+                continue;
+            }
+
+            let cells = drainage.trace(source);
+            if cells.len() < 10 || !drainage.ocean[*cells.last().unwrap()] {
+                continue;
+            }
+
+            // Long parallel runs are duplicates even if their springs happen
+            // to pass the endpoint spacing checks. A brief crossing is fine;
+            // reject only when a meaningful portion of the route hugs one
+            // already selected.
+            let near_existing = cells.iter().filter(|idx| reserved_route[**idx]).count();
+            if near_existing * 6 > cells.len() {
+                continue;
+            }
+
+            let river = self.river_from_drainage(&drainage, &cells);
+            if river.len() < 10 {
+                continue;
+            }
+
+            chosen_sources.push(source_point);
+            chosen_mouths.push(mouth_point);
+            rivers.push(river);
+
+            for &idx in &cells {
+                let x = (idx % drainage.size) as i32;
+                let z = (idx / drainage.size) as i32;
+                for dz in -route_clearance_cells..=route_clearance_cells {
+                    for dx in -route_clearance_cells..=route_clearance_cells {
+                        if dx * dx + dz * dz > route_clearance_cells * route_clearance_cells {
+                            continue;
+                        }
+                        let nx = x + dx;
+                        let nz = z + dz;
+                        if nx >= 0
+                            && nz >= 0
+                            && nx < drainage.size as i32
+                            && nz < drainage.size as i32
+                        {
+                            reserved_route[nz as usize * drainage.size + nx as usize] = true;
+                        }
+                    }
+                }
+            }
+        }
+
         rivers
+    }
+
+    fn river_from_drainage(&self, drainage: &DrainageField, cells: &[usize]) -> Vec<Vec3> {
+        let mut line = cells
+            .iter()
+            .map(|idx| drainage.point(*idx))
+            .collect::<Vec<_>>();
+
+        // Chaikin subdivision removes the drainage lattice's eight-direction
+        // staircase while staying within a few metres of the valley it found.
+        // Endpoints remain exact, especially the ocean-connected mouth.
+        for _ in 0..2 {
+            let mut smooth = Vec::with_capacity(line.len() * 2);
+            smooth.push(line[0]);
+            for pair in line.windows(2) {
+                smooth.push(pair[0].lerp(pair[1], 0.25));
+                smooth.push(pair[0].lerp(pair[1], 0.75));
+            }
+            smooth.push(*line.last().unwrap());
+            line = smooth;
+        }
+
+        let line = Self::resample_river(&line, 9.0);
+        // Deeper than the water column, leaving the rendered surface visibly
+        // recessed below its banks instead of reading like a texture on land.
+        const INCISION: f32 = 1.9;
+        const MIN_FALL_PER_METRE: f32 = 0.0008;
+        let mut river = Vec::with_capacity(line.len());
+        let first = line[0];
+        let mut bed = (self.raw_height(first.x, first.y) - INCISION).max(SEA_LEVEL);
+        river.push(Vec3::new(first.x, bed, first.y));
+
+        for pair in line.windows(2) {
+            let point = pair[1];
+            let terrain = self.raw_height(point.x, point.y);
+            let fall = pair[0].distance(point) * MIN_FALL_PER_METRE;
+            bed = (bed - fall).min(terrain - INCISION).max(SEA_LEVEL);
+            river.push(Vec3::new(point.x, bed, point.y));
+        }
+        river
+    }
+
+    fn resample_river(line: &[Vec2], interval: f32) -> Vec<Vec2> {
+        let mut result = vec![line[0]];
+        let mut cursor = line[0];
+        let mut remaining = interval;
+
+        for &end in &line[1..] {
+            let mut segment = end - cursor;
+            let mut length = segment.length();
+            while length >= remaining && length > 1e-5 {
+                cursor += segment / length * remaining;
+                result.push(cursor);
+                segment = end - cursor;
+                length = segment.length();
+                remaining = interval;
+            }
+            remaining -= length;
+            cursor = end;
+        }
+
+        let last = *line.last().unwrap();
+        if result.last().unwrap().distance_squared(last) > 0.01 {
+            result.push(last);
+        }
+        result
     }
 }
 
@@ -1025,27 +1348,37 @@ impl HeightGrid {
             size,
             data,
         };
-        grid.carve_rivers(field);
+        // Coast smoothing is intentionally first. It averages low terrain
+        // across several vertices and, when run after carving, partially fills
+        // a near-sea river back in while its water level still follows the
+        // original bed. That produces dry estuary stretches and isolated
+        // puddles. The river must be the final terrain operation.
         grid.apply_beach_shelf(field);
+        grid.carve_rivers(field);
         grid
     }
 
     /// Stamp each river's descending bed into the grid.
     fn carve_rivers(&mut self, field: &HeightField) {
-        let influence = RIVER_HALF_WIDTH + BANK_WIDTH;
-
         for river in &field.rivers {
-            for window in river.windows(2) {
+            for (segment_index, window) in river.windows(2).enumerate() {
                 let a = window[0];
                 let b = window[1];
+                let half_a = river_half_width_at(segment_index, river.len());
+                let half_b = river_half_width_at(segment_index + 1, river.len());
+                let bank_a = river_bank_width_at(segment_index, river.len());
+                let bank_b = river_bank_width_at(segment_index + 1, river.len());
+                let influence = (half_a + bank_a).max(half_b + bank_b);
                 let min_x = a.x.min(b.x) - influence;
                 let max_x = a.x.max(b.x) + influence;
                 let min_z = a.z.min(b.z) - influence;
                 let max_z = a.z.max(b.z) + influence;
                 let xi0 = (((min_x - self.min) / self.spacing).floor().max(0.0)) as usize;
                 let zi0 = (((min_z - self.min) / self.spacing).floor().max(0.0)) as usize;
-                let xi1 = ((((max_x - self.min) / self.spacing).ceil()) as usize).min(self.size - 1);
-                let zi1 = ((((max_z - self.min) / self.spacing).ceil()) as usize).min(self.size - 1);
+                let xi1 =
+                    ((((max_x - self.min) / self.spacing).ceil()) as usize).min(self.size - 1);
+                let zi1 =
+                    ((((max_z - self.min) / self.spacing).ceil()) as usize).min(self.size - 1);
 
                 let pa = Vec2::new(a.x, a.z);
                 let seg = Vec2::new(b.x, b.z) - pa;
@@ -1059,14 +1392,16 @@ impl HeightGrid {
                         );
                         let t = ((p - pa).dot(seg) / len_sq).clamp(0.0, 1.0);
                         let dist = p.distance(pa + seg * t);
-                        if dist >= influence {
+                        let half_width = half_a + (half_b - half_a) * t;
+                        let bank_width = bank_a + (bank_b - bank_a) * t;
+                        if dist >= half_width + bank_width {
                             continue;
                         }
                         let bed = a.y + (b.y - a.y) * t;
-                        let carve = if dist <= RIVER_HALF_WIDTH {
+                        let carve = if dist <= half_width {
                             1.0
                         } else {
-                            let s = (dist - RIVER_HALF_WIDTH) / BANK_WIDTH;
+                            let s = (dist - half_width) / bank_width;
                             1.0 - (s * s * (3.0 - 2.0 * s))
                         };
                         let idx = zi * self.size + xi;
@@ -1149,9 +1484,7 @@ impl HeightGrid {
         for h in self.data.iter_mut() {
             if *h > SEA_LEVEL - BAND && *h < SEA_LEVEL + BAND {
                 let t = (*h - SEA_LEVEL) / BAND;
-                *h = SEA_LEVEL
-                    + t * t * t.signum() * BAND * 0.55
-                    + t.signum() * WATERLINE_STEP;
+                *h = SEA_LEVEL + t * t * t.signum() * BAND * 0.55 + t.signum() * WATERLINE_STEP;
             }
         }
     }
@@ -1278,59 +1611,195 @@ pub fn surface_weights(grid: &HeightGrid, x: f32, z: f32, h: f32) -> [f32; 4] {
 mod tests {
     use super::*;
 
-    /// A river must arrive at open water, not merely run out of height.
-    ///
-    /// The distinction is the whole bug this replaced. Routing stopped when the
-    /// BED reached sea level, which inland happens hundreds of metres from any
-    /// coast -- the bed falls at a fixed rate whatever the ground does. On the
-    /// shipped world that left three of four rivers ending in dry country, one
-    /// of them 600 m from the nearest open water: a channel full of water,
-    /// connected to nothing, starting and stopping in a field.
-    ///
-    /// So this asserts on reachable sea, not on the mouth's height.
+    #[test]
+    fn river_width_grows_from_headwater_to_mouth() {
+        let mut previous = 0.0;
+        for index in 0..100 {
+            let width = river_half_width_at(index, 100);
+            assert!(width >= previous, "river narrows again at point {index}");
+            previous = width;
+        }
+        assert_eq!(river_half_width_at(0, 100), RIVER_SOURCE_HALF_WIDTH);
+        assert_eq!(river_half_width_at(99, 100), RIVER_HALF_WIDTH);
+        assert_eq!(river_water_reach_at(99, 100), RIVER_WATER_REACH);
+    }
+
+    /// Coastal smoothing used to run after river carving and average the
+    /// low-elevation bed back upward. Rendering still followed the planned bed,
+    /// so estuaries became dry channels dotted with disconnected puddles.
+    #[test]
+    fn coastal_shelf_never_fills_the_river_above_its_waterline() {
+        const SHORE_OVERLAP: f32 = 0.18;
+        let half = 700.0;
+        let mut checked = 0usize;
+
+        for seed in 0u64..16 {
+            let field = HeightField::new(WorldStyle::Showcase, seed, half);
+            if field.rivers.is_empty() {
+                continue;
+            }
+            let grid = HeightGrid::build(&field, half);
+            for river in &field.rivers {
+                for point in river {
+                    let terrain = grid.height(point.x, point.z);
+                    let waterline = river_surface_height(point.y, SEA_LEVEL) + SHORE_OVERLAP;
+                    assert!(
+                        terrain < waterline,
+                        "seed {seed} river at ({:.0},{:.0}) was filled to {terrain:.2}m above its {waterline:.2}m waterline",
+                        point.x,
+                        point.z
+                    );
+                    checked += 1;
+                }
+            }
+        }
+
+        assert!(
+            checked > 100,
+            "not enough river points exercised: {checked}"
+        );
+    }
+
+    /// A river must arrive at boundary-connected ocean. Merely finding terrain
+    /// below the global water plane is insufficient because showcase worlds
+    /// also contain isolated inland lake basins.
     #[test]
     fn every_river_ends_at_open_water() {
-        for seed in [91u64, 7, 2026, 55_555] {
+        for seed in [1u64, 7, 12, 42, 91, 55_555] {
             let field = HeightField::new(WorldStyle::Showcase, seed, 4096.0);
+            let drainage = DrainageField::build(&field);
             for (i, r) in field.rivers.iter().enumerate() {
                 let mouth = r.last().unwrap();
-                if mouth.x.abs() > 4096.0 || mouth.z.abs() > 4096.0 {
-                    continue; // ran off the world edge, which is ocean
-                }
-                let mut distance = f32::MAX;
-                'search: for ring in 1..12 {
-                    let radius = ring as f32 * 10.0;
-                    for k in 0..24 {
-                        let a = std::f32::consts::TAU * k as f32 / 24.0;
-                        let (px, pz) = (mouth.x + a.cos() * radius, mouth.z + a.sin() * radius);
-                        if field.raw_height(px, pz) < SEA_LEVEL - 1.0 {
-                            distance = radius;
-                            break 'search;
-                        }
-                    }
-                }
+                let x = ((mouth.x - drainage.min) / drainage.spacing)
+                    .round()
+                    .clamp(0.0, (drainage.size - 1) as f32) as usize;
+                let z = ((mouth.z - drainage.min) / drainage.spacing)
+                    .round()
+                    .clamp(0.0, (drainage.size - 1) as f32) as usize;
                 assert!(
-                    distance <= 60.0,
-                    "seed {seed} river {i} ends at ({:.0},{:.0}), {} m from open sea",
+                    drainage.ocean[z * drainage.size + x],
+                    "seed {seed} river {i} ends at ({:.0},{:.0}) in water that is not connected to the world ocean",
                     mouth.x,
-                    mouth.z,
-                    if distance == f32::MAX { "120+".into() } else { format!("{distance:.0}") }
+                    mouth.z
                 );
             }
         }
     }
 
-    /// Every world must actually get rivers. Candidates are discarded when they
-    /// fail to reach the sea, and a filter with no floor under it is one bad
-    /// tuning change away from a world with none at all.
+    /// Validate the rendered 2 m terrain, not only the coarse drainage graph.
+    /// A coarse mouth can be ocean-connected while beach shaping leaves one
+    /// positive fine-grid saddle between it and the sea; visually that is a
+    /// river ending in a pond a few metres short of the coastline.
     #[test]
-    fn every_seed_still_gets_rivers() {
-        for seed in [91u64, 7, 2026, 55_555, 12, 900] {
+    fn river_mouth_is_connected_on_the_final_terrain_grid() {
+        const RENDERED_WATERLINE: f32 = SEA_LEVEL + 0.18;
+        let half = 2048.0;
+        let mut mouths_checked = 0usize;
+
+        for seed in [1u64, 7, 12, 42, 91] {
+            let field = HeightField::new(WorldStyle::Showcase, seed, half);
+            if field.rivers.is_empty() {
+                continue;
+            }
+            let grid = HeightGrid::build(&field, half);
+            let mut connected = vec![false; grid.data.len()];
+            let mut queue = VecDeque::new();
+
+            for z in 0..grid.size {
+                for x in 0..grid.size {
+                    if x != 0 && z != 0 && x + 1 != grid.size && z + 1 != grid.size {
+                        continue;
+                    }
+                    let idx = z * grid.size + x;
+                    if grid.data[idx] < RENDERED_WATERLINE && !connected[idx] {
+                        connected[idx] = true;
+                        queue.push_back(idx);
+                    }
+                }
+            }
+
+            while let Some(idx) = queue.pop_front() {
+                for next in DrainageField::cardinal_neighbors(grid.size, idx)
+                    .into_iter()
+                    .flatten()
+                {
+                    if !connected[next] && grid.data[next] < RENDERED_WATERLINE {
+                        connected[next] = true;
+                        queue.push_back(next);
+                    }
+                }
+            }
+
+            for (river_index, river) in field.rivers.iter().enumerate() {
+                let mouth = river.last().unwrap();
+                let x = ((mouth.x - grid.min) / grid.spacing)
+                    .round()
+                    .clamp(0.0, (grid.size - 1) as f32) as usize;
+                let z = ((mouth.z - grid.min) / grid.spacing)
+                    .round()
+                    .clamp(0.0, (grid.size - 1) as f32) as usize;
+                assert!(
+                    connected[z * grid.size + x],
+                    "seed {seed} river {river_index} ends at ({:.0},{:.0}) but final terrain leaves it disconnected from the sea",
+                    mouth.x,
+                    mouth.z
+                );
+                mouths_checked += 1;
+            }
+        }
+
+        assert!(mouths_checked > 4, "not enough river mouths exercised");
+    }
+
+    /// Rainfall is part of the seed: dry worlds can have no rivers and wet
+    /// worlds expose several catchments. Guard both ends and intermediate
+    /// variety so the system cannot drift back to one fixed count.
+    #[test]
+    fn river_abundance_varies_between_seeds() {
+        let mut counts = [1u64, 4, 7, 12, 42, 91, 92, 777, 900, 2026, 55_555]
+            .map(|seed| {
+                HeightField::new(WorldStyle::Showcase, seed, 4096.0)
+                    .rivers
+                    .len()
+            })
+            .to_vec();
+        assert!(
+            counts.contains(&0),
+            "sample had no riverless seed: {counts:?}"
+        );
+        assert!(
+            counts.iter().copied().max().unwrap_or(0) >= 4,
+            "sample had no river-rich seed: {counts:?}"
+        );
+        counts.sort_unstable();
+        counts.dedup();
+        assert!(counts.len() >= 4, "river counts barely vary: {counts:?}");
+    }
+
+    /// Separate rivers must represent separate catchments, not two nearly
+    /// parallel lines spawned in the same place.
+    #[test]
+    fn rivers_do_not_spawn_beside_each_other() {
+        for seed in [1u64, 4, 12, 42, 91, 777, 55_555] {
             let field = HeightField::new(WorldStyle::Showcase, seed, 4096.0);
-            assert!(
-                !field.rivers.is_empty(),
-                "seed {seed} produced no rivers at all"
-            );
+            for a in 0..field.rivers.len() {
+                for b in a + 1..field.rivers.len() {
+                    let source_a = Vec2::new(field.rivers[a][0].x, field.rivers[a][0].z);
+                    let source_b = Vec2::new(field.rivers[b][0].x, field.rivers[b][0].z);
+                    let mouth_a = field.rivers[a].last().unwrap();
+                    let mouth_b = field.rivers[b].last().unwrap();
+                    assert!(
+                        source_a.distance(source_b) >= 240.0,
+                        "seed {seed} rivers {a}/{b} begin only {:.0}m apart",
+                        source_a.distance(source_b)
+                    );
+                    assert!(
+                        Vec2::new(mouth_a.x, mouth_a.z).distance(Vec2::new(mouth_b.x, mouth_b.z))
+                            >= 120.0,
+                        "seed {seed} rivers {a}/{b} use the same mouth"
+                    );
+                }
+            }
         }
     }
 
@@ -1375,8 +1844,7 @@ mod tests {
                 let mut in_valley = 0;
                 let mut total = 0;
                 for w in r.windows(2) {
-                    let along =
-                        Vec2::new(w[1].x - w[0].x, w[1].z - w[0].z).normalize_or(Vec2::X);
+                    let along = Vec2::new(w[1].x - w[0].x, w[1].z - w[0].z).normalize_or(Vec2::X);
                     let side = Vec2::new(-along.y, along.x) * 40.0;
                     let centre = field.raw_height(w[0].x, w[0].z);
                     let left = field.raw_height(w[0].x + side.x, w[0].z + side.y);
@@ -1423,10 +1891,18 @@ mod tests {
     #[ignore]
     fn river_shape_readout() {
         let half = 4096.0;
+        for seed in [1u64, 4, 7, 12, 42, 91, 92, 777, 900, 2026, 55_555] {
+            let field = HeightField::new(WorldStyle::Showcase, seed, half);
+            println!("seed {seed:>5}: {} rivers", field.rivers.len());
+        }
         let field = HeightField::new(WorldStyle::Showcase, 91, half);
-        println!("{} rivers on the shipped world (Showcase/91)", field.rivers.len());
+        println!(
+            "{} rivers on the shipped world (Showcase/91)",
+            field.rivers.len()
+        );
         for (i, r) in field.rivers.iter().enumerate() {
-            let len: f32 = r.windows(2)
+            let len: f32 = r
+                .windows(2)
                 .map(|w| Vec2::new(w[0].x, w[0].z).distance(Vec2::new(w[1].x, w[1].z)))
                 .sum();
             let above = r.iter().filter(|p| p.y > SEA_LEVEL).count();
@@ -1482,11 +1958,11 @@ mod tests {
                 }
             }
             println!(
-                "            spring ({:.0},{:.0}) h={:.0}  mouth ({:.0},{:.0})  open sea {} m away",
-                r[0].x, r[0].z, field.raw_height(r[0].x, r[0].z), mouth.x, mouth.z,
+                "            spring ({:.0},{:.0}) h={:.0}  middle ({:.0},{:.0})  mouth ({:.0},{:.0})  open sea {} m away",
+                r[0].x, r[0].z, field.raw_height(r[0].x, r[0].z), mid.x, mid.z,
+                mouth.x, mouth.z,
                 if to_sea == f32::MAX { "600+".to_string() } else { format!("{to_sea:.0}") }
             );
-            let _ = mid;
         }
     }
 
@@ -1625,7 +2101,10 @@ mod tests {
 
         // Iron is rare: far scarcer than wood on average, and rich deposits
         // cover only a small fraction of the world.
-        assert!(iron_sum < wood_sum * 0.25, "iron {iron_sum} vs wood {wood_sum}");
+        assert!(
+            iron_sum < wood_sum * 0.25,
+            "iron {iron_sum} vs wood {wood_sum}"
+        );
         let rich_frac = rich_iron_cells as f32 / samples as f32;
         assert!(
             rich_frac > 0.001 && rich_frac < 0.08,
@@ -1669,9 +2148,7 @@ mod tests {
                 let s = grid.slope(x, z);
                 let vein = biomes.iron_vein(x, z);
                 let biome = biomes.biome(x, z, h, s);
-                if vein > 0.6
-                    && matches!(biome, WorldBiome::Highlands | WorldBiome::Mountains)
-                {
+                if vein > 0.6 && matches!(biome, WorldBiome::Highlands | WorldBiome::Mountains) {
                     println!("vein at ({x:.0},{z:.0}) h={h:.1} {biome:?} strength {vein:.2}");
                     found += 1;
                     if found >= 15 {
@@ -1757,6 +2234,9 @@ mod climate_tests {
             .iter()
             .map(|&x| climate_at(seed, x, -2540.0, 5.0, half).frost)
             .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
-        assert!(spread.1 - spread.0 > 0.01, "frost line should wobble: {spread:?}");
+        assert!(
+            spread.1 - spread.0 > 0.01,
+            "frost line should wobble: {spread:?}"
+        );
     }
 }

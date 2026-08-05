@@ -1,6 +1,7 @@
 //! Shared modal helpers (backdrop + panel + cursor sync)
 
 use bevy::prelude::*;
+use bevy::ui::FocusPolicy;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::input::InputState;
@@ -82,6 +83,14 @@ where
                     padding: UiRect::all(Val::Px(layout.panel_padding)),
                     ..default()
                 },
+                // `Node` requires `FocusPolicy`, whose default is `Pass`. Without
+                // this override the legacy Bevy UI interaction system continues
+                // through blank parts of the panel and presses the full-screen
+                // backdrop underneath it. The picking backend blocks by default,
+                // but declaring both policies makes the modal correct for either
+                // interaction path used by Bevy 0.19.
+                FocusPolicy::Block,
+                Pickable::default(),
                 BackgroundColor(MENU_BACKGROUND),
                 BorderColor::from(BUTTON_BORDER),
             ))

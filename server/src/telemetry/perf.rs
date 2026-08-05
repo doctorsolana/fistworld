@@ -1,12 +1,14 @@
 //! Fixed-tick server performance diagnostics.
 
 use bevy::prelude::*;
-use shared::components::Player;
+use shared::components::{CharacterKind, Player};
 use shared::protocol::FIXED_TIMESTEP_HZ;
 use std::cmp::Ordering;
 use std::time::{Duration, Instant};
 
 use crate::net::input::{ClientInputIngressStats, ClientInputs};
+use crate::world::village::{MigrationCooldown, VillagerIntent};
+use crate::world::village_roads::{NavigationRouteFailed, NavigationRoutePending};
 
 const LOG_INTERVAL: Duration = Duration::from_secs(3);
 const TARGET_TICK_SECS: f64 = 1.0 / FIXED_TIMESTEP_HZ;
@@ -14,16 +16,18 @@ const TARGET_TICK_SECS: f64 = 1.0 / FIXED_TIMESTEP_HZ;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Phase {
     Core,
+    Navigation,
     Collision,
 }
 
 impl Phase {
-    const COUNT: usize = 2;
+    const COUNT: usize = 3;
 
     fn idx(self) -> usize {
         match self {
             Phase::Core => 0,
-            Phase::Collision => 1,
+            Phase::Navigation => 1,
+            Phase::Collision => 2,
         }
     }
 }
@@ -126,7 +130,6 @@ impl ServerPerfMonitor {
             Duration::from_secs_f64(ms as f64 / 1000.0),
         );
     }
-
 }
 
 pub fn handle_perf_tick_begin(mut perf: ResMut<ServerPerfMonitor>) {
@@ -166,9 +169,28 @@ pub fn handle_perf_core_phase_end(mut perf: ResMut<ServerPerfMonitor>) {
     }
 }
 
+pub fn handle_perf_navigation_phase_begin(mut perf: ResMut<ServerPerfMonitor>) {
+    if perf.enabled {
+        perf.start_phase(Phase::Navigation);
+    }
+}
+
+pub fn handle_perf_navigation_phase_end(mut perf: ResMut<ServerPerfMonitor>) {
+    if perf.enabled {
+        perf.end_phase(Phase::Navigation);
+    }
+}
+
 pub fn update_server_perf_log(
     mut perf: ResMut<ServerPerfMonitor>,
     players: Query<&Player>,
+    villagers: Query<(
+        &CharacterKind,
+        Option<&VillagerIntent>,
+        Has<NavigationRoutePending>,
+        Has<NavigationRouteFailed>,
+        Has<MigrationCooldown>,
+    )>,
     client_inputs: Res<ClientInputs>,
     mut input_ingress: ResMut<ClientInputIngressStats>,
 ) {
@@ -190,6 +212,9 @@ pub fn update_server_perf_log(
 
     let core_avg_ms = perf.phase_sum[Phase::Core.idx()].as_secs_f64() * 1000.0 / ticks_f;
     let core_max_ms = perf.phase_max[Phase::Core.idx()].as_secs_f64() * 1000.0;
+    let navigation_avg_ms =
+        perf.phase_sum[Phase::Navigation.idx()].as_secs_f64() * 1000.0 / ticks_f;
+    let navigation_max_ms = perf.phase_max[Phase::Navigation.idx()].as_secs_f64() * 1000.0;
     let collision_avg_ms = perf.phase_sum[Phase::Collision.idx()].as_secs_f64() * 1000.0 / ticks_f;
     let collision_max_ms = perf.phase_max[Phase::Collision.idx()].as_secs_f64() * 1000.0;
 
@@ -234,13 +259,41 @@ pub fn update_server_perf_log(
         out
     };
 
+    let mut villager_total = 0usize;
+    let mut villager_idle = 0usize;
+    let mut villager_migrating = 0usize;
+    let mut villager_settled = 0usize;
+    let mut villager_nav_pending = 0usize;
+    let mut villager_nav_failed = 0usize;
+    let mut villager_migration_cooldown = 0usize;
+    for (kind, intent, pending, failed, cooldown) in villagers.iter() {
+        if *kind != CharacterKind::Villager {
+            continue;
+        }
+        villager_total += 1;
+        match intent {
+            Some(VillagerIntent::Idle) | None => villager_idle += 1,
+            Some(VillagerIntent::Travelling { .. }) => villager_migrating += 1,
+            Some(
+                VillagerIntent::Resident { .. }
+                | VillagerIntent::Building { .. }
+                | VillagerIntent::RoadBuilding { .. },
+            ) => villager_settled += 1,
+        }
+        villager_nav_pending += usize::from(pending);
+        villager_nav_failed += usize::from(failed);
+        villager_migration_cooldown += usize::from(cooldown);
+    }
+
     info!(
-        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} collision={:.2}/{:.2} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={}",
+        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} navigation={:.2}/{:.2} collision={:.2}/{:.2} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} villagers={} idle={} migrating={} settled={} nav_pending={} nav_failed={} migration_cooldown={}",
         tick_avg_ms,
         tick_max_ms,
         over_budget_pct,
         core_avg_ms,
         core_max_ms,
+        navigation_avg_ms,
+        navigation_max_ms,
         collision_avg_ms,
         collision_max_ms,
         client_inputs.latest.len(),
@@ -248,6 +301,13 @@ pub fn update_server_perf_log(
         input_ingress_total_per_sec,
         per_client_input_summary,
         players_count,
+        villager_total,
+        villager_idle,
+        villager_migrating,
+        villager_settled,
+        villager_nav_pending,
+        villager_nav_failed,
+        villager_migration_cooldown,
     );
 
     input_ingress.reset_window();

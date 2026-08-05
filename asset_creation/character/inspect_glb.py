@@ -1,9 +1,10 @@
 """Verify a .glb against this repo's Bevy 0.19 character conventions. Pure stdlib, no Blender.
 
-    python3 asset_creation/inspect_glb.py client/assets/characters/voxel_boy.glb
+    python3 asset_creation/character/inspect_glb.py client/assets/characters/voxel_boy.glb
 """
 
 import json
+import os
 import struct
 import sys
 from collections import Counter
@@ -177,3 +178,40 @@ if pos.get("eye.L", (0, 0, 0))[2] > pos.get("ear.L", (0, 0, 0))[2]:
     print("  FAIL: eyes sit behind the ears"); ok = False
 if ok:
     print("  OK: faces -Z (Bevy forward), character's left on -X, no code-side yaw offset needed")
+
+
+# --- manifest cross-check ---------------------------------------------------------------------------
+# A manifest that promises something the glb lacks is worse than no manifest. An early version listed
+# six skin tones by material name while the glb shipped one: glTF drops materials no primitive uses.
+import re
+
+man = os.path.join(os.path.dirname(path), os.path.basename(path).rsplit(".", 1)[0] + ".ron")
+if os.path.exists(man):
+    print("\n-- manifest cross-check --")
+    txt = open(man).read()
+    node_names = {n.get("name") for n in g.get("nodes", [])}
+    anim_names = {a["name"] for a in g.get("animations", [])}
+    mat_names = {m["name"] for m in g.get("materials", [])}
+
+    def listed(key):
+        m = re.search(key + r":\s*\[([^\]]*)\]", txt)
+        return re.findall(r'"([^"]+)"', m.group(1)) if m else []
+
+    checks = [
+        ("wardrobe items", [n for grp in re.findall(r"items:\s*\[([^\]]*)\]", txt)
+                            for n in re.findall(r'"([^"]+)"', grp)], node_names),
+        ("slot defaults", re.findall(r'default:\s*"([^"]+)"', txt), node_names | {"Tan"}),
+        ("body node", [re.search(r'body:\s*"([^"]+)"', txt).group(1)], node_names),
+        ("body_clips", listed("body_clips"), anim_names),
+        ("face_clips", listed("face_clips"), anim_names),
+        ("skin material", re.findall(r'material:\s*"([^"]+)"', txt), mat_names),
+    ]
+    bad = []
+    for label, promised, actual in checks:
+        missing = [x for x in promised if x not in actual]
+        bad += missing
+        print(f"  {label:16s} {len(promised) - len(missing):2d}/{len(promised):2d} present"
+              + (f"   MISSING {missing}" if missing else ""))
+    tones = re.findall(r'\(name:\s*"([^"]+)",\s*rgb:', txt)
+    print(f"  {'skin tones':16s} {len(tones)} carried as values (not glb materials, by design)")
+    print("  OK: manifest matches the glb" if not bad else f"  FAIL: manifest promises missing {bad}")

@@ -206,7 +206,13 @@ pub(crate) fn process_chunk_tasks(
         } else {
             Some(&result.tangents)
         };
-        let mesh_handle = build_terrain_mesh(&result.mesh_data, tangents_ref, &mut meshes);
+        let mesh_handle = build_terrain_mesh(
+            &result.mesh_data,
+            tangents_ref,
+            &result.generator,
+            result.coord,
+            &mut meshes,
+        );
 
         let palette = crate::terrain::materials::stylized_palette();
         let material = materials.add(TerrainSplatMaterial {

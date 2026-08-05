@@ -2,6 +2,41 @@
 
 use super::*;
 
+/// Open the selected person's full encyclopedia record. The compact plate
+/// remains an at-a-glance selection readout; durable life details belong in
+/// the scrollable People page.
+pub(super) fn handle_selection_expand_button(
+    selection: Res<crate::selection::Selection>,
+    characters: Query<&shared::components::CharacterName>,
+    mut open: ResMut<crate::ui::encyclopedia::EncyclopediaOpen>,
+    mut tab: ResMut<crate::ui::encyclopedia::EncyclopediaTab>,
+    mut selected: ResMut<crate::ui::encyclopedia::SelectedPerson>,
+    mut buttons: Query<
+        (&Interaction, &mut BackgroundColor),
+        (With<SelectionExpandButton>, Changed<Interaction>),
+    >,
+) {
+    for (interaction, mut background) in buttons.iter_mut() {
+        *background = match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED.into(),
+            Interaction::Hovered => BUTTON_HOVERED.into(),
+            Interaction::None => BUTTON_NORMAL.into(),
+        };
+        if *interaction != Interaction::Pressed || selection.len() != 1 {
+            continue;
+        }
+        let Some(name) = selection
+            .primary()
+            .and_then(|entity| characters.get(entity).ok())
+        else {
+            continue;
+        };
+        selected.0 = Some(name.0.clone());
+        *tab = crate::ui::encyclopedia::EncyclopediaTab::People;
+        open.0 = true;
+    }
+}
+
 pub(super) fn handle_mode_toggle_key(
     keyboard: Res<ButtonInput<KeyCode>>,
     input_state: Res<InputState>,
@@ -64,7 +99,10 @@ pub(super) fn handle_spawn_hero_button(
     mut creator: ResMut<crate::ui::hero_creator::HeroCreatorOpen>,
     mut arm: ResMut<crate::hero::control::HeroSpawnArm>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
-    heroes: Query<(&shared::components::Hero, &shared::components::PlayerPosition)>,
+    heroes: Query<(
+        &shared::components::Hero,
+        &shared::components::PlayerPosition,
+    )>,
     mut cameras: Query<&mut crate::camera_rts::CommanderCamera>,
     mut notice: ResMut<super::GodNotice>,
     buttons: Query<&Interaction, (With<SpawnHeroButton>, Changed<Interaction>)>,

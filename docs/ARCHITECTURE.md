@@ -67,11 +67,12 @@ An army crossing the map is one strategic entity. When a player zooms in on it, 
 meets a hostile force, it **promotes** into N tactical units. When attention leaves and
 the situation resolves, it **demotes** back to a strength number.
 
-> **[not built]** — zero implementation and zero tests. The seam currently has neither
-> endpoint: no strategic entity to promote, and no tactical unit type to promote into.
-> `SimLevel` is computed every tick and read only by a telemetry line. These rules are
-> therefore a specification to write tests against (ROADMAP Phase 2), not invariants that
-> existing code upholds.
+> **[partially built]** — region `SimLevel` now gates ambient villager behaviour:
+> unobserved regions receive no walking, route or seated-animation decisions, and a
+> focused test locks that cost boundary. The actual identity seam is still absent,
+> however: authoritative villagers remain embodied server entities rather than being
+> losslessly converted to compact `AtPlace`/`Travelling` person records. Phase 2 still
+> owns those promotion/demotion endpoints and their aggregate-consistency tests.
 
 Rules that keep this sane:
 
@@ -92,7 +93,7 @@ The world is divided into regions. That single division serves all of:
 | Role | Meaning | State |
 |------|---------|-------|
 | **Interest management** | What the server replicates to a given client | **[done]** |
-| **Simulation LOD** | Whether this region is tactical or strategic right now | **[partial]** — `SimLevel` is computed every tick and read by one telemetry line. Nothing branches on it. |
+| **Simulation LOD** | Whether this region is tactical or strategic right now | **[partial]** — `SimLevel` gates ambient villager routing, movement and seated animation, but authoritative people are not yet promoted from or demoted to compact strategic records. |
 | **Political** | Who owns this land | **[not built]** — `RegionState` has no owner. See the correction below. |
 | **Persistence** | The unit that gets saved and loaded | **[not built]** — `RegionState` does not even derive `Serialize`. See the correction below. |
 

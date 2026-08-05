@@ -2,10 +2,61 @@
 
 use bevy::prelude::*;
 use lightyear::prelude::PeerId;
-use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
+use serde::{Deserialize, Serialize};
+use shared::player_profile::{HeroSave, PlayerProfile, PROFILE_VERSION};
 use shared::protocol::NameRejectionReason;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+/// Exact v6 bincode layout. Bincode is positional, so this explicit decoder is
+/// the only safe way to add Charm without deleting existing local characters.
+#[derive(Deserialize, Serialize)]
+struct PlayerProfileV6 {
+    version: u32,
+    player_name: String,
+    position: [f32; 3],
+    rotation: f32,
+    hero: Option<HeroSave>,
+    level: u32,
+    prestige: u32,
+    reputation: i32,
+    stamina: u32,
+    intelligence: u32,
+    bank_gold: u64,
+    last_login: std::time::SystemTime,
+    total_playtime_secs: u64,
+}
+
+impl PlayerProfileV6 {
+    fn migrate(self) -> PlayerProfile {
+        PlayerProfile {
+            version: PROFILE_VERSION,
+            player_name: self.player_name,
+            position: self.position,
+            rotation: self.rotation,
+            hero: self.hero,
+            level: self.level,
+            prestige: self.prestige,
+            reputation: self.reputation,
+            // These were unused scaffolds in v6 and normally zero. Give an
+            // existing hero the same baseline as a newly-created character.
+            stamina: if self.stamina == 0 {
+                10
+            } else {
+                self.stamina.min(100)
+            },
+            intelligence: if self.intelligence == 0 {
+                10
+            } else {
+                self.intelligence.min(100)
+            },
+            charm: 10,
+            bank_gold: self.bank_gold,
+            last_login: self.last_login,
+            total_playtime_secs: self.total_playtime_secs,
+        }
+    }
+}
 
 /// Resource managing player profile persistence.
 #[derive(Resource)]
@@ -45,6 +96,31 @@ impl PlayerProfiles {
 
         let bytes = std::fs::read(&path)
             .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+        // Try the exact old layout before the current one. `deserialize` rejects
+        // trailing bytes, so a v7 profile cannot be mistaken for v6.
+        if let Ok(old) = bincode::deserialize::<PlayerProfileV6>(&bytes) {
+            // `bincode::deserialize` accepts trailing bytes. Re-encoding is an
+            // exact-layout check that prevents a deliberately stale v7-shaped
+            // test/profile from masquerading as v6 just because its first
+            // field says `6`.
+            let exact_v6_layout = bincode::serialize(&old).is_ok_and(|encoded| encoded == bytes);
+            if old.version == 6 && exact_v6_layout {
+                let backup_path = self.storage_dir.join(format!("{}.v6.backup", name_lower));
+                std::fs::copy(&path, &backup_path).map_err(|e| {
+                    format!("Failed to backup v6 profile {}: {}", path.display(), e)
+                })?;
+                let profile = old.migrate();
+                save_profile_to_dir(&self.storage_dir, &profile)?;
+                info!(
+                    "Migrated player profile '{}' from v6 to v{} (backup: {})",
+                    profile.player_name,
+                    PROFILE_VERSION,
+                    backup_path.display()
+                );
+                return Ok(profile);
+            }
+        }
+
         let profile: PlayerProfile = bincode::deserialize(&bytes)
             .map_err(|e| format!("Failed to deserialize {}: {}", path.display(), e))?;
 
@@ -138,7 +214,8 @@ mod tests {
     /// silent loss here reads to the player as "the game deleted my character".
     #[test]
     fn hero_survives_profile_round_trip() {
-        let dir = std::env::temp_dir().join(format!("fistworld-profile-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("fistworld-profile-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let mut outfit = HeroOutfit::default();
@@ -189,6 +266,50 @@ mod tests {
                 .exists(),
             "stale profile was not backed up before rejection"
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn version_six_profile_is_migrated_without_losing_the_hero() {
+        let dir = std::env::temp_dir().join(format!(
+            "fistworld-profile-v6-migration-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let old = PlayerProfileV6 {
+            version: 6,
+            player_name: "LegacyHero".to_string(),
+            position: [1.0, 2.0, 3.0],
+            rotation: 0.4,
+            hero: Some(HeroSave {
+                position: [9.0, 8.0, 7.0],
+                rotation: 1.2,
+                outfit_slots: [0; shared::components::HERO_SLOT_MAX],
+                outfit_skin: 2,
+            }),
+            level: 3,
+            prestige: 1,
+            reputation: 7,
+            stamina: 0,
+            intelligence: 24,
+            bank_gold: 999,
+            last_login: std::time::SystemTime::now(),
+            total_playtime_secs: 123,
+        };
+        let path = dir.join("legacyhero.bin");
+        std::fs::write(&path, bincode::serialize(&old).unwrap()).unwrap();
+
+        let profiles = PlayerProfiles::new(dir.clone());
+        let migrated = profiles.load_profile("legacyhero").unwrap();
+        assert_eq!(migrated.version, PROFILE_VERSION);
+        assert_eq!(migrated.hero, old.hero);
+        assert_eq!(migrated.level, 3);
+        assert_eq!(migrated.stamina, 10);
+        assert_eq!(migrated.intelligence, 24);
+        assert_eq!(migrated.charm, 10);
+        assert!(dir.join("legacyhero.v6.backup").exists());
+        assert!(bincode::deserialize::<PlayerProfile>(&std::fs::read(path).unwrap()).is_ok());
 
         std::fs::remove_dir_all(&dir).ok();
     }

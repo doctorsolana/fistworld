@@ -61,6 +61,10 @@ pub enum PropKind {
     // Deliberately has NO colliders_manifest.ron entry: a crop field must be walkable so farmers
     // can stand in it to harvest.
     Wheat_Field,
+
+    // environment/shore — built in-repo by asset_creation/houses/build_fishing_pier.py.
+    // Like the wheat field, NO colliders_manifest.ron entry: units walk out along the deck.
+    Fishing_Pier,
 }
 
 impl PropKind {
@@ -133,6 +137,7 @@ impl PropKind {
             "grass_patch" => Some(PropKind::Grass_Patch),
             "grass_tall" => Some(PropKind::Grass_Tall),
             "wheat_field" => Some(PropKind::Wheat_Field),
+            "fishing_pier" => Some(PropKind::Fishing_Pier),
             _ => None,
         }
     }
@@ -170,6 +175,7 @@ impl PropKind {
             PropKind::Grass_Patch => "grass_patch",
             PropKind::Grass_Tall => "grass_tall",
             PropKind::Wheat_Field => "wheat_field",
+            PropKind::Fishing_Pier => "fishing_pier",
         }
     }
 
@@ -206,6 +212,7 @@ impl PropKind {
             PropKind::Grass_Patch => "game_assets/environment/grass/Grass_Patch_A.glb#Scene0",
             PropKind::Grass_Tall => "game_assets/environment/grass/Grass_Tall_A.glb#Scene0",
             PropKind::Wheat_Field => "game_assets/environment/crops/WheatField.glb#Scene0",
+            PropKind::Fishing_Pier => "game_assets/environment/shore/FishingPier.glb#Scene0",
         }
     }
 }
@@ -242,6 +249,7 @@ pub const ALL_PROP_KINDS: &[PropKind] = &[
     PropKind::Grass_Patch,
     PropKind::Grass_Tall,
     PropKind::Wheat_Field,
+    PropKind::Fishing_Pier,
 ];
 
 #[cfg(test)]

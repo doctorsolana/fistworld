@@ -17,7 +17,9 @@ pub(super) fn ensure_map_texture(
     // Always render from the LIVE terrain (heights + edits + water level).
     // The authored minimap.png goes stale the moment the world is sculpted
     // or generated, so it is no longer used.
-    let bounds = map_config.bounds.unwrap_or_else(load_active_map_bounds);
+    let bounds = map_config
+        .bounds
+        .unwrap_or_else(|| terrain.generator.active_map_bounds());
     let image = build_live_map_image(MAP_TEX_SIZE, bounds, &terrain);
     map_texture.handle = Some(images.add(image));
 }
@@ -102,9 +104,11 @@ fn build_live_map_image(
                         WorldBiome::Meadows => [0.48, 0.61, 0.30],
                         WorldBiome::Forest => [0.21, 0.41, 0.19],
                         WorldBiome::Highlands => [0.56, 0.49, 0.32],
-                        WorldBiome::Mountains => {
-                            lerp3([0.58, 0.56, 0.52], [0.78, 0.78, 0.80], (above - 28.0) / 18.0)
-                        }
+                        WorldBiome::Mountains => lerp3(
+                            [0.58, 0.56, 0.52],
+                            [0.78, 0.78, 0.80],
+                            (above - 28.0) / 18.0,
+                        ),
                         // Unreachable in practice — the branches above paint
                         // anything at or below the waterline before we get
                         // here. Spelled out anyway, and in sea colours, so that
@@ -123,17 +127,30 @@ fn build_live_map_image(
                     // Legacy maps: elevation greens.
                     lerp3([0.32, 0.52, 0.26], [0.45, 0.58, 0.30], (above - 2.2) / 11.8)
                 } else if above < 28.0 {
-                    lerp3([0.45, 0.58, 0.30], [0.52, 0.48, 0.38], (above - 14.0) / 14.0)
+                    lerp3(
+                        [0.45, 0.58, 0.30],
+                        [0.52, 0.48, 0.38],
+                        (above - 14.0) / 14.0,
+                    )
                 } else {
-                    lerp3([0.52, 0.48, 0.38], [0.72, 0.72, 0.74], (above - 28.0) / 15.0)
+                    lerp3(
+                        [0.52, 0.48, 0.38],
+                        [0.72, 0.72, 0.74],
+                        (above - 28.0) / 15.0,
+                    )
                 };
                 // Climate tint via the shared function so the map matches the
                 // world (snowy poles, dry equator strip).
                 let base = {
                     let world_x = min_x + (x as f32 / (size - 1) as f32) * width;
                     let world_z = min_z + (y as f32 / (size - 1) as f32) * depth;
-                    let climate =
-                        shared::worldgen::climate_at(climate_seed, world_x, world_z, h, width * 0.5);
+                    let climate = shared::worldgen::climate_at(
+                        climate_seed,
+                        world_x,
+                        world_z,
+                        h,
+                        width * 0.5,
+                    );
                     let frosted = lerp3(base, [0.62, 0.66, 0.70], climate.frost * 0.55);
                     let snowed = lerp3(
                         frosted,
@@ -144,11 +161,7 @@ fn build_live_map_image(
                     // yellowing, then quadratically toward sand.
                     let scorched = lerp3(
                         snowed,
-                        [
-                            snowed[0] * 1.14,
-                            snowed[1] * 1.05,
-                            snowed[2] * 0.72,
-                        ],
+                        [snowed[0] * 1.14, snowed[1] * 1.05, snowed[2] * 0.72],
                         climate.dry,
                     );
                     lerp3(
@@ -222,10 +235,6 @@ pub(super) fn update_marker_image_handle(
     }
 }
 
-
-
-
-
 pub(super) fn build_player_arrow_image(size: u32, color: Color) -> Image {
     let mut pixels = vec![0u8; (size * size * 4) as usize];
     let rgba = color.to_srgba();
@@ -265,10 +274,4 @@ pub(super) fn build_player_arrow_image(size: u32, color: Color) -> Image {
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     )
-}
-
-pub(super) fn load_active_map_bounds() -> MapBounds {
-    shared::map::load_default_map()
-        .map(|loaded| loaded.definition.bounds)
-        .unwrap_or_else(|_| TerrainGenerator::new(WORLD_SEED).active_map_bounds())
 }

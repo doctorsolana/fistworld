@@ -16,15 +16,29 @@ use shared::spatial::SpatialObstacleGrid;
 use shared::terrain::WorldTerrain;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
+use std::time::Duration;
 
 const GRID_CELL_SIZE: f32 = 2.0; // meters
 const GRID_MAX_STEP: f32 = 1.2; // max height delta between neighbor cells
-const GRID_MAX_NODES: usize = 4000; // hard cap per path search (safety)
-const DEFAULT_PATHFINDING_REQUESTS_PER_TICK: usize = 6;
+
+// Hard cap per path search. One dense-village survey can cost several
+// milliseconds even with this bound, so scheduling also uses elapsed CPU time.
+const GRID_MAX_NODES: usize = 4000;
+// The time budget is the primary limiter: easy/cache-hit routes can drain a
+// burst together, while one difficult survey still ends the planner's turn.
+const DEFAULT_PATHFINDING_REQUESTS_PER_TICK: usize = 16;
+const DEFAULT_PATHFINDING_MILLISECONDS_PER_TICK: f32 = 2.0;
 
 #[derive(Resource, Clone, Debug)]
 pub struct PathfindingBudgetSettings {
+    /// Hard safety ceiling. The wall-clock budget below normally stops the
+    /// planner first, but this prevents a cache-hit crowd from monopolising a
+    /// tick even when every lookup is individually cheap.
     pub max_requests_per_tick: usize,
+    /// Real CPU time available to tactical route planning in one server tick.
+    /// At least one request is always served so a single difficult route
+    /// cannot deadlock the fair round-robin queue.
+    pub max_milliseconds_per_tick: f32,
 }
 
 impl Default for PathfindingBudgetSettings {
@@ -34,9 +48,22 @@ impl Default for PathfindingBudgetSettings {
             .and_then(|raw| raw.parse::<usize>().ok())
             .unwrap_or(DEFAULT_PATHFINDING_REQUESTS_PER_TICK)
             .clamp(1, 128);
+        let max_milliseconds_per_tick = std::env::var("CITYSIM_PATHFINDING_MILLISECONDS_PER_TICK")
+            .ok()
+            .and_then(|raw| raw.parse::<f32>().ok())
+            .filter(|milliseconds| milliseconds.is_finite() && *milliseconds > 0.0)
+            .unwrap_or(DEFAULT_PATHFINDING_MILLISECONDS_PER_TICK)
+            .clamp(0.1, 50.0);
         Self {
             max_requests_per_tick,
+            max_milliseconds_per_tick,
         }
+    }
+}
+
+impl PathfindingBudgetSettings {
+    pub fn max_duration(&self) -> Duration {
+        Duration::from_secs_f32(self.max_milliseconds_per_tick / 1_000.0)
     }
 }
 

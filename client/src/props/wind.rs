@@ -73,7 +73,9 @@ fn has_authored_vertex_color(mesh: &Mesh) -> bool {
             .iter()
             .any(|v| v[0] < NEAR_WHITE || v[1] < NEAR_WHITE || v[2] < NEAR_WHITE),
         // Unorm8/16 variants: any channel below full scale is painted colour.
-        Some(VertexAttributeValues::Unorm8x4(c)) => c.iter().any(|v| v[..3].iter().any(|&x| x < 253)),
+        Some(VertexAttributeValues::Unorm8x4(c)) => {
+            c.iter().any(|v| v[..3].iter().any(|&x| x < 253))
+        }
         Some(VertexAttributeValues::Uint16x4(c)) => {
             c.iter().any(|v| v[..3].iter().any(|&x| x < 64_800))
         }
@@ -135,8 +137,8 @@ pub fn bake_foliage_color_ramp(mesh: &mut Mesh) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
     use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 
     fn triangle(colors: Option<Vec<[f32; 4]>>) -> Mesh {
         let mut mesh = Mesh::new(

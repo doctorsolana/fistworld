@@ -30,8 +30,10 @@ server_data/
 .env
 .env.local
 
-# Local cargo config (machine-specific linker paths)
-.cargo/
+# Local cargo config is normally machine-specific. Keep the shared command
+# aliases while continuing to ignore any other per-machine Cargo files.
+.cargo/*
+!.cargo/config.toml
 
 # Windows cross-compilation (WSL-specific)
 windows_build/
@@ -40,3 +42,9 @@ client_data/
 
 # Asset-creation working files: renders are regenerable Blender output (~21MB+).
 asset_creation/renders/
+
+# Blender auto-backups
+*.blend1
+
+# Python bytecode from asset_creation scripts
+__pycache__/

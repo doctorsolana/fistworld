@@ -49,7 +49,10 @@ impl RiverReach {
         }
         let origin = chunk.world_pos();
         let (min_x, min_z) = (origin.x - radius, origin.z - radius);
-        let (max_x, max_z) = (origin.x + CHUNK_SIZE + radius, origin.z + CHUNK_SIZE + radius);
+        let (max_x, max_z) = (
+            origin.x + CHUNK_SIZE + radius,
+            origin.z + CHUNK_SIZE + radius,
+        );
         for river in rivers.iter() {
             for w in river.windows(2) {
                 let (a, b) = (w[0], w[1]);
@@ -199,7 +202,8 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
     let map = terrain.loaded_map();
     // Hand-authored maps carry no recipe, so they get no procedural cover:
     // scattering into a map somebody placed by hand would be vandalism.
-    let (Some(field), Some(generated)) = (map.biome_field.as_ref(), map.definition.generated.as_ref())
+    let (Some(field), Some(generated)) =
+        (map.biome_field.as_ref(), map.definition.generated.as_ref())
     else {
         return out;
     };
@@ -326,8 +330,7 @@ mod tests {
                                 let (sx, sz) = (x + dx, z + dz);
                                 let sh = terrain.get_height(sx, sz);
                                 let sn = terrain.get_normal(sx, sz);
-                                let ss =
-                                    (sn.x * sn.x + sn.z * sn.z).sqrt() / sn.y.max(0.01);
+                                let ss = (sn.x * sn.x + sn.z * sn.z).sqrt() / sn.y.max(0.01);
                                 sh > 3.0 && format!("{:?}", field.biome(sx, sz, sh, ss)) == b
                             });
                         if solid {
@@ -440,13 +443,8 @@ mod tests {
             let slope = (n.x * n.x + n.z * n.z).sqrt() / n.y.max(0.01);
             let biome = field.biome(x, z, height, slope);
             let p = field.resources(x, z, height, slope);
-            let c = crate::worldgen::climate_at(
-                generated.seed,
-                x,
-                z,
-                height,
-                generated.half_extent,
-            );
+            let c =
+                crate::worldgen::climate_at(generated.seed, x, z, height, generated.half_extent);
             println!(
                 "{label:10} Biome: {biome:?} ground {height:.0}m slope {slope:.2} | \
                  snow {:.2} frost {:.2} dry {:.2} | farm {:.2} wood {:.2} stone {:.2} iron {:.2}",
@@ -485,7 +483,10 @@ mod tests {
                     per.push(
                         generate_chunk_grass(
                             &terrain.generator,
-                            ChunkCoord { x: centre.x + dx, z: centre.z + dz },
+                            ChunkCoord {
+                                x: centre.x + dx,
+                                z: centre.z + dz,
+                            },
                         )
                         .len(),
                     );

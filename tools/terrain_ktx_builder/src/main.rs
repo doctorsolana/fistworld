@@ -131,7 +131,11 @@ fn main() -> Result<()> {
         println!("Generated KTX2 arrays:");
         for path in [&albedo_output, &normal_output] {
             let bytes = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-            println!("  {} ({:.1} MB)", path.display(), bytes as f64 / 1_048_576.0);
+            println!(
+                "  {} ({:.1} MB)",
+                path.display(),
+                bytes as f64 / 1_048_576.0
+            );
         }
     }
 

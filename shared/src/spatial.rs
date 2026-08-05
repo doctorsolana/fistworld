@@ -39,14 +39,7 @@ impl ObstacleAABB {
 
     /// Check if a point is inside the actual rotated rectangle (not just AABB).
     pub fn contains_point(&self, point: Vec2, center: Vec2, half_extents: Vec2) -> bool {
-        // Transform point to local space of the rotated rectangle
-        let local = point - center;
-        let cos_r = (-self.rotation).cos();
-        let sin_r = (-self.rotation).sin();
-        let rotated = Vec2::new(
-            local.x * cos_r - local.y * sin_r,
-            local.x * sin_r + local.y * cos_r,
-        );
+        let rotated = crate::rotation::world_to_local_xz(point - center, self.rotation);
 
         rotated.x.abs() <= half_extents.x && rotated.y.abs() <= half_extents.y
     }
@@ -85,8 +78,7 @@ impl ObstacleEntry {
 
     /// Check if a point is inside this obstacle's footprint.
     pub fn contains_point(&self, point: Vec2) -> bool {
-        let cos_r = (-self.rotation).cos();
-        let sin_r = (-self.rotation).sin();
+        let (sin_r, cos_r) = self.rotation.sin_cos();
         self.contains_point_with_basis(point, cos_r, sin_r)
     }
 }
@@ -141,8 +133,12 @@ impl SpatialObstacleGrid {
         let max_cell = Self::world_to_cell(aabb.max);
 
         let inverse_basis = InverseRotationBasis {
-            cos: (-entry.rotation).cos(),
-            sin: (-entry.rotation).sin(),
+            // `contains_point_with_basis` is the same inverse projection as
+            // `crate::rotation::world_to_local_xz`. Caching -rotation here
+            // inverted it twice, so a rotated building's real door could be
+            // classified as wall even though the route survey saw it open.
+            cos: entry.rotation.cos(),
+            sin: entry.rotation.sin(),
         };
         let idx = self.obstacles.len();
         self.obstacles.push(entry);
@@ -178,6 +174,50 @@ impl SpatialObstacleGrid {
             }
         }
 
+        false
+    }
+
+    /// Check a whole movement segment against the exact rotated footprints.
+    ///
+    /// Sampling a line at fixed spacing is not stable under subdivision: a
+    /// planner can sample a long segment at different positions than movement
+    /// samples its first short step. That allowed one pass to miss a thin
+    /// rotated corner while the other rejected it forever. Transforming the
+    /// segment into each nearby obstacle's local space gives an exact slab
+    /// intersection and is also cheaper for ordinary short movement legs.
+    pub fn segment_blocked(&self, start: Vec2, end: Vec2) -> bool {
+        let min = Self::world_to_cell(start.min(end));
+        let max = Self::world_to_cell(start.max(end));
+
+        for cx in min.0..=max.0 {
+            for cz in min.1..=max.1 {
+                let Some(indices) = self.cells.get(&(cx, cz)) else {
+                    continue;
+                };
+                for &idx in indices {
+                    let Some(entry) = self.obstacles.get(idx) else {
+                        continue;
+                    };
+                    let Some(basis) = self.obstacle_inverse_basis.get(idx) else {
+                        continue;
+                    };
+                    let to_local = |point: Vec2| {
+                        let relative = point - entry.center;
+                        Vec2::new(
+                            relative.x * basis.cos - relative.y * basis.sin,
+                            relative.x * basis.sin + relative.y * basis.cos,
+                        )
+                    };
+                    if segment_intersects_box_after_start(
+                        to_local(start),
+                        to_local(end),
+                        entry.half_extents,
+                    ) {
+                        return true;
+                    }
+                }
+            }
+        }
         false
     }
 
@@ -222,6 +262,40 @@ impl SpatialObstacleGrid {
     }
 }
 
+/// Return whether a local-space segment enters or remains inside an axis-aligned box.
+///
+/// A contact that exists only at the segment's starting instant is ignored so
+/// an actor already standing on a footprint boundary can move away from it.
+/// Route planners use this same primitive as movement to avoid disagreeing at
+/// thin rotated corners.
+pub fn segment_intersects_box_after_start(start: Vec2, end: Vec2, half: Vec2) -> bool {
+    const START_EPSILON: f32 = 1e-5;
+    let direction = end - start;
+    let mut entry_t = 0.0_f32;
+    let mut exit_t = 1.0_f32;
+
+    for (origin, delta, extent) in [
+        (start.x, direction.x, half.x),
+        (start.y, direction.y, half.y),
+    ] {
+        if delta.abs() <= f32::EPSILON {
+            if origin < -extent || origin > extent {
+                return false;
+            }
+            continue;
+        }
+        let first = (-extent - origin) / delta;
+        let second = (extent - origin) / delta;
+        entry_t = entry_t.max(first.min(second));
+        exit_t = exit_t.min(first.max(second));
+        if entry_t > exit_t {
+            return false;
+        }
+    }
+
+    entry_t <= 1.0 && exit_t > START_EPSILON
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,8 +331,33 @@ mod tests {
             obstacle_type: 0,
         });
 
-        // Point at origin should be blocked
-        assert!(grid.point_blocked(Vec2::ZERO));
+        // Exercise asymmetric local points: origin alone cannot distinguish a
+        // correct rotation from its mirror image.
+        let inside = crate::rotation::local_to_world_xz(Vec2::new(1.8, 0.8), 0.7853982);
+        let outside = crate::rotation::local_to_world_xz(Vec2::new(0.0, 1.2), 0.7853982);
+        assert!(grid.point_blocked(inside));
+        assert!(!grid.point_blocked(outside));
+    }
+
+    #[test]
+    fn segment_checks_rotated_footprints_without_sampling_gaps() {
+        let rotation = std::f32::consts::FRAC_PI_4;
+        let mut grid = SpatialObstacleGrid::new();
+        grid.insert(ObstacleEntry {
+            center: Vec2::ZERO,
+            half_extents: Vec2::new(2.0, 1.0),
+            rotation,
+            obstacle_type: 0,
+        });
+
+        let world = |local| crate::rotation::local_to_world_xz(local, rotation);
+        assert!(grid.segment_blocked(world(Vec2::new(-3.0, 0.9)), world(Vec2::new(3.0, 0.9))));
+        assert!(!grid.segment_blocked(world(Vec2::new(-3.0, 1.1)), world(Vec2::new(3.0, 1.1))));
+
+        // A unit already on the boundary may move outward, while arriving on
+        // that same solid boundary is rejected.
+        assert!(!grid.segment_blocked(world(Vec2::new(-2.0, 0.0)), world(Vec2::new(-3.0, 0.0))));
+        assert!(grid.segment_blocked(world(Vec2::new(-3.0, 0.0)), world(Vec2::new(-2.0, 0.0))));
     }
 
     #[test]

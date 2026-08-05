@@ -2,12 +2,10 @@ use bevy::ecs::world::EntityWorldMut;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
-
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ShadowCullRoot {
     pub max_distance_sq: f32,
 }
-
 
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct ShadowCullState {

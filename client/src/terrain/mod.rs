@@ -3,8 +3,8 @@
 //! Updated for Bevy 0.18
 
 mod chunks;
-pub mod map_view;
 mod debug;
+pub mod map_view;
 mod materials;
 mod mesh;
 mod paint;
@@ -20,6 +20,7 @@ pub use chunks::{LoadedChunks, TerrainChunk, TerrainUpdateSet};
 pub use debug::PerfHitchStats;
 // Cloud-shadow sync writes the palette's cloud fields into chunk materials.
 pub use materials::TerrainSplatMaterial;
+pub(crate) use streaming::TerrainStreamingState;
 
 /// Plugin for terrain rendering.
 pub struct TerrainPlugin;

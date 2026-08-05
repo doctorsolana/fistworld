@@ -8,7 +8,7 @@ use crate::player::SPAWN_POSITION;
 use serde::{Deserialize, Serialize};
 
 /// Current profile version for migration support
-pub const PROFILE_VERSION: u32 = 6;
+pub const PROFILE_VERSION: u32 = 7;
 
 /// Serializable player profile containing all persistent state
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,7 +41,6 @@ pub struct PlayerProfile {
 
     // === Inventory ===
 
-
     // === Death State ===
 
     // === Progression ===
@@ -60,6 +59,9 @@ pub struct PlayerProfile {
     /// Intelligence attribute (scaffold)
     #[serde(default)]
     pub intelligence: u32,
+    /// Charm attribute for the embodied character.
+    #[serde(default)]
+    pub charm: u32,
     /// Global banked gold accessible from bank branches
     #[serde(default)]
     pub bank_gold: u64,
@@ -118,21 +120,28 @@ impl PlayerProfile {
             rotation: 0.0,
             hero: None,
 
-
-
             // Not dead
 
             // Progression defaults
             level: 0,
             prestige: 0,
             reputation: 0,
-            stamina: 0,
-            intelligence: 0,
+            stamina: 10,
+            intelligence: 10,
+            charm: 10,
             bank_gold: 0,
 
             // Metadata
             last_login: std::time::SystemTime::now(),
             total_playtime_secs: 0,
         }
+    }
+
+    pub fn character_attributes(&self) -> crate::components::CharacterAttributes {
+        crate::components::CharacterAttributes::new(
+            self.stamina.min(100) as u8,
+            self.intelligence.min(100) as u8,
+            self.charm.min(100) as u8,
+        )
     }
 }

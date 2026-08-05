@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::map::{LoadedMap, MapBounds};
 use crate::terrain::TerrainDeltaData;
+use crate::worldgen::{river_surface_height, river_water_reach_at};
 
 use super::map_access::load_active_map;
 use super::sampling::sample_delta_from_map;
@@ -144,10 +145,96 @@ impl TerrainGenerator {
     }
 }
 
+/// One rendered river-water segment in ground-plane coordinates.
+#[derive(Clone, Copy, Debug)]
+struct RiverWaterSegment {
+    a: Vec2,
+    b: Vec2,
+    surface_a: f32,
+    surface_b: f32,
+    reach_a: f32,
+    reach_b: f32,
+}
+
+impl RiverWaterSegment {
+    fn level_at(self, point: Vec2) -> Option<f32> {
+        let segment = self.b - self.a;
+        let t =
+            ((point - self.a).dot(segment) / segment.length_squared().max(1e-6)).clamp(0.0, 1.0);
+        let reach = self.reach_a + (self.reach_b - self.reach_a) * t;
+        (point.distance_squared(self.a + segment * t) < reach * reach)
+            .then_some(self.surface_a + (self.surface_b - self.surface_a) * t)
+    }
+}
+
+/// Chunked lookup for local river height.
+///
+/// Road A* asks thousands of water questions. Indexing each short river
+/// segment into the few terrain chunks touched by its tapered reach keeps each
+/// query to a handful of segments rather than every river in the world.
+#[derive(Default)]
+struct RiverWaterIndex {
+    by_chunk: HashMap<(i32, i32), Vec<RiverWaterSegment>>,
+}
+
+impl RiverWaterIndex {
+    fn from_loaded_map(map: &LoadedMap) -> Self {
+        let Some(ocean) = map.heightmap.water_level else {
+            return Self::default();
+        };
+        let mut index = Self::default();
+        for river in map.rivers.iter() {
+            for (segment_index, window) in river.windows(2).enumerate() {
+                let a3 = window[0];
+                let b3 = window[1];
+                let segment = RiverWaterSegment {
+                    a: Vec2::new(a3.x, a3.z),
+                    b: Vec2::new(b3.x, b3.z),
+                    surface_a: river_surface_height(a3.y, ocean),
+                    surface_b: river_surface_height(b3.y, ocean),
+                    reach_a: river_water_reach_at(segment_index, river.len()),
+                    reach_b: river_water_reach_at(segment_index + 1, river.len()),
+                };
+                let reach = segment.reach_a.max(segment.reach_b);
+                let min = segment.a.min(segment.b) - Vec2::splat(reach);
+                let max = segment.a.max(segment.b) + Vec2::splat(reach);
+                let min_chunk = (
+                    (min.x / CHUNK_SIZE).floor() as i32,
+                    (min.y / CHUNK_SIZE).floor() as i32,
+                );
+                let max_chunk = (
+                    (max.x / CHUNK_SIZE).floor() as i32,
+                    (max.y / CHUNK_SIZE).floor() as i32,
+                );
+                for x in min_chunk.0..=max_chunk.0 {
+                    for z in min_chunk.1..=max_chunk.1 {
+                        index.by_chunk.entry((x, z)).or_default().push(segment);
+                    }
+                }
+            }
+        }
+        index
+    }
+
+    fn level_at(&self, point: Vec2, ocean: f32) -> f32 {
+        let key = (
+            (point.x / CHUNK_SIZE).floor() as i32,
+            (point.y / CHUNK_SIZE).floor() as i32,
+        );
+        self.by_chunk
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .filter_map(|segment| segment.level_at(point))
+            .fold(ocean, f32::max)
+    }
+}
+
 /// Resource holding terrain generator and runtime delta modifications.
 #[derive(Resource)]
 pub struct WorldTerrain {
     pub generator: TerrainGenerator,
+    river_water: RiverWaterIndex,
     delta_chunks: HashMap<ChunkCoord, TerrainDeltaData>,
     version: u32,
     chunk_versions: HashMap<ChunkCoord, u32>,
@@ -157,10 +244,12 @@ pub struct WorldTerrain {
 impl Default for WorldTerrain {
     fn default() -> Self {
         let generator = TerrainGenerator::new(WORLD_SEED);
+        let river_water = RiverWaterIndex::from_loaded_map(generator.loaded_map());
         let delta_chunks = generator.loaded_map().terrain_deltas_by_chunk.clone();
 
         Self {
             generator,
+            river_water,
             delta_chunks,
             version: 0,
             chunk_versions: HashMap::new(),
@@ -172,6 +261,7 @@ impl Default for WorldTerrain {
 impl WorldTerrain {
     pub fn reload_from_loaded_map(&mut self, loaded_map: LoadedMap) {
         super::map_access::set_active_map_bounds(loaded_map.definition.bounds);
+        self.river_water = RiverWaterIndex::from_loaded_map(&loaded_map);
         let delta_chunks = loaded_map.terrain_deltas_by_chunk.clone();
         self.generator = TerrainGenerator::from_loaded_map(loaded_map, WORLD_SEED);
         self.delta_chunks = delta_chunks;
@@ -183,6 +273,17 @@ impl WorldTerrain {
     #[inline]
     pub fn water_level(&self) -> Option<f32> {
         self.generator.loaded_map().heightmap.water_level
+    }
+
+    /// Water surface at a world point, including sloping inland rivers.
+    ///
+    /// Ocean-only callers may still use [`Self::water_level`]. Placement,
+    /// navigation and buoyancy need this local surface instead: an inland
+    /// river can be far above the global sea plane.
+    #[inline]
+    pub fn water_surface_height(&self, x: f32, z: f32) -> Option<f32> {
+        let ocean = self.water_level()?;
+        Some(self.river_water.level_at(Vec2::new(x, z), ocean))
     }
 
     /// River centrelines as `(x, bed_height, z)`. Empty for authored maps.
@@ -200,7 +301,7 @@ impl WorldTerrain {
 
     #[inline]
     pub fn get_water_height(&self, x: f32, z: f32) -> Option<f32> {
-        let water = self.water_level()?;
+        let water = self.water_surface_height(x, z)?;
         (self.get_height(x, z) < water).then_some(water)
     }
 
@@ -480,6 +581,42 @@ impl WorldTerrain {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn river_segment_reports_its_sloping_local_surface_only_inside_its_reach() {
+        let segment = RiverWaterSegment {
+            a: Vec2::new(0.0, 0.0),
+            b: Vec2::new(10.0, 0.0),
+            surface_a: 12.0,
+            surface_b: 8.0,
+            reach_a: 2.0,
+            reach_b: 4.0,
+        };
+
+        assert_eq!(segment.level_at(Vec2::new(5.0, 1.0)), Some(10.0));
+        assert_eq!(segment.level_at(Vec2::new(5.0, 4.0)), None);
+    }
+
+    #[test]
+    fn world_water_query_detects_an_inland_river_above_the_ocean_plane() {
+        let terrain = WorldTerrain::default();
+        let ocean = terrain.water_level().expect("generated world has water");
+        let sample = terrain
+            .rivers()
+            .iter()
+            .flatten()
+            .find_map(|point| {
+                let surface = terrain.water_surface_height(point.x, point.z)?;
+                (surface > ocean + 0.2 && terrain.get_height(point.x, point.z) < surface)
+                    .then_some((*point, surface))
+            })
+            .expect("generated world has a wet inland river point");
+
+        assert_eq!(
+            terrain.get_water_height(sample.0.x, sample.0.z),
+            Some(sample.1)
+        );
+    }
 
     #[test]
     fn flatten_rect_returns_sorted_unique_affected_chunks() {

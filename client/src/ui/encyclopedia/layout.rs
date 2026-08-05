@@ -9,10 +9,17 @@ use bevy::prelude::*;
 
 use super::*;
 use crate::ui::modal::{spawn_modal, ModalLayout};
-use crate::ui::styles::{ACCENT_COLOR, BUTTON_BORDER, TEXT_COLOR, TEXT_MUTED};
+use crate::ui::styles::{
+    ACCENT_COLOR, BUTTON_BORDER, BUTTON_NORMAL, INK, PLATE_RULE_SOFT, RADIUS, TEXT_COLOR,
+    TEXT_MUTED,
+};
 
 const PANEL_SIZE: Vec2 = Vec2::new(940.0, 620.0);
 const LIST_WIDTH: f32 = 320.0;
+// Civic and workplace records are intentionally deeper than the compact map
+// card. The pane scrolls, so a real permit/market/staffing record should not be
+// squeezed into six generic rows.
+const PLACE_DETAIL_LINES: usize = 14;
 
 pub(super) fn spawn_encyclopedia(
     mut commands: Commands,
@@ -24,8 +31,8 @@ pub(super) fn spawn_encyclopedia(
     }
     // Capture runs photograph the world, not the UI — except when a capture
     // explicitly opens this window to verify it.
-    let capture_opts_in = std::env::var("FISTFORCE_CAPTURE_ENCYCLOPEDIA")
-        .is_ok_and(|value| !value.trim().is_empty());
+    let capture_opts_in =
+        std::env::var("FISTFORCE_CAPTURE_ENCYCLOPEDIA").is_ok_and(|value| !value.trim().is_empty());
     if capture.is_some() && !capture_opts_in {
         return;
     }
@@ -80,6 +87,7 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>) {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::SpaceBetween,
+                flex_shrink: 0.0,
                 padding: UiRect::axes(Val::Px(20.0), Val::Px(14.0)),
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
@@ -99,13 +107,47 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>) {
             header
                 .spawn(Node {
                     flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(6.0),
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(10.0),
                     ..default()
                 })
-                .with_children(|tabs| {
-                    for tab in EncyclopediaTab::ALL {
-                        spawn_tab(tabs, tab);
-                    }
+                .with_children(|controls| {
+                    controls
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            column_gap: Val::Px(6.0),
+                            ..default()
+                        })
+                        .with_children(|tabs| {
+                            for tab in EncyclopediaTab::ALL {
+                                spawn_tab(tabs, tab);
+                            }
+                        });
+                    controls
+                        .spawn((
+                            Button,
+                            EncyclopediaCloseButton,
+                            Node {
+                                width: Val::Px(30.0),
+                                height: Val::Px(30.0),
+                                flex_shrink: 0.0,
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                border: UiRect::all(Val::Px(1.0)),
+                                border_radius: BorderRadius::all(Val::Px(6.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::NONE),
+                            BorderColor::from(DIVIDER),
+                        ))
+                        .with_child((
+                            Text::new("X"),
+                            TextFont {
+                                font_size: FontSize::Px(13.0),
+                                ..default()
+                            },
+                            TextColor(TEXT_MUTED),
+                        ));
                 });
         });
 }
@@ -170,6 +212,7 @@ fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
     panel
         .spawn(Node {
             flex_grow: 1.0,
+            min_height: Val::Px(0.0),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::Stretch,
             overflow: Overflow::clip(),
@@ -202,8 +245,9 @@ fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
 /// second layout to read the other.
 fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
     use super::places::{
-        PlaceCountText, PlaceDetailCard, PlaceDetailEmptyState, PlaceDetailName, PlaceDetailSubtitle,
-        PlaceField, PlaceStat, PlacesListContent,
+        PlaceCountText, PlaceDetailCard, PlaceDetailEmptyState, PlaceDetailLabel, PlaceDetailLine,
+        PlaceDetailName, PlaceDetailSubtitle, PlaceDetailValue, PlacesListContent,
+        PlacesListViewport,
     };
 
     body.spawn((
@@ -211,6 +255,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
         Node {
             display: Display::None,
             flex_grow: 1.0,
+            min_height: Val::Px(0.0),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::Stretch,
             overflow: Overflow::clip(),
@@ -225,7 +270,8 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
             Node {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                justify_content: JustifyContent::FlexEnd,
+                justify_content: JustifyContent::SpaceBetween,
+                flex_shrink: 0.0,
                 padding: UiRect::axes(Val::Px(20.0), Val::Px(10.0)),
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
@@ -233,6 +279,30 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
             BorderColor::from(DIVIDER),
         ))
         .with_children(|row| {
+            row.spawn((
+                crate::ui::history::WorldHistoryButton,
+                Button,
+                Node {
+                    width: Val::Px(112.0),
+                    height: Val::Px(28.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                    ..default()
+                },
+                BackgroundColor(BUTTON_NORMAL),
+                BorderColor::all(PLATE_RULE_SOFT),
+            ))
+            .with_child((
+                Text::new("WORLD HISTORY"),
+                TextFont {
+                    font_size: FontSize::Px(8.5),
+                    ..default()
+                },
+                TextColor(INK),
+                Pickable::IGNORE,
+            ));
             row.spawn((
                 PlaceCountText,
                 Text::new(""),
@@ -247,6 +317,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
         // Master / detail
         tab.spawn(Node {
             flex_grow: 1.0,
+            min_height: Val::Px(0.0),
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Stretch,
             overflow: Overflow::clip(),
@@ -256,13 +327,15 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
             // list
             split
                 .spawn((
+                    PlacesListViewport,
                     Node {
-                        width: Val::Percent(46.0),
+                        width: Val::Px(350.0),
+                        min_height: Val::Px(0.0),
+                        flex_shrink: 0.0,
                         flex_direction: FlexDirection::Column,
-                        padding: UiRect::axes(Val::Px(12.0), Val::Px(10.0)),
-                        row_gap: Val::Px(2.0),
                         border: UiRect::right(Val::Px(1.0)),
                         overflow: Overflow::scroll_y(),
+                        scrollbar_width: 8.0,
                         ..default()
                     },
                     BorderColor::from(DIVIDER),
@@ -272,6 +345,12 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                         PlacesListContent,
                         Node {
                             flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Stretch,
+                            // A flex item is shrinkable by default. The list must
+                            // instead grow to its rows' natural height so its
+                            // parent has real overflow to scroll.
+                            flex_shrink: 0.0,
+                            padding: UiRect::axes(Val::Px(10.0), Val::Px(10.0)),
                             row_gap: Val::Px(2.0),
                             ..default()
                         },
@@ -283,8 +362,11 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                 .spawn((
                     Node {
                         flex_grow: 1.0,
+                        min_height: Val::Px(0.0),
                         flex_direction: FlexDirection::Column,
-                        padding: UiRect::all(Val::Px(20.0)),
+                        align_items: AlignItems::Stretch,
+                        overflow: Overflow::scroll_y(),
+                        scrollbar_width: 8.0,
                         ..default()
                     },
                     BackgroundColor(DETAIL_BG),
@@ -314,6 +396,8 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                             Node {
                                 display: Display::None,
                                 flex_direction: FlexDirection::Column,
+                                align_items: AlignItems::Stretch,
+                                padding: UiRect::all(Val::Px(24.0)),
                                 ..default()
                             },
                         ))
@@ -336,15 +420,42 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                 },
                                 TextColor(ACCENT_COLOR),
                                 Node {
-                                    margin: UiRect::bottom(Val::Px(16.0)),
+                                    margin: UiRect::bottom(Val::Px(18.0)),
                                     ..default()
                                 },
                             ));
-                            for field in PlaceField::ALL {
+                            card.spawn((
+                                crate::ui::history::VillageHistoryButton,
+                                Button,
+                                Node {
+                                    width: Val::Px(126.0),
+                                    height: Val::Px(30.0),
+                                    align_self: AlignSelf::FlexEnd,
+                                    justify_content: JustifyContent::Center,
+                                    align_items: AlignItems::Center,
+                                    margin: UiRect::bottom(Val::Px(10.0)),
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                                    ..default()
+                                },
+                                BackgroundColor(BUTTON_NORMAL),
+                                BorderColor::all(PLATE_RULE_SOFT),
+                            ))
+                            .with_child((
+                                Text::new("VILLAGE HISTORY"),
+                                TextFont {
+                                    font_size: FontSize::Px(8.5),
+                                    ..default()
+                                },
+                                TextColor(INK),
+                                Pickable::IGNORE,
+                            ));
+                            for index in 0..PLACE_DETAIL_LINES {
                                 card.spawn((
+                                    PlaceDetailLine(index),
                                     Node {
                                         flex_direction: FlexDirection::Row,
-                                        align_items: AlignItems::Center,
+                                        align_items: AlignItems::FlexStart,
                                         justify_content: JustifyContent::SpaceBetween,
                                         padding: UiRect::vertical(Val::Px(9.0)),
                                         border: UiRect::bottom(Val::Px(1.0)),
@@ -353,7 +464,8 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                     BorderColor::from(DIVIDER),
                                     children![
                                         (
-                                            Text::new(field.label()),
+                                            PlaceDetailLabel(index),
+                                            Text::new(""),
                                             TextFont {
                                                 font_size: FontSize::Px(10.0),
                                                 ..default()
@@ -364,14 +476,15 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                             // ADVANCE" onto two lines and the
                                             // row would read as broken.
                                             Node {
+                                                width: Val::Px(112.0),
                                                 flex_shrink: 0.0,
                                                 margin: UiRect::right(Val::Px(16.0)),
                                                 ..default()
                                             },
                                         ),
                                         (
-                                            PlaceStat(field),
-                                            Text::new("-"),
+                                            PlaceDetailValue(index),
+                                            Text::new(""),
                                             TextFont {
                                                 font_size: FontSize::Px(13.0),
                                                 ..default()
@@ -381,6 +494,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                             // so the column edge stays straight.
                                             TextLayout::justify(Justify::Right),
                                             Node {
+                                                flex_grow: 1.0,
                                                 flex_shrink: 1.0,
                                                 ..default()
                                             },
@@ -399,6 +513,7 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
         TabBody(EncyclopediaTab::People),
         Node {
             flex_grow: 1.0,
+            min_height: Val::Px(0.0),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::Stretch,
             overflow: Overflow::clip(),
@@ -412,6 +527,7 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::SpaceBetween,
+                flex_shrink: 0.0,
                 padding: UiRect::axes(Val::Px(20.0), Val::Px(10.0)),
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
@@ -425,7 +541,11 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                 ..default()
             })
             .with_children(|filters| {
-                for filter in [PeopleFilter::All, PeopleFilter::Known, PeopleFilter::Unknown] {
+                for filter in [
+                    PeopleFilter::All,
+                    PeopleFilter::Known,
+                    PeopleFilter::Unknown,
+                ] {
                     spawn_filter(filters, filter);
                 }
             });
@@ -443,6 +563,7 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
         // Master / detail
         tab.spawn(Node {
             flex_grow: 1.0,
+            min_height: Val::Px(0.0),
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Stretch,
             overflow: Overflow::clip(),
@@ -455,8 +576,11 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                     PeopleListViewport,
                     Node {
                         width: Val::Px(LIST_WIDTH),
+                        min_height: Val::Px(0.0),
+                        flex_shrink: 0.0,
                         flex_direction: FlexDirection::Column,
                         overflow: Overflow::scroll_y(),
+                        scrollbar_width: 8.0,
                         border: UiRect::right(Val::Px(1.0)),
                         ..default()
                     },
@@ -468,6 +592,7 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                         Node {
                             flex_direction: FlexDirection::Column,
                             align_items: AlignItems::Stretch,
+                            flex_shrink: 0.0,
                             padding: UiRect::all(Val::Px(8.0)),
                             row_gap: Val::Px(2.0),
                             ..default()
@@ -480,8 +605,11 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                 .spawn((
                     Node {
                         flex_grow: 1.0,
+                        min_height: Val::Px(0.0),
                         flex_direction: FlexDirection::Column,
                         padding: UiRect::all(Val::Px(22.0)),
+                        overflow: Overflow::scroll_y(),
+                        scrollbar_width: 8.0,
                         ..default()
                     },
                     BackgroundColor(DETAIL_BG),
@@ -724,6 +852,7 @@ fn spawn_footer(panel: &mut ChildSpawnerCommands<'_>) {
                 flex_direction: FlexDirection::Row,
                 justify_content: JustifyContent::SpaceBetween,
                 align_items: AlignItems::Center,
+                flex_shrink: 0.0,
                 padding: UiRect::axes(Val::Px(20.0), Val::Px(10.0)),
                 border: UiRect::top(Val::Px(1.0)),
                 ..default()
@@ -756,5 +885,36 @@ pub(super) fn despawn_encyclopedia(
     // Re-request the roster next time it opens so it never shows stale levels.
     if despawned {
         people.requested = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::ui::FocusPolicy;
+
+    use super::*;
+
+    #[test]
+    fn encyclopedia_panel_captures_clicks_and_people_content_can_overflow() {
+        let mut world = World::new();
+        world.run_system_once(spawn_encyclopedia).unwrap();
+
+        let mut panels =
+            world.query_filtered::<(&FocusPolicy, &Pickable), With<EncyclopediaPanel>>();
+        let (focus, pickable) = panels.single(&world).unwrap();
+        assert_eq!(*focus, FocusPolicy::Block);
+        assert!(pickable.should_block_lower);
+
+        let mut contents = world.query_filtered::<&Node, With<PeopleListContent>>();
+        assert_eq!(contents.single(&world).unwrap().flex_shrink, 0.0);
+
+        let mut viewports = world.query_filtered::<&Node, With<PeopleListViewport>>();
+        let viewport = viewports.single(&world).unwrap();
+        assert_eq!(viewport.min_height, Val::Px(0.0));
+        assert_eq!(viewport.overflow.y, OverflowAxis::Scroll);
+
+        let mut close_buttons = world.query_filtered::<Entity, With<EncyclopediaCloseButton>>();
+        assert_eq!(close_buttons.iter(&world).count(), 1);
     }
 }

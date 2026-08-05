@@ -148,17 +148,18 @@ fn bc5_is_measured_against_bc7_for_normal_maps() {
         // image. That separates "BC5 compresses worse" from "this normal map
         // was not unit length to begin with", which are different problems with
         // different fixes.
-        let rebuilt_truth: Vec<[f32; 3]> = img
-            .pixels()
-            .map(|p| reconstruct(p.0[0], p.0[1]))
-            .collect();
+        let rebuilt_truth: Vec<[f32; 3]> =
+            img.pixels().map(|p| reconstruct(p.0[0], p.0[1])).collect();
 
         let bc7_err = measure(&truth, &bc7_normals);
         let bc5_err = measure(&truth, &bc5_normals);
         let bc5_codec_only = measure(&rebuilt_truth, &bc5_normals);
         let z_cost = measure(&truth, &rebuilt_truth);
 
-        println!("\n{name}  ({w}x{h}, {} KB either way)", bc5_blocks.len() / 1024);
+        println!(
+            "\n{name}  ({w}x{h}, {} KB either way)",
+            bc5_blocks.len() / 1024
+        );
         println!(
             "  BC7            mean {:.3}deg  p99 {:.3}deg  max {:.3}deg",
             bc7_err.mean, bc7_err.p99, bc7_err.max

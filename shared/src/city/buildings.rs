@@ -338,8 +338,8 @@ mod tests {
         let transform = plot_building_scene_transform(&plot, CityBuildingKind::LogCabin, 0.0);
         let forward = transform.rotation * Vec3::Z;
         let scene_forward = Vec2::new(forward.x, forward.z).normalize_or_zero();
-        let frontage_forward = plot_building_front_direction(&plot, CityBuildingKind::LogCabin)
-            .normalize_or_zero();
+        let frontage_forward =
+            plot_building_front_direction(&plot, CityBuildingKind::LogCabin).normalize_or_zero();
 
         assert!(scene_forward.distance(frontage_forward) < 1.0e-4);
     }
@@ -363,8 +363,8 @@ mod tests {
         let transform = plot_building_scene_transform(&plot, CityBuildingKind::LogCabin, 0.0);
         let forward = transform.rotation * Vec3::Z;
         let scene_forward = Vec2::new(forward.x, forward.z).normalize_or_zero();
-        let frontage_forward = plot_building_front_direction(&plot, CityBuildingKind::LogCabin)
-            .normalize_or_zero();
+        let frontage_forward =
+            plot_building_front_direction(&plot, CityBuildingKind::LogCabin).normalize_or_zero();
 
         assert!(scene_forward.distance(frontage_forward) < 1.0e-4);
     }

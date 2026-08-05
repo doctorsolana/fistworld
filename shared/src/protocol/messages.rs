@@ -74,9 +74,7 @@ pub enum DevCommand {
     /// Spawn a villager at a world position. A test tool for now: villagers have
     /// a name and stand there, so the encyclopedia and selection have real
     /// non-player people to list before settlements exist to produce them.
-    SpawnNpc {
-        pos: Vec3,
-    },
+    SpawnNpc { pos: Vec3 },
     /// Set a character's banner. Targeted by NAME rather than entity, because
     /// the encyclopedia lists people the client may not currently have
     /// replicated -- interest management only delivers who is nearby.
@@ -88,20 +86,14 @@ pub enum DevCommand {
     ///
     /// The founding act per WORLD-DESIGN section 1. The server enforces the
     /// spacing rule -- a client-side check is advisory.
-    FoundSettlement {
-        pos: Vec3,
-        name: String,
-    },
+    FoundSettlement { pos: Vec3, name: String },
     /// Take a villager into the sender's retinue, or dismiss it.
     ///
     /// Targeted by ENTITY, not by name: `shared::names::person_name` produces
     /// its first duplicate around the fifty-first villager, and command has to
     /// be exact. Affiliation can afford to be name-targeted because it addresses
     /// people the client has never replicated; command cannot.
-    SetRetinue {
-        unit: Entity,
-        commanded: bool,
-    },
+    SetRetinue { unit: Entity, commanded: bool },
 }
 
 impl bevy::ecs::entity::MapEntities for DevCommand {
@@ -217,11 +209,49 @@ pub struct CharacterRosterEntry {
     pub name: String,
     pub kind: crate::components::CharacterKind,
     pub affiliation: crate::components::CharacterAffiliation,
+    pub attributes: crate::components::CharacterAttributes,
     /// For a hero, whether its owner is connected right now. Villagers are never
     /// "online" -- they are simply present, which is a different thing.
     pub online: bool,
     /// True when this is the requesting player's own hero.
     pub is_self: bool,
+}
+
+/// Client -> server: fetch the bounded session history for one replicated
+/// settlement. History is intentionally pull-based; it does not make every
+/// market resend a year of daily records whenever one new day closes.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct RequestSettlementHistory {
+    pub settlement: Entity,
+}
+
+impl bevy::ecs::entity::MapEntities for RequestSettlementHistory {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        self.settlement = mapper.get_mapped(self.settlement);
+    }
+}
+
+/// Server -> client response to [`RequestSettlementHistory`].
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct SettlementHistoryResponse {
+    pub settlement: Entity,
+    pub archive: crate::economy::SettlementHistoryArchive,
+}
+
+impl bevy::ecs::entity::MapEntities for SettlementHistoryResponse {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        self.settlement = mapper.get_mapped(self.settlement);
+    }
+}
+
+/// Client -> server: fetch the bounded world-wide daily rollup.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct RequestWorldHistory;
+
+/// Server -> client response to [`RequestWorldHistory`].
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct WorldHistoryResponse {
+    pub archive: crate::economy::WorldHistoryArchive,
 }
 
 /// Reliable channel for important messages.
@@ -278,7 +308,10 @@ mod tests {
     fn unit_move_order_roundtrips() {
         let msg = UnitMoveOrder {
             units: vec![
-                (Entity::from_raw_u32(7).unwrap(), Vec3::new(-64.5, 12.0, 480.0)),
+                (
+                    Entity::from_raw_u32(7).unwrap(),
+                    Vec3::new(-64.5, 12.0, 480.0),
+                ),
                 (Entity::from_raw_u32(9).unwrap(), Vec3::new(1.0, 2.0, 3.0)),
             ],
         };

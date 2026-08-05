@@ -13,8 +13,8 @@
 //! starts sending them — see docs/WORLD-DESIGN.md §1/§4.
 
 pub mod actions;
-pub mod places;
 pub mod layout;
+pub mod places;
 pub mod state_sync;
 
 use bevy::prelude::*;
@@ -32,7 +32,9 @@ impl Plugin for EncyclopediaPlugin {
         app.init_resource::<KnownPeople>();
         app.init_resource::<places::KnownPlaces>();
         app.init_resource::<places::SelectedPlace>();
+        app.init_resource::<places::SelectedPlaceEntry>();
         app.init_resource::<ClickGuard>();
+        app.add_observer(actions::on_scroll);
         app.add_systems(
             Update,
             (
@@ -49,6 +51,16 @@ impl Plugin for EncyclopediaPlugin {
         );
         app.add_systems(
             Update,
+            // Detailed job, household and inventory joins are only useful
+            // while this window is visible. Keeping them behind this condition
+            // avoids a per-frame inspection cost during ordinary world play.
+            state_sync::refresh_visible_person_facts
+                .before(state_sync::rebuild_people_list)
+                .run_if(encyclopedia_open)
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.add_systems(
+            Update,
             (
                 layout::spawn_encyclopedia,
                 actions::request_roster_on_open,
@@ -58,7 +70,7 @@ impl Plugin for EncyclopediaPlugin {
                 actions::handle_banner_buttons,
                 actions::handle_retinue_button,
                 actions::close_on_escape_or_backdrop,
-                actions::scroll_people_list,
+                actions::send_scroll_events,
                 state_sync::rebuild_people_list,
                 state_sync::sync_tab_visuals,
                 state_sync::sync_filter_visuals,
@@ -78,7 +90,10 @@ impl Plugin for EncyclopediaPlugin {
                 .run_if(encyclopedia_open)
                 .run_if(in_state(GameState::Playing)),
         );
-        app.add_systems(Update, layout::despawn_encyclopedia.run_if(encyclopedia_closed));
+        app.add_systems(
+            Update,
+            layout::despawn_encyclopedia.run_if(encyclopedia_closed),
+        );
         app.add_systems(OnEnter(GameState::MainMenu), close_on_main_menu);
     }
 }
@@ -212,6 +227,21 @@ pub struct PersonRecord {
     /// Lowercase account that commands this person, if any. Display only -- the
     /// server checks its own copy before moving anything.
     pub commanded_by: Option<String>,
+    /// Latest nearby simulation facts. These remain as the last known record
+    /// when the person leaves replication range.
+    pub residence: Option<String>,
+    pub home: Option<String>,
+    pub occupation: Option<String>,
+    pub workplace: Option<String>,
+    pub wallet: Option<u64>,
+    pub nutrition: Option<shared::components::Nutrition>,
+    pub activity: Option<shared::components::CharacterActivity>,
+    pub attributes: Option<shared::components::CharacterAttributes>,
+    pub work_status: Option<shared::components::WorkStatus>,
+    pub daily_wage: Option<u64>,
+    pub workforce_requirements: Option<shared::economy::WorkforceRequirements>,
+    pub inventory: Option<shared::economy::GoodsInventory>,
+    pub carried: Option<shared::economy::CarriedLoad>,
 }
 
 /// Every person the client is aware of, known or not.
@@ -270,6 +300,9 @@ pub struct EncyclopediaBackdrop;
 #[derive(Component)]
 pub struct EncyclopediaPanel;
 
+#[derive(Component)]
+pub struct EncyclopediaCloseButton;
+
 #[derive(Component, Clone, Copy)]
 pub struct TabButton(pub EncyclopediaTab);
 
@@ -306,6 +339,14 @@ pub struct DetailStat(pub DetailField);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DetailField {
+    Attributes,
+    Home,
+    Work,
+    Employment,
+    Hunger,
+    Wealth,
+    Inventory,
+    Activity,
     Affiliation,
     Standing,
     Status,
@@ -313,7 +354,15 @@ pub enum DetailField {
 }
 
 impl DetailField {
-    pub const ALL: [DetailField; 4] = [
+    pub const ALL: [DetailField; 12] = [
+        DetailField::Attributes,
+        DetailField::Home,
+        DetailField::Work,
+        DetailField::Employment,
+        DetailField::Hunger,
+        DetailField::Wealth,
+        DetailField::Inventory,
+        DetailField::Activity,
         DetailField::Affiliation,
         DetailField::Standing,
         DetailField::Status,
@@ -322,6 +371,14 @@ impl DetailField {
 
     pub fn label(self) -> &'static str {
         match self {
+            DetailField::Attributes => "ATTRIBUTES",
+            DetailField::Home => "HOME",
+            DetailField::Work => "WORK",
+            DetailField::Employment => "EMPLOYMENT",
+            DetailField::Hunger => "FOOD",
+            DetailField::Wealth => "MONEY",
+            DetailField::Inventory => "INVENTORY",
+            DetailField::Activity => "NOW",
             DetailField::Affiliation => "AFFILIATION",
             DetailField::Standing => "STANDING",
             DetailField::Status => "STATUS",
@@ -337,7 +394,16 @@ impl DetailField {
     /// the rows are hidden instead of filled with filler.
     pub fn applies_to(self, kind: PersonKind) -> bool {
         match self {
-            DetailField::Affiliation | DetailField::Knowledge => true,
+            DetailField::Home
+            | DetailField::Work
+            | DetailField::Employment
+            | DetailField::Hunger => kind == PersonKind::Villager,
+            DetailField::Attributes
+            | DetailField::Wealth
+            | DetailField::Inventory
+            | DetailField::Activity
+            | DetailField::Affiliation
+            | DetailField::Knowledge => true,
             DetailField::Standing | DetailField::Status => kind == PersonKind::Hero,
         }
     }

@@ -1,0 +1,5 @@
+[alias]
+# Deterministic headless village soak with milestone and stall reporting.
+village-lab = "test -p server village_simulation_lab -- --ignored --nocapture --test-threads=1"
+# Optimised steady-state scale probe: 5,000 residents across 30 towns by default.
+village-scale-lab = "test --release -p server village_scale_lab -- --ignored --nocapture --test-threads=1"

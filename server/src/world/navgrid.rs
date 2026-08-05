@@ -1,14 +1,33 @@
 //! Navigation obstacle grid: keeps `SpatialObstacleGrid` in sync with authored buildings.
 //!
-//! Salvaged from the deleted NPC AI - it contains no unit types, it just expands each
-//! building footprint by its flatten radius into the shared spatial grid that
-//! `world::pathfinding` queries. Without it the grid stays permanently empty and
-//! "buildings block navigation" is silently lost.
+//! It contains no unit types: each authored building footprint receives a small
+//! embodied-agent clearance and enters the shared spatial grid used by route
+//! planning and movement-time anti-tunnelling checks. Landscaping flatten radii
+//! are deliberately unrelated; they are much too large for navigation and cover
+//! the authored doors.
 
 use bevy::prelude::*;
 use shared::spatial::{ObstacleEntry, SpatialObstacleGrid};
 
 use crate::collision::building_index::BuildingSpatialIndex;
+
+/// Horizontal clearance around solid architecture for an embodied villager.
+/// Build-zone `flatten_radius` is landscaping space, not collision space; using
+/// it here swallowed authored door anchors and made correct portal routing
+/// impossible.
+pub const VILLAGER_NAV_RADIUS: f32 = 0.28;
+
+/// Horizontal body clearance used around authored props. Keep this shared by
+/// route surveying, interaction-point selection and movement-time collision;
+/// three almost-identical constants here previously let a planned route end at
+/// a point the embodied villager could never actually occupy.
+pub const VILLAGER_PROP_RADIUS: f32 = 0.35;
+
+/// Spatial sampling interval for both route certification and movement-time
+/// anti-tunnelling. A coarser planner used to miss thin rotated-building
+/// corners that embodied movement then rejected, causing an endless replan of
+/// the same nominally valid route.
+pub const NAVIGATION_SAMPLE_STEP: f32 = 0.2;
 
 /// Tracks the last known building index version to detect authored changes.
 #[derive(Resource, Default)]
@@ -34,8 +53,8 @@ pub fn sync_obstacle_grid(
     for building in buildings {
         let def = building.building_type.definition();
         let half_extents = Vec2::new(
-            def.footprint.x / 2.0 + def.flatten_radius,
-            def.footprint.y / 2.0 + def.flatten_radius,
+            def.footprint.x / 2.0 + VILLAGER_NAV_RADIUS,
+            def.footprint.y / 2.0 + VILLAGER_NAV_RADIUS,
         );
 
         grid.insert(ObstacleEntry {
@@ -48,5 +67,44 @@ pub fn sync_obstacle_grid(
 
     if !buildings.is_empty() {
         trace!("Rebuilt spatial grid with {} obstacles", buildings.len());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shared::building::BuildingType;
+    use shared::components::SettlementBuildingKind;
+
+    #[test]
+    fn every_authored_door_sits_outside_its_navigation_blocker() {
+        for step in 0..16 {
+            let rotation = std::f32::consts::TAU * step as f32 / 16.0;
+            for (building_type, kind) in [
+                (BuildingType::LogCabin, SettlementBuildingKind::House),
+                (
+                    BuildingType::LumberjackHut,
+                    SettlementBuildingKind::LumberjackHut,
+                ),
+                (BuildingType::Farmstead, SettlementBuildingKind::Farmstead),
+                (BuildingType::TownHall, SettlementBuildingKind::Hall),
+            ] {
+                let mut grid = SpatialObstacleGrid::default();
+                let definition = building_type.definition();
+                grid.insert(ObstacleEntry {
+                    center: Vec2::ZERO,
+                    half_extents: definition.footprint * 0.5 + Vec2::splat(VILLAGER_NAV_RADIUS),
+                    rotation,
+                    obstacle_type: building_type as u32,
+                });
+                let door = kind.entrance_position(Vec3::ZERO, rotation);
+                assert!(grid.point_blocked(Vec2::ZERO));
+                assert!(
+                    !grid.point_blocked(Vec2::new(door.x, door.z)),
+                    "{} door is inside its nav blocker at rotation {rotation}",
+                    definition.display_name
+                );
+            }
+        }
     }
 }

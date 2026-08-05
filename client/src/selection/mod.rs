@@ -31,6 +31,8 @@ impl Plugin for SelectionPlugin {
                 // then pick, then let the ring follow what is now selected.
                 tag_characters_selectable,
                 tag_settlements_selectable,
+                tag_settlement_buildings_selectable,
+                tag_construction_sites_selectable,
                 clear_stale_selection,
                 pick::pick_on_left_click,
                 order::issue_order_on_right_click,
@@ -68,6 +70,14 @@ impl Selectable {
         Self {
             radius: 0.55,
             height: 1.7,
+        }
+    }
+
+    pub fn settlement_building(kind: shared::components::SettlementBuildingKind) -> Self {
+        let definition = kind.art().definition();
+        Self {
+            radius: definition.footprint.max_element() * 0.5,
+            height: definition.height,
         }
     }
 }
@@ -275,6 +285,40 @@ fn tag_settlements_selectable(
     }
 }
 
+fn tag_settlement_buildings_selectable(
+    mut commands: Commands,
+    buildings: Query<
+        (Entity, &shared::components::SettlementBuilding),
+        (
+            With<shared::components::PlayerPosition>,
+            Without<Selectable>,
+        ),
+    >,
+) {
+    for (entity, building) in buildings.iter() {
+        commands
+            .entity(entity)
+            .insert(Selectable::settlement_building(building.kind));
+    }
+}
+
+fn tag_construction_sites_selectable(
+    mut commands: Commands,
+    sites: Query<
+        (Entity, &shared::components::ConstructionSite),
+        (
+            With<shared::components::PlayerPosition>,
+            Without<Selectable>,
+        ),
+    >,
+) {
+    for (entity, site) in sites.iter() {
+        commands
+            .entity(entity)
+            .insert(Selectable::settlement_building(site.kind));
+    }
+}
+
 fn tag_characters_selectable(
     mut commands: Commands,
     characters: Query<
@@ -413,7 +457,9 @@ pub fn formation_targets(centre: Vec3, count: usize, spacing: f32) -> Vec<Vec3> 
     while placed < count {
         let radius = ring as f32 * spacing;
         // Circumference divided by spacing, so rings do not crowd as they grow.
-        let capacity = ((std::f32::consts::TAU * radius) / spacing).floor().max(1.0) as usize;
+        let capacity = ((std::f32::consts::TAU * radius) / spacing)
+            .floor()
+            .max(1.0) as usize;
         for i in 0..capacity {
             if placed >= count {
                 break;
@@ -458,7 +504,10 @@ mod tests {
                     target.distance(centre) < spacing * count as f32,
                     "target {target:?} scattered too far for count {count}"
                 );
-                assert_eq!(target.y, centre.y, "formation must stay in the ground plane");
+                assert_eq!(
+                    target.y, centre.y,
+                    "formation must stay in the ground plane"
+                );
             }
         }
     }
@@ -473,14 +522,26 @@ mod tests {
         let theirs = CommandedBy("bryn".to_string());
 
         assert!(can_command(Some(&mine), Some("aldric")));
-        assert!(!can_command(Some(&theirs), Some("aldric")), "took someone else's unit");
+        assert!(
+            !can_command(Some(&theirs), Some("aldric")),
+            "took someone else's unit"
+        );
         // Nobody's unit: a villager not in any retinue.
-        assert!(!can_command(None, Some("aldric")), "claimed an unconscripted villager");
+        assert!(
+            !can_command(None, Some("aldric")),
+            "claimed an unconscripted villager"
+        );
         // Before the account is known, nothing is commandable.
-        assert!(!can_command(Some(&mine), None), "claimed a unit with no account");
+        assert!(
+            !can_command(Some(&mine), None),
+            "claimed a unit with no account"
+        );
         // Account keys are lowercase on both sides; a case mismatch must NOT
         // silently grant command.
-        assert!(!can_command(Some(&mine), Some("Aldric")), "case-insensitive match");
+        assert!(
+            !can_command(Some(&mine), Some("Aldric")),
+            "case-insensitive match"
+        );
     }
 
     #[test]
@@ -497,7 +558,10 @@ mod tests {
         // little accumulated device motion is still a click.
         assert!(is_click(2.0, 5.0, 0.10), "a shaky tap was rejected");
         // A deliberate orbit.
-        assert!(!is_click(120.0, 300.0, 0.6), "an orbit was treated as a click");
+        assert!(
+            !is_click(120.0, 300.0, 0.6),
+            "an orbit was treated as a click"
+        );
         // Cursor pinned at the window edge: radial displacement stops growing
         // while device motion keeps streaming. This is the case radial-only
         // discrimination gets wrong.
@@ -506,18 +570,16 @@ mod tests {
             "an edge-of-screen orbit was treated as a click"
         );
         // Press-and-hold with a perfectly steady hand is not a click either.
-        assert!(!is_click(0.0, 0.0, 1.5), "a long hold was treated as a click");
+        assert!(
+            !is_click(0.0, 0.0, 1.5),
+            "a long hold was treated as a click"
+        );
     }
 
     #[test]
     fn ray_through_a_body_hits_it() {
         // Looking down -Z at a body standing at the origin.
-        let hit = ray_vs_vertical_segment(
-            Vec3::new(0.0, 1.0, 10.0),
-            Vec3::NEG_Z,
-            Vec3::ZERO,
-            1.7,
-        );
+        let hit = ray_vs_vertical_segment(Vec3::new(0.0, 1.0, 10.0), Vec3::NEG_Z, Vec3::ZERO, 1.7);
         let (distance, gap) = hit.expect("ray should reach the body");
         assert!((distance - 10.0).abs() < 1e-3, "distance {distance}");
         assert!(gap < 1e-3, "gap {gap} should be ~0 through the centre");
@@ -525,28 +587,23 @@ mod tests {
 
     #[test]
     fn ray_beside_a_body_measures_the_gap() {
-        let (_, gap) = ray_vs_vertical_segment(
-            Vec3::new(2.0, 1.0, 10.0),
-            Vec3::NEG_Z,
-            Vec3::ZERO,
-            1.7,
-        )
-        .expect("still in front");
-        assert!((gap - 2.0).abs() < 1e-3, "gap {gap} should be the 2m offset");
+        let (_, gap) =
+            ray_vs_vertical_segment(Vec3::new(2.0, 1.0, 10.0), Vec3::NEG_Z, Vec3::ZERO, 1.7)
+                .expect("still in front");
+        assert!(
+            (gap - 2.0).abs() < 1e-3,
+            "gap {gap} should be the 2m offset"
+        );
     }
 
     /// A click above the head must not hit. Without clamping the segment to
-        /// `height` the infinite-line solution would report a hit for a ray
+    /// `height` the infinite-line solution would report a hit for a ray
     /// passing well over the character.
     #[test]
     fn ray_over_the_head_misses() {
-        let (_, gap) = ray_vs_vertical_segment(
-            Vec3::new(0.0, 6.0, 10.0),
-            Vec3::NEG_Z,
-            Vec3::ZERO,
-            1.7,
-        )
-        .expect("in front, just high");
+        let (_, gap) =
+            ray_vs_vertical_segment(Vec3::new(0.0, 6.0, 10.0), Vec3::NEG_Z, Vec3::ZERO, 1.7)
+                .expect("in front, just high");
         assert!(gap > 4.0, "gap {gap} should be the height shortfall");
     }
 
@@ -563,8 +620,15 @@ mod tests {
     #[test]
     fn pick_radius_grows_with_distance_but_never_shrinks() {
         let base = 0.55;
-        assert_eq!(pick_radius_at(base, 10.0), base, "near target lost its radius");
+        assert_eq!(
+            pick_radius_at(base, 10.0),
+            base,
+            "near target lost its radius"
+        );
         let far = pick_radius_at(base, 1000.0);
-        assert!(far > base * 10.0, "distant target radius {far} is too tight");
+        assert!(
+            far > base * 10.0,
+            "distant target radius {far} is too tight"
+        );
     }
 }

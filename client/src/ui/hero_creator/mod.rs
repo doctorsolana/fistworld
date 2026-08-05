@@ -8,6 +8,7 @@
 
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
+use bevy::ui::FocusPolicy;
 
 use shared::components::HeroOutfit;
 
@@ -208,12 +209,7 @@ fn setup_preview_rig(
                     InheritedVisibility::default(),
                 ))
                 .with_children(|root| {
-                    spawn_character_scene_child(
-                        root,
-                        &asset_server,
-                        &mut hero_assets,
-                        &manifest,
-                    );
+                    spawn_character_scene_child(root, &asset_server, &mut hero_assets, &manifest);
                 })
                 .id();
             rig = Some(rig_entity);
@@ -318,6 +314,11 @@ fn spawn_creator(
                     row_gap: Val::Px(10.0),
                     ..default()
                 },
+                // This custom modal predates `spawn_modal`: capture clicks in
+                // its transparent preview gaps so they cannot reach the
+                // fullscreen close backdrop underneath.
+                FocusPolicy::Block,
+                Pickable::default(),
             ))
             .with_children(|panel| {
                 panel

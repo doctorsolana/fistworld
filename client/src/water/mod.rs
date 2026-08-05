@@ -8,8 +8,9 @@ pub mod overlay;
 pub use chunks::WaterChunk;
 
 use chunks::{cleanup_water_chunks, spawn_water_chunks, LoadedWaterChunks, WaterRenderAssets};
-use material::{ setup_water_assets, sync_water_wave_clock, update_water_cull_mode,
-    update_water_sun_dir, ToonWaterMaterial,
+use material::{
+    setup_water_assets, sync_water_wave_clock, update_water_cull_mode, update_water_sun_dir,
+    ToonWaterMaterial,
 };
 use overlay::{despawn_underwater_overlay, spawn_underwater_overlay, update_underwater_overlay};
 
@@ -25,7 +26,6 @@ use bevy::render::render_resource::{
 };
 use bevy::shader::ShaderRef;
 use std::collections::HashMap;
-
 
 use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, VERTEX_SPACING};
 

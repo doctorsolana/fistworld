@@ -98,28 +98,109 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
             .collect(),
         // Near/far pair plus a low angle: LOD popping, terrain silhouette, horizon.
         "survey" => vec![
-            Shot { name: "close".into(), focus, zoom: 90.0, tilt: 0.55, time_of_day, ..Default::default() },
-            Shot { name: "mid".into(), focus, zoom: 260.0, tilt: 0.75, time_of_day, ..Default::default() },
-            Shot { name: "far".into(), focus, zoom: 700.0, tilt: 0.95, time_of_day, ..Default::default() },
-            Shot { name: "horizon".into(), focus, zoom: 200.0, tilt: 0.18, time_of_day, ..Default::default() },
+            Shot {
+                name: "close".into(),
+                focus,
+                zoom: 90.0,
+                tilt: 0.55,
+                time_of_day,
+                ..Default::default()
+            },
+            Shot {
+                name: "mid".into(),
+                focus,
+                zoom: 260.0,
+                tilt: 0.75,
+                time_of_day,
+                ..Default::default()
+            },
+            Shot {
+                name: "far".into(),
+                focus,
+                zoom: 700.0,
+                tilt: 0.95,
+                time_of_day,
+                ..Default::default()
+            },
+            Shot {
+                name: "horizon".into(),
+                focus,
+                zoom: 200.0,
+                tilt: 0.18,
+                time_of_day,
+                ..Default::default()
+            },
         ],
         // Same framing across the day — lighting, shadows, atmosphere, water response.
         "daycycle" => vec![
-            Shot { name: "dawn".into(), focus, time_of_day: 0.08, ..Default::default() },
-            Shot { name: "noon".into(), focus, time_of_day: 0.5, ..Default::default() },
-            Shot { name: "dusk".into(), focus, time_of_day: 0.92, ..Default::default() },
+            Shot {
+                name: "dawn".into(),
+                focus,
+                time_of_day: 0.08,
+                ..Default::default()
+            },
+            Shot {
+                name: "noon".into(),
+                focus,
+                time_of_day: 0.5,
+                ..Default::default()
+            },
+            Shot {
+                name: "dusk".into(),
+                focus,
+                time_of_day: 0.92,
+                ..Default::default()
+            },
         ],
         // Low angle over water: the class of bug that cost the most time historically
         // (winding order, shore foam, caustics, glints).
         "water" => vec![
-            Shot { name: "water_low".into(), focus, zoom: 120.0, tilt: 0.12, time_of_day, ..Default::default() },
-            Shot { name: "water_mid".into(), focus, zoom: 200.0, tilt: 0.45, time_of_day, ..Default::default() },
-            Shot { name: "water_down".into(), focus, zoom: 260.0, tilt: 1.1, time_of_day, ..Default::default() },
+            Shot {
+                name: "water_low".into(),
+                focus,
+                zoom: 120.0,
+                tilt: 0.12,
+                time_of_day,
+                ..Default::default()
+            },
+            Shot {
+                name: "water_mid".into(),
+                focus,
+                zoom: 200.0,
+                tilt: 0.45,
+                time_of_day,
+                ..Default::default()
+            },
+            Shot {
+                name: "water_down".into(),
+                focus,
+                zoom: 260.0,
+                tilt: 1.1,
+                time_of_day,
+                ..Default::default()
+            },
         ],
+        // Hold one close shoreline framing across several seconds. A single
+        // water screenshot can accidentally catch a flattering wave phase;
+        // this preset makes phase-dependent terrain gaps and foam teeth show.
+        "shorecycle" => (0..6)
+            .map(|phase| Shot {
+                name: format!("shore_phase_{phase}"),
+                focus,
+                zoom: 105.0,
+                tilt: 0.48,
+                time_of_day,
+                ..Default::default()
+            })
+            .collect(),
         "spawn" => preset_shots("survey", focus, time_of_day),
         other => {
             eprintln!("capture: unknown preset '{other}', using a single shot");
-            vec![Shot { focus, time_of_day, ..Default::default() }]
+            vec![Shot {
+                focus,
+                time_of_day,
+                ..Default::default()
+            }]
         }
     }
 }
@@ -154,7 +235,7 @@ OPTIONS:
     --time <0..1>      Time of day, 0.5 = noon [default: 0.5]
     --warmup <frames>  Frames before first shot, for streaming  [default: 240]
     --settle <frames>  Frames after each camera move            [default: 60]
-    --preset <name>    orbit | survey | daycycle | water
+    --preset <name>    orbit | survey | daycycle | water | shorecycle
 
 EXAMPLES:
     cargo run -p client --bin capture -- --at 0,0 --preset survey

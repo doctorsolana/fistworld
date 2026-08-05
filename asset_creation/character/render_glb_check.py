@@ -1,6 +1,6 @@
 """Round-trip check: import the exported .glb back into a clean scene and render it.
 
-    blender --background --factory-startup --python asset_creation/render_glb_check.py
+    blender --background --factory-startup --python asset_creation/character/render_glb_check.py
 
 Renders what actually shipped rather than the source scene, so a bad bake, a mirrored limb or a
 broken walk shows up as a picture instead of a number. Output goes to asset_creation/renders/glb_*.
@@ -13,7 +13,8 @@ import sys
 import bpy
 from mathutils import Vector
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Three levels: <repo>/asset_creation/<family>/<script>.py
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GLB = os.path.join(REPO, "client", "assets", "characters", "voxel_boy.glb")
 OUT = os.path.join(REPO, "asset_creation", "renders")
 RES = 460

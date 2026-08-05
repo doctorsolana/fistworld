@@ -50,7 +50,18 @@ pub fn view_radius_to_rings(reported: Option<f32>) -> i32 {
 
 /// Integer coordinate of a region on the world grid.
 #[derive(
-    Component, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug, Default, PartialOrd, Ord,
+    Component,
+    Serialize,
+    Deserialize,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Debug,
+    Default,
+    PartialOrd,
+    Ord,
 )]
 pub struct RegionCoord {
     pub x: i32,
@@ -136,7 +147,10 @@ mod tests {
 
     #[test]
     fn world_positions_map_to_regions_including_negatives() {
-        assert_eq!(RegionCoord::from_world_pos(Vec3::ZERO), RegionCoord::new(0, 0));
+        assert_eq!(
+            RegionCoord::from_world_pos(Vec3::ZERO),
+            RegionCoord::new(0, 0)
+        );
         assert_eq!(
             RegionCoord::from_world_pos(Vec3::new(REGION_SIZE * 1.5, 0.0, REGION_SIZE * 2.5)),
             RegionCoord::new(1, 2)
@@ -210,7 +224,13 @@ mod view_radius_tests {
     /// regions (an invisible world) or a panic.
     #[test]
     fn degenerate_view_radius_falls_back_to_one_region() {
-        for bad in [None, Some(f32::NAN), Some(f32::INFINITY), Some(-1.0), Some(0.0)] {
+        for bad in [
+            None,
+            Some(f32::NAN),
+            Some(f32::INFINITY),
+            Some(-1.0),
+            Some(0.0),
+        ] {
             assert_eq!(view_radius_to_rings(bad), 1, "bad radius {bad:?}");
         }
     }

@@ -13,9 +13,7 @@
 //! The rule that follows: **a binding is added here or not at all.**
 
 use bevy::asset::Asset;
-use bevy::image::{
-    ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor,
-};
+use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::reflect::TypePath;

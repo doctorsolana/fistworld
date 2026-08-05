@@ -122,16 +122,13 @@ pub fn update_day_night_cycle(
     // cool key light (~2-3% of the sun) so shapes still model instead of
     // crushing to silhouette. It rises as the sun drops well below horizon.
     let moon_factor = smoothstep(0.05, 0.35, -elevation);
-    let fill_illuminance = (lerp_f32(60.0, 11_000.0, day_factor)
-        + 900.0 * twilight_factor
-        + 9_000.0 * moon_factor)
-        * lighting_boost;
+    let fill_illuminance =
+        (lerp_f32(60.0, 11_000.0, day_factor) + 900.0 * twilight_factor + 9_000.0 * moon_factor)
+            * lighting_boost;
     // The moon rides the antipode of the sun's arc: while the sun is below
     // the horizon, -sun_dir points down from an elevated moon.
     let day_fill_dir = Vec3::new(-sun_dir.x, -0.35, -sun_dir.z).normalize_or_zero();
-    let fill_dir = day_fill_dir
-        .lerp(-sun_dir, moon_factor)
-        .normalize_or_zero();
+    let fill_dir = day_fill_dir.lerp(-sun_dir, moon_factor).normalize_or_zero();
     let fill_rotation = Quat::from_rotation_arc(Vec3::NEG_Z, fill_dir);
     let fill_color = Color::srgb(0.60, 0.72, 0.95);
     for (mut fill_light, mut fill_transform) in fill_query.iter_mut() {
@@ -223,8 +220,7 @@ pub fn update_day_night_cycle(
         fog_color.set_alpha(fog_color.alpha() * map_clear);
         let visibility = (lerp_f32(320.0, 1050.0, day_factor) * lerp_f32(1.0, 0.68, dust_factor))
             .max(520.0 * twilight_factor);
-        let fog_light_factor =
-            (day_factor * dust_factor + 0.35 * twilight_factor).clamp(0.0, 1.0);
+        let fog_light_factor = (day_factor * dust_factor + 0.35 * twilight_factor).clamp(0.0, 1.0);
         let fog_sky_factor = (day_factor + 0.35 * twilight_factor).clamp(0.0, 1.0);
         let extinction = lerp_color(
             Color::srgb(0.26, 0.34, 0.48),

@@ -7533,6 +7533,7 @@ dependencies = [
  "bevy",
  "bincode 1.3.3",
  "lightyear",
+ "serde",
  "shared",
 ]
 

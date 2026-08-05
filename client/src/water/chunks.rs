@@ -42,6 +42,7 @@ pub(super) fn spawn_water_chunks(
     terrain: Res<WorldTerrain>,
     render_assets: Option<Res<WaterRenderAssets>>,
     loaded_chunks: Res<LoadedChunks>,
+    streaming: Res<crate::terrain::TerrainStreamingState>,
     mut loaded_water: ResMut<LoadedWaterChunks>,
     mut meshes: ResMut<Assets<Mesh>>,
     world_root_query: Query<Entity, With<ClientWorldRoot>>,
@@ -53,19 +54,43 @@ pub(super) fn spawn_water_chunks(
         return;
     };
 
-    let mut spawned = 0usize;
-    let max_per_frame = 2usize;
+    // `LoadedChunks` is a HashSet. Iterating it directly while allowing only
+    // two water meshes per frame made rivers appear as random disconnected
+    // puddles across an already-visible RTS view. Follow terrain's nearest-
+    // first order so water grows outward as one contiguous detailed region.
+    let mut candidates = if streaming.desired_order.is_empty() {
+        let mut fallback = loaded_chunks.chunks.iter().copied().collect::<Vec<_>>();
+        if let Some(center) = streaming.center {
+            fallback.sort_unstable_by_key(|coord| {
+                (coord.x - center.x).abs().max((coord.z - center.z).abs())
+            });
+        }
+        fallback
+    } else {
+        streaming
+            .desired_order
+            .iter()
+            .copied()
+            .filter(|coord| loaded_chunks.chunks.contains(coord))
+            .collect::<Vec<_>>()
+    };
 
-    for coord in loaded_chunks.chunks.iter() {
-        if spawned >= max_per_frame {
+    const MAX_WATER_MESHES_PER_FRAME: usize = 12;
+    const MAX_CHUNKS_EXAMINED_PER_FRAME: usize = 48;
+    let mut spawned = 0usize;
+    let mut examined = 0usize;
+
+    for coord in candidates.drain(..) {
+        if spawned >= MAX_WATER_MESHES_PER_FRAME || examined >= MAX_CHUNKS_EXAMINED_PER_FRAME {
             break;
         }
-        if loaded_water.entries.contains_key(coord) {
+        if loaded_water.entries.contains_key(&coord) {
             continue;
         }
+        examined += 1;
 
-        let Some(mesh) = build_water_mesh(&terrain, *coord) else {
-            loaded_water.entries.insert(*coord, None);
+        let Some(mesh) = build_water_mesh(&terrain, coord) else {
+            loaded_water.entries.insert(coord, None);
             continue;
         };
 
@@ -86,7 +111,7 @@ pub(super) fn spawn_water_chunks(
             ))
             .id();
         commands.entity(world_root).add_child(entity);
-        loaded_water.entries.insert(*coord, Some(entity));
+        loaded_water.entries.insert(coord, Some(entity));
         spawned += 1;
     }
 }

@@ -9,7 +9,6 @@ use lightyear::prelude::*;
 use shared::components::{Player, PlayerPosition, PlayerRotation};
 use std::collections::HashMap;
 
-
 #[derive(Default)]
 struct PerClientFlow {
     samples: u64,

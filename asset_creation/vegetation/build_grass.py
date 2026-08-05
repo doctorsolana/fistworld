@@ -28,6 +28,7 @@ right angles always present something. And at the RTS camera's 40.8 deg above th
 vertical card still shows ~65% of its area, so they do not need to lean the way wheat straws did.
 """
 
+import json
 import math
 import os
 import random
@@ -52,13 +53,46 @@ def log(m):
 
 # Variants mix on the ground: short/dark reads as turf, tall/bright as meadow. Both are the same
 # 2 m patch with the same card count, so the cost is identical and only the look changes.
+# Blade thickness is an ALIASING decision, not a style one. Measured against the game camera
+# (45 deg vertical FOV, 1385 px target):
+#
+#     camera    card on screen   ONE BLADE   texels per pixel
+#      40 m        18.8 px         0.94 px         14 : 1
+#     150 m         5.0 px         0.25 px         51 : 1
+#     280 m         2.7 px         0.13 px         95 : 1   <- the default zoom
+#
+# A blade thinner than a pixel is sampled as in-or-out, and which texel wins changes every frame as
+# the camera drifts. That is the shimmer. Thicker blades and a SMALLER texture both cut the ratio;
+# a 256 map showing 2.7 px of screen is 95 texels fighting over one pixel, and no amount of
+# per-blade artistry survives that.
 VARIANTS = {
-    "short": dict(blade_w=(0.34, 0.52), blade_h=(0.28, 0.46), cards=(9, 3),
-                  greens=[(74, 112, 41), (92, 132, 48), (110, 148, 58), (62, 96, 36)],
-                  taper=0.85, bend=0.30),
-    "tall":  dict(blade_w=(0.40, 0.62), blade_h=(0.62, 0.95), cards=(9, 3),
-                  greens=[(126, 168, 62), (146, 186, 74), (112, 154, 54), (160, 196, 88)],
-                  taper=1.15, bend=0.44),
+    # CHOSEN. Upright, gapped, outward-splayed blades. The rejected designs below record why.
+    "short": dict(blade_w=(0.40, 0.60), blade_h=(0.40, 0.62), cards=(9, 3),
+                  greens=[(88, 128, 48), (104, 146, 56), (76, 112, 42), (120, 158, 64)],
+                  taper=0.95, bend=0.30, blades=15, width=(0.028, 0.046), tex=128,
+                  splay=True, base_band=0.46, min_gap=0.045, bend_pow=2.3),
+    "tall": dict(blade_w=(0.46, 0.68), blade_h=(0.70, 1.02), cards=(9, 3),
+                 greens=[(132, 174, 68), (152, 192, 80), (118, 160, 60), (166, 200, 94)],
+                 taper=1.0, bend=0.36, blades=15, width=(0.030, 0.048), tex=128,
+                 splay=True, base_band=0.44, min_gap=0.045, bend_pow=2.3),
+
+    # --- rejected, kept buildable so the reasoning survives --------------------------------
+    # fine: 26 thin blades on a 256 map. Best up close, DISSOLVES by 150 m -- blades go sub-pixel
+    # at 40 m, and at 280 m it is 95 texels fighting over a single pixel.
+    "fine": dict(blade_w=(0.34, 0.52), blade_h=(0.28, 0.46), cards=(9, 3),
+                 greens=[(74, 112, 41), (92, 132, 48), (110, 148, 58), (62, 96, 36)],
+                 taper=0.85, bend=0.30),
+    # coarse: overcorrected. Blades wide enough to fuse into star-shaped rosettes -- thistle, not
+    # turf. It held distance well, which is what pointed at splay and gaps rather than width.
+    "coarse": dict(blade_w=(0.44, 0.66), blade_h=(0.34, 0.56), cards=(7, 3),
+                   greens=[(84, 122, 46), (100, 140, 54), (116, 154, 62), (72, 106, 40)],
+                   taper=0.70, bend=0.22, blades=10, width=(0.055, 0.095), tex=128),
+    # spear: 9 bold blades. Best silhouette at range and the cheapest, but sparse at 40 m -- you
+    # see ground between the clumps.
+    "spear": dict(blade_w=(0.42, 0.62), blade_h=(0.42, 0.66), cards=(8, 3),
+                  greens=[(92, 132, 50), (110, 152, 60), (78, 116, 44), (126, 164, 68)],
+                  taper=1.25, bend=0.26, blades=9, width=(0.045, 0.072), tex=128,
+                  splay=True, base_band=0.60, min_gap=0.085, bend_pow=2.6),
 }
 
 VARIANT = arg("--variant", "short")
@@ -69,7 +103,7 @@ REPO = "/Users/terminator2/Coding/fistworld/asset_creation"
 OUT = arg("--out", os.path.join(REPO, "vegetation"))
 TEX = os.path.join(OUT, f"Grass_Blades_{arg('--variant', 'short')}.png")
 
-TEX_SIZE = 256          # 256 KB of VRAM. A 1024 would be 4 MB, for no visible gain at this scale.
+TEX_SIZE = V.get("tex", 256)   # 256 -> 256 KB VRAM, 128 -> 64 KB. Smaller also means less aliasing.
 PATCH = 2.0             # metres square
 CARDS = V["cards"]      # crossed pairs per LOD
 BLADE_W = V["blade_w"]
@@ -107,20 +141,47 @@ def make_texture(path):
     jitter = random.Random(SEED * 7717)
     greens = V["greens"]
 
-    for _ in range(26):
-        base_x = jitter.uniform(0.06, 0.94) * w
+    # Bases are placed with a MINIMUM GAP so blades read as separate stalks instead of merging
+    # into one mass at the root, and they occupy a narrow central band so the tuft has a foot
+    # rather than a hedge-like base.
+    band = V.get("base_band", 0.88)
+    gap = V.get("min_gap", 0.0) * w
+    bases = []
+    for _ in range(V.get("blades", 26)):
+        for _try in range(40):
+            cand = (0.5 + jitter.uniform(-0.5, 0.5) * band) * w
+            if all(abs(cand - b) >= gap for b in bases):
+                bases.append(cand)
+                break
+        else:
+            bases.append((0.5 + jitter.uniform(-0.5, 0.5) * band) * w)
+
+    for base_x in bases:
         base_y = h - 1
         height = jitter.uniform(0.42, 0.92) * h * (1.0 if VARIANT == "short" else 1.06)
-        width = jitter.uniform(0.014, 0.030) * w
-        bend = jitter.uniform(-V["bend"], V["bend"]) * w
+        width = jitter.uniform(*V.get("width", (0.014, 0.030))) * w
+        # SPLAY OUTWARD. A randomly-signed bend leans blades inward as often as out, and the
+        # inward ones cross over the middle and fuse the tuft into a rosette. Signing the bend by
+        # which side of centre the blade stands on is what makes it open like a real clump.
+        if V.get("splay"):
+            side = 1.0 if base_x >= w * 0.5 else -1.0
+            off = abs(base_x - w * 0.5) / (w * 0.5)             # 0 centre, 1 edge
+            bend = side * jitter.uniform(0.35, 1.0) * V["bend"] * w * (0.35 + 0.65 * off)
+        else:
+            bend = jitter.uniform(-V["bend"], V["bend"]) * w
         r, g, b = greens[jitter.randrange(len(greens))]
-        steps = int(height)
-        for s in range(steps):
-            t = s / max(steps - 1, 1)
-            y = int(base_y - t * height)
+        # ITERATE ROWS, not a parameter. Stepping t from 0..1 in int(height) increments moves
+        # height/(steps-1) rows each time -- fractionally MORE than one -- so int() rounding drops
+        # whole scanlines at irregular intervals. That is what put transparent horizontal cuts
+        # across every blade. Walking y directly guarantees each row is written exactly once.
+        y_top = max(0, int(base_y - height))
+        for y in range(y_top, int(base_y) + 1):
             if not (0 <= y < h):
                 continue
-            cx = base_x + bend * (t ** 1.7)
+            t = (base_y - y) / max(height, 1e-6)         # 0 at the base, 1 at the tip
+            # A high exponent keeps the stalk UPRIGHT and puts the curve near the tip, which is
+            # how grass actually stands; a low one bows the whole blade over from the root.
+            cx = base_x + bend * (t ** V.get("bend_pow", 1.7))
             half = max(0.5, width * (1.0 - t ** 0.85))     # taper to a tip
             shade = 0.72 + 0.28 * t                        # lighter toward the tip
             for x in range(int(cx - half), int(cx + half) + 1):
@@ -133,6 +194,40 @@ def make_texture(path):
                 px[i + 3] = 255
     write_png(path, px, w, h)
     return w, h
+
+
+def force_alpha_mask(path, cutoff=CUTOFF):
+    """Rewrite the exported glTF material to MASK. Blender cannot express this on export.
+
+    Probed every candidate on this Blender -- blend_method CLIP/HASHED/BLEND and
+    surface_render_method DITHERED/BLENDED -- and the exporter writes alphaMode BLEND for all five
+    whenever alpha is connected. So it is patched in the file afterwards.
+
+    Not cosmetic. BLEND forces back-to-front sorting per patch and disables depth writes, which is
+    precisely the overdraw that makes thousands of alpha cards expensive. MASK sorts nothing, keeps
+    the depth buffer, and stays early-Z friendly -- the whole reason cutout is the right choice for
+    grass rather than transparency.
+    """
+    raw = open(path, "rb").read()
+    off, chunks = 12, []
+    while off < len(raw):
+        length, kind = struct.unpack_from("<II", raw, off)
+        chunks.append([kind, raw[off + 8: off + 8 + length]])
+        off += 8 + length
+    doc = json.loads(chunks[0][1])
+    for mat in doc.get("materials", []):
+        if mat.get("alphaMode") != "OPAQUE":
+            mat["alphaMode"] = "MASK"
+            mat["alphaCutoff"] = cutoff
+    chunks[0][1] = json.dumps(doc, separators=(",", ":")).encode()
+
+    body = b""
+    for kind, data in chunks:
+        pad = (4 - len(data) % 4) % 4
+        data += (b" " if kind == 0x4E4F534A else b"\x00") * pad
+        body += struct.pack("<II", len(data), kind) + data
+    with open(path, "wb") as fh:
+        fh.write(b"glTF" + struct.pack("<II", 2, 12 + len(body)) + body)
 
 
 def card(bm, uv_layer, centre, width, height, angle):
@@ -170,6 +265,11 @@ def main():
     tex = nt.nodes.new("ShaderNodeTexImage")
     tex.image = image
     tex.interpolation = "Linear"
+    # CLAMP, not repeat. glTF defaults an unspecified sampler to REPEAT, and this texture has
+    # transparent rows at the top but fully opaque blade BASES on the bottom row -- so bilinear
+    # filtering at the top edge wrapped around and blended in that opaque row, drawing a thin green
+    # line across the top of every card. Blender's "EXTEND" exports as CLAMP_TO_EDGE.
+    tex.extension = "EXTEND"
     nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
     nt.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
     bsdf.inputs["Metallic"].default_value = 0.0
@@ -228,7 +328,8 @@ def main():
         export_materials="EXPORT", export_yup=True, export_apply=True, export_attributes=True,
         use_active_scene=True,
     )
-    log(f"wrote {path} ({os.path.getsize(path) / 1024:.0f} KB)")
+    force_alpha_mask(path)
+    log(f"wrote {path} ({os.path.getsize(path) / 1024:.0f} KB, alphaMode=MASK cutoff={CUTOFF})")
 
     density = PATCH * PATCH
     for radius in (60, 80):

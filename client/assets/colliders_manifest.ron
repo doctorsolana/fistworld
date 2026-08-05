@@ -197,6 +197,20 @@
     // Two storeys: eaves at 4.40 m of an 8.18 m total (-0.16..8.02), so 0.558 cuts at the eaves and
     // the hull excludes the roof and the bell cupola entirely. Takes in the entrance steps and the
     // notice board, which is intended. Anchor_Door sits beyond the bottom step, outside the hull.
+    // Walls top out at 2.20 m of a 3.86 m total (-0.16..3.70), so 0.611 cuts at the eaves. The hull
+    // takes in the shore yard (net rack, fish line, crates, oars) as well as the hut.
+    //
+    // NOTE the PIER is deliberately absent from this file, exactly like the wheat field. It is
+    // PropKind::Fishing_Pier, its own glb, and units must be able to WALK OUT ALONG IT. It is also
+    // why the pier is not part of FishermansHut.glb: one convex hull over a hut and a 7 m jetty
+    // encloses every metre of open water between them.
+    (
+      kind: "building_fishermans_hut",
+      gltf_path: "game_assets/buildings/village/FishermansHut.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.611 ),
+      collidable: true,
+    ),
     (
       kind: "building_town_hall",
       gltf_path: "game_assets/buildings/village/TownHall.glb#Scene0",

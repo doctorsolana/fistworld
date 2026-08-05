@@ -36,10 +36,7 @@ pub fn local_to_world_xz(local: Vec2, rotation_y: f32) -> Vec2 {
 #[inline]
 pub fn world_to_local_xz(rel: Vec2, rotation_y: f32) -> Vec2 {
     let (sin_r, cos_r) = rotation_y.sin_cos();
-    Vec2::new(
-        rel.x * cos_r - rel.y * sin_r,
-        rel.x * sin_r + rel.y * cos_r,
-    )
+    Vec2::new(rel.x * cos_r - rel.y * sin_r, rel.x * sin_r + rel.y * cos_r)
 }
 
 #[cfg(test)]

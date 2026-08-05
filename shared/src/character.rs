@@ -88,9 +88,11 @@ impl CharacterManifest {
     /// Load the shipped manifest, searching the same asset roots as maps.
     pub fn load() -> Result<Self, String> {
         let (path, text) = read_manifest_text()?;
-        let manifest: Self = ron::from_str(&text)
-            .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
-        manifest.validate().map_err(|e| format!("{}: {e}", path.display()))?;
+        let manifest: Self =
+            ron::from_str(&text).map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+        manifest
+            .validate()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(manifest)
     }
 
@@ -215,7 +217,9 @@ mod tests {
             );
         }
         assert_eq!(
-            manifest.skin_tone(default_outfit.skin).map(|t| t.name.as_str()),
+            manifest
+                .skin_tone(default_outfit.skin)
+                .map(|t| t.name.as_str()),
             Some(manifest.skin.default.as_str())
         );
     }

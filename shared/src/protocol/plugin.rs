@@ -2,9 +2,16 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::components::{
-    ActiveMapState, CharacterAffiliation, CharacterKind, CharacterName, CommandedBy,
-    ConstructionSite, Residence, Settlement, SettlementBuilding, CloudSeed, Health, Hero, HeroOutfit, Player,
-    PlayerPosition, PlayerProgression, PlayerRotation, TimeWarp, WorldTime,
+    ActiveMapState, BuildingDoorDemand, CharacterActivity, CharacterAffiliation,
+    CharacterAttributes, CharacterKind, CharacterName, CloudSeed, CommandedBy, ConstructionSite,
+    FarmField, FishingPier, Health, Hero, HeroOutfit, Household, MootAdministration, Nutrition,
+    Occupation, Player, PlayerPosition, PlayerProgression, PlayerRotation, Residence, Settlement,
+    SettlementBuilding, SettlementDevelopment, SettlementPolicies, TimeWarp, VillageRoad,
+    WorkStatus, WorldTime,
+};
+use crate::economy::{
+    BusinessAccount, BusinessSalePolicy, BusinessWagePolicy, CarriedLoad, GoodsInventory,
+    HouseholdEconomy, MootMarket, SettlementEconomy, Wallet, WorkforceRequirements,
 };
 use crate::terrain::TerrainDeltaChunk;
 
@@ -30,11 +37,34 @@ impl Plugin for ProtocolPlugin {
         // === CHARACTERS (heroes and villagers alike) ===
         app.component::<CharacterName>().replicate();
         app.component::<CharacterKind>().replicate();
+        app.component::<CharacterAttributes>().replicate();
+        app.component::<CharacterActivity>().replicate();
+        app.component::<Occupation>().replicate();
+        app.component::<WorkStatus>().replicate();
+        app.component::<Nutrition>().replicate();
+        app.component::<CarriedLoad>().replicate();
+        app.component::<GoodsInventory>().replicate();
+        app.component::<Wallet>().replicate();
+        app.component::<MootMarket>().replicate();
+        app.component::<SettlementEconomy>().replicate();
         app.component::<CharacterAffiliation>().replicate();
         app.component::<CommandedBy>().replicate();
         app.component::<Settlement>().replicate();
+        app.component::<SettlementDevelopment>().replicate();
+        app.component::<MootAdministration>().replicate();
+        app.component::<SettlementPolicies>().replicate();
         app.component::<SettlementBuilding>().replicate();
         app.component::<ConstructionSite>().replicate();
+        app.component::<FarmField>().replicate();
+        app.component::<FishingPier>().replicate();
+        app.component::<Household>().replicate();
+        app.component::<HouseholdEconomy>().replicate();
+        app.component::<BusinessAccount>().replicate();
+        app.component::<BusinessSalePolicy>().replicate();
+        app.component::<BusinessWagePolicy>().replicate();
+        app.component::<WorkforceRequirements>().replicate();
+        app.component::<BuildingDoorDemand>().replicate();
+        app.component::<VillageRoad>().replicate();
         app.component::<Residence>().replicate();
 
         // === HEALTH ===
@@ -49,7 +79,6 @@ impl Plugin for ProtocolPlugin {
         // === TERRAIN DELTA CHUNKS ===
         app.component::<TerrainDeltaChunk>().replicate();
 
-
         // === MESSAGES ===
         // Client -> Server
         app.register_message::<PlayerInput>()
@@ -59,6 +88,11 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<SubmitPlayerName>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<RequestCharacterRoster>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<RequestSettlementHistory>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<RequestWorldHistory>()
             .add_direction(NetworkDirection::ClientToServer);
         // `.add_map_entities()` must live HERE, in the shared plugin: it swaps
         // both the serialize and deserialize functions for the type, so if only
@@ -74,6 +108,11 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<NameSubmissionResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<CharacterRoster>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<SettlementHistoryResponse>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<WorldHistoryResponse>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<DevStatus>()
             .add_direction(NetworkDirection::ServerToClient);

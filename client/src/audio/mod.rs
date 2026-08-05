@@ -8,9 +8,7 @@ pub mod state;
 
 pub use assets::{ensure_audio_assets_loaded, setup_audio};
 pub use limits::apply_audio_limits;
-pub use remote_players::{
-    ensure_remote_footstep_emitters, update_remote_footstep_emitters,
-};
+pub use remote_players::{ensure_remote_footstep_emitters, update_remote_footstep_emitters};
 pub use state::*;
 
 use bevy::audio::{SpatialAudioSink, Volume};

@@ -10,7 +10,7 @@ use bevy::diagnostic::{
 use bevy::prelude::*;
 use std::collections::VecDeque;
 
-use shared::components::{Player, PlayerPosition};
+use shared::components::{Player, PlayerPosition, Settlement, SettlementBuildingKind};
 use shared::debug::DebugGizmoMode;
 use shared::terrain::ChunkCoord;
 
@@ -260,7 +260,7 @@ pub fn spawn_debug_overlay(mut commands: Commands) {
 
             // Key hints
             parent.spawn((
-                Text::new("[F3] Perf Overlay  |  [F4] Gizmos"),
+                Text::new("[F3] Perf + Village Info  |  [F4] Gizmos + Planning Rings"),
                 TextFont {
                     font_size: FontSize::Px(12.0),
                     ..default()
@@ -303,6 +303,7 @@ pub fn update_debug_overlay(
         Query<(), With<crate::render::systems::CloudLayer>>,
         Query<(), With<crate::render::systems::CloudLayerPlane>>,
         Query<&crate::camera_rts::CommanderCamera>,
+        Query<(&Settlement, &PlayerPosition)>,
     )>,
 ) {
     // Show/hide overlay based on debug mode
@@ -409,9 +410,10 @@ pub fn update_debug_overlay(
         // ever disagree, the numbers are the truth and the view is the bug.
         if let (Some(focus), Some(terrain)) = (focus, world.1.as_ref()) {
             let map = terrain.generator.loaded_map();
-            if let (Some(field), Some(generated)) =
-                (map.biome_field.as_deref(), map.definition.generated.as_ref())
-            {
+            if let (Some(field), Some(generated)) = (
+                map.biome_field.as_deref(),
+                map.definition.generated.as_ref(),
+            ) {
                 let height = terrain.get_height(focus.x, focus.z);
                 // Gradient magnitude (rise per metre): the convention
                 // `BiomeField` was written against and the terrain mesh uses.
@@ -419,8 +421,7 @@ pub fn update_debug_overlay(
                 // here, and using one would quietly report the wrong biome on
                 // any hillside.
                 let normal = terrain.get_normal(focus.x, focus.z);
-                let slope =
-                    (normal.x * normal.x + normal.z * normal.z).sqrt() / normal.y.max(0.01);
+                let slope = (normal.x * normal.x + normal.z * normal.z).sqrt() / normal.y.max(0.01);
                 let biome = field.biome(focus.x, focus.z, height, slope);
                 let profile = field.resources(focus.x, focus.z, height, slope);
                 let climate = shared::worldgen::climate_at(
@@ -444,6 +445,43 @@ pub fn update_debug_overlay(
                     profile.wood,
                     profile.stone,
                     profile.iron,
+                ));
+            }
+        }
+        if let Some(focus) = focus {
+            let nearest = counts_b
+                .p3()
+                .iter()
+                .map(|(settlement, position)| {
+                    let distance =
+                        Vec2::new(position.0.x - focus.x, position.0.z - focus.z).length();
+                    (
+                        distance,
+                        settlement.name.clone(),
+                        settlement.tier,
+                        settlement.residents,
+                    )
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((distance, name, tier, residents)) =
+                nearest.filter(|(distance, ..)| *distance <= 500.0)
+            {
+                let house = SettlementBuildingKind::House.preferred_ring();
+                let work = SettlementBuildingKind::Farmstead.preferred_ring();
+                let fishing = SettlementBuildingKind::FishermansHut.preferred_ring();
+                lines.push_str(&format!(
+                    "Village: {} | {:?} | pop {} | {:.0}m from focus\n\
+                     Planning: houses {:.0}-{:.0}m | work {:.0}-{:.0}m | fishing {:.0}-{:.0}m [F4]\n",
+                    name,
+                    tier,
+                    residents,
+                    distance,
+                    house.0,
+                    house.1,
+                    work.0,
+                    work.1,
+                    fishing.0,
+                    fishing.1,
                 ));
             }
         }

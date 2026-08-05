@@ -55,7 +55,9 @@ CLASSES = {
     # Grass is the one family that MAY carry a texture and MAY be alpha-masked: a blade is 3 mm
     # wide and its shape can only come from the alpha channel. Everything else stays opaque.
     "grass":   {"lod0": (12, 80),    "lod1": (6, 40),    "ratio": (0.20, 0.60), "bbox": 0.50,
-                "allow_texture": True, "allow_alpha": True, "texture_size": (256, 256)},
+                "allow_texture": True, "allow_alpha": True, "texture_size": (128, 128)},
+    # 128, not 256: the chosen blade design is coarse enough that 256 bought nothing but a 4x
+    # VRAM bill, and a smaller map is also less to alias when the patch is a few pixels wide.
     "any":     {"lod0": (1, 100000), "lod1": (1, 100000), "ratio": (0.05, 1.01), "bbox": 0.45},
 }
 LOD1_RATIO = (0.10, 0.30)      # default; per-class "ratio" overrides

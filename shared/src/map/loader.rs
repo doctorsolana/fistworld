@@ -249,7 +249,12 @@ fn build_loaded_map(
             definition.terrain.water_level,
         )?;
         // Hand-authored maps have no recipe, so no rivers to lay water in.
-        (heightmap, heightmap_bytes, None, std::sync::Arc::new(Vec::new()))
+        (
+            heightmap,
+            heightmap_bytes,
+            None,
+            std::sync::Arc::new(Vec::new()),
+        )
     };
 
     if let Some(minimap_rel) = definition.terrain.minimap.as_deref() {

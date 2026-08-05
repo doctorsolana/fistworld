@@ -3,9 +3,25 @@
 Everything learned turning a Tripo-generated blob into a rigged, animated, clothable base
 character. Written for the next time you do this, and for when you start wiring it into the game.
 
-**Current asset:** `tripo_boy.blend` — `Character_Base` + `Rig` + `Wardrobe` collection.
+**Current asset:** `basemodel_v2.blend` — `Character_Base` (14 loose parts, 426 verts, rigged) +
+`Rig` (16 bones) + 9 clips in two layers (body + face). Built reproducibly by `build_basemodel_v2.py` then
+`rig_basemodel_v2.py`. No wardrobe yet. See section 13.
+
+**v1 (`tripo_boy.blend`) is deleted.** Everything v2 still reuses was distilled into
+`v1_donor.blend` (121 KB): the `arm.L/R` + `hand.L/R` geometry (190 verts) and the `WalkCycle`
+action. Its hair and garments were built against v1's body and did not fit v2 anyway — v1's head is
+x ±0.2041 against v2's ±0.1904, and v2's torso is 20% shorter. Recover it from git history
+(commit `8174161`) if ever needed.
+
+The donor deliberately carries **no materials**: appending v1's full `Character_Base` dragged its
+`Skin`/`Eye` materials in as orphans, so `bpy.data.materials.new("Skin")` collided and yielded
+`Skin.001` — which would ship as the glTF material name. Both build scripts now assert their output
+names are unsuffixed. `basemodel_v2.blend` has no external library links at all.
+
 **Ships as:** `client/assets/characters/voxel_boy.glb`, built by `export_character_glb.py`
 (section 12). The `.blend` is the studio source; the `.glb` is the only thing the game reads.
+Note `export_character_glb.py` is still written against v1's scene (its hair list, `Wardrobe`
+collection and studio objects) and needs repointing at v2.
 
 ---
 
@@ -367,9 +383,9 @@ poses and actually look at them.
 ## 12. Export to Bevy
 
 ```bash
-blender asset_creation/tripo_boy.blend --background --python asset_creation/export_character_glb.py
-python3 asset_creation/inspect_glb.py client/assets/characters/voxel_boy.glb   # numeric contract
-blender --background --factory-startup --python asset_creation/render_glb_check.py  # look at it
+blender asset_creation/tripo_boy.blend --background --python asset_creation/character/export_character_glb.py
+python3 asset_creation/character/inspect_glb.py client/assets/characters/voxel_boy.glb   # numeric contract
+blender --background --factory-startup --python asset_creation/character/render_glb_check.py  # look at it
 ```
 
 **The `.blend` stays a studio file** — 1 unit tall, facing −Y, lights and camera tuned for that
@@ -439,21 +455,657 @@ convincing, fully-lit picture of the back of its head.
 
 ---
 
-## 13. Known gaps before this ships in-game
+## 13. The v2 base rebuild — cleaning a Tripo mesh properly
 
-1. **No UVs on body or garments.** The six hairstyles are unwrapped and baked (section 12); the body
-   and clothes are still flat-colour only, so no logos, prints, decals or baked AO on apparel. This
-   is the biggest remaining blocker for apparel variety.
-2. **No edge loops at joints**, so group boundaries are positional. Fine for rigid binding;
-   would need loops for any smooth deformation.
-3. **Eyes are 192 of ~750 verts** (3-segment bevel). Drop to 1 segment to reclaim ~25% of the
-   mesh with no visible change at this scale.
-4. **Only one animation.** The glb ships `walk` alone; Bevy 0.19's `AnimationGraph` plays clips by
-   name, so `idle`, `run` and `jump` would slot in beside it reusing the same rig and the derived-
-   bounce grounding technique. An idle is the most conspicuous absence — an NPC standing still
-   currently has nothing to play.
-5. **`Shorts_Athletic` has invalid geometry** from its Solidify pass. The exporter only warns, and
-   `export_character_glb.py` repairs it with `mesh.validate()` on the way out, so the shipped glb is
-   clean — but the `.blend` is still wrong and should be fixed at source.
-6. **Not yet loaded in the game.** The glb meets the contract and round-trips correctly, but nothing
-   in `client/` references `characters/voxel_boy.glb` yet.
+v1's Tripo generation had shorts modelled into the body, which is what drove the positional-threshold
+bug in section 2. v2 was regenerated **plain** and rebuilt by `build_basemodel_v2.py` into
+`basemodel_v2.blend`: 14 loose parts, 426 verts, provably symmetric, jointed and rigged.
+
+### Which download to take
+
+Tripo's OBJ and GLB were **byte-for-byte equivalent geometry** — 240 verts, 460 tris, the same 5
+loose parts, no UVs, no vertex colours, no materials, and a 51-byte MTL exactly as in section 1. The
+only difference: the OBJ carries a 90° X rotation on the object, the GLB imports at identity. **Take
+the GLB.** OBJ's usual advantages (quads, being the "simple" format) never materialised — Tripo
+ships triangles either way. `triage_tripo.py` answers this in one command for any future download.
+
+### Symmetry: check topology, not just positions
+
+v2 arrived **already perfectly symmetric** — every one of 240 verts had an exact mirror partner, max
+deviation 0.000000. There was no "better side" to pick. But that is only true of the *download*:
+
+> **A vertex-position symmetry check is not a symmetry check.** After the coplanar cleanup, every
+> vertex still had an exact mirror partner (7e-8) while **39 of 320 faces and 46 of 604 edges had
+> none**. `dissolve_limit` walks geometry in index order and merged coplanar faces into different
+> n-gons per side — an 8-gon on one arm, an 11-gon on the other. Verify verts, edges **and** faces.
+
+Two failed attempts before the fix, both worth not repeating:
+
+- **Restricting the dissolve to mirror-paired edges made it worse.** `dissolve_edges(use_verts=True)`
+  then removed vertices asymmetrically (159 vs 158 per side).
+- **The diagnostic itself was wrong.** Pairing verts by nearest-neighbour is unreliable, because the
+  arm's bottom ring and the hand's top ring are *coincident* (split deliberately at the wrist), so
+  the lookup happily pairs an arm vert with the mirrored **hand** vert and invents failures. The tell
+  was `partner[partner[i]] != i` for 22 verts. Compare **multisets of rounded coordinates** instead —
+  it sidesteps vertex identity entirely.
+
+The fix is to make symmetry **structural**: section 3's cut-in-half-and-mirror, so the −X side is a
+literal copy of +X and no operator gets a vote. Two notes on doing it:
+
+- **Do not `holes_fill` the cut before mirroring.** Capping it leaves an interior wall that the
+  mirror then duplicates, burying coincident faces inside the body. The two halves close the seam
+  themselves once welded.
+- **Weld only the seam** (`abs(x) < 1e-5`). A global `remove_doubles` fuses the wrist rings — it took
+  9 loose parts down to 7 even at a distance of 0.002.
+
+Useful corollary discovered along the way: `dissolve_limit` is order-dependent but not order-*biased*
+— fed symmetric input it returns symmetric output. So a second pass **after** mirroring safely
+reclaims the seam verts the bisect introduced (322 → 308).
+
+### What to strip, and what to keep
+
+Tripo puts a **45° chamfer on every edge**. Keep it: it is what makes edges catch light instead of
+reading as raw blocks. It shows up as ~168 edges at exactly 45° in a dihedral-angle histogram.
+
+What to remove is the **coplanar** geometry — 262 edges at ~0°, glTF triangulation diagonals and cuts
+sitting inside flat faces, contributing no shape whatsoever. A 1° dissolve limit is nowhere near 45°,
+so the chamfer is safe *by construction*, not by luck. Net: 366 → 302 verts with an identical
+bounding box.
+
+**Don't reach for merge-by-distance as a blunt un-bevel.** It fuses loose parts long before it
+removes chamfers, and its merged corner lands inside the true sharp corner anyway.
+
+### Cheap wins
+
+- **v1's eyes were 96 verts each** (3-segment beveled boxes) — 192 of 750. On a leaner body that
+  became 35% of the whole mesh to draw two rectangles. They *are* rectangles: 8 verts each, visually
+  crisper, and `shade_smooth_by_angle` keeps the corners sharp.
+- **Material slots must exist before you assign `material_index`.** Setting it in bmesh on a mesh with
+  zero slots is silently clamped to 0 — the eyes rendered skin-coloured with no error anywhere.
+
+### Grafting parts between models
+
+v2's own arms were thin, tapered and had **no hands at all**, so v1's arms + hands were grafted in.
+Both models were the same height (0.99805 vs 0.998) so no rescaling was needed — only a translation
+derived from measured bounds, not eyeballed: v1's arm inner edge sits at x 0.1475 but v2's shoulder
+socket is at 0.1396, so dropping them in raw leaves a visible 0.008 gap at the shoulder.
+
+Position parts by **proportion, not by copied coordinates**. The eyes were placed at the same fraction
+of the head (0.426 across the half-width, 0.431 up) and the same 0.0050 proud of the face plane, so
+they read identically on a head of different size.
+
+### Joint splitting for a rigid rig (section 4 applied)
+
+The Tripo body is **one welded shell** — head + torso + both legs + both feet. Only arms, hands, ears
+and eyes were separate. Three bisect + `split_edges` + `holes_fill` cuts produce the 14 parts a rigid
+rig needs. Everything here was found by measuring, and none of it is guessable:
+
+| Cut | Height | Note |
+|---|---|---|
+| neck | 0.6200 | |
+| hip | 0.2600 | |
+| ankle | 0.0800 | |
+
+- **The hip must be cut at or below 0.2656.** The crotch junction sits between 0.2656 and 0.2734, so
+  a cut at 0.2734 leaves both legs joined as a single piece still centred on x=0. It looks like a hip
+  cut and isn't one — always confirm by counting loose parts, never by eye.
+- **Restrict cuts to the body shell.** Bisecting the whole mesh slices the hands in half too: they
+  span z 0.2109–0.2997 and straddle the hip plane.
+- **Put cut planes BETWEEN existing vertex rings.** Landing the neck cut on 0.6289 — the head's own
+  bottom chamfer ring — made bisect degenerate and tore the head into 7 fragments.
+- **Split only the edges `bisect_plane` reports** in `geom_cut`. Selecting edges by z instead splits
+  any pre-existing ring at that height.
+
+### The hip needs overlap, or it gapes
+
+A flat cut leaves the leg's top face and the torso's bottom coplanar, so the leg's corner emerges
+through the torso the moment it swings — **1.7% of body height at 15°, ~2.9 cm at 1.7 m**. v1 avoided
+this implicitly: its torso reached 0.035 below the leg tops.
+
+- **Extrude a stub; never move the existing ring.** The leg column has only two rings (ankle and the
+  hip cut), so raising the top one re-slopes every side wall and tapers the whole *visible* leg —
+  measured 0.1254 wide at the ankle against 0.1174 at the top, a 6.4% cone.
+- **Inset the stub ~6%.** Raised flush, its outer wall is exactly coplanar with the torso's (both at
+  x 0.1456) and z-fights — the same reasoning as the garment offsets in section 7.
+
+Neck and ankle are left as butt joints, as in v1. Fine for a walk's small rotations; a big head turn
+or foot roll wants the same stub treatment.
+
+### Retargeting a walk onto different proportions
+
+v1's rig and `WalkCycle` transfer to v2, and `rig_basemodel_v2.py` does it. The reason it works:
+**every animated channel is a rotation about the bone's local X, plus a root translation.** Pose
+channels live in bone-local axes, so building v2's bones with the **same directions and rolls** — only
+repositioned — makes v1's rotations directly meaningful. Set roll with `align_roll(target_z)` rather
+than a raw number; roll is measured from a reference plane that shifts with bone direction. Assert
+the resulting `matrix_local` X axes against v1's, or the walk silently plays wrong.
+
+**What does not transfer is the bounce.** v2's legs are **48% longer** than v1's (0.2150 vs 0.1448)
+and its torso 20% shorter, so v1's root curve left the feet sinking 0.0057. Re-derive per section 6:
+flatten the vertical channel, measure the lowest mesh point per frame, set root z to `-lowest`, then
+exaggerate 1.6× about the minimum. Result: lowest `+0.000000`, foot exactly planted, loop closed.
+
+Because the legs are 48% longer and still knee-less, section 6's ±4° heel-strike/toe-off ceiling is
+*tighter* on v2 than on v1 — the same angle displaces the foot proportionally further.
+
+### Two silent no-ops that cost a render each
+
+- **The glTF importer leaves `rotation_mode = 'QUATERNION'`.** Assigning `rotation_euler` on such an
+  object does nothing at all — a turnaround came out as eight identical front views.
+- **Freshly created pose bones default to quaternion too.** An action driving `rotation_euler` then
+  moves nothing. Set `pb.rotation_mode = 'XYZ'` when linking a euler action.
+
+### Turntables: rotate the subject, not the camera
+
+Orbiting the camera around a cyclorama swings it past the backdrop's edge — the back view renders an
+empty room and the side view catches the cyc's edge. Rotating the subject keeps it against the sweep
+from every angle *and* keeps the key/fill/rim relationship identical across the turnaround instead of
+re-lighting every frame. `render_studio.py` does this, and scales the whole rig off the subject's
+measured height so it works on a 1-unit or a 1.7 m character.
+
+### The animation set: two layers, body and face
+
+`animate_basemodel_v2.py` authors everything as per-frame values from plain functions, so timing is
+reproducible and tweakable by editing one number.
+
+| Layer | Bones | Clips |
+|---|---|---|
+| **BODY** | all 14 except the eyes | `idle`, `walk`, `sit_idle`, `sit_down` |
+| **FACE** | `eye.L`, `eye.R` only | `face_idle`, `face_happy`, `face_angry`, `face_sad`, `face_surprised` |
+
+**No clip touches both sets**, and the build asserts it — `finish()` fails if a clip keys a bone
+outside its layer. That separation is the whole point: it lets one body clip and one face clip play
+simultaneously, so *angry + walking* and *happy + sitting* are free combinations rather than
+authored pairs. In Bevy 0.19 this is an `AnimationGraph` with the two eye bones in their own mask
+group, masked OUT of every body node and IN on every face node (verify the exact mask API against
+the version when wiring it). Evaluation is per-bone on a 16-bone skeleton, so the cost is noise —
+a crowd is bounded by skinning and draw calls, not graph evaluation.
+
+A second payoff: give each NPC a random time offset into the face clip and a hundred villagers stop
+blinking in unison, which a single combined clip could never do.
+
+### Looping: integer harmonics only
+
+**Every periodic term must be an integer multiple of the cycle.** A first pass used `sin(t * 0.5)`
+for a slow head drift; a half-cycle does not return to its starting value, and frame 1 vs frame 73
+ended up **0.0875 rad (5°) apart on head yaw** — a visible snap every 3 seconds. The clips now check
+themselves: `check_loop()` compares every channel of every bone at frame 1 against the last frame and
+asserts the difference is zero. All five looping clips report `0.000000000`.
+
+Note this is *not* what a floor-contact assert catches — the earlier `abs(lows[0] - lows[-1]) < 1e-6`
+check passed happily while the head was 5° out, because the feet were fine.
+
+### A standing idle must NOT use the section 6 derivation
+
+`walk`, `sit_down` and `sit_idle` all derive root z from the mesh's lowest point. A **standing** idle
+must not: both feet stay planted, so the derivation would cancel the breathing rise and flatten it.
+Author the bob directly as a strictly non-negative term — `0.004 * (0.5 - 0.5*cos t)` never dips
+below zero — then assert no penetration.
+
+Related trap: rolling `hips` for a weight shift tilts the legs, and with both feet planted a foot
+corner drops through the floor (measured -0.00123). Carry the shift above the hips plus a lateral
+root slide so the legs stay vertical.
+
+### What two rectangles can express
+
+Verified by rendering, not assumed. `eye.*` local Y points into the head, so `rotation_euler[1]`
+spins the eye box within the face plane; both eyes share local axes, so a symmetric tilt needs
+**opposite signs**.
+
+| Mood | Recipe | Reads as |
+|---|---|---|
+| neutral | full height, no tilt | — |
+| **angry** | narrow to 0.60, inner edge **down** (+13°) | unmistakable |
+| **sad** | narrow to 0.72, inner edge **up** (−9°) | worried/concerned |
+| **happy** | hard squint to 0.38, no tilt, raised | cheerful |
+| **surprised** | taller than neutral (1.35) | — |
+
+Inner-edge-up is **sad, not happy** — a first pass labelled that combination "happy" and it plainly
+read as concern. Happiness needs a squint, not a tilt.
+
+### `sit_idle` and `sit_down`
+
+`sit_down` is the one-shot transition; **`sit_idle` is the looping hold an NPC actually spends time
+in**. The knee-less leg dictates the pose either way: hip to ankle is one rigid part, so sitting is
+legs straight out in front, the vinyl-toy sit, with no alternative short of adding a knee. Seated
+silhouette measures 0.8122 against 0.99805 standing. The 0.035 hip stub holds at a full 90° rotation
+with no visible gap — it was sized for a walk's ~15°, so that was worth checking.
+
+### `idle` and `sit_down`
+
+`animate_basemodel_v2.py` authors both as per-frame values from plain functions rather than
+hand-posed keys, so timing is reproducible and tweakable by editing one number.
+
+**Bone-local axes decide every channel, and none of them are guessable.** Measured off this rig:
+
+| Bone | Fact | Consequence |
+|---|---|---|
+| `root` | local Y = world −Y | `location[1]` positive moves the character **back** |
+| `head` | local Y = world **+Z** | `rotation_euler[1]` is **yaw**, not pitch |
+| `eye.L/R` | both share local X = world −X | one negative `location[0]` slides the **pair** toward +X |
+| `eye.L/R` | local Z = world +Z, pivot at the eye's centre | `scale[2]` squashes vertically — a **blink** |
+
+The blink is the cheapest expressiveness available: the eyes are already separate rigid boxes on
+their own bones, so 1.0 → 0.35 → 0.08 → 0.45 → 1.0 over four frames reads convincingly, and glTF
+carries bone scale fine. Eye darts are a small `location[0]` offset; ±0.011 is about a quarter of the
+eye's width and stays well inside the head's flat front face (which runs to x ±0.180 before the
+chamfer), so the box never slides off the face.
+
+**The idle must NOT use the section 6 grounding derivation.** The feet stay planted the whole time,
+so deriving root z from the lowest point would fight the breathing bob and flatten it. Author the bob
+as strictly non-negative instead — `0.004 * (0.5 - 0.5*cos(t))` never dips below zero — and assert no
+penetration afterwards.
+
+**`sit_down` does use it**, per frame rather than per cycle: derive root z = −lowest at every frame
+and the character settles onto the floor with no penetration at any point of the descent, which is
+exactly the motion a sit wants anyway.
+
+**The knee-less leg dictates the seated pose.** Hip to ankle is one rigid part, so sitting means legs
+straight out in front — the classic vinyl-toy sit. There is no alternative without adding a knee.
+Measured result: seated silhouette 0.8122 tall against 0.99805 standing, legs reaching y −0.2996.
+The 0.035 hip stub holds up at a full 90° rotation with no visible gap at the joint.
+
+### The v2 wardrobe: parametric boxes, not bisected body copies
+
+`build_wardrobe_v2.py` builds garments as **chamfered boxes fitted to measured body bounds**, not as
+copies of the body bisected and Solidified the way v1's were. The body is boxes, so a garment is a
+slightly larger box. This sidesteps every Solidify trap in section 7 at once — no `use_even_offset`
+catastrophe, no chevron from smooth shading warping a flat face, no inherited vertex groups yielding
+`torso.001` — and costs 8 verts per piece.
+
+**The rule that shapes everything: a garment piece may span only ONE body part.** Binding is rigid,
+one bone per vertex, so a single shell bridging the hip would tear the moment a leg swings. Hence:
+
+| Item | Pieces |
+|---|---|
+| shorts | hip on `torso`, one thigh on each `leg` |
+| shirt (short sleeve) | body on `torso`, one sleeve on each `arm` |
+| shirt (long sleeve) | body plus **two** segments per arm, to follow the taper |
+| hair | five slabs, all on `head` |
+
+Where pieces cross a joint they **overlap**, exactly as the body's own hip stub does: the thigh piece
+runs up past the hip plane to 0.30 and is swallowed by the wider hip piece, so rotation cannot open a
+gap. Each layer is slightly larger than the one beneath, so a shirt sits over shorts.
+
+**Fit sleeves to the arm's taper, never to its bounding box.** The arm slants outward — x
+0.1396..0.2157 at the shoulder against 0.1764..0.2900 at the wrist — so a sleeve sized from the
+overall bounding box is far too wide at the top. The first attempt read as a horizontal shoulder pad
+floating off the arm, and the long-sleeve version as one solid slab with no arm definition at all.
+Long sleeves need two overlapping segments.
+
+**Always render the back.** A garment fitted from front-facing measurements can look perfect head-on
+and leave skin showing behind. `preview_wardrobe_v2.py` sheets front and back for every outfit, and
+rotates the rig rather than the camera so lighting is identical across tiles.
+
+Hair reuses section 8's voxel material (position → snap → white noise → CONSTANT ramp) so it matches
+the established look. Nothing may drop below z 0.855: the eyes top out at 0.8446 and a fringe over
+them reads as a blindfold. Slot discipline from section 8 still applies — **one item visible per
+slot**, since overlapping garments make one show through another and read as an untextured patch.
+
+### Specular sheen destroys dark albedo
+
+`Hair_Crop` (albedo 0.018..0.064, i.e. black) rendered **mid-grey**, and auburn `Hair_Long` rendered
+**skin-pink**. The colour ramps were verified correct to four decimals — the fault was shading, not
+data. A broad specular lobe at roughness 0.55 over a near-black surface is almost all of what you
+see, so it washes the albedo out entirely.
+
+Author matte: specular 0 (the socket is `Specular IOR Level` on Blender 4+, `Specular` before that),
+IOR 1.0, roughness ~0.95. This also makes the studio render *honest*, because the game flattens
+materials at load anyway — `client/src/props/foliage.rs::flatten_base` sets reflectance 0,
+roughness 1, metallic 0.
+
+**Corollary for skin tones: spread the dark end far harder than intuition suggests.** A first palette
+bottomed out at linear 0.140 and still rendered as a medium tan. Deep skin needs ~0.062. Under a
+300 W key with the Khronos PBR Neutral transform, mid albedo reads bright.
+
+`SKIN_TONES` ships six: Porcelain, Fair, Tan (the original v1/v2 skin), Olive, Brown, Deep. They are
+plain material datablocks, so a villager is dressed by swapping slot 0 on `Character_Base`.
+
+### Styled hair is layered slabs, not a cap
+
+What separates the reference look from a helmet, in order of importance:
+
+1. **the fringe OVERHANGS forward**, past the face plane at y −0.1475, so it casts a brow shadow
+2. slabs step back and up in layers rather than sharing one flat top
+3. **sideburns descend in FRONT of the ears** (ears y −0.0518..0.0596, top z 0.8125)
+4. a nape slab drops behind the ears, which no front view will ever show you
+
+**Slabs must overlap in z.** Meeting edge-to-edge, each box's chamfer draws a seam line across the
+head and the whole thing reads as a band perched on the crown. Hard limits: nothing below z 0.8446
+across the eyes (a fringe over them reads as a blindfold), and nothing inside x 0.1865..0.2549 at
+z 0.6973..0.8125 or it intersects an ear.
+
+Five styles ship: `Hair_Tousled` (hero, 9 slabs), `Hair_Crop`, `Hair_Bowl`, `Hair_Spiky`,
+`Hair_Long`. Spiky's tips must not touch each other or `build()`'s one-shell-per-box assert fires.
+
+### A standing idle must not swing the arms
+
+`rotation_euler[0]` on the arms **is the channel the walk uses for arm swing**. Any amount of it on
+an idle reads as walking on the spot — which is exactly how the first idle looked. Arms should only
+lean with the torso (`rotation_euler[2]`).
+
+Life comes from breathing plus **deliberate look-arounds that hold and then move**, not a continuous
+sine, which just reads as swaying. A small periodic hold-and-move interpolator over phase does it,
+and closes the loop by construction as long as the first and last points share a value.
+
+### World-position materials swim; bake at BUILD time
+
+The voxel hair material reads `Geometry.Position` — **world** position — so the pattern is nailed to
+world space and the hair slides through it as the head turns. Visible in any animation, and it would
+reach the game too, since glTF cannot carry a procedural node graph at all.
+
+v1 hid this by baking during export. v2 bakes in `build_wardrobe_v2.py` instead, which is better:
+Blender previews and the shipped glb then show the *same* thing, and the exporter stays generic.
+Bake in **REST pose** (a posed rig bakes the pose into the texture) and **unhide everything first**
+(`select_set()` silently no-ops on a hidden object, and the bake fails with "No valid selected
+objects"). 256 px per style is ample — 10–21 KB each.
+
+### Exporting nine actions, not one
+
+`export_character_glb.py` samples **every** action's armature-space matrices before the game-space
+transform and rewrites all of them after, for the reason in section 12: `Armature.transform()`
+recomputes bone axes, so stored channels change meaning. Face clips need it too — their eye bones
+rotate with everything else.
+
+**Reset specular and IOR to glTF defaults at export.** The `.blend` keeps them at 0 / 1.0 so studio
+renders are matte, but non-default values emit `KHR_materials_specular` and `KHR_materials_ior`, and
+the contract is *no KHR extensions*. Nothing is lost: the game mattes materials itself at load.
+
+### Source layout: split the data, not the file
+
+The shipped `.glb` must be one file — every garment and hairstyle is skinned to the same armature,
+and rebuilding a joint list against a skeleton from another asset is the pain the format spec calls
+out. The **only** justified split is non-skinned attachments (a tool or lantern parented to a bone
+socket); those can be their own glbs.
+
+The `.blend` is a build artifact, so per-item `.blend` files buy nothing — they would each need the
+rig appended to bind against and the body present to check fit. Instead the *data* is split:
+`wardrobe_items.py` holds pure numbers with one block per item, and `build_wardrobe_v2.py` is generic
+machinery that walks it. Adding a hairstyle is ~6 lines in one file, and both the builder and the
+preview catalogue pick it up.
+
+`build_wardrobe_v2.py` also emits **`client/assets/characters/voxel_boy.ron`**, in the same RON style
+as `colliders_manifest.ron`, listing slots, per-slot items and defaults, skin tones, and the body and
+face clip names. The game enumerates the wardrobe from that instead of hardcoding node names in Rust,
+and because it is generated it cannot drift from the glb.
+
+---
+
+### Adding wardrobe items: the ordering rule that outranks taste
+
+**`BOTTOMS`, `TOPS` and `HAIR` are APPEND-ONLY lists. Never insert, never reorder.**
+
+An outfit is replicated and persisted as a **`u8` index per slot**
+(`shared/src/components/actors.rs`), and `CharacterSlot::item()` resolves it *positionally*. The list
+order is therefore a wire and save-file contract, not a presentation choice.
+
+The second wave of garments was first written shortest-hem-to-longest, which reads beautifully in the
+source and put the two new bottoms at indices 1 and 3 — silently redressing every existing villager
+holding index 1, whose `Bottom_Shorts_Long` became `Bottom_Breeches`. Nothing errors; the wrong
+clothes just appear. Append, and put the reading order in a comment instead.
+
+### Varying the CUT when the body is boxes
+
+Colour alone stops distinguishing garments after about four. What actually reads, cheapest first:
+
+| Variation | How | Cost |
+|---|---|---|
+| Hem height | `hem_z` on the thigh pieces — the leg spans z 0.0800..0.2950, so hem *is* the cut | free |
+| Sleeveless | omit the sleeve pieces entirely; bare arms change the whole silhouette | −48 verts |
+| Cuff | one box per leg, standing proud on every side and overlapping the thigh in z | 48 verts |
+| Skirted hem | a separate flared piece below the hip, still on `torso` | 24 verts |
+
+Two hems 0.03 apart are **invisible** — that is 5 cm on a 1.7 m character. `Top_Tunic` at hem 0.27
+against the tee's 0.30 was indistinguishable until it got a real skirt.
+
+### A hem may hang below the hip, but only as its own piece
+
+Section 7's rule is that a garment piece spans one body part; the *body* piece of a shirt must stay
+above the hip joint at 0.26 or it swings with the chest while the legs rotate under it.
+
+A tunic skirt is the exception that proves it: it hangs **below** the joint and is still bound to
+`torso`, which is correct — a real tunic hem hangs from the body and does not follow the leg. What it
+must then do is **clear the swinging thigh**. The thigh piece's front face sits at y −0.0481 and
+pivots at z 0.26; 0.045 below the pivot a 25° swing carries it forward to about y −0.067, so the
+skirt front sits at −0.0800 and the sides at ±0.1850 against the thigh's ±0.1597.
+
+Do not eyeball this. Evaluate the posed meshes over every frame of `walk` and measure the minimum
+clearance — ours is +0.0256 front and +0.0222 side at the tightest frame. A rest-pose render tells
+you nothing about a garment that only fails mid-stride.
+
+### Overlapping boxes are fine; *touching* ones are not
+
+`build()` asserts one shell per box. That counts **connected components**, so boxes that merely
+interpenetrate stay separate and pass — which is what lets a cuff sit over a thigh and a hip piece
+swallow it. Only boxes that share geometry merge and trip the assert.
+
+### Two duplicate-source-of-truth bugs, found by reading the output
+
+Both were invisible in the code and obvious in the render:
+
+* **The preview sheet lied.** `preview_wardrobe_v2.py` and `_encode_outfits.py` each carried their own
+  hardcoded copy of the item list *and* the outfit captions. New garments never entered the
+  catalogue, and the outfit tiles rendered the new clothes captioned with the old outfits' names. The
+  preview now derives items from `wardrobe_items.ITEMS` and writes an `index.json` describing what it
+  actually rendered; the encoder reads that.
+* **Every garment was built twice.** `build_wardrobe_v2.py` called `shorts()`/`shirt()` explicitly for
+  the original four items and *then* looped over the same data, each pass deleting the previous
+  object. Harmless, and pure confusion.
+
+### The directory reorg left a script writing to nowhere
+
+`build_wardrobe_v2.py` saved to `asset_creation/basemodel_v2.blend` after the file moved into
+`character/`. It would have written a new `.blend` at a path nothing reads while the exporter kept
+consuming the stale one — a wardrobe that builds cleanly, previews correctly and ships without the
+new items. Scripts that live beside their `.blend` should derive the path from `__file__`, not from
+the repo root.
+
+---
+
+### The work clips: build, chop, carry
+
+Three looping body clips, added after the idle set. `build` and `chop` are 32 frames (1.33 s);
+`carry` is **24, exactly the walk's**, so a villager's stride cadence does not change when it picks
+something up.
+
+**Loop on the slowest frame.** Both swings loop at the TOP of the wind-up. Looping on the strike puts
+the seam on the fastest frame in the cycle, where a one-frame discontinuity is most visible.
+
+**Timing is asymmetric, because a swing is.** The wind-up occupies over half the cycle and the strike
+lands in about 16% of it. Equal timing reads as waving.
+
+**What separates `chop` from `build` is the torso YAW, not the arms.** A hammer blow is vertical and
+driven from the shoulders; an axe stroke is a body rotation, wound up over one shoulder and unwound
+across the trunk. Give them similar arm arcs without the twist and they are the same clip twice.
+
+### Limb angles are measured off STRAIGHT DOWN
+
+The single most expensive mistake in authoring these. For arm and leg bones, which point down at
+rest: **0° is hanging, 90° is straight BACK, 180° is straight up.** The first `build` used 105° for
+"hammer raised" and put the arm horizontally behind the character. Measured at frame 1 as direction
+`(+0.18, +0.94, +0.29)` — the number said "raised", the rig said "pointing backwards". A hammer over
+the shoulder is nearer **160°**.
+
+Two more sign traps on the same bones:
+
+* **A parent's forward lean CANCELS the child's swing.** `arm.R` hangs off `torso`, and one rotation
+  about their shared local X tips the torso's TOP forward while tipping the arm's TIP backward. A 14°
+  forward lean eats 14° of strike. Local −42° lands at about −28° in world; over-rotate to compensate.
+* **`rot[2]`'s direction flips with the limb's z.** On a raised arm a negative value swings INWARD;
+  on a lowered one the same value swings outward. `carry` drove the arm through the head with −11°
+  before this was measured.
+
+### Carrying: proportion beat the plan
+
+The brief was a load on the shoulder. Measurement killed it. This character is chibi-proportioned —
+the head spans x ±0.1904 against a shoulder joint at x 0.2148 — so **the head is nearly as wide as the
+shoulders**. A block resting where a human shoulder actually is renders inside the skull, and the only
+x that cleared it (0.285) left the block floating off the side of the body.
+
+Carrying **in front, in both arms** has nothing to intersect: the load sits forward of the torso face
+(y −0.0381) and forward of the head's front plane (y −0.1475). It also reads better, because both arms
+come around it.
+
+**Neither arm swings in `carry`, and that absence is most of what sells the weight.** A walk with a
+normal arm swing and a box stuck to the chest reads as a walk.
+
+Do not judge a carry pose on a bare mannequin — it looks like waving. Put an actual block in and
+render it. Three shoulder positions and two front ones were rendered before this was settled.
+
+### Attachment points on a SKINNED character are bones, not empties
+
+Props on a building attach to empties (`PROP_PIPELINE.md` §4), because a building is a static node
+tree. A character has no node per part — its parts are vertices weighted to joints — so the only thing
+that moves with a chest is a joint.
+
+`add_attach_bones.py` adds `attach.carry` as a child of `torso`. **No mesh carries a vertex group for
+it**, so it weights zero vertices and the skin is bit-for-bit unchanged (asserted). glTF still exports
+it as a joint, and Bevy spawns a named entity the game parents a resource block to.
+
+Two practical notes:
+
+* **No clip may key an attachment bone.** They are markers: unkeyed, they sit at rest and inherit the
+  parent's motion, which is exactly what a carried load should do. `animate_basemodel_v2.py` therefore
+  excludes them from `BODY_BONES` and from finish()'s "every body bone is keyed" assert.
+* **A bone-parented object sits at the bone TAIL.** To seat a block's BASE on the bone head, offset by
+  `block_height/2 - TAIL_LEN` along the bone. Getting this backwards hung the first test block at
+  chest height and made a correct attachment point look wrong.
+
+It is a separate script rather than an entry in `rig_basemodel_v2.py`'s `BONES` because re-running the
+rig rebuilds the armature object, orphaning every garment parented to it and forcing a full wardrobe
+rebuild. Adding bones in place disturbs nothing. Run it after rigging.
+
+### The body/face split is real in the .blend and IMPOSSIBLE in the glb
+
+Authoring keeps it: body clips key 14 bones, face clips key 2, asserted by `finish()`.
+
+The glb cannot. **Blender's glTF exporter emits channels for every joint of an armature in every
+animation, whatever the action contains.** Verified twice — filtering the export rewrite down to only
+the bones each action owns, and separately turning `export_bake_animation` off — both still produced
+17 animated nodes across all 12 clips.
+
+This is fine, and it is worth understanding why rather than trying to defeat it: Bevy's
+`AnimationGraph` mask blocks targets **at the graph node**, not by whether a clip has curves for them.
+Mask the two eye bones out of every body node and into every face node and the layers still compose.
+The redundant channels cost file size, not correctness.
+
+A useful side effect: since every clip drives every joint in the shipped glb, the "an unkeyed bone
+holds the previous clip's pose" failure cannot occur at runtime. `fill_rest()` still matters for
+previewing in Blender and for making the authored intent explicit.
+
+---
+
+## 13a. Held items: the joint gives you half, the clip owns the other half
+
+Two attach joints, both on the rig, both exported as ordinary glTF nodes:
+
+| joint | parent | holds |
+|---|---|---|
+| `attach.carry` | `torso` | the five carried bundles, base seated on the joint |
+| `attach.tool.R` | `hand.R` | axe, hammer, scythe |
+
+Items are authored **grip/base at the origin, working axis on +Z**, which the joint's own axis then
+points the right way. Front is on Blender **−Y** — see `RESOURCE_PIPELINE.md` §1 for why the obvious
++Y argument is wrong.
+
+### What the joint does NOT do
+
+It fixes where the haft points. It says **nothing** about which way a blade is turned about that axis,
+and nothing else does either. Measured with no wrist rotation in the clips:
+
+* `chop` — the axe bit sat at `(0,0,+1)`, straight **up**, every frame; `dot(bit, travel)` negative
+  through the strike. Hitting the tree with the flat of the axe.
+* `build` — the hammer face pointed forward-**up** at impact, `dot = −0.51`. Claw-first.
+
+Both look exactly like a backwards model. Neither was: `verify_facing.py` passes on all eight items.
+**A tool's orientation is fixed relative to the hand, so raising the arm rolls the blade with it, and
+only the wrist can put it back.** `C_TWIST` / `B_TWIST` / `H_TWIST` exist for this and are not
+decoration — delete them and the tools go back to landing sideways.
+
+### Previewing them: do not use Blender bone parenting
+
+`preview_animations.py` builds the joint transform arithmetically instead, because bone parenting
+differs from glTF in three ways at once and all three lied:
+
+1. **Origin** — a bone-parented object sits at the bone's **tail**; a glTF joint is a point, so the
+   child lands on the **head**. That 0.08 gap floated the wheat sheaf above the character's head.
+2. **Scale** — the exporter rescales the character by `TARGET_HEIGHT_M / body_height` ≈ **1.704**.
+   Items export at 1.0, so an item at its true game size is 1.7× too big in rig space. This is what
+   made the scythe look absurd.
+3. **Basis** — glTF aligns the child's +Y with the joint's +Y and its +Z with the joint's **roll** axis.
+
+The correct transform is `translate(bone_head) @ (bone_basis @ YUP) @ scale(1/1.704)`. It is a true
+inverse of the game transform, so the preview shows what ships — including facing bugs, which a
+hand-fudged preview will happily hide.
+
+### Reach is a constraint
+
+A 1.32 m scythe on a hand 0.6 m off the ground buries its blade if the arm hangs at all. Arm pitch and
+wrist twist were **scanned** to find the pair that lands the tip on the ground with the blade flat:
+arm −83°, twist −75°, snath 27° below horizontal — which is roughly a real snath's angle. The `build`
+strike was raised from −32° to −72° for the same class of reason: at −32° the haft sat 62° below
+horizontal, and a hammer's face is perpendicular to its haft, so **no wrist rotation could have made
+the face lead**. Geometry first, then taste.
+
+---
+
+## 14. Known gaps before this ships in-game
+
+1. **Wardrobe is nine items** — 2 shorts, 2 shirts, 5 hairstyles — plus 6 skin tones. No hats,
+   shoes or accessories yet. Because garments are fitted to
+   measured body bounds, **the base is now effectively frozen** — changing body proportions
+   invalidates every garment's numbers at once.
+2. **Nose.** v1 had one; v2 does not, so the frontmost geometry is now the eyes. Cosmetic, but note
+   `inspect_glb.py`'s facing check asserts "nose centred at x=0" and now passes *by accident*,
+   because two symmetric eyes average to zero.
+3. **Hands are the fattest non-body part** at 74 verts of 426 — more than the arms, for two small
+   blocks. They would go to ~16 as chamfered boxes, keeping the wrist split for articulation.
+4. **No edge loops at joints**, so group boundaries are positional. Fine for rigid binding; smooth
+   deformation would need loops.
+5. **Nine clips: body `idle`/`walk`/`sit_idle`/`sit_down`, face `idle`/`happy`/`angry`/`sad`/
+   `surprised`.** Missing `run`, `jump`, and `stand_up` to reverse `sit_down`. The face layer is
+   authored but nothing consumes it yet — the masked `AnimationGraph` still has to be built in
+   `client/`.
+6. **No knees or elbows**, as in v1. Section 6's ±4° heel/toe ceiling is tighter on v2's 48% longer
+   legs. Knees are the change that buys a livelier walk.
+7. **`Shorts_Athletic` in v1 has invalid geometry** from its Solidify pass. Irrelevant to v2, but
+   `export_character_glb.py` still repairs it with `mesh.validate()` on the way out.
+8. **Not yet loaded in the game.** The glb and manifest are written and verified, but nothing in
+   `client/` references them yet, and the masked `AnimationGraph` for the body/face layers still has
+   to be built.
+9. **LODs are parked deliberately.** Measured at 500 NPCs: 393k verts / 728k tris (nothing) but
+   **2000 draw calls, 4000 with shadows** — the real cost. A draw call is per *material*, so merging
+   meshes alone buys nothing; the prerequisite is one shared material, which `build_lods_v2.py`
+   does with a 64×64 palette atlas. Revisit only if frame numbers demand it.
+
+---
+
+## 15. Scripts
+
+| Script | Does |
+|---|---|
+| `triage_tripo.py` | Inspect any fresh Tripo download: loose parts, UVs, quads vs tris, vertex colours, orientation, scale |
+| `build_basemodel_v2.py` | `basemodelv2.glb` + `v1_donor.blend` → cleaned, symmetric, jointed `basemodel_v2.blend` |
+
+> **`basemodelv2.glb` is no longer in the repo.** It was the raw Tripo download feeding step 1 and
+> was deleted during a 2026-08-01 cleanup that mistook it for a stale export. Nothing downstream is
+> affected — `basemodel_v2.blend` is the cleaned result and is intact, as is the shipped
+> `voxel_boy.glb`. Re-running step 1 requires a fresh Tripo export; §13 covers which download to
+> take. Steps 2 onward all read `basemodel_v2.blend` and run unchanged.
+| `rig_basemodel_v2.py` | Build the 16-bone rig, bind, retarget the donor's walk, re-derive the bounce |
+| `animate_basemodel_v2.py` | Author the body layer (`idle`, `sit_idle`, `sit_down`) and face layer (5 moods) |
+| `wardrobe_items.py` | Wardrobe DATA — one block per item, no Blender imports |
+| `build_wardrobe_v2.py` | Build the wardrobe from that data, bake hair, emit the RON manifest |
+| `build_lods_v2.py` | LOD1 via a shared palette atlas (parked — see below) |
+| `preview_basemodel_v2.py` | One looping webp per clip + mood and turnaround sheets |
+| `preview_wardrobe_v2.py` | Front/back sheet of outfit combinations |
+| `optimize_mesh.py` | Standalone coplanar cleanup; asserts bbox, part count and symmetry unchanged |
+| `render_studio.py` | Section 10 studio turnaround + close-ups of whatever is in the open `.blend` |
+| `export_character_glb.py` | `.blend` → `client/assets/characters/*.glb` (section 12) — still v1-shaped |
+| `inspect_glb.py` | Verify an exported `.glb` against the Bevy contract, pure stdlib |
+
+**The habit that caught the most bugs:** assert the invariant, don't assume it. Every script here
+ends by checking what it claims — bounding box unchanged, loose parts intact, symmetry exact in verts
+*and* edges *and* faces, foot planted at exactly zero, loop closed. Four separate defects in this
+rebuild — asymmetric dissolve, a tapered leg, silently clamped material indices, a rotation that did
+nothing — produced clean-looking renders and would have shipped without those checks.

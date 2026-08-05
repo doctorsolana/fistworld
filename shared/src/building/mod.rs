@@ -23,14 +23,8 @@ mod tests {
     fn every_building_has_a_definition_and_a_model() {
         for kind in BuildingType::all() {
             let def = kind.definition();
-            assert!(
-                !def.display_name.is_empty(),
-                "{kind:?} has no display name"
-            );
-            assert!(
-                kind.scene_path().is_some(),
-                "{kind:?} has no model to draw"
-            );
+            assert!(!def.display_name.is_empty(), "{kind:?} has no display name");
+            assert!(kind.scene_path().is_some(), "{kind:?} has no model to draw");
         }
     }
 
@@ -38,7 +32,10 @@ mod tests {
     fn flatten_footprint_is_square_and_positive() {
         for kind in BuildingType::all() {
             let flatten = kind.definition().flatten_footprint();
-            assert!(flatten.x > 0.0 && flatten.y > 0.0, "{kind:?} flattens nothing");
+            assert!(
+                flatten.x > 0.0 && flatten.y > 0.0,
+                "{kind:?} flattens nothing"
+            );
         }
     }
 }

@@ -70,8 +70,7 @@ fn wire_common_systems(app: &mut App) {
         (
             // Sole DistanceFog writer; folds in the map-view fade, so it must
             // see this frame's MapViewBlend.
-            game_systems::update_day_night_cycle
-                .after(terrain::map_view::update_map_view_state),
+            game_systems::update_day_night_cycle.after(terrain::map_view::update_map_view_state),
             game_systems::update_atmosphere,
             game_systems::apply_graphics_settings,
             game_systems::sync_atmosphere_enabled,
@@ -105,12 +104,7 @@ fn wire_common_systems(app: &mut App) {
 /// Gameplay wiring: top-down commander camera + world visuals.
 fn wire_game_systems(app: &mut App) {
     // Setup systems (run once at startup - rendering only)
-    app.add_systems(
-        Startup,
-        (
-            game_systems::setup_particle_assets,
-        ),
-    );
+    app.add_systems(Startup, (game_systems::setup_particle_assets,));
 
     // Spawn world visuals and the perf overlay when entering gameplay
     app.add_systems(
@@ -145,9 +139,7 @@ fn wire_game_systems(app: &mut App) {
     // Cleanup overlays when leaving gameplay
     app.add_systems(
         OnExit(GameState::Playing),
-        (
-            perf_overlay::despawn_debug_overlay,
-        ),
+        (perf_overlay::despawn_debug_overlay,),
     );
 
     // Replication-driven spawn/setup must NOT be gated solely to `Playing`.
@@ -155,26 +147,17 @@ fn wire_game_systems(app: &mut App) {
     // Gameplay systems (only when playing) - split into groups to avoid tuple limit
     app.add_systems(
         Update,
-        (
-            game_systems::update_sand_particles,
-        )
-            .run_if(in_state(GameState::Playing)),
+        (game_systems::update_sand_particles,).run_if(in_state(GameState::Playing)),
     );
 
     // Player character visuals/animation
 
     // NPC visuals/animation + debug hitboxes
 
-
     app.add_systems(
         Update,
-        (
-            perf_overlay::update_client_perf_snapshot,
-        )
-            .run_if(in_state(GameState::Playing)),
+        (perf_overlay::update_client_perf_snapshot,).run_if(in_state(GameState::Playing)),
     );
-
-
 
     app.add_systems(
         Update,
@@ -185,7 +168,6 @@ fn wire_game_systems(app: &mut App) {
         Update,
         perf_overlay::handle_toggle_debug_mode.run_if(in_state(GameState::Playing)),
     );
-
 
     app.add_systems(
         Update,
@@ -209,5 +191,4 @@ fn wire_game_systems(app: &mut App) {
         Update,
         perf_overlay::emit_client_perf_summary.run_if(in_state(GameState::Playing)),
     );
-
 }

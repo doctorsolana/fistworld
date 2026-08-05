@@ -75,8 +75,8 @@ pub fn update_map_view_state(cameras: Query<&CommanderCamera>, mut blend: ResMut
     let Ok(camera) = cameras.single() else {
         return;
     };
-    let next = ((camera.zoom - DETAIL_FADE_START) / (DETAIL_FADE_END - DETAIL_FADE_START))
-        .clamp(0.0, 1.0);
+    let next =
+        ((camera.zoom - DETAIL_FADE_START) / (DETAIL_FADE_END - DETAIL_FADE_START)).clamp(0.0, 1.0);
     if blend.0 != next {
         blend.0 = next;
     }

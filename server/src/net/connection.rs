@@ -5,7 +5,9 @@ use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use std::time::Duration;
 
-use shared::components::{Player, PlayerPosition, PlayerProgression, PlayerRotation};
+use shared::components::{
+    CharacterAttributes, Player, PlayerPosition, PlayerProgression, PlayerRotation,
+};
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 
 use crate::net::input::ClientInputs;
@@ -75,6 +77,7 @@ pub fn handle_disconnections(
         &PlayerPosition,
         &PlayerRotation,
         &shared::components::HeroOutfit,
+        &CharacterAttributes,
     )>,
 ) {
     let client_entity = trigger.entity;
@@ -147,12 +150,11 @@ pub fn handle_disconnections(
 
     // Snapshot the hero so a SERVER RESTART can rebuild it; the live entity
     // itself survives an ordinary disconnect.
-    let hero_state = heroes
-        .iter()
-        .find(|(hero, _, _, _)| hero.owner == peer_id)
-        .map(|(_, position, rotation, outfit)| {
-            crate::player::hero::hero_save(position, rotation, outfit)
-        });
+    let hero_snapshot = heroes.iter().find(|(hero, ..)| hero.owner == peer_id);
+    let hero_state = hero_snapshot.map(|(_, position, rotation, outfit, _)| {
+        crate::player::hero::hero_save(position, rotation, outfit)
+    });
+    let attributes = hero_snapshot.map(|(_, _, _, _, attributes)| *attributes);
 
     let profile = PlayerProfile {
         version: PROFILE_VERSION,
@@ -163,8 +165,15 @@ pub fn handle_disconnections(
         level: progression.level,
         prestige: progression.prestige,
         reputation: progression.reputation,
-        stamina: progression.stamina,
-        intelligence: progression.intelligence,
+        stamina: attributes
+            .map(|attributes| u32::from(attributes.physique()))
+            .unwrap_or(progression.stamina),
+        intelligence: attributes
+            .map(|attributes| u32::from(attributes.intelligence()))
+            .unwrap_or(progression.intelligence),
+        charm: attributes
+            .map(|attributes| u32::from(attributes.charm()))
+            .unwrap_or(progression.charm),
         bank_gold: profiles
             .profiles
             .get(&name_lower)

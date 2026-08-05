@@ -15,5 +15,10 @@ pub mod map_state;
 pub mod navgrid;
 pub mod pathfinding;
 pub mod regions;
-pub mod village;
+pub mod settlement_development;
 pub mod time;
+pub mod village;
+#[cfg(test)]
+pub mod village_lab;
+pub(crate) mod village_lab_scenario;
+pub mod village_roads;

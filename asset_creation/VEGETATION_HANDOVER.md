@@ -251,8 +251,16 @@ the shape has to come from the alpha channel. Same lesson the pines teach from t
 71% of their leaf texture is cut away. `alphaMode` is **MASK**, not BLEND: cutout needs no
 back-to-front sorting and keeps depth writes, which matters when thousands overlap.
 
-**256×256, and keep it that way.** 256 KB of VRAM. The same blades at 1024² would be **4 MB** for
-no visible gain at this size. Size is what costs, not count.
+**128×128, and keep it that way.** 64 KB of VRAM. The blade design is coarse enough that 256²
+bought nothing but a 4× VRAM bill, and a smaller map is also less to alias when a patch is only a
+few pixels wide. The same blades at 1024² would be **4 MB**. Size is what costs, not count.
+
+**The blade shape was arrived at by elimination, and the reasons are in `build_grass.py`.** Thin
+blades (26 on a 256 map) look best up close and dissolve by 150 m. Fat blades fuse into
+star-shaped rosettes — thistle, not turf. What works is *upright, gapped, outward-splayed*: the
+bend must be signed by which side of the tuft's centre a blade stands on, or half of them lean
+inward, cross the middle and fuse. Rejected variants stay buildable in that file so the reasoning
+is not lost.
 
 **One entity per patch, never per blade.** A patch stands in for ~40 individual blades.
 

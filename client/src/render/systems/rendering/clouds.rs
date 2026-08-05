@@ -229,9 +229,8 @@ pub(super) fn cloud_wind_state(abs_seconds: f32, seed_phase: f32) -> (Vec2, f32)
         + amp
             * (0.7 * (p1.cos() - (w1 * abs_seconds + p1).cos()) / w1
                 + 0.3 * (p2.cos() - (w2 * abs_seconds + p2).cos()) / w2);
-    let speed = mid
-        + amp
-            * (0.7 * (w1 * abs_seconds + p1).sin() + 0.3 * (w2 * abs_seconds + p2).sin());
+    let speed =
+        mid + amp * (0.7 * (w1 * abs_seconds + p1).sin() + 0.3 * (w2 * abs_seconds + p2).sin());
     (CLOUD_WIND_BEARING * integral, speed)
 }
 
@@ -522,11 +521,17 @@ mod storm_tests {
         let seed_phase = hash_to_unit(7, 0) * 37.0;
         let half = 4096.0;
         let mut prev = storm_center(seed_phase, 0.0, half);
-        println!("capture-seed storm center @225s: {:?}", storm_center(seed_phase, 225.0, half));
+        println!(
+            "capture-seed storm center @225s: {:?}",
+            storm_center(seed_phase, 225.0, half)
+        );
         for i in 1..20_000 {
             let t = i as f32 * 1.0;
             let c = storm_center(seed_phase, t, half);
-            assert!(c.x.abs() <= half && c.y.abs() <= half, "off map at {t}: {c:?}");
+            assert!(
+                c.x.abs() <= half && c.y.abs() <= half,
+                "off map at {t}: {c:?}"
+            );
             assert!(c.distance(prev) < 8.0, "teleport at {t}: {prev:?} -> {c:?}");
             prev = c;
         }

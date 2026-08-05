@@ -1,0 +1,81 @@
+(
+  map_id: "village_lab",
+  bounds: (
+    min: (-512.0, -512.0),
+    max: (512.0, 512.0),
+  ),
+  terrain: (
+    // Generated maps ignore this filename. Keeping it explicit makes the
+    // definition valid without shipping a large diagnostic heightmap.
+    heightmap: "height.png",
+    minimap: None,
+    water_level: Some(0.0),
+    height_min: -34.0,
+    height_max: 82.0,
+  ),
+  generated: Some((
+    style: Mainland,
+    seed: 3,
+    generator_version: 8,
+    half_extent: 512.0,
+  )),
+  player_spawn: Some((0.0, 8.0, 0.0)),
+  // Authored timber is shared by rendering, collision, construction gathering,
+  // lumber-work permits, and chopping. The sparse grid keeps both climate
+  // fixtures supplied; the mixed southwestern grove gives Lab Meadow a compact
+  // forest on the same walkable landmass as its hall.
+  objects: [
+    // Lab Meadow grove. It deliberately stays beyond the civic centre and
+    // clear of the eastern fishing shore, while remaining inside a hut's 120 m
+    // working radius. Uneven rows keep it reading as woodland rather than an
+    // orchard and leave routes between trunks.
+    (kind: "tree_01", position: ( 42.0, 0.0, -208.0), rotation_degrees:  18.0, scale: 0.94),
+    (kind: "tree_08", position: ( 54.0, 0.0, -201.0), rotation_degrees:  73.0, scale: 1.07),
+    (kind: "tree_02", position: ( 64.0, 0.0, -215.0), rotation_degrees: 131.0, scale: 0.91),
+    (kind: "tree_09", position: ( 76.0, 0.0, -205.0), rotation_degrees: 207.0, scale: 1.04),
+    (kind: "tree_01", position: ( 88.0, 0.0, -216.0), rotation_degrees: 279.0, scale: 0.89),
+    (kind: "tree_08", position: (100.0, 0.0, -207.0), rotation_degrees: 336.0, scale: 1.10),
+
+    (kind: "tree_09", position: ( 43.0, 0.0, -188.0), rotation_degrees:  42.0, scale: 1.03),
+    (kind: "tree_02", position: ( 56.0, 0.0, -181.0), rotation_degrees:  96.0, scale: 0.92),
+    (kind: "tree_01", position: ( 67.0, 0.0, -194.0), rotation_degrees: 154.0, scale: 1.08),
+    (kind: "tree_08", position: ( 79.0, 0.0, -183.0), rotation_degrees: 223.0, scale: 0.96),
+    (kind: "tree_09", position: ( 91.0, 0.0, -195.0), rotation_degrees: 291.0, scale: 1.05),
+    (kind: "tree_02", position: (102.0, 0.0, -184.0), rotation_degrees: 349.0, scale: 0.90),
+
+    (kind: "tree_08", position: ( 63.0, 0.0, -169.0), rotation_degrees:  61.0, scale: 0.95),
+    (kind: "tree_01", position: ( 76.0, 0.0, -171.0), rotation_degrees: 143.0, scale: 1.06),
+    (kind: "tree_09", position: ( 89.0, 0.0, -165.0), rotation_degrees: 251.0, scale: 0.93),
+
+    (kind: "tree_02", position: (-360.0, 0.0, -360.0), rotation_degrees: 12.0, scale: 0.90),
+    (kind: "tree_02", position: (-180.0, 0.0, -360.0), rotation_degrees: 43.0, scale: 1.05),
+    (kind: "tree_02", position: (   0.0, 0.0, -360.0), rotation_degrees: 91.0, scale: 0.95),
+    (kind: "tree_02", position: ( 180.0, 0.0, -360.0), rotation_degrees: 137.0, scale: 1.10),
+    (kind: "tree_02", position: ( 360.0, 0.0, -360.0), rotation_degrees: 204.0, scale: 0.88),
+
+    (kind: "tree_02", position: (-360.0, 0.0, -180.0), rotation_degrees: 27.0, scale: 1.12),
+    (kind: "tree_02", position: (-180.0, 0.0, -180.0), rotation_degrees: 68.0, scale: 0.92),
+    (kind: "tree_02", position: (   0.0, 0.0, -180.0), rotation_degrees: 116.0, scale: 1.00),
+    (kind: "tree_02", position: ( 180.0, 0.0, -180.0), rotation_degrees: 173.0, scale: 0.96),
+    (kind: "tree_02", position: ( 360.0, 0.0, -180.0), rotation_degrees: 248.0, scale: 1.08),
+
+    (kind: "tree_02", position: (-360.0, 0.0,    0.0), rotation_degrees: 38.0, scale: 0.94),
+    (kind: "tree_02", position: (-180.0, 0.0,    0.0), rotation_degrees: 82.0, scale: 1.07),
+    (kind: "tree_02", position: (   0.0, 0.0,    0.0), rotation_degrees: 129.0, scale: 0.91),
+    (kind: "tree_02", position: ( 180.0, 0.0,    0.0), rotation_degrees: 188.0, scale: 1.04),
+    (kind: "tree_02", position: ( 360.0, 0.0,    0.0), rotation_degrees: 263.0, scale: 0.98),
+
+    (kind: "tree_02", position: (-360.0, 0.0,  180.0), rotation_degrees: 54.0, scale: 1.06),
+    (kind: "tree_02", position: (-180.0, 0.0,  180.0), rotation_degrees: 103.0, scale: 0.89),
+    (kind: "tree_02", position: (   0.0, 0.0,  180.0), rotation_degrees: 151.0, scale: 1.11),
+    (kind: "tree_02", position: ( 180.0, 0.0,  180.0), rotation_degrees: 218.0, scale: 0.93),
+    (kind: "tree_02", position: ( 360.0, 0.0,  180.0), rotation_degrees: 287.0, scale: 1.02),
+
+    (kind: "tree_02", position: (-360.0, 0.0,  360.0), rotation_degrees: 71.0, scale: 0.97),
+    (kind: "tree_02", position: (-180.0, 0.0,  360.0), rotation_degrees: 124.0, scale: 1.09),
+    (kind: "tree_02", position: (   0.0, 0.0,  360.0), rotation_degrees: 179.0, scale: 0.90),
+    (kind: "tree_02", position: ( 180.0, 0.0,  360.0), rotation_degrees: 236.0, scale: 1.03),
+    (kind: "tree_02", position: ( 360.0, 0.0,  360.0), rotation_degrees: 311.0, scale: 0.95),
+  ],
+  blockers: [],
+)

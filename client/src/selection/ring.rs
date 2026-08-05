@@ -171,7 +171,9 @@ pub(super) fn sync_selection_ring(
         .unwrap_or(RING_SCALE_FROM);
     let scale_factor = (zoom / RING_SCALE_FROM).clamp(1.0, RING_SCALE_MAX);
 
-    let my_account = account.as_ref().map(|input| input.name.trim().to_lowercase());
+    let my_account = account
+        .as_ref()
+        .map(|input| input.name.trim().to_lowercase());
 
     // Where every ring belongs this frame, and whether that unit takes orders.
     // Empty past the hide distance, so the whole pool simply hides.
@@ -239,8 +241,7 @@ pub(super) fn sync_selection_ring(
     }
 
     let scale = Vec3::splat(scale_factor);
-    for (index, (_entity, mut transform, mut visibility, children)) in
-        rings.iter_mut().enumerate()
+    for (index, (_entity, mut transform, mut visibility, children)) in rings.iter_mut().enumerate()
     {
         match wanted.get(index) {
             Some((point, commandable)) => {

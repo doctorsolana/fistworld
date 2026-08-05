@@ -100,17 +100,35 @@ pub struct CommanderCamera {
 
 impl Default for CommanderCamera {
     fn default() -> Self {
-        // Test hook: perf runs need a reproducible zoom without input automation.
+        // Test hooks: unattended perf and visual-regression runs need a
+        // reproducible framing without pretending mouse automation is gameplay.
         let start_zoom = std::env::var("FISTFORCE_START_ZOOM")
             .ok()
             .and_then(|raw| raw.parse::<f32>().ok())
             .filter(|z| z.is_finite())
             .unwrap_or(280.0);
+        let start_focus = std::env::var("FISTFORCE_START_FOCUS")
+            .ok()
+            .and_then(|raw| {
+                let mut parts = raw.split(',').map(|part| part.trim().parse::<f32>().ok());
+                match (parts.next().flatten(), parts.next().flatten()) {
+                    (Some(x), Some(z)) if x.is_finite() && z.is_finite() => {
+                        Some(Vec3::new(x, 0.0, z))
+                    }
+                    _ => None,
+                }
+            })
+            .unwrap_or(Vec3::ZERO);
+        let start_yaw = std::env::var("FISTFORCE_START_YAW")
+            .ok()
+            .and_then(|raw| raw.parse::<f32>().ok())
+            .filter(|yaw| yaw.is_finite())
+            .unwrap_or(-0.45);
         Self {
-            yaw: -0.45,
-            yaw_target: -0.45,
-            focus: Vec3::ZERO,
-            focus_target: Vec3::ZERO,
+            yaw: start_yaw,
+            yaw_target: start_yaw,
+            focus: start_focus,
+            focus_target: start_focus,
             pan_speed: 120.0,
             zoom: start_zoom,
             zoom_target: start_zoom,
@@ -150,6 +168,7 @@ pub fn update_commander_camera(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
+    input_state: Res<crate::input::InputState>,
     mut mouse_motion: MessageReader<MouseMotion>,
     mut mouse_wheel: MessageReader<MouseWheel>,
     terrain: Option<Res<WorldTerrain>>,
@@ -164,7 +183,9 @@ pub fn update_commander_camera(
         look_delta += event.delta;
     }
 
-    if mouse_buttons.pressed(MouseButton::Right) {
+    let accepts_world_input = commander_accepts_world_input(&input_state);
+
+    if accepts_world_input && mouse_buttons.pressed(MouseButton::Right) {
         controller.yaw_target -= look_delta.x * controller.look_sensitivity;
     }
 
@@ -176,7 +197,7 @@ pub fn update_commander_camera(
         };
         scroll_lines += event.y * factor;
     }
-    if scroll_lines.abs() > f32::EPSILON {
+    if accepts_world_input && scroll_lines.abs() > f32::EPSILON {
         // Multiplicative: each notch changes zoom by a constant *fraction*, so the felt
         // speed is the same whether you are inspecting a soldier or looking at a realm.
         let factor = (1.0 + controller.zoom_speed).powf(-scroll_lines);
@@ -185,16 +206,16 @@ pub fn update_commander_camera(
     }
 
     let mut pan_input = Vec2::ZERO;
-    if keys.pressed(KeyCode::KeyW) {
+    if accepts_world_input && keys.pressed(KeyCode::KeyW) {
         pan_input.y += 1.0;
     }
-    if keys.pressed(KeyCode::KeyS) {
+    if accepts_world_input && keys.pressed(KeyCode::KeyS) {
         pan_input.y -= 1.0;
     }
-    if keys.pressed(KeyCode::KeyA) {
+    if accepts_world_input && keys.pressed(KeyCode::KeyA) {
         pan_input.x -= 1.0;
     }
-    if keys.pressed(KeyCode::KeyD) {
+    if accepts_world_input && keys.pressed(KeyCode::KeyD) {
         pan_input.x += 1.0;
     }
 
@@ -223,8 +244,14 @@ pub fn update_commander_camera(
     // an out-of-bounds target that the camera then has to unwind.
     if let Some(terrain) = terrain.as_deref() {
         let bounds = terrain.generator.active_map_bounds();
-        controller.focus_target.x = controller.focus_target.x.clamp(bounds.min[0], bounds.max[0]);
-        controller.focus_target.z = controller.focus_target.z.clamp(bounds.min[1], bounds.max[1]);
+        controller.focus_target.x = controller
+            .focus_target
+            .x
+            .clamp(bounds.min[0], bounds.max[0]);
+        controller.focus_target.z = controller
+            .focus_target
+            .z
+            .clamp(bounds.min[1], bounds.max[1]);
     }
 
     // Ease the rendered camera toward what input asked for. This is the whole
@@ -247,6 +274,10 @@ pub fn update_commander_camera(
     controller.tilt = TILT_CLOSE + (TILT_FAR - TILT_CLOSE) * zoom_t.powf(0.45);
 
     apply_commander_transform(&mut transform, &controller, terrain.as_deref());
+}
+
+fn commander_accepts_world_input(input_state: &crate::input::InputState) -> bool {
+    !input_state.ui_blocking()
 }
 
 pub fn release_cursor_for_rts(
@@ -418,4 +449,18 @@ pub fn send_commander_view(
     *heartbeat = 0.0;
     *last_sent = Some(view.clone());
     sender.send::<InputChannel>(view);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_open_encyclopedia_blocks_commander_pan_or_zoom_input() {
+        let mut input = crate::input::InputState::default();
+        assert!(commander_accepts_world_input(&input));
+
+        input.encyclopedia_open = true;
+        assert!(!commander_accepts_world_input(&input));
+    }
 }
