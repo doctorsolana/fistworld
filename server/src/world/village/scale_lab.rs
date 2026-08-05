@@ -10,10 +10,11 @@ use std::time::{Duration, Instant};
 use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
 use shared::components::{
-    CharacterActivity, CharacterAffiliation, CharacterAttributes, CharacterKind, CharacterName,
-    FarmField, Household, Occupation, PlayerPosition, PlayerRotation, Residence, Settlement,
-    SettlementBuilding, SettlementBuildingKind, SettlementPolicies, SettlementTier, TimeWarp,
-    WorkStatus, WorldTime,
+    AttachedTo, BuildingId, BuildingOf, CharacterActivity, CharacterAffiliation,
+    CharacterAttributes, CharacterKind, CharacterName, CivicEmployment, CivicRole, EmployedAt,
+    FarmField, Household, LivesAt, MootAdministration, Occupation, PersonId, PlayerPosition,
+    PlayerRotation, Residence, ResidentOf, Settlement, SettlementBuilding, SettlementBuildingKind,
+    SettlementId, SettlementPolicies, SettlementTier, TimeWarp, WorkStatus, WorldTime,
 };
 use shared::economy::{
     BusinessAccount, BusinessSalePolicy, CarriedLoad, Good, GoodsInventory, HouseholdEconomy,
@@ -36,6 +37,10 @@ use crate::collision::library::StaticColliders;
 use crate::player::hero::{step_units, MoveTarget};
 use crate::world::pathfinding::PathfindingBudgetSettings;
 use crate::world::regions::RegionRegistry;
+use crate::world::regions::StrategicStep;
+use crate::world::village::strategic::{
+    advance_strategic_villages, StrategicPerson, StrategicProductionProgress,
+};
 use crate::world::village_roads::{
     plan_villager_travel_routes, queue_villager_travel_routes, NavigationRoutePending,
     VillageRoadGraph,
@@ -70,6 +75,10 @@ struct TacticalMovementBench;
 struct TacticalRoutingBench;
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 struct VillageSteadyBench;
+#[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
+struct IdentitySteadyBench;
+#[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
+struct StrategicVillageBench;
 
 fn env_usize(name: &str, fallback: usize) -> usize {
     std::env::var(name)
@@ -84,6 +93,8 @@ fn resident_count_for(town: usize, towns: usize, npcs: usize) -> usize {
 }
 
 fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
+    let mut next_person_id = 1_u64;
+    let mut next_building_id = 1_u64;
     for town_index in 0..towns {
         let resident_count = resident_count_for(town_index, towns, npcs);
         let place = format!("ScaleTown{town_index:02}");
@@ -94,6 +105,7 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
         hall_inventory.add(Good::Food, 600);
         let hall = world
             .spawn((
+                SettlementId(town_index as u64 + 1),
                 Settlement {
                     name: place.clone(),
                     tier: SettlementTier::Village,
@@ -102,6 +114,10 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                 },
                 SettlementEconomy::default(),
                 SettlementPolicies::default(),
+                MootAdministration {
+                    market_porter: Some(names_for_porter(town_index)),
+                    ..default()
+                },
                 MootMarket::founding(),
                 hall_inventory,
                 PlayerPosition(hall_position),
@@ -119,8 +135,12 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
             let radius = 18.0 + (house_index % 5) as f32 * 3.0;
             let position =
                 hall_position + Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
+            let building_id = BuildingId(next_building_id);
+            next_building_id += 1;
             let house = world
                 .spawn((
+                    building_id,
+                    BuildingOf(SettlementId(town_index as u64 + 1)),
                     SettlementBuilding {
                         kind: SettlementBuildingKind::House,
                         settlement: place.clone(),
@@ -137,17 +157,22 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                     PlayerRotation(angle),
                 ))
                 .id();
-            houses.push(house);
+            houses.push((house, building_id));
         }
 
-        let mut farms = Vec::with_capacity(resident_count.div_ceil(2));
-        for (farm_index, workers) in names.chunks(2).enumerate() {
+        let farm_workers = names.get(1..).unwrap_or_default();
+        let mut farms = Vec::with_capacity(farm_workers.len().div_ceil(2));
+        for (farm_index, workers) in farm_workers.chunks(2).enumerate() {
             let row = farm_index / 14;
             let column = farm_index % 14;
             let position = hall_position
                 + Vec3::new(column as f32 * 18.0 - 115.0, 0.0, 65.0 + row as f32 * 24.0);
+            let building_id = BuildingId(next_building_id);
+            next_building_id += 1;
             let farm = world
                 .spawn((
+                    building_id,
+                    BuildingOf(SettlementId(town_index as u64 + 1)),
                     SettlementBuilding {
                         kind: SettlementBuildingKind::Farmstead,
                         settlement: place.clone(),
@@ -172,6 +197,7 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                     .expect("farmstead has two field anchors");
                 world
                     .spawn((
+                        AttachedTo(building_id),
                         FarmField {
                             settlement: place.clone(),
                             farmstead: position,
@@ -183,26 +209,45 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                     ))
                     .id()
             });
-            farms.push((farm, fields, position));
+            farms.push((farm, building_id, fields, position));
         }
 
         for resident in 0..resident_count {
             let name = names[resident].clone();
-            let home = houses[resident / 4];
-            let (farmstead, fields, farm_position) = farms[resident / 2];
-            let field = fields[resident % fields.len()];
-            let position =
-                SettlementBuildingKind::Farmstead.interior_door_position(farm_position, 0.0);
-            world
-                .spawn((
-                    CharacterName(name),
-                    CharacterKind::Villager,
-                    CharacterAffiliation::default(),
+            let (home, home_id) = houses[resident / 4];
+            let farmer = resident.checked_sub(1).map(|worker_index| {
+                let (farmstead, farm_id, fields, farm_position) = farms[worker_index / 2];
+                let field = fields[worker_index % fields.len()];
+                (farmstead, farm_id, field, farm_position)
+            });
+            let position = farmer.map_or(hall_position, |(_, _, _, farm_position)| {
+                SettlementBuildingKind::Farmstead.interior_door_position(farm_position, 0.0)
+            });
+            let mut person = world.spawn((
+                CharacterName(name.clone()),
+                CharacterKind::Villager,
+                CharacterAffiliation::default(),
+                Residence(place.clone()),
+                VillagerIntent::Resident { settlement: hall },
+                HomeAssignment { home },
+                GoodsInventory::new(shared::economy::capacity::VILLAGER),
+                CarriedLoad::default(),
+                Wallet::new(1_000_000),
+                PlayerPosition(position),
+                PlayerRotation(0.0),
+            ));
+            person.insert((
+                RegionCoord::from_world_pos(position),
+                WorkStatus::Employed,
+                CharacterAttributes::from_seed(((town_index as u64) << 32) | resident as u64),
+                PersonId(next_person_id),
+                ResidentOf(SettlementId(town_index as u64 + 1)),
+                LivesAt(home_id),
+            ));
+            if let Some((farmstead, farm_id, field, _)) = farmer {
+                person.insert((
                     CharacterActivity::Indoors,
                     Occupation(Some("Farmer".to_string())),
-                    Residence(place.clone()),
-                    VillagerIntent::Resident { settlement: hall },
-                    HomeAssignment { home },
                     FarmerRoutine {
                         farmstead,
                         field,
@@ -214,27 +259,37 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                             seconds_left: 1_000_000.0,
                         },
                     },
-                    GoodsInventory::new(shared::economy::capacity::VILLAGER),
-                    CarriedLoad::default(),
-                    Wallet::new(1_000_000),
-                    PlayerPosition(position),
-                    PlayerRotation(0.0),
-                    RegionCoord::from_world_pos(position),
-                ))
-                .insert((
-                    WorkStatus::Employed,
-                    CharacterAttributes::from_seed(((town_index as u64) << 32) | resident as u64),
+                    EmployedAt(farm_id),
                 ));
+            } else {
+                person.insert((
+                    CharacterActivity::Idle,
+                    Occupation(Some("Market Porter".to_string())),
+                    CivicEmployment {
+                        settlement: SettlementId(town_index as u64 + 1),
+                        role: CivicRole::MarketPorter,
+                    },
+                ));
+            }
+            next_person_id += 1;
         }
     }
 
     world.spawn((WorldTime::new_default(), TimeWarp::clamped(1.0)));
 }
 
+fn names_for_porter(town_index: usize) -> String {
+    format!("T{town_index:02}Resident000")
+}
+
 fn configure_app(towns: usize, npcs: usize) -> App {
     let mut app = App::new();
     app.init_resource::<Time>();
     app.init_resource::<SettlementEconomyRuntime>();
+    app.init_resource::<crate::world::identity::WorldIdAllocator>();
+    app.init_resource::<crate::world::identity::WorldIdentityIndex>();
+    app.init_resource::<StrategicStep>();
+    app.init_resource::<StrategicProductionProgress>();
     app.init_resource::<AmbientClock>();
     app.init_resource::<AmbientSpotCache>();
     app.init_resource::<RegionRegistry>();
@@ -276,6 +331,18 @@ fn configure_app(towns: usize, npcs: usize) -> App {
             .chain(),
     );
     app.add_systems(TacticalMovementBench, step_units);
+    app.add_systems(
+        IdentitySteadyBench,
+        (
+            crate::world::identity::assign_stable_world_ids,
+            crate::world::identity::rebuild_world_identity_index,
+            crate::world::identity::reconcile_stable_world_relationships,
+            crate::world::identity::reconcile_stable_adjunct_relationships,
+            crate::world::identity::reconcile_stable_civic_employment,
+        )
+            .chain(),
+    );
+    app.add_systems(StrategicVillageBench, advance_strategic_villages);
     app.add_systems(
         TacticalRoutingBench,
         (
@@ -381,6 +448,45 @@ fn bench_daily_economy(world: &mut World, samples: usize) -> Timing {
         world.run_schedule(EconomyDailyBench);
         durations.push(started.elapsed());
     }
+    durations.sort_unstable();
+    let total: Duration = durations.iter().copied().sum();
+    Timing {
+        average: total / samples as u32,
+        p50: percentile(&durations, 50),
+        p95: percentile(&durations, 95),
+        p99: percentile(&durations, 99),
+        max: *durations.last().expect("at least one sample"),
+    }
+}
+
+fn bench_strategic_villages(world: &mut World, samples: usize) -> Timing {
+    let residents: Vec<Entity> = world
+        .query_filtered::<Entity, With<CharacterKind>>()
+        .iter(world)
+        .collect();
+    for resident in &residents {
+        world.entity_mut(*resident).insert(StrategicPerson);
+    }
+
+    let mut durations = Vec::with_capacity(samples);
+    for serial in 1..=(WARMUP_RUNS + samples) {
+        {
+            let mut step = world.resource_mut::<StrategicStep>();
+            step.serial = serial as u64;
+            // Enough elapsed work to execute real output/storage/porter paths,
+            // rather than benchmarking only their early-return checks.
+            step.elapsed_world_seconds = 300.0;
+        }
+        let started = Instant::now();
+        world.run_schedule(StrategicVillageBench);
+        if serial > WARMUP_RUNS {
+            durations.push(started.elapsed());
+        }
+    }
+    for resident in residents {
+        world.entity_mut(resident).remove::<StrategicPerson>();
+    }
+
     durations.sort_unstable();
     let total: Duration = durations.iter().copied().sum();
     Timing {
@@ -501,6 +607,14 @@ fn village_scale_lab() {
             "village steady bundle",
             bench_schedule(app.world_mut(), VillageSteadyBench, samples),
         ),
+        (
+            "identity steady pass",
+            bench_schedule(app.world_mut(), IdentitySteadyBench, samples),
+        ),
+        (
+            "strategic villages",
+            bench_strategic_villages(app.world_mut(), samples),
+        ),
     ] {
         print_timing(name, &timing);
     }
@@ -528,6 +642,12 @@ fn village_scale_lab() {
         .query::<&AmbientRoutine>()
         .iter(app.world())
         .count();
+    let person_ids: std::collections::HashSet<PersonId> = app
+        .world_mut()
+        .query::<&PersonId>()
+        .iter(app.world())
+        .copied()
+        .collect();
     println!(
         "SCALE result residents={counted} entities={entities_after} entity_growth={} ambient_orders={ambient} pending_routes={pending_routes} rss={:.1}MiB",
         entities_after as isize - entities_before as isize,
@@ -535,6 +655,11 @@ fn village_scale_lab() {
     );
 
     assert_eq!(counted, npcs, "resident recount drifted at scale");
+    assert_eq!(
+        person_ids.len(),
+        npcs,
+        "durable person ids collided at scale"
+    );
     assert_eq!(
         entities_after, entities_before,
         "steady ticks leaked entities"

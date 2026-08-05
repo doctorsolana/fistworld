@@ -75,11 +75,11 @@ pub enum DevCommand {
     /// a name and stand there, so the encyclopedia and selection have real
     /// non-player people to list before settlements exist to produce them.
     SpawnNpc { pos: Vec3 },
-    /// Set a character's banner. Targeted by NAME rather than entity, because
-    /// the encyclopedia lists people the client may not currently have
-    /// replicated -- interest management only delivers who is nearby.
+    /// Set a character's banner through its durable identity. The encyclopedia
+    /// can address people outside interest range because its roster carries
+    /// PersonId even when the embodied entity is not replicated.
     SetAffiliation {
-        character: String,
+        person: crate::components::PersonId,
         banner: Option<u8>,
     },
     /// Found a settlement: raise a city hall here and name the place.
@@ -89,19 +89,16 @@ pub enum DevCommand {
     FoundSettlement { pos: Vec3, name: String },
     /// Take a villager into the sender's retinue, or dismiss it.
     ///
-    /// Targeted by ENTITY, not by name: `shared::names::person_name` produces
-    /// its first duplicate around the fifty-first villager, and command has to
-    /// be exact. Affiliation can afford to be name-targeted because it addresses
-    /// people the client has never replicated; command cannot.
-    SetRetinue { unit: Entity, commanded: bool },
+    /// Targeted by durable identity so the command remains exact even when the
+    /// person's embodied entity is outside the client's interest range.
+    SetRetinue {
+        person: crate::components::PersonId,
+        commanded: bool,
+    },
 }
 
 impl bevy::ecs::entity::MapEntities for DevCommand {
-    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
-        if let DevCommand::SetRetinue { unit, .. } = self {
-            *unit = mapper.get_mapped(*unit);
-        }
-    }
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, _mapper: &mut M) {}
 }
 
 /// Client -> Server: walk these specific units to these specific points.
@@ -206,6 +203,7 @@ pub struct CharacterRoster {
 /// One person in the world.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct CharacterRosterEntry {
+    pub id: crate::components::PersonId,
     pub name: String,
     pub kind: crate::components::CharacterKind,
     pub affiliation: crate::components::CharacterAffiliation,

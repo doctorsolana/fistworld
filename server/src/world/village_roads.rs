@@ -6,6 +6,8 @@
 //! then follows cheap waypoints and shared road-graph paths; repeated commutes
 //! reuse the complete obstacle-versioned route in either certified direction.
 
+mod geometry;
+
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lightyear::prelude::{NetworkTarget, Replicate};
@@ -13,7 +15,7 @@ use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
 use shared::components::{
     BuildingDoorUse, CharacterActivity, CharacterKind, CharacterName, FarmField,
     MootAdministration, Occupation, PlayerPosition, PlayerRotation, RoadClass, RoadSurface,
-    Settlement, SettlementBuilding, SettlementBuildingKind, VillageRoad, WorldTime,
+    Settlement, SettlementBuilding, SettlementBuildingKind, VillageRoad, WorkStatus, WorldTime,
 };
 use shared::economy::{Wallet, ROAD_STEWARD_DAILY_SALARY};
 use shared::spatial::SpatialObstacleGrid;
@@ -28,6 +30,11 @@ use crate::world::village::{HomeRoutine, PierTraversal, VillagerIntent};
 use crate::{
     collision::library::{DerivedColliderLibrary, StaticColliders},
     world::pathfinding::PathfindingBudgetSettings,
+};
+
+pub(crate) use geometry::{
+    road_corridor_is_dry, road_sample_is_dry, road_segment_is_dry, road_segment_is_dry_at_width,
+    surface_width_for_tier,
 };
 
 /// The live collision sources used by tactical travel planning. They must be
@@ -86,7 +93,6 @@ const ROAD_ROUTE_CANDIDATES: usize = 4;
 /// monopolise a server tick trying every road combination.
 const AGENT_ROAD_CANDIDATES_TO_SURVEY: usize = 2;
 const ROAD_MAX_WEIGHTED_DETOUR: f32 = 1.35;
-const ROAD_WATER_FREEBOARD: f32 = 0.25;
 /// Grid samples must not ride the exact edge of a continuous field/ribbon
 /// intersection. This tiny cushion absorbs rounding without visibly widening
 /// the requested crop clearance.
@@ -96,69 +102,6 @@ const ROAD_SURVEY_FIELD_EPSILON: f32 = 0.25;
 /// rear of the building.
 const DOOR_APPROACH_LENGTH: f32 = 2.25;
 pub const ROAD_SPEED_MULTIPLIER: f32 = 1.22;
-
-fn surface_width_for_tier(tier: shared::components::SettlementTier, class: RoadClass) -> f32 {
-    match (tier, class) {
-        (shared::components::SettlementTier::Hamlet, _) => VILLAGE_ROAD_WIDTH,
-        (shared::components::SettlementTier::Village, RoadClass::Main) => 3.4,
-        (shared::components::SettlementTier::Village, RoadClass::Lane) => 2.8,
-        (_, RoadClass::Main) => 4.0,
-        (_, RoadClass::Lane) => 3.0,
-    }
-}
-
-fn road_sample_is_dry_at_width(terrain: &WorldTerrain, point: Vec2, width: f32) -> bool {
-    let shoulder = width * 0.5 + 0.2;
-    let diagonal = shoulder * std::f32::consts::FRAC_1_SQRT_2;
-    [
-        Vec2::ZERO,
-        Vec2::X * shoulder,
-        Vec2::NEG_X * shoulder,
-        Vec2::Y * shoulder,
-        Vec2::NEG_Y * shoulder,
-        Vec2::new(diagonal, diagonal),
-        Vec2::new(-diagonal, diagonal),
-        Vec2::new(diagonal, -diagonal),
-        Vec2::new(-diagonal, -diagonal),
-    ]
-    .into_iter()
-    .all(|offset| {
-        let sample = point + offset;
-        terrain
-            .water_surface_height(sample.x, sample.y)
-            .is_none_or(|water| {
-                terrain.get_height(sample.x, sample.y) >= water + ROAD_WATER_FREEBOARD
-            })
-    })
-}
-
-fn road_sample_is_dry(terrain: &WorldTerrain, point: Vec2) -> bool {
-    road_sample_is_dry_at_width(terrain, point, VILLAGE_ROAD_WIDTH)
-}
-
-pub(crate) fn road_segment_is_dry(terrain: &WorldTerrain, start: Vec2, end: Vec2) -> bool {
-    road_segment_is_dry_at_width(terrain, start, end, VILLAGE_ROAD_WIDTH)
-}
-
-fn road_segment_is_dry_at_width(
-    terrain: &WorldTerrain,
-    start: Vec2,
-    end: Vec2,
-    width: f32,
-) -> bool {
-    let steps = (start.distance(end) / NAVIGATION_SAMPLE_STEP)
-        .ceil()
-        .max(1.0) as usize;
-    (0..=steps).all(|step| {
-        road_sample_is_dry_at_width(terrain, start.lerp(end, step as f32 / steps as f32), width)
-    })
-}
-
-fn road_corridor_is_dry(terrain: &WorldTerrain, points: &[Vec2], width: f32) -> bool {
-    points
-        .windows(2)
-        .all(|pair| road_segment_is_dry_at_width(terrain, pair[0], pair[1], width))
-}
 
 pub(crate) fn doorway_road_apron_is_dry(
     terrain: &WorldTerrain,
@@ -541,9 +484,8 @@ impl RoadSurvey<'_> {
             || point.y < self.min.y
             || point.x > self.max.x
             || point.y > self.max.y
+            || !road_sample_is_dry(self.terrain, point)
         {
-            true
-        } else if !road_sample_is_dry(self.terrain, point) {
             true
         } else {
             // Props may overlap a chosen chopping/interaction target, so the
@@ -1641,12 +1583,12 @@ pub fn ensure_moot_administrations(
 pub fn staff_and_pay_road_stewards(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
-    buildings: Query<&SettlementBuilding>,
     mut halls: Query<(
         Entity,
         &mut Settlement,
         &mut MootAdministration,
         &mut MootAdministrationRuntime,
+        Option<&shared::components::SettlementId>,
     )>,
     mut villagers: Query<(
         Entity,
@@ -1655,25 +1597,28 @@ pub fn staff_and_pay_road_stewards(
         &mut Occupation,
         &mut Wallet,
         Option<&RoadSteward>,
+        Option<&shared::components::EmployedAt>,
+        Option<&shared::components::CivicEmployment>,
     )>,
 ) {
     let Some(day) = world_time.iter().next().map(|clock| clock.day) else {
         return;
     };
-    let employed: HashSet<&str> = buildings
-        .iter()
-        .flat_map(|building| building.workers.iter().map(String::as_str))
-        .collect();
-
-    for (hall, mut settlement, mut administration, mut runtime) in halls.iter_mut() {
+    for (hall, mut settlement, mut administration, mut runtime, settlement_id) in halls.iter_mut() {
         let current_name = administration.road_steward.clone();
         let current = current_name.as_deref().and_then(|wanted| {
             villagers
                 .iter()
-                .find(|(_, name, intent, _, _, _)| {
+                .find(|(_, name, intent, _, _, _, _, civic_job)| {
                     name.0 == wanted
                         && intent.settlement() == Some(hall)
                         && intent.counts_as_resident()
+                        && settlement_id.is_none_or(|settlement_id| {
+                            civic_job.is_some_and(|job| {
+                                job.settlement == *settlement_id
+                                    && job.role == shared::components::CivicRole::RoadSteward
+                            })
+                        })
                 })
                 .map(|(entity, ..)| entity)
         });
@@ -1685,12 +1630,15 @@ pub fn staff_and_pay_road_stewards(
                     .find(|(_, name, ..)| name.0 == wanted)
                     .map(|(entity, ..)| entity)
                 {
-                    if let Ok((_, _, _, mut occupation, _, _)) = villagers.get_mut(entity) {
+                    if let Ok((_, _, _, mut occupation, _, _, _, _)) = villagers.get_mut(entity) {
                         if occupation.0.as_deref() == Some("Road Steward") {
                             occupation.0 = None;
                         }
                     }
-                    commands.entity(entity).remove::<RoadSteward>();
+                    commands
+                        .entity(entity)
+                        .remove::<RoadSteward>()
+                        .remove::<shared::components::CivicEmployment>();
                 }
             }
             administration.road_steward = None;
@@ -1703,11 +1651,12 @@ pub fn staff_and_pay_road_stewards(
         } else {
             let candidate = villagers
                 .iter()
-                .filter(|(_, name, intent, occupation, _, steward)| {
+                .filter(|(_, _, intent, occupation, _, steward, employed_at, civic_job)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
                         && occupation.0.is_none()
                         && steward.is_none()
-                        && !employed.contains(name.0.as_str())
+                        && employed_at.is_none()
+                        && civic_job.is_none()
                 })
                 .min_by(|a, b| a.1 .0.cmp(&b.1 .0))
                 .map(|(entity, ..)| entity);
@@ -1715,7 +1664,7 @@ pub fn staff_and_pay_road_stewards(
                 runtime.last_paid_day = day;
                 continue;
             };
-            let Ok((_, name, _, mut occupation, _, _)) = villagers.get_mut(candidate) else {
+            let Ok((_, name, _, mut occupation, _, _, _, _)) = villagers.get_mut(candidate) else {
                 continue;
             };
             occupation.0 = Some("Road Steward".to_string());
@@ -1727,6 +1676,14 @@ pub fn staff_and_pay_road_stewards(
             commands
                 .entity(candidate)
                 .insert(RoadSteward { settlement: hall });
+            if let Some(settlement_id) = settlement_id {
+                commands
+                    .entity(candidate)
+                    .insert(shared::components::CivicEmployment {
+                        settlement: *settlement_id,
+                        role: shared::components::CivicRole::RoadSteward,
+                    });
+            }
             info!(
                 "Village '{}': {} took the public Road Steward position at the Moot Hall",
                 settlement.name, name.0
@@ -1734,7 +1691,7 @@ pub fn staff_and_pay_road_stewards(
             candidate
         };
 
-        if let Ok((_, _, _, mut occupation, _, steward)) = villagers.get_mut(worker) {
+        if let Ok((_, _, _, mut occupation, _, steward, _, civic_job)) = villagers.get_mut(worker) {
             if occupation.0.as_deref() != Some("Road Steward") {
                 occupation.0 = Some("Road Steward".to_string());
             }
@@ -1742,6 +1699,19 @@ pub fn staff_and_pay_road_stewards(
                 commands
                     .entity(worker)
                     .insert(RoadSteward { settlement: hall });
+            }
+            if let Some(settlement_id) = settlement_id {
+                if civic_job.is_none_or(|job| {
+                    job.settlement != *settlement_id
+                        || job.role != shared::components::CivicRole::RoadSteward
+                }) {
+                    commands
+                        .entity(worker)
+                        .insert(shared::components::CivicEmployment {
+                            settlement: *settlement_id,
+                            role: shared::components::CivicRole::RoadSteward,
+                        });
+                }
             }
         }
 
@@ -1756,7 +1726,7 @@ pub fn staff_and_pay_road_stewards(
         }
         let payment = settlement.treasury.min(administration.wage_arrears);
         if payment > 0 {
-            if let Ok((_, name, _, _, mut wallet, _)) = villagers.get_mut(worker) {
+            if let Ok((_, name, _, _, mut wallet, _, _, _)) = villagers.get_mut(worker) {
                 settlement.treasury -= payment;
                 administration.wage_arrears -= payment;
                 wallet.credit(payment);
@@ -1783,31 +1753,45 @@ pub fn staff_and_pay_road_stewards(
 /// attached without changing the settlement model. The first city worker is
 /// the existing accountable Road Steward.
 pub fn staff_public_positions(
-    buildings: Query<&SettlementBuilding>,
-    mut halls: Query<(Entity, &Settlement, &mut MootAdministration)>,
+    mut commands: Commands,
+    mut halls: Query<(
+        Entity,
+        &Settlement,
+        &mut MootAdministration,
+        Option<&shared::components::SettlementId>,
+    )>,
     mut villagers: Query<(
         Entity,
         &CharacterName,
         &VillagerIntent,
         &mut Occupation,
         Option<&RoadSteward>,
+        Option<&shared::components::EmployedAt>,
+        Option<&shared::components::CivicEmployment>,
     )>,
 ) {
-    let building_workers: HashSet<String> = buildings
-        .iter()
-        .flat_map(|building| building.workers.iter().cloned())
-        .collect();
-
-    for (hall, settlement, mut administration) in halls.iter_mut() {
-        let is_current_resident = |wanted: &str| {
-            villagers.iter().any(|(_, name, intent, _, _)| {
-                name.0 == wanted && intent.settlement() == Some(hall) && intent.counts_as_resident()
-            })
+    for (hall, settlement, mut administration, settlement_id) in halls.iter_mut() {
+        let has_civic_role = |wanted: &str, role: shared::components::CivicRole| {
+            villagers
+                .iter()
+                .any(|(_, name, intent, _, _, _, civic_job)| {
+                    name.0 == wanted
+                        && intent.settlement() == Some(hall)
+                        && intent.counts_as_resident()
+                        && settlement_id.is_none_or(|settlement_id| {
+                            civic_job.is_some_and(|job| {
+                                job.settlement == *settlement_id && job.role == role
+                            })
+                        })
+                })
         };
         let mut city_workers = administration.city_workers.clone();
         let mut guards = administration.guards.clone();
-        city_workers.retain(|name| is_current_resident(name));
-        guards.retain(|name| is_current_resident(name));
+        city_workers.retain(|name| {
+            has_civic_role(name, shared::components::CivicRole::CityWorker)
+                || has_civic_role(name, shared::components::CivicRole::RoadSteward)
+        });
+        guards.retain(|name| has_civic_role(name, shared::components::CivicRole::Guard));
 
         if let Some(steward) = administration.road_steward.clone() {
             if !city_workers.contains(&steward) {
@@ -1827,53 +1811,61 @@ pub fn staff_public_positions(
         while city_workers.len() < desired_workers
             && city_workers.len() + guards.len() < staffing_budget
         {
-            let occupied: HashSet<&str> = city_workers
-                .iter()
-                .chain(guards.iter())
-                .map(String::as_str)
-                .collect();
             let candidate = villagers
                 .iter()
-                .filter(|(_, name, intent, occupation, _)| {
+                .filter(|(_, _, intent, occupation, _, employed_at, civic_job)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
                         && occupation.0.is_none()
-                        && !building_workers.contains(&name.0)
-                        && !occupied.contains(name.0.as_str())
+                        && employed_at.is_none()
+                        && civic_job.is_none()
                 })
                 .min_by(|a, b| a.1 .0.cmp(&b.1 .0))
-                .map(|(entity, name, _, _, _)| (entity, name.0.clone()));
+                .map(|(entity, name, _, _, _, _, _)| (entity, name.0.clone()));
             let Some((entity, name)) = candidate else {
                 break;
             };
-            if let Ok((_, _, _, mut occupation, steward)) = villagers.get_mut(entity) {
+            if let Ok((_, _, _, mut occupation, steward, _, _)) = villagers.get_mut(entity) {
                 if steward.is_none() {
                     occupation.0 = Some("City Worker".to_string());
+                    commands.entity(entity).insert(WorkStatus::Employed);
+                    if let Some(settlement_id) = settlement_id {
+                        commands
+                            .entity(entity)
+                            .insert(shared::components::CivicEmployment {
+                                settlement: *settlement_id,
+                                role: shared::components::CivicRole::CityWorker,
+                            });
+                    }
                 }
             }
             city_workers.push(name);
         }
 
         while guards.len() < desired_guards && city_workers.len() + guards.len() < staffing_budget {
-            let occupied: HashSet<&str> = city_workers
-                .iter()
-                .chain(guards.iter())
-                .map(String::as_str)
-                .collect();
             let candidate = villagers
                 .iter()
-                .filter(|(_, name, intent, occupation, _)| {
+                .filter(|(_, _, intent, occupation, _, employed_at, civic_job)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
                         && occupation.0.is_none()
-                        && !building_workers.contains(&name.0)
-                        && !occupied.contains(name.0.as_str())
+                        && employed_at.is_none()
+                        && civic_job.is_none()
                 })
                 .min_by(|a, b| a.1 .0.cmp(&b.1 .0))
-                .map(|(entity, name, _, _, _)| (entity, name.0.clone()));
+                .map(|(entity, name, _, _, _, _, _)| (entity, name.0.clone()));
             let Some((entity, name)) = candidate else {
                 break;
             };
-            if let Ok((_, _, _, mut occupation, _)) = villagers.get_mut(entity) {
+            if let Ok((_, _, _, mut occupation, _, _, _)) = villagers.get_mut(entity) {
                 occupation.0 = Some("Town Guard".to_string());
+                commands.entity(entity).insert(WorkStatus::Employed);
+                if let Some(settlement_id) = settlement_id {
+                    commands
+                        .entity(entity)
+                        .insert(shared::components::CivicEmployment {
+                            settlement: *settlement_id,
+                            role: shared::components::CivicRole::Guard,
+                        });
+                }
             }
             guards.push(name);
         }
@@ -1921,13 +1913,16 @@ pub fn audit_village_roads(
         &PlayerPosition,
         Has<HomeRoutine>,
     )>,
-    stewards: Query<(
-        Entity,
-        &CharacterName,
-        &VillagerIntent,
-        &RoadSteward,
-        Option<&RoadBuilderRoutine>,
-    )>,
+    stewards: Query<
+        (
+            Entity,
+            &CharacterName,
+            &VillagerIntent,
+            &RoadSteward,
+            Option<&RoadBuilderRoutine>,
+        ),
+        Without<crate::world::village::strategic::StrategicPerson>,
+    >,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
@@ -2162,7 +2157,7 @@ pub fn audit_village_roads(
 #[allow(clippy::too_many_arguments)]
 pub fn plan_requested_roads(
     mut commands: Commands,
-    time: Option<Res<Time>>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     terrain: Option<Res<WorldTerrain>>,
     colliders: Option<Res<StaticColliders>>,
     derived: Option<Res<DerivedColliderLibrary>>,
@@ -2194,7 +2189,7 @@ pub fn plan_requested_roads(
     mut survey_scratch: Local<SurveyScratch>,
 ) {
     let Some(terrain) = terrain else { return };
-    let now = time.as_ref().map_or(0.0, |time| time.elapsed_secs_f64());
+    let now = simulation_time.elapsed_real_seconds_f64();
     for (building_entity, request, building, position, rotation, backoff) in requests.iter() {
         if backoff.is_some_and(|backoff| now < backoff.retry_after) {
             continue;
@@ -2533,8 +2528,7 @@ pub fn plan_requested_roads(
 
 #[allow(clippy::too_many_arguments)]
 pub fn build_village_roads(
-    time: Res<Time>,
-    warp: Query<&shared::components::TimeWarp>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     terrain: Option<Res<WorldTerrain>>,
     mut commands: Commands,
     mut roads: Query<&mut VillageRoad>,
@@ -2563,8 +2557,7 @@ pub fn build_village_roads(
     >,
 ) {
     let Some(terrain) = terrain else { return };
-    let factor = warp.iter().next().map_or(1.0, |warp| warp.0);
-    let dt = time.delta_secs() * factor;
+    let dt = simulation_time.world_seconds();
     for (
         builder,
         position,

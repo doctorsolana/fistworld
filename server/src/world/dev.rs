@@ -117,10 +117,14 @@ pub fn handle_dev_commands(
     mut hero_index: ResMut<crate::player::hero::HeroIndex>,
     heroes: Query<&Hero>,
     mut named: Query<(
-        &shared::components::CharacterName,
+        &shared::components::PersonId,
         &mut shared::components::CharacterAffiliation,
     )>,
-    kinds: Query<&shared::components::CharacterKind>,
+    kinds: Query<(
+        Entity,
+        &shared::components::PersonId,
+        &shared::components::CharacterKind,
+    )>,
     settlements: Query<(
         &shared::components::Settlement,
         &shared::components::PlayerPosition,
@@ -240,7 +244,7 @@ pub fn handle_dev_commands(
                         "Dev: villager {entity:?} spawned at {safe_position:?} (requested {pos:?})"
                     );
                 }
-                DevCommand::SetAffiliation { character, banner } => {
+                DevCommand::SetAffiliation { person, banner } => {
                     // Reject out-of-range indices rather than storing one: a
                     // stored bad index renders as UNAFFILIATED and would look
                     // like the change silently failed.
@@ -248,10 +252,9 @@ pub fn handle_dev_commands(
                         warn!("Dev: ignoring SetAffiliation with unknown banner {banner:?}");
                         continue;
                     }
-                    let wanted = character.to_lowercase();
                     let mut hit = false;
-                    for (name, mut affiliation) in named.iter_mut() {
-                        if name.0.to_lowercase() != wanted {
+                    for (person_id, mut affiliation) in named.iter_mut() {
+                        if *person_id != person {
                             continue;
                         }
                         hit = true;
@@ -261,16 +264,12 @@ pub fn handle_dev_commands(
                         if *affiliation != next {
                             *affiliation = next;
                         }
-                        // STOP at the first match. Generated names are not
-                        // unique -- the first duplicate appears around the
-                        // fifty-first villager -- so without this one command
-                        // re-flags every namesake in the world.
                         break;
                     }
                     if hit {
-                        info!("Dev: '{character}' banner set to {banner:?}");
+                        info!("Dev: person {} banner set to {banner:?}", person.0);
                     } else {
-                        info!("Dev: no character named '{character}'");
+                        info!("Dev: no character with id {}", person.0);
                     }
                 }
                 DevCommand::FoundSettlement { pos, name } => {
@@ -326,13 +325,10 @@ pub fn handle_dev_commands(
                             shared::economy::MootMarket::founding(),
                             shared::components::SettlementPolicies::default(),
                             shared::components::PlayerPosition(grounded),
-                            // NO RegionCoord, deliberately. Region tagging is
-                            // what opts an entity into interest management, and
-                            // settlement summaries are the map screen
-                            // (WORLD-DESIGN section 7) -- a place you have to
-                            // stand next to before it appears on your map is not
-                            // a map. Entities without the tag replicate to
-                            // everyone, which is exactly what a summary wants.
+                            // The shared village schedule tags the physical hall
+                            // with RegionCoord before network visibility is
+                            // applied. Its tiny SettlementSummary is the global
+                            // map/encyclopedia record.
                             lightyear::prelude::Replicate::to_clients(
                                 lightyear::prelude::NetworkTarget::All,
                             ),
@@ -340,10 +336,8 @@ pub fn handle_dev_commands(
                         .id();
                     info!("Dev: founded '{name}' ({entity:?}) at {grounded:?}");
                 }
-                DevCommand::SetRetinue { unit, commanded } => {
-                    // Entity-targeted, because command must be exact and
-                    // generated names collide.
-                    if unit == Entity::PLACEHOLDER {
+                DevCommand::SetRetinue { person, commanded } => {
+                    if !person.is_assigned() {
                         continue;
                     }
                     let Some(account) = profiles.peer_to_name.get(&remote_id.0).cloned() else {
@@ -352,7 +346,8 @@ pub fn handle_dev_commands(
                     // Only VILLAGERS can be conscripted. A hero is somebody's
                     // persisted body; taking one into a retinue would let god
                     // mode hand a player's character to another player.
-                    let Ok(kind) = kinds.get(unit) else {
+                    let Some((unit, _, kind)) = kinds.iter().find(|(_, id, _)| **id == person)
+                    else {
                         continue;
                     };
                     if *kind != shared::components::CharacterKind::Villager {

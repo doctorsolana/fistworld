@@ -15,9 +15,16 @@
 //! buildings and draw them; they never decide anything.
 
 pub mod ambient;
+mod economy;
 pub mod history;
+mod production;
 #[cfg(test)]
 mod scale_lab;
+pub mod schedule;
+pub mod strategic;
+
+pub(crate) use economy::review_automatic_wage_offer;
+pub(crate) use production::{farmer_seconds_per_wheat, fisher_seconds_per_food, lumber_tree_yield};
 
 use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::{HashMap, HashSet};
@@ -33,11 +40,9 @@ use shared::components::{
 use shared::economy::{
     permit_price, BusinessAccount, BusinessSalePolicy, BusinessWagePolicy, CarriedLoad, Good,
     GoodsInventory, HouseholdEconomy, MootMarket, SettlementEconomy, Wallet, WorkforceRequirements,
-    BUSINESS_WAGE_REVIEW_STEP, FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE,
-    FULLY_STAFFED_DAYS_BEFORE_REVIEW, MAXIMUM_BUSINESS_DAILY_WAGE, MINIMUM_BUSINESS_DAILY_WAGE,
-    PAYROLL_STRESS_DAYS_BEFORE_CUT, PENNIES_PER_COIN, STARTING_TREASURY_MONEY,
-    VACANCY_DAYS_BEFORE_RAISE, VILLAGE_MIN_PROSPERITY, VILLAGE_MIN_RESIDENTS,
-    VILLAGE_REQUIRED_SECURE_DAYS, WEALTHY_OWNER_MONEY,
+    FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE, MAXIMUM_BUSINESS_DAILY_WAGE,
+    MINIMUM_BUSINESS_DAILY_WAGE, PENNIES_PER_COIN, STARTING_TREASURY_MONEY, VILLAGE_MIN_PROSPERITY,
+    VILLAGE_MIN_RESIDENTS, VILLAGE_REQUIRED_SECURE_DAYS, WEALTHY_OWNER_MONEY,
 };
 use shared::region::{RegionCoord, SimLevel};
 use shared::spatial::SpatialObstacleGrid;
@@ -163,40 +168,6 @@ fn farmstead_position_key(position: Vec3) -> FarmsteadPositionKey {
         position.y.to_bits(),
         position.z.to_bits(),
     )
-}
-
-/// Actual field labour required for one inventory unit. Progress is retained
-/// between shifts, so short working days reduce current output without erasing
-/// work or requiring a special per-day cap. Almost barren fields can still
-/// yield eventually, but are proportionally unattractive places to build.
-fn farmer_seconds_per_wheat(quality: f32) -> f32 {
-    let quality = if quality.is_finite() {
-        quality.clamp(0.01, 1.0)
-    } else {
-        0.01
-    };
-    PERFECT_FIELD_SECONDS_PER_WHEAT / quality
-}
-
-/// Pier quality uses the same readable scale as farmland: ideal water can
-/// approach six catches per ordinary shift, while a two-thirds-quality shore
-/// approaches four. Travel along the pier is real labour overhead rather than
-/// being hidden inside a daily output table.
-fn fisher_seconds_per_food(quality: f32) -> f32 {
-    farmer_seconds_per_wheat(quality)
-}
-
-/// A completed interaction with a real tree creates one physical carried
-/// bundle, whose size reflects the timber density sampled where the hut was
-/// built. There is deliberately no daily ceiling.
-fn lumber_tree_yield(quality: f32) -> u32 {
-    if quality < 0.34 {
-        1
-    } else if quality < 0.67 {
-        2
-    } else {
-        3
-    }
 }
 
 /// Where a villager is in the business of joining somewhere.
@@ -509,25 +480,31 @@ pub fn ensure_business_economies(
     buildings: Query<(
         Entity,
         &SettlementBuilding,
+        Option<&shared::components::OwnedBy>,
         Option<&BusinessAccount>,
         Option<&BusinessSalePolicy>,
         Option<&BusinessWagePolicy>,
     )>,
-    mut owners: Query<(&CharacterName, &mut Wallet)>,
+    mut owners: Query<(
+        Option<&shared::components::PersonId>,
+        &CharacterName,
+        &mut Wallet,
+    )>,
 ) {
-    for (entity, building, account, policy, wage_policy) in buildings.iter() {
+    for (entity, building, owner_id, account, policy, wage_policy) in buildings.iter() {
         if business_output(building.kind).is_none() {
             continue;
         }
         let mut entity_commands = commands.entity(entity);
         if account.is_none() {
             let mut opening_cash = 0;
-            if let Some(owner) = building.owner.as_deref() {
-                if let Some((_, mut wallet)) = owners.iter_mut().find(|(name, _)| name.0 == owner) {
-                    let wanted = 2 * PENNIES_PER_COIN;
-                    if wallet.debit(wanted) {
-                        opening_cash = wanted;
-                    }
+            if let Some((_, _, mut wallet)) = owners.iter_mut().find(|(person_id, name, _)| {
+                owner_id.is_some_and(|owner| person_id.copied() == Some(owner.0))
+                    || (owner_id.is_none() && building.owner.as_deref() == Some(name.0.as_str()))
+            }) {
+                let wanted = 2 * PENNIES_PER_COIN;
+                if wallet.debit(wanted) {
+                    opening_cash = wanted;
                 }
             }
             entity_commands.insert(BusinessAccount {
@@ -551,8 +528,12 @@ pub fn staff_moot_hall_roles(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
     mut last_payday: Local<HashMap<Entity, u32>>,
-    buildings: Query<&SettlementBuilding>,
-    mut halls: Query<(Entity, &mut Settlement, &mut MootAdministration)>,
+    mut halls: Query<(
+        Entity,
+        &mut Settlement,
+        &mut MootAdministration,
+        Option<&shared::components::SettlementId>,
+    )>,
     mut villagers: Query<(
         Entity,
         &CharacterName,
@@ -560,31 +541,42 @@ pub fn staff_moot_hall_roles(
         &mut Occupation,
         Option<&WorkStatus>,
         Option<&MarketPorter>,
+        Option<&shared::components::EmployedAt>,
+        Option<&shared::components::CivicEmployment>,
     )>,
-    mut wallets: Query<(&CharacterName, &mut Wallet)>,
+    mut wallets: Query<(
+        &CharacterName,
+        Option<&shared::components::CivicEmployment>,
+        &mut Wallet,
+    )>,
 ) {
     let day = world_time.iter().next().map_or(0, |clock| clock.day);
-    let business_workers: HashSet<&str> = buildings
-        .iter()
-        .flat_map(|building| building.workers.iter().map(String::as_str))
-        .collect();
-    for (hall, mut settlement, mut administration) in halls.iter_mut() {
-        let valid = |wanted: &str| {
-            villagers.iter().any(|(_, name, intent, _, _, _)| {
-                name.0 == wanted && intent.settlement() == Some(hall) && intent.counts_as_resident()
-            })
+    for (hall, mut settlement, mut administration, settlement_id) in halls.iter_mut() {
+        let valid = |wanted: &str, role: shared::components::CivicRole| {
+            villagers
+                .iter()
+                .any(|(_, name, intent, _, _, _, _, civic_job)| {
+                    name.0 == wanted
+                        && intent.settlement() == Some(hall)
+                        && intent.counts_as_resident()
+                        && settlement_id.is_none_or(|settlement_id| {
+                            civic_job.is_some_and(|job| {
+                                job.settlement == *settlement_id && job.role == role
+                            })
+                        })
+                })
         };
         if administration
             .reeve
             .as_deref()
-            .is_some_and(|name| !valid(name))
+            .is_some_and(|name| !valid(name, shared::components::CivicRole::Reeve))
         {
             administration.reeve = None;
         }
         if administration
             .market_porter
             .as_deref()
-            .is_some_and(|name| !valid(name))
+            .is_some_and(|name| !valid(name, shared::components::CivicRole::MarketPorter))
         {
             administration.market_porter = None;
         }
@@ -607,32 +599,36 @@ pub fn staff_moot_hall_roles(
             if filled {
                 continue;
             }
-            let occupied: HashSet<String> = administration
-                .road_steward
-                .iter()
-                .chain(administration.reeve.iter())
-                .chain(administration.market_porter.iter())
-                .chain(administration.city_workers.iter())
-                .chain(administration.guards.iter())
-                .cloned()
-                .collect();
             let candidate = villagers
                 .iter()
-                .filter(|(_, name, intent, occupation, status, _)| {
+                .filter(|(_, _, intent, occupation, status, _, employed_at, civic_job)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
                         && occupation.0.is_none()
+                        && employed_at.is_none()
+                        && civic_job.is_none()
                         && status.is_none_or(|status| *status == WorkStatus::LookingForWork)
-                        && !business_workers.contains(name.0.as_str())
-                        && !occupied.contains(&name.0)
                 })
                 .min_by(|a, b| a.1 .0.cmp(&b.1 .0))
                 .map(|(entity, ..)| entity);
             let Some(candidate) = candidate else { continue };
-            let Ok((_, name, _, mut occupation, _, marker)) = villagers.get_mut(candidate) else {
+            let Ok((_, name, _, mut occupation, _, marker, _, _)) = villagers.get_mut(candidate)
+            else {
                 continue;
             };
             occupation.0 = Some(title.to_string());
             commands.entity(candidate).insert(WorkStatus::Employed);
+            if let Some(settlement_id) = settlement_id {
+                commands
+                    .entity(candidate)
+                    .insert(shared::components::CivicEmployment {
+                        settlement: *settlement_id,
+                        role: if porter_role {
+                            shared::components::CivicRole::MarketPorter
+                        } else {
+                            shared::components::CivicRole::Reeve
+                        },
+                    });
+            }
             if porter_role {
                 administration.market_porter = Some(name.0.clone());
                 if marker.is_none_or(|porter| porter.settlement != hall) {
@@ -654,20 +650,29 @@ pub fn staff_moot_hall_roles(
         if elapsed > 0 {
             *previous = day;
             let due = FOUNDING_DAILY_WAGE.saturating_mul(u64::from(elapsed));
-            for employee in [
-                administration.reeve.as_deref(),
-                administration.market_porter.as_deref(),
+            for (employee, role) in [
+                (
+                    administration.reeve.as_deref(),
+                    shared::components::CivicRole::Reeve,
+                ),
+                (
+                    administration.market_porter.as_deref(),
+                    shared::components::CivicRole::MarketPorter,
+                ),
             ]
             .into_iter()
-            .flatten()
             {
+                let Some(employee) = employee else { continue };
                 let payment = settlement.treasury.min(due);
                 if payment == 0 {
                     break;
                 }
-                if let Some((_, mut wallet)) =
-                    wallets.iter_mut().find(|(name, _)| name.0 == employee)
-                {
+                if let Some((_, _, mut wallet)) = wallets.iter_mut().find(|(name, civic_job, _)| {
+                    settlement_id.is_some_and(|settlement_id| {
+                        civic_job
+                            .is_some_and(|job| job.settlement == *settlement_id && job.role == role)
+                    }) || (settlement_id.is_none() && name.0 == employee)
+                }) {
                     settlement.treasury -= payment;
                     wallet.credit(payment);
                 }
@@ -680,10 +685,18 @@ pub fn staff_moot_hall_roles(
 /// is an intentional choice and is never silently converted back into job
 /// seeking merely because the occupation title is empty.
 pub fn reconcile_work_statuses(
-    mut villagers: Query<(&Occupation, &mut WorkStatus), With<CharacterKind>>,
+    mut villagers: Query<
+        (
+            &Occupation,
+            Option<&shared::components::EmployedAt>,
+            Option<&shared::components::CivicEmployment>,
+            &mut WorkStatus,
+        ),
+        With<CharacterKind>,
+    >,
 ) {
-    for (occupation, mut status) in villagers.iter_mut() {
-        let next = if occupation.0.is_some() {
+    for (occupation, employed_at, civic_job, mut status) in villagers.iter_mut() {
+        let next = if occupation.0.is_some() || employed_at.is_some() || civic_job.is_some() {
             WorkStatus::Employed
         } else if *status == WorkStatus::Chilling {
             WorkStatus::Chilling
@@ -738,7 +751,7 @@ pub fn run_market_collections(
             Option<&HouseholdShoppingRoutine>,
             Option<&NavigationRouteFailed>,
         ),
-        With<CharacterKind>,
+        (With<CharacterKind>, Without<strategic::StrategicPerson>),
     >,
 ) {
     for (
@@ -977,14 +990,19 @@ pub fn run_business_payroll_and_owner_leisure(
     world_time: Query<&WorldTime>,
     settlements: Query<(Entity, &Settlement)>,
     mut businesses: Query<(
+        Entity,
         &mut SettlementBuilding,
         &mut BusinessAccount,
         &mut BusinessWagePolicy,
+        Option<&shared::components::BuildingId>,
+        Option<&shared::components::OwnedBy>,
     )>,
     mut villagers: Query<(
         Entity,
         &CharacterName,
         &VillagerIntent,
+        Option<&shared::components::PersonId>,
+        Option<&shared::components::EmployedAt>,
         &mut Wallet,
         &mut Occupation,
         &mut WorkStatus,
@@ -1006,22 +1024,37 @@ pub fn run_business_payroll_and_owner_leisure(
     // villagers made payroll O(businesses * population), and the wealthy-owner
     // check repeated that cost even on ticks with no day boundary.
     let mut people_by_settlement: HashMap<Entity, HashMap<String, Entity>> = HashMap::new();
+    let mut people_by_id: HashMap<shared::components::PersonId, Entity> = HashMap::new();
+    let mut workers_by_building: HashMap<shared::components::BuildingId, Vec<Entity>> =
+        HashMap::new();
     let mut available_replacements: HashMap<Entity, usize> = HashMap::new();
-    for (entity, name, intent, _, occupation, status) in villagers.iter() {
+    for (entity, name, intent, person_id, employed_at, _, occupation, status) in villagers.iter() {
         let Some(settlement) = intent.settlement() else {
             continue;
         };
+        if let Some(person_id) = person_id {
+            people_by_id.insert(*person_id, entity);
+        }
+        if let Some(employment) = employed_at {
+            workers_by_building
+                .entry(employment.0)
+                .or_default()
+                .push(entity);
+        }
         people_by_settlement
             .entry(settlement)
             .or_default()
             .entry(name.0.clone())
             .or_insert(entity);
-        if occupation.0.is_none() && *status == WorkStatus::LookingForWork {
+        if occupation.0.is_none() && employed_at.is_none() && *status == WorkStatus::LookingForWork
+        {
             *available_replacements.entry(settlement).or_default() += 1;
         }
     }
 
-    for (mut building, mut account, mut wage_policy) in businesses.iter_mut() {
+    for (business_entity, mut building, mut account, mut wage_policy, building_id, owner_id) in
+        businesses.iter_mut()
+    {
         if business_output(building.kind).is_none() {
             continue;
         }
@@ -1029,6 +1062,32 @@ pub fn run_business_payroll_and_owner_leisure(
             continue;
         };
         let people = people_by_settlement.get(&settlement);
+        let mut worker_entities: Vec<Entity> = building_id
+            .and_then(|building_id| workers_by_building.get(building_id))
+            .cloned()
+            .unwrap_or_default();
+        // Compatibility for focused tests and pre-identity saves. Once a
+        // building has durable assignments, display names never decide money.
+        if worker_entities.is_empty() {
+            let mut workers = building.workers.clone();
+            workers.sort();
+            worker_entities.extend(
+                workers
+                    .iter()
+                    .filter_map(|wanted| people.and_then(|people| people.get(wanted)).copied()),
+            );
+        }
+        worker_entities.sort_unstable_by_key(|entity| entity.to_bits());
+        worker_entities.dedup();
+        let worker_count = worker_entities.len();
+        let owner_entity = owner_id
+            .and_then(|owner| people_by_id.get(&owner.0).copied())
+            .or_else(|| {
+                building
+                    .owner
+                    .as_deref()
+                    .and_then(|owner| people.and_then(|people| people.get(owner)).copied())
+            });
         if account.last_payroll_day == u32::MAX {
             account.last_payroll_day = day;
         }
@@ -1041,27 +1100,21 @@ pub fn run_business_payroll_and_owner_leisure(
             let per_worker = wage_policy.daily_wage.saturating_mul(u64::from(elapsed));
             account.wage_arrears = account
                 .wage_arrears
-                .saturating_add(per_worker.saturating_mul(building.workers.len() as u64));
+                .saturating_add(per_worker.saturating_mul(worker_count as u64));
 
             // Arrears are a real workplace liability, not merely a warning
             // counter. When later sales make cash available, distribute the
             // entire affordable obligation evenly so no alphabetically-early
             // worker is always paid while everybody else starves.
-            let mut workers = building.workers.clone();
-            workers.sort();
-            let worker_entities: Vec<Entity> = workers
-                .iter()
-                .filter_map(|wanted| people.and_then(|people| people.get(wanted)).copied())
-                .collect();
             if !worker_entities.is_empty() {
                 let payment_budget = account.cash.min(account.wage_arrears);
                 let worker_count = worker_entities.len() as u64;
                 let equal_share = payment_budget / worker_count;
                 let remainder = payment_budget % worker_count;
                 let mut paid = 0_u64;
-                for (index, worker) in worker_entities.into_iter().enumerate() {
+                for (index, worker) in worker_entities.iter().copied().enumerate() {
                     let payment = equal_share + u64::from((index as u64) < remainder);
-                    let Ok((_, _, _, mut wallet, _, _)) = villagers.get_mut(worker) else {
+                    let Ok((_, _, _, _, _, mut wallet, _, _)) = villagers.get_mut(worker) else {
                         continue;
                     };
                     wallet.credit(payment);
@@ -1071,18 +1124,17 @@ pub fn run_business_payroll_and_owner_leisure(
                 account.wage_arrears = account.wage_arrears.saturating_sub(paid);
             }
 
-            if let Some(owner) = building.owner.as_deref() {
+            if building.owner.is_some() {
                 let payroll_reserve = wage_policy
                     .daily_wage
-                    .saturating_mul(building.workers.len() as u64)
+                    .saturating_mul(worker_count as u64)
                     .saturating_mul(2)
                     .saturating_add(2 * PENNIES_PER_COIN)
                     .saturating_add(account.wage_arrears);
                 let draw = account.cash.saturating_sub(payroll_reserve);
                 if draw > 0 {
-                    if let Some(owner_entity) = people.and_then(|people| people.get(owner)).copied()
-                    {
-                        let Ok((_, _, _, mut wallet, _, _)) = villagers.get_mut(owner_entity)
+                    if let Some(owner_entity) = owner_entity {
+                        let Ok((_, _, _, _, _, mut wallet, _, _)) = villagers.get_mut(owner_entity)
                         else {
                             continue;
                         };
@@ -1095,7 +1147,7 @@ pub fn run_business_payroll_and_owner_leisure(
             review_automatic_wage_offer(
                 &mut wage_policy,
                 elapsed,
-                building.workers.len(),
+                worker_count,
                 building.kind.positions() as usize,
                 account.cash,
                 account.wage_arrears,
@@ -1105,12 +1157,19 @@ pub fn run_business_payroll_and_owner_leisure(
         let Some(owner) = building.owner.clone() else {
             continue;
         };
-        if !building.workers.iter().any(|worker| worker == &owner) {
-            continue;
-        }
-        let Some(owner_entity) = people.and_then(|people| people.get(&owner)).copied() else {
+        let Some(owner_entity) = owner_entity else {
             continue;
         };
+        let owner_is_worker = building_id.is_some_and(|building_id| {
+            villagers
+                .get(owner_entity)
+                .is_ok_and(|(_, _, _, _, employed_at, _, _, _)| {
+                    employed_at.copied() == Some(shared::components::EmployedAt(*building_id))
+                })
+        }) || building.workers.iter().any(|worker| worker == &owner);
+        if !owner_is_worker {
+            continue;
+        }
         let replacement_exists = available_replacements
             .get(&settlement)
             .copied()
@@ -1118,21 +1177,23 @@ pub fn run_business_payroll_and_owner_leisure(
             > 0;
         let owner_is_wealthy = villagers
             .get(owner_entity)
-            .is_ok_and(|(_, _, _, wallet, _, _)| wallet.balance() >= WEALTHY_OWNER_MONEY);
+            .is_ok_and(|(_, _, _, _, _, wallet, _, _)| wallet.balance() >= WEALTHY_OWNER_MONEY);
         let payroll_secure = account.cash
             >= wage_policy
                 .daily_wage
-                .saturating_mul(building.workers.len() as u64)
+                .saturating_mul(worker_count as u64)
                 .saturating_mul(2);
         if !replacement_exists || !owner_is_wealthy || !payroll_secure {
             continue;
         }
         building.workers.retain(|worker| worker != &owner);
-        if let Ok((_, _, _, _, mut occupation, mut status)) = villagers.get_mut(owner_entity) {
+        if let Ok((_, _, _, _, _, _, mut occupation, mut status)) = villagers.get_mut(owner_entity)
+        {
             occupation.0 = None;
             *status = WorkStatus::Chilling;
             commands
                 .entity(owner_entity)
+                .remove::<shared::components::EmployedAt>()
                 .remove::<FarmerRoutine>()
                 .remove::<FishingRoutine>()
                 .remove::<LumberjackRoutine>()
@@ -1145,57 +1206,7 @@ pub fn run_business_payroll_and_owner_leisure(
                 building.kind.trade().unwrap_or("business")
             );
         }
-    }
-}
-
-fn review_automatic_wage_offer(
-    policy: &mut BusinessWagePolicy,
-    elapsed_days: u32,
-    filled_positions: usize,
-    total_positions: usize,
-    cash: u64,
-    arrears: u64,
-) {
-    if !policy.automatic || elapsed_days == 0 || total_positions == 0 {
-        return;
-    }
-    let elapsed = elapsed_days.min(u32::from(u16::MAX)) as u16;
-    if filled_positions < total_positions {
-        policy.vacancy_days = policy.vacancy_days.saturating_add(elapsed);
-        policy.fully_staffed_days = 0;
-        policy.payroll_stress_days = 0;
-        let next = policy
-            .daily_wage
-            .saturating_add(BUSINESS_WAGE_REVIEW_STEP)
-            .min(MAXIMUM_BUSINESS_DAILY_WAGE);
-        let full_day_cost = next.saturating_mul(total_positions as u64);
-        if policy.vacancy_days >= VACANCY_DAYS_BEFORE_RAISE
-            && next > policy.daily_wage
-            && cash >= full_day_cost
-        {
-            policy.daily_wage = next;
-            policy.vacancy_days = 0;
-        }
-        return;
-    }
-
-    policy.vacancy_days = 0;
-    policy.fully_staffed_days = policy.fully_staffed_days.saturating_add(elapsed);
-    if arrears > 0 {
-        policy.payroll_stress_days = policy.payroll_stress_days.saturating_add(elapsed);
-    } else {
-        policy.payroll_stress_days = 0;
-    }
-    let staffed_payroll = policy.daily_wage.saturating_mul(filled_positions as u64);
-    let easy_to_fill_but_cash_tight = policy.fully_staffed_days >= FULLY_STAFFED_DAYS_BEFORE_REVIEW
-        && cash < staffed_payroll.saturating_mul(2);
-    if policy.payroll_stress_days >= PAYROLL_STRESS_DAYS_BEFORE_CUT || easy_to_fill_but_cash_tight {
-        policy.daily_wage = policy
-            .daily_wage
-            .saturating_sub(BUSINESS_WAGE_REVIEW_STEP)
-            .max(MINIMUM_BUSINESS_DAILY_WAGE);
-        policy.payroll_stress_days = 0;
-        policy.fully_staffed_days = 0;
+        let _ = business_entity;
     }
 }
 
@@ -1327,9 +1338,8 @@ fn begin_workplace_exit(
 /// Keep the job system paused while the worker crosses the threshold, so its
 /// destination cannot drag them through the wall while the door is opening.
 pub fn run_workplace_door_transits(
-    time: Res<Time>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     obstacles: Option<Res<SpatialObstacleGrid>>,
-    warp: Query<&shared::components::TimeWarp>,
     mut commands: Commands,
     mut workers: Query<
         (
@@ -1342,10 +1352,10 @@ pub fn run_workplace_door_transits(
             &mut WorkplaceDoorTransit,
             Option<&MoveTarget>,
         ),
-        With<CharacterKind>,
+        (With<CharacterKind>, Without<strategic::StrategicPerson>),
     >,
 ) {
-    let dt = time.delta_secs() * time_warp_factor(&warp);
+    let dt = simulation_time.world_seconds();
     for (worker, position, intent, mut home, mut facing, mut activity, mut transit, move_target) in
         workers.iter_mut()
     {
@@ -1494,6 +1504,12 @@ pub struct HomeRoutine {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HomeAssignment {
     home: Entity,
+}
+
+impl HomeAssignment {
+    pub(crate) const fn home(&self) -> Entity {
+        self.home
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -2206,8 +2222,7 @@ pub fn tag_villager_intent(
 
 /// Uncommitted villagers pick somewhere to live and start walking.
 pub fn seek_settlement(
-    time: Res<Time>,
-    warp: Query<&shared::components::TimeWarp>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     mut clock: ResMut<VillageClock>,
     mut commands: Commands,
     settlements: Query<(
@@ -2223,13 +2238,13 @@ pub fn seek_settlement(
         Option<&MigrationCooldown>,
     )>,
 ) {
-    clock.seek += time.delta_secs() * time_warp_factor(&warp);
+    clock.seek += simulation_time.world_seconds();
     if clock.seek < SEEK_INTERVAL {
         return;
     }
     clock.seek = 0.0;
 
-    let now = time.elapsed_secs_f64();
+    let now = simulation_time.elapsed_real_seconds_f64();
 
     for (entity, position, mut intent, cooldown) in villagers.iter_mut() {
         if !matches!(*intent, VillagerIntent::Idle) {
@@ -2277,7 +2292,7 @@ pub fn seek_settlement(
 /// Villagers who reached their hall become residents of that settlement.
 pub fn arrive_at_settlement(
     mut commands: Commands,
-    time: Option<Res<Time>>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     halls: Query<(&PlayerPosition, &Settlement, Option<&PlayerRotation>)>,
     mut villagers: Query<(
         Entity,
@@ -2288,7 +2303,7 @@ pub fn arrive_at_settlement(
         Option<&MigrationCooldown>,
     )>,
 ) {
-    let now = time.as_ref().map_or(0.0, |time| time.elapsed_secs_f64());
+    let now = simulation_time.elapsed_real_seconds_f64();
     for (entity, position, mut intent, move_target, route_failed, cooldown) in villagers.iter_mut()
     {
         let VillagerIntent::Travelling { settlement } = *intent else {
@@ -2438,8 +2453,7 @@ fn next_civic_need(
 /// that trade and progressively dearer for residents with several holdings.
 #[allow(clippy::too_many_arguments)]
 pub fn consider_permits(
-    time: Res<Time>,
-    warp: Query<&shared::components::TimeWarp>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     mut clock: ResMut<VillageClock>,
     mut commands: Commands,
     planning: PermitPlanningResources,
@@ -2463,11 +2477,12 @@ pub fn consider_permits(
         &CharacterName,
         &mut VillagerIntent,
         Option<&WorkStatus>,
+        Option<&strategic::StrategicPerson>,
     )>,
     road_stewards: Query<(), With<RoadSteward>>,
     mut wallets: Query<&mut Wallet>,
 ) {
-    clock.permit += time.delta_secs() * time_warp_factor(&warp);
+    clock.permit += simulation_time.world_seconds();
     if clock.permit < PERMIT_INTERVAL {
         return;
     }
@@ -2716,10 +2731,11 @@ pub fn consider_permits(
             .collect();
         let applicant = villagers
             .iter()
-            .filter(|(_, _, intent, _)| {
-                matches!(intent, VillagerIntent::Resident { settlement } if *settlement == settlement_entity)
+            .filter(|(_, _, intent, _, strategic)| {
+                strategic.is_none()
+                    && matches!(intent, VillagerIntent::Resident { settlement } if *settlement == settlement_entity)
             })
-            .filter_map(|(entity, name, _, status)| {
+            .filter_map(|(entity, name, _, status, _)| {
                 // Owning a building does not create a second job, but its
                 // construction still needs the applicant's physical time.
                 // Never tear somebody out of a field, workplace doorway or
@@ -2850,7 +2866,10 @@ pub fn consider_permits(
             .remove::<NavigationRoutePending>()
             .remove::<NavigationRouteFailed>()
             .remove::<ambient::AmbientRoutine>();
-        if let Ok(mut intent) = villagers.get_mut(builder).map(|(_, _, intent, _)| intent) {
+        if let Ok(mut intent) = villagers
+            .get_mut(builder)
+            .map(|(_, _, intent, _, _)| intent)
+        {
             *intent = VillagerIntent::Building {
                 settlement: settlement_entity,
                 site,
@@ -2896,11 +2915,10 @@ pub fn site_quality(terrain: &WorldTerrain, kind: SettlementBuildingKind, at: Ve
 /// chops, carries what fits, and deposits it at the site.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn run_construction_material_logistics(
-    time: Res<Time>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     terrain: Option<Res<WorldTerrain>>,
     derived: Option<Res<DerivedColliderLibrary>>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
-    warp: Query<&shared::components::TimeWarp>,
     world_time: Query<&WorldTime>,
     mut commands: Commands,
     settlements: Query<
@@ -2943,8 +2961,8 @@ pub fn run_construction_material_logistics(
     {
         return;
     }
-    let dt = time.delta_secs() * time_warp_factor(&warp);
-    let now = time.elapsed_secs_f64();
+    let dt = simulation_time.world_seconds();
+    let now = simulation_time.elapsed_real_seconds_f64();
     // A terrain proof is bounded but not free. Stagger simultaneous builders
     // across ticks instead of letting a migration wave perform the same
     // impossible-landmass search four times in one server frame.
@@ -3401,13 +3419,12 @@ pub fn run_construction_material_logistics(
 /// built it or what it cost.
 #[allow(clippy::too_many_arguments)]
 pub fn advance_construction(
-    time: Res<Time>,
-    warp: Query<&shared::components::TimeWarp>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     world_time: Query<&WorldTime>,
     mut commands: Commands,
     mut terrain: Option<ResMut<WorldTerrain>>,
     mut deltas: ResMut<PublishedTerrainDeltas>,
-    settlements: Query<&Settlement>,
+    settlements: Query<(&Settlement, Option<&shared::components::SettlementId>)>,
     positions: Query<&PlayerPosition>,
     move_targets: Query<&MoveTarget>,
     home_routines: Query<(), With<HomeRoutine>>,
@@ -3415,11 +3432,12 @@ pub fn advance_construction(
     mut pending: Query<(Entity, &mut UnderConstruction, &GoodsInventory)>,
     mut sites: Query<&mut shared::components::ConstructionSite>,
     mut facings: Query<&mut PlayerRotation>,
+    person_ids: Query<&shared::components::PersonId>,
 ) {
-    let warp = time_warp_factor(&warp);
+    let world_dt = simulation_time.world_seconds();
     let daylight = world_time.iter().next().is_none_or(WorldTime::is_day);
     for (site, mut under, materials) in pending.iter_mut() {
-        let Ok(settlement) = settlements.get(under.settlement) else {
+        let Ok((settlement, settlement_id)) = settlements.get(under.settlement) else {
             // Its settlement vanished; drop the site rather than leaving a
             // building belonging to nowhere.
             release_builder(&mut commands, &mut intents, under.builder, None);
@@ -3537,7 +3555,7 @@ pub fn advance_construction(
                 );
             }
             BuildStage::Raising { seconds_left } => {
-                let left = seconds_left - time.delta_secs() * warp;
+                let left = seconds_left - world_dt;
                 if left > 0.0 {
                     under.stage = BuildStage::Raising { seconds_left: left };
                     continue;
@@ -3561,11 +3579,24 @@ pub fn advance_construction(
                             rotation: under.rotation,
                         },
                         shared::building::BuildingPosition(under.position),
-                        // No RegionCoord: buildings are part of the map screen, like
-                        // the settlements they belong to.
+                        // Region tagging runs later in the shared village schedule;
+                        // only the settlement's lightweight summary stays global.
                         Replicate::to_clients(NetworkTarget::All),
                     ))
                     .id();
+                if let Some(settlement_id) = settlement_id {
+                    commands
+                        .entity(building_entity)
+                        .insert(shared::components::BuildingOf(*settlement_id));
+                }
+                if let Some(owner_id) = under
+                    .builder
+                    .and_then(|builder| person_ids.get(builder).ok().copied())
+                {
+                    commands
+                        .entity(building_entity)
+                        .insert(shared::components::OwnedBy(owner_id));
+                }
                 info!(
                     "Village '{}': {} completed ({:.0}% ground)",
                     settlement.name,
@@ -3689,7 +3720,11 @@ pub fn fill_vacancies(
         &mut Occupation,
         Option<&WorkStatus>,
         Option<&CharacterAttributes>,
+        Option<&shared::components::EmployedAt>,
+        Option<&shared::components::CivicEmployment>,
+        Option<&shared::components::PersonId>,
     )>,
+    building_ids: Query<&shared::components::BuildingId>,
     settlements: Query<(Entity, &Settlement)>,
     administrations: Query<&MootAdministration>,
     active_builders: Query<(), Or<(With<ConstructionMaterialRoutine>, With<RoadBuilderRoutine>)>>,
@@ -3697,49 +3732,91 @@ pub fn fill_vacancies(
     // Civic posts are jobs, not honorary labels. Give those explicit rosters
     // priority when repairing an old save that contains the same person in a
     // business roster as well.
-    let mut employed: HashSet<String> = HashSet::new();
+    let mut legacy_civic_names: HashSet<String> = HashSet::new();
     for administration in administrations.iter() {
         if let Some(reeve) = &administration.reeve {
-            employed.insert(reeve.clone());
+            legacy_civic_names.insert(reeve.clone());
         }
         if let Some(porter) = &administration.market_porter {
-            employed.insert(porter.clone());
+            legacy_civic_names.insert(porter.clone());
         }
         if let Some(steward) = &administration.road_steward {
-            employed.insert(steward.clone());
+            legacy_civic_names.insert(steward.clone());
         }
-        employed.extend(administration.city_workers.iter().cloned());
-        employed.extend(administration.guards.iter().cloned());
+        legacy_civic_names.extend(administration.city_workers.iter().cloned());
+        legacy_civic_names.extend(administration.guards.iter().cloned());
     }
 
-    // Repair legacy or malformed double assignments as well as preventing new
-    // ones. The first business roster keeps an ordinary worker; a civic worker
-    // is removed from every business because their public post already owns
-    // their working day.
-    for (_, mut building, _, _, _) in buildings.iter_mut() {
-        let settlement_name = building.settlement.clone();
-        let trade = building.kind.trade().unwrap_or("workplace");
-        building.workers.retain(|worker| {
-            let keeps_job = employed.insert(worker.clone());
-            if !keeps_job {
-                warn!(
-                    "Village '{}': removed {worker} from the {} roster because they already hold another job",
-                    settlement_name, trade
-                );
-            }
-            keeps_job
-        });
+    let mut assigned_entities = HashSet::new();
+    let mut stable_workers_by_building: HashMap<
+        shared::components::BuildingId,
+        Vec<(shared::components::PersonId, Entity, String)>,
+    > = HashMap::new();
+    for (entity, name, _, _, _, _, _, employment, civic_job, person_id) in villagers.iter() {
+        if employment.is_some() || civic_job.is_some() {
+            assigned_entities.insert(entity);
+        }
+        if employment.is_some() && civic_job.is_some() {
+            // The public post owns the working day. Commands are applied before
+            // routine assignment later in the shared chained schedule.
+            commands
+                .entity(entity)
+                .remove::<shared::components::EmployedAt>();
+        } else if let Some(employment) = employment {
+            stable_workers_by_building
+                .entry(employment.0)
+                .or_default()
+                .push((
+                    person_id.copied().unwrap_or_default(),
+                    entity,
+                    name.0.clone(),
+                ));
+        }
     }
-    if !villagers
-        .iter()
-        .any(|(entity, name, intent, _, occupation, status, _)| {
+    for workers in stable_workers_by_building.values_mut() {
+        workers.sort_unstable_by_key(|(person_id, entity, _)| (person_id.0, entity.to_bits()));
+    }
+
+    // Stable employment is authoritative and the readable roster is derived
+    // from it. This preserves two different people with the same display name
+    // and cleans civic/business double assignment without guessing by name.
+    for (building_entity, mut building, _, _, _) in buildings.iter_mut() {
+        if let Ok(building_id) = building_ids.get(building_entity) {
+            let roster: Vec<String> = stable_workers_by_building
+                .get(building_id)
+                .into_iter()
+                .flatten()
+                .map(|(_, _, name)| name.clone())
+                .collect();
+            if building.workers != roster {
+                building.workers = roster;
+            }
+        } else {
+            let settlement_name = building.settlement.clone();
+            let trade = building.kind.trade().unwrap_or("workplace");
+            building.workers.retain(|worker| {
+                let keeps_job = !legacy_civic_names.contains(worker);
+                if !keeps_job {
+                    warn!(
+                        "Village '{}': removed {worker} from the {} roster because they already hold a civic job",
+                        settlement_name, trade
+                    );
+                }
+                keeps_job
+            });
+        }
+    }
+    if !villagers.iter().any(
+        |(entity, _, intent, _, occupation, status, _, employed_at, civic_job, _)| {
             intent.is_settled()
                 && occupation.0.is_none()
-                && !employed.contains(name.0.as_str())
+                && employed_at.is_none()
+                && civic_job.is_none()
+                && !assigned_entities.contains(&entity)
                 && active_builders.get(entity).is_err()
                 && status.is_none_or(|status| *status == WorkStatus::LookingForWork)
-        })
-    {
+        },
+    ) {
         return;
     }
 
@@ -3778,11 +3855,24 @@ pub fn fill_vacancies(
                 let taker = villagers
                     .iter()
                     .filter(
-                        |(entity, name, intent, _, occupation, status, attributes)| {
+                        |(
+                            entity,
+                            _,
+                            intent,
+                            _,
+                            occupation,
+                            status,
+                            attributes,
+                            employed_at,
+                            civic_job,
+                            _,
+                        )| {
                             intent.is_settled()
                                 && intent.settlement() == Some(settlement_entity)
                                 && occupation.0.is_none()
-                                && !employed.contains(&name.0)
+                                && employed_at.is_none()
+                                && civic_job.is_none()
+                                && !assigned_entities.contains(entity)
                                 && active_builders.get(*entity).is_err()
                                 && status.is_none_or(|status| *status == WorkStatus::LookingForWork)
                                 && requirements.is_none_or(|requirements| {
@@ -3797,7 +3887,7 @@ pub fn fill_vacancies(
                             .distance_squared(plot)
                             .total_cmp(&b.3 .0.distance_squared(plot))
                     })
-                    .map(|(entity, name, _, _, _, _, _)| (entity, name.0.clone()));
+                    .map(|(entity, name, _, _, _, _, _, _, _, _)| (entity, name.0.clone()));
                 if let Some((taker_entity, taker)) = taker {
                     placement = Some((vacancy_entity, kind, offered_wage, taker_entity, taker));
                     break;
@@ -3814,16 +3904,19 @@ pub fn fill_vacancies(
                 break;
             }
             building.workers.push(taker.clone());
-            employed.insert(taker.clone());
-            for (_, name, _, _, mut occupation, _, _) in villagers.iter_mut() {
-                if name.0 == taker {
-                    let title = kind.trade().unwrap_or("Villager").to_string();
-                    if occupation.0.as_deref() != Some(title.as_str()) {
-                        occupation.0 = Some(title);
-                    }
+            assigned_entities.insert(taker_entity);
+            if let Ok((_, _, _, _, mut occupation, _, _, _, _, _)) = villagers.get_mut(taker_entity)
+            {
+                let title = kind.trade().unwrap_or("Villager").to_string();
+                if occupation.0.as_deref() != Some(title.as_str()) {
+                    occupation.0 = Some(title);
                 }
             }
-            commands.entity(taker_entity).insert(WorkStatus::Employed);
+            let mut employee = commands.entity(taker_entity);
+            employee.insert(WorkStatus::Employed);
+            if let Ok(building_id) = building_ids.get(vacancy_entity) {
+                employee.insert(shared::components::EmployedAt(*building_id));
+            }
             info!(
                 "Village '{}': {taker} took work as a {} for {} coin/day",
                 settlement.name,
@@ -4098,7 +4191,7 @@ pub fn run_household_shopping(
             Option<&MoveTarget>,
             Option<&HomeRoutine>,
         ),
-        With<CharacterKind>,
+        (With<CharacterKind>, Without<strategic::StrategicPerson>),
     >,
 ) {
     for (shopper, position, mut activity, mut carrier, mut routine, move_target, home) in
@@ -4346,9 +4439,8 @@ pub fn assign_households(
 /// with a real journey instead of farming or chopping beside the bed.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn run_household_schedules(
-    time: Res<Time>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     obstacles: Option<Res<SpatialObstacleGrid>>,
-    warp: Query<&shared::components::TimeWarp>,
     world_time: Query<&WorldTime>,
     mut commands: Commands,
     homes: Query<
@@ -4382,14 +4474,14 @@ pub fn run_household_schedules(
             Option<&mut RoadBuilderRoutine>,
             Option<&WorkplaceDoorTransit>,
         ),
-        With<CharacterKind>,
+        (With<CharacterKind>, Without<strategic::StrategicPerson>),
     >,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
     };
     let is_day = clock.is_day();
-    let dt = time.delta_secs() * time_warp_factor(&warp);
+    let dt = simulation_time.world_seconds();
 
     for (
         villager,
@@ -4712,7 +4804,12 @@ pub fn run_household_schedules(
 pub fn ensure_farm_fields(
     mut commands: Commands,
     terrain: Option<Res<WorldTerrain>>,
-    farms: Query<(&SettlementBuilding, &PlayerPosition, &PlayerRotation)>,
+    farms: Query<(
+        &SettlementBuilding,
+        &PlayerPosition,
+        &PlayerRotation,
+        Option<&shared::components::BuildingId>,
+    )>,
     fields: Query<&FarmField>,
 ) {
     let Some(terrain) = terrain else {
@@ -4722,7 +4819,7 @@ pub fn ensure_farm_fields(
         .iter()
         .map(|field| (farmstead_position_key(field.farmstead), field.plot_index))
         .collect();
-    for (farm, position, rotation) in farms.iter() {
+    for (farm, position, rotation, building_id) in farms.iter() {
         if farm.kind != SettlementBuildingKind::Farmstead {
             continue;
         }
@@ -4738,17 +4835,24 @@ pub fn ensure_farm_fields(
                 continue;
             };
             field_position.y = terrain.get_height(field_position.x, field_position.z);
-            commands.spawn((
-                FarmField {
-                    settlement: farm.settlement.clone(),
-                    farmstead: position.0,
-                    plot_index,
-                    quality: farm.quality,
-                },
-                PlayerPosition(field_position),
-                PlayerRotation(rotation.0),
-                Replicate::to_clients(NetworkTarget::All),
-            ));
+            let field = commands
+                .spawn((
+                    FarmField {
+                        settlement: farm.settlement.clone(),
+                        farmstead: position.0,
+                        plot_index,
+                        quality: farm.quality,
+                    },
+                    PlayerPosition(field_position),
+                    PlayerRotation(rotation.0),
+                    Replicate::to_clients(NetworkTarget::All),
+                ))
+                .id();
+            if let Some(building_id) = building_id {
+                commands
+                    .entity(field)
+                    .insert(shared::components::AttachedTo(*building_id));
+            }
             info!(
                 "Village '{}': planted wheat field {}/{} beside its Farmstead",
                 farm.settlement,
@@ -4765,7 +4869,12 @@ pub fn ensure_farm_fields(
 pub fn ensure_fishing_piers(
     mut commands: Commands,
     terrain: Option<Res<WorldTerrain>>,
-    huts: Query<(&SettlementBuilding, &PlayerPosition, &PlayerRotation)>,
+    huts: Query<(
+        &SettlementBuilding,
+        &PlayerPosition,
+        &PlayerRotation,
+        Option<&shared::components::BuildingId>,
+    )>,
     piers: Query<&FishingPier>,
 ) {
     let Some(terrain) = terrain else {
@@ -4774,7 +4883,7 @@ pub fn ensure_fishing_piers(
     let Some(water) = terrain.water_level() else {
         return;
     };
-    for (hut, position, rotation) in huts.iter() {
+    for (hut, position, rotation, building_id) in huts.iter() {
         if hut.kind != SettlementBuildingKind::FishermansHut
             || piers.iter().any(|pier| pier.fishermans_hut == position.0)
         {
@@ -4784,16 +4893,23 @@ pub fn ensure_fishing_piers(
             continue;
         };
         pier_position.y = water;
-        commands.spawn((
-            FishingPier {
-                settlement: hut.settlement.clone(),
-                fishermans_hut: position.0,
-                quality: hut.quality,
-            },
-            PlayerPosition(pier_position),
-            PlayerRotation(rotation.0),
-            Replicate::to_clients(NetworkTarget::All),
-        ));
+        let pier = commands
+            .spawn((
+                FishingPier {
+                    settlement: hut.settlement.clone(),
+                    fishermans_hut: position.0,
+                    quality: hut.quality,
+                },
+                PlayerPosition(pier_position),
+                PlayerRotation(rotation.0),
+                Replicate::to_clients(NetworkTarget::All),
+            ))
+            .id();
+        if let Some(building_id) = building_id {
+            commands
+                .entity(pier)
+                .insert(shared::components::AttachedTo(*building_id));
+        }
         info!(
             "Village '{}': set a fishing pier behind its Fisherman's Hut",
             hut.settlement
@@ -4809,6 +4925,7 @@ pub fn assign_farmer_routines(
         &SettlementBuilding,
         &PlayerPosition,
         &PlayerRotation,
+        Option<&shared::components::BuildingId>,
     )>,
     fields: Query<(Entity, &FarmField)>,
     settlements: Query<(Entity, &Settlement)>,
@@ -4820,11 +4937,13 @@ pub fn assign_farmer_routines(
             &PlayerPosition,
             Option<&WorkerOffDuty>,
             Option<&FarmerHarvestProgress>,
+            Option<&shared::components::EmployedAt>,
         ),
         (
             Without<FarmerRoutine>,
             Without<FishingRoutine>,
             Without<LumberjackRoutine>,
+            Without<strategic::StrategicPerson>,
         ),
     >,
 ) {
@@ -4832,6 +4951,23 @@ pub fn assign_farmer_routines(
         return;
     };
     if villagers.is_empty() || !ordinary_workday(clock) {
+        return;
+    }
+    let mut eligible_by_building: HashMap<shared::components::BuildingId, Vec<Entity>> =
+        HashMap::new();
+    for (entity, _, _, _, _, _, employment) in villagers.iter() {
+        if let Some(employment) = employment {
+            eligible_by_building
+                .entry(employment.0)
+                .or_default()
+                .push(entity);
+        }
+    }
+    if eligible_by_building.is_empty()
+        && !farms.iter().any(|(_, building, _, _, building_id)| {
+            building.kind == SettlementBuildingKind::Farmstead && building_id.is_none()
+        })
+    {
         return;
     }
     let mut fields_by_farm: HashMap<FarmsteadPositionKey, Vec<(Entity, u8)>> = HashMap::new();
@@ -4845,7 +4981,7 @@ pub fn assign_farmer_routines(
         farm_fields.sort_by_key(|(_, plot_index)| *plot_index);
     }
     let mut claimed = HashSet::new();
-    for (farmstead, farm, position, rotation) in farms.iter() {
+    for (farmstead, farm, position, rotation, building_id) in farms.iter() {
         if farm.kind != SettlementBuildingKind::Farmstead {
             continue;
         }
@@ -4860,21 +4996,43 @@ pub fn assign_farmer_routines(
         };
         for (worker_index, worker_name) in farm.workers.iter().enumerate() {
             let field = farm_fields[worker_index % farm_fields.len()].0;
-            let candidate = villagers
-                .iter()
-                .filter(|(entity, name, intent, _, off_duty, _)| {
-                    !claimed.contains(entity)
-                        && name.0 == *worker_name
-                        && intent.is_settled()
-                        && intent.settlement() == Some(hall)
-                        && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
-                })
-                .min_by(|a, b| {
-                    a.3 .0
-                        .distance_squared(position.0)
-                        .total_cmp(&b.3 .0.distance_squared(position.0))
-                });
-            let Some((worker, _, _, _, _, progress)) = candidate else {
+            let candidate = if let Some(building_id) = building_id {
+                eligible_by_building
+                    .get(building_id)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entity| villagers.get(*entity).ok())
+                    .filter(|(entity, _, intent, _, off_duty, _, _)| {
+                        !claimed.contains(entity)
+                            && intent.is_settled()
+                            && intent.settlement() == Some(hall)
+                            && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
+                    })
+                    .min_by(|a, b| {
+                        a.3 .0
+                            .distance_squared(position.0)
+                            .total_cmp(&b.3 .0.distance_squared(position.0))
+                    })
+                    .map(|candidate| candidate.0)
+            } else {
+                villagers
+                    .iter()
+                    .filter(|(entity, name, intent, _, off_duty, _, _)| {
+                        !claimed.contains(entity)
+                            && name.0 == *worker_name
+                            && intent.is_settled()
+                            && intent.settlement() == Some(hall)
+                            && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
+                    })
+                    .min_by(|a, b| {
+                        a.3 .0
+                            .distance_squared(position.0)
+                            .total_cmp(&b.3 .0.distance_squared(position.0))
+                    })
+                    .map(|candidate| candidate.0)
+            };
+            let Some(candidate) = candidate else { continue };
+            let Ok((worker, _, _, _, _, progress, _)) = villagers.get(candidate) else {
                 continue;
             };
             let harvest_seconds = progress
@@ -4910,8 +5068,7 @@ pub fn assign_farmer_routines(
 /// evaluates the Farmstead's sale policy and collects only approved surplus.
 #[allow(clippy::too_many_arguments)]
 pub fn run_farmer_routines(
-    time: Res<Time>,
-    warp: Query<&shared::components::TimeWarp>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     world_time: Query<&WorldTime>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
     colliders: Option<Res<StaticColliders>>,
@@ -4941,12 +5098,7 @@ pub fn run_farmer_routines(
         With<CharacterKind>,
     >,
 ) {
-    let factor = warp
-        .iter()
-        .next()
-        .map(|time_warp| time_warp.0)
-        .unwrap_or(1.0);
-    let dt = time.delta_secs() * factor;
+    let dt = simulation_time.world_seconds();
     let Some(clock) = world_time.iter().next() else {
         return;
     };
@@ -5277,6 +5429,7 @@ pub fn assign_fishing_routines(
         &SettlementBuilding,
         &PlayerPosition,
         &PlayerRotation,
+        Option<&shared::components::BuildingId>,
     )>,
     piers: Query<(Entity, &FishingPier)>,
     settlements: Query<(Entity, &Settlement)>,
@@ -5288,11 +5441,13 @@ pub fn assign_fishing_routines(
             &PlayerPosition,
             Option<&WorkerOffDuty>,
             Option<&FishingWorkProgress>,
+            Option<&shared::components::EmployedAt>,
         ),
         (
             Without<FarmerRoutine>,
             Without<FishingRoutine>,
             Without<LumberjackRoutine>,
+            Without<strategic::StrategicPerson>,
         ),
     >,
 ) {
@@ -5302,8 +5457,25 @@ pub fn assign_fishing_routines(
     if villagers.is_empty() || !ordinary_workday(clock) {
         return;
     }
+    let mut eligible_by_building: HashMap<shared::components::BuildingId, Vec<Entity>> =
+        HashMap::new();
+    for (entity, _, _, _, _, _, employment) in villagers.iter() {
+        if let Some(employment) = employment {
+            eligible_by_building
+                .entry(employment.0)
+                .or_default()
+                .push(entity);
+        }
+    }
+    if eligible_by_building.is_empty()
+        && !huts.iter().any(|(_, building, _, _, building_id)| {
+            building.kind == SettlementBuildingKind::FishermansHut && building_id.is_none()
+        })
+    {
+        return;
+    }
     let mut claimed = HashSet::new();
-    for (hut_entity, hut, hut_position, hut_rotation) in huts.iter() {
+    for (hut_entity, hut, hut_position, hut_rotation, building_id) in huts.iter() {
         if hut.kind != SettlementBuildingKind::FishermansHut {
             continue;
         }
@@ -5320,21 +5492,44 @@ pub fn assign_fishing_routines(
             continue;
         };
         for worker_name in &hut.workers {
-            let candidate = villagers
-                .iter()
-                .filter(|(entity, name, intent, _, off_duty, _)| {
-                    !claimed.contains(entity)
-                        && name.0 == *worker_name
-                        && intent.is_settled()
-                        && intent.settlement() == Some(hall)
-                        && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
-                })
-                .min_by(|a, b| {
-                    a.3 .0
-                        .distance_squared(hut_position.0)
-                        .total_cmp(&b.3 .0.distance_squared(hut_position.0))
-                });
-            let Some((worker, _, _, _, _, progress)) = candidate else {
+            let candidate = if let Some(building_id) = building_id {
+                eligible_by_building
+                    .get(building_id)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entity| villagers.get(*entity).ok())
+                    .filter(|(entity, _, intent, _, off_duty, _, _)| {
+                        !claimed.contains(entity)
+                            && intent.is_settled()
+                            && intent.settlement() == Some(hall)
+                            && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
+                    })
+                    .min_by(|a, b| {
+                        a.3 .0
+                            .distance_squared(hut_position.0)
+                            .total_cmp(&b.3 .0.distance_squared(hut_position.0))
+                    })
+                    .map(|candidate| candidate.0)
+            } else {
+                villagers
+                    .iter()
+                    .filter(|(entity, name, intent, _, off_duty, _, _)| {
+                        !claimed.contains(entity)
+                            && name.0 == *worker_name
+                            && intent.is_settled()
+                            && intent.settlement() == Some(hall)
+                            && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
+                    })
+                    .min_by(|a, b| {
+                        a.3 .0
+                            .distance_squared(hut_position.0)
+                            .total_cmp(&b.3 .0.distance_squared(hut_position.0))
+                    })
+                    .map(|candidate| candidate.0)
+            };
+            let Some(candidate) = candidate else { continue };
+            let Ok((worker, worker_display_name, _, _, _, progress, _)) = villagers.get(candidate)
+            else {
                 continue;
             };
             let catch_seconds = progress
@@ -5362,8 +5557,8 @@ pub fn assign_fishing_routines(
                     MoveTarget(hut.kind.entrance_position(hut_position.0, hut_rotation.0)),
                 ));
             info!(
-                "Village '{}': {worker_name} began fishing from the new pier",
-                hut.settlement
+                "Village '{}': {} began fishing from the new pier",
+                hut.settlement, worker_display_name.0,
             );
         }
     }
@@ -5418,9 +5613,8 @@ fn install_fishing_route(
 /// collects policy-approved surplus as a separate job.
 #[allow(clippy::too_many_arguments)]
 pub fn run_fishing_routines(
-    time: Res<Time>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     terrain: Option<Res<WorldTerrain>>,
-    warp: Query<&shared::components::TimeWarp>,
     world_time: Query<&WorldTime>,
     mut economy_runtime: ResMut<SettlementEconomyRuntime>,
     mut commands: Commands,
@@ -5449,7 +5643,7 @@ pub fn run_fishing_routines(
     let Some(terrain) = terrain else {
         return;
     };
-    let dt = time.delta_secs() * time_warp_factor(&warp);
+    let dt = simulation_time.world_seconds();
     let Some(clock) = world_time.iter().next() else {
         return;
     };
@@ -5770,9 +5964,8 @@ pub fn run_fishing_routines(
 
 /// Attach a physical work routine to every staffed lumberjack hut.
 ///
-/// Employment remains the source of truth: the routine exists only while the
-/// villager's name is actually in that hut's worker roster. Entity-backed
-/// jobs replace this name join later, when people gain stable `PersonId`s.
+/// `EmployedAt(BuildingId)` is authoritative. The readable name roster is only
+/// a compatibility path for buildings loaded before durable relationships.
 pub fn assign_lumberjack_routines(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
@@ -5781,6 +5974,7 @@ pub fn assign_lumberjack_routines(
         &SettlementBuilding,
         &PlayerPosition,
         &PlayerRotation,
+        Option<&shared::components::BuildingId>,
     )>,
     settlements: Query<(Entity, &Settlement)>,
     villagers: Query<
@@ -5791,11 +5985,13 @@ pub fn assign_lumberjack_routines(
             &PlayerPosition,
             Option<&WorkerOffDuty>,
             Option<&LumberjackWorkProgress>,
+            Option<&shared::components::EmployedAt>,
         ),
         (
             Without<FarmerRoutine>,
             Without<FishingRoutine>,
             Without<LumberjackRoutine>,
+            Without<strategic::StrategicPerson>,
         ),
     >,
 ) {
@@ -5805,8 +6001,25 @@ pub fn assign_lumberjack_routines(
     if villagers.is_empty() || !ordinary_workday(clock) {
         return;
     }
+    let mut eligible_by_building: HashMap<shared::components::BuildingId, Vec<Entity>> =
+        HashMap::new();
+    for (entity, _, _, _, _, _, employment) in villagers.iter() {
+        if let Some(employment) = employment {
+            eligible_by_building
+                .entry(employment.0)
+                .or_default()
+                .push(entity);
+        }
+    }
+    if eligible_by_building.is_empty()
+        && !huts.iter().any(|(_, building, _, _, building_id)| {
+            building.kind == SettlementBuildingKind::LumberjackHut && building_id.is_none()
+        })
+    {
+        return;
+    }
     let mut claimed = HashSet::new();
-    for (hut_entity, building, hut_position, hut_rotation) in huts.iter() {
+    for (hut_entity, building, hut_position, hut_rotation, building_id) in huts.iter() {
         if building.kind != SettlementBuildingKind::LumberjackHut {
             continue;
         }
@@ -5817,21 +6030,44 @@ pub fn assign_lumberjack_routines(
             continue;
         };
         for worker_name in &building.workers {
-            let candidate = villagers
-                .iter()
-                .filter(|(entity, name, intent, _, off_duty, _)| {
-                    !claimed.contains(entity)
-                        && name.0 == *worker_name
-                        && intent.is_settled()
-                        && intent.settlement() == Some(hall)
-                        && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
-                })
-                .min_by(|a, b| {
-                    a.3 .0
-                        .distance_squared(hut_position.0)
-                        .total_cmp(&b.3 .0.distance_squared(hut_position.0))
-                });
-            let Some((worker, _, _, _, _, progress)) = candidate else {
+            let candidate = if let Some(building_id) = building_id {
+                eligible_by_building
+                    .get(building_id)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entity| villagers.get(*entity).ok())
+                    .filter(|(entity, _, intent, _, off_duty, _, _)| {
+                        !claimed.contains(entity)
+                            && intent.is_settled()
+                            && intent.settlement() == Some(hall)
+                            && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
+                    })
+                    .min_by(|a, b| {
+                        a.3 .0
+                            .distance_squared(hut_position.0)
+                            .total_cmp(&b.3 .0.distance_squared(hut_position.0))
+                    })
+                    .map(|candidate| candidate.0)
+            } else {
+                villagers
+                    .iter()
+                    .filter(|(entity, name, intent, _, off_duty, _, _)| {
+                        !claimed.contains(entity)
+                            && name.0 == *worker_name
+                            && intent.is_settled()
+                            && intent.settlement() == Some(hall)
+                            && off_duty.is_none_or(|off_duty| off_duty.day != clock.day)
+                    })
+                    .min_by(|a, b| {
+                        a.3 .0
+                            .distance_squared(hut_position.0)
+                            .total_cmp(&b.3 .0.distance_squared(hut_position.0))
+                    })
+                    .map(|candidate| candidate.0)
+            };
+            let Some(candidate) = candidate else { continue };
+            let Ok((worker, worker_display_name, _, _, _, progress, _)) = villagers.get(candidate)
+            else {
                 continue;
             };
             let (cycle, chop_seconds) = progress
@@ -5863,8 +6099,8 @@ pub fn assign_lumberjack_routines(
                     MoveTarget(entrance),
                 ));
             info!(
-                "Village '{}': {worker_name} began working from the lumberjack hut",
-                building.settlement
+                "Village '{}': {} began working from the lumberjack hut",
+                building.settlement, worker_display_name.0
             );
         }
     }
@@ -5878,11 +6114,10 @@ pub fn assign_lumberjack_routines(
 /// complete the next leg rather than as deleted resources.
 #[allow(clippy::too_many_arguments)]
 pub fn run_lumberjack_routines(
-    time: Res<Time>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     terrain: Option<Res<WorldTerrain>>,
     derived: Option<Res<DerivedColliderLibrary>>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
-    warp: Query<&shared::components::TimeWarp>,
     world_time: Query<&WorldTime>,
     mut commands: Commands,
     huts: Query<(&SettlementBuilding, &PlayerPosition, &PlayerRotation), Without<CharacterKind>>,
@@ -5911,12 +6146,7 @@ pub fn run_lumberjack_routines(
     let Some(terrain) = terrain else {
         return;
     };
-    let factor = warp
-        .iter()
-        .next()
-        .map(|time_warp| time_warp.0)
-        .unwrap_or(1.0);
-    let dt = time.delta_secs() * factor;
+    let dt = simulation_time.world_seconds();
     let Some(clock) = world_time.iter().next() else {
         return;
     };
@@ -6523,13 +6753,6 @@ fn exterior_door_clearance_position(building: Vec3, door: Vec3) -> Vec3 {
         door.y,
         door.z + outward.y * (DOOR_REACH + 0.35),
     )
-}
-
-fn time_warp_factor(warp: &Query<&shared::components::TimeWarp>) -> f32 {
-    warp.iter()
-        .next()
-        .map(|time_warp| time_warp.0)
-        .unwrap_or(1.0)
 }
 
 fn ordinary_workday(clock: &WorldTime) -> bool {
@@ -7246,7 +7469,7 @@ mod tests {
         review_automatic_wage_offer(&mut policy, 2, 0, 2, 4 * PENNIES_PER_COIN, 0);
         assert_eq!(
             policy.daily_wage,
-            FOUNDING_DAILY_WAGE + BUSINESS_WAGE_REVIEW_STEP
+            FOUNDING_DAILY_WAGE + shared::economy::BUSINESS_WAGE_REVIEW_STEP
         );
 
         review_automatic_wage_offer(&mut policy, 2, 2, 2, 0, PENNIES_PER_COIN);

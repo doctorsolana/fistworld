@@ -28,6 +28,7 @@ use crate::ui::styles::{TEXT_COLOR, TEXT_MUTED};
 /// One settlement the player knows about.
 #[derive(Clone, Debug)]
 pub struct PlaceRecord {
+    pub id: shared::components::SettlementId,
     pub name: String,
     pub tier: SettlementTier,
     pub position: Vec3,
@@ -45,6 +46,9 @@ pub struct PlaceRecord {
     pub inventory_used: u32,
     pub inventory_capacity: u32,
     pub buildings: Vec<PlaceBuildingRecord>,
+    /// Counts from the global lightweight directory. Detailed records replace
+    /// these when the settlement is inside the client's interest area.
+    pub summary_buildings: [u16; 4],
     pub wheat_fields: u32,
     pub fishing_piers: u32,
     pub permits: Vec<PlacePermitRecord>,
@@ -74,10 +78,9 @@ pub struct PlacePermitRecord {
 /// Every settlement the client is aware of.
 ///
 /// Accumulated rather than derived from what is currently replicated: knowing a
-/// place is permanent. Settlements replicate globally today (they are the map
-/// screen, WORLD-DESIGN §7), so in practice this fills immediately — but the
-/// registry is written the same way as [`KnownPeople`] so that the day
-/// settlements become interest-managed, walking away does not erase them.
+/// place is permanent. Lightweight summaries arrive globally; full settlement
+/// detail is interest-managed. The registry merges both, so walking away drops
+/// live detail without erasing what the player learned.
 #[derive(Resource, Default)]
 pub struct KnownPlaces {
     pub records: Vec<PlaceRecord>,
@@ -104,6 +107,64 @@ impl KnownPlaces {
 /// Selected row, held by NAME so it survives list rebuilds.
 #[derive(Resource, Default)]
 pub struct SelectedPlace(pub Option<String>);
+
+pub(super) fn learn_settlement_summaries(
+    summaries: Query<(&shared::components::SettlementSummary, &PlayerPosition)>,
+    mut places: ResMut<KnownPlaces>,
+) {
+    for (summary, position) in summaries.iter() {
+        let existing = places.records.iter().position(|record| {
+            record.id == summary.id || (!record.id.is_assigned() && record.name == summary.name)
+        });
+        let counts = [
+            summary.houses,
+            summary.farmsteads,
+            summary.fishing_huts,
+            summary.lumber_huts,
+        ];
+        let unchanged = existing.is_some_and(|index| {
+            let record = &places.records[index];
+            record.tier == summary.tier
+                && record.position == position.0
+                && record.residents == summary.residents
+                && record.treasury == summary.treasury
+                && record.summary_buildings == counts
+        });
+        if unchanged {
+            continue;
+        }
+        if let Some(index) = existing {
+            let record = &mut places.records[index];
+            record.tier = summary.tier;
+            record.position = position.0;
+            record.residents = summary.residents;
+            record.treasury = summary.treasury;
+            record.summary_buildings = counts;
+        } else {
+            places.records.push(PlaceRecord {
+                id: summary.id,
+                name: summary.name.clone(),
+                tier: summary.tier,
+                position: position.0,
+                residents: summary.residents,
+                treasury: summary.treasury,
+                market: None,
+                economy: None,
+                administration: None,
+                development: None,
+                poor_relief: false,
+                inventory: Vec::new(),
+                inventory_used: 0,
+                inventory_capacity: 0,
+                buildings: Vec::new(),
+                summary_buildings: counts,
+                wheat_fields: 0,
+                fishing_piers: 0,
+                permits: Vec::new(),
+            });
+        }
+    }
+}
 
 /// Which node inside the selected settlement the explorer is showing.
 ///
@@ -169,6 +230,7 @@ pub struct PlaceDetailValue(pub usize);
 pub(super) fn learn_settlements(
     seen: Query<(
         &Settlement,
+        Option<&shared::components::SettlementId>,
         &PlayerPosition,
         Option<&GoodsInventory>,
         Option<&MootMarket>,
@@ -179,13 +241,18 @@ pub(super) fn learn_settlements(
     )>,
     buildings: Query<(
         &SettlementBuilding,
+        Option<&shared::components::BuildingOf>,
         &PlayerPosition,
         Option<&GoodsInventory>,
         Option<&Household>,
     )>,
     fields: Query<&FarmField>,
     piers: Query<&FishingPier>,
-    sites: Query<(&ConstructionSite, Option<&GoodsInventory>)>,
+    sites: Query<(
+        &ConstructionSite,
+        Option<&shared::components::BuildingOf>,
+        Option<&GoodsInventory>,
+    )>,
     mut places: ResMut<KnownPlaces>,
 ) {
     // Decide FIRST whether anything changed, using read-only access, and only
@@ -197,12 +264,18 @@ pub(super) fn learn_settlements(
     // its `Interaction` to reach `Pressed`. The list rendered perfectly and was
     // completely unclickable. Measured before the fix: 275 rebuilds in one short
     // capture, where the correct answer is 1.
-    let snapshot = |settlement: &Settlement| {
+    let snapshot = |settlement: &Settlement,
+                    settlement_id: Option<&shared::components::SettlementId>| {
         let mut records: Vec<PlaceBuildingRecord> = buildings
             .iter()
-            .filter(|(building, _, _, _)| building.settlement == settlement.name)
+            .filter(|(building, owner, _, _, _)| {
+                settlement_id.map_or_else(
+                    || building.settlement == settlement.name,
+                    |id| owner.is_some_and(|owner| owner.0 == *id),
+                )
+            })
             .map(
-                |(building, position, inventory, household)| PlaceBuildingRecord {
+                |(building, _, position, inventory, household)| PlaceBuildingRecord {
                     kind: building.kind,
                     position: position.0,
                     owner: building.owner.clone(),
@@ -226,23 +299,30 @@ pub(super) fn learn_settlements(
         });
         records
     };
-    let permit_snapshot = |settlement: &Settlement| {
-        let mut records: Vec<PlacePermitRecord> = sites
-            .iter()
-            .filter(|(site, _)| site.settlement == settlement.name)
-            .map(|(site, inventory)| PlacePermitRecord {
-                kind: site.kind,
-                raising: site.raising,
-                delivered_wood: inventory.map_or(0, |store| store.amount(Good::Wood)),
-                required_wood: site.kind.construction_wood_required(),
-            })
-            .collect();
-        records.sort_by_key(|permit| permit.kind.label());
-        records
-    };
+    let permit_snapshot =
+        |settlement: &Settlement, settlement_id: Option<&shared::components::SettlementId>| {
+            let mut records: Vec<PlacePermitRecord> = sites
+                .iter()
+                .filter(|(site, owner, _)| {
+                    settlement_id.map_or_else(
+                        || site.settlement == settlement.name,
+                        |id| owner.is_some_and(|owner| owner.0 == *id),
+                    )
+                })
+                .map(|(site, _, inventory)| PlacePermitRecord {
+                    kind: site.kind,
+                    raising: site.raising,
+                    delivered_wood: inventory.map_or(0, |store| store.amount(Good::Wood)),
+                    required_wood: site.kind.construction_wood_required(),
+                })
+                .collect();
+            records.sort_by_key(|permit| permit.kind.label());
+            records
+        };
     let needs_update = seen.iter().any(
         |(
             settlement,
+            settlement_id,
             position,
             inventory,
             market,
@@ -251,8 +331,8 @@ pub(super) fn learn_settlements(
             development,
             policies,
         )| {
-            let building_records = snapshot(settlement);
-            let permits = permit_snapshot(settlement);
+            let building_records = snapshot(settlement, settlement_id);
+            let permits = permit_snapshot(settlement, settlement_id);
             let wheat_fields = fields
                 .iter()
                 .filter(|field| field.settlement == settlement.name)
@@ -261,7 +341,16 @@ pub(super) fn learn_settlements(
                 .iter()
                 .filter(|pier| pier.settlement == settlement.name)
                 .count() as u32;
-            match places.find(&settlement.name) {
+            let record = places.records.iter().find(|record| {
+                settlement_id.map_or_else(
+                    || record.name == settlement.name,
+                    |id| {
+                        record.id == *id
+                            || (!record.id.is_assigned() && record.name == settlement.name)
+                    },
+                )
+            });
+            match record {
                 Some(record) => {
                     record.tier != settlement.tier
                         || record.position != position.0
@@ -288,11 +377,21 @@ pub(super) fn learn_settlements(
         return;
     }
 
-    for (settlement, position, inventory, market, economy, administration, development, policies) in
-        seen.iter()
+    for (
+        settlement,
+        settlement_id,
+        position,
+        inventory,
+        market,
+        economy,
+        administration,
+        development,
+        policies,
+    ) in seen.iter()
     {
-        let building_records = snapshot(settlement);
-        let permits = permit_snapshot(settlement);
+        let building_records = snapshot(settlement, settlement_id);
+        let summary_buildings = summarize_buildings(&building_records);
+        let permits = permit_snapshot(settlement, settlement_id);
         let wheat_fields = fields
             .iter()
             .filter(|field| field.settlement == settlement.name)
@@ -303,12 +402,18 @@ pub(super) fn learn_settlements(
             .count() as u32;
         let (inventory_used, inventory_capacity) = inventory_bulk(inventory);
         let inventory = inventory_contents(inventory);
-        match places
-            .records
-            .iter_mut()
-            .find(|record| record.name == settlement.name)
-        {
+        match places.records.iter_mut().find(|record| {
+            settlement_id.map_or_else(
+                || record.name == settlement.name,
+                |id| {
+                    record.id == *id || (!record.id.is_assigned() && record.name == settlement.name)
+                },
+            )
+        }) {
             Some(record) => {
+                if let Some(id) = settlement_id {
+                    record.id = *id;
+                }
                 record.tier = settlement.tier;
                 record.position = position.0;
                 record.residents = settlement.residents;
@@ -322,11 +427,13 @@ pub(super) fn learn_settlements(
                 record.inventory_used = inventory_used;
                 record.inventory_capacity = inventory_capacity;
                 record.buildings = building_records;
+                record.summary_buildings = summary_buildings;
                 record.wheat_fields = wheat_fields;
                 record.fishing_piers = fishing_piers;
                 record.permits = permits;
             }
             None => places.records.push(PlaceRecord {
+                id: settlement_id.copied().unwrap_or_default(),
                 name: settlement.name.clone(),
                 tier: settlement.tier,
                 position: position.0,
@@ -341,12 +448,29 @@ pub(super) fn learn_settlements(
                 inventory_used,
                 inventory_capacity,
                 buildings: building_records,
+                summary_buildings,
                 wheat_fields,
                 fishing_piers,
                 permits,
             }),
         }
     }
+}
+
+fn summarize_buildings(records: &[PlaceBuildingRecord]) -> [u16; 4] {
+    let count = |kind| {
+        records
+            .iter()
+            .filter(|building| building.kind == kind)
+            .count()
+            .min(u16::MAX as usize) as u16
+    };
+    [
+        count(SettlementBuildingKind::House),
+        count(SettlementBuildingKind::Farmstead),
+        count(SettlementBuildingKind::FishermansHut),
+        count(SettlementBuildingKind::LumberjackHut),
+    ]
 }
 
 fn inventory_contents(inventory: Option<&GoodsInventory>) -> Vec<(Good, u32)> {
@@ -369,7 +493,7 @@ fn inventory_bulk(inventory: Option<&GoodsInventory>) -> (u32, u32) {
 
 fn next_permit_summary(place: &PlaceRecord) -> String {
     let count = |kind: SettlementBuildingKind| {
-        place
+        let detailed = place
             .buildings
             .iter()
             .filter(|building| building.kind == kind)
@@ -378,7 +502,15 @@ fn next_permit_summary(place: &PlaceRecord) -> String {
                 .permits
                 .iter()
                 .filter(|permit| permit.kind == kind)
-                .count()
+                .count();
+        let directory = match kind {
+            SettlementBuildingKind::House => place.summary_buildings[0] as usize,
+            SettlementBuildingKind::Farmstead => place.summary_buildings[1] as usize,
+            SettlementBuildingKind::FishermansHut => place.summary_buildings[2] as usize,
+            SettlementBuildingKind::LumberjackHut => place.summary_buildings[3] as usize,
+            _ => 0,
+        };
+        detailed.max(directory)
     };
     let next = next_settlement_building(
         count(SettlementBuildingKind::Farmstead),
@@ -873,9 +1005,16 @@ fn place_detail_model(
                 1 => "1 person".to_string(),
                 count => format!("{count} people"),
             };
+            let known_building_count = place.buildings.len().max(
+                place
+                    .summary_buildings
+                    .iter()
+                    .map(|count| *count as usize)
+                    .sum(),
+            );
             let structures = format!(
                 "{} completed / {} wheat field{} / {} fishing pier{}",
-                place.buildings.len() + 1,
+                known_building_count + 1,
                 place.wheat_fields,
                 if place.wheat_fields == 1 { "" } else { "s" },
                 place.fishing_piers,
@@ -1213,6 +1352,7 @@ mod tests {
             ("Dunreach", SettlementTier::Town),
         ] {
             places.records.push(PlaceRecord {
+                id: shared::components::SettlementId::UNASSIGNED,
                 name: name.to_string(),
                 tier,
                 position: Vec3::ZERO,
@@ -1227,6 +1367,7 @@ mod tests {
                 inventory_used: 0,
                 inventory_capacity: 0,
                 buildings: Vec::new(),
+                summary_buildings: [0; 4],
                 wheat_fields: 0,
                 fishing_piers: 0,
                 permits: Vec::new(),
@@ -1253,6 +1394,7 @@ mod tests {
 
     fn explorer_place() -> PlaceRecord {
         PlaceRecord {
+            id: shared::components::SettlementId(1),
             name: "Brackwater".into(),
             tier: SettlementTier::Village,
             position: Vec3::new(120.0, 0.0, -80.0),
@@ -1277,6 +1419,7 @@ mod tests {
                 inventory_used: 8,
                 inventory_capacity: 80,
             }],
+            summary_buildings: [0, 1, 0, 0],
             wheat_fields: 1,
             fishing_piers: 0,
             permits: Vec::new(),

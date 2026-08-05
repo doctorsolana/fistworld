@@ -11,7 +11,7 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, MessageSender, RemoteId};
 
 use shared::components::{
-    CharacterAffiliation, CharacterAttributes, CharacterKind, CharacterName, Hero,
+    CharacterAffiliation, CharacterAttributes, CharacterKind, CharacterName, Hero, PersonId,
 };
 use shared::protocol::{
     CharacterRoster, CharacterRosterEntry, ReliableChannel, RequestCharacterRoster,
@@ -28,6 +28,7 @@ pub fn handle_character_roster_requests(
         &CharacterAffiliation,
         Option<&CharacterAttributes>,
         Option<&Hero>,
+        Option<&PersonId>,
     )>,
     mut client_links: Query<
         (
@@ -45,13 +46,14 @@ pub fn handle_character_roster_requests(
 
         let mut entries: Vec<CharacterRosterEntry> = characters
             .iter()
-            .map(|(name, kind, affiliation, attributes, hero)| {
+            .map(|(name, kind, affiliation, attributes, hero, person_id)| {
                 // A hero is "online" when its owner is connected. A villager is
                 // never online -- it is simply present, which is a different
                 // thing and must not render as an away marker.
                 let online =
                     hero.is_some_and(|hero| profiles.peer_to_name.contains_key(&hero.owner));
                 CharacterRosterEntry {
+                    id: person_id.copied().unwrap_or_default(),
                     name: name.0.clone(),
                     kind: *kind,
                     affiliation: *affiliation,

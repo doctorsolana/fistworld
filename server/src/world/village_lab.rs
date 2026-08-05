@@ -506,6 +506,10 @@ fn configure_lab(app: &mut App) {
     app.init_resource::<village::ambient::AmbientSpotCache>();
     app.init_resource::<PublishedTerrainDeltas>();
     app.init_resource::<VillageRoadGraph>();
+    app.init_resource::<crate::world::identity::WorldIdAllocator>();
+    app.init_resource::<crate::world::identity::WorldIdentityIndex>();
+    app.init_resource::<crate::world::settlement_directory::SettlementDirectory>();
+    app.init_resource::<village::history::SettlementHistoryRuntime>();
     app.init_resource::<LastPlannedRoutes>();
     app.init_resource::<LastRouteHandoffs>();
     app.init_resource::<collision::building_index::BuildingSpatialIndex>();
@@ -518,10 +522,15 @@ fn configure_lab(app: &mut App) {
     });
     app.add_systems(Startup, collision::library::setup_baked_colliders);
 
-    // Keep this aligned with app/schedule.rs. The lab deliberately includes
-    // the pieces most lightweight unit tests are tempted to omit: the derived
-    // hall obstacle, building index, prop collider stream, nav grid, route
-    // queue and actual movement phase.
+    village::schedule::configure_shared_village_simulation(app, Update);
+    app.configure_sets(
+        Update,
+        village::schedule::VillageSimulationSet::Core
+            .after(crate::world::navgrid::sync_obstacle_grid),
+    );
+
+    // Environment preparation remains lab-specific; all behaviour and local
+    // navigation after this point comes from the production registration.
     app.add_systems(
         Update,
         (
@@ -530,78 +539,15 @@ fn configure_lab(app: &mut App) {
             collision::building_index::sync_building_spatial_index,
             collision::streaming::update_static_collider_streaming,
             crate::world::navgrid::sync_obstacle_grid,
-            (
-                (
-                    crate::player::hero::ensure_character_attributes,
-                    village::tag_villager_intent,
-                    village::seek_settlement,
-                    village::arrive_at_settlement,
-                    village::recount_residents,
-                    village::ensure_village_finances,
-                    village::ensure_settlement_economies,
-                    village::ensure_business_economies,
-                )
-                    .chain(),
-                (
-                    village_roads::ensure_moot_administrations,
-                    crate::world::settlement_development::ensure_settlement_developments,
-                    village_roads::staff_and_pay_road_stewards,
-                    village::staff_moot_hall_roles,
-                    village_roads::staff_public_positions,
-                    village::reconcile_work_statuses,
-                    village_roads::audit_village_roads,
-                )
-                    .chain(),
-                (
-                    village::update_moot_market_targets,
-                    village::ensure_households,
-                    village::assign_households,
-                    village::update_household_budgets_and_pantries,
-                    village::update_settlement_economies,
-                    village::run_business_payroll_and_owner_leisure,
-                    village::consider_permits,
-                )
-                    .chain(),
-                village::run_construction_material_logistics,
-                village::advance_construction,
-                village::ensure_farm_fields,
-                village_roads::plan_requested_roads,
-                village::fill_vacancies,
-                village::run_household_schedules,
-                village::run_workplace_door_transits,
-                village_roads::build_village_roads,
-                crate::world::settlement_development::upgrade_town_roads,
-                crate::world::settlement_development::update_settlement_developments,
-                (
-                    village::ensure_fishing_piers,
-                    village::assign_farmer_routines,
-                    village::assign_fishing_routines,
-                    village::assign_lumberjack_routines,
-                    village::run_household_shopping,
-                    village::run_farmer_routines,
-                    village::run_fishing_routines,
-                    village::run_lumberjack_routines,
-                    village::run_market_collections,
-                    village::ambient::run_ambient_routines,
-                    village::settle_pending_market_payments,
-                    crate::player::hero::sync_hero_attributes_to_player_progression,
-                    (
-                        village::sync_carried_load,
-                        village::sync_building_door_demands,
-                    )
-                        .chain(),
-                )
-                    .chain(),
-            )
-                .chain(),
-            village_roads::rebuild_village_road_graph,
-            village_roads::queue_villager_travel_routes,
-            village_roads::plan_villager_travel_routes,
-            remember_planned_routes,
-            remember_route_handoffs,
-            step_units,
         )
             .chain(),
+    );
+    app.add_systems(
+        Update,
+        (remember_planned_routes, remember_route_handoffs)
+            .chain()
+            .after(village_roads::plan_villager_travel_routes)
+            .before(step_units),
     );
 }
 

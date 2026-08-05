@@ -11,11 +11,14 @@
 
 pub mod bootstrap;
 pub mod dev;
+pub mod identity;
 pub mod map_state;
 pub mod navgrid;
 pub mod pathfinding;
 pub mod regions;
 pub mod settlement_development;
+pub mod settlement_directory;
+pub mod simulation_time;
 pub mod time;
 pub mod village;
 #[cfg(test)]

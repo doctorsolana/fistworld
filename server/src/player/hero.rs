@@ -314,7 +314,7 @@ pub fn step_units(
     obstacles: Option<Res<SpatialObstacleGrid>>,
     colliders: Option<Res<StaticColliders>>,
     derived: Option<Res<DerivedColliderLibrary>>,
-    warp: Query<&shared::components::TimeWarp>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     // `With<CharacterKind>` is load-bearing, not decoration: the commander
     // camera anchor carries the identical PlayerPosition + PlayerRotation +
     // RegionCoord shape, so without it this system would start walking the
@@ -333,7 +333,10 @@ pub fn step_units(
             Option<&BuildingDoorUse>,
             Option<&crate::world::village::PierTraversal>,
         ),
-        With<CharacterKind>,
+        (
+            With<CharacterKind>,
+            Without<crate::world::village::strategic::StrategicPerson>,
+        ),
     >,
 ) {
     let Some(terrain) = terrain else {
@@ -343,8 +346,7 @@ pub fn step_units(
     // strategic tick sped up while the hero kept walking at 1x, so god mode's
     // 100x button made everything EXCEPT the thing you were watching go faster.
     // The arrival clamp below is what keeps a huge step from overshooting.
-    let factor = warp.iter().next().map(|w| w.0).unwrap_or(1.0);
-    let dt = factor / shared::protocol::FIXED_TIMESTEP_HZ as f32;
+    let dt = simulation_time.world_seconds();
 
     for (
         entity,

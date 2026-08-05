@@ -11,7 +11,7 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
-use shared::components::{Player, PlayerPosition, TimeWarp};
+use shared::components::{Player, PlayerPosition};
 use shared::region::{view_radius_to_rings, RegionCoord, SimLevel, REGION_SIZE};
 use shared::terrain::WorldTerrain;
 
@@ -59,6 +59,7 @@ impl RegionState {
 #[derive(Resource, Default)]
 pub struct RegionRegistry {
     regions: HashMap<RegionCoord, RegionState>,
+    revision: u64,
 }
 
 impl RegionRegistry {
@@ -80,6 +81,10 @@ impl RegionRegistry {
 
     pub fn iter(&self) -> impl Iterator<Item = &RegionState> {
         self.regions.values()
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// Number of regions currently promoted to tactical simulation.
@@ -294,12 +299,18 @@ pub fn update_region_sim_levels(
         }
     }
 
+    let mut changed = false;
     for region in registry.regions.values_mut() {
-        region.sim_level = if region.observers > 0 {
+        let next = if region.observers > 0 {
             SimLevel::Tactical
         } else {
             SimLevel::Strategic
         };
+        changed |= region.sim_level != next;
+        region.sim_level = next;
+    }
+    if changed {
+        registry.revision = registry.revision.wrapping_add(1);
     }
 }
 
@@ -340,6 +351,12 @@ impl StrategicClock {
     }
 }
 
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct StrategicStep {
+    pub serial: u64,
+    pub elapsed_world_seconds: f64,
+}
+
 /// The always-on simulation: advances every region in the world, observed or not.
 ///
 /// This is the load-bearing cost of a persistent world, so it must stay cheap enough to
@@ -347,12 +364,12 @@ impl StrategicClock {
 /// per-soldier — those belong to the tactical layer, which only runs where someone is
 /// looking. `last_tick_micros` exists so that constraint is measured, not assumed.
 pub fn tick_strategic_world(
-    time: Res<Time>,
-    warp: Query<&TimeWarp>,
+    simulation_time: super::simulation_time::SimulationTime,
     mut clock: ResMut<StrategicClock>,
     mut registry: ResMut<RegionRegistry>,
+    mut step: ResMut<StrategicStep>,
 ) {
-    let factor = warp.iter().next().map(|w| w.0).unwrap_or(1.0);
+    let factor = simulation_time.factor();
 
     // The accumulator tracks REAL time, so the tick fires at a true 1Hz whatever
     // the warp. Warp then scales the simulated seconds handed to the tick body.
@@ -370,7 +387,7 @@ pub fn tick_strategic_world(
     // population growth, tier thresholds — will drift from what a 1x world
     // produces. Sub-stepping or a warp cap is the fix when that starts to
     // matter; it is a balance decision, not a bug here.
-    let Some(elapsed) = clock.advance(time.delta_secs_f64(), factor as f64) else {
+    let Some(elapsed) = clock.advance(simulation_time.real_seconds_f64(), factor as f64) else {
         return;
     };
 
@@ -383,6 +400,8 @@ pub fn tick_strategic_world(
     }
     clock.last_tick_micros = started.elapsed().as_micros();
     clock.ticks += 1;
+    step.serial = clock.ticks;
+    step.elapsed_world_seconds = elapsed;
 }
 
 /// Periodic report so the "strategic tick stays cheap at world scale" claim is checkable.
@@ -392,7 +411,7 @@ pub fn log_region_telemetry(
     time: Res<Time>,
     mut last_log_secs: Local<f64>,
 ) {
-    if clock.ticks == 0 || clock.ticks % 30 != 0 {
+    if clock.ticks == 0 || !clock.ticks.is_multiple_of(30) {
         return;
     }
     // Strategic ticks outrun real time under warp; floor the log rate in real seconds.

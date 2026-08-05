@@ -235,10 +235,13 @@ pub(super) fn handle_banner_buttons(
         if *interaction != Interaction::Pressed {
             continue;
         }
+        if !record.id.is_assigned() {
+            continue;
+        }
         let next = record.affiliation.cycled(*step);
         if let Ok(mut sender) = senders.single_mut() {
             sender.send::<ReliableChannel>(shared::protocol::DevCommand::SetAffiliation {
-                character: name.clone(),
+                person: record.id,
                 banner: next.0,
             });
         }
@@ -258,7 +261,6 @@ pub(super) fn handle_retinue_button(
     selected: Res<SelectedPerson>,
     people: Res<KnownPeople>,
     account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
-    characters: Query<(Entity, &shared::components::CharacterName)>,
     buttons: Query<&Interaction, (With<RetinueButton>, Changed<Interaction>)>,
     mut senders: Query<
         &mut MessageSender<shared::protocol::DevCommand>,
@@ -280,12 +282,9 @@ pub(super) fn handle_retinue_button(
     let Some(record) = people.find(&name) else {
         return;
     };
-    // Targeted by ENTITY, so this only works on someone you can currently see.
-    // That is a real limitation and the honest one: generated names collide, and
-    // conscripting the wrong namesake is worse than not offering the button.
-    let Some((entity, _)) = characters.iter().find(|(_, n)| n.0 == name) else {
+    if !record.id.is_assigned() {
         return;
-    };
+    }
     let my_account = account
         .as_ref()
         .map(|input| input.name.trim().to_lowercase())
@@ -293,7 +292,7 @@ pub(super) fn handle_retinue_button(
     let already_mine = record.commanded_by.as_deref() == Some(my_account.as_str());
     if let Ok(mut sender) = senders.single_mut() {
         sender.send::<ReliableChannel>(shared::protocol::DevCommand::SetRetinue {
-            unit: entity,
+            person: record.id,
             commanded: !already_mine,
         });
     }

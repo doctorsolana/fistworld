@@ -1075,15 +1075,11 @@ garrisons → sieges) so coin keeps mattering.
   detail (stocks, slots) replicates on interest. Caravans/warbands are
   ordinary interest-managed entities.
 
-  > **[correction]** This is **not expressible as written** and is an unmade design
-  > decision rather than a replication flag. lightyear 0.28 visibility is per-ENTITY,
-  > not per-component: `gain_visibility`/`lose_visibility` take `(entity, sender)` and
-  > hide the whole entity, and this repo's own interest pass does exactly that. Getting
-  > summary-global plus detail-on-interest requires EITHER two entities per settlement
-  > (a global summary entity plus a `RegionCoord`-tagged detail entity, joined
-  > client-side on `SettlementId`) OR a global directory message plus request/response
-  > for detail. Decide it in ROADMAP Phase 1, while a settlement has four fields — it
-  > shapes every entity class added afterwards.
+  > **[implemented 2026-08-05]** lightyear visibility is per-entity, so every settlement
+  > has two representations: a tiny globally replicated `SettlementSummary` entity and
+  > region-scoped detail entities carrying `RegionCoord`. The client encyclopedia joins
+  > summary and nearby detail through `SettlementId`; markets, inventories, buildings,
+  > worksites, roads, fields and piers are not whole-world replication payloads.
   >
   > There is a second prize for getting this right: once a global directory carries the
   > map screen, the map screen no longer justifies whole-world interest, so the view

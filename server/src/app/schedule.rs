@@ -29,6 +29,8 @@ enum FpsServerSet {
 }
 
 fn configure_fps_fixed_schedule(app: &mut App) {
+    world::village::schedule::configure_shared_village_simulation(app, FixedUpdate);
+
     app.configure_sets(
         FixedUpdate,
         (
@@ -39,90 +41,36 @@ fn configure_fps_fixed_schedule(app: &mut App) {
         )
             .chain(),
     );
+    app.configure_sets(
+        FixedUpdate,
+        (
+            world::village::schedule::VillageSimulationSet::Core
+                .in_set(FpsServerSet::WorldTick)
+                .after(world::navgrid::sync_obstacle_grid)
+                .before(world::regions::tick_strategic_world)
+                .run_if(server_is_started),
+            world::village::schedule::VillageSimulationSet::Navigation
+                .in_set(FpsServerSet::NetIngress)
+                .after(player::hero::handle_unit_move_orders)
+                .before(world::regions::update_client_interest)
+                .run_if(server_is_started),
+        ),
+    );
 
     app.add_systems(
         FixedUpdate,
         (
             world::time::handle_set_time_of_day,
             world::dev::handle_dev_commands,
+            world::village::strategic::update_person_simulation_lod,
             world::village::claim_settlement_hall_obstacles,
             world::time::update_world_time,
             crate::city::buildings::sync_authored_plot_buildings,
             collision::building_index::sync_building_spatial_index,
             collision::streaming::update_static_collider_streaming,
             world::navgrid::sync_obstacle_grid,
-            // Villages run themselves: tag, seek, arrive, recount, decide, build.
-            // Chained because each step reads what the previous one wrote, and
-            // a resident who arrives must be counted before anyone applies for
-            // a permit on their behalf.
-            (
-                (
-                    player::hero::ensure_character_attributes,
-                    world::village::tag_villager_intent,
-                    world::village::seek_settlement,
-                    world::village::arrive_at_settlement,
-                    world::village::recount_residents,
-                    world::village::ensure_village_finances,
-                    world::village::ensure_settlement_economies,
-                    world::village::ensure_business_economies,
-                )
-                    .chain(),
-                (
-                    world::village_roads::ensure_moot_administrations,
-                    world::settlement_development::ensure_settlement_developments,
-                    world::village_roads::staff_and_pay_road_stewards,
-                    world::village::staff_moot_hall_roles,
-                    world::village_roads::staff_public_positions,
-                    world::village::reconcile_work_statuses,
-                    world::village_roads::audit_village_roads,
-                )
-                    .chain(),
-                (
-                    world::village::update_moot_market_targets,
-                    world::village::ensure_households,
-                    world::village::assign_households,
-                    world::village::update_household_budgets_and_pantries,
-                    world::village::update_settlement_economies,
-                    world::village::run_business_payroll_and_owner_leisure,
-                    world::village::history::capture_settlement_history,
-                    world::village::consider_permits,
-                )
-                    .chain(),
-                world::village::run_construction_material_logistics,
-                world::village::advance_construction,
-                // Publish the separate crop footprint before surveying the
-                // completed Farmstead's road.
-                world::village::ensure_farm_fields,
-                world::village_roads::plan_requested_roads,
-                world::village::fill_vacancies,
-                world::village::run_household_schedules,
-                world::village::run_workplace_door_transits,
-                world::village_roads::build_village_roads,
-                world::settlement_development::upgrade_town_roads,
-                world::settlement_development::update_settlement_developments,
-                (
-                    world::village::ensure_fishing_piers,
-                    world::village::assign_farmer_routines,
-                    world::village::assign_fishing_routines,
-                    world::village::assign_lumberjack_routines,
-                    world::village::run_household_shopping,
-                    world::village::run_farmer_routines,
-                    world::village::run_fishing_routines,
-                    world::village::run_lumberjack_routines,
-                    world::village::run_market_collections,
-                    world::village::ambient::run_ambient_routines,
-                    world::village::settle_pending_market_payments,
-                    player::hero::sync_hero_attributes_to_player_progression,
-                    (
-                        world::village::sync_carried_load,
-                        world::village::sync_building_door_demands,
-                    )
-                        .chain(),
-                )
-                    .chain(),
-            )
-                .chain(),
             world::regions::tick_strategic_world,
+            world::village::strategic::advance_strategic_villages,
             world::regions::log_region_telemetry,
         )
             .chain()
@@ -141,11 +89,6 @@ fn configure_fps_fixed_schedule(app: &mut App) {
             net::input::handle_client_input_messages,
             player::commander::sync_commander_views,
             player::hero::handle_unit_move_orders,
-            world::village_roads::rebuild_village_road_graph,
-            world::village_roads::queue_villager_travel_routes,
-            world::village_roads::retry_failed_routes_after_obstacle_change,
-            world::village_roads::plan_villager_travel_routes,
-            player::hero::step_units,
             world::regions::update_client_interest,
             world::regions::apply_region_visibility,
             world::regions::update_region_sim_levels,

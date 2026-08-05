@@ -39,11 +39,10 @@ pub(super) fn receive_character_roster(
                     shared::components::CharacterKind::Hero => PersonKind::Hero,
                     shared::components::CharacterKind::Villager => PersonKind::Villager,
                 };
-                if let Some(existing) = people
-                    .records
-                    .iter_mut()
-                    .find(|record| record.name == entry.name)
-                {
+                if let Some(existing) = people.records.iter_mut().find(|record| {
+                    record.id == entry.id || (!record.id.is_assigned() && record.name == entry.name)
+                }) {
+                    existing.id = entry.id;
                     existing.kind = kind;
                     existing.affiliation = entry.affiliation;
                     existing.online = entry.online;
@@ -56,6 +55,7 @@ pub(super) fn receive_character_roster(
                     existing.known |= entry.is_self;
                 } else {
                     people.records.push(PersonRecord {
+                        id: entry.id,
                         known: entry.is_self,
                         is_self: entry.is_self,
                         name: entry.name,
@@ -103,24 +103,32 @@ pub(super) fn learn_visible_characters(
             // `track_affiliation_changes` fills it in when it lands.
             Option<&shared::components::CharacterAffiliation>,
             Option<&shared::components::CommandedBy>,
+            Option<&shared::components::PersonId>,
         ),
         Added<shared::components::CharacterName>,
     >,
     mut people: ResMut<KnownPeople>,
 ) {
-    for (name, kind, affiliation, commanded) in seen.iter() {
+    for (name, kind, affiliation, commanded, person_id) in seen.iter() {
         let affiliation = affiliation.copied().unwrap_or_default();
         let kind = match kind {
             shared::components::CharacterKind::Hero => PersonKind::Hero,
             shared::components::CharacterKind::Villager => PersonKind::Villager,
         };
-        if let Some(existing) = people.records.iter_mut().find(|r| r.name == name.0) {
+        if let Some(existing) = people.records.iter_mut().find(|record| {
+            person_id.is_some_and(|id| record.id == *id)
+                || (!record.id.is_assigned() && record.name == name.0)
+        }) {
+            if let Some(id) = person_id {
+                existing.id = *id;
+            }
             existing.known = true;
             existing.kind = kind;
             existing.affiliation = affiliation;
             existing.commanded_by = commanded.map(|c| c.0.clone());
         } else {
             people.records.push(PersonRecord {
+                id: person_id.copied().unwrap_or_default(),
                 name: name.0.clone(),
                 kind,
                 affiliation,
@@ -165,18 +173,25 @@ pub(super) fn refresh_visible_person_facts(
         Option<&shared::components::CharacterAttributes>,
         Option<&shared::economy::GoodsInventory>,
         Option<&shared::economy::CarriedLoad>,
+        Option<&shared::components::EmployedAt>,
+        Option<&shared::components::CivicEmployment>,
+        Option<&shared::components::LivesAt>,
+        Option<&shared::components::PersonId>,
     )>,
     buildings: Query<(
         &shared::components::SettlementBuilding,
+        Option<&shared::components::BuildingId>,
         Option<&shared::economy::BusinessWagePolicy>,
         Option<&shared::economy::WorkforceRequirements>,
     )>,
     households: Query<(
         &shared::components::SettlementBuilding,
+        Option<&shared::components::BuildingId>,
         &shared::components::Household,
     )>,
     administrations: Query<(
         &shared::components::Settlement,
+        Option<&shared::components::SettlementId>,
         &shared::components::MootAdministration,
     )>,
     mut people: ResMut<KnownPeople>,
@@ -192,34 +207,58 @@ pub(super) fn refresh_visible_person_facts(
         attributes,
         inventory,
         carried,
+        employed_at,
+        civic_job,
+        lives_at,
+        person_id,
     ) in seen.iter()
     {
-        let employment = buildings
-            .iter()
-            .find(|(building, _, _)| building.workers.iter().any(|worker| worker == &name.0));
-        let workplace = employment.map(|(building, _, _)| {
+        let employment = buildings.iter().find(|(building, building_id, _, _)| {
+            employed_at.map_or_else(
+                || building.workers.iter().any(|worker| worker == &name.0),
+                |job| building_id.is_some_and(|id| *id == job.0),
+            )
+        });
+        let workplace = employment.map(|(building, _, _, _)| {
             format!("{} in {}", building.kind.label(), building.settlement)
         });
         let next_daily_wage = employment
-            .and_then(|(_, wage, _)| wage)
+            .and_then(|(_, _, wage, _)| wage)
             .map(|wage| wage.daily_wage);
         let next_requirements = employment
-            .and_then(|(_, _, requirements)| requirements)
+            .and_then(|(_, _, _, requirements)| requirements)
             .copied();
-        let civic_employment = administrations.iter().find_map(|(settlement, office)| {
-            let role = if office.reeve.as_deref() == Some(name.0.as_str()) {
-                Some(("Reeve", Some(shared::economy::FOUNDING_DAILY_WAGE)))
+        let civic_employment = administrations.iter().find_map(|(settlement, id, office)| {
+            let role = if let Some(job) = civic_job {
+                if !id.is_some_and(|id| *id == job.settlement) {
+                    return None;
+                }
+                match job.role {
+                    shared::components::CivicRole::Reeve => {
+                        ("Reeve", Some(shared::economy::FOUNDING_DAILY_WAGE))
+                    }
+                    shared::components::CivicRole::MarketPorter => {
+                        ("Market Porter", Some(shared::economy::FOUNDING_DAILY_WAGE))
+                    }
+                    shared::components::CivicRole::RoadSteward => {
+                        ("Road Steward", Some(office.road_steward_daily_salary))
+                    }
+                    shared::components::CivicRole::CityWorker => ("City Worker", None),
+                    shared::components::CivicRole::Guard => ("Guard", None),
+                }
+            } else if office.reeve.as_deref() == Some(name.0.as_str()) {
+                ("Reeve", Some(shared::economy::FOUNDING_DAILY_WAGE))
             } else if office.market_porter.as_deref() == Some(name.0.as_str()) {
-                Some(("Market Porter", Some(shared::economy::FOUNDING_DAILY_WAGE)))
+                ("Market Porter", Some(shared::economy::FOUNDING_DAILY_WAGE))
             } else if office.road_steward.as_deref() == Some(name.0.as_str()) {
-                Some(("Road Steward", Some(office.road_steward_daily_salary)))
+                ("Road Steward", Some(office.road_steward_daily_salary))
             } else if office.guards.iter().any(|guard| guard == &name.0) {
-                Some(("Guard", None))
+                ("Guard", None)
             } else if office.city_workers.iter().any(|worker| worker == &name.0) {
-                Some(("City Worker", None))
+                ("City Worker", None)
             } else {
-                None
-            }?;
+                return None;
+            };
             Some((
                 format!("{} at the Moot Hall in {}", role.0, settlement.name),
                 role.1,
@@ -231,13 +270,18 @@ pub(super) fn refresh_visible_person_facts(
             next_daily_wage.or_else(|| civic_employment.and_then(|(_, wage)| wage));
         let home = households
             .iter()
-            .find(|(_, household)| {
-                household
-                    .residents
-                    .iter()
-                    .any(|resident| resident == &name.0)
+            .find(|(_, building_id, household)| {
+                lives_at.map_or_else(
+                    || {
+                        household
+                            .residents
+                            .iter()
+                            .any(|resident| resident == &name.0)
+                    },
+                    |home| building_id.is_some_and(|id| *id == home.0),
+                )
             })
-            .map(|(building, _)| format!("Cabin in {}", building.settlement));
+            .map(|(building, _, _)| format!("Cabin in {}", building.settlement));
         let next_residence = residence.map(|residence| residence.0.clone());
         let next_occupation = occupation
             .and_then(|occupation| occupation.0.clone())
@@ -250,7 +294,10 @@ pub(super) fn refresh_visible_person_facts(
         let next_inventory = inventory.cloned();
         let next_carried = carried.copied();
 
-        let Some(current) = people.records.iter().find(|record| record.name == name.0) else {
+        let Some(current) = people.records.iter().find(|record| {
+            person_id.is_some_and(|id| record.id == *id)
+                || (!record.id.is_assigned() && record.name == name.0)
+        }) else {
             continue;
         };
         let changed = current.residence != next_residence
@@ -269,11 +316,13 @@ pub(super) fn refresh_visible_person_facts(
         if !changed {
             continue;
         }
-        if let Some(record) = people
-            .records
-            .iter_mut()
-            .find(|record| record.name == name.0)
-        {
+        if let Some(record) = people.records.iter_mut().find(|record| {
+            person_id.is_some_and(|id| record.id == *id)
+                || (!record.id.is_assigned() && record.name == name.0)
+        }) {
+            if let Some(id) = person_id {
+                record.id = *id;
+            }
             record.residence = next_residence;
             record.home = home;
             record.occupation = next_occupation;
@@ -298,13 +347,17 @@ pub(super) fn track_affiliation_changes(
         (
             &shared::components::CharacterName,
             &shared::components::CharacterAffiliation,
+            Option<&shared::components::PersonId>,
         ),
         Changed<shared::components::CharacterAffiliation>,
     >,
     mut people: ResMut<KnownPeople>,
 ) {
-    for (name, affiliation) in changed.iter() {
-        if let Some(record) = people.records.iter_mut().find(|r| r.name == name.0) {
+    for (name, affiliation, person_id) in changed.iter() {
+        if let Some(record) = people.records.iter_mut().find(|record| {
+            person_id.is_some_and(|id| record.id == *id)
+                || (!record.id.is_assigned() && record.name == name.0)
+        }) {
             if record.affiliation != *affiliation {
                 record.affiliation = *affiliation;
             }
@@ -819,6 +872,7 @@ pub(super) fn track_retinue_changes(
         (
             &shared::components::CharacterName,
             Option<&shared::components::CommandedBy>,
+            Option<&shared::components::PersonId>,
         ),
         Changed<shared::components::CommandedBy>,
     >,
@@ -826,8 +880,11 @@ pub(super) fn track_retinue_changes(
     mut people: ResMut<KnownPeople>,
 ) {
     let _ = removed;
-    for (name, commanded) in changed.iter() {
-        if let Some(record) = people.records.iter_mut().find(|r| r.name == name.0) {
+    for (name, commanded, person_id) in changed.iter() {
+        if let Some(record) = people.records.iter_mut().find(|record| {
+            person_id.is_some_and(|id| record.id == *id)
+                || (!record.id.is_assigned() && record.name == name.0)
+        }) {
             let next = commanded.map(|c| c.0.clone());
             if record.commanded_by != next {
                 record.commanded_by = next;

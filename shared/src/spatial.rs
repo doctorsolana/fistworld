@@ -333,8 +333,10 @@ mod tests {
 
         // Exercise asymmetric local points: origin alone cannot distinguish a
         // correct rotation from its mirror image.
-        let inside = crate::rotation::local_to_world_xz(Vec2::new(1.8, 0.8), 0.7853982);
-        let outside = crate::rotation::local_to_world_xz(Vec2::new(0.0, 1.2), 0.7853982);
+        let inside =
+            crate::rotation::local_to_world_xz(Vec2::new(1.8, 0.8), std::f32::consts::FRAC_PI_4);
+        let outside =
+            crate::rotation::local_to_world_xz(Vec2::new(0.0, 1.2), std::f32::consts::FRAC_PI_4);
         assert!(grid.point_blocked(inside));
         assert!(!grid.point_blocked(outside));
     }

@@ -271,7 +271,7 @@ fn choose_spot(
         terrain.get_height(spot.point.x, spot.point.y),
         spot.point.y,
     );
-    let sitting = mix(seed ^ 0xa11c_e55) % 3 != 0;
+    let sitting = !mix(seed ^ 0x0a11_ce55).is_multiple_of(3);
     let rest = duration(seed ^ 0x5eed, 12.0, 32.0);
     Some((point, spot.facing, sitting, rest))
 }
@@ -283,8 +283,7 @@ fn choose_spot(
 /// existing budgeted route queue and shared road graph do the travel work.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn run_ambient_routines(
-    time: Res<Time>,
-    warp: Query<&shared::components::TimeWarp>,
+    simulation_time: crate::world::simulation_time::SimulationTime,
     mut ambient_clock: ResMut<AmbientClock>,
     mut spot_cache: ResMut<AmbientSpotCache>,
     world_time: Query<&WorldTime>,
@@ -333,16 +332,19 @@ pub fn run_ambient_routines(
             Option<&MoveTarget>,
             Option<&mut AmbientRoutine>,
         ),
-        With<CharacterKind>,
+        (
+            With<CharacterKind>,
+            Without<super::strategic::StrategicPerson>,
+        ),
     >,
     mut commands: Commands,
 ) {
-    ambient_clock.real_accumulator += time.delta_secs();
+    ambient_clock.real_accumulator += simulation_time.real_seconds();
     if ambient_clock.real_accumulator < AMBIENT_REAL_INTERVAL {
         return;
     }
     let real_elapsed = std::mem::take(&mut ambient_clock.real_accumulator);
-    let dt = real_elapsed * super::time_warp_factor(&warp);
+    let dt = real_elapsed * simulation_time.factor();
     let any_tactical_observer = regions
         .as_ref()
         .is_none_or(|registry| registry.tactical_count() > 0);

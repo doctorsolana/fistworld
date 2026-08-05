@@ -528,6 +528,7 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         }
         let sample =
             |name: &str, level, prestige, online, known, is_self, affiliation| PersonRecord {
+                id: shared::components::PersonId::UNASSIGNED,
                 name: name.to_string(),
                 kind: PersonKind::Hero,
                 affiliation,

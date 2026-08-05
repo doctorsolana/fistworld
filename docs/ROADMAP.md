@@ -22,8 +22,8 @@ infrastructure is a phase that cannot be tested.
 | Phase | Name | Size | State |
 |---|---|---|---|
 | 0 | Let me in | M | in progress |
-| 1 | The world remembers | L | in progress — founding, picking, panels and the autonomous village slice land; persistence and identity do not |
-| 2 | The seam | L | not started |
+| 1 | The world remembers | L | in progress — stable identity, settlement directory, founding, picking and panels are live; world-state persistence is not |
+| 2 | The seam | L | in progress — ordinary villagers now demote to aggregate strategic work; the traveller/army promotion contract is not built |
 | 3 | They eat | M | in progress — physical food, daily consumption, prosperity and Hamlet → Village are live; births, decline and later tiers are not |
 | 4 | Prices and the hand cart | M | in progress — NPC wallets and local Moot prices are live; player trading and carts are not |
 | 5 | Caravans | L | not started |
@@ -50,7 +50,8 @@ on a local binary.
 - [x] Add a release-only 5,000-resident / 30-settlement scale lab and remove
       unchanged household, field and work-routine reconciliation from the hot
       path. The current village bundle is within one 60 Hz tick on the reference
-      machine; this does not replace Phase 2 strategic person compression.
+      machine; Phase 2 now also compresses ordinary off-screen villagers, while
+      traveller and army promotion remain separate work.
 - [x] Fix the interest cache that could never hit (~4k-entry set rebuilt at 60Hz per client)
 - [x] Stop replicating the whole world to connected-but-unnamed clients
 - [x] Persist heroes across disconnect and server restart
@@ -74,9 +75,11 @@ walk to one, and inspect it.
 Three shapes get decided here while their payload is still trivial, because all three are
 join keys or on-disk contracts that are ruinous to change later.
 
-- [ ] **Stable identity.** `SettlementId`, and an allocator. Not `Entity` (unstable across
-      restarts) and not `PeerId` (random per session). Every later cross-reference —
-      `Settlement.owner`, caravan origin, business slot — joins on this.
+- [x] **Stable identity.** `PersonId`, `SettlementId`, `BuildingId` and an allocator.
+      Ownership, employment, housing, civic work, adjunct fields/piers, UI commands and
+      the settlement directory join on ids; names remain display/legacy-migration data.
+      The allocator observes loaded ids before issuing another, ready for the versioned
+      world-state file below.
 - [ ] **World-state file, versioned and self-describing.** NOT bincode: it is positional,
       which is exactly why `PROFILE_VERSION` is at 7 and the profile loader has an explicit
       v6 migration plus reject-and-backup for unknown layouts. A wipe is an inconvenience for an outfit and fatal for months of
@@ -86,14 +89,13 @@ join keys or on-disk contracts that are ruinous to change later.
 - [ ] Route world saves through the existing background IO worker
       (`server/src/persistence/io_queue.rs`), not the main thread
 - [ ] Backup rotation and load-newest-valid-on-corrupt for the world file
-- [ ] **The replication split**, decided rather than assumed: lightyear 0.28 visibility is
-      per-ENTITY, not per-component, so "summaries global, detail on interest" needs either
-      two entities per settlement or a global directory message plus an interest-managed
-      detail entity. Decide now; it shapes every later entity class.
+- [x] **The replication split:** one globally replicated `SettlementSummary` entity and
+      `RegionCoord`-scoped halls, buildings, markets, inventories, worksites, roads, fields
+      and piers, joined client-side by `SettlementId`.
 - [ ] Radius aggregator over `BiomeField::resources` — does not exist in any form, and
       `resources()` has never had a production caller, so validate it discriminates before
       building site scoring on it
-- [ ] **`Person` and the settlement roster, before anything writes a population
+- [x] **`Person` and the settlement roster, before anything writes a population
       float.** WORLD-DESIGN 1a makes population a roster of named people rather
       than a number, and retrofitting that later means tearing out every
       consumer of `population: f32`. It is ~24 bytes a head and the name model
@@ -201,8 +203,9 @@ answer "can a village run itself?" before any of the economy above exists):
       reuse the bounded road route queue, sit on collision-checked path verges,
       and use the authored seated loop. A shared 4Hz real-time decision pass and
       cached gathering geometry keep cost independent of frame rate and warp;
-      unobserved regions receive no ambient movement work. Full person-record
-      promotion/demotion remains Phase 2.
+      unobserved regions receive no ambient movement work. Ordinary residents
+      now demote to durable strategic records; traveller and army round trips
+      remain Phase 2 work.
 - [x] Builder-made local paths. The person who finishes a building surveys from
       its authored door to the closest existing village path (or hall door),
       visibly builds the route in sections, pauses for their household at night,
@@ -236,10 +239,10 @@ answer "can a village run itself?" before any of the economy above exists):
       authoritative threshold crossing even when presentation is shorter than
       a network snapshot.
 - [x] Dedicated 1km `village_lab` map and `cargo village-lab` regression
-      harness. Its default two-hour scenario runs a fertile meadow coast and a
-      frozen inland settlement simultaneously through the real
-      collider/navigation/economy stack, reports expansion and inventories,
-      detects per-villager stalls, and verifies
+      harness. Its default 190-minute scenario runs one fixed-seed meadow village with
+      eight founders plus eight day-2 migrants. The opt-in `dual` scenario adds frozen
+      inland Coldbarrow. Both use the real collider/navigation/economy stack, report
+      expansion and inventories, detect per-villager stalls, and verify
       that every completed building builds its own door connector to the finished
       path network, including very short connectors beside an existing road.
 - [x] Village Lab food-secure and food-poor controls. The meadow must build both
@@ -295,6 +298,13 @@ walks real terrain around obstacles. If tactical travel is systematically slower
 learn to look away at the right moment — that is the look-away exploit, falsifiable with
 one entity and zero combat code.
 
+The first half of this seam is now exercised by ordinary villagers: outside tactical
+regions they retain durable identity, household, wallet and employment state, shed routes
+and animation phases, and contribute through aggregate workplace production and Moot
+commerce. Re-observation rebuilds their embodied routines. This proves the scheduling and
+state-shedding mechanism, but it does not satisfy the traveller round-trip or arrival-time
+contract below.
+
 - [ ] One strategic traveller entity: position, route, ETA
 - [ ] Promotion: strategic entity to a real walking body, deterministic from strategic state
 - [ ] Demotion: back to numbers, losing nothing
@@ -315,8 +325,9 @@ change when it arrives.
 
 **Playable:** watch a meadows village outgrow a moor one; starve a hamlet down to Ruins.
 
-The strategic tick finally gets a body. Note it currently runs an empty loop — the "prove
-it is cheap at world scale" claim has so far been made by timing nothing.
+The strategic tick now advances aggregate off-screen workplace production, porter commerce
+and household purchasing. Tactical villagers retain the visible per-trip loops; unobserved
+ordinary residents shed paths, door choreography and work-animation phases.
 
 - [x] Work slots on built plots, and people filling them
 - [x] One quality-scaled observed Wood loop from a filled Lumberjack Hut slot
@@ -334,7 +345,9 @@ it is cheap at world scale" claim has so far been made by timing nothing.
 - [x] Prosperity scalar with a panel breakdown: reserve 40, production 30,
       housing 20, employment 10, and hunger penalty down to -30.
 - [x] Hamlet → Village advancement after sustained measurable food security.
-- [ ] Reconcile observed per-trip production with the distant strategic tick
+- [x] Reconcile observed per-trip production with the distant strategic tick. Both use the
+      same quality-scaled rates, worker counts, one-field/two-field Farmstead capacity,
+      storage limits, sale policy and market transaction code.
 - [ ] Wheat-to-Food processing from FILLED SLOTS. Direct fishing already obeys
       filled slots; an unstaffed farm or mill must likewise produce nothing.
 - [ ] Births against a food-supported cap, and deaths, as roster events
@@ -349,7 +362,8 @@ it is cheap at world scale" claim has so far been made by timing nothing.
       only the last needs destruction, deliberate razing, or long physical decay.
       Destroying the hall alone must not erase a populated town.
 - [ ] Stagger economy work per settlement (30-60s) rather than sweeping every region
-- [ ] Measure the tick at full world scale and write the real numbers into ARCHITECTURE
+- [x] Measure the tick at full world scale and write the real numbers into ARCHITECTURE.
+      `cargo village-scale-lab` holds 5,000 NPCs in 30 towns and fails on entity/route growth.
 - [ ] **Decide the warp policy.** At 100x the tick hands the economy a 100-simulated-second
       integration step, so nonlinear growth drifts from a 1x world. Sub-step, or cap warp.
 - [ ] **Decide who may warp.** `TimeWarp` is a single replicated global set by a dev

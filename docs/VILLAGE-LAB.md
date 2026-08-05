@@ -16,8 +16,10 @@ From the workspace root:
 cargo village-lab
 ```
 
-The default is the `secure` scenario: 190 simulated minutes at 100x. The test is
-ignored by ordinary `cargo test` runs.
+The default is the `secure` scenario: 190 simulated minutes at 100x, with eight
+founders and eight uncommitted arrivals at the start of day 2. This deliberately
+crosses the real 12-resident Hamlet → Village threshold and tests late immigration
+recovery on every run. The test is ignored by ordinary `cargo test` runs.
 
 Useful overrides:
 
@@ -33,7 +35,7 @@ FISTWORLD_LAB_WARP=500 cargo village-lab
 # Include every villager's state in each five-minute report.
 FISTWORLD_LAB_VERBOSE=1 cargo village-lab
 
-# Reproduce a mature-village population wave: 8 founders, then 12 arrivals on day 7.
+# Replace the default wave: 8 founders, then 12 arrivals on day 7.
 FISTWORLD_LAB_DAY_TWO_ARRIVALS=12 \
 FISTWORLD_LAB_ARRIVAL_DAY=7 \
 FISTWORLD_LAB_MINUTES=220 \
@@ -51,7 +53,8 @@ geometrically valid shore. Its environment supports a Farmstead, Fisherman's
 Hut, and Lumberjack Hut. A compact mixed grove sits southwest of the hall on
 the same walkable landmass, so chopping and construction timber are visible and
 physically reachable rather than only present inside a nominal radius. The
-settlement should accumulate edible Wheat and Food, cover one daily portion per
+default run adds eight uncommitted migrants on day 2. The settlement should
+accumulate edible Wheat and Food, cover one daily portion per
 resident, hold at least three reserve days, sustain the food rule for three days
 and advance from Hamlet to Village.
 
@@ -108,9 +111,12 @@ counts (including active pending work), salary and arrears in the settlement pan
 
 ## What the tests prove
 
-The explicit `dual` pass requires all of the following:
+The explicit `dual` pass (which adds the default day-2 arrival wave to Lab Meadow)
+requires all of the following:
 
-- sixteen residents join the correct settlements and all receive designated beds;
+- twenty-four residents join the correct settlements (sixteen founders across
+  both settlements plus eight day-2 arrivals at Lab Meadow) and all receive
+  designated beds;
 - cabins repeat until housing covers the population;
 - the meadow builds and staffs both fishing and farming, while inland Coldbarrow never invents fishing access;
 - low measured food security causes repeated Farmstead permits;
@@ -178,8 +184,9 @@ Launch the real server and rendered client with one village already staged:
 ```
 
 This starts the `secure` scenario at 1x, skips the login screens with the local
-`LabObserver` profile, and focuses the camera on the same eight-person Lab
-Meadow on every run. Both map and placement use seed 3. Use WASD to pan, the
+`LabObserver` profile, and focuses the camera on the same eight-founder Lab
+Meadow on every run; the default day-2 wave adds eight more. Both map and
+placement use seed 3. Use WASD to pan, the
 mouse wheel to zoom, right-drag to orbit, and the HUD speed buttons to pause or
 switch between 1x, 10x and 100x whenever you want. The launcher prints a
 timestamped `logs/testworld-*` directory containing `server.log` and
@@ -193,7 +200,7 @@ as the headless test:
 FISTWORLD_LAB_SCENARIO=dual ./run.sh testworld
 FISTWORLD_LAB_SCENARIO=poor FISTWORLD_LAB_WARP=10 ./run.sh testworld
 
-# Spawn eight uncommitted arrivals beside Lab Meadow at the start of day 2.
+# This is now the default; set it explicitly when documenting a reproduction.
 FISTWORLD_LAB_DAY_TWO_ARRIVALS=8 FISTWORLD_LAB_WARP=10 ./run.sh testworld
 
 # Replay the day-7 twelve-person wave used by the construction/pathfinding stress test.
@@ -271,10 +278,12 @@ fishing search. The rings are siting preferences, not a hard village border.
 default fixture is deliberately severe: 5,000 individually embodied residents
 across 30 settlements, with 1,260 occupied cabins, roughly 2,500 staffed
 Farmsteads, physical fields, work states, household purses/pantries, business
-accounts/payroll, wallets, inventories, homes and work routines. It
+accounts/payroll, wallets, inventories, homes, work routines and one dedicated
+market porter per settlement. It
 reports average, p50, p95, p99 and maximum time for the main village systems as
 a share of the 16.67 ms 60 Hz budget. It also measures a full 5,000-person daily
-food/market boundary and a 512-person local movement and bounded route burst.
+food/market boundary, the stable-identity pass, aggregate off-screen production
+and commerce, and a 512-person local movement and bounded route burst.
 
 ```bash
 cargo village-scale-lab
@@ -298,16 +307,19 @@ checks happen when a vacancy is filled and farm training happens only when a
 physical production cycle succeeds, not in a per-NPC decision loop every frame.
 
 Reference 60-sample measurement on the 10-core Apple Silicon development
-machine on 2026-08-04:
+machine on 2026-08-05:
 
-- the steady village bundle averaged 0.804 ms, p99 was 0.832 ms and the maximum
-  was 0.842 ms — 4.8% of one 60 Hz tick on average;
+- the steady village bundle averaged 1.186 ms, p99 was 1.244 ms and the maximum
+  was 1.244 ms — 7.1% of one 60 Hz tick on average;
 - the once-per-world-day 5,000-person food, adaptive-wage, household-budget and
-  business-payroll burst averaged 1.377 ms, p99 was 1.450 ms and the maximum
-  was 1.450 ms;
-- the capped 512-person local route burst averaged 0.035 ms, p99 was 0.044 ms,
+  business-payroll burst averaged 1.796 ms, p99 was 1.898 ms and the maximum
+  was 1.941 ms;
+- full stable identity and legacy-relationship reconciliation averaged 0.053 ms
+  (0.3% of a tick), while the real aggregate strategic-village pass averaged
+  0.268 ms, p99 was 0.287 ms and the maximum was 0.299 ms;
+- the capped 512-person local route burst averaged 0.038 ms, p99 was 0.053 ms,
   the maximum was 0.057 ms, and all requests drained;
-- the test process rose from 214.0 to 217.3 MiB RSS for 16,384 ECS entities,
+- the test process rose from 215.3 to 224.2 MiB RSS for 16,384 ECS entities,
   with no entity growth.
 
 These are machine-specific reference numbers, not pass/fail thresholds; the
@@ -315,12 +327,12 @@ invariants and the emitted distribution are the durable regression evidence.
 
 This is not a claim that 5,000 simultaneously visible characters are shippable.
 The probe excludes rendering, replication, loaded prop collision and a genuine
-crowd fighting over routes. More importantly, distant residents are still full
-ECS people whose workplace loops run at 60 Hz: the compact strategic
-`AtPlace`/`Travelling` representation and promotion/demotion seam remain required
-before the 5,000-person world is architecturally complete. The result says the
-current village calculations have comfortable headroom and gives that future
-seam a repeatable regression target.
+crowd fighting over routes. Distant residents remain durable ECS identity,
+money, household and employment records, but shed routes, door choreography and
+trade phases; production and commerce run in aggregate. Armies, battles and
+travelling parties still need their own promotion contracts. The result says the
+current village calculations have comfortable headroom and gives those future
+seams a repeatable regression target.
 
 ## Inspect the empty map
 

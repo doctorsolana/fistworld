@@ -7,12 +7,12 @@ The companion document [WORLD-DESIGN.md](WORLD-DESIGN.md) describes what runs ON
 architecture: settlements, goods, caravans, clans, and the player's climb from one guy
 to a realm. The build order for both lives in [ROADMAP.md](ROADMAP.md).
 
-> **Status, audited 2026-07-30.** This document is a design record, not a description of
-> the code. Most of it is still unbuilt. Where it previously described intent in the
-> present tense, that has been corrected inline and marked **[not built]**,
-> **[partial]** or **[done]**. The one-line summary: interest management is real, the
-> strategic tick is an empty loop, and nothing political or persistent about regions
-> exists. Do not read a section as a description of working code unless it says so.
+> **Status, audited 2026-08-05.** This remains a design record, with implementation state
+> marked **[not built]**, **[partial]** or **[done]**. The living-village foundation now
+> has stable world identities, one authoritative simulation clock, shared live/lab
+> scheduling, region-scoped settlement detail, a global settlement directory and an
+> aggregate off-screen economy. Politics, armies, combat and world-state persistence are
+> still unbuilt. Do not read an unmarked future rule as working code.
 
 ## The game
 
@@ -67,12 +67,14 @@ An army crossing the map is one strategic entity. When a player zooms in on it, 
 meets a hostile force, it **promotes** into N tactical units. When attention leaves and
 the situation resolves, it **demotes** back to a strength number.
 
-> **[partially built]** — region `SimLevel` now gates ambient villager behaviour:
-> unobserved regions receive no walking, route or seated-animation decisions, and a
-> focused test locks that cost boundary. The actual identity seam is still absent,
-> however: authoritative villagers remain embodied server entities rather than being
-> losslessly converted to compact `AtPlace`/`Travelling` person records. Phase 2 still
-> owns those promotion/demotion endpoints and their aggregate-consistency tests.
+> **[partially built]** — ordinary off-screen villagers now carry `StrategicPerson` and
+> shed routes, movement targets, door/shopping state and trade-specific tactical progress.
+> Settlement production, workplace storage, porter sales and household purchasing advance
+> in aggregate on the strategic step. Returning to a tactical region removes the marker
+> and the normal assignment systems rebuild embodied routines from durable `PersonId`,
+> `EmployedAt`, `LivesAt` and settlement relationships. Migration, construction, roads and
+> market deliveries are transition-critical: an actor already doing one may finish before
+> demotion. Armies and lossless battle promotion remain unbuilt.
 
 Rules that keep this sane:
 
@@ -93,7 +95,7 @@ The world is divided into regions. That single division serves all of:
 | Role | Meaning | State |
 |------|---------|-------|
 | **Interest management** | What the server replicates to a given client | **[done]** |
-| **Simulation LOD** | Whether this region is tactical or strategic right now | **[partial]** — `SimLevel` gates ambient villager routing, movement and seated animation, but authoritative people are not yet promoted from or demoted to compact strategic records. |
+| **Simulation LOD** | Whether this region is tactical or strategic right now | **[partial]** — ordinary villagers promote/demote between tactical routines and aggregate settlement production/economy; construction, travel parties and combat still need dedicated strategic forms. |
 | **Political** | Who owns this land | **[not built]** — `RegionState` has no owner. See the correction below. |
 | **Persistence** | The unit that gets saved and loaded | **[not built]** — `RegionState` does not even derive `Serialize`. See the correction below. |
 
@@ -187,11 +189,13 @@ Rough bands to design against:
   on ephemeral storage and every deploy destroys every player profile. Persistence code is
   worthless until that is fixed — it is the top item in ROADMAP Phase 0.
 
-On budgeting: "budget the strategic tick as the primary server cost" is right in principle
-but currently points at the wrong system. The tick *is* inside the measured Core phase, but
-its loop body is empty, so the number it reports is noise. The real measured cost today is
-the 60Hz interest and visibility work. Re-measure once the tick has a body (ROADMAP Phase 3)
-and write the actual numbers here.
+On budgeting: the strategic tick now has real settlement production and commerce work.
+`cargo village-scale-lab` is the regression gate: its 2026-08-05 reference fixture held
+5,000 NPCs in 30 settlements and measured the complete steady bundle at 1.186 ms, the
+daily economy burst at 1.796 ms, the full stable-identity/reconciliation pass at 0.053 ms
+and aggregate strategic villages at 0.268 ms on the development machine, with no entity or
+route-queue growth. These are reference numbers, not a platform guarantee; retain the
+fixture and compare deltas whenever a world-wide rule is added.
 
 ## 6. What already exists and fits
 
@@ -212,13 +216,16 @@ and write the actual numbers here.
 - Chunked terrain streaming, huge maps, and the map editor. **[done]**
 - lightyear replication + profile persistence. **[done]** — including heroes, which now
   survive disconnect and server restart.
+- Stable `PersonId`, `SettlementId` and `BuildingId` relationships, global settlement
+  summaries plus region-scoped physical/economic detail, and aggregate off-screen village
+  production. **[done for the current village simulation]**
 - ~~The commander camera, which needs its zoom range extended by ~20×.~~ **[done]** —
   12m–12,000m, which covers the whole map.
 
 **What does NOT exist, despite being easy to assume from the rest of this document:**
-combat (stripped wholesale — ~9,600 lines — and never replaced), any unit abstraction other
-than one hero per player, any settlement/clan/goods type, world-state persistence, entity
-picking, and any non-dev path to a body.
+combat (stripped wholesale — ~9,600 lines — and never replaced), strategic armies,
+caravans, clans, political ownership, world-state persistence, and a production path for
+founding or commanding a body outside the current dev/gameplay tools.
 
 ## 7. Build order
 
@@ -231,9 +238,9 @@ The engine steps this section listed map onto it as follows, with their real sta
 | Old step | Reality | Lands in |
 |---|---|---|
 | 1. Region layer | Interest management done; ownership and persistence never started, and both move off regions entirely (§3) | Phase 1 |
-| 2. Strategic tick | **Not started.** The loop body is `strategic_secs += elapsed` and nothing reads it. "Prove it is cheap" has so far been proved by timing an empty loop. | Phase 3 |
+| 2. Strategic tick | **Partial.** Villager production, workplace stock, porter commerce and household purchasing run in aggregate; caravans, armies and strategic construction do not. | Phase 3 |
 | 3. Tactical units + flow fields | Not started. Deliberately moved LATE: it is the biggest block of work and carries the least architectural uncertainty. | Phase 6 |
-| 4. Promotion/demotion | Not started, and moved EARLY (see below) | Phase 2 |
+| 4. Promotion/demotion | **Partial for ordinary villagers.** Tactical routine state is shed/rebuilt across `SimLevel`; army and travelling-party aggregate contracts remain. | Phase 2 |
 | 5. Zoom bands + render LOD | Camera range done; entity representation across bands not started. Re-scope accordingly (§4). | as needed |
 | 6. Art pass | ongoing | — |
 
@@ -247,3 +254,27 @@ One amendment: the advice was also impossible to act on as written, because the 
 neither endpoint — there is no strategic entity to promote and no tactical unit type to
 promote into. So the actionable form is: **write the promotion contract as tests the first
 time any strategic entity exists**, before the machinery it constrains.
+
+## 8. Living-world implementation rules
+
+The current village simulation uses these rules as hard boundaries:
+
+- **Identity is data, names are labels.** `PersonId`, `SettlementId` and `BuildingId` are
+  authoritative across regions, payroll, ownership, employment, housing, UI commands and
+  serialized relationships. Legacy name rosters remain for readable panels and old-state
+  migration only; the versioned world-state file itself is still a roadmap item.
+- **There is one simulation clock.** `SimulationTime` is the server-side source of real
+  seconds, world seconds and warp. Gameplay code must not multiply `Time` by `TimeWarp`
+  independently. Strategic steps consume accumulated world seconds from that clock.
+- **The live game and Village Lab share one ordered schedule.** Add village behaviour to
+  `server/src/world/village/schedule.rs`; do not maintain a second hand-copied lab list.
+- **Summary and detail are different entities.** `SettlementSummary` is tiny and global.
+  Halls, buildings, worksites, roads, fields, piers, markets and inventories carry
+  `RegionCoord` and replicate only through interest management. They join by stable id.
+- **Off-screen simulation is aggregate.** A strategic person must not own a path, door
+  timer, seat, shopping trip or resource animation. Add world-wide rules to the strategic
+  settlement pass and cover tactical/strategic agreement with tests.
+- **Pure policy lives outside orchestration.** Wage decisions are in `village/economy.rs`,
+  production rates in `village/production.rs`, strategic LOD in `village/strategic.rs`,
+  shared ordering in `village/schedule.rs`, and road geometry in
+  `village_roads/geometry.rs`. Keep extending those seams instead of growing one monolith.

@@ -54,9 +54,9 @@ pub const BUTTON_PRESSED: Color = Color::srgba(0.729, 0.706, 0.671, 0.98);
 
 /// The carved outer edge on every plate. Dark and near-opaque on purpose: this
 /// is half of how a plate keeps a silhouette against bright terrain.
-pub const PLATE_RULE: Color = Color::srgba(0.361, 0.345, 0.318, 0.85);
+pub const PLATE_RULE: Color = Color::srgba(0.361, 0.345, 318.0 / 1000.0, 0.85);
 /// Hairline dividers INSIDE a plate, replacing nested bordered boxes.
-pub const PLATE_RULE_SOFT: Color = Color::srgba(0.361, 0.345, 0.318, 0.32);
+pub const PLATE_RULE_SOFT: Color = Color::srgba(0.361, 0.345, 318.0 / 1000.0, 0.32);
 /// Legacy name, kept so existing menus compile unchanged.
 pub const BUTTON_BORDER: Color = PLATE_RULE;
 
@@ -70,7 +70,7 @@ pub const INK: Color = Color::srgb(0.129, 0.118, 0.102);
 #[allow(dead_code)]
 pub const INK_SOFT: Color = Color::srgb(0.243, 0.227, 0.203);
 /// Small-caps labels, hints, keybind lines. Tuned to stay readable at 10px.
-pub const INK_MUTED: Color = Color::srgb(0.361, 0.345, 0.318);
+pub const INK_MUTED: Color = Color::srgb(0.361, 0.345, 318.0 / 1000.0);
 /// Text ON a saturated or slate fill, where ink would disappear.
 pub const INK_INVERSE: Color = Color::srgb(0.965, 0.957, 0.933);
 

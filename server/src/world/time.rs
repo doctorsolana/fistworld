@@ -38,12 +38,15 @@ pub fn spawn_world_time_once(mut commands: Commands, spawned: Option<Res<WorldTi
 /// trickle forever (~1 KiB/s each). The proper fix is client-side clock
 /// prediction (integrate locally from TimeWarp, correct on sparse syncs) —
 /// do that before worrying about idle bandwidth measurements.
-pub fn update_world_time(mut world_time: Query<&mut WorldTime>, warp: Query<&TimeWarp>) {
-    let factor = warp.iter().next().map(|w| w.0).unwrap_or(1.0);
-    let real_dt = 1.0 / shared::protocol::FIXED_TIMESTEP_HZ as f32;
+pub fn update_world_time(
+    mut world_time: Query<&mut WorldTime>,
+    simulation_time: super::simulation_time::SimulationTime,
+) {
+    let real_dt = simulation_time.real_seconds();
+    let world_dt = simulation_time.world_seconds();
     for mut wt in world_time.iter_mut() {
         // Ocean clock stays wall-clock even under warp/pause — see WorldTime::advance.
-        wt.advance(real_dt * factor, real_dt);
+        wt.advance(world_dt, real_dt);
     }
 }
 

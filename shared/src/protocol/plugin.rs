@@ -2,12 +2,13 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::components::{
-    ActiveMapState, BuildingDoorDemand, CharacterActivity, CharacterAffiliation,
-    CharacterAttributes, CharacterKind, CharacterName, CloudSeed, CommandedBy, ConstructionSite,
-    FarmField, FishingPier, Health, Hero, HeroOutfit, Household, MootAdministration, Nutrition,
-    Occupation, Player, PlayerPosition, PlayerProgression, PlayerRotation, Residence, Settlement,
-    SettlementBuilding, SettlementDevelopment, SettlementPolicies, TimeWarp, VillageRoad,
-    WorkStatus, WorldTime,
+    ActiveMapState, AttachedTo, BuildingDoorDemand, BuildingId, BuildingOf, CharacterActivity,
+    CharacterAffiliation, CharacterAttributes, CharacterKind, CharacterName, CivicEmployment,
+    CloudSeed, CommandedBy, ConstructionSite, EmployedAt, FarmField, FishingPier, Health, Hero,
+    HeroOutfit, Household, LivesAt, MootAdministration, Nutrition, Occupation, OwnedBy, PersonId,
+    Player, PlayerPosition, PlayerProgression, PlayerRotation, Residence, ResidentOf, Settlement,
+    SettlementBuilding, SettlementDevelopment, SettlementId, SettlementPolicies, SettlementSummary,
+    TimeWarp, VillageRoad, WorkStatus, WorldTime,
 };
 use crate::economy::{
     BusinessAccount, BusinessSalePolicy, BusinessWagePolicy, CarriedLoad, GoodsInventory,
@@ -36,6 +37,17 @@ impl Plugin for ProtocolPlugin {
 
         // === CHARACTERS (heroes and villagers alike) ===
         app.component::<CharacterName>().replicate();
+        app.component::<PersonId>().replicate();
+        app.component::<SettlementId>().replicate();
+        app.component::<SettlementSummary>().replicate();
+        app.component::<BuildingId>().replicate();
+        app.component::<ResidentOf>().replicate();
+        app.component::<BuildingOf>().replicate();
+        app.component::<AttachedTo>().replicate();
+        app.component::<OwnedBy>().replicate();
+        app.component::<EmployedAt>().replicate();
+        app.component::<CivicEmployment>().replicate();
+        app.component::<LivesAt>().replicate();
         app.component::<CharacterKind>().replicate();
         app.component::<CharacterAttributes>().replicate();
         app.component::<CharacterActivity>().replicate();

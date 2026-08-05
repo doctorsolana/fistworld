@@ -45,7 +45,11 @@ impl Plugin for EncyclopediaPlugin {
                 state_sync::learn_visible_characters,
                 state_sync::track_affiliation_changes,
                 state_sync::track_retinue_changes,
-                places::learn_settlements,
+                (
+                    places::learn_settlement_summaries,
+                    places::learn_settlements,
+                )
+                    .chain(),
             )
                 .run_if(in_state(GameState::Playing)),
         );
@@ -210,6 +214,7 @@ impl PersonKind {
 /// One person the world contains — known to this player or not.
 #[derive(Clone, Debug)]
 pub struct PersonRecord {
+    pub id: shared::components::PersonId,
     pub name: String,
     pub kind: PersonKind,
     pub affiliation: Affiliation,
@@ -444,7 +449,7 @@ pub(super) const ROW_SELECTED: Color = Color::srgba(0.560, 0.325, 0.129, 0.20);
 /// The detail pane goes LIGHTER than the body, like a fresh leaf laid on the
 /// ledger.
 pub(super) const DETAIL_BG: Color = Color::srgba(0.898, 0.878, 0.843, 0.92);
-pub(super) const DIVIDER: Color = Color::srgba(0.361, 0.345, 0.318, 0.32);
+pub(super) const DIVIDER: Color = Color::srgba(0.361, 0.345, 318.0 / 1000.0, 0.32);
 /// Online marker. Moss green -- the old bright green measured ~2.3:1 on a light
 /// panel and read as a lit LED rather than as ink.
 pub(super) const STATUS_ONLINE: Color = Color::srgb(0.243, 0.435, 0.196);

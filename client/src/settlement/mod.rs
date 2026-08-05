@@ -367,8 +367,9 @@ struct RaisingVisual {
 /// Draw a building rising out of its plot while it is being raised.
 ///
 /// The server sends ONE bit — `raising` flips true when the ground is cleared —
-/// and the clock runs here. Streaming a progress float instead would re-send
-/// every site to every client at tick rate, because sites replicate globally.
+/// and the clock runs here. Streaming a progress float instead would resend
+/// every nearby site at tick rate even though region-scoped detail only needs
+/// the transition.
 /// The cost of the local clock is that it starts a network hop late, which at
 /// ten seconds nobody can see.
 fn raise_construction_visuals(
@@ -754,7 +755,7 @@ fn setup_house_window_lighting(
 ///
 /// The replicated household on the cabin is the durable occupancy fact. Do not
 /// cross-join it with separate character entities here: those entities may be
-/// streamed or replicated a frame later than the globally visible building,
+/// streamed or replicated a frame later than the building's regional detail,
 /// which used to leave a genuinely occupied cabin dark in live play.
 fn sync_house_window_lighting(
     mut commands: Commands,

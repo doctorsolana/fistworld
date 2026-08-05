@@ -23,7 +23,9 @@ pub(crate) const SECURE_VILLAGERS: usize = 8;
 pub(crate) const POOR_VILLAGERS: usize = 8;
 const FOUNDING_WOOD: u32 = 80;
 const DEFAULT_LAB_WARP: f32 = 1.0;
-const DEFAULT_DAY_TWO_ARRIVALS: usize = 0;
+// The normal lab crosses the real Hamlet -> Village population threshold and
+// also exercises the late-immigration recovery path every run.
+const DEFAULT_DAY_TWO_ARRIVALS: usize = 8;
 const DEFAULT_LAB_ARRIVAL_DAY: u32 = 2;
 const DEFAULT_REALWORLD_VILLAGERS: usize = 32;
 const DEFAULT_REALWORLD_POINT: Vec2 = Vec2::new(-346.0, 306.0);

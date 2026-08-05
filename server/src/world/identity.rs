@@ -1,0 +1,474 @@
+//! Stable world identity and session-local lookup indexes.
+//!
+//! Bevy `Entity` values are excellent live handles but are not save keys, and
+//! names are presentation rather than identity. Every durable person, place
+//! and building receives an opaque monotonic id once. Relationship components
+//! retain those ids while runtime AI remains free to cache Entity handles.
+
+use bevy::prelude::*;
+use shared::components::{
+    AttachedTo, BuildingId, BuildingOf, CharacterKind, CharacterName, CivicEmployment, CivicRole,
+    EmployedAt, FarmField, FishingPier, LivesAt, MootAdministration, OwnedBy, PersonId,
+    PlayerPosition, ResidentOf, Settlement, SettlementBuilding, SettlementBuildingKind,
+    SettlementId,
+};
+
+use super::village::{HomeAssignment, VillagerIntent};
+
+#[derive(Resource, Debug)]
+pub struct WorldIdAllocator {
+    next_person: u64,
+    next_settlement: u64,
+    next_building: u64,
+}
+
+/// Migrate field and pier parent links from their old position join. New
+/// adjuncts receive AttachedTo at spawn, so this compatibility pass becomes a
+/// no-op after old worlds have been observed once.
+pub fn reconcile_stable_adjunct_relationships(
+    mut commands: Commands,
+    buildings: Query<(&BuildingId, &SettlementBuilding, &PlayerPosition)>,
+    fields: Query<(Entity, &FarmField), Without<AttachedTo>>,
+    piers: Query<(Entity, &FishingPier), Without<AttachedTo>>,
+) {
+    for (entity, field) in fields.iter() {
+        let mut matches = buildings.iter().filter(|(_, building, position)| {
+            building.kind == SettlementBuildingKind::Farmstead
+                && building.settlement == field.settlement
+                && position.0 == field.farmstead
+        });
+        if let (Some(first), None) = (matches.next().map(|(id, ..)| *id), matches.next()) {
+            commands.entity(entity).insert(AttachedTo(first));
+        }
+    }
+    for (entity, pier) in piers.iter() {
+        let mut matches = buildings.iter().filter(|(_, building, position)| {
+            building.kind == SettlementBuildingKind::FishermansHut
+                && building.settlement == pier.settlement
+                && position.0 == pier.fishermans_hut
+        });
+        if let (Some(first), None) = (matches.next().map(|(id, ..)| *id), matches.next()) {
+            commands.entity(entity).insert(AttachedTo(first));
+        }
+    }
+}
+
+/// Backfill durable civic assignments from the replicated named roster. New
+/// hires write this component immediately; this pass exists for old saves and
+/// removes posts whose holder has left the settlement. Ambiguous duplicate
+/// display names are never guessed.
+pub fn reconcile_stable_civic_employment(
+    mut commands: Commands,
+    halls: Query<(Entity, &SettlementId, Ref<MootAdministration>)>,
+    people: Query<(
+        Entity,
+        &CharacterName,
+        &VillagerIntent,
+        Option<&CivicEmployment>,
+    )>,
+    changed_people: Query<
+        (Entity, &VillagerIntent, Option<&CivicEmployment>),
+        Changed<VillagerIntent>,
+    >,
+) {
+    // A person leaving town can invalidate a post without changing the hall's
+    // roster in the same tick. This query is proportional to movers, not to
+    // the entire population.
+    for (entity, intent, current) in changed_people.iter() {
+        let Some(current) = current else {
+            continue;
+        };
+        let remains_in_settlement = intent.settlement().is_some_and(|hall| {
+            halls
+                .get(hall)
+                .is_ok_and(|(_, settlement, _)| *settlement == current.settlement)
+        });
+        if !remains_in_settlement {
+            commands.entity(entity).remove::<CivicEmployment>();
+        }
+    }
+
+    for (hall, settlement_id, administration) in halls.iter() {
+        // New staffing writes CivicEmployment directly. The name join is only
+        // an old-save migration and therefore runs when its source changes.
+        if !administration.is_changed() {
+            continue;
+        }
+        let role_for_name = |name: &str| {
+            if administration.road_steward.as_deref() == Some(name) {
+                Some(CivicRole::RoadSteward)
+            } else if administration.market_porter.as_deref() == Some(name) {
+                Some(CivicRole::MarketPorter)
+            } else if administration.reeve.as_deref() == Some(name) {
+                Some(CivicRole::Reeve)
+            } else if administration.guards.iter().any(|guard| guard == name) {
+                Some(CivicRole::Guard)
+            } else if administration
+                .city_workers
+                .iter()
+                .any(|worker| worker == name)
+            {
+                Some(CivicRole::CityWorker)
+            } else {
+                None
+            }
+        };
+
+        for (entity, name, intent, current) in people.iter() {
+            if intent.settlement() != Some(hall) {
+                if current.is_some_and(|job| job.settlement == *settlement_id) {
+                    commands.entity(entity).remove::<CivicEmployment>();
+                }
+                continue;
+            }
+            let Some(role) = role_for_name(&name.0) else {
+                if current.is_some_and(|job| job.settlement == *settlement_id) {
+                    commands.entity(entity).remove::<CivicEmployment>();
+                }
+                continue;
+            };
+            let desired = CivicEmployment {
+                settlement: *settlement_id,
+                role,
+            };
+            if current.copied() == Some(desired) {
+                continue;
+            }
+            let matches = people
+                .iter()
+                .filter(|(_, other_name, other_intent, _)| {
+                    other_name.0 == name.0 && other_intent.settlement() == Some(hall)
+                })
+                .take(2)
+                .count();
+            if matches == 1 {
+                commands.entity(entity).insert(desired);
+            }
+        }
+    }
+}
+
+impl Default for WorldIdAllocator {
+    fn default() -> Self {
+        Self {
+            next_person: 1,
+            next_settlement: 1,
+            next_building: 1,
+        }
+    }
+}
+
+impl WorldIdAllocator {
+    fn observe_person(&mut self, id: PersonId) {
+        self.next_person = self.next_person.max(id.0.saturating_add(1));
+    }
+
+    fn observe_settlement(&mut self, id: SettlementId) {
+        self.next_settlement = self.next_settlement.max(id.0.saturating_add(1));
+    }
+
+    fn observe_building(&mut self, id: BuildingId) {
+        self.next_building = self.next_building.max(id.0.saturating_add(1));
+    }
+
+    fn person(&mut self) -> PersonId {
+        let id = PersonId(self.next_person);
+        self.next_person = self.next_person.saturating_add(1);
+        id
+    }
+
+    fn settlement(&mut self) -> SettlementId {
+        let id = SettlementId(self.next_settlement);
+        self.next_settlement = self.next_settlement.saturating_add(1);
+        id
+    }
+
+    fn building(&mut self) -> BuildingId {
+        let id = BuildingId(self.next_building);
+        self.next_building = self.next_building.saturating_add(1);
+        id
+    }
+}
+
+#[derive(Resource, Default, Debug)]
+pub struct WorldIdentityIndex {
+    pub people: bevy::platform::collections::HashMap<PersonId, Entity>,
+    pub settlements: bevy::platform::collections::HashMap<SettlementId, Entity>,
+    pub buildings: bevy::platform::collections::HashMap<BuildingId, Entity>,
+    initialized: bool,
+}
+
+/// Assign ids to newly created durable entities. Existing ids are observed
+/// first so loading a world and then creating something can never reuse an id.
+pub fn assign_stable_world_ids(
+    mut commands: Commands,
+    mut allocator: ResMut<WorldIdAllocator>,
+    existing_people: Query<&PersonId, Added<PersonId>>,
+    existing_settlements: Query<&SettlementId, Added<SettlementId>>,
+    existing_buildings: Query<&BuildingId, Added<BuildingId>>,
+    new_people: Query<Entity, (With<CharacterKind>, Without<PersonId>)>,
+    new_settlements: Query<Entity, (With<Settlement>, Without<SettlementId>)>,
+    new_buildings: Query<Entity, (With<SettlementBuilding>, Without<BuildingId>)>,
+) {
+    for id in existing_people.iter() {
+        allocator.observe_person(*id);
+    }
+    for id in existing_settlements.iter() {
+        allocator.observe_settlement(*id);
+    }
+    for id in existing_buildings.iter() {
+        allocator.observe_building(*id);
+    }
+
+    for entity in new_people.iter() {
+        commands.entity(entity).insert(allocator.person());
+    }
+    for entity in new_settlements.iter() {
+        commands.entity(entity).insert(allocator.settlement());
+    }
+    for entity in new_buildings.iter() {
+        commands.entity(entity).insert(allocator.building());
+    }
+}
+
+/// Rebuild the cheap Entity lookup tables only when identity components change.
+pub fn rebuild_world_identity_index(
+    mut index: ResMut<WorldIdentityIndex>,
+    people: Query<(Entity, &PersonId), With<CharacterKind>>,
+    settlements: Query<(Entity, &SettlementId), With<Settlement>>,
+    buildings: Query<(Entity, &BuildingId), With<SettlementBuilding>>,
+    changed_people: Query<(), Changed<PersonId>>,
+    changed_settlements: Query<(), Changed<SettlementId>>,
+    changed_buildings: Query<(), Changed<BuildingId>>,
+    removed_people: RemovedComponents<PersonId>,
+    removed_settlements: RemovedComponents<SettlementId>,
+    removed_buildings: RemovedComponents<BuildingId>,
+) {
+    let dirty = !index.initialized
+        || !changed_people.is_empty()
+        || !changed_settlements.is_empty()
+        || !changed_buildings.is_empty()
+        || !removed_people.is_empty()
+        || !removed_settlements.is_empty()
+        || !removed_buildings.is_empty();
+    if !dirty {
+        return;
+    }
+
+    index.people.clear();
+    index.settlements.clear();
+    index.buildings.clear();
+    for (entity, id) in people.iter() {
+        assert!(
+            index.people.insert(*id, entity).is_none(),
+            "duplicate durable PersonId {}",
+            id.0
+        );
+    }
+    for (entity, id) in settlements.iter() {
+        assert!(
+            index.settlements.insert(*id, entity).is_none(),
+            "duplicate durable SettlementId {}",
+            id.0
+        );
+    }
+    for (entity, id) in buildings.iter() {
+        assert!(
+            index.buildings.insert(*id, entity).is_none(),
+            "duplicate durable BuildingId {}",
+            id.0
+        );
+    }
+    index.initialized = true;
+}
+
+/// Maintain the durable mirrors of the live Entity relationships. Compatibility
+/// recovery from old name-only state is deliberately conservative: ambiguous
+/// duplicate names are left unresolved instead of silently paying or assigning
+/// the wrong person.
+#[allow(clippy::type_complexity)]
+pub fn reconcile_stable_world_relationships(
+    mut commands: Commands,
+    settlements: Query<(Entity, &Settlement, &SettlementId)>,
+    buildings: Query<(
+        Entity,
+        Ref<SettlementBuilding>,
+        &BuildingId,
+        Option<&OwnedBy>,
+    )>,
+    people: Query<(
+        Entity,
+        &CharacterName,
+        &PersonId,
+        &VillagerIntent,
+        Option<&ResidentOf>,
+        Option<&EmployedAt>,
+    )>,
+    changed_people: Query<
+        (
+            Entity,
+            &VillagerIntent,
+            Option<&HomeAssignment>,
+            Option<&ResidentOf>,
+            Option<&LivesAt>,
+        ),
+        Or<(Changed<VillagerIntent>, Changed<HomeAssignment>)>,
+    >,
+    unscoped_buildings: Query<(Entity, &SettlementBuilding), Without<BuildingOf>>,
+    building_ids: Query<&BuildingId>,
+    mut removed_homes: RemovedComponents<HomeAssignment>,
+) {
+    let settlement_by_entity: bevy::platform::collections::HashMap<Entity, SettlementId> =
+        settlements
+            .iter()
+            .map(|(entity, _, id)| (entity, *id))
+            .collect();
+    let settlement_by_name: bevy::platform::collections::HashMap<&str, SettlementId> = settlements
+        .iter()
+        .map(|(_, settlement, id)| (settlement.name.as_str(), *id))
+        .collect();
+
+    for (entity, intent, home, resident_of, lives_at) in changed_people.iter() {
+        if let Some(settlement_id) = intent
+            .settlement()
+            .and_then(|settlement| settlement_by_entity.get(&settlement).copied())
+        {
+            if resident_of.copied() != Some(ResidentOf(settlement_id)) {
+                commands.entity(entity).insert(ResidentOf(settlement_id));
+            }
+        } else if resident_of.is_some() {
+            commands.entity(entity).remove::<ResidentOf>();
+        }
+
+        let home_id = home.and_then(|home| building_ids.get(home.home()).ok().copied());
+        if let Some(home_id) = home_id {
+            if lives_at.copied() != Some(LivesAt(home_id)) {
+                commands.entity(entity).insert(LivesAt(home_id));
+            }
+        } else if lives_at.is_some() {
+            commands.entity(entity).remove::<LivesAt>();
+        }
+    }
+    for entity in removed_homes.read() {
+        if people.get(entity).is_ok() {
+            commands.entity(entity).remove::<LivesAt>();
+        }
+    }
+
+    // New buildings receive BuildingOf at creation. Only unresolved legacy
+    // entities enter this migration query.
+    for (building_entity, building) in unscoped_buildings.iter() {
+        if let Some(settlement_id) = settlement_by_name
+            .get(building.settlement.as_str())
+            .copied()
+        {
+            commands
+                .entity(building_entity)
+                .insert(BuildingOf(settlement_id));
+        }
+    }
+
+    // New construction writes OwnedBy directly. This branch migrates legacy
+    // buildings only when one and only one resident matches the display name.
+    for (building_entity, building, _, owner_id) in buildings.iter() {
+        if !building.is_changed() || owner_id.is_some() {
+            continue;
+        }
+        let settlement_id = settlement_by_name
+            .get(building.settlement.as_str())
+            .copied();
+        let Some(owner) = building.owner.as_deref() else {
+            continue;
+        };
+        let mut matches = people
+            .iter()
+            .filter(|(_, name, _, intent, resident_of, _)| {
+                let person_settlement = resident_of.map(|resident| resident.0).or_else(|| {
+                    intent
+                        .settlement()
+                        .and_then(|hall| settlement_by_entity.get(&hall).copied())
+                });
+                name.0 == owner && person_settlement == settlement_id
+            });
+        if let (Some(first), None) = (matches.next().map(|(_, _, id, ..)| *id), matches.next()) {
+            commands.entity(building_entity).insert(OwnedBy(first));
+        }
+    }
+
+    // Migrate the legacy worker-name roster once. New hiring writes EmployedAt
+    // directly, so duplicate display names never become an authority again.
+    for (_, building, building_id, _) in buildings.iter() {
+        if !building.is_changed() {
+            continue;
+        }
+        let settlement_id = settlement_by_name
+            .get(building.settlement.as_str())
+            .copied();
+        for worker_name in &building.workers {
+            let mut matches =
+                people
+                    .iter()
+                    .filter(|(_, name, _, intent, resident_of, employed_at)| {
+                        let person_settlement =
+                            resident_of.map(|resident| resident.0).or_else(|| {
+                                intent
+                                    .settlement()
+                                    .and_then(|hall| settlement_by_entity.get(&hall).copied())
+                            });
+                        name.0 == *worker_name
+                            && person_settlement == settlement_id
+                            && employed_at.is_none()
+                    });
+            if let (Some(first), None) = (matches.next().map(|(entity, ..)| entity), matches.next())
+            {
+                commands.entity(first).insert(EmployedAt(*building_id));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocator_observes_loaded_ids_and_never_reassigns_existing_people() {
+        let mut app = App::new();
+        app.init_resource::<WorldIdAllocator>()
+            .add_systems(Update, assign_stable_world_ids);
+        let loaded = app
+            .world_mut()
+            .spawn((CharacterKind::Villager, PersonId(100)))
+            .id();
+        let first_new = app.world_mut().spawn(CharacterKind::Villager).id();
+        let second_new = app.world_mut().spawn(CharacterKind::Villager).id();
+
+        app.update();
+        let ids = [loaded, first_new, second_new].map(|entity| {
+            *app.world()
+                .get::<PersonId>(entity)
+                .expect("every person receives a durable id")
+        });
+        assert_eq!(ids[0], PersonId(100));
+        assert!(ids[1].0 > 100 && ids[2].0 > 100);
+        assert_ne!(ids[1], ids[2]);
+
+        app.update();
+        assert_eq!(app.world().get::<PersonId>(first_new), Some(&ids[1]));
+        assert_eq!(app.world().get::<PersonId>(second_new), Some(&ids[2]));
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate durable PersonId 9")]
+    fn identity_index_refuses_ambiguous_durable_ids() {
+        let mut app = App::new();
+        app.init_resource::<WorldIdentityIndex>()
+            .add_systems(Update, rebuild_world_identity_index);
+        app.world_mut()
+            .spawn((CharacterKind::Villager, PersonId(9)));
+        app.world_mut()
+            .spawn((CharacterKind::Villager, PersonId(9)));
+
+        app.update();
+    }
+}

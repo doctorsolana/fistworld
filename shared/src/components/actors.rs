@@ -197,9 +197,8 @@ impl CharacterKind {
 /// Buildings are how its plan gets expressed; this is what constitutes it. See
 /// WORLD-DESIGN section 1.
 ///
-/// Replicated whole for now because a settlement is currently four small fields.
-/// When it carries stocks and rosters, the summary/detail split (ROADMAP Phase 1)
-/// separates what every client needs from what only nearby clients do.
+/// The hall entity is region-scoped detail. A separate [`super::SettlementSummary`]
+/// carries the small globally visible map record, joined through [`super::SettlementId`].
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Settlement {
     /// Chosen by whoever founded it. Naming a place is the first act of
@@ -913,10 +912,9 @@ pub fn settlement_founding_refusal(
 
 /// Where a person lives.
 ///
-/// Replicated by NAME rather than by entity because residence is a fact about a
-/// person that outlives any particular client's view of the settlement, and
-/// because it is what the encyclopedia wants to print: "Aldith of Yewcrag".
-/// Absent means unhoused -- a real state, not a missing value.
+/// Human-readable residence label for panels and old-state migration.
+/// [`super::ResidentOf`] and [`super::LivesAt`] are the authoritative durable
+/// relationships. Absent means unhoused -- a real state, not a missing value.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Residence(pub String);
 
@@ -994,9 +992,9 @@ pub struct ConstructionSite {
     /// cleared and the frame is going up.
     ///
     /// A BOOL, not a progress float, and that is deliberate: a float would mark
-    /// this component changed every tick and re-send every site to every client
-    /// forever, because these replicate globally. This flips once. The client
-    /// runs its own clock from the flip and uses [`SETTLEMENT_RAISE_SECONDS`],
+    /// this component changed every tick and resend nearby detail without a
+    /// meaningful state transition. This flips once. The client runs its own
+    /// clock from the flip and uses [`SETTLEMENT_RAISE_SECONDS`],
     /// which both sides agree on.
     pub raising: bool,
     /// Where the builder stands to work — beside the plot, not on it.
@@ -1035,24 +1033,21 @@ pub fn builder_stand_position(plot: Vec3, rotation_y: f32, footprint_depth: f32)
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct SettlementBuilding {
     pub kind: SettlementBuildingKind,
-    /// The settlement this belongs to, by NAME -- the same identity the
-    /// encyclopedia and the dev commands use, until `SettlementId` exists
-    /// (ROADMAP Phase 1).
+    /// Display label retained for panels and old-state migration. [`super::BuildingOf`]
+    /// is the authoritative settlement relationship.
     pub settlement: String,
-    /// Who applied for the permit and walked out to raise it.
+    /// Readable owner label retained for panels and old-state migration.
+    /// [`super::OwnedBy`] is authoritative for rights and money.
     pub owner: Option<String>,
     /// How well the ground it stands on suits its trade, 0..1.
     ///
     /// Sampled ONCE, where it was built, and then carried. Recomputing it per
-    /// tick would mark the component changed at tick rate and re-send every
-    /// building to every client forever -- these replicate globally, with no
-    /// interest management, because they belong to the map screen.
+    /// tick would mark the component changed at tick rate and resend nearby
+    /// detail without conveying a real state transition.
     pub quality: f32,
-    /// Who works here, by name. Fewer than `kind.positions()` means vacancies.
-    ///
-    /// Names, not entities, because this is replicated and it is what the panel
-    /// prints. A position counts as filled only while a living person holds it,
-    /// which is the whole reason this is a roster and not a number.
+    /// Readable worker roster derived from employees for panels and legacy
+    /// migration. [`super::EmployedAt`] is authoritative; fewer entries than
+    /// `kind.positions()` means vacancies.
     pub workers: Vec<String>,
 }
 
@@ -1075,8 +1070,8 @@ pub const FARM_FIELD_LATERAL_OFFSET: f32 = 4.45;
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct FarmField {
     pub settlement: String,
-    /// Farmstead plot position is the temporary join key until stable building
-    /// ids exist. It is unique within the current deterministic village plan.
+    /// Farmstead plot position retained for layout and old-save migration.
+    /// [`AttachedTo`](super::AttachedTo) is the authoritative parent link.
     pub farmstead: Vec3,
     /// Zero-based position in the Farmstead's two-field layout.
     #[serde(default)]
@@ -1087,8 +1082,8 @@ pub struct FarmField {
 /// The collider-free pier paired with one completed Fisherman's Hut.
 ///
 /// Its [`PlayerPosition`] is the pier asset's landward origin at water level,
-/// not terrain height. The fisherman hut position remains the stable join key
-/// until buildings receive persistent ids.
+/// not terrain height. The hut position remains for layout and old-save
+/// migration; [`AttachedTo`](super::AttachedTo) is authoritative.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct FishingPier {
     pub settlement: String,
