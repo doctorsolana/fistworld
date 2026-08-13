@@ -18,6 +18,16 @@ pub struct PropSpawn {
     pub render_tuning: PropRenderTuning,
 }
 
+/// Collision-relevant authored prop data without scene strings or terrain Y.
+/// Road and navigation survey code should use this view instead of paying for
+/// the full render spawn when it only needs a ground-plane blocker.
+#[derive(Debug, Clone, Copy)]
+pub struct BlockingPropSpawn {
+    pub kind: PropKind,
+    pub position: Vec2,
+    pub scale: f32,
+}
+
 /// How far from a river centreline the ground is kept clear of anything with a
 /// silhouette. The water is [`RIVER_HALF_WIDTH`] + 1.5 m wide, so this leaves a
 /// margin of bank beyond the waterline rather than letting trunks stand in the
@@ -42,30 +52,12 @@ struct RiverReach {
 
 impl RiverReach {
     fn for_chunk(terrain: &TerrainGenerator, chunk: ChunkCoord, radius: f32) -> Self {
-        let rivers = &terrain.loaded_map().rivers;
-        let mut segments = Vec::new();
-        if rivers.is_empty() {
-            return Self { segments, radius };
-        }
-        let origin = chunk.world_pos();
-        let (min_x, min_z) = (origin.x - radius, origin.z - radius);
-        let (max_x, max_z) = (
-            origin.x + CHUNK_SIZE + radius,
-            origin.z + CHUNK_SIZE + radius,
-        );
-        for river in rivers.iter() {
-            for w in river.windows(2) {
-                let (a, b) = (w[0], w[1]);
-                if a.x.min(b.x) > max_x
-                    || a.x.max(b.x) < min_x
-                    || a.z.min(b.z) > max_z
-                    || a.z.max(b.z) < min_z
-                {
-                    continue;
-                }
-                segments.push((Vec2::new(a.x, a.z), Vec2::new(b.x, b.z)));
-            }
-        }
+        let segments = terrain
+            .loaded_map()
+            .river_segments_by_chunk
+            .get(&(chunk.x, chunk.z))
+            .cloned()
+            .unwrap_or_default();
         Self { segments, radius }
     }
 
@@ -137,6 +129,45 @@ pub fn generate_chunk_prop_spawns(terrain: &TerrainGenerator, chunk: ChunkCoord)
     out
 }
 
+/// Deterministically generate only props that block village roads.
+///
+/// This intentionally shares the authored chunk index and river-clearance
+/// rule with [`generate_chunk_prop_spawns`], but omits height sampling, render
+/// tuning and scene-path cloning. A server road survey may warm many chunks
+/// during a settlement burst and none of that visual data is used there.
+pub fn generate_chunk_blocking_props(
+    terrain: &TerrainGenerator,
+    chunk: ChunkCoord,
+) -> Vec<BlockingPropSpawn> {
+    if !chunk.in_world_bounds() {
+        return Vec::new();
+    }
+    let river_reach = RiverReach::for_chunk(terrain, chunk, RIVER_CLEARANCE);
+    let Some(indexed) = terrain
+        .loaded_map()
+        .objects_by_chunk
+        .get(&(chunk.x, chunk.z))
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(indexed.len());
+    for object in indexed {
+        let Some(kind) = object.kind.filter(|kind| kind.blocks_village_road()) else {
+            continue;
+        };
+        let position = Vec2::new(object.position[0], object.position[2]);
+        if river_reach.contains(position) {
+            continue;
+        }
+        out.push(BlockingPropSpawn {
+            kind,
+            position,
+            scale: object.scale,
+        });
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Ground cover
 // ---------------------------------------------------------------------------
@@ -195,6 +226,20 @@ const GRASS_TALL: PropKind = PropKind::GrassTallA;
 /// Deterministic from (seed, world position) alone — never from iteration
 /// order — so a chunk looks the same however the player approached it.
 pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<PropSpawn> {
+    generate_chunk_grass_at_density(terrain, chunk, 1.0)
+}
+
+/// Generate ground cover at a diagnostic density multiplier.
+///
+/// Normal gameplay always calls [`generate_chunk_grass`] and therefore keeps
+/// the authored 1x appearance. The client capture/performance harness can use
+/// this variant to stress the renderer without committing an artificially
+/// dense world or changing any simulation data.
+pub fn generate_chunk_grass_at_density(
+    terrain: &TerrainGenerator,
+    chunk: ChunkCoord,
+    multiplier: f32,
+) -> Vec<PropSpawn> {
     let mut out = Vec::new();
     let map = terrain.loaded_map();
     // Hand-authored maps carry no recipe, so they get no procedural cover:
@@ -207,9 +252,19 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
     let seed = generated.seed;
     let water = map.heightmap.water_level.unwrap_or(f32::NEG_INFINITY);
 
+    let multiplier = if multiplier.is_finite() {
+        multiplier.clamp(1.0, 32.0)
+    } else {
+        1.0
+    };
+    // Halving cell width yields four times as many samples over the same
+    // ground area. Density acceptance remains biome-driven, so a 16x stress
+    // meadow is still recognisably the same meadow instead of a uniform grid.
+    let cell = GRASS_CELL / multiplier.sqrt();
+    let per_chunk_cap = (GRASS_PER_CHUNK_CAP as f32 * multiplier).ceil() as usize;
     let base_x = chunk.x as f32 * CHUNK_SIZE;
     let base_z = chunk.z as f32 * CHUNK_SIZE;
-    let steps = (CHUNK_SIZE / GRASS_CELL).ceil() as i32;
+    let steps = (CHUNK_SIZE / cell).ceil() as i32;
 
     let short_tuning = default_render_tuning(GRASS_PATCH);
     let tall_tuning = default_render_tuning(GRASS_TALL);
@@ -224,7 +279,7 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
     let mut grown = 0usize;
     for iz in 0..steps {
         for ix in 0..steps {
-            if grown >= GRASS_PER_CHUNK_CAP {
+            if grown >= per_chunk_cap {
                 return out;
             }
             // Seeded from the CELL's world identity, not from a running
@@ -236,8 +291,8 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
                 ^ ix as u64;
             let mut rng = crate::worldgen::splitmix64(crate::worldgen::splitmix64(key) ^ seed);
 
-            let x = base_x + (ix as f32 + crate::worldgen::rand01(&mut rng)) * GRASS_CELL;
-            let z = base_z + (iz as f32 + crate::worldgen::rand01(&mut rng)) * GRASS_CELL;
+            let x = base_x + (ix as f32 + crate::worldgen::rand01(&mut rng)) * cell;
+            let z = base_z + (iz as f32 + crate::worldgen::rand01(&mut rng)) * cell;
             let height = terrain.get_height(x, z);
             if height < water + 0.4 {
                 continue;
@@ -300,6 +355,56 @@ pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Ve
 mod tests {
     use super::*;
     use crate::terrain::WorldTerrain;
+
+    #[test]
+    fn indexed_lightweight_blockers_match_naive_world_river_filtering() {
+        let terrain = WorldTerrain::default();
+        let mut compared = 0;
+        let mut chunks: Vec<_> = terrain
+            .generator
+            .loaded_map()
+            .objects_by_chunk
+            .keys()
+            .copied()
+            .collect();
+        chunks.sort_unstable();
+        for (x, z) in chunks.into_iter().take(64) {
+            let chunk = ChunkCoord::new(x, z);
+            let expected: Vec<_> = terrain
+                .generator
+                .loaded_map()
+                .objects_by_chunk
+                .get(&(x, z))
+                .into_iter()
+                .flatten()
+                .filter_map(|object| {
+                    let kind = object.kind.filter(|kind| kind.blocks_village_road())?;
+                    let point = Vec2::new(object.position[0], object.position[2]);
+                    let cleared = terrain.generator.loaded_map().rivers.iter().any(|river| {
+                        river.windows(2).any(|window| {
+                            let a = Vec2::new(window[0].x, window[0].z);
+                            let b = Vec2::new(window[1].x, window[1].z);
+                            let segment = b - a;
+                            let t = ((point - a).dot(segment) / segment.length_squared().max(1e-6))
+                                .clamp(0.0, 1.0);
+                            point.distance_squared(a + segment * t)
+                                < RIVER_CLEARANCE * RIVER_CLEARANCE
+                        })
+                    });
+                    (!cleared).then_some((kind, point, object.scale))
+                })
+                .collect();
+            let actual = generate_chunk_blocking_props(&terrain.generator, chunk);
+            assert_eq!(actual.len(), expected.len());
+            for (actual, expected) in actual.iter().zip(expected) {
+                assert_eq!(actual.kind, expected.0);
+                assert_eq!(actual.position, expected.1);
+                assert_eq!(actual.scale, expected.2);
+                compared += 1;
+            }
+        }
+        assert!(compared > 0, "test area contained no blocking props");
+    }
 
     /// Somewhere to point the camera for each biome.
     #[test]
@@ -501,5 +606,27 @@ mod tests {
                 capped
             );
         }
+    }
+
+    #[test]
+    fn diagnostic_ground_cover_density_scales_without_changing_the_normal_recipe() {
+        let terrain = WorldTerrain::default();
+        let chunk = ChunkCoord::from_world_pos(Vec3::new(1720.0, 0.0, 0.0));
+        let normal = generate_chunk_grass(&terrain.generator, chunk);
+        let explicit_normal = generate_chunk_grass_at_density(&terrain.generator, chunk, 1.0);
+        let stressed = generate_chunk_grass_at_density(&terrain.generator, chunk, 4.0);
+
+        assert_eq!(normal.len(), explicit_normal.len());
+        assert_eq!(
+            normal
+                .iter()
+                .map(|spawn| spawn.position)
+                .collect::<Vec<_>>(),
+            explicit_normal
+                .iter()
+                .map(|spawn| spawn.position)
+                .collect::<Vec<_>>()
+        );
+        assert!(stressed.len() > normal.len() * 2);
     }
 }

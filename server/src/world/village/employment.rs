@@ -2,6 +2,19 @@
 
 use super::*;
 
+/// Equal-wage founding businesses must form a usable production chain before
+/// a two-seat workplace monopolises a very small Hamlet's labour. This is only
+/// a tie-breaker: an owner can still recruit differently by changing wages.
+const fn founding_job_priority(kind: SettlementBuildingKind) -> u8 {
+    match kind {
+        SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut => 0,
+        SettlementBuildingKind::Windmill => 1,
+        SettlementBuildingKind::LumberjackHut => 2,
+        SettlementBuildingKind::Bakery => 3,
+        _ => 4,
+    }
+}
+
 /// Residents take vacant positions in their own settlement.
 ///
 /// This is the smallest honest version of WORLD-DESIGN section 1a's rule that
@@ -21,6 +34,7 @@ pub fn fill_vacancies(
         &PlayerPosition,
         Option<&BusinessWagePolicy>,
         Option<&WorkforceRequirements>,
+        Option<&BusinessCondition>,
         &shared::components::BuildingId,
         &shared::components::BuildingOf,
     )>,
@@ -37,7 +51,14 @@ pub fn fill_vacancies(
         &shared::components::PersonId,
     )>,
     settlements: Query<(Entity, &Settlement, &shared::components::SettlementId)>,
-    active_builders: Query<(), Or<(With<ConstructionMaterialRoutine>, With<RoadBuilderRoutine>)>>,
+    active_builders: Query<
+        (),
+        Or<(
+            With<ConstructionMaterialRoutine>,
+            With<RoadBuilderRoutine>,
+            With<moot_services::PermitPickupRoutine>,
+        )>,
+    >,
 ) {
     let mut assigned_entities = HashSet::new();
     let mut stable_workers_by_building: HashMap<
@@ -73,7 +94,7 @@ pub fn fill_vacancies(
     // Stable employment is authoritative and the readable roster is derived
     // from it. This preserves two different people with the same display name
     // and cleans civic/business double assignment without guessing by name.
-    for (_, mut building, _, _, _, building_id, _) in buildings.iter_mut() {
+    for (_, mut building, _, _, _, _, building_id, _) in buildings.iter_mut() {
         let roster: Vec<String> = stable_workers_by_building
             .get(building_id)
             .into_iter()
@@ -105,13 +126,17 @@ pub fn fill_vacancies(
             // later specialist buildings do not need a parallel job system.
             let mut vacancies: Vec<_> = buildings
                 .iter()
-                .filter(|(_, building, _, _, _, building_id, building_of)| {
-                    building_of.0 == *settlement_id
-                        && worker_counts.get(*building_id).copied().unwrap_or(0)
-                            < building.kind.positions() as usize
-                })
+                .filter(
+                    |(_, building, _, _, _, condition, building_id, building_of)| {
+                        building_of.0 == *settlement_id
+                            && !condition
+                                .is_some_and(|condition| !condition.state.accepts_new_workers())
+                            && worker_counts.get(*building_id).copied().unwrap_or(0)
+                                < building.kind.positions() as usize
+                    },
+                )
                 .map(
-                    |(entity, building, at, wage, requirements, building_id, _)| {
+                    |(entity, building, at, wage, requirements, _, building_id, _)| {
                         (
                             entity,
                             *building_id,
@@ -119,12 +144,15 @@ pub fn fill_vacancies(
                             at.0,
                             wage.map_or(FOUNDING_DAILY_WAGE, |policy| policy.daily_wage),
                             requirements.copied(),
+                            worker_counts.get(building_id).copied().unwrap_or(0),
                         )
                     },
                 )
                 .collect();
             vacancies.sort_by(|a, b| {
                 b.4.cmp(&a.4)
+                    .then_with(|| usize::from(a.6 > 0).cmp(&usize::from(b.6 > 0)))
+                    .then_with(|| founding_job_priority(a.2).cmp(&founding_job_priority(b.2)))
                     .then_with(|| a.3.x.total_cmp(&b.3.x))
                     .then_with(|| a.3.z.total_cmp(&b.3.z))
             });
@@ -133,7 +161,8 @@ pub fn fill_vacancies(
             // Only an unfillable specialist offer falls through to the next;
             // ordinary jobs never scan the whole population once per building.
             let mut placement = None;
-            for (vacancy_entity, vacancy_id, kind, plot, offered_wage, requirements) in vacancies {
+            for (vacancy_entity, vacancy_id, kind, plot, offered_wage, requirements, _) in vacancies
+            {
                 let taker = villagers
                     .iter()
                     .filter(
@@ -188,7 +217,8 @@ pub fn fill_vacancies(
                 break;
             };
 
-            let Ok((_, mut building, _, _, _, building_id, _)) = buildings.get_mut(vacancy_entity)
+            let Ok((_, mut building, _, _, _, _, building_id, _)) =
+                buildings.get_mut(vacancy_entity)
             else {
                 break;
             };

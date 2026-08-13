@@ -6,7 +6,9 @@ simulation code.
 
 The companion document [WORLD-DESIGN.md](WORLD-DESIGN.md) describes what runs ON this
 architecture: settlements, goods, caravans, clans, and the player's climb from one guy
-to a realm. The build order for both lives in [ROADMAP.md](ROADMAP.md).
+to a realm. [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md) is the executable reference for market
+ownership, municipal finance and settlement policy. The build order lives in
+[ROADMAP.md](ROADMAP.md).
 
 > **Status, audited 2026-08-05.** This remains a design record, with implementation state
 > marked **[not built]**, **[partial]** or **[done]**. The living-village foundation now
@@ -69,7 +71,10 @@ meets a hostile force, it **promotes** into N tactical units. When attention lea
 the situation resolves, it **demotes** back to a strength number.
 
 > **[partially built]** — ordinary off-screen villagers now carry `StrategicPerson` and
-> shed routes, movement targets, door/shopping state and trade-specific tactical progress.
+> shed movement targets, door/shopping state and trade-specific tactical progress.
+> A resident already travelling retains one cheap `StrategicTravel` route cursor and
+> advances it at the strategic cadence; promotion catches up the fractional interval and
+> restores the remaining tactical waypoints instead of teleporting or restarting.
 > Settlement production, workplace storage, porter sales and household purchasing advance
 > in aggregate on the strategic step. Returning to a tactical region removes the marker
 > and the normal assignment systems rebuild embodied routines from durable `PersonId`,
@@ -96,7 +101,7 @@ The world is divided into regions. That single division serves all of:
 | Role | Meaning | State |
 |------|---------|-------|
 | **Interest management** | What the server replicates to a given client | **[done]** |
-| **Simulation LOD** | Whether this region is tactical or strategic right now | **[partial]** — ordinary villagers promote/demote between tactical routines and aggregate settlement production/economy; construction, travel parties and combat still need dedicated strategic forms. |
+| **Simulation LOD** | Whether this region is tactical or strategic right now | **[partial]** — ordinary villagers promote/demote between tactical routines, per-person strategic travel and aggregate settlement production/economy; construction, military travel parties and combat still need dedicated strategic forms. |
 | **Political** | Who owns this land | **[not built]** — `RegionState` has no owner. See the correction below. |
 | **Persistence** | The unit that gets saved and loaded | **[not built]** — `RegionState` does not even derive `Serialize`. See the correction below. |
 
@@ -185,18 +190,19 @@ Rough bands to design against:
   world-state document keyed by stable settlement ids. Per-region sharding is a scale answer
   to a problem an 8km world with ~30 settlements does not have, and stable ids make it a
   pure write-side change if it is ever needed.
-- **It needs a hosted server.** This is an operational commitment, not just code. **And it
-  is currently not met:** `fly.toml` declares no `[mounts]` volume, so `server_data/` lives
-  on ephemeral storage and every deploy destroys every player profile. Persistence code is
-  worthless until that is fixed — it is the top item in ROADMAP Phase 0.
+- **It needs a hosted server.** This is an operational commitment, not just code. The
+  current server deliberately uses process-lifetime worlds and accounts: reconnect is
+  supported, restart is a clean reset. Before durable seasons or worlds ship, hosting needs
+  a volume and world/account saves need one shared versioned lifetime; persisting only an
+  account into a reset society would preserve the wrong half of ownership.
 
 On budgeting: the strategic tick now has real settlement production and commerce work.
 `cargo village-scale-lab` is the regression gate: its 2026-08-05 reference fixture held
-5,000 NPCs in 30 settlements and measured the complete steady bundle at 0.760 ms, the
-daily economy burst at 0.956 ms, the full stable-identity/reconciliation pass at 0.055 ms
-and aggregate strategic villages at 0.177 ms on the development machine, with no entity or
-route-queue growth. These are reference numbers, not a platform guarantee; retain the
-fixture and compare deltas whenever a world-wide rule is added.
+5,000 NPCs in 30 settlements and measured the complete steady bundle at 0.881 ms, the
+daily economy, civic-finance and history burst at 1.446 ms, the full stable-identity/reconciliation
+pass at 0.048 ms and aggregate strategic villages at 0.151 ms on the development machine,
+with no entity or route-queue growth. These are reference numbers, not a platform
+guarantee; retain the fixture and compare deltas whenever a world-wide rule is added.
 
 ## 6. What already exists and fits
 
@@ -210,16 +216,43 @@ fixture and compare deltas whenever a world-wide rule is added.
 - `server/src/world/navgrid.rs` and village routing — **[live, bounded local use]**.
   The navgrid keeps the shared building obstacle index current; village travel, trades,
   ambient movement, construction and hero steps query it. `village_roads` owns the
-  obstacle surveys, route cache and road graph. The old generic `find_path` routine in
+  obstacle surveys, locally invalidated route cache, resumable long-route searches and
+  road graph. Committed journeys use a priority lane ahead of ambient wandering; mass
+  migration admission is paced in real time, nearby migrants can join a certified cohort
+  approach, and Moot queue-rank changes use short local steps instead of global A*. Building
+  and streamed-prop changes invalidate only intersecting route-cache entries. Repeated
+  blocked-goal warnings are spatially and temporally coalesced, while the final live
+  collision proof remains authoritative. Permitted worksite footprints block road surveys
+  before their shells exist. The old generic `find_path` routine in
   `pathfinding.rs` remains unused, although its wall-clock budget settings are shared by
   the live queue. Future commanded groups still require regional flow fields rather than
   multiplying these local searches.
+- Villager inspection intent — **[done]**. Server-only routines are folded at the end of
+  the shared village activity schedule into compact, replicated objective and navigation
+  enums. The client can distinguish a queue, work trip, delivery, home trip, route search
+  or blocked route without receiving routine internals, destinations or formatted debug
+  strings for every tactical NPC. Component writes are change-gated.
 - Chunked terrain streaming and huge maps. **[done]**
-- lightyear replication + profile persistence. **[done]** — including heroes, which now
-  survive disconnect and server restart.
+- lightyear replication + session identity. **[done]** — heroes, cargo, wallets and
+  account-keyed commanded units survive disconnect/reconnect to the same process. A server
+  restart intentionally starts clean until world and account durability can ship together.
+- Replicated character velocity and bounded client extrapolation. **[done]** — the client
+  advances an actor for at most 80 ms beyond its latest authoritative snapshot, then uses
+  normal correction smoothing. Turns and stops replicate immediately enough to prevent
+  runaway prediction without requiring 60 Hz position snapshots.
+- Dense-crowd character rendering. **[done for the current village target]** — the nearest
+  160 visible people use full rigs; farther visible people retain individual moving roots
+  and selection state while sharing proxy mesh/material assets. The proxy is rendered
+  directly on each replicated root, avoiding a second entity and hierarchy transform per
+  distant person. This rendering LOD is independent of server simulation LOD.
 - Stable `PersonId`, `SettlementId` and `BuildingId` relationships, global settlement
   summaries plus region-scoped physical/economic detail, and aggregate off-screen village
   production. **[done for the current village simulation]**
+- The live server and Village Lab share one ordered village registration. Its
+  core is explicitly partitioned into identity/population, civic,
+  economy/planning, construction, activity and directory sets, with nested
+  economy sets for markets, households, settlement accounts and permits. These
+  are scheduling/telemetry boundaries, not duplicated implementations.
 - ~~The commander camera, which needs its zoom range extended by ~20×.~~ **[done]** —
   12m–12,000m, which covers the whole map.
 
@@ -242,7 +275,7 @@ The engine steps this section listed map onto it as follows, with their real sta
 | 2. Strategic tick | **Partial.** Villager production, workplace stock, porter commerce and household purchasing run in aggregate; caravans, armies and strategic construction do not. | Phase 3 |
 | 3. Tactical units + flow fields | Not started. Deliberately moved LATE: it is the biggest block of work and carries the least architectural uncertainty. | Phase 6 |
 | 4. Promotion/demotion | **Partial for ordinary villagers.** Tactical routine state is shed/rebuilt across `SimLevel`; army and travelling-party aggregate contracts remain. | Phase 2 |
-| 5. Zoom bands + render LOD | Camera range done; entity representation across bands not started. Re-scope accordingly (§4). | as needed |
+| 5. Zoom bands + render LOD | Camera range and dense-villager full-rig/proxy split done; buildings, armies and effects still need representation across bands. | as needed |
 | 6. Art pass | ongoing | — |
 
 **The parting advice of this section still stands, and is why the order changed.** "Step 4
@@ -274,19 +307,26 @@ The current village simulation uses these rules as hard boundaries:
 - **Summary and detail are different entities.** `SettlementSummary` is tiny and global.
   Halls, buildings, worksites, roads, fields, piers, markets and inventories carry
   `RegionCoord` and replicate only through interest management. They join by stable id.
-- **Off-screen simulation is aggregate.** A strategic person must not own a path, door
-  timer, seat, shopping trip or resource animation. Add world-wide rules to the strategic
-  settlement pass and cover tactical/strategic agreement with tests.
+- **Off-screen work is aggregate; travel is a cheap cursor.** A strategic person must not
+  own tactical pathfinding, a movement target, door timer, seat, shopping trip or resource
+  animation. An already planned journey may retain immutable waypoints plus one progress
+  index and advance at the bounded strategic cadence. Add world-wide work rules to the
+  strategic settlement pass and cover tactical/strategic agreement with tests.
 - **Village domains have explicit owners.** `village.rs` is the public facade and shared
   state model; migration and resident counts live in `village/population.rs`, demand and
   geography-aware permits in `village/planning.rs`, material supply and building work in
-  `village/construction.rs`, vacancy matching in `village/employment.rs`, commercial work
-  and payroll in `village/commerce.rs`, aggregate food/prosperity in
+  `village/construction.rs`, vacancy matching in `village/employment.rs`, physical Moot
+  Steward collection in `village/commerce.rs`, municipal budgets/payroll and the enacted
+  relief/reserve/staffing/subsidy policy model in
+  `village/civic.rs`, business transaction settlement and
+  owner strategy/solvency in `village/businesses/`, bounded firm/market/settlement
+  archives in `village/history.rs`, aggregate food/prosperity in
   `village/settlement_economy.rs`, household provisioning in `village/households.rs`,
   physical trades in `village/trades.rs`, production rates in `village/production.rs`,
   strategic LOD in `village/strategic.rs`, and shared ordering in `village/schedule.rs`.
   `village_roads.rs` owns the local survey primitives and public road state; connector
   construction lives in `village_roads/construction.rs`, graph routing and caches in
-  `village_roads/routing.rs`, civic repair in `village_roads/steward.rs`, and width/dryness
+  `village_roads/routing.rs`, the Moot Steward's civic repair duty in
+  `village_roads/steward.rs`, and width/dryness
   geometry in `village_roads/geometry.rs`. Keep extending those seams instead of growing
   either facade into a monolith.

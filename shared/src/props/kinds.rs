@@ -90,11 +90,19 @@ impl PropKind {
         )
     }
 
+    /// Scenery a public road crew may remove after an embodied chopping job.
+    ///
+    /// Rocks remain permanent route constraints. Dead trunks are included:
+    /// they obstruct a lane just like a living tree and are still timber a
+    /// road crew can reasonably clear.
+    pub const fn is_road_clearable(self) -> bool {
+        self.is_tree() || self.is_dead_tree()
+    }
+
     /// Large authored scenery a village path surveys around instead of
     /// deleting. Low brush, flowers and grass are wear rather than barriers.
     pub const fn blocks_village_road(self) -> bool {
-        self.is_tree()
-            || self.is_dead_tree()
+        self.is_road_clearable()
             || matches!(
                 self,
                 Self::SmallRockA

@@ -84,6 +84,24 @@ C_IRON       = (0.1350, 0.1500, 0.1850)   # cold blue-grey steel
 C_IRON_LIT   = (0.4100, 0.4450, 0.5000)   # the lit top face of a bar
 C_ORE        = (0.1450, 0.1550, 0.1750)
 C_ORE_VEIN   = (0.4600, 0.3400, 0.1600)   # rusty vein: iron reads as iron by its ore, not by shine
+# Sackcloth is deliberately COOL and desaturated. Flour's danger in this set is reading as another
+# wheat -- they are the same crop one step apart -- so the sack leans grey-linen while the sheaf stays
+# saturated gold, and their silhouettes are opposites: squat and round against tall and flared.
+C_LINEN      = (0.4750, 0.4350, 0.3500)
+C_LINEN_LT   = (0.6300, 0.5850, 0.4850)
+C_LINEN_DK   = (0.3050, 0.2750, 0.2150)
+C_FLOUR      = (0.7900, 0.7700, 0.7100)   # the dust itself, paler and greyer than the cloth
+# Bread, copied verbatim from build_bakery.py. The loaves on the bakery counter and the loaves in a
+# baker's arms are the same bread; two palettes for one object is how they drift apart.
+C_CRUST      = (0.5600, 0.3050, 0.1050)
+C_CRUST_LT   = (0.7000, 0.4400, 0.1750)
+C_CRUMB      = (0.7600, 0.5900, 0.3300)
+
+
+def zrot(a):
+    """An in-plan rotation for `tbox`. The kit's rbox turns about X and Y; a sack needs Z."""
+    c, sn = math.cos(a), math.sin(a)
+    return lambda p: (p[0] * c - p[1] * sn, p[0] * sn + p[1] * c, p[2])
 
 
 wipe()
@@ -132,6 +150,26 @@ def fish(self, base, yaw, pitch, tone, scale=1.0, detail=True):
                       (0.020, 0.020, 0.024), place)
 
 Item.fish = fish
+
+
+def loaf(self, cx, cy, cz, ln, wd, ht, yaw, tone):
+    """One loaf: three slabs shrinking upward, plus two slashes across the crust.
+
+    Deliberately the same shape language as the loaves on the bakery's counter -- the building and the
+    carried basket are the same bread, and a second recipe for one object is how the two drift apart.
+    Modelled long-axis on X, then yawed into place."""
+    rot = zrot(yaw)
+    place = lambda p: (p[0] + cx, p[1] + cy, p[2] + cz)
+    xf = lambda p: place(rot(p))
+    for i, (f, z0, z1) in enumerate(((1.00, 0.00, 0.46), (0.86, 0.42, 0.78), (0.62, 0.74, 1.00))):
+        self.tbox(-ln * f / 2, ln * f / 2, -wd * f / 2, wd * f / 2, ht * z0, ht * z1,
+                  shade(C_CRUST if i < 2 else C_CRUST_LT, tone + 0.035 * i), xf)
+    for sx in (-1, 1):                       # slashes: the one mark that says "baked", not "potato"
+        self.tbox(sx * ln * 0.17 - ln * 0.05, sx * ln * 0.17 + ln * 0.05, -wd * 0.23, wd * 0.23,
+                  ht * 0.94, ht * 1.06, shade(C_CRUMB, tone), xf)
+
+
+Item.loaf = loaf
 
 rng = random.Random(9)
 
@@ -346,6 +384,118 @@ for (px, py, pz, pw) in ((-0.128, -0.106, ING_H * 0.70, 0.052), (0.096, 0.053, I
            shade(C_ORE_VEIN, rng.uniform(0.92, 1.10)))
 iron = it.finish(min_width=HAND_GAP)
 
+# ======================================================================================================
+# FLOUR — a tied sack. The mill's output, and the one bundle that must not be mistaken for wheat.
+# ======================================================================================================
+it = Item("FlourSack")
+# FOUR VERSIONS FAILED BEFORE THIS ONE. A sack is a single SOFT mass, and that is the hardest thing to
+# say in a vocabulary of boxes -- everything else in this set is discrete hard objects (blocks, bars,
+# logs, stalks) which boxes describe honestly. The failures, because each one is a real lesson:
+#
+#   1. six stacked bands        -> a wedding cake. Near-equal widths make a ziggurat, not a bulge.
+#   2. flat sewn top + ears     -> an open paper grocery bag. A PALE seam across the top reads as a
+#                                  mouth with light inside; the bands under it read as the box.
+#   3. straight creases on (2)  -> a zip up the front: a straight prism cuts the chord of a bulging
+#                                  body, so it only surfaces where the profile steps.
+#   4. eight cloth gores        -> a bunch of bananas. Arithmetic, not taste: at the belly the ring is
+#                                  1.019 m round, so 8 gores sit 0.127 apart while each prism is only
+#                                  0.120 wide. They never touched, and the gaps showed daylight.
+#
+# THE ANSWER IS ONE SOLID TAPERED BODY, and detail kept ON it rather than made OF it. Two lofted
+# segments give the bag its profile -- swelling to a belly, then drawing hard into the neck -- and
+# each is drawn again turned 45 deg at 0.75 scale, which puts that copy's corners 6% proud of the
+# first's edges and knocks the four hard arrises off. (At 0.92 scale, tried earlier, the corners land
+# 30% proud and it becomes an eight-pointed star; the margin matters.) The rotation happens in
+# NORMALISED space and the x/y scales are applied after, so the softening stays proportional instead
+# of dragging the sack out square in plan the way a rotated rectangle does.
+def bag_seg(z0, z1, hx0, hy0, hx1, hy1, rgb, rgb2):
+    def place(p, kx, ky, rot):
+        t = (p[2] - z0) / (z1 - z0)
+        x, y = (p[0], p[1]) if not rot else (p[0] * SQ - p[1] * SQ, p[0] * SQ + p[1] * SQ)
+        return (x * kx * (hx0 + (hx1 - hx0) * t), y * ky * (hy0 + (hy1 - hy0) * t), p[2])
+    it.tbox(-1, 1, -1, 1, z0, z1, rgb, lambda p: place(p, 1.0, 1.0, False))
+    it.tbox(-1, 1, -1, 1, z0, z1, rgb2, lambda p: place(p, 0.75, 0.75, True))
+
+
+SQ = math.sqrt(0.5)
+bag_seg(0.000, 0.150, 0.150, 0.108, 0.216, 0.152, shade(C_LINEN, 0.98), shade(C_LINEN, 1.10))
+bag_seg(0.150, 0.298, 0.216, 0.152, 0.056, 0.040, shade(C_LINEN, 0.92), shade(C_LINEN, 1.04))
+# Folds down the shoulder, where the taper is a big plain sheet and the silhouette gives nothing.
+# Radii are picked to sit proud of BOTH copies of the body along their whole length -- the mistake in
+# version 3 was a chord through a curve.
+for k in range(4):
+    th = math.radians(38 + 90 * k)
+    c, sn = math.cos(th), math.sin(th)
+    it.prism((0.224 * c, 0.158 * sn, 0.156), (0.100 * c, 0.070 * sn, 0.272),
+             0.015, 0.012, shade(C_LINEN, 0.80))   # a shaded fold, not a dark gash
+# The tie, and the cloth left over above it -- which is what makes it a sack and not a pot. All of it
+# stays sackcloth-coloured: the pale top was what made version 2 look open, and a closed sack has no
+# lighter surface anywhere. The flour is INSIDE.
+it.box(-0.066, 0.066, -0.048, 0.048, 0.282, 0.320, shade(C_ROPE, 1.06))
+it.box(-0.082, -0.042, -0.018, 0.018, 0.288, 0.314, shade(C_ROPE, 0.84))       # knot
+for k in range(5):
+    th = math.radians(34 + 72 * k)
+    c, sn = math.cos(th), math.sin(th)
+    it.prism((0.032 * c, 0.023 * sn, 0.316), (0.080 * c, 0.057 * sn, 0.354 + 0.018 * (k % 2)),
+             0.025, 0.016, shade(C_LINEN_LT, 0.90 + 0.08 * (k % 2)))
+flour = it.finish(min_width=HAND_GAP)
+
+# ======================================================================================================
+# BREAD — the bakery's output, in the same wicker tray the catch comes home in.
+# ======================================================================================================
+it = Item("BreadBasket")
+# THE TRAY IS DELIBERATELY THE FISH BASKET'S, and that is not laziness. A village has one basket
+# maker; a bread tray and a fish tray being visibly the same object is correct, and it cost three
+# rebuilds to learn how to build an open container in this style (low tray, real walls, rim as four
+# boxes and not one, floor in shadow). Re-deriving it for bread would only find the same three traps.
+#
+# What separates them at icon size is everything ON the tray: warm crust against cold fish-blue, a
+# pale cloth the fish tray does not have, and rounded loaves against long tapered bodies.
+FW, FD = 0.170, 0.112        # tray inner half-extents
+WALL, FLOOR_Z, WALL_Z = 0.024, 0.030, 0.124
+it.box(-FW - WALL, FW + WALL, -FD - WALL, FD + WALL, 0.0, FLOOR_Z, shade(C_WICKER, 0.92))
+for sx in (-1, 1):
+    it.box(sx * (FW + WALL) - WALL, sx * (FW + WALL) + WALL, -FD - WALL, FD + WALL,
+           FLOOR_Z - 0.006, WALL_Z, C_WICKER)
+for sy in (-1, 1):
+    it.box(-FW - WALL * 2, FW + WALL * 2, sy * (FD + WALL) - WALL, sy * (FD + WALL) + WALL,
+           FLOOR_Z - 0.006, WALL_Z, C_WICKER)
+for sx in (-0.086, 0.062):                       # staves: wicker reads by its verticals
+    for sy in (-1, 1):
+        it.box(sx - 0.016, sx + 0.016, sy * (FD + WALL) - WALL - 0.005, sy * (FD + WALL) + WALL + 0.005,
+               FLOOR_Z + 0.004, WALL_Z - 0.010, shade(C_WICKER_LT, 0.90))
+RO_X, RO_Y = FW + WALL * 2, FD + WALL * 2
+for sx in (-1, 1):
+    it.box(sx * RO_X - WALL, sx * RO_X + WALL, -RO_Y, RO_Y,
+           WALL_Z - 0.018, WALL_Z + 0.010, shade(C_WICKER_LT, 0.94))
+for sy in (-1, 1):
+    it.box(-RO_X, RO_X, sy * RO_Y - WALL, sy * RO_Y + WALL,
+           WALL_Z - 0.018, WALL_Z + 0.010, shade(C_WICKER_LT, 0.94))
+it.box(-FW, FW, -FD, FD, FLOOR_Z - 0.004, FLOOR_Z + 0.010, shade(C_WICKER, 0.48))   # floor, in shadow
+# A linen cloth lining the tray and hanging over the front edge. Cheapest possible separation from the
+# fish basket: a pale horizontal band under warm loaves, where the fish tray is dark all through.
+# Kept SMALL and dull. At full extent and full brightness it stopped being a cloth and became a white
+# slab running through the middle of the icon, brighter than the bread it was supposed to sit under.
+it.box(-FW + 0.030, FW - 0.030, -FD + 0.022, FD - 0.022, FLOOR_Z + 0.008, FLOOR_Z + 0.024,
+       shade(C_LINEN, 1.10))
+it.box(-FW + 0.052, FW - 0.052, RO_Y - 0.004, RO_Y + 0.016, WALL_Z - 0.044, WALL_Z + 0.010,
+       shade(C_LINEN, 0.94))
+# Loaves STRADDLING the rim (rim top is WALL_Z + 0.010), for the reason the fish do: seated below it
+# the tray reads half empty, floating above it they read as resting on a table.
+#
+# TWO THAT READ, ONE THAT PEEKS -- the fish basket's rule, and the first pass broke it the same way.
+# Three loaves piled at similar heights and near-parallel merged into a single orange mass. These two
+# are turned hard across each other and separated along the tray; the third is small, low and at the
+# BACK, where the rim cuts it -- a glimpse that says "more underneath" rather than a third silhouette.
+# Tones are all below 1.0: at the bakery's own brightness, against wicker instead of dark timber, the
+# crust went luminous orange.
+for cx, cy, cz, ln, wd, ht, yaw, tone in (
+        (-0.074, -0.028, WALL_Z - 0.008, 0.232, 0.126, 0.092, math.radians(-15), 0.86),
+        (0.084, 0.028, WALL_Z - 0.002, 0.204, 0.116, 0.086, math.radians(24), 0.78),
+        (0.004, 0.070, WALL_Z + 0.014, 0.152, 0.098, 0.070, math.radians(-42), 0.92)):
+    it.loaf(cx, cy, cz, ln, wd, ht, yaw, tone)
+bread = it.finish(min_width=HAND_GAP)
+
 # --- one material, shared: every bundle is vertex-coloured and matte -----------------------------------
 mat = bpy.data.materials.new("ResourceVC")
 if not mat.node_tree:
@@ -365,7 +515,7 @@ for nm in ("Specular IOR Level", "Specular"):
         bsdf.inputs[nm].default_value = 0.0
         break
 
-ITEMS = [wood, wheat, fish, stone, iron]
+ITEMS = [wood, wheat, fish, stone, iron, flour, bread]
 for obj, me, span in ITEMS:
     me.materials.append(mat)
     assert "." not in obj.name, f"datablock name got suffixed: {obj.name}"
@@ -380,7 +530,7 @@ for obj, me, span in ITEMS:
 
 # Lay them out in a row so the .blend is browsable; the exporter zeroes each one before writing.
 for i, (obj, me, span) in enumerate(ITEMS):
-    obj.location = ((i - 2) * 0.75, 0, 0)
+    obj.location = ((i - (len(ITEMS) - 1) / 2) * 0.75, 0, 0)
 
 print(f"[res] {len(ITEMS)} bundles, hand gap to clear = {HAND_GAP:.3f} m")
 bpy.ops.wm.save_as_mainfile(filepath=OUT_BLEND)

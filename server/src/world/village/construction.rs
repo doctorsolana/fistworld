@@ -2,6 +2,142 @@
 
 use super::*;
 
+const MAX_CERTIFIED_DELIVERY_FAILURES: u8 = 12;
+
+fn material_stock_may_supply(
+    owns_priority: bool,
+    available_wood: u32,
+    settlement_outstanding: u32,
+) -> bool {
+    owns_priority || available_wood >= settlement_outstanding
+}
+
+fn delivery_access_points(
+    terrain: &WorldTerrain,
+    access: Option<&PlannedRoadAccess>,
+) -> Option<(Vec3, Vec3, Vec<RouteWaypoint>)> {
+    let access = access?;
+    let destination = *access.points.get(1)?;
+    let entry = *access.points.last()?;
+    let to_world = |point: Vec2| Vec3::new(point.x, terrain.get_height(point.x, point.y), point.y);
+    let destination = to_world(destination);
+    let entry = to_world(entry);
+    let mut waypoints: Vec<_> = access
+        .points
+        .iter()
+        .skip(1)
+        .rev()
+        .copied()
+        .map(|point| RouteWaypoint {
+            position: to_world(point),
+            on_road: false,
+        })
+        .collect();
+    waypoints.dedup_by(|a, b| a.position.distance_squared(b.position) <= 0.01);
+    Some((entry, destination, waypoints))
+}
+
+fn begin_material_delivery(
+    commands: &mut Commands,
+    builder: Entity,
+    position: Vec3,
+    fallback: Vec3,
+    terrain: &WorldTerrain,
+    access: Option<&PlannedRoadAccess>,
+) -> ConstructionMaterialPhase {
+    let Some((entry, destination, waypoints)) = delivery_access_points(terrain, access) else {
+        commands.entity(builder).insert(MoveTarget(fallback));
+        return ConstructionMaterialPhase::Delivering {
+            destination: fallback,
+        };
+    };
+    if ground_distance(position, entry) > WORK_REACH {
+        commands.entity(builder).insert(MoveTarget(entry));
+        ConstructionMaterialPhase::ApproachingDeliveryAccess { entry }
+    } else {
+        commands
+            .entity(builder)
+            .remove::<NavigationRoutePending>()
+            .remove::<NavigationRouteFailed>()
+            .insert((
+                MoveTarget(destination),
+                TravelRoute {
+                    goal: destination,
+                    waypoints,
+                    next: 0,
+                },
+            ));
+        ConstructionMaterialPhase::Delivering { destination }
+    }
+}
+
+fn begin_material_egress(
+    commands: &mut Commands,
+    builder: Entity,
+    position: Vec3,
+    terrain: &WorldTerrain,
+    access: Option<&PlannedRoadAccess>,
+) -> ConstructionMaterialPhase {
+    let Some((exit, mut waypoints)) = delivery_egress_points(terrain, access) else {
+        commands
+            .entity(builder)
+            .remove::<MoveTarget>()
+            .remove::<TravelRoute>();
+        return ConstructionMaterialPhase::Seeking;
+    };
+    if ground_distance(position, exit) <= WORK_REACH {
+        commands
+            .entity(builder)
+            .remove::<MoveTarget>()
+            .remove::<TravelRoute>();
+        return ConstructionMaterialPhase::Seeking;
+    }
+    // Access points are stored door -> apron -> ... -> public network. A
+    // delivery finishes at the apron (index 1), so follow the remainder in
+    // its authored direction instead of asking bounded A* to rediscover a
+    // 200-metre pre-road corridor from scratch.
+    if waypoints.is_empty() {
+        waypoints.push(RouteWaypoint {
+            position: exit,
+            on_road: false,
+        });
+    }
+    commands
+        .entity(builder)
+        .remove::<NavigationRoutePending>()
+        .remove::<NavigationRouteFailed>()
+        .insert((
+            MoveTarget(exit),
+            TravelRoute {
+                goal: exit,
+                waypoints,
+                next: 0,
+            },
+        ));
+    ConstructionMaterialPhase::LeavingDeliveryAccess { exit }
+}
+
+fn delivery_egress_points(
+    terrain: &WorldTerrain,
+    access: Option<&PlannedRoadAccess>,
+) -> Option<(Vec3, Vec<RouteWaypoint>)> {
+    let access = access?;
+    let exit_point = access.points.last().copied()?;
+    let to_world = |point: Vec2| Vec3::new(point.x, terrain.get_height(point.x, point.y), point.y);
+    let exit = to_world(exit_point);
+    let waypoints = access
+        .points
+        .iter()
+        .skip(2)
+        .copied()
+        .map(|point| RouteWaypoint {
+            position: to_world(point),
+            on_road: false,
+        })
+        .collect();
+    Some((exit, waypoints))
+}
+
 /// Supply approved worksites with physical wood before construction begins.
 ///
 /// Market Wood in the settlement hall is preferred and must be purchased by
@@ -15,20 +151,34 @@ pub fn run_construction_material_logistics(
     derived: Option<Res<DerivedColliderLibrary>>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
     world_time: Query<&WorldTime>,
+    mut business_events: ResMut<BusinessEventQueue>,
     mut commands: Commands,
-    settlements: Query<
+    mut settlements: Query<
         (
             Entity,
-            &Settlement,
+            &mut Settlement,
             &shared::components::SettlementId,
             &PlayerPosition,
             Option<&PlayerRotation>,
+            Option<&MootAdministration>,
+            Option<&SettlementPolicies>,
+            Option<&mut shared::economy::CivicAccount>,
         ),
         Without<CharacterKind>,
     >,
-    sites: Query<(Entity, &UnderConstruction, &PlayerPosition), Without<CharacterKind>>,
+    mut sites: Query<
+        (
+            Entity,
+            &mut UnderConstruction,
+            Option<&mut shared::components::ConstructionSite>,
+            &PlayerPosition,
+            Option<&PlannedRoadAccess>,
+        ),
+        Without<CharacterKind>,
+    >,
     mut inventories: Query<&mut GoodsInventory>,
     mut markets: Query<&mut MootMarket>,
+    mut tree_candidates: Local<TreeWorkCandidateCache>,
     mut builders: Query<
         (
             Entity,
@@ -47,19 +197,33 @@ pub fn run_construction_material_logistics(
         ),
         With<CharacterKind>,
     >,
+    // A player-owned site is normally supplied by an unemployed resident,
+    // but its material bill still belongs to the owner. The disjoint filter
+    // lets that owner's live/offline hero wallet fund market Wood without
+    // ever charging the resident who happens to carry it.
+    mut non_builder_owner_wallets: Query<
+        (&shared::components::PersonId, &mut Wallet),
+        Without<ConstructionMaterialRoutine>,
+    >,
 ) {
     let Some(terrain) = terrain else {
         return;
     };
-    if world_time
-        .iter()
-        .next()
-        .is_some_and(|clock| !clock.is_day())
-    {
+    let Some(clock) = world_time.iter().next() else {
+        return;
+    };
+    if !clock.is_day() {
         return;
     }
+    let day = clock.day;
     let dt = simulation_time.world_seconds();
-    let now = simulation_time.elapsed_real_seconds_f64();
+    // Timber/store retries are world behaviour, so their cooldown must advance
+    // with the master time warp. Using wall-clock time here made a 60-second
+    // sparse-timber backoff last ten world minutes at 10x (and an hour at
+    // 100x), which looked exactly like abandoned construction. The one-proof-
+    // per-tick budget above still bounds the actual pathfinding cost.
+    let now = f64::from(clock.day) * f64::from(clock.cycle_duration())
+        + f64::from(clock.seconds_in_cycle);
     // A terrain proof is bounded but not free. Stagger simultaneous builders
     // across ticks instead of letting a migration wave perform the same
     // impossible-landmass search four times in one server frame.
@@ -70,7 +234,8 @@ pub fn run_construction_material_logistics(
     // it is fully supplied. Builders already carrying Wood may always finish
     // their delivery.
     let mut material_priority: HashMap<Entity, (u32, u64, Entity)> = HashMap::new();
-    for (site_entity, site, _) in sites.iter() {
+    let mut material_outstanding: HashMap<Entity, u32> = HashMap::new();
+    for (site_entity, site, _, _, _) in sites.iter_mut() {
         if site.stage != BuildStage::Supplying {
             continue;
         }
@@ -85,6 +250,10 @@ pub fn run_construction_material_logistics(
         if remaining == 0 {
             continue;
         }
+        material_outstanding
+            .entry(site.settlement)
+            .and_modify(|outstanding| *outstanding = outstanding.saturating_add(remaining))
+            .or_insert(remaining);
         let candidate = (remaining, site_entity.to_bits(), site_entity);
         let priority = material_priority
             .entry(site.settlement)
@@ -121,7 +290,9 @@ pub fn run_construction_material_logistics(
             *activity = CharacterActivity::Idle;
             continue;
         }
-        let Ok((_, site, site_position)) = sites.get(routine.site) else {
+        let Ok((_, mut site, mut site_view, _site_position, planned_access)) =
+            sites.get_mut(routine.site)
+        else {
             commands
                 .entity(builder)
                 .remove::<ConstructionMaterialRoutine>()
@@ -158,34 +329,95 @@ pub fn run_construction_material_logistics(
                     .remove::<NavigationRoutePending>()
                     .remove::<TravelRoute>()
                     .remove::<MoveTarget>();
-            } else if matches!(routine.phase, ConstructionMaterialPhase::Delivering { .. }) {
-                // A valid plot can still have one bad interaction side (a
-                // steep rear bank, water edge or prop cluster). Delivery does
-                // not require the builder to stand at the hammering anchor:
-                // rotate around the site's accessible perimeter instead of
-                // pinning the whole village to one failed endpoint forever.
+            } else if matches!(
+                routine.phase,
+                ConstructionMaterialPhase::ApproachingDeliveryAccess { .. }
+                    | ConstructionMaterialPhase::Delivering { .. }
+                    | ConstructionMaterialPhase::LeavingDeliveryAccess { .. }
+            ) {
+                // Material delivery predates the physical connector, but its
+                // permit-time access reservation begins at a certified door
+                // apron. Recover to that exact frontage rather than spiralling
+                // ever farther around the plot: the old growing-radius retry
+                // eventually selected water, map edges and crop plots and
+                // could cycle hundreds of failed routes despite a valid road
+                // claim sitting on the same worksite.
                 routine.failed_delivery_routes = routine.failed_delivery_routes.wrapping_add(1);
-                let attempt = u32::from(routine.failed_delivery_routes);
-                let angle = (attempt % 12) as f32 * std::f32::consts::TAU / 12.0;
-                let radius = site.kind.clearance() + 1.5 + (attempt / 12) as f32 * 2.0;
-                let x = site_position.0.x + angle.cos() * radius;
-                let z = site_position.0.z + angle.sin() * radius;
-                let destination = Vec3::new(x, terrain.get_height(x, z), z);
-                debug!(
-                    "Village supplier {} could not reach delivery anchor {:.1},{:.1}; trying perimeter approach {:.1},{:.1}",
-                    name.0,
-                    failed.goal.x,
-                    failed.goal.z,
-                    destination.x,
-                    destination.z,
-                );
-                routine.phase = ConstructionMaterialPhase::Delivering { destination };
                 commands
                     .entity(builder)
                     .remove::<NavigationRouteFailed>()
                     .remove::<NavigationRoutePending>()
                     .remove::<TravelRoute>()
-                    .insert(MoveTarget(destination));
+                    .remove::<MoveTarget>();
+                let leaving_access = matches!(
+                    routine.phase,
+                    ConstructionMaterialPhase::LeavingDeliveryAccess { .. }
+                );
+                if routine.failed_delivery_routes >= MAX_CERTIFIED_DELIVERY_FAILURES
+                    && !leaving_access
+                {
+                    // The access corridor was accepted by the road-width
+                    // terrain/building proof. Repeated tactical failures here
+                    // mean the bounded fine-grid planner cannot rediscover it
+                    // before construction creates the actual road. Preserve
+                    // the physical cargo and transaction, but complete this
+                    // last-mile handoff abstractly instead of deadlocking the
+                    // settlement forever.
+                    warn!(
+                        "Village supplier {} could not traverse the certified {} access after {} routes; completing the carried-material handoff",
+                        name.0,
+                        site.kind.label(),
+                        routine.failed_delivery_routes,
+                    );
+                    routine.phase = ConstructionMaterialPhase::Delivering {
+                        destination: position.0,
+                    };
+                } else if leaving_access {
+                    if routine.failed_delivery_routes >= MAX_CERTIFIED_DELIVERY_FAILURES {
+                        // The cargo transaction is already complete. A tree
+                        // or later shell can obstruct a long permit-time
+                        // corridor before its physical road is finished; do
+                        // not spend hundreds of long A* retries merely to
+                        // return to the public-network endpoint. Keep the
+                        // builder at their embodied position and let the next
+                        // material decision choose a fresh reachable target.
+                        warn!(
+                            "Village supplier {} could not leave the certified {} access after {} routes; resuming material work from the current position",
+                            name.0,
+                            site.kind.label(),
+                            routine.failed_delivery_routes,
+                        );
+                        routine.failed_delivery_routes = 0;
+                        routine.phase = ConstructionMaterialPhase::Seeking;
+                    } else {
+                        debug!(
+                            "Village supplier {} could not leave the delivery corridor at {:.1},{:.1}; retrying its certified egress",
+                            name.0, failed.goal.x, failed.goal.z,
+                        );
+                        routine.phase = begin_material_egress(
+                            &mut commands,
+                            builder,
+                            position.0,
+                            &terrain,
+                            planned_access,
+                        );
+                    }
+                } else {
+                    debug!(
+                        "Village supplier {} could not reach delivery anchor {:.1},{:.1}; retrying through the certified access corridor",
+                        name.0,
+                        failed.goal.x,
+                        failed.goal.z,
+                    );
+                    routine.phase = begin_material_delivery(
+                        &mut commands,
+                        builder,
+                        position.0,
+                        site.stand,
+                        &terrain,
+                        planned_access,
+                    );
+                }
             } else if matches!(
                 routine.phase,
                 ConstructionMaterialPhase::CollectingFromStore { .. }
@@ -234,8 +466,17 @@ pub fn run_construction_material_logistics(
             continue;
         }
 
-        let Some((hall_entity, settlement, _, hall_position, hall_rotation)) = settlements
-            .iter()
+        let Some((
+            hall_entity,
+            mut settlement,
+            settlement_id,
+            hall_position,
+            hall_rotation,
+            administration,
+            policies,
+            mut civic_account,
+        )) = settlements
+            .iter_mut()
             .find(|(entity, ..)| *entity == site.settlement)
         else {
             continue;
@@ -262,10 +503,14 @@ pub fn run_construction_material_logistics(
                 *activity = CharacterActivity::Idle;
                 if carried_wood > 0 {
                     commands.entity(builder).remove::<ambient::AmbientRoutine>();
-                    ensure_move_target(&mut commands, builder, move_target, site.stand);
-                    routine.phase = ConstructionMaterialPhase::Delivering {
-                        destination: site.stand,
-                    };
+                    routine.phase = begin_material_delivery(
+                        &mut commands,
+                        builder,
+                        position.0,
+                        site.stand,
+                        &terrain,
+                        planned_access,
+                    );
                     continue;
                 }
                 if carries_other_goods {
@@ -277,15 +522,45 @@ pub fn run_construction_material_logistics(
                     };
                     continue;
                 }
-                let affordable = site.owner_id.is_none()
-                    || match (markets.get(hall_entity), wallet.as_deref()) {
+                let public_budget = crate::world::village::civic::civic_discretionary_budget(
+                    &settlement,
+                    administration,
+                    policies,
+                );
+                let affordable = if site.owner_id.is_none() {
+                    markets.get(hall_entity).is_ok_and(|market| {
+                        market
+                            .preview_purchase(
+                                Good::Wood,
+                                1,
+                                public_budget,
+                                None,
+                                Some(shared::economy::MarketSeller::Treasury(*settlement_id)),
+                            )
+                            .units
+                            > 0
+                    })
+                } else if site.owner_id == Some(*person_id) {
+                    match (markets.get(hall_entity), wallet.as_deref()) {
                         (Ok(market), Some(wallet)) => {
                             wallet.can_afford(market.pool(Good::Wood).ask)
                         }
                         // Compatibility for focused tests assembled without the
                         // finance initialiser. A live village always has both.
                         _ => true,
-                    };
+                    }
+                } else {
+                    site.owner_id.is_some_and(|owner_id| {
+                        non_builder_owner_wallets
+                            .iter()
+                            .find(|(candidate, _)| **candidate == owner_id)
+                            .is_some_and(|(_, owner_wallet)| {
+                                markets.get(hall_entity).is_ok_and(|market| {
+                                    owner_wallet.can_afford(market.pool(Good::Wood).ask)
+                                })
+                            })
+                    })
+                };
                 let source = inventories
                     .get(hall_entity)
                     .is_ok_and(|inventory| {
@@ -295,7 +570,25 @@ pub fn run_construction_material_logistics(
                     })
                     .then_some((hall_entity, hall_entrance));
                 if let Some((source, entrance)) = source {
-                    if !owns_material_priority {
+                    let available_wood = inventories
+                        .get(hall_entity)
+                        .map(|inventory| inventory.amount(Good::Wood))
+                        .unwrap_or(0);
+                    let outstanding = material_outstanding
+                        .get(&site.settlement)
+                        .copied()
+                        .unwrap_or(required.saturating_sub(delivered));
+                    // Serialising genuinely scarce founding stock prevents it
+                    // being smeared across dozens of half-supplied sites. Once
+                    // the market physically holds enough Wood to cover every
+                    // outstanding site, however, a poor or temporarily
+                    // unreachable priority owner must not block all other
+                    // affordable builders behind it.
+                    if !material_stock_may_supply(
+                        owns_material_priority,
+                        available_wood,
+                        outstanding,
+                    ) {
                         if ambient_routine.is_some() {
                             continue;
                         }
@@ -318,29 +611,47 @@ pub fn run_construction_material_logistics(
                 tree_proof_used = true;
 
                 let salt = stable_name_hash(&name.0) ^ routine.site.to_bits() as u32;
-                let Some((tree, stand)) = find_tree_for_cycle(
+                let (tree, stand) = match find_tree_for_cycle_cached(
+                    &mut tree_candidates,
                     &terrain,
                     derived.as_deref(),
                     obstacles.as_deref(),
-                    site_position.0,
+                    // A remote building plot is not the tree-search centre.
+                    // Founding builders share the settlement's reachable
+                    // woodland around its hall, then carry timber out to the
+                    // site; otherwise an edge cabin can back off forever even
+                    // while the same village visibly has a healthy forest.
+                    hall_position.0,
                     routine.cycle,
                     salt,
-                ) else {
-                    // No locally valid stand for this deterministic candidate.
-                    // Apply the same real-time backoff as a failed global route,
-                    // otherwise a sparse grove retries at the server tick rate.
-                    postpone_construction_tree_search(&mut routine, now);
-                    ensure_move_target(&mut commands, builder, move_target, hall_entrance);
-                    continue;
+                ) {
+                    TreeCandidateLookup::Pending => {
+                        // The immutable 5x5-chunk prop search is filled a few
+                        // chunks per tick. Do not count cache preparation as a
+                        // failed tree or impose a gameplay backoff.
+                        continue;
+                    }
+                    TreeCandidateLookup::Unavailable => {
+                        // No locally valid stand for this deterministic
+                        // candidate. Back off rather than retrying a sparse
+                        // grove at the server tick rate.
+                        postpone_construction_tree_search(&mut routine, now);
+                        ensure_move_target(&mut commands, builder, move_target, hall_entrance);
+                        continue;
+                    }
+                    TreeCandidateLookup::Found { tree, stand } => (tree, stand),
                 };
-                // Reject the permanent failure before it enters the ordinary
-                // navigation queue. The terrain-only proof deliberately omits
-                // transient props/buildings; it answers the cheap structural
-                // question of whether hall and tree share walkable land.
-                if !crate::world::village_roads::embodied_land_route_exists(
+                // Reject an obviously water-separated candidate before it
+                // enters the ordinary navigation queue. This must stay a
+                // cheap pre-check: running the permit-time 2,000-node landmass
+                // A* for every timber retry produced repeated 100-185 ms
+                // construction ticks under a 600-person load. The tactical
+                // planner immediately below remains the authoritative,
+                // obstacle-aware route proof.
+                if !crate::world::village_roads::road_segment_is_coarsely_dry(
                     &terrain,
-                    hall_entrance,
-                    stand,
+                    Vec2::new(hall_entrance.x, hall_entrance.z),
+                    Vec2::new(stand.x, stand.z),
                 ) {
                     let widened = postpone_construction_tree_search(&mut routine, now);
                     if widened {
@@ -406,19 +717,88 @@ pub fn run_construction_material_logistics(
                     let carry_room = carrier.free_bulk() / Good::Wood.bulk_per_unit();
                     let requested = remaining.min(carry_room);
                     if site.owner_id.is_none() {
-                        source_store.transfer_to(&mut carrier, Good::Wood, requested)
-                    } else {
+                        let budget = crate::world::village::civic::civic_discretionary_budget(
+                            &settlement,
+                            administration,
+                            policies,
+                        );
+                        match markets.get_mut(source) {
+                            Ok(mut market) => {
+                                let purchase = market.purchase(
+                                    Good::Wood,
+                                    requested,
+                                    budget,
+                                    None,
+                                    Some(shared::economy::MarketSeller::Treasury(*settlement_id)),
+                                );
+                                if purchase.trade.units == 0
+                                    || settlement.treasury < purchase.trade.pennies
+                                {
+                                    0
+                                } else {
+                                    let moved = source_store.transfer_to(
+                                        &mut carrier,
+                                        Good::Wood,
+                                        purchase.trade.units,
+                                    );
+                                    debug_assert_eq!(moved, purchase.trade.units);
+                                    settlement.treasury -= purchase.trade.pennies;
+                                    if let Some(account) = civic_account.as_deref_mut() {
+                                        account.record_material_expense(
+                                            day.saturating_add(1),
+                                            purchase.trade.pennies,
+                                        );
+                                    }
+                                    business_events.record_market_purchase(
+                                        day,
+                                        *settlement_id,
+                                        purchase.fills,
+                                    );
+                                    moved
+                                }
+                            }
+                            Err(_) => 0,
+                        }
+                    } else if site.owner_id == Some(*person_id) {
                         match (markets.get_mut(source), wallet.as_deref_mut()) {
                             (Ok(mut market), Some(wallet)) => buy_from_moot(
+                                day,
+                                site.settlement_id,
                                 Good::Wood,
                                 requested,
                                 wallet,
                                 &mut source_store,
                                 &mut carrier,
                                 &mut market,
+                                &mut business_events,
                             ),
                             _ => source_store.transfer_to(&mut carrier, Good::Wood, requested),
                         }
+                    } else if let Some(owner_id) = site.owner_id {
+                        match (
+                            markets.get_mut(source),
+                            non_builder_owner_wallets
+                                .iter_mut()
+                                .find(|(candidate, _)| **candidate == owner_id),
+                        ) {
+                            (Ok(mut market), Some((_, mut owner_wallet))) => buy_from_moot(
+                                day,
+                                site.settlement_id,
+                                Good::Wood,
+                                requested,
+                                &mut owner_wallet,
+                                &mut source_store,
+                                &mut carrier,
+                                &mut market,
+                                &mut business_events,
+                            ),
+                            // If the owning character genuinely vanished, do
+                            // not transfer private hall stock for free. The
+                            // worker falls back to gathering physical timber.
+                            _ => 0,
+                        }
+                    } else {
+                        0
                     }
                 } else {
                     0
@@ -426,10 +806,14 @@ pub fn run_construction_material_logistics(
                 if moved > 0 {
                     routine.failed_store_routes = 0;
                     routine.store_retry_after = 0.0;
-                    commands.entity(builder).insert(MoveTarget(site.stand));
-                    routine.phase = ConstructionMaterialPhase::Delivering {
-                        destination: site.stand,
-                    };
+                    routine.phase = begin_material_delivery(
+                        &mut commands,
+                        builder,
+                        position.0,
+                        site.stand,
+                        &terrain,
+                        planned_access,
+                    );
                 } else {
                     routine.phase = ConstructionMaterialPhase::Seeking;
                 }
@@ -465,14 +849,37 @@ pub fn run_construction_material_logistics(
                 }
                 let remaining = required.saturating_sub(delivered);
                 if let Ok(mut carrier) = inventories.get_mut(builder) {
-                    carrier.add(Good::Wood, remaining.min(3));
+                    // This is a deadlock escape, not a substitute timber
+                    // industry. An ordinary builder recovers two usable bundles
+                    // per tree; a professional woodcutter recovers three, works
+                    // faster in good forest, and can sell through the market.
+                    carrier.add(Good::Wood, remaining.min(SELF_SUPPLY_TREE_YIELD));
                 }
                 routine.cycle = routine.cycle.wrapping_add(1);
                 *activity = CharacterActivity::Idle;
-                commands.entity(builder).insert(MoveTarget(site.stand));
-                routine.phase = ConstructionMaterialPhase::Delivering {
-                    destination: site.stand,
-                };
+                routine.phase = begin_material_delivery(
+                    &mut commands,
+                    builder,
+                    position.0,
+                    site.stand,
+                    &terrain,
+                    planned_access,
+                );
+            }
+            ConstructionMaterialPhase::ApproachingDeliveryAccess { entry, .. } => {
+                *activity = CharacterActivity::Idle;
+                if ground_distance(position.0, entry) > WORK_REACH {
+                    ensure_move_target(&mut commands, builder, move_target, entry);
+                    continue;
+                }
+                routine.phase = begin_material_delivery(
+                    &mut commands,
+                    builder,
+                    position.0,
+                    site.stand,
+                    &terrain,
+                    planned_access,
+                );
             }
             ConstructionMaterialPhase::Delivering { destination } => {
                 *activity = CharacterActivity::Idle;
@@ -497,13 +904,40 @@ pub fn run_construction_material_logistics(
                     site.kind.label(),
                 );
                 if now_delivered >= required {
+                    // This exact point was just reached through the live route
+                    // planner. Reuse that proof for the final hammering walk;
+                    // the authored front stand may have become obstructed while
+                    // the builder was gathering several timber loads.
+                    site.stand = position.0;
+                    if let Some(site_view) = site_view.as_deref_mut() {
+                        site_view.stand = position.0;
+                    }
                     commands
                         .entity(builder)
                         .remove::<ConstructionMaterialRoutine>()
-                        .insert(MoveTarget(site.stand));
+                        .insert(MoveTarget(position.0));
                 } else {
-                    routine.phase = ConstructionMaterialPhase::Seeking;
+                    routine.phase = begin_material_egress(
+                        &mut commands,
+                        builder,
+                        position.0,
+                        &terrain,
+                        planned_access,
+                    );
                 }
+            }
+            ConstructionMaterialPhase::LeavingDeliveryAccess { exit } => {
+                *activity = CharacterActivity::Idle;
+                if ground_distance(position.0, exit) > WORK_REACH {
+                    ensure_move_target(&mut commands, builder, move_target, exit);
+                    continue;
+                }
+                routine.failed_delivery_routes = 0;
+                commands
+                    .entity(builder)
+                    .remove::<MoveTarget>()
+                    .remove::<TravelRoute>();
+                routine.phase = ConstructionMaterialPhase::Seeking;
             }
         }
     }
@@ -525,18 +959,31 @@ pub fn advance_construction(
     settlements: Query<(&Settlement, &shared::components::SettlementId)>,
     positions: Query<&PlayerPosition>,
     move_targets: Query<&MoveTarget>,
+    route_failures: Query<&NavigationRouteFailed>,
     home_routines: Query<(), With<HomeRoutine>>,
     mut intents: Query<&mut VillagerIntent>,
-    mut pending: Query<(Entity, &mut UnderConstruction, &GoodsInventory)>,
+    mut activities: Query<&mut CharacterActivity>,
+    mut pending: Query<(
+        Entity,
+        &mut UnderConstruction,
+        &GoodsInventory,
+        Option<&PlannedRoadAccess>,
+        Option<&InheritedBusinessCapital>,
+    )>,
     mut sites: Query<&mut shared::components::ConstructionSite>,
     mut facings: Query<&mut PlayerRotation>,
 ) {
     let world_dt = simulation_time.world_seconds();
     let daylight = world_time.iter().next().is_none_or(WorldTime::is_day);
-    for (site, mut under, materials) in pending.iter_mut() {
+    for (site, mut under, materials, planned_access, inherited_capital) in pending.iter_mut() {
         let Ok((settlement, settlement_id)) = settlements.get(under.settlement) else {
             // Its settlement vanished; drop the site rather than leaving a
             // building belonging to nowhere.
+            if let Some(builder) = under.builder {
+                if let Ok(mut activity) = activities.get_mut(builder) {
+                    *activity = CharacterActivity::Idle;
+                }
+            }
             release_builder(&mut commands, &mut intents, under.builder, None);
             commands.entity(site).despawn();
             continue;
@@ -558,11 +1005,13 @@ pub fn advance_construction(
         match under.stage {
             BuildStage::Supplying => {
                 let Some(builder) = under.builder else {
-                    commands.entity(site).despawn();
+                    // A death or departure does not erase a permitted plot,
+                    // its delivered Wood, or inherited-business escrow. The
+                    // recovery/succession systems assign another builder.
                     continue;
                 };
                 if positions.get(builder).is_err() {
-                    commands.entity(site).despawn();
+                    under.builder = None;
                     continue;
                 }
                 let required = under.kind.construction_wood_required();
@@ -581,16 +1030,54 @@ pub fn advance_construction(
                 );
             }
             BuildStage::Walking => {
-                // No builder left (they were despawned): the permit lapses
-                // rather than the building appearing by itself.
+                // Keep the supplied worksite intact while succession or the
+                // orphan-construction pass finds a replacement builder.
                 let Some(builder) = under.builder else {
-                    commands.entity(site).despawn();
                     continue;
                 };
                 let Ok(at) = positions.get(builder) else {
-                    commands.entity(site).despawn();
+                    under.builder = None;
                     continue;
                 };
+                if route_failures
+                    .get(builder)
+                    .is_ok_and(|failed| failed.goal.distance_squared(under.stand) <= 0.01)
+                {
+                    under.failed_stand_routes = under.failed_stand_routes.saturating_add(1);
+                    let attempt = u32::from(under.failed_stand_routes);
+                    let angle =
+                        under.rotation + (attempt % 12) as f32 * std::f32::consts::TAU / 12.0;
+                    let footprint = under.kind.art().definition().footprint;
+                    let radius =
+                        footprint.x.max(footprint.y) * 0.5 + 2.0 + (attempt / 12) as f32 * 2.0;
+                    let x = under.position.x + angle.sin() * radius;
+                    let z = under.position.z + angle.cos() * radius;
+                    under.stand = Vec3::new(
+                        x,
+                        terrain
+                            .as_deref()
+                            .map_or(under.position.y, |terrain| terrain.get_height(x, z)),
+                        z,
+                    );
+                    if let Ok(mut site_view) = sites.get_mut(site) {
+                        site_view.stand = under.stand;
+                    }
+                    commands
+                        .entity(builder)
+                        .remove::<NavigationRouteFailed>()
+                        .remove::<NavigationRoutePending>()
+                        .remove::<TravelRoute>()
+                        .insert(MoveTarget(under.stand));
+                    warn!(
+                        "Village '{}': builder could not reach the {} work point; trying perimeter approach {} at {:.1},{:.1}",
+                        settlement.name,
+                        under.kind.label(),
+                        attempt,
+                        under.stand.x,
+                        under.stand.z,
+                    );
+                    continue;
+                }
                 if at.0.distance(under.stand) > BUILD_REACH {
                     if move_targets.get(builder).is_err() {
                         commands.entity(builder).insert(MoveTarget(under.stand));
@@ -599,6 +1086,18 @@ pub fn advance_construction(
                 }
 
                 // On site. Clear the plot before anything is raised on it.
+                let earthwork_seconds = terrain.as_deref().map_or(0.0, |terrain| {
+                    if under.kind == SettlementBuildingKind::Farmstead {
+                        super::planning::farmstead_earthwork_effort(
+                            terrain,
+                            under.position,
+                            under.rotation,
+                        )
+                        .map_or(0.0, |effort| 2.0 + effort * 6.0)
+                    } else {
+                        0.0
+                    }
+                });
                 if let Some(terrain) = terrain.as_mut() {
                     clear_and_level(terrain, &mut deltas, &mut commands, &under);
                 }
@@ -616,7 +1115,7 @@ pub fn advance_construction(
                     shared::building::BuildingPosition(under.position),
                 ));
                 under.stage = BuildStage::Raising {
-                    seconds_left: BUILD_SECONDS,
+                    seconds_left: BUILD_SECONDS + earthwork_seconds,
                 };
                 // Construction owns the builder now. Leaving the walk target
                 // attached lets `step_units` run later in the fixed schedule
@@ -652,6 +1151,11 @@ pub fn advance_construction(
                 );
             }
             BuildStage::Raising { seconds_left } => {
+                if let Some(builder) = under.builder {
+                    if let Ok(mut activity) = activities.get_mut(builder) {
+                        *activity = CharacterActivity::Building;
+                    }
+                }
                 let left = seconds_left - world_dt;
                 if left > 0.0 {
                     under.stage = BuildStage::Raising { seconds_left: left };
@@ -688,6 +1192,22 @@ pub fn advance_construction(
                     commands
                         .entity(building_entity)
                         .insert(shared::components::OwnedBy(owner_id));
+                }
+                if let Some(capital) = inherited_capital {
+                    // Keep takeover money in an authoritative account on the
+                    // completed entity immediately. The next economy pass
+                    // atomically converts this escrow to BusinessAccount cash.
+                    // Deferring that conversion by one tick prevents a site
+                    // despawn and a separately queued account insert from
+                    // exposing a one-frame loss at schedule boundaries.
+                    commands
+                        .entity(building_entity)
+                        .insert(InheritedBusinessCapital(capital.0));
+                }
+                if let Some(planned_access) = planned_access {
+                    commands
+                        .entity(building_entity)
+                        .insert(planned_access.clone());
                 }
                 info!(
                     "Village '{}': {} completed ({:.0}% ground)",
@@ -741,27 +1261,16 @@ fn release_builder(
 
 /// Level the plot and publish the change so clients see the same ground.
 ///
-/// The flatten itself already existed in the shared terrain-editing primitives
-/// uses -- and so did the client's ingest of replicated deltas. What did not
-/// exist was anything on the SERVER writing one, so this is the missing half of
-/// a road that was already built from both ends.
+/// The flatten itself already existed in the shared terrain-editing primitives,
+/// as did the client's ingestion of replicated deltas. The server now authors
+/// and publishes the edit when embodied construction clears the plot.
 fn clear_and_level(
     terrain: &mut WorldTerrain,
     deltas: &mut PublishedTerrainDeltas,
     commands: &mut Commands,
     under: &UnderConstruction,
 ) {
-    let def = under.kind.art().definition();
-    // Level TO the plot's own height, so a building on a slope cuts a terrace
-    // rather than the whole village drifting to one altitude.
-    let ground = terrain.get_height(under.position.x, under.position.z);
-    let centre = Vec3::new(under.position.x, ground, under.position.z);
-    let affected = terrain.apply_flatten_rect(
-        centre,
-        def.footprint * 0.5,
-        under.rotation,
-        def.flatten_radius,
-    );
+    let affected = level_construction_ground(terrain, under);
 
     for coord in affected {
         let Some(data) = terrain.get_delta_chunk(coord) else {
@@ -779,6 +1288,152 @@ fn clear_and_level(
                     .spawn((chunk, Replicate::to_clients(NetworkTarget::All)))
                     .id();
                 deltas.by_chunk.insert(coord, entity);
+            }
+        }
+    }
+}
+
+fn level_construction_ground(
+    terrain: &mut WorldTerrain,
+    under: &UnderConstruction,
+) -> Vec<shared::terrain::ChunkCoord> {
+    let def = under.kind.art().definition();
+    // Level TO the plot's own height, so a building on a slope cuts a terrace
+    // rather than the whole village drifting to one altitude.
+    let ground = terrain.get_height(under.position.x, under.position.z);
+    let footprint_center = def.world_footprint_center(under.position, under.rotation);
+    let centre = Vec3::new(footprint_center.x, ground, footprint_center.y);
+    let mut affected = terrain.apply_flatten_rect(
+        centre,
+        def.footprint * 0.5,
+        under.rotation,
+        def.flatten_radius,
+    );
+
+    // A Farmstead is one agricultural land claim: terrace both adjacent crop
+    // plots to a shared working plane, while the farmyard keeps its own local
+    // height and every outer edge blends back into the authored hillside.
+    if let (Some(fields), Some(field_half)) = (
+        under.kind.field_positions(under.position, under.rotation),
+        under.kind.field_half_extents(),
+    ) {
+        let field_target = fields
+            .iter()
+            .map(|field| terrain.get_height(field.x, field.z))
+            .sum::<f32>()
+            / fields.len() as f32;
+        let terrace_half = field_half + Vec2::splat(shared::components::FARM_FIELD_TERRACE_MARGIN);
+        for field in fields {
+            let field = Vec3::new(field.x, field_target, field.z);
+            affected.extend(terrain.apply_flatten_rect(
+                field,
+                terrace_half,
+                under.rotation,
+                // The two crop plots share one agricultural terrace. Their
+                // padded inner rectangles meet in the authored aisle, so grid
+                // interpolation cannot leave a tilted strip beneath either
+                // field model.
+                1.0,
+            ));
+        }
+    }
+
+    affected.sort_unstable_by_key(|coord| (coord.x, coord.z));
+    affected.dedup();
+    affected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        delivery_egress_points, level_construction_ground, material_stock_may_supply, BuildStage,
+        PlannedRoadAccess, UnderConstruction, WorldTerrain,
+    };
+    use bevy::prelude::{Entity, Vec2, Vec3};
+    use shared::components::SettlementBuildingKind;
+
+    #[test]
+    fn abundant_market_wood_cannot_be_starved_by_one_priority_site() {
+        assert!(material_stock_may_supply(true, 0, 60));
+        assert!(!material_stock_may_supply(false, 59, 60));
+        assert!(material_stock_may_supply(false, 60, 60));
+        assert!(material_stock_may_supply(false, 387, 60));
+    }
+
+    #[test]
+    fn material_carrier_leaves_by_the_reserved_corridor_in_forward_order() {
+        let terrain = WorldTerrain::default();
+        let access = PlannedRoadAccess {
+            settlement_id: shared::components::SettlementId(1),
+            points: vec![
+                Vec2::new(0.0, 0.0),
+                Vec2::new(0.0, 2.0),
+                Vec2::new(10.0, 2.0),
+                Vec2::new(20.0, 4.0),
+            ],
+            half_width: 1.0,
+        };
+
+        let (exit, waypoints) = delivery_egress_points(&terrain, Some(&access)).unwrap();
+        assert_eq!(Vec2::new(exit.x, exit.z), Vec2::new(20.0, 4.0));
+        assert_eq!(waypoints.len(), 2);
+        assert_eq!(
+            Vec2::new(waypoints[0].position.x, waypoints[0].position.z),
+            Vec2::new(10.0, 2.0)
+        );
+        assert_eq!(
+            Vec2::new(waypoints[1].position.x, waypoints[1].position.z),
+            Vec2::new(20.0, 4.0)
+        );
+    }
+
+    #[test]
+    fn farmstead_earthworks_level_both_crop_plots() {
+        let mut terrain = WorldTerrain::default();
+        let kind = SettlementBuildingKind::Farmstead;
+        let position = (-1800..=1800)
+            .step_by(40)
+            .flat_map(|x| (-1200..=1200).step_by(40).map(move |z| (x, z)))
+            .find_map(|(x, z)| {
+                let position =
+                    Vec3::new(x as f32, terrain.get_height(x as f32, z as f32), z as f32);
+                let effort = crate::world::village::planning::farmstead_earthwork_effort(
+                    &terrain, position, 0.0,
+                )?;
+                (effort > 0.08).then_some(position)
+            })
+            .expect("deterministic world contains moderate terraceable farm ground");
+        let under = UnderConstruction {
+            kind,
+            position,
+            rotation: 0.0,
+            owner: None,
+            owner_id: None,
+            builder: None,
+            settlement: Entity::PLACEHOLDER,
+            settlement_id: shared::components::SettlementId(1),
+            stand: position,
+            failed_stand_routes: 0,
+            stage: BuildStage::Walking,
+            quality: 0.5,
+        };
+
+        assert!(!level_construction_ground(&mut terrain, &under).is_empty());
+        let half = kind.field_half_extents().unwrap();
+        for field in kind.field_positions(position, 0.0).unwrap() {
+            let target = terrain.get_height(field.x, field.z);
+            for corner in [
+                Vec2::new(-half.x, -half.y),
+                Vec2::new(-half.x, half.y),
+                Vec2::new(half.x, -half.y),
+                Vec2::new(half.x, half.y),
+            ] {
+                let height = terrain.get_height(field.x + corner.x, field.z + corner.y);
+                assert!(
+                    (height - target).abs() < 0.08,
+                    "field corner remained {:.2} m from its terrace height",
+                    height - target,
+                );
             }
         }
     }

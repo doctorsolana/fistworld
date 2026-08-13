@@ -1,5 +1,7 @@
 use bevy::prelude::*;
-use shared::building::{build_zones_by_chunk, point_in_any_build_zone_entries, BuildZoneEntry};
+use shared::building::{
+    build_zones_by_chunk, clearance_zones_for_building, point_in_any_build_zone_entries,
+};
 use shared::building::{BuildingPosition, PlacedBuilding};
 use shared::components::VillageRoad;
 use shared::props::PropSpawn;
@@ -36,9 +38,8 @@ pub(super) fn invalidate_props_for_new_buildings(
     let mut added_entities = HashSet::new();
     for (entity, building, position) in new_buildings.iter() {
         added_entities.insert(entity);
-        let zone =
-            BuildZoneEntry::from_building(position.0, building.building_type, building.rotation);
-        let (min_chunk_x, max_chunk_x, min_chunk_z, max_chunk_z) = zone.chunk_bounds();
+        let zones =
+            clearance_zones_for_building(position.0, building.building_type, building.rotation);
 
         // Remove ONLY the props standing on the new plot.
         //
@@ -47,33 +48,36 @@ pub(super) fn invalidate_props_for_new_buildings(
         // putting up one hut made several hundred trees vanish and trickle back
         // at the spawn budget -- the "everything reloads" flicker. The building
         // covers a few metres; only those few metres need to change.
-        for cx in min_chunk_x..=max_chunk_x {
-            for cz in min_chunk_z..=max_chunk_z {
-                let coord = shared::terrain::ChunkCoord::new(cx, cz);
-                if let Some(entities) = prop_chunk_index.by_chunk.get_mut(&coord) {
-                    entities.retain(|prop| {
-                        let Ok(transform) = prop_transforms.get(*prop) else {
-                            return true;
-                        };
-                        let at = transform.translation();
-                        if zone.contains_point(Vec2::new(at.x, at.z)) {
-                            commands.entity(*prop).despawn();
-                            false
-                        } else {
-                            true
-                        }
-                    });
-                }
-                // Anything still queued for this chunk has not been spawned
-                // yet; drop the ones that would land inside the building rather
-                // than letting them appear indoors a few frames later.
-                for (queued_coord, spawns) in pending_spawns.queue.iter_mut() {
-                    if *queued_coord != coord {
-                        continue;
+        for zone in zones {
+            let (min_chunk_x, max_chunk_x, min_chunk_z, max_chunk_z) = zone.chunk_bounds();
+            for cx in min_chunk_x..=max_chunk_x {
+                for cz in min_chunk_z..=max_chunk_z {
+                    let coord = shared::terrain::ChunkCoord::new(cx, cz);
+                    if let Some(entities) = prop_chunk_index.by_chunk.get_mut(&coord) {
+                        entities.retain(|prop| {
+                            let Ok(transform) = prop_transforms.get(*prop) else {
+                                return true;
+                            };
+                            let at = transform.translation();
+                            if zone.contains_point(Vec2::new(at.x, at.z)) {
+                                commands.entity(*prop).despawn();
+                                false
+                            } else {
+                                true
+                            }
+                        });
                     }
-                    spawns.retain(|spawn| {
-                        !zone.contains_point(Vec2::new(spawn.position.x, spawn.position.z))
-                    });
+                    // Anything still queued for this chunk has not been spawned
+                    // yet; drop the ones that would land inside the building rather
+                    // than letting them appear indoors a few frames later.
+                    for (queued_coord, spawns) in pending_spawns.queue.iter_mut() {
+                        if *queued_coord != coord {
+                            continue;
+                        }
+                        spawns.retain(|spawn| {
+                            !zone.contains_point(Vec2::new(spawn.position.x, spawn.position.z))
+                        });
+                    }
                 }
             }
         }
@@ -216,12 +220,23 @@ pub(super) fn spawn_chunk_props(
             });
         }
         spawns.retain(|spawn| {
-            // Mature obstacles are part of the road survey and must not blink
-            // away. Everything light enough to trample yields to the built
-            // prefix, including items queued before this road existed.
-            spawn.kind.is_some_and(|kind| kind.blocks_village_road())
+            // Brush yields to a finished ribbon. Trees do too, but only after
+            // the embodied road worker has chopped them and advanced this
+            // built prefix; rocks remain permanent scenery and collision.
+            let permanent = spawn
+                .kind
+                .is_some_and(|kind| kind.blocks_village_road() && !kind.is_road_clearable());
+            let padding = if spawn.kind.is_some_and(|kind| kind.is_road_clearable()) {
+                shared::components::ROAD_CLEARED_TREE_PADDING
+            } else {
+                0.12
+            };
+            permanent
                 || !roads.iter().any(|road| {
-                    road.contains_built_point(Vec2::new(spawn.position.x, spawn.position.z), 0.12)
+                    road.contains_built_point(
+                        Vec2::new(spawn.position.x, spawn.position.z),
+                        padding,
+                    )
                 })
         });
         // Mark loaded immediately so the chunk is not re-enqueued while its
@@ -279,11 +294,11 @@ pub(super) fn spawn_chunk_props(
     perf.props_spawn_ms += start.elapsed().as_secs_f32() * 1000.0;
 }
 
-/// Remove only light vegetation covered by newly completed road sections.
+/// Remove vegetation covered by newly completed road sections.
 ///
-/// Trees and rocks remain because the server planned around them. Chunk
-/// indexes keep this bounded to the few chunks touched by the path rather than
-/// scanning every prop in view after each two-metre addition.
+/// Trees can appear here only after the road worker completed their chopping
+/// phase. Rocks remain because every server survey treats them as permanent.
+/// Chunk indexes keep this bounded to the few chunks touched by the path.
 pub(super) fn clear_props_for_built_village_roads(
     mut commands: Commands,
     changed_roads: Query<&VillageRoad, Changed<VillageRoad>>,
@@ -292,7 +307,9 @@ pub(super) fn clear_props_for_built_village_roads(
     props: Query<(&GlobalTransform, Option<&PropKindTag>)>,
 ) {
     for road in changed_roads.iter() {
-        let Some((min_chunk, max_chunk)) = road_chunk_bounds(road, 0.25) else {
+        let Some((min_chunk, max_chunk)) =
+            road_chunk_bounds(road, shared::components::ROAD_CLEARED_TREE_PADDING)
+        else {
             continue;
         };
         for cx in min_chunk.x..=max_chunk.x {
@@ -303,11 +320,18 @@ pub(super) fn clear_props_for_built_village_roads(
                         let Ok((transform, kind)) = props.get(*entity) else {
                             return true;
                         };
-                        if kind.is_some_and(|kind| kind.0.blocks_village_road()) {
+                        if kind.is_some_and(|kind| {
+                            kind.0.blocks_village_road() && !kind.0.is_road_clearable()
+                        }) {
                             return true;
                         }
                         let at = transform.translation();
-                        if road.contains_built_point(Vec2::new(at.x, at.z), 0.12) {
+                        let padding = if kind.is_some_and(|kind| kind.0.is_road_clearable()) {
+                            shared::components::ROAD_CLEARED_TREE_PADDING
+                        } else {
+                            0.12
+                        };
+                        if road.contains_built_point(Vec2::new(at.x, at.z), padding) {
                             commands.entity(*entity).despawn();
                             false
                         } else {
@@ -320,11 +344,17 @@ pub(super) fn clear_props_for_built_village_roads(
                         continue;
                     }
                     spawns.retain(|spawn| {
-                        spawn.kind.is_some_and(|kind| kind.blocks_village_road())
-                            || !road.contains_built_point(
-                                Vec2::new(spawn.position.x, spawn.position.z),
-                                0.12,
-                            )
+                        let padding = if spawn.kind.is_some_and(|kind| kind.is_road_clearable()) {
+                            shared::components::ROAD_CLEARED_TREE_PADDING
+                        } else {
+                            0.12
+                        };
+                        spawn.kind.is_some_and(|kind| {
+                            kind.blocks_village_road() && !kind.is_road_clearable()
+                        }) || !road.contains_built_point(
+                            Vec2::new(spawn.position.x, spawn.position.z),
+                            padding,
+                        )
                     });
                 }
             }

@@ -16,7 +16,6 @@ use shared::protocol::{
 use shared::terrain::WorldTerrain;
 
 use crate::persistence::profiles::PlayerProfiles;
-use crate::player::roster_cache::PlayerRosterCache;
 use crate::world::dev::DevMode;
 
 fn resolve_map_spawn_position(terrain: &WorldTerrain) -> Vec3 {
@@ -32,12 +31,12 @@ fn resolve_map_spawn_position(terrain: &WorldTerrain) -> Vec3 {
 }
 
 /// Handle player name submissions from clients.
-/// Validates name, loads/creates profile, spawns player entity.
+/// Validates name, resumes/creates the session profile, and spawns the
+/// connection-owned commander entity.
 pub fn handle_player_name_submission(
     mut commands: Commands,
     terrain: Res<WorldTerrain>,
     mut profiles: ResMut<PlayerProfiles>,
-    mut roster_cache: ResMut<PlayerRosterCache>,
     mut hero_index: ResMut<crate::player::hero::HeroIndex>,
     mut heroes: Query<&mut shared::components::Hero>,
     mut client_links: Query<
@@ -132,15 +131,16 @@ pub fn handle_player_name_submission(
                 ))
                 .id();
 
-            // The hero outlives the connection, so a returning player either
-            // re-adopts the body still standing in the world, or -- after a
-            // server restart, when no entity survived -- has it rebuilt from
-            // the profile snapshot. Peer ids are per-session, so the identity
-            // that carries across connections is the name.
+            // The hero outlives the connection, so a returning player re-adopts
+            // the exact body still standing in this world. Peer ids are per
+            // connection; the session account name is the stable authority.
             let readopted = match hero_index.by_name.get(&name_lower).copied() {
                 Some(hero_entity) => match heroes.get_mut(hero_entity) {
                     Ok(mut hero) => {
                         hero.owner = peer_id;
+                        commands
+                            .entity(hero_entity)
+                            .remove::<crate::player::hero::OfflineHero>();
                         info!("Re-adopted hero {hero_entity:?} for '{}'", name_lower);
                         true
                     }
@@ -168,6 +168,7 @@ pub fn handle_player_name_submission(
                         saved.rotation,
                         saved.outfit(),
                         profile.character_attributes(),
+                        saved.health(),
                     );
                     info!("Restored hero {entity:?} for '{}' from profile", name_lower);
                 }
@@ -175,7 +176,6 @@ pub fn handle_player_name_submission(
 
             profiles.peer_to_name.insert(peer_id, name_lower.clone());
             profiles.name_to_peer.insert(name_lower.clone(), peer_id);
-            roster_cache.upsert_profile(&profile);
             profiles.profiles.insert(name_lower, profile);
 
             sender.send::<ReliableChannel>(NameSubmissionResult::Accepted { profile_loaded });

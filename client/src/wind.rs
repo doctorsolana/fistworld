@@ -46,6 +46,70 @@ pub const WIND_DIRECTION: Vec2 = Vec2::new(0.8206, 0.5715);
 /// fails on `0.86` vs `0.860` is a test people learn to ignore.
 pub const WIND_DIRECTION_WGSL: &str = "vec2<f32>(0.8206, 0.5715)";
 
+/// Wind speed wanders between these bounds (world metres/sec) on slow swells.
+/// Clouds and mechanical wind-driven props consume the same value so a mill
+/// never races while the visible weather is calm.
+pub const WIND_SPEED_MIN: f32 = 1.5;
+pub const WIND_SPEED_MAX: f32 = 4.5;
+
+/// The local wind bearing at an absolute world time.
+///
+/// Large shader-driven surfaces retain [`WIND_DIRECTION`] as their prevailing
+/// bearing (see the module-level note about uniforms), while articulated
+/// objects such as a windmill can cheaply follow these slower weather shifts.
+/// The two deterministic swells keep the wind from oscillating like a clock
+/// while limiting it to roughly 55 degrees either side of the prevailing
+/// bearing. `Vec2` is world XZ, pointing downwind.
+pub fn wind_direction(abs_seconds: f32, seed_phase: f32) -> Vec2 {
+    use std::f32::consts::TAU;
+
+    let prevailing_bearing = WIND_DIRECTION.x.atan2(WIND_DIRECTION.y);
+    let primary = (TAU * abs_seconds / 1_800.0 + seed_phase * 0.37).sin() * 0.72;
+    let secondary = (TAU * abs_seconds / 617.0 + seed_phase * 1.91).sin() * 0.24;
+    let bearing = prevailing_bearing + primary + secondary;
+    Vec2::new(bearing.sin(), bearing.cos())
+}
+
+/// Derive the deterministic wind phase from the server-authoritative cloud
+/// seed. Kept here so every consumer observes the same gust at the same world
+/// time without replicating another continuously changing value.
+pub fn wind_seed_phase(seed: u64) -> f32 {
+    let mut x = seed;
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^= x >> 31;
+    (x as f64 / u64::MAX as f64) as f32 * 37.0
+}
+
+/// Integrated downwind offset and instantaneous speed at an absolute world
+/// time. The closed form is frame-rate independent and continuous through
+/// time-warp changes.
+pub fn wind_state(abs_seconds: f32, seed_phase: f32) -> (Vec2, f32) {
+    use std::f32::consts::TAU;
+
+    let amplitude = 0.5 * (WIND_SPEED_MAX - WIND_SPEED_MIN);
+    let midpoint = WIND_SPEED_MIN + amplitude;
+    let primary_rate = TAU / 540.0;
+    let secondary_rate = TAU / 197.0;
+    let primary_phase = seed_phase;
+    let secondary_phase = seed_phase * 2.7;
+    let integral = midpoint * abs_seconds
+        + amplitude
+            * (0.7 * (primary_phase.cos() - (primary_rate * abs_seconds + primary_phase).cos())
+                / primary_rate
+                + 0.3
+                    * (secondary_phase.cos()
+                        - (secondary_rate * abs_seconds + secondary_phase).cos())
+                    / secondary_rate);
+    let speed = midpoint
+        + amplitude
+            * (0.7 * (primary_rate * abs_seconds + primary_phase).sin()
+                + 0.3 * (secondary_rate * abs_seconds + secondary_phase).sin());
+    (WIND_DIRECTION * integral, speed)
+}
+
 /// How fast gust fronts sweep downwind, as a multiplier on world time.
 ///
 /// ONE value for every plant. It used to be per-kind — grass 1.4, bushes 1.25,
@@ -141,5 +205,32 @@ mod tests {
             (length - 1.0).abs() < 1e-4,
             "WIND_DIRECTION must be unit length, got {length}"
         );
+    }
+
+    #[test]
+    fn wind_speed_stays_inside_its_declared_range() {
+        let phase = wind_seed_phase(0x1234_5678);
+        for second in (0..10_000).step_by(17) {
+            let (_, speed) = wind_state(second as f32, phase);
+            assert!(
+                (WIND_SPEED_MIN..=WIND_SPEED_MAX).contains(&speed),
+                "wind speed {speed} escaped {WIND_SPEED_MIN}..={WIND_SPEED_MAX}"
+            );
+        }
+    }
+
+    #[test]
+    fn local_wind_bearing_changes_slowly_and_stays_normalised() {
+        let phase = wind_seed_phase(0x1234_5678);
+        let start = wind_direction(0.0, phase);
+        let later = wind_direction(450.0, phase);
+        assert!(
+            start.distance(later) > 0.05,
+            "the local bearing should visibly change during a world day"
+        );
+        for second in (0..10_000).step_by(17) {
+            let direction = wind_direction(second as f32, phase);
+            assert!((direction.length() - 1.0).abs() < 1e-5);
+        }
     }
 }

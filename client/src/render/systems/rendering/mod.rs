@@ -21,8 +21,10 @@ pub use clouds::{
 pub use day_night::update_day_night_cycle;
 pub use scaled_target::sync_scene_render_target;
 pub use settings::{
-    apply_graphics_settings, save_graphics_settings, sync_shadow_cascades_to_zoom,
-    GraphicsSettings, InputSettings, LAUNCHER_RESOLUTION,
+    apply_graphics_settings, available_display_resolutions, best_fullscreen_video_mode,
+    save_graphics_settings, sync_shadow_cascades_to_zoom, tick_display_change_confirmation,
+    DisplayMode, DisplayResolution, GraphicsSettings, GroundCoverRenderer, InputSettings,
+    PendingDisplayChange, DISPLAY_CONFIRMATION_SECONDS, LAUNCHER_RESOLUTION,
 };
 pub use setup::setup_rendering;
 
@@ -46,7 +48,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::Extent3d;
 use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection, Msaa};
 use bevy::ui::UiScale;
-use bevy::window::{PresentMode, PrimaryWindow, WindowMode};
+use bevy::window::{PresentMode, PrimaryWindow};
 
 // =============================================================================
 // COMPONENTS

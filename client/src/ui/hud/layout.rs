@@ -399,8 +399,8 @@ fn selection_plate() -> impl Bundle {
             position_type: PositionType::Absolute,
             bottom: Val::Px(26.0),
             left: Val::Percent(50.0),
-            margin: UiRect::left(Val::Px(-148.0)),
-            width: Val::Px(296.0),
+            margin: UiRect::left(Val::Px(-178.0)),
+            width: Val::Px(356.0),
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
             column_gap: Val::Px(10.0),
@@ -448,6 +448,28 @@ fn selection_plate() -> impl Bundle {
                     ..default()
                 },
                 TextColor(INK_MUTED),
+            ),
+            (
+                SelectionHealthTrack,
+                Node {
+                    display: Display::None,
+                    width: Val::Px(58.0),
+                    height: Val::Px(7.0),
+                    padding: UiRect::all(Val::Px(1.0)),
+                    ..default()
+                },
+                BackgroundColor(PLATE_RULE_SOFT),
+                Pickable::IGNORE,
+                children![(
+                    SelectionHealthFill,
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(100.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.29, 0.58, 0.29)),
+                    Pickable::IGNORE,
+                )],
             ),
             (
                 SelectionExpandButton,

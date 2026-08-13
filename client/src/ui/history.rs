@@ -8,10 +8,10 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
-use shared::components::Settlement;
+use shared::components::{BuildingId, Settlement};
 use shared::economy::{
-    format_money, Good, SettlementHistoryArchive, SettlementHistoryDay, WorldHistoryArchive,
-    WorldHistoryDay, SETTLEMENT_HISTORY_DAYS,
+    format_money, BusinessHistoryArchive, BusinessHistoryDay, Good, SettlementHistoryArchive,
+    SettlementHistoryDay, WorldHistoryArchive, WorldHistoryDay, SETTLEMENT_HISTORY_DAYS,
 };
 use shared::protocol::{
     ReliableChannel, RequestSettlementHistory, RequestWorldHistory, SettlementHistoryResponse,
@@ -19,6 +19,7 @@ use shared::protocol::{
 };
 
 use crate::states::GameState;
+use crate::ui::good_icon_path;
 use crate::ui::modal::{
     handle_backdrop_pressed, spawn_modal, update_modal_click_guard, ModalLayout,
 };
@@ -58,6 +59,7 @@ pub(crate) enum HistoryView {
     World,
     Village,
     Market(Good),
+    Business(BuildingId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,6 +117,14 @@ pub(crate) struct MarketHistoryButton {
     pub settlement: Entity,
     pub place: String,
     pub good: Good,
+}
+
+/// Button attached to a selected private workplace's compact card.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BusinessHistoryButton {
+    pub settlement: Entity,
+    pub place: String,
+    pub business: BuildingId,
 }
 
 /// Button in a selected village's encyclopedia record.
@@ -195,7 +205,12 @@ fn handle_open_buttons(
     mut buttons: ParamSet<(
         Query<
             (&Interaction, &MarketHistoryButton, &mut BackgroundColor),
-            (Changed<Interaction>, Without<VillageHistoryButton>),
+            (
+                Changed<Interaction>,
+                Without<VillageHistoryButton>,
+                Without<WorldHistoryButton>,
+                Without<BusinessHistoryButton>,
+            ),
         >,
         Query<
             (&Interaction, &mut BackgroundColor),
@@ -203,6 +218,8 @@ fn handle_open_buttons(
                 With<VillageHistoryButton>,
                 Changed<Interaction>,
                 Without<MarketHistoryButton>,
+                Without<WorldHistoryButton>,
+                Without<BusinessHistoryButton>,
             ),
         >,
         Query<
@@ -212,6 +229,16 @@ fn handle_open_buttons(
                 Changed<Interaction>,
                 Without<MarketHistoryButton>,
                 Without<VillageHistoryButton>,
+                Without<BusinessHistoryButton>,
+            ),
+        >,
+        Query<
+            (&Interaction, &BusinessHistoryButton, &mut BackgroundColor),
+            (
+                Changed<Interaction>,
+                Without<MarketHistoryButton>,
+                Without<VillageHistoryButton>,
+                Without<WorldHistoryButton>,
             ),
         >,
     )>,
@@ -266,6 +293,20 @@ fn handle_open_buttons(
                 view: HistoryView::World,
                 return_to_trade: false,
             });
+        }
+    }
+    for (interaction, button, mut background) in buttons.p3().iter_mut() {
+        *background = button_background(*interaction);
+        if clicked && *interaction == Interaction::Pressed {
+            cache.in_flight.remove(&button.settlement);
+            cache.requested.remove(&button.settlement);
+            target.0 = Some(HistoryTarget {
+                settlement: Some(button.settlement),
+                place: button.place.clone(),
+                view: HistoryView::Business(button.business),
+                return_to_trade: false,
+            });
+            trade_target.0 = None;
         }
     }
 }
@@ -375,6 +416,11 @@ fn ensure_history_panel(
     };
     let settlement_archive = cache.archives.get(&target.place);
     let world_archive = cache.world.as_ref();
+    let business_archive = match target.view {
+        HistoryView::Business(id) => settlement_archive
+            .and_then(|archive| archive.businesses.iter().find(|business| business.id == id)),
+        _ => None,
+    };
     let (count, first_day, last_day) = match target.view {
         HistoryView::World => world_archive.map_or((0, None, None), |archive| {
             (
@@ -392,6 +438,13 @@ fn ensure_history_panel(
                 )
             })
         }
+        HistoryView::Business(_) => business_archive.map_or((0, None, None), |archive| {
+            (
+                archive.days.len(),
+                archive.days.first().map(|day| day.day),
+                archive.days.last().map(|day| day.day),
+            )
+        }),
     };
     let signature = format!(
         "{:?}|{:?}|{:?}|{}|{:?}",
@@ -433,7 +486,7 @@ fn ensure_history_panel(
     ));
 
     commands.entity(nodes.panel).with_children(|panel| {
-        spawn_header(panel, target);
+        spawn_header(panel, target, business_archive);
         spawn_range_bar(panel, *range, count, first_day, last_day);
         panel
             .spawn(Node {
@@ -479,14 +532,40 @@ fn ensure_history_panel(
                                 spawn_market_history(content, &asset_server, good, days)
                             }
                             HistoryView::World => unreachable!(),
+                            HistoryView::Business(_) => unreachable!(),
                         }
+                    }
+                    HistoryView::Business(_) => {
+                        let Some(_archive) = settlement_archive else {
+                            spawn_empty_history(content, "Requesting the settlement ledger...");
+                            return;
+                        };
+                        let Some(business) = business_archive else {
+                            spawn_empty_history(
+                                content,
+                                "No history exists for this business identity yet.",
+                            );
+                            return;
+                        };
+                        if business.days.is_empty() {
+                            spawn_empty_history(
+                                content,
+                                "No completed business day yet. The first record closes at the next dawn.",
+                            );
+                            return;
+                        }
+                        spawn_business_history(content, visible_business_days(business, *range));
                     }
                 }
             });
     });
 }
 
-fn spawn_header(parent: &mut ChildSpawnerCommands<'_>, target: &HistoryTarget) {
+fn spawn_header(
+    parent: &mut ChildSpawnerCommands<'_>,
+    target: &HistoryTarget,
+    business: Option<&BusinessHistoryArchive>,
+) {
     let (title, subtitle, close_label) = match target.view {
         HistoryView::World => (
             "WORLD HISTORY".to_string(),
@@ -506,6 +585,29 @@ fn spawn_header(parent: &mut ChildSpawnerCommands<'_>, target: &HistoryTarget) {
             ),
             "MARKET HISTORY / QUOTES AND EXECUTED PRICES".to_string(),
             "BACK",
+        ),
+        HistoryView::Business(id) => (
+            business.map_or_else(
+                || format!("BUSINESS #{}", id.0),
+                |business| {
+                    format!(
+                        "{} #{}",
+                        business.kind.label().to_uppercase(),
+                        business.id.0
+                    )
+                },
+            ),
+            business.map_or_else(
+                || "BUSINESS HISTORY / ACCOUNTING AND OWNER DECISIONS".to_string(),
+                |business| {
+                    format!(
+                        "{} / OWNER {} / ACCOUNTING AND OWNER DECISIONS",
+                        target.place.to_uppercase(),
+                        business.owner_name.as_deref().unwrap_or("UNRESOLVED")
+                    )
+                },
+            ),
+            "X",
         ),
     };
     parent
@@ -684,6 +786,207 @@ fn visible_world_days(archive: &WorldHistoryArchive, range: HistoryRange) -> &[W
     &archive.days[start..]
 }
 
+fn visible_business_days(
+    archive: &BusinessHistoryArchive,
+    range: HistoryRange,
+) -> &[BusinessHistoryDay] {
+    let start = archive.days.len().saturating_sub(range.days());
+    &archive.days[start..]
+}
+
+fn business_output_stock(day: &BusinessHistoryDay) -> u32 {
+    day.workplace_stock
+        .iter()
+        .copied()
+        .fold(0u32, u32::saturating_add)
+}
+
+fn spawn_business_history(parent: &mut ChildSpawnerCommands<'_>, days: &[BusinessHistoryDay]) {
+    let latest = days.last().expect("non-empty business history");
+    spawn_stat_strip(
+        parent,
+        &[
+            ("STATE", latest.state.label().to_string()),
+            (
+                "STRATEGY",
+                format!(
+                    "{} / {}",
+                    latest.strategy.label(),
+                    if latest.autopilot { "auto" } else { "manual" }
+                ),
+            ),
+            (
+                "CASH / PROTECTED / DRAWABLE",
+                format!(
+                    "{} / {} / {} coin",
+                    format_money(latest.cash),
+                    format_money(latest.protected_working_capital),
+                    format_money(latest.withdrawable_profit),
+                ),
+            ),
+            (
+                "WAGE / TAX DEBT",
+                format!(
+                    "{} / {} coin",
+                    format_money(latest.wage_arrears),
+                    format_money(latest.tax_arrears),
+                ),
+            ),
+            (
+                "LATEST PROFIT",
+                format!(
+                    "{}{} coin",
+                    if latest.profit < 0 { "-" } else { "+" },
+                    format_money(latest.profit.unsigned_abs())
+                ),
+            ),
+            (
+                "STORE / LISTED",
+                format!(
+                    "{} / {} units",
+                    business_output_stock(latest),
+                    latest.listed_output_units
+                ),
+            ),
+        ],
+    );
+
+    spawn_chart_grid(parent, |grid| {
+        spawn_chart(
+            grid,
+            "DAILY P&L",
+            "coin",
+            &[
+                Series::new(
+                    "revenue",
+                    SAGE,
+                    days.iter()
+                        .map(|day| day.observed.then_some(day.gross_revenue as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "costs",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| {
+                            day.observed.then_some(
+                                day.wage_expense
+                                    .saturating_add(day.input_expense)
+                                    .saturating_add(day.market_fees)
+                                    .saturating_add(day.profit_taxes)
+                                    as f64
+                                    / 100.0,
+                            )
+                        })
+                        .collect(),
+                ),
+                Series::new(
+                    "profit",
+                    INK,
+                    days.iter()
+                        .map(|day| day.observed.then_some(day.profit.max(0) as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "loss",
+                    BLUE_GREY,
+                    days.iter()
+                        .map(|day| {
+                            day.observed
+                                .then_some(day.profit.min(0).unsigned_abs() as f64 / 100.0)
+                        })
+                        .collect(),
+                ),
+            ],
+        );
+        spawn_chart(
+            grid,
+            "CASH & LIABILITIES",
+            "coin",
+            &[
+                Series::new(
+                    "cash",
+                    INK,
+                    days.iter()
+                        .map(|day| Some(day.cash as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "wage arrears",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| Some(day.wage_arrears as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "tax arrears",
+                    BLUE_GREY,
+                    days.iter()
+                        .map(|day| Some(day.tax_arrears as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "owner draws",
+                    SAGE,
+                    days.iter()
+                        .map(|day| day.observed.then_some(day.owner_withdrawals as f64 / 100.0))
+                        .collect(),
+                ),
+            ],
+        );
+        spawn_chart(
+            grid,
+            "OWNER SETTINGS",
+            "coin / unit or day",
+            &[
+                Series::new(
+                    "asking price",
+                    INK,
+                    days.iter()
+                        .map(|day| Some(day.asking_unit_price as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "daily wage",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| Some(day.daily_wage as f64 / 100.0))
+                        .collect(),
+                ),
+            ],
+        );
+        spawn_chart(
+            grid,
+            "PHYSICAL FLOW",
+            "units / day",
+            &[
+                Series::new(
+                    "produced",
+                    SAGE,
+                    days.iter()
+                        .map(|day| day.observed.then_some(day.produced_units as f64))
+                        .collect(),
+                ),
+                Series::new(
+                    "sold",
+                    BLUE_GREY,
+                    days.iter()
+                        .map(|day| day.observed.then_some(day.sold_units as f64))
+                        .collect(),
+                ),
+                Series::new(
+                    "inputs",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| day.observed.then_some(day.purchased_input_units as f64))
+                        .collect(),
+                ),
+            ],
+        );
+    });
+    spawn_business_daily_table(parent, days);
+}
+
 fn spawn_market_history(
     parent: &mut ChildSpawnerCommands<'_>,
     asset_server: &AssetServer,
@@ -701,7 +1004,7 @@ fn spawn_market_history(
         })
         .with_children(|heading| {
             heading.spawn((
-                ImageNode::new(asset_server.load(good_icon(good))),
+                ImageNode::new(asset_server.load(good_icon_path(good))),
                 Node {
                     width: Val::Px(44.0),
                     height: Val::Px(44.0),
@@ -767,6 +1070,13 @@ fn spawn_market_history(
                 "DAILY VOLUME",
                 format!("{} coin", format_money(market.coin_volume())),
             ),
+            (
+                "UNMET DEMAND",
+                format!(
+                    "{} unavailable / {} unaffordable",
+                    market.unavailable_units, market.unaffordable_units
+                ),
+            ),
         ],
     );
 
@@ -823,34 +1133,41 @@ fn spawn_market_history(
         );
         spawn_chart(
             grid,
-            "UNITS TRADED",
+            "DEMAND OUTCOME",
             "units / day",
             &[
                 Series::new(
-                    "bought",
-                    BRONZE,
-                    days.iter()
-                        .map(|day| Some(day.market[good.index()].producer_units as f64))
-                        .collect(),
-                ),
-                Series::new(
-                    "sold",
+                    "fulfilled",
                     BLUE_GREY,
                     days.iter()
                         .map(|day| Some(day.market[good.index()].consumer_units as f64))
+                        .collect(),
+                ),
+                Series::new(
+                    "unavailable",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| Some(day.market[good.index()].unavailable_units as f64))
+                        .collect(),
+                ),
+                Series::new(
+                    "unaffordable",
+                    INK,
+                    days.iter()
+                        .map(|day| Some(day.market[good.index()].unaffordable_units as f64))
                         .collect(),
                 ),
             ],
         );
         spawn_chart(
             grid,
-            "MARKET POOL CASH",
-            "coin",
+            "CONSIGNED STOCK",
+            "units",
             &[Series::new(
-                "cash",
+                "listed",
                 INK,
                 days.iter()
-                    .map(|day| Some(day.market[good.index()].pool_cash as f64 / 100.0))
+                    .map(|day| Some(day.market[good.index()].listed_units as f64))
                     .collect(),
             )],
         );
@@ -868,8 +1185,51 @@ fn spawn_village_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Settleme
                 format!("{} coin", format_money(latest.total_local_coin)),
             ),
             (
-                "GOODS AT BID",
-                format!("{} coin", format_money(latest.stock_liquidation_value)),
+                "TREASURY / ARREARS",
+                format!(
+                    "{} / {} coin",
+                    format_money(latest.civic_treasury),
+                    format_money(latest.civic_wage_arrears),
+                ),
+            ),
+            (
+                "BUSINESS CASH / ARREARS",
+                format!(
+                    "{} / {} coin",
+                    format_money(latest.business_cash),
+                    format_money(
+                        latest
+                            .business_wage_arrears
+                            .saturating_add(latest.business_tax_arrears),
+                    ),
+                ),
+            ),
+            (
+                "FOOD AVAILABLE / AT FIRMS",
+                format!(
+                    "{} / {} units",
+                    latest.purchasable_food, latest.unlisted_business_food,
+                ),
+            ),
+            (
+                "CIVIC POLICY",
+                format!(
+                    "{} / {:.1}% fee / {:.1}% levy / {} staffing",
+                    latest.civic.strategy.label(),
+                    latest.civic.market_fee_bps as f32 / 100.0,
+                    latest.civic.business_profit_tax_bps as f32 / 100.0,
+                    latest.civic.staffing_posture.label(),
+                ),
+            ),
+            (
+                "RELIEF / TARGETS",
+                format!(
+                    "{} / food {}d / payroll {}d / subsidy {:.1}%",
+                    latest.civic.poor_relief.label(),
+                    latest.civic.food_reserve_target_days,
+                    latest.civic.civic_payroll_reserve_days,
+                    latest.civic.business_permit_subsidy_bps as f32 / 100.0,
+                ),
             ),
             (
                 "PEOPLE / EMPLOYED",
@@ -900,10 +1260,17 @@ fn spawn_village_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Settleme
                         .collect(),
                 ),
                 Series::new(
-                    "market cash",
+                    "business accounts",
                     BLUE_GREY,
                     days.iter()
-                        .map(|day| Some(day.market_cash.iter().sum::<u64>() as f64 / 100.0))
+                        .map(|day| Some(day.business_cash as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "household purses",
+                    SAGE,
+                    days.iter()
+                        .map(|day| Some(day.household_cash as f64 / 100.0))
                         .collect(),
                 ),
             ],
@@ -982,10 +1349,160 @@ fn spawn_village_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Settleme
                         .map(|day| Some(day.food_consumed as f64))
                         .collect(),
                 ),
+                Series::new(
+                    "purchasable",
+                    BLUE_GREY,
+                    days.iter()
+                        .map(|day| Some(day.purchasable_food as f64))
+                        .collect(),
+                ),
+            ],
+        );
+    });
+    spawn_chart_grid(parent, |grid| {
+        spawn_chart(
+            grid,
+            "CIVIC CASH & ARREARS",
+            "coin",
+            &[
+                Series::new(
+                    "treasury",
+                    INK,
+                    days.iter()
+                        .map(|day| Some(day.civic_treasury as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "wage arrears",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| Some(day.civic_wage_arrears as f64 / 100.0))
+                        .collect(),
+                ),
+            ],
+        );
+        spawn_chart(
+            grid,
+            "CIVIC INCOME",
+            "coin / day",
+            &[
+                Series::new(
+                    "permits",
+                    INK,
+                    days.iter()
+                        .map(|day| {
+                            day.civic
+                                .observed
+                                .then_some(day.civic.permit_income as f64 / 100.0)
+                        })
+                        .collect(),
+                ),
+                Series::new(
+                    "market fees",
+                    SAGE,
+                    days.iter()
+                        .map(|day| {
+                            day.civic
+                                .observed
+                                .then_some(day.civic.market_fee_income as f64 / 100.0)
+                        })
+                        .collect(),
+                ),
+                Series::new(
+                    "profit levy",
+                    BLUE_GREY,
+                    days.iter()
+                        .map(|day| {
+                            day.civic
+                                .observed
+                                .then_some(day.civic.profit_tax_income as f64 / 100.0)
+                        })
+                        .collect(),
+                ),
+                Series::new(
+                    "permit subsidy",
+                    INK,
+                    days.iter()
+                        .map(|day| Some(day.civic.business_permit_subsidy_bps as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "public sales",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| {
+                            day.civic
+                                .observed
+                                .then_some(day.civic.public_sale_income as f64 / 100.0)
+                        })
+                        .collect(),
+                ),
+            ],
+        );
+        spawn_chart(
+            grid,
+            "CIVIC SPENDING",
+            "coin / day",
+            &[
+                Series::new(
+                    "wages",
+                    INK,
+                    days.iter()
+                        .map(|day| {
+                            day.civic
+                                .observed
+                                .then_some(day.civic.wage_expense as f64 / 100.0)
+                        })
+                        .collect(),
+                ),
+                Series::new(
+                    "materials",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| {
+                            day.civic
+                                .observed
+                                .then_some(day.civic.material_expense as f64 / 100.0)
+                        })
+                        .collect(),
+                ),
+                Series::new(
+                    "poor relief",
+                    SAGE,
+                    days.iter()
+                        .map(|day| {
+                            day.civic
+                                .observed
+                                .then_some(day.civic.poor_relief_expense as f64 / 100.0)
+                        })
+                        .collect(),
+                ),
+            ],
+        );
+        spawn_chart(
+            grid,
+            "ENACTED RATES",
+            "percent",
+            &[
+                Series::new(
+                    "market fee",
+                    SAGE,
+                    days.iter()
+                        .map(|day| Some(day.civic.market_fee_bps as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "profit levy",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| Some(day.civic.business_profit_tax_bps as f64 / 100.0))
+                        .collect(),
+                ),
             ],
         );
     });
     spawn_village_daily_table(parent, days);
+    spawn_civic_daily_table(parent, days);
 }
 
 fn spawn_world_history(parent: &mut ChildSpawnerCommands<'_>, days: &[WorldHistoryDay]) {
@@ -1078,10 +1595,17 @@ fn spawn_world_history(parent: &mut ChildSpawnerCommands<'_>, days: &[WorldHisto
                         .collect(),
                 ),
                 Series::new(
-                    "market cash",
+                    "business accounts",
                     BLUE_GREY,
                     days.iter()
-                        .map(|day| Some(day.market_cash as f64 / 100.0))
+                        .map(|day| Some(day.business_cash as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "household purses",
+                    SAGE,
+                    days.iter()
+                        .map(|day| Some(day.household_cash as f64 / 100.0))
                         .collect(),
                 ),
             ],
@@ -1371,7 +1895,14 @@ fn spawn_market_daily_table(
                 ),
                 market.average_consumer_price().map_or_else(
                     || "--".into(),
-                    |price| format!("{} / {}u", format_money(price), market.consumer_units),
+                    |price| {
+                        format!(
+                            "{} / {}u (+{} unmet)",
+                            format_money(price),
+                            market.consumer_units,
+                            market.unmet_units()
+                        )
+                    },
                 ),
                 format!(
                     "{} / {}",
@@ -1380,6 +1911,126 @@ fn spawn_market_daily_table(
                 ),
                 format!("{} / {}", market.closing_stock, market.target_stock),
                 format_money(market.coin_volume()),
+            ],
+        );
+    }
+}
+
+fn business_adjustments(days: &[BusinessHistoryDay], index: usize) -> String {
+    let Some(previous) = index.checked_sub(1).and_then(|previous| days.get(previous)) else {
+        return "Opening record".to_string();
+    };
+    let current = days[index];
+    let mut changes = Vec::new();
+    if current.asking_unit_price != previous.asking_unit_price {
+        changes.push(format!(
+            "ask {}→{}",
+            format_money(previous.asking_unit_price),
+            format_money(current.asking_unit_price)
+        ));
+    }
+    if current.daily_wage != previous.daily_wage {
+        changes.push(format!(
+            "wage {}→{}",
+            format_money(previous.daily_wage),
+            format_money(current.daily_wage)
+        ));
+    }
+    if current.strategy != previous.strategy {
+        changes.push(format!(
+            "{}→{}",
+            previous.strategy.label(),
+            current.strategy.label()
+        ));
+    }
+    if current.autopilot != previous.autopilot {
+        changes.push(if current.autopilot {
+            "autopilot enabled".to_string()
+        } else {
+            "manual control".to_string()
+        });
+    }
+    if current.state != previous.state {
+        changes.push(format!(
+            "{}→{}",
+            previous.state.label(),
+            current.state.label()
+        ));
+    }
+    if changes.is_empty() {
+        "No policy change".to_string()
+    } else {
+        changes.join(" / ")
+    }
+}
+
+fn spawn_business_daily_table(parent: &mut ChildSpawnerCommands<'_>, days: &[BusinessHistoryDay]) {
+    spawn_table_title(parent, "RECENT BUSINESS RECORDS", "latest 30 days");
+    spawn_table_header(
+        parent,
+        &[
+            "DAY",
+            "REVENUE / COST / PROFIT",
+            "CASH / WAGE / TAX DEBT",
+            "MADE / SOLD",
+            "STORE / LISTED",
+            "ADJUSTMENTS",
+        ],
+    );
+    for index in (0..days.len()).rev().take(30) {
+        let day = days[index];
+        if !day.observed {
+            spawn_table_row(
+                parent,
+                &[
+                    day.day.to_string(),
+                    "Skipped boundary".to_string(),
+                    format!(
+                        "{} / {} / {}",
+                        format_money(day.cash),
+                        format_money(day.wage_arrears),
+                        format_money(day.tax_arrears),
+                    ),
+                    "--".to_string(),
+                    format!(
+                        "{} / {}",
+                        business_output_stock(&day),
+                        day.listed_output_units
+                    ),
+                    business_adjustments(days, index),
+                ],
+            );
+            continue;
+        }
+        let costs = day
+            .wage_expense
+            .saturating_add(day.input_expense)
+            .saturating_add(day.market_fees)
+            .saturating_add(day.profit_taxes);
+        spawn_table_row(
+            parent,
+            &[
+                day.day.to_string(),
+                format!(
+                    "{} / {} / {}{}",
+                    format_money(day.gross_revenue),
+                    format_money(costs),
+                    if day.profit < 0 { "-" } else { "+" },
+                    format_money(day.profit.unsigned_abs())
+                ),
+                format!(
+                    "{} / {} / {}",
+                    format_money(day.cash),
+                    format_money(day.wage_arrears),
+                    format_money(day.tax_arrears),
+                ),
+                format!("{} / {}", day.produced_units, day.sold_units),
+                format!(
+                    "{} / {}",
+                    business_output_stock(&day),
+                    day.listed_output_units
+                ),
+                business_adjustments(days, index),
             ],
         );
     }
@@ -1408,6 +2059,68 @@ fn spawn_village_daily_table(parent: &mut ChildSpawnerCommands<'_>, days: &[Sett
                 format!("{} / {}", day.population, day.employed),
                 day.hungry.to_string(),
                 format!("{:.0}", day.prosperity),
+            ],
+        );
+    }
+}
+
+fn spawn_civic_daily_table(parent: &mut ChildSpawnerCommands<'_>, days: &[SettlementHistoryDay]) {
+    spawn_table_title(parent, "RECENT CIVIC ACCOUNTS", "latest 30 days");
+    spawn_table_header(
+        parent,
+        &[
+            "DAY",
+            "INCOME / SPENDING",
+            "TREASURY / ARREARS",
+            "POSITIONS",
+            "FEE / LEVY / SUBSIDY",
+            "POLICY CHANGE",
+        ],
+    );
+    for day in days.iter().rev().take(30) {
+        let income = day
+            .civic
+            .permit_income
+            .saturating_add(day.civic.market_fee_income)
+            .saturating_add(day.civic.profit_tax_income)
+            .saturating_add(day.civic.public_sale_income);
+        let spending = day
+            .civic
+            .wage_expense
+            .saturating_add(day.civic.poor_relief_expense)
+            .saturating_add(day.civic.material_expense);
+        let change = if day.civic.adjustment == shared::components::CivicPolicyAdjustment::None {
+            "No change".to_string()
+        } else {
+            format!(
+                "{} / {}",
+                day.civic.adjustment.label(),
+                day.civic.reason.label()
+            )
+        };
+        spawn_table_row(
+            parent,
+            &[
+                day.day.to_string(),
+                format!("{} / {}", format_money(income), format_money(spending)),
+                format!(
+                    "{} / {}",
+                    format_money(day.civic_treasury),
+                    format_money(day.civic_wage_arrears)
+                ),
+                format!(
+                    "{} filled / {} vacant / {}",
+                    day.civic.filled_positions,
+                    day.civic.vacant_positions,
+                    day.civic.staffing_posture.label(),
+                ),
+                format!(
+                    "{:.1}% / {:.1}% / {:.1}%",
+                    day.civic.market_fee_bps as f32 / 100.0,
+                    day.civic.business_profit_tax_bps as f32 / 100.0,
+                    day.civic.business_permit_subsidy_bps as f32 / 100.0,
+                ),
+                change,
             ],
         );
     }
@@ -1523,16 +2236,6 @@ fn spawn_table_cells(parent: &mut ChildSpawnerCommands<'_>, cells: &[String], he
         });
 }
 
-fn good_icon(good: Good) -> &'static str {
-    match good {
-        Good::Food => "ui/goods/fish.png",
-        Good::Wheat => "ui/goods/wheat.png",
-        Good::Wood => "ui/goods/wood.png",
-        Good::Stone => "ui/goods/stone.png",
-        Good::Iron => "ui/goods/iron.png",
-    }
-}
-
 fn sync_input_state(target: Res<HistoryPanelTarget>, mut input: ResMut<crate::input::InputState>) {
     let open = target.0.is_some();
     if input.history_open != open {
@@ -1545,12 +2248,17 @@ fn despawn_history(
     roots: Query<Entity, With<HistoryPanelRoot>>,
     mut target: ResMut<HistoryPanelTarget>,
     mut input: ResMut<crate::input::InputState>,
+    mut cache: ResMut<SettlementHistoryCache>,
 ) {
     for root in roots.iter() {
         commands.entity(root).despawn();
     }
     target.0 = None;
     input.history_open = false;
+    // Archives are world-session data. Keeping every inspected settlement and
+    // all of its business days across disconnects/new worlds both wastes
+    // memory and risks showing stale history after entity ids are reused.
+    *cache = SettlementHistoryCache::default();
 }
 
 #[cfg(test)]
@@ -1568,5 +2276,25 @@ mod tests {
         let sampled = sample_values(&values, MAX_CHART_POINTS);
         assert_eq!(sampled.len(), MAX_CHART_POINTS);
         assert_eq!(sampled.last(), Some(&Some(364.0)));
+    }
+
+    #[test]
+    fn business_adjustments_explain_price_wage_and_solvency_changes() {
+        let first = BusinessHistoryDay {
+            asking_unit_price: 80,
+            daily_wage: 100,
+            state: shared::economy::BusinessState::Operating,
+            ..default()
+        };
+        let second = BusinessHistoryDay {
+            asking_unit_price: 76,
+            daily_wage: 110,
+            state: shared::economy::BusinessState::CashTight,
+            ..first
+        };
+        let changes = business_adjustments(&[first, second], 1);
+        assert!(changes.contains("ask 0.80→0.76"));
+        assert!(changes.contains("wage 1.00→1.10"));
+        assert!(changes.contains("Operating→Cash tight"));
     }
 }

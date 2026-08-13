@@ -63,10 +63,15 @@ mod tests {
     }
 
     #[test]
-    fn legacy_town_hall_variant_deserializes_as_moot_hall() {
-        let kind: BuildingType = ron::from_str("TownHall").unwrap();
-        assert_eq!(kind, BuildingType::MootHall);
-        assert_eq!(ron::to_string(&kind).unwrap(), "MootHall");
+    fn civic_hall_variants_keep_distinct_serialized_identities() {
+        for kind in [
+            BuildingType::MootHall,
+            BuildingType::VillageHall,
+            BuildingType::TownHall,
+        ] {
+            let encoded = ron::to_string(&kind).unwrap();
+            assert_eq!(ron::from_str::<BuildingType>(&encoded).unwrap(), kind);
+        }
     }
 
     #[test]

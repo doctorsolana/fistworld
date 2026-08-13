@@ -10,8 +10,9 @@ use bevy::prelude::*;
 use lightyear::prelude::{NetworkTarget, Replicate};
 
 use shared::components::{
-    CharacterActivity, MootAdministration, PlayerPosition, PlayerRotation, Settlement,
-    SettlementBuilding, SettlementBuildingKind, SettlementTier, TimeWarp, VillageRoad, WorldTime,
+    CharacterActivity, CharacterName, MootAdministration, PlayerPosition, PlayerRotation,
+    Settlement, SettlementBuilding, SettlementBuildingKind, SettlementTier, TimeWarp, VillageRoad,
+    WorldTime,
 };
 use shared::economy::{Good, GoodsInventory, MootMarket, SettlementEconomy};
 use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
@@ -21,12 +22,17 @@ use crate::world::village;
 
 pub(crate) const SECURE_VILLAGERS: usize = 8;
 pub(crate) const POOR_VILLAGERS: usize = 8;
-const FOUNDING_WOOD: u32 = 80;
+pub(crate) const TRIPLE_STRESS_VILLAGERS_PER_VILLAGE: usize = 200;
+pub(crate) const DENSE_STRESS_VILLAGERS: usize = 1_000;
 const DEFAULT_LAB_WARP: f32 = 1.0;
 // The normal lab crosses the real Hamlet -> Village population threshold and
 // also exercises the late-immigration recovery path every run.
 const DEFAULT_DAY_TWO_ARRIVALS: usize = 8;
 const DEFAULT_LAB_ARRIVAL_DAY: u32 = 2;
+const DEFAULT_DAILY_ARRIVALS: usize = 0;
+const DEFAULT_DAILY_ARRIVAL_DAYS: u32 = 0;
+const DEFAULT_DAILY_ARRIVAL_START_DAY: u32 = 1;
+const MAX_LAB_ARRIVALS: usize = 5_000;
 const DEFAULT_REALWORLD_VILLAGERS: usize = 32;
 const DEFAULT_REALWORLD_POINT: Vec2 = Vec2::new(-346.0, 306.0);
 // Seed 3's two laboratory anchors. They are still validated against the live
@@ -35,12 +41,16 @@ const DEFAULT_REALWORLD_POINT: Vec2 = Vec2::new(-346.0, 306.0);
 // sample on the server's first Update (which can block the network handshake).
 const LAB_MEADOW_ANCHOR: Vec2 = Vec2::new(112.0, -158.0);
 const LAB_COLDBARROW_ANCHOR: Vec2 = Vec2::new(-278.0, -428.0);
+const LAB_GREENWOOD_ANCHOR: Vec2 = Vec2::new(-120.0, 220.0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LabScenario {
     Secure,
     Poor,
     Dual,
+    EconomySoak,
+    TripleStress,
+    DenseStress,
 }
 
 impl LabScenario {
@@ -53,21 +63,68 @@ impl LabScenario {
             "secure" | "food-secure" | "meadow" | "coast" | "coastal" | "port" => Self::Secure,
             "poor" | "food-poor" | "cold" | "north" => Self::Poor,
             "dual" | "both" | "two" => Self::Dual,
-            value => panic!("unknown FISTWORLD_LAB_SCENARIO '{value}'; use secure, poor, or dual"),
+            "economy" | "economy-soak" | "economy50" | "fifty-days" => Self::EconomySoak,
+            "triple" | "triple-stress" | "stress" | "three" => Self::TripleStress,
+            "dense" | "dense-stress" | "thousand" | "1000" => Self::DenseStress,
+            value => panic!(
+                "unknown FISTWORLD_LAB_SCENARIO '{value}'; use secure, poor, dual, economy-soak, triple-stress, or dense-stress"
+            ),
         }
     }
 
     pub(crate) fn includes_secure(self) -> bool {
-        matches!(self, Self::Secure | Self::Dual)
+        matches!(
+            self,
+            Self::Secure | Self::Dual | Self::EconomySoak | Self::TripleStress | Self::DenseStress
+        )
     }
 
     pub(crate) fn includes_poor(self) -> bool {
-        matches!(self, Self::Poor | Self::Dual)
+        matches!(
+            self,
+            Self::Poor | Self::Dual | Self::EconomySoak | Self::TripleStress
+        )
+    }
+
+    pub(crate) fn includes_greenwood(self) -> bool {
+        matches!(self, Self::EconomySoak | Self::TripleStress)
+    }
+
+    pub(crate) fn is_triple_stress(self) -> bool {
+        self == Self::TripleStress
+    }
+
+    pub(crate) fn is_economy_soak(self) -> bool {
+        self == Self::EconomySoak
+    }
+
+    pub(crate) fn is_crowd_stress(self) -> bool {
+        matches!(self, Self::TripleStress | Self::DenseStress)
+    }
+
+    pub(crate) fn runs_arrival_waves(self) -> bool {
+        !self.is_crowd_stress() && self.includes_secure()
+    }
+
+    pub(crate) fn residents_per_village(self) -> usize {
+        match self {
+            Self::EconomySoak => 0,
+            Self::TripleStress => TRIPLE_STRESS_VILLAGERS_PER_VILLAGE,
+            Self::DenseStress => DENSE_STRESS_VILLAGERS,
+            _ => SECURE_VILLAGERS,
+        }
     }
 
     pub(crate) fn expected_residents(self) -> usize {
-        usize::from(self.includes_secure()) * SECURE_VILLAGERS
-            + usize::from(self.includes_poor()) * POOR_VILLAGERS
+        match self {
+            Self::EconomySoak => 0,
+            Self::TripleStress => TRIPLE_STRESS_VILLAGERS_PER_VILLAGE * 3,
+            Self::DenseStress => DENSE_STRESS_VILLAGERS,
+            _ => {
+                usize::from(self.includes_secure()) * SECURE_VILLAGERS
+                    + usize::from(self.includes_poor()) * POOR_VILLAGERS
+            }
+        }
     }
 }
 
@@ -288,6 +345,100 @@ pub(crate) fn choose_poor_site(
     (hall, trees, farmland)
 }
 
+/// A third, temperate inland site for the 600-person stress scenario.
+///
+/// Unlike the two control sites, Greenwood is selected for room to expand as
+/// well as viable farming and timber. It does not require or forbid fishing:
+/// the ordinary planner remains free to exploit any shore it can actually
+/// reach. The fixed anchor keeps startup cheap, while the scored fallback
+/// makes terrain-generator changes fail honestly instead of silently stacking
+/// two towns inside the 300-metre founding exclusion.
+pub(crate) fn choose_greenwood_site(
+    terrain: &WorldTerrain,
+    away_from: &[Vec3],
+) -> (Vec3, usize, f32) {
+    let map = terrain.generator.loaded_map();
+    let field = map
+        .biome_field
+        .as_deref()
+        .expect("village_lab must be a generated map with a biome field");
+    let bounds = map.definition.bounds;
+    let margin = 96.0;
+    let minimum_spacing = shared::components::MIN_SETTLEMENT_SPACING + 30.0;
+
+    let inspect = |point: Vec2| {
+        let height = terrain.get_height(point.x, point.y);
+        let slope = slope_at(terrain, point.x, point.y);
+        let hall = Vec3::new(point.x, height, point.y);
+        let biome = field.biome(point.x, point.y, height, slope);
+        let farmland = field.resources(point.x, point.y, height, slope).farmland;
+        let spacing = away_from
+            .iter()
+            .map(|other| Vec2::new(hall.x - other.x, hall.z - other.z).length())
+            .fold(f32::INFINITY, f32::min);
+        let valid = slope < 0.12
+            && matches!(biome, WorldBiome::Meadows | WorldBiome::Forest)
+            && farmland >= 0.18
+            && spacing >= minimum_spacing
+            && shared::components::minimum_building_water_clearance(
+                terrain,
+                hall,
+                SettlementBuildingKind::Hall,
+                0.0,
+            ) >= shared::components::SETTLEMENT_FREEBOARD;
+        (valid, hall, biome, farmland, spacing)
+    };
+
+    if map.definition.map_id == "village_lab" {
+        let (valid, hall, _, farmland, _) = inspect(LAB_GREENWOOD_ANCHOR);
+        if valid {
+            let trees = nearby_tree_count(terrain, LAB_GREENWOOD_ANCHOR, 120.0);
+            if trees > 0 && village::lumber_plot_has_reachable_tree(terrain, hall) {
+                return (hall, trees, farmland);
+            }
+        }
+    }
+
+    let mut candidates = Vec::new();
+    let mut x = bounds.min[0] + margin;
+    while x <= bounds.max[0] - margin {
+        let mut z = bounds.min[1] + margin;
+        while z <= bounds.max[1] - margin {
+            let point = Vec2::new(x, z);
+            let (valid, hall, biome, farmland, spacing) = inspect(point);
+            if valid {
+                let biome_score = match biome {
+                    WorldBiome::Forest => 4.0,
+                    WorldBiome::Meadows => 3.0,
+                    _ => 0.0,
+                };
+                let room = (spacing / 500.0).min(1.0);
+                let edge_penalty =
+                    Vec2::new(x / bounds.width().max(1.0), z / bounds.depth().max(1.0)).length();
+                candidates.push((
+                    biome_score + farmland * 4.0 + room - edge_penalty,
+                    hall,
+                    farmland,
+                ));
+            }
+            z += 10.0;
+        }
+        x += 10.0;
+    }
+    candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+    for (_, hall, farmland) in candidates.into_iter().take(192) {
+        let point = Vec2::new(hall.x, hall.z);
+        let trees = nearby_tree_count(terrain, point, 120.0);
+        if trees > 0 && village::lumber_plot_has_reachable_tree(terrain, hall) {
+            return (hall, trees, farmland);
+        }
+    }
+
+    panic!(
+        "village_lab needs a third temperate site at least {minimum_spacing:.0}m from both controls with viable farmland and timber"
+    );
+}
+
 fn enabled_flag(name: &str) -> bool {
     std::env::var(name).is_ok_and(|raw| {
         matches!(
@@ -314,6 +465,26 @@ fn realworld_villager_count() -> usize {
         .clamp(1, 5_000)
 }
 
+/// Optional X/Z offset for migration waves in both the rendered and headless
+/// Village Lab. The default keeps arrivals beside the hall; a distant offset
+/// reproduces a god-mode burst without changing the settlement seed.
+pub(crate) fn lab_arrival_offset() -> Vec2 {
+    let Some(raw) = std::env::var("FISTWORLD_LAB_ARRIVAL_OFFSET").ok() else {
+        return Vec2::ZERO;
+    };
+    let Some((x, z)) = raw.split_once(',') else {
+        warn!("Ignoring malformed FISTWORLD_LAB_ARRIVAL_OFFSET='{raw}'; expected x,z");
+        return Vec2::ZERO;
+    };
+    match (x.trim().parse::<f32>(), z.trim().parse::<f32>()) {
+        (Ok(x), Ok(z)) if x.is_finite() && z.is_finite() => Vec2::new(x, z).clamp_length_max(200.0),
+        _ => {
+            warn!("Ignoring malformed FISTWORLD_LAB_ARRIVAL_OFFSET='{raw}'; expected finite x,z");
+            Vec2::ZERO
+        }
+    }
+}
+
 pub(crate) fn lab_arrival_count() -> usize {
     std::env::var("FISTWORLD_LAB_DAY_TWO_ARRIVALS")
         .ok()
@@ -327,7 +498,186 @@ pub(crate) fn lab_arrival_day() -> u32 {
         .ok()
         .and_then(|raw| raw.parse::<u32>().ok())
         .unwrap_or(DEFAULT_LAB_ARRIVAL_DAY)
-        .clamp(2, 10_000)
+        // Scenario day 1 is a useful paused-spawn/unpause reproduction and is
+        // already supported by the shared wave scheduler. The old lower bound
+        // silently postponed documented day-1 stress runs until day 2.
+        .clamp(1, 10_000)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LabArrivalTarget {
+    Meadow,
+    Coldbarrow,
+    Greenwood,
+}
+
+impl LabArrivalTarget {
+    pub(crate) const fn settlement_name(self) -> &'static str {
+        match self {
+            Self::Meadow => "Lab Meadow",
+            Self::Coldbarrow => "Lab Coldbarrow",
+            Self::Greenwood => "Lab Greenwood",
+        }
+    }
+
+    pub(crate) const fn resident_prefix(self) -> &'static str {
+        match self {
+            Self::Meadow => "Meadow",
+            Self::Coldbarrow => "Cold",
+            Self::Greenwood => "Green",
+        }
+    }
+
+    pub(crate) const fn seed_salt(self) -> u64 {
+        match self {
+            Self::Meadow => 0x4d45_4144,
+            Self::Coldbarrow => 0x434f_4c44,
+            Self::Greenwood => 0x4752_4545,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LabArrivalWave {
+    /// One-based scenario day. Day 1 is the founding day (`WorldTime::day == 0`).
+    pub(crate) day: u32,
+    pub(crate) count: usize,
+    pub(crate) target: LabArrivalTarget,
+}
+
+fn build_arrival_waves(
+    single_day: u32,
+    single_count: usize,
+    daily_start_day: u32,
+    daily_days: u32,
+    daily_count: usize,
+) -> Vec<LabArrivalWave> {
+    let mut waves = Vec::new();
+    if single_count > 0 {
+        waves.push(LabArrivalWave {
+            day: single_day.max(1),
+            count: single_count.min(MAX_LAB_ARRIVALS),
+            target: LabArrivalTarget::Meadow,
+        });
+    }
+    if daily_count > 0 {
+        for offset in 0..daily_days.min(MAX_LAB_ARRIVALS as u32) {
+            waves.push(LabArrivalWave {
+                day: daily_start_day.max(1).saturating_add(offset),
+                count: daily_count,
+                target: LabArrivalTarget::Meadow,
+            });
+        }
+    }
+    waves.sort_unstable_by_key(|wave| wave.day);
+
+    let mut combined: Vec<LabArrivalWave> = Vec::with_capacity(waves.len());
+    let mut remaining = MAX_LAB_ARRIVALS;
+    for wave in waves {
+        if remaining == 0 {
+            break;
+        }
+        let count = wave.count.min(remaining);
+        if let Some(last) = combined
+            .last_mut()
+            .filter(|last| last.day == wave.day && last.target == wave.target)
+        {
+            last.count = last.count.saturating_add(count);
+        } else {
+            combined.push(LabArrivalWave {
+                day: wave.day,
+                count,
+                target: wave.target,
+            });
+        }
+        remaining -= count;
+    }
+    combined
+}
+
+/// A deliberately gentle long-economy fixture. Ten people found the three
+/// settlements on day 1, five balance them to five residents each on day 5,
+/// then one person reaches each settlement on days 6 through 30. Migration
+/// stops at exactly thirty residents per village so days 31-50 reveal the
+/// economy's steady state instead of another population shock.
+fn economy_soak_arrival_waves() -> Vec<LabArrivalWave> {
+    let mut waves = vec![
+        LabArrivalWave {
+            day: 1,
+            count: 4,
+            target: LabArrivalTarget::Meadow,
+        },
+        LabArrivalWave {
+            day: 1,
+            count: 3,
+            target: LabArrivalTarget::Coldbarrow,
+        },
+        LabArrivalWave {
+            day: 1,
+            count: 3,
+            target: LabArrivalTarget::Greenwood,
+        },
+        LabArrivalWave {
+            day: 5,
+            count: 1,
+            target: LabArrivalTarget::Meadow,
+        },
+        LabArrivalWave {
+            day: 5,
+            count: 2,
+            target: LabArrivalTarget::Coldbarrow,
+        },
+        LabArrivalWave {
+            day: 5,
+            count: 2,
+            target: LabArrivalTarget::Greenwood,
+        },
+    ];
+    for day in 6..=30 {
+        for target in [
+            LabArrivalTarget::Meadow,
+            LabArrivalTarget::Coldbarrow,
+            LabArrivalTarget::Greenwood,
+        ] {
+            waves.push(LabArrivalWave {
+                day,
+                count: 1,
+                target,
+            });
+        }
+    }
+    waves
+}
+
+/// All configured migration waves, shared by the rendered fixture and the
+/// headless evidence run. The daily schedule is additive; set the legacy
+/// one-shot count to zero when only recurring arrivals are wanted.
+pub(crate) fn lab_arrival_waves() -> Vec<LabArrivalWave> {
+    if LabScenario::from_environment().is_economy_soak() {
+        return economy_soak_arrival_waves();
+    }
+    let daily_count = std::env::var("FISTWORLD_LAB_DAILY_ARRIVALS")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_DAILY_ARRIVALS)
+        .min(MAX_LAB_ARRIVALS);
+    let daily_days = std::env::var("FISTWORLD_LAB_DAILY_ARRIVAL_DAYS")
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_DAILY_ARRIVAL_DAYS)
+        .min(MAX_LAB_ARRIVALS as u32);
+    let daily_start_day = std::env::var("FISTWORLD_LAB_DAILY_ARRIVAL_START_DAY")
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .unwrap_or(DEFAULT_DAILY_ARRIVAL_START_DAY)
+        .clamp(1, 10_000);
+    build_arrival_waves(
+        lab_arrival_day(),
+        lab_arrival_count(),
+        daily_start_day,
+        daily_days,
+        daily_count,
+    )
 }
 
 fn realworld_point() -> Vec2 {
@@ -354,11 +704,8 @@ fn spawn_runtime_village(
     name: &str,
     hall_position: Vec3,
     resident_count: usize,
-    founding_wood: u32,
-    poor_relief: bool,
 ) {
-    let mut hall_inventory = GoodsInventory::new(shared::economy::capacity::HALL);
-    hall_inventory.add(Good::Wood, founding_wood);
+    let hall_inventory = GoodsInventory::new(shared::economy::capacity::HALL);
     commands.spawn((
         Settlement {
             name: name.to_string(),
@@ -368,11 +715,7 @@ fn spawn_runtime_village(
         },
         hall_inventory,
         shared::economy::MootMarket::founding(),
-        if poor_relief {
-            shared::components::SettlementPolicies::poor_relief()
-        } else {
-            shared::components::SettlementPolicies::default()
-        },
+        shared::components::SettlementPolicies::default(),
         PlayerPosition(hall_position),
         PlayerRotation(0.0),
         Replicate::to_clients(NetworkTarget::All),
@@ -384,6 +727,10 @@ fn spawn_runtime_village(
         villager_seed,
         hall_position,
         resident_count,
+        Vec2::ZERO,
+        None,
+        None,
+        None,
     );
 }
 
@@ -393,67 +740,193 @@ fn spawn_runtime_villagers(
     villager_seed: &mut crate::world::dev::VillagerSeed,
     hall_position: Vec3,
     villager_count: usize,
+    offset: Vec2,
+    obstacles: Option<&shared::spatial::SpatialObstacleGrid>,
+    colliders: Option<&crate::collision::library::StaticColliders>,
+    derived: Option<&crate::collision::library::DerivedColliderLibrary>,
 ) {
     let entrance = SettlementBuildingKind::Hall.entrance_position(hall_position, 0.0);
-    for index in 0..villager_count {
-        let x = entrance.x + (index as f32 - (villager_count as f32 - 1.0) * 0.5) * 0.55;
-        let z = entrance.z - 0.45 - (index % 2) as f32 * 0.45;
+    for _ in 0..villager_count {
+        // Match one god-mode click: the common safe-spawn helper creates the
+        // compact deterministic scatter. This keeps the rendered and headless
+        // labs equivalent even for several hundred simultaneous arrivals.
+        let x = entrance.x + offset.x;
+        let z = entrance.z + offset.y - 0.45;
         villager_seed.0 = villager_seed.0.wrapping_add(1);
-        crate::player::hero::spawn_villager(
-            commands,
-            terrain,
+        let requested = Vec3::new(x, terrain.get_height(x, z), z);
+        let Some(position) = crate::world::dev::safe_villager_spawn_position(
+            requested,
             villager_seed.0,
-            Vec3::new(x, terrain.get_height(x, z), z),
-        );
+            terrain,
+            obstacles,
+            colliders,
+            derived,
+        ) else {
+            warn!(
+                "Village Lab skipped villager {}: no navigable ground within 48 metres of {:?}",
+                villager_seed.0, requested
+            );
+            continue;
+        };
+        crate::player::hero::spawn_villager(commands, terrain, villager_seed.0, position);
     }
 }
 
-/// Optionally introduce a second migration wave on a chosen displayed calendar
-/// day. Day zero is the founding day, so displayed day 2 begins at `day >= 1`.
-/// The arrivals remain uncommitted and must choose, reach and join Lab Meadow
-/// through the ordinary migration systems.
-pub(crate) fn stage_rendered_lab_day_two_arrivals(
+#[derive(Default)]
+pub(crate) struct RenderedLabArrivalState {
+    next_wave: usize,
+}
+
+/// Introduce the configured migration waves. Arrivals remain uncommitted and
+/// must choose, reach and join their target settlement through the ordinary
+/// migration path.
+pub(crate) fn stage_rendered_lab_arrivals(
     mut commands: Commands,
     terrain: Res<WorldTerrain>,
     world_time: Query<&WorldTime>,
     settlements: Query<(&Settlement, &PlayerPosition)>,
+    obstacles: Option<Res<shared::spatial::SpatialObstacleGrid>>,
+    colliders: Option<Res<crate::collision::library::StaticColliders>>,
+    derived: Option<Res<crate::collision::library::DerivedColliderLibrary>>,
     mut villager_seed: ResMut<crate::world::dev::VillagerSeed>,
-    mut staged: Local<bool>,
+    mut state: Local<RenderedLabArrivalState>,
 ) {
-    if *staged || !enabled_flag("FISTWORLD_VILLAGE_LAB_RUNTIME") {
+    if !enabled_flag("FISTWORLD_VILLAGE_LAB_RUNTIME") {
         return;
     }
-    let count = lab_arrival_count();
-    if count == 0 {
-        *staged = true;
+    if LabScenario::from_environment().is_crowd_stress() {
+        return;
+    }
+    let waves = lab_arrival_waves();
+    if state.next_wave >= waves.len() {
         return;
     }
     let Some(clock) = world_time.iter().next() else {
         return;
     };
-    let arrival_day = lab_arrival_day();
-    if clock.day < arrival_day - 1 {
+    if clock.day < waves[state.next_wave].day.saturating_sub(1) {
         return;
     }
-    let Some((_, hall_position)) = settlements
-        .iter()
-        .find(|(settlement, _)| settlement.name == "Lab Meadow")
-    else {
-        warn!("Village Lab arrival wave requested, but the active scenario has no Lab Meadow");
-        *staged = true;
-        return;
-    };
-    spawn_runtime_villagers(
-        &mut commands,
-        &terrain,
-        &mut villager_seed,
-        hall_position.0,
-        count,
-    );
-    *staged = true;
-    info!(
-        "Rendered Village Lab day {arrival_day}: spawned {count} uncommitted arrivals beside Lab Meadow"
-    );
+    while let Some(wave) = waves.get(state.next_wave).copied() {
+        if clock.day < wave.day.saturating_sub(1) {
+            break;
+        }
+        let Some((_, hall_position)) = settlements
+            .iter()
+            .find(|(settlement, _)| settlement.name == wave.target.settlement_name())
+        else {
+            warn!(
+                "Village Lab arrival day {} has no target {}",
+                wave.day,
+                wave.target.settlement_name()
+            );
+            state.next_wave += 1;
+            continue;
+        };
+        spawn_runtime_villagers(
+            &mut commands,
+            &terrain,
+            &mut villager_seed,
+            hall_position.0,
+            wave.count,
+            lab_arrival_offset(),
+            obstacles.as_deref(),
+            colliders.as_deref(),
+            derived.as_deref(),
+        );
+        state.next_wave += 1;
+        info!(
+            "Rendered Village Lab scenario day {}: spawned {} uncommitted arrivals for {} with offset {:.1},{:.1}",
+            wave.day,
+            wave.count,
+            wave.target.settlement_name(),
+            lab_arrival_offset().x,
+            lab_arrival_offset().y,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recurring_arrivals_are_combined_with_a_same_day_single_wave_and_bounded() {
+        assert_eq!(
+            build_arrival_waves(2, 8, 1, 3, 3),
+            vec![
+                LabArrivalWave {
+                    day: 1,
+                    count: 3,
+                    target: LabArrivalTarget::Meadow,
+                },
+                LabArrivalWave {
+                    day: 2,
+                    count: 11,
+                    target: LabArrivalTarget::Meadow,
+                },
+                LabArrivalWave {
+                    day: 3,
+                    count: 3,
+                    target: LabArrivalTarget::Meadow,
+                },
+            ]
+        );
+        assert_eq!(
+            build_arrival_waves(2, MAX_LAB_ARRIVALS, 1, 1, 3)
+                .iter()
+                .map(|wave| wave.count)
+                .sum::<usize>(),
+            MAX_LAB_ARRIVALS
+        );
+    }
+
+    #[test]
+    fn economy_soak_balances_ninety_arrivals_across_three_villages() {
+        let waves = economy_soak_arrival_waves();
+        assert_eq!(waves.iter().map(|wave| wave.count).sum::<usize>(), 90);
+        assert_eq!(waves.iter().map(|wave| wave.day).max(), Some(30));
+        for target in [
+            LabArrivalTarget::Meadow,
+            LabArrivalTarget::Coldbarrow,
+            LabArrivalTarget::Greenwood,
+        ] {
+            assert_eq!(
+                waves
+                    .iter()
+                    .filter(|wave| wave.target == target)
+                    .map(|wave| wave.count)
+                    .sum::<usize>(),
+                30
+            );
+        }
+        assert_eq!(
+            waves
+                .iter()
+                .filter(|wave| wave.day == 1)
+                .map(|wave| wave.count)
+                .sum::<usize>(),
+            10
+        );
+        assert_eq!(
+            waves
+                .iter()
+                .filter(|wave| wave.day == 5)
+                .map(|wave| wave.count)
+                .sum::<usize>(),
+            5
+        );
+        for day in 6..=30 {
+            assert_eq!(
+                waves
+                    .iter()
+                    .filter(|wave| wave.day == day)
+                    .map(|wave| wave.count)
+                    .sum::<usize>(),
+                3
+            );
+        }
+    }
 }
 
 /// Stage the visible lab once when `./run.sh testworld` opts into it.
@@ -528,8 +1001,6 @@ pub(crate) fn stage_rendered_lab_once(
             "Oakfell Stress Lab",
             hall,
             residents,
-            0,
-            false,
         );
         let factor = lab_warp();
         *warp = TimeWarp::clamped(factor);
@@ -554,10 +1025,12 @@ pub(crate) fn stage_rendered_lab_once(
     let Some(mut warp) = warps.iter_mut().next() else {
         return;
     };
-    if settlements
-        .iter()
-        .any(|settlement| matches!(settlement.name.as_str(), "Lab Meadow" | "Lab Coldbarrow"))
-    {
+    if settlements.iter().any(|settlement| {
+        matches!(
+            settlement.name.as_str(),
+            "Lab Meadow" | "Lab Coldbarrow" | "Lab Greenwood"
+        )
+    }) {
         warn!("Rendered Village Lab already exists; skipping duplicate staging");
         *staged = true;
         return;
@@ -570,6 +1043,17 @@ pub(crate) fn stage_rendered_lab_once(
     let poor = scenario
         .includes_poor()
         .then(|| choose_poor_site(&terrain, secure.map(|choice| choice.0)));
+    let greenwood = scenario.includes_greenwood().then(|| {
+        let mut occupied = Vec::new();
+        if let Some(choice) = secure {
+            occupied.push(choice.0);
+        }
+        if let Some(choice) = poor {
+            occupied.push(choice.0);
+        }
+        choose_greenwood_site(&terrain, &occupied)
+    });
+    let residents_per_village = scenario.residents_per_village();
 
     if let Some((hall, trees, hut, rotation, fishing_quality, farmland)) = secure {
         spawn_runtime_village(
@@ -578,9 +1062,7 @@ pub(crate) fn stage_rendered_lab_once(
             &mut villager_seed,
             "Lab Meadow",
             hall,
-            SECURE_VILLAGERS,
-            FOUNDING_WOOD,
-            true,
+            residents_per_village,
         );
         info!(
             "Rendered lab staged Lab Meadow at ({:.1}, {:.1}) — farmland {:.0}%, trees {}, fishing {:.0}% at ({:.1}, {:.1}) rotation {:.3}",
@@ -601,12 +1083,27 @@ pub(crate) fn stage_rendered_lab_once(
             &mut villager_seed,
             "Lab Coldbarrow",
             hall,
-            POOR_VILLAGERS,
-            FOUNDING_WOOD,
-            true,
+            residents_per_village,
         );
         info!(
             "Rendered lab staged Lab Coldbarrow at ({:.1}, {:.1}) — farmland {:.1}%, trees {}, fishing none",
+            hall.x,
+            hall.z,
+            farmland * 100.0,
+            trees,
+        );
+    }
+    if let Some((hall, trees, farmland)) = greenwood {
+        spawn_runtime_village(
+            &mut commands,
+            &terrain,
+            &mut villager_seed,
+            "Lab Greenwood",
+            hall,
+            residents_per_village,
+        );
+        info!(
+            "Rendered lab staged Lab Greenwood at ({:.1}, {:.1}) — farmland {:.0}%, trees {}",
             hall.x,
             hall.z,
             farmland * 100.0,
@@ -643,8 +1140,15 @@ struct VillageTraceCounts {
     farmer_routines: usize,
     fishing_routines: usize,
     lumberjack_routines: usize,
+    processing_routines: usize,
+    moot_queue: usize,
+    immigration_queue: usize,
+    permit_queue: usize,
+    food_queue: usize,
     carried_food: u32,
     carried_wheat: u32,
+    carried_flour: u32,
+    carried_bread: u32,
     carried_wood: u32,
 }
 
@@ -665,6 +1169,7 @@ pub(crate) fn log_rendered_village_diagnostics(
     sites: Query<&village::UnderConstruction>,
     roads: Query<&VillageRoad>,
     villagers: Query<(
+        &CharacterName,
         &village::VillagerIntent,
         Option<&CharacterActivity>,
         Option<&crate::player::hero::MoveTarget>,
@@ -675,7 +1180,17 @@ pub(crate) fn log_rendered_village_diagnostics(
         Option<&village::FarmerRoutine>,
         Option<&village::FishingRoutine>,
         Option<&village::LumberjackRoutine>,
+        Has<village::HomeRoutine>,
+        Has<village::HouseholdShoppingRoutine>,
+        Has<village::MarketCollectionRoutine>,
+        Has<village::ConstructionMaterialRoutine>,
     )>,
+    processors: Query<(
+        &village::VillagerIntent,
+        Option<&CharacterActivity>,
+        &village::ProcessingRoutine,
+    )>,
+    moot_services: Query<&village::MootQueueTicket>,
     world_time: Query<&WorldTime>,
     mut last_log: Local<Option<std::time::Instant>>,
 ) {
@@ -689,9 +1204,35 @@ pub(crate) fn log_rendered_village_diagnostics(
     *last_log = Some(now);
 
     let mut by_settlement = std::collections::HashMap::<Entity, VillageTraceCounts>::new();
+    for ticket in moot_services.iter() {
+        let counts = by_settlement.entry(ticket.hall).or_default();
+        counts.moot_queue += 1;
+        match ticket.kind {
+            village::MootServiceKind::Immigration => counts.immigration_queue += 1,
+            village::MootServiceKind::Permit => counts.permit_queue += 1,
+            village::MootServiceKind::HouseholdShopping
+            | village::MootServiceKind::PersonalMeal
+            | village::MootServiceKind::PoorRelief => counts.food_queue += 1,
+        }
+    }
     let mut unaffiliated = 0usize;
-    for (intent, activity, moving, pending, failed, route, inventory, farmer, fisher, lumberjack) in
-        villagers.iter()
+    for (
+        name,
+        intent,
+        activity,
+        moving,
+        pending,
+        failed,
+        route,
+        inventory,
+        farmer,
+        fisher,
+        lumberjack,
+        home,
+        shopping,
+        market_collection,
+        construction,
+    ) in villagers.iter()
     {
         let Some(settlement) = intent.settlement() else {
             unaffiliated += 1;
@@ -707,6 +1248,29 @@ pub(crate) fn log_rendered_village_diagnostics(
         counts.route_pending += usize::from(pending.is_some());
         counts.route_exhausted += usize::from(pending.is_some_and(|pending| pending.exhausted()));
         counts.route_failed += usize::from(failed.is_some());
+        if let Some(failed) = failed {
+            let owner = if home {
+                "home"
+            } else if shopping {
+                "household-shopping"
+            } else if market_collection {
+                "market-collection"
+            } else if construction {
+                "construction"
+            } else if farmer.is_some() {
+                "farming"
+            } else if fisher.is_some() {
+                "fishing"
+            } else if lumberjack.is_some() {
+                "lumberjack"
+            } else {
+                "unowned"
+            };
+            warn!(
+                "VillageTrace unresolved route failure actor='{}' owner={} goal={:.1},{:.1}",
+                name.0, owner, failed.goal.x, failed.goal.z,
+            );
+        }
         counts.routed += usize::from(route.is_some());
         counts.indoors +=
             usize::from(activity.is_some_and(|activity| *activity == CharacterActivity::Indoors));
@@ -735,10 +1299,25 @@ pub(crate) fn log_rendered_village_diagnostics(
             counts.carried_wheat = counts
                 .carried_wheat
                 .saturating_add(inventory.amount(Good::Wheat));
+            counts.carried_flour = counts
+                .carried_flour
+                .saturating_add(inventory.amount(Good::Flour));
+            counts.carried_bread = counts
+                .carried_bread
+                .saturating_add(inventory.amount(Good::Bread));
             counts.carried_wood = counts
                 .carried_wood
                 .saturating_add(inventory.amount(Good::Wood));
         }
+    }
+    for (intent, activity, _) in processors.iter() {
+        let Some(settlement) = intent.settlement() else {
+            continue;
+        };
+        let counts = by_settlement.entry(settlement).or_default();
+        counts.processing_routines += 1;
+        counts.working +=
+            usize::from(activity.is_some_and(|activity| *activity == CharacterActivity::Indoors));
     }
 
     let day = world_time.iter().next().map_or(0, |clock| clock.day);
@@ -750,6 +1329,8 @@ pub(crate) fn log_rendered_village_diagnostics(
             .count();
         let mut workplace_food = 0u32;
         let mut workplace_wheat = 0u32;
+        let mut workplace_flour = 0u32;
+        let mut workplace_bread = 0u32;
         let mut workplace_wood = 0u32;
         for (_, inventory) in buildings
             .iter()
@@ -758,6 +1339,8 @@ pub(crate) fn log_rendered_village_diagnostics(
             if let Some(inventory) = inventory {
                 workplace_food = workplace_food.saturating_add(inventory.amount(Good::Food));
                 workplace_wheat = workplace_wheat.saturating_add(inventory.amount(Good::Wheat));
+                workplace_flour = workplace_flour.saturating_add(inventory.amount(Good::Flour));
+                workplace_bread = workplace_bread.saturating_add(inventory.amount(Good::Bread));
                 workplace_wood = workplace_wood.saturating_add(inventory.amount(Good::Wood));
             }
         }
@@ -775,7 +1358,7 @@ pub(crate) fn log_rendered_village_diagnostics(
             complete_roads += usize::from(road.is_complete());
         }
         info!(
-            "VillageTrace '{}' day={} tier={:?} pop={} embodied={} immigrating={} failed_immigrants={} buildings={} sites={} roads={}/{} moving={} working={} farming={} fishing={} chopping={} routines={}/{}/{} indoors={} routed={} route_pending={} route_failed={} exhausted={} hall_food={} hall_wheat={} hall_wood={} workplace_food={} workplace_wheat={} workplace_wood={} carried_food={} carried_wheat={} carried_wood={} market_cash_food={} market_cash_wheat={} market_cash_wood={} reserve_days={:.2} steward={} audit_roadless={} audit_disconnected={} audit_pending={} wage_arrears={} unaffiliated={}",
+            "VillageTrace '{}' day={} tier={:?} pop={} embodied={} immigrating={} failed_immigrants={} buildings={} sites={} roads={}/{} moving={} working={} farming={} fishing={} chopping={} routines={}/{}/{}/{} moot_queue={} immigration_queue={} permit_queue={} food_queue={} indoors={} routed={} route_pending={} route_failed={} exhausted={} hall_fish={} hall_wheat={} hall_flour={} hall_bread={} hall_wood={} workplace_fish={} workplace_wheat={} workplace_flour={} workplace_bread={} workplace_wood={} carried_fish={} carried_wheat={} carried_flour={} carried_bread={} carried_wood={} listed_fish={} listed_wheat={} listed_flour={} listed_bread={} listed_wood={} reserve_days={:.2} steward={} audit_roadless={} audit_disconnected={} audit_pending={} wage_arrears={} unaffiliated={}",
             settlement.name,
             day,
             settlement.tier,
@@ -795,6 +1378,11 @@ pub(crate) fn log_rendered_village_diagnostics(
             counts.farmer_routines,
             counts.fishing_routines,
             counts.lumberjack_routines,
+            counts.processing_routines,
+            counts.moot_queue,
+            counts.immigration_queue,
+            counts.permit_queue,
+            counts.food_queue,
             counts.indoors,
             counts.routed,
             counts.route_pending,
@@ -802,16 +1390,24 @@ pub(crate) fn log_rendered_village_diagnostics(
             counts.route_exhausted,
             hall.amount(Good::Food),
             hall.amount(Good::Wheat),
+            hall.amount(Good::Flour),
+            hall.amount(Good::Bread),
             hall.amount(Good::Wood),
             workplace_food,
             workplace_wheat,
+            workplace_flour,
+            workplace_bread,
             workplace_wood,
             counts.carried_food,
             counts.carried_wheat,
+            counts.carried_flour,
+            counts.carried_bread,
             counts.carried_wood,
-            market.pool(Good::Food).cash,
-            market.pool(Good::Wheat).cash,
-            market.pool(Good::Wood).cash,
+            market.listed_units(Good::Food),
+            market.listed_units(Good::Wheat),
+            market.listed_units(Good::Flour),
+            market.listed_units(Good::Bread),
+            market.listed_units(Good::Wood),
             economy.map_or(0.0, |economy| economy.reserve_days),
             administration
                 .and_then(|administration| administration.road_steward.as_deref())

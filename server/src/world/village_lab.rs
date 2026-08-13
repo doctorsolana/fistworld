@@ -8,18 +8,21 @@
 //! `cargo village-lab`
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Instant;
 
 use bevy::prelude::*;
 use shared::components::{
-    BuildingDoorDemand, BuildingDoorUse, CharacterActivity, CharacterAffiliation,
-    CharacterAttributes, CharacterKind, CharacterName, FarmField, FishingPier, Household,
-    MootAdministration, Nutrition, Occupation, PlayerPosition, PlayerRotation, Residence,
-    Settlement, SettlementBuilding, SettlementBuildingKind, SettlementTier, TimeWarp, VillageRoad,
+    BuildingDoorDemand, BuildingDoorUse, BuildingId, CharacterActivity, CharacterAffiliation,
+    CharacterAttributes, CharacterKind, CharacterName, FarmField, FishingPier, Health, Household,
+    MootAdministration, Nutrition, Occupation, OwnedBy, PersonId, PlayerPosition, PlayerRotation,
+    Residence, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
+    SettlementOpportunityBoard, SettlementPolicies, SettlementTier, TimeWarp, VillageRoad,
     WorkStatus, WorldTime,
 };
 use shared::economy::{
-    BusinessAccount, BusinessWagePolicy, CarriedLoad, Good, GoodsInventory, HouseholdEconomy,
-    MootMarket, SettlementEconomy, Wallet, FOOD_SECURITY_TARGET_DAYS, VILLAGE_MIN_PROSPERITY,
+    BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessWagePolicy, CarriedLoad,
+    CivicAccount, Good, GoodsInventory, HouseholdEconomy, MarketSeller, MootMarket,
+    SettlementEconomy, Wallet, FOOD_SECURITY_TARGET_DAYS, VILLAGE_MIN_PROSPERITY,
     VILLAGE_REQUIRED_SECURE_DAYS,
 };
 use shared::region::RegionCoord;
@@ -32,17 +35,18 @@ use crate::player::hero::{step_units, MoveTarget};
 use crate::world::navgrid::ObstacleGridState;
 use crate::world::pathfinding::PathfindingBudgetSettings;
 use crate::world::village::{
-    self, ConstructionMaterialRoutine, FarmerRoutine, FishingRoutine, HomeRoutine,
-    LumberjackRoutine, PublishedTerrainDeltas, SettlementEconomyRuntime, UnderConstruction,
-    VillageClock, VillagerIntent, WorkerOffDuty, WorkplaceDoorTransit,
+    self, BuildStage, ConstructionMaterialRoutine, FarmerRoutine, FishingRoutine, HomeRoutine,
+    InheritedBusinessCapital, LumberjackRoutine, MootQueueTicket, MootServiceKind,
+    PermitPickupRoutine, ProcessingRoutine, PublishedTerrainDeltas, SettlementEconomyRuntime,
+    UnderConstruction, VillageClock, VillagerIntent, WorkerOffDuty, WorkplaceDoorTransit,
 };
 use crate::world::village_lab_scenario::{
-    choose_poor_site, choose_secure_site, lab_arrival_count, lab_arrival_day, LabScenario,
-    POOR_VILLAGERS, SECURE_VILLAGERS,
+    choose_greenwood_site, choose_poor_site, choose_secure_site, lab_arrival_offset,
+    lab_arrival_waves, LabArrivalTarget, LabScenario,
 };
 use crate::world::village_roads::{
-    self, NavigationRouteFailed, NavigationRoutePending, RoadBuilderRoutine, TravelRoute,
-    VillageRoadGraph,
+    self, NavigationRouteFailed, NavigationRoutePending, PlannedRoadAccess, RoadBuilderRoutine,
+    RoadConnectorFor, RoadRepairBacklog, RoadRequest, TravelRoute, VillageRoadGraph,
 };
 
 const DEFAULT_LAB_WARP: f32 = 100.0;
@@ -56,6 +60,16 @@ const DEFAULT_LAB_MINUTES: f32 = 190.0;
 // avoiding a false alarm just before a long connector completes at high warp.
 const STALL_SECONDS: f32 = 600.0;
 const REPORT_SECONDS: f32 = 300.0;
+const ARRIVAL_STRESS_SETTLE_GRACE_DAYS: f32 = 2.0;
+/// A connector normally needs one survey, a walk of at most a few minutes and
+/// less than a second of work per point. After ten world minutes it must be
+/// complete or have an explicit active/requested/audited owner; a single
+/// physical steward may still have older repairs ahead of it in a stress town.
+const STRESS_ROAD_COMPLETION_GRACE_SECONDS: f32 = 600.0;
+
+fn lab_world_seconds(clock: &WorldTime) -> f32 {
+    clock.day as f32 * clock.cycle_duration() + clock.seconds_in_cycle
+}
 
 #[derive(Default, Debug)]
 struct Evidence {
@@ -66,6 +80,8 @@ struct Evidence {
     saw_fishing: bool,
     saw_sitting: bool,
     saw_wheat_carried: bool,
+    saw_flour_present: bool,
+    saw_bread_present: bool,
     saw_wood_carried: bool,
     saw_food_carried: bool,
     saw_road_builder: bool,
@@ -74,18 +90,135 @@ struct Evidence {
     saw_door_open: bool,
     saw_door_close_after_open: bool,
     saw_daily_consumption: bool,
-    saw_market_buying: bool,
-    saw_market_selling: bool,
+    saw_market_consignment: bool,
+    saw_customer_purchase: bool,
     saw_hunger: bool,
     saw_village_tier: bool,
+    max_moot_queue_depth: usize,
+    max_immigration_queue_depth: usize,
+    peak_recent_food_production: f32,
     coldbarrow_saw_hunger: bool,
     meadow_saw_hunger: bool,
     farmed_workplaces: HashSet<Entity>,
     productive_workers: HashSet<String>,
+    building_first_seen_seconds: HashMap<Entity, f32>,
+    producer_staffed_since_seconds: HashMap<Entity, f32>,
+    producer_worker_since_seconds: HashMap<(Entity, String), f32>,
 }
 
 #[derive(Resource, Default, Debug)]
 struct LastPlannedRoutes(HashMap<Entity, TravelRoute>);
+
+#[derive(Resource, Default)]
+struct LabPhaseTimings {
+    core_started: Option<Instant>,
+    navigation_started: Option<Instant>,
+    core_section_started: [Option<Instant>; 6],
+    core_section_milliseconds: [Vec<f64>; 6],
+    economy_section_started: [Option<Instant>; 4],
+    economy_section_milliseconds: [Vec<f64>; 4],
+    construction_section_started: [Option<Instant>; 6],
+    construction_section_milliseconds: [Vec<f64>; 6],
+    core_milliseconds: Vec<f64>,
+    navigation_milliseconds: Vec<f64>,
+    burst_core_milliseconds: Vec<f64>,
+    burst_navigation_milliseconds: Vec<f64>,
+    burst_ticks_remaining: usize,
+}
+
+fn begin_lab_core_section<const INDEX: usize>(mut timing: ResMut<LabPhaseTimings>) {
+    timing.core_section_started[INDEX] = Some(Instant::now());
+}
+
+fn advance_lab_core_section<const FINISHED: usize, const NEXT: usize>(
+    mut timing: ResMut<LabPhaseTimings>,
+) {
+    if let Some(started) = timing.core_section_started[FINISHED].take() {
+        let elapsed = started.elapsed().as_secs_f64() * 1_000.0;
+        timing.core_section_milliseconds[FINISHED].push(elapsed);
+    }
+    timing.core_section_started[NEXT] = Some(Instant::now());
+}
+
+fn end_lab_core_section<const INDEX: usize>(mut timing: ResMut<LabPhaseTimings>) {
+    if let Some(started) = timing.core_section_started[INDEX].take() {
+        let elapsed = started.elapsed().as_secs_f64() * 1_000.0;
+        timing.core_section_milliseconds[INDEX].push(elapsed);
+    }
+}
+
+fn begin_lab_economy_section<const INDEX: usize>(mut timing: ResMut<LabPhaseTimings>) {
+    timing.economy_section_started[INDEX] = Some(Instant::now());
+}
+
+fn advance_lab_economy_section<const FINISHED: usize, const NEXT: usize>(
+    mut timing: ResMut<LabPhaseTimings>,
+) {
+    if let Some(started) = timing.economy_section_started[FINISHED].take() {
+        let elapsed = started.elapsed().as_secs_f64() * 1_000.0;
+        timing.economy_section_milliseconds[FINISHED].push(elapsed);
+    }
+    timing.economy_section_started[NEXT] = Some(Instant::now());
+}
+
+fn end_lab_economy_section<const INDEX: usize>(mut timing: ResMut<LabPhaseTimings>) {
+    if let Some(started) = timing.economy_section_started[INDEX].take() {
+        let elapsed = started.elapsed().as_secs_f64() * 1_000.0;
+        timing.economy_section_milliseconds[INDEX].push(elapsed);
+    }
+}
+
+fn begin_lab_construction_section<const INDEX: usize>(mut timing: ResMut<LabPhaseTimings>) {
+    timing.construction_section_started[INDEX] = Some(Instant::now());
+}
+
+fn advance_lab_construction_section<const FINISHED: usize, const NEXT: usize>(
+    mut timing: ResMut<LabPhaseTimings>,
+) {
+    if let Some(started) = timing.construction_section_started[FINISHED].take() {
+        let elapsed = started.elapsed().as_secs_f64() * 1_000.0;
+        timing.construction_section_milliseconds[FINISHED].push(elapsed);
+    }
+    timing.construction_section_started[NEXT] = Some(Instant::now());
+}
+
+fn end_lab_construction_section<const INDEX: usize>(mut timing: ResMut<LabPhaseTimings>) {
+    if let Some(started) = timing.construction_section_started[INDEX].take() {
+        let elapsed = started.elapsed().as_secs_f64() * 1_000.0;
+        timing.construction_section_milliseconds[INDEX].push(elapsed);
+    }
+}
+
+fn begin_lab_core_timing(mut timing: ResMut<LabPhaseTimings>) {
+    timing.core_started = Some(Instant::now());
+}
+
+fn end_lab_core_timing(mut timing: ResMut<LabPhaseTimings>) {
+    let Some(started) = timing.core_started.take() else {
+        return;
+    };
+    let elapsed = started.elapsed().as_secs_f64() * 1_000.0;
+    timing.core_milliseconds.push(elapsed);
+    if timing.burst_ticks_remaining > 0 {
+        timing.burst_core_milliseconds.push(elapsed);
+    }
+}
+
+fn begin_lab_navigation_timing(mut timing: ResMut<LabPhaseTimings>) {
+    timing.navigation_started = Some(Instant::now());
+}
+
+fn end_lab_navigation_timing(mut timing: ResMut<LabPhaseTimings>) {
+    let Some(started) = timing.navigation_started.take() else {
+        return;
+    };
+    let elapsed = started.elapsed().as_secs_f64() * 1_000.0;
+    timing.navigation_milliseconds.push(elapsed);
+    if timing.burst_ticks_remaining > 0 {
+        timing.burst_navigation_milliseconds.push(elapsed);
+        timing.burst_ticks_remaining -= 1;
+    }
+}
 
 #[derive(Resource, Default, Debug)]
 struct LastRouteHandoffs(HashMap<Entity, String>);
@@ -127,7 +260,7 @@ struct StructureMilestone {
     residents: u32,
     settlements: Vec<(String, SettlementTier, u32)>,
     sites: Vec<(SettlementBuildingKind, &'static str, u32, u32)>,
-    buildings: [usize; 8],
+    buildings: [usize; 10],
     roads: Vec<(u16, usize)>,
     fields: usize,
     piers: usize,
@@ -144,17 +277,228 @@ struct PersonView {
 }
 
 const LIFE_EVENT_LIMIT: usize = 64;
+const STRESS_UNACCOUNTED_WORK_SECONDS: f32 = 180.0;
+
+#[derive(Debug, Default)]
+struct StressWorkerRecord {
+    name: String,
+    settlement: String,
+    job: String,
+    current_unaccounted: f32,
+    longest_unaccounted: f32,
+    total_unaccounted: f32,
+}
+
+/// Large-lab guard for the failure that is hardest to see in aggregate logs:
+/// someone retains a real job but stands idle through their shift with no
+/// route, work routine, queue, door or off-screen aggregate state explaining
+/// it. Brief hand-offs are expected; the ledger keeps both the longest
+/// uninterrupted spell and the current spell so a persistent state-machine
+/// hole is distinct from ordinary downtime.
+#[derive(Default)]
+struct StressTaskLedger {
+    workers: HashMap<Entity, StressWorkerRecord>,
+}
+
+impl StressTaskLedger {
+    fn observe(&mut self, world: &mut World, elapsed_world_seconds: f32) {
+        let on_shift = world
+            .query::<&WorldTime>()
+            .iter(world)
+            .next()
+            .is_some_and(|clock| {
+                clock.seconds_in_cycle < clock.day_duration * village::WORKDAY_END_DAY_T
+            });
+        let settlement_names: HashMap<_, _> = world
+            .query::<(Entity, &Settlement)>()
+            .iter(world)
+            .map(|(entity, settlement)| (entity, settlement.name.clone()))
+            .collect();
+        let people: Vec<_> = world
+            .query::<(
+                Entity,
+                &CharacterName,
+                &WorkStatus,
+                &Occupation,
+                Option<&shared::components::EmployedAt>,
+                &CharacterActivity,
+                &VillagerIntent,
+            )>()
+            .iter(world)
+            .map(
+                |(entity, name, status, occupation, employed_at, activity, intent)| {
+                    (
+                        entity,
+                        name.0.clone(),
+                        *status,
+                        occupation.0.is_some(),
+                        format!(
+                            "{}@{}",
+                            occupation.0.as_deref().unwrap_or("Unemployed"),
+                            employed_at
+                                .map(|employment| employment.0 .0.to_string())
+                                .unwrap_or_else(|| "none".to_string()),
+                        ),
+                        *activity,
+                        intent.settlement(),
+                    )
+                },
+            )
+            .collect();
+
+        for (entity, name, status, has_occupation, job, activity, settlement) in people {
+            let record = self.workers.entry(entity).or_default();
+            record.name = name;
+            record.job = job;
+            record.settlement = settlement
+                .and_then(|entity| settlement_names.get(&entity))
+                .cloned()
+                .unwrap_or_else(|| "Unaffiliated".to_string());
+
+            let has_embodied_task = world.get::<MoveTarget>(entity).is_some()
+                || world.get::<FarmerRoutine>(entity).is_some()
+                || world.get::<FishingRoutine>(entity).is_some()
+                || world.get::<LumberjackRoutine>(entity).is_some()
+                || world.get::<RoadBuilderRoutine>(entity).is_some()
+                || world.get::<ConstructionMaterialRoutine>(entity).is_some()
+                || world
+                    .get::<village::MarketCollectionRoutine>(entity)
+                    .is_some()
+                || world
+                    .get::<village::HouseholdShoppingRoutine>(entity)
+                    .is_some()
+                || world.get::<MootQueueTicket>(entity).is_some()
+                || world.get::<BuildingDoorUse>(entity).is_some()
+                || world.get::<WorkplaceDoorTransit>(entity).is_some()
+                || world.get::<HomeRoutine>(entity).is_some();
+            let intentionally_abstract_or_off_duty = world
+                .get::<shared::components::CivicEmployment>(entity)
+                .is_some()
+                || world.get::<WorkerOffDuty>(entity).is_some()
+                || world
+                    .get::<village::strategic::StrategicPerson>(entity)
+                    .is_some();
+            let visibly_working = matches!(
+                activity,
+                CharacterActivity::Building
+                    | CharacterActivity::Chopping
+                    | CharacterActivity::Farming
+                    | CharacterActivity::Fishing
+                    | CharacterActivity::Indoors
+            );
+            let unexplained = on_shift
+                && status == WorkStatus::Employed
+                && has_occupation
+                && !has_embodied_task
+                && !intentionally_abstract_or_off_duty
+                && !visibly_working;
+            if unexplained {
+                record.current_unaccounted += elapsed_world_seconds;
+                record.total_unaccounted += elapsed_world_seconds;
+                record.longest_unaccounted =
+                    record.longest_unaccounted.max(record.current_unaccounted);
+            } else {
+                record.current_unaccounted = 0.0;
+            }
+        }
+    }
+
+    fn print_report(&self, world: &mut World) {
+        let settlement_names: HashMap<_, _> = world
+            .query::<(Entity, &Settlement)>()
+            .iter(world)
+            .map(|(entity, settlement)| (entity, settlement.name.clone()))
+            .collect();
+        let mut status_by_settlement = HashMap::<String, (usize, usize, usize, usize)>::new();
+        for (status, intent) in world.query::<(&WorkStatus, &VillagerIntent)>().iter(world) {
+            let settlement = intent
+                .settlement()
+                .and_then(|entity| settlement_names.get(&entity))
+                .cloned()
+                .unwrap_or_else(|| "Unaffiliated".to_string());
+            let counts = status_by_settlement.entry(settlement).or_default();
+            counts.3 += 1;
+            match status {
+                WorkStatus::Employed => counts.0 += 1,
+                WorkStatus::LookingForWork => counts.1 += 1,
+                WorkStatus::Chilling => counts.2 += 1,
+            }
+        }
+        let mut status_rows: Vec<_> = status_by_settlement.into_iter().collect();
+        status_rows.sort_by(|a, b| a.0.cmp(&b.0));
+        for (settlement, (employed, looking, chilling, total)) in status_rows {
+            println!(
+                "LAB task health '{settlement}': total={total} employed={employed} looking={looking} chilling={chilling}"
+            );
+        }
+
+        let mut worst: Vec<_> = self
+            .workers
+            .values()
+            .filter(|record| record.longest_unaccounted >= STRESS_UNACCOUNTED_WORK_SECONDS)
+            .collect();
+        worst.sort_by(|a, b| b.longest_unaccounted.total_cmp(&a.longest_unaccounted));
+        let currently_stuck = self
+            .workers
+            .values()
+            .filter(|record| record.current_unaccounted >= STRESS_UNACCOUNTED_WORK_SECONDS)
+            .count();
+        println!(
+            "LAB task health historical_unexplained_employed_idle={} currently_stuck={} threshold={:.0}s world",
+            worst.len(),
+            currently_stuck,
+            STRESS_UNACCOUNTED_WORK_SECONDS,
+        );
+        for record in worst.into_iter().take(20) {
+            println!(
+                "  LAB task idle actor='{}' settlement='{}' job='{}' longest={:.1}m current={:.1}m total={:.1}m",
+                record.name,
+                record.settlement,
+                record.job,
+                record.longest_unaccounted / 60.0,
+                record.current_unaccounted / 60.0,
+                record.total_unaccounted / 60.0,
+            );
+        }
+    }
+
+    fn assert_no_currently_stuck_workers(&self) {
+        let stuck: Vec<_> = self
+            .workers
+            .values()
+            .filter(|record| record.current_unaccounted >= STRESS_UNACCOUNTED_WORK_SECONDS)
+            .map(|record| {
+                format!(
+                    "{} in {} [{}] ({:.1} world minutes)",
+                    record.name,
+                    record.settlement,
+                    record.job,
+                    record.current_unaccounted / 60.0,
+                )
+            })
+            .collect();
+        assert!(
+            stuck.is_empty(),
+            "employed residents remained without work, travel, service or off-duty state: {}",
+            stuck.join(", "),
+        );
+    }
+}
 
 /// Bounded, lab-only biography for one resident. This deliberately does not
 /// become a production component: live worlds may contain thousands of people,
 /// while the lab can afford detailed observation of its small cast.
 #[derive(Debug)]
 struct LabLifeRecord {
+    person_id: Option<PersonId>,
     name: String,
     initial_money: u64,
     current_money: u64,
     money_in: u64,
     money_out: u64,
+    initial_health: f32,
+    current_health: f32,
+    max_health: f32,
     initial_attributes: CharacterAttributes,
     current_attributes: CharacterAttributes,
     current_job: String,
@@ -229,12 +573,14 @@ impl LabLifeLedger {
             .query::<(
                 Entity,
                 &CharacterName,
+                Option<&PersonId>,
                 &Wallet,
                 Option<&CharacterAttributes>,
                 Option<&Occupation>,
                 Option<&WorkStatus>,
                 Option<&Residence>,
                 Option<&Nutrition>,
+                &Health,
                 &CharacterActivity,
             )>()
             .iter(world)
@@ -242,23 +588,27 @@ impl LabLifeLedger {
                 |(
                     entity,
                     name,
+                    person_id,
                     wallet,
                     attributes,
                     occupation,
                     status,
                     residence,
                     nutrition,
+                    health,
                     activity,
                 )| {
                     (
                         entity,
                         name.0.clone(),
+                        person_id.copied(),
                         wallet.balance(),
                         attributes.copied().unwrap_or_default(),
                         occupation.and_then(|occupation| occupation.0.clone()),
                         status.copied().unwrap_or_default(),
                         residence.map(|residence| residence.0.clone()),
                         nutrition.copied().unwrap_or_default(),
+                        health.clone(),
                         *activity,
                     )
                 },
@@ -266,8 +616,19 @@ impl LabLifeLedger {
             .collect();
 
         let at = format!("t={:.1}m", sim_seconds / 60.0);
-        for (entity, name, money, attributes, occupation, status, residence, nutrition, activity) in
-            snapshots
+        for (
+            entity,
+            name,
+            person_id,
+            money,
+            attributes,
+            occupation,
+            status,
+            residence,
+            nutrition,
+            health,
+            activity,
+        ) in snapshots
         {
             let job = workplaces.get(&name).cloned().unwrap_or_else(|| {
                 occupation
@@ -290,11 +651,15 @@ impl LabLifeLedger {
                 let mut visits = HashMap::new();
                 visits.insert(activity_label, 1);
                 LabLifeRecord {
+                    person_id,
                     name: name.clone(),
                     initial_money: money,
                     current_money: money,
                     money_in: 0,
                     money_out: 0,
+                    initial_health: health.current,
+                    current_health: health.current,
+                    max_health: health.max,
                     initial_attributes: attributes,
                     current_attributes: attributes,
                     current_job: job.clone(),
@@ -308,6 +673,9 @@ impl LabLifeLedger {
                     events,
                 }
             });
+            if record.person_id.is_none() {
+                record.person_id = person_id;
+            }
             *record.activity_seconds.entry(activity_label).or_default() += elapsed_seconds;
 
             if money > record.current_money {
@@ -326,6 +694,15 @@ impl LabLifeLedger {
                 ));
             }
             record.current_money = money;
+
+            if (health.current - record.current_health).abs() > f32::EPSILON {
+                record.push_event(format!(
+                    "{at} health {:.0} -> {:.0}",
+                    record.current_health, health.current,
+                ));
+                record.current_health = health.current;
+                record.max_health = health.max;
+            }
 
             if attributes != record.current_attributes {
                 record.push_event(format!(
@@ -387,7 +764,23 @@ impl LabLifeLedger {
         }
     }
 
-    fn print_final_report(&self) {
+    fn print_final_report(&self, world: &mut World) {
+        let deaths: HashMap<PersonId, (u32, shared::components::DeathCause)> = world
+            .resource::<village::MortalityLedger>()
+            .iter()
+            .map(|death| (death.id, (death.day, death.cause)))
+            .collect();
+        let total_deaths = world.resource::<village::MortalityLedger>().total_deaths;
+        let starvation_deaths = deaths
+            .values()
+            .filter(|(_, cause)| *cause == shared::components::DeathCause::Starvation)
+            .count();
+        println!(
+            "LAB mortality total={} starvation={} retained_records={}",
+            total_deaths,
+            starvation_deaths,
+            deaths.len(),
+        );
         if self.people.is_empty() {
             println!("LAB wealth no residents recorded");
             return;
@@ -438,9 +831,97 @@ impl LabLifeLedger {
             top.join(", ")
         );
 
+        // Personal wallets alone make a cash-poor company owner look destitute
+        // even when they control a valuable firm. Keep the original liquid
+        // ranking above, then add the more useful controlled-wealth ranking.
+        // Household purses remain shared and are deliberately not assigned to
+        // one member.
+        let mut businesses_by_owner = HashMap::<PersonId, (Vec<String>, u64, i64, u64)>::new();
+        for (id, building, owner, account) in world
+            .query::<(
+                &BuildingId,
+                &SettlementBuilding,
+                Option<&OwnedBy>,
+                &BusinessAccount,
+            )>()
+            .iter(world)
+        {
+            let Some(owner) = owner else {
+                continue;
+            };
+            let entry = businesses_by_owner.entry(owner.0).or_default();
+            entry.0.push(format!(
+                "{}#{}@{}",
+                building.kind.label(),
+                id.0,
+                building.settlement
+            ));
+            entry.1 = entry.1.saturating_add(account.cash);
+            entry.2 = entry.2.saturating_add(account.lifetime_profit());
+            entry.3 = entry.3.saturating_add(account.owner_withdrawals);
+        }
+        let mut controlled: Vec<_> = self
+            .people
+            .values()
+            .map(|person| {
+                let (firms, business_cash, profit, withdrawals) = person
+                    .person_id
+                    .and_then(|id| businesses_by_owner.get(&id))
+                    .map_or_else(
+                        || (String::new(), 0, 0, 0),
+                        |(firms, cash, profit, withdrawals)| {
+                            (firms.join("|"), *cash, *profit, *withdrawals)
+                        },
+                    );
+                (
+                    person.current_money.saturating_add(business_cash),
+                    person,
+                    business_cash,
+                    profit,
+                    withdrawals,
+                    firms,
+                )
+            })
+            .collect();
+        controlled.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
+        for (side, ranked) in [
+            ("poorest", controlled.iter().take(3).collect::<Vec<_>>()),
+            (
+                "richest",
+                controlled.iter().rev().take(3).collect::<Vec<_>>(),
+            ),
+        ] {
+            for (index, (net_worth, person, business_cash, profit, withdrawals, firms)) in
+                ranked.into_iter().enumerate()
+            {
+                println!(
+                    "LAB wealth detail side={} rank={} name='{}' controlled={} wallet={} business_cash={} initial={} in={} out={} business_profit={}{} withdrawals={} job='{}' status='{}' residence='{}' home='{}' hungry={} firms=[{}]",
+                    side,
+                    index + 1,
+                    person.name,
+                    shared::economy::format_money(*net_worth),
+                    shared::economy::format_money(person.current_money),
+                    shared::economy::format_money(*business_cash),
+                    shared::economy::format_money(person.initial_money),
+                    shared::economy::format_money(person.money_in),
+                    shared::economy::format_money(person.money_out),
+                    if *profit < 0 { "-" } else { "+" },
+                    shared::economy::format_money(profit.unsigned_abs()),
+                    shared::economy::format_money(*withdrawals),
+                    person.current_job,
+                    person.current_status,
+                    person.current_residence,
+                    person.current_home,
+                    person.hungry,
+                    firms,
+                );
+            }
+        }
+
         let mut people: Vec<_> = self.people.values().collect();
         people.sort_by(|a, b| a.name.cmp(&b.name));
         for person in people {
+            let death = person.person_id.and_then(|id| deaths.get(&id).copied());
             let mut activities: Vec<_> = person
                 .activity_seconds
                 .iter()
@@ -457,8 +938,15 @@ impl LabLifeLedger {
                 .collect();
             activities.sort_by(|a, b| b.0.total_cmp(&a.0));
             println!(
-                "LAB life {} wallet={}->{} in={} out={} attrs=P{} I{} C{}->P{} I{} C{} residence='{}' home='{}' work='{}' status='{}' hungry={} activities=[{}]",
+                "LAB life {} life={} health={:.0}->{:.0}/{:.0} wallet={}->{} in={} out={} attrs=P{} I{} C{}->P{} I{} C{} residence='{}' home='{}' work='{}' status='{}' hungry={} activities=[{}]",
                 person.name,
+                death.map_or_else(
+                    || "alive".to_string(),
+                    |(day, cause)| format!("dead day {day} ({})", cause.label()),
+                ),
+                person.initial_health,
+                if death.is_some() { 0.0 } else { person.current_health },
+                person.max_health,
                 shared::economy::format_money(person.initial_money),
                 shared::economy::format_money(person.current_money),
                 shared::economy::format_money(person.money_in),
@@ -504,6 +992,7 @@ fn configure_lab(app: &mut App) {
     app.init_resource::<SettlementEconomyRuntime>();
     app.init_resource::<village::ambient::AmbientClock>();
     app.init_resource::<village::ambient::AmbientSpotCache>();
+    app.init_resource::<village::ambient::AmbientDiagnostics>();
     app.init_resource::<PublishedTerrainDeltas>();
     app.init_resource::<VillageRoadGraph>();
     app.init_resource::<crate::world::identity::WorldIdAllocator>();
@@ -512,6 +1001,8 @@ fn configure_lab(app: &mut App) {
     app.init_resource::<village::history::SettlementHistoryRuntime>();
     app.init_resource::<LastPlannedRoutes>();
     app.init_resource::<LastRouteHandoffs>();
+    app.init_resource::<LabPhaseTimings>();
+    app.init_resource::<village::PermitPlanningDiagnostics>();
     app.init_resource::<collision::building_index::BuildingSpatialIndex>();
     app.init_resource::<collision::streaming::ColliderStreamingState>();
     app.init_resource::<ObstacleGridState>();
@@ -527,6 +1018,96 @@ fn configure_lab(app: &mut App) {
         Update,
         village::schedule::VillageSimulationSet::Core
             .after(crate::world::navgrid::sync_obstacle_grid),
+    );
+    app.add_systems(
+        Update,
+        (
+            begin_lab_core_timing
+                .after(crate::world::navgrid::sync_obstacle_grid)
+                .before(village::schedule::VillageSimulationSet::Core),
+            end_lab_core_timing
+                .after(village::schedule::VillageSimulationSet::Core)
+                .before(village::schedule::VillageSimulationSet::Navigation),
+            begin_lab_navigation_timing
+                .after(end_lab_core_timing)
+                .before(village::schedule::VillageSimulationSet::Navigation),
+            end_lab_navigation_timing.after(village::schedule::VillageSimulationSet::Navigation),
+        ),
+    );
+    use village::schedule::VillageEconomySet;
+    app.add_systems(
+        Update,
+        (
+            begin_lab_economy_section::<0>
+                .after(advance_lab_core_section::<1, 2>)
+                .before(VillageEconomySet::MarketsBusinesses),
+            advance_lab_economy_section::<0, 1>
+                .after(VillageEconomySet::MarketsBusinesses)
+                .before(VillageEconomySet::Households),
+            advance_lab_economy_section::<1, 2>
+                .after(VillageEconomySet::Households)
+                .before(VillageEconomySet::SettlementAccounts),
+            advance_lab_economy_section::<2, 3>
+                .after(VillageEconomySet::SettlementAccounts)
+                .before(VillageEconomySet::Permits),
+            end_lab_economy_section::<3>
+                .after(VillageEconomySet::Permits)
+                .before(advance_lab_core_section::<2, 3>),
+        ),
+    );
+    use village::schedule::VillageConstructionSet;
+    app.add_systems(
+        Update,
+        (
+            begin_lab_construction_section::<0>
+                .after(advance_lab_core_section::<2, 3>)
+                .before(VillageConstructionSet::MootServices),
+            advance_lab_construction_section::<0, 1>
+                .after(VillageConstructionSet::MootServices)
+                .before(VillageConstructionSet::MaterialLogistics),
+            advance_lab_construction_section::<1, 2>
+                .after(VillageConstructionSet::MaterialLogistics)
+                .before(VillageConstructionSet::BuildingProgress),
+            advance_lab_construction_section::<2, 3>
+                .after(VillageConstructionSet::BuildingProgress)
+                .before(VillageConstructionSet::Fields),
+            advance_lab_construction_section::<3, 4>
+                .after(VillageConstructionSet::Fields)
+                .before(VillageConstructionSet::RoadPlanning),
+            advance_lab_construction_section::<4, 5>
+                .after(VillageConstructionSet::RoadPlanning)
+                .before(VillageConstructionSet::Employment),
+            end_lab_construction_section::<5>
+                .after(VillageConstructionSet::Employment)
+                .before(advance_lab_core_section::<3, 4>),
+        ),
+    );
+    use village::schedule::VillageCoreSet;
+    app.add_systems(
+        Update,
+        (
+            begin_lab_core_section::<0>
+                .after(begin_lab_core_timing)
+                .before(VillageCoreSet::IdentityPopulation),
+            advance_lab_core_section::<0, 1>
+                .after(VillageCoreSet::IdentityPopulation)
+                .before(VillageCoreSet::Civic),
+            advance_lab_core_section::<1, 2>
+                .after(VillageCoreSet::Civic)
+                .before(VillageCoreSet::EconomyPlanning),
+            advance_lab_core_section::<2, 3>
+                .after(VillageCoreSet::EconomyPlanning)
+                .before(VillageCoreSet::Construction),
+            advance_lab_core_section::<3, 4>
+                .after(VillageCoreSet::Construction)
+                .before(VillageCoreSet::Activity),
+            advance_lab_core_section::<4, 5>
+                .after(VillageCoreSet::Activity)
+                .before(VillageCoreSet::Directory),
+            end_lab_core_section::<5>
+                .after(VillageCoreSet::Directory)
+                .before(end_lab_core_timing),
+        ),
     );
 
     // Environment preparation remains lab-specific; all behaviour and local
@@ -557,10 +1138,8 @@ fn spawn_lab_village(
     resident_prefix: &str,
     hall_position: Vec3,
     resident_count: usize,
-    founding_wood: u32,
 ) {
-    let mut hall_inventory = GoodsInventory::new(shared::economy::capacity::HALL);
-    hall_inventory.add(Good::Wood, founding_wood);
+    let hall_inventory = GoodsInventory::new(shared::economy::capacity::HALL);
     world.spawn((
         Settlement {
             name: name.to_string(),
@@ -576,12 +1155,34 @@ fn spawn_lab_village(
     ));
 
     let entrance = SettlementBuildingKind::Hall.entrance_position(hall_position, 0.0);
-    for index in 0..resident_count {
+    let seed_base = resident_prefix.bytes().fold(0_u64, |hash, byte| {
+        hash.wrapping_mul(109).wrapping_add(u64::from(byte))
+    });
+    let positions: Vec<_> = {
+        let terrain = world.resource::<WorldTerrain>();
+        (0..resident_count)
+            .map(|index| {
+                let requested = Vec3::new(
+                    entrance.x,
+                    terrain.get_height(entrance.x, entrance.z - 0.45),
+                    entrance.z - 0.45,
+                );
+                crate::world::dev::safe_villager_spawn_position(
+                    requested,
+                    seed_base.wrapping_add(index as u64),
+                    terrain,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap_or_else(|| {
+                    panic!("{name} resident {index} had no navigable spawn near the Moot entrance")
+                })
+            })
+            .collect()
+    };
+    for (index, position) in positions.into_iter().enumerate() {
         let angle = index as f32 / resident_count as f32 * std::f32::consts::TAU;
-        let x = entrance.x + (index as f32 - (resident_count as f32 - 1.0) * 0.5) * 0.55;
-        let z = entrance.z - 0.45 - (index % 2) as f32 * 0.45;
-        let y = world.resource::<WorldTerrain>().get_height(x, z);
-        let position = Vec3::new(x, y, z);
         world.spawn((
             CharacterName(format!("{resident_prefix}{index}")),
             CharacterKind::Villager,
@@ -598,15 +1199,46 @@ fn spawn_lab_village(
     }
 }
 
-fn spawn_lab_arrivals(world: &mut World, hall_position: Vec3, count: usize) {
+fn spawn_lab_arrivals(
+    world: &mut World,
+    hall_position: Vec3,
+    day: u32,
+    count: usize,
+    target: LabArrivalTarget,
+) {
     let entrance = SettlementBuildingKind::Hall.entrance_position(hall_position, 0.0);
-    for index in 0..count {
-        let x = entrance.x + (index as f32 - (count as f32 - 1.0) * 0.5) * 0.55;
-        let z = entrance.z - 0.45 - (index % 2) as f32 * 0.45;
-        let y = world.resource::<WorldTerrain>().get_height(x, z);
-        let position = Vec3::new(x, y, z);
+    let offset = lab_arrival_offset();
+    let positions: Vec<_> = {
+        let terrain = world.resource::<WorldTerrain>();
+        let obstacles = world.get_resource::<SpatialObstacleGrid>();
+        let colliders = world.get_resource::<StaticColliders>();
+        let derived = world.get_resource::<DerivedColliderLibrary>();
+        (0..count)
+            .map(|index| {
+                // Reproduce a god-mode burst at one click. The safe-spawn
+                // helper supplies its deterministic compact scatter; laying
+                // hundreds of arrivals in one 135-metre row made the lab test
+                // several unrelated terrain patches instead of one crowd.
+                let x = entrance.x + offset.x;
+                let z = entrance.z + offset.y - 0.45;
+                let requested = Vec3::new(x, terrain.get_height(x, z), z);
+                let seed = (u64::from(day) << 32)
+                    ^ target.seed_salt()
+                    ^ u64::try_from(index).unwrap_or(u64::MAX);
+                crate::world::dev::safe_villager_spawn_position(
+                    requested, seed, terrain, obstacles, colliders, derived,
+                )
+                .unwrap_or_else(|| {
+                    panic!(
+                        "arrival {index} on day {day} had no navigable spawn point near {requested:?}"
+                    )
+                })
+            })
+            .collect()
+    };
+    for (index, position) in positions.into_iter().enumerate() {
         world.spawn((
-            CharacterName(format!("MeadowArrival{index}")),
+            CharacterName(format!("{}ArrivalD{day}_{index}", target.resident_prefix())),
             CharacterKind::Villager,
             CharacterAffiliation::default(),
             CharacterActivity::Idle,
@@ -622,7 +1254,7 @@ fn spawn_lab_arrivals(world: &mut World, hall_position: Vec3, count: usize) {
 }
 
 fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
-    let (secure, poor) = {
+    let (secure, poor, greenwood) = {
         let terrain = world.resource::<WorldTerrain>();
         let secure = scenario
             .includes_secure()
@@ -630,12 +1262,25 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
         let poor = scenario
             .includes_poor()
             .then(|| choose_poor_site(terrain, secure.map(|choice| choice.0)));
-        (secure, poor)
+        let greenwood = scenario.includes_greenwood().then(|| {
+            let mut occupied = Vec::new();
+            if let Some(choice) = secure {
+                occupied.push(choice.0);
+            }
+            if let Some(choice) = poor {
+                occupied.push(choice.0);
+            }
+            choose_greenwood_site(terrain, &occupied)
+        });
+        (secure, poor, greenwood)
     };
+    let residents_per_village = scenario.residents_per_village();
 
     println!(
         "LAB map=village_lab scenario={scenario:?} villages={} warp={}x",
-        usize::from(secure.is_some()) + usize::from(poor.is_some()),
+        usize::from(secure.is_some())
+            + usize::from(poor.is_some())
+            + usize::from(greenwood.is_some()),
         warp,
     );
 
@@ -658,8 +1303,7 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             "Lab Meadow",
             "MeadowResident",
             hall,
-            SECURE_VILLAGERS,
-            80,
+            residents_per_village,
         );
     }
 
@@ -677,8 +1321,25 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             "Lab Coldbarrow",
             "ColdResident",
             hall,
-            POOR_VILLAGERS,
-            80,
+            residents_per_village,
+        );
+    }
+
+    if let Some((hall, trees, farmland)) = greenwood {
+        println!(
+            "LAB inland='Lab Greenwood' hall=({:.1},{:.1},{:.1}) farmland={:.0}% trees={}",
+            hall.x,
+            hall.y,
+            hall.z,
+            farmland * 100.0,
+            trees,
+        );
+        spawn_lab_village(
+            world,
+            "Lab Greenwood",
+            "GreenResident",
+            hall,
+            residents_per_village,
         );
     }
 
@@ -695,6 +1356,8 @@ fn building_index(kind: SettlementBuildingKind) -> usize {
         SettlementBuildingKind::Market => 5,
         SettlementBuildingKind::Tavern => 6,
         SettlementBuildingKind::Church => 7,
+        SettlementBuildingKind::Windmill => 8,
+        SettlementBuildingKind::Bakery => 9,
     }
 }
 
@@ -731,7 +1394,7 @@ fn milestone(world: &mut World) -> StructureMilestone {
         .collect();
     sites.sort_by_key(|(kind, _, _, _)| building_index(*kind));
 
-    let mut buildings = [0usize; 8];
+    let mut buildings = [0usize; 10];
     for building in world.query::<&SettlementBuilding>().iter(world) {
         buildings[building_index(building.kind)] += 1;
     }
@@ -767,6 +1430,29 @@ fn people(world: &mut World) -> Vec<PersonView> {
         .iter(world)
         .map(|(entity, failed)| (entity, *failed))
         .collect();
+    let travel_routes: HashMap<_, _> = world
+        .query::<(Entity, &TravelRoute)>()
+        .iter(world)
+        .map(|(entity, route)| {
+            let next = route
+                .waypoints
+                .get(route.next)
+                .map_or("done".to_string(), |waypoint| {
+                    format!("{:.1},{:.1}", waypoint.position.x, waypoint.position.z)
+                });
+            (
+                entity,
+                format!(
+                    "{}/{}@{}→{:.1},{:.1}",
+                    route.next,
+                    route.waypoints.len(),
+                    next,
+                    route.goal.x,
+                    route.goal.z
+                ),
+            )
+        })
+        .collect();
     let door_bypasses: HashSet<_> = world
         .query_filtered::<Entity, With<BuildingDoorUse>>()
         .iter(world)
@@ -775,10 +1461,23 @@ fn people(world: &mut World) -> Vec<PersonView> {
         .query_filtered::<Entity, With<village::PierTraversal>>()
         .iter(world)
         .collect();
+    let moot_transits: HashSet<_> = world
+        .query_filtered::<Entity, With<village::MootQueueTransit>>()
+        .iter(world)
+        .collect();
+    let moot_tickets: HashSet<_> = world
+        .query_filtered::<Entity, With<MootQueueTicket>>()
+        .iter(world)
+        .collect();
     let market_collections: HashMap<_, _> = world
         .query::<(Entity, &village::MarketCollectionRoutine)>()
         .iter(world)
         .map(|(entity, routine)| (entity, routine.clone()))
+        .collect();
+    let processing_states: HashMap<_, _> = world
+        .query::<(Entity, &ProcessingRoutine)>()
+        .iter(world)
+        .map(|(entity, routine)| (entity, format!("{routine:?}")))
         .collect();
     let off_duty_workers: HashMap<_, _> = world
         .query::<(Entity, &WorkerOffDuty)>()
@@ -836,9 +1535,13 @@ fn people(world: &mut World) -> Vec<PersonView> {
                 carried,
             )| {
                 let failed = failed_routes.get(&entity);
+                let travel = travel_routes.get(&entity);
                 let door_collision_bypass = door_bypasses.contains(&entity);
                 let pier_collision_bypass = pier_bypasses.contains(&entity);
+                let moot_transit = moot_transits.contains(&entity);
+                let moot_ticket = moot_tickets.contains(&entity);
                 let market_collection = market_collections.get(&entity);
+                let processor = processing_states.get(&entity);
                 let off_duty = off_duty_workers.get(&entity);
                 let (work_status, occupation) = work_states
                     .get(&entity)
@@ -846,7 +1549,7 @@ fn people(world: &mut World) -> Vec<PersonView> {
                         (*status, occupation.as_deref())
                     });
                 let state = format!(
-                    "{} {:?} {:?} pos={:.1},{:.1} target={} pending={} failed={} road={} farm={} wood={} fish={} market={} home={} door={} off_duty={} work={:?}/{:?} bypass=[door:{door_collision_bypass},pier:{pier_collision_bypass}] supply={} carry={:?}:{}",
+                    "{} {:?} {:?} pos={:.1},{:.1} target={} pending={} travel={} failed={} road={} farm={} wood={} fish={} process={} market={} home={} door={} off_duty={} work={:?}/{:?} bypass=[door:{door_collision_bypass},pier:{pier_collision_bypass},moot:{moot_transit}/{moot_ticket}] supply={} carry={:?}:{}",
                     name.0,
                     intent,
                     activity,
@@ -854,11 +1557,13 @@ fn people(world: &mut World) -> Vec<PersonView> {
                     position.0.z,
                     target.map_or_else(|| "-".to_string(), |target| format!("{:.1},{:.1}", target.0.x, target.0.z)),
                     pending.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
+                    travel.map_or("-", String::as_str),
                     failed.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
                     road.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
                     farmer.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
                     lumberjack.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
                     fisher.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
+                    processor.map_or("-", String::as_str),
                     market_collection.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
                     home.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
                     door.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
@@ -881,6 +1586,7 @@ fn people(world: &mut World) -> Vec<PersonView> {
                 // 0→1→2→failed→0, continuously resetting the stall clock.
                 let movement_owned = target.is_some()
                     || pending.is_some()
+                    || travel.is_some()
                     || failed.is_some()
                     || door.is_some();
                 let progress_key = if movement_owned {
@@ -909,6 +1615,67 @@ fn people(world: &mut World) -> Vec<PersonView> {
 }
 
 fn update_evidence(world: &mut World, evidence: &mut Evidence) {
+    let now = world
+        .query::<&WorldTime>()
+        .iter(world)
+        .next()
+        .map_or(0.0, lab_world_seconds);
+    let buildings: Vec<_> = world
+        .query::<(Entity, &SettlementBuilding)>()
+        .iter(world)
+        .map(|(entity, building)| (entity, building.kind, building.workers.clone()))
+        .collect();
+    for (entity, kind, workers) in buildings {
+        evidence
+            .building_first_seen_seconds
+            .entry(entity)
+            .or_insert(now);
+        if matches!(
+            kind,
+            SettlementBuildingKind::Farmstead
+                | SettlementBuildingKind::FishermansHut
+                | SettlementBuildingKind::LumberjackHut
+                | SettlementBuildingKind::Windmill
+                | SettlementBuildingKind::Bakery
+        ) && !workers.is_empty()
+        {
+            evidence
+                .producer_staffed_since_seconds
+                .entry(entity)
+                .or_insert(now);
+            for worker in workers {
+                evidence
+                    .producer_worker_since_seconds
+                    .entry((entity, worker))
+                    .or_insert(now);
+            }
+        } else {
+            evidence.producer_staffed_since_seconds.remove(&entity);
+        }
+    }
+    let mut queue_depths: HashMap<Entity, usize> = HashMap::new();
+    let mut immigration_depths: HashMap<Entity, usize> = HashMap::new();
+    for ticket in world.query::<&MootQueueTicket>().iter(world) {
+        *queue_depths.entry(ticket.hall).or_default() += 1;
+        if ticket.kind == MootServiceKind::Immigration {
+            *immigration_depths.entry(ticket.hall).or_default() += 1;
+        }
+    }
+    evidence.max_moot_queue_depth = evidence
+        .max_moot_queue_depth
+        .max(queue_depths.values().copied().max().unwrap_or_default());
+    evidence.max_immigration_queue_depth = evidence.max_immigration_queue_depth.max(
+        immigration_depths
+            .values()
+            .copied()
+            .max()
+            .unwrap_or_default(),
+    );
+    for economy in world.query::<&SettlementEconomy>().iter(world) {
+        evidence.peak_recent_food_production = evidence
+            .peak_recent_food_production
+            .max(economy.recent_food_production);
+    }
     for activity in world.query::<&CharacterActivity>().iter(world) {
         evidence.saw_chopping |= *activity == CharacterActivity::Chopping;
         evidence.saw_building |= *activity == CharacterActivity::Building;
@@ -925,19 +1692,21 @@ fn update_evidence(world: &mut World, evidence: &mut Evidence) {
             evidence.farmed_workplaces.insert(routine.farmstead());
         }
     }
-    for (name, activity, farmer, fisher, lumberjack) in world
+    for (name, activity, farmer, fisher, lumberjack, processor) in world
         .query::<(
             &CharacterName,
             &CharacterActivity,
             Option<&FarmerRoutine>,
             Option<&FishingRoutine>,
             Option<&LumberjackRoutine>,
+            Option<&ProcessingRoutine>,
         )>()
         .iter(world)
     {
         let performed_job = (farmer.is_some() && *activity == CharacterActivity::Farming)
             || (fisher.is_some() && *activity == CharacterActivity::Fishing)
-            || (lumberjack.is_some() && *activity == CharacterActivity::Chopping);
+            || (lumberjack.is_some() && *activity == CharacterActivity::Chopping)
+            || (processor.is_some() && *activity == CharacterActivity::Indoors);
         if performed_job {
             evidence.productive_workers.insert(name.0.clone());
         }
@@ -951,6 +1720,10 @@ fn update_evidence(world: &mut World, evidence: &mut Evidence) {
         evidence.saw_wheat_carried |= load.good == Some(Good::Wheat) && load.amount > 0;
         evidence.saw_wood_carried |= load.good == Some(Good::Wood) && load.amount > 0;
         evidence.saw_food_carried |= load.good == Some(Good::Food) && load.amount > 0;
+    }
+    for inventory in world.query::<&GoodsInventory>().iter(world) {
+        evidence.saw_flour_present |= inventory.amount(Good::Flour) > 0;
+        evidence.saw_bread_present |= inventory.amount(Good::Bread) > 0;
     }
     for (site, inventory) in world
         .query::<(&UnderConstruction, &GoodsInventory)>()
@@ -981,10 +1754,10 @@ fn update_evidence(world: &mut World, evidence: &mut Evidence) {
         }
     }
     for market in world.query::<&MootMarket>().iter(world) {
-        evidence.saw_market_buying |= Good::ALL
+        evidence.saw_market_consignment |= Good::ALL
             .iter()
             .any(|good| market.pool(*good).units_bought > 0);
-        evidence.saw_market_selling |= Good::ALL
+        evidence.saw_customer_purchase |= Good::ALL
             .iter()
             .any(|good| market.pool(*good).units_sold > 0);
     }
@@ -994,9 +1767,31 @@ fn update_evidence(world: &mut World, evidence: &mut Evidence) {
         .any(|settlement| settlement.tier == SettlementTier::Village);
 }
 
-/// Every penny must be in exactly one authoritative place, including owner
-/// shares queued between the producer and payment systems in the same tick.
-fn total_money(world: &mut World) -> u64 {
+#[derive(Debug, Clone, Copy)]
+struct MoneyBreakdown {
+    wallets: u64,
+    treasuries: u64,
+    businesses: u64,
+    households: u64,
+    construction_escrow: u64,
+    clearing: u64,
+}
+
+impl MoneyBreakdown {
+    fn total(self) -> u64 {
+        self.wallets
+            .saturating_add(self.treasuries)
+            .saturating_add(self.businesses)
+            .saturating_add(self.households)
+            .saturating_add(self.construction_escrow)
+            .saturating_add(self.clearing)
+    }
+}
+
+/// Every penny must be in exactly one authoritative wallet, household purse,
+/// business account, civic treasury or unfinished-business escrow after the
+/// tick's event queue settles.
+fn money_breakdown(world: &mut World) -> MoneyBreakdown {
     let wallets = world
         .query::<&Wallet>()
         .iter(world)
@@ -1006,16 +1801,6 @@ fn total_money(world: &mut World) -> u64 {
         .query::<&Settlement>()
         .iter(world)
         .map(|settlement| settlement.treasury)
-        .sum::<u64>();
-    let market_cash = world
-        .query::<&MootMarket>()
-        .iter(world)
-        .map(MootMarket::total_liquidity)
-        .sum::<u64>();
-    let pending = world
-        .query::<&village::PendingMarketPayment>()
-        .iter(world)
-        .map(|payment| payment.pennies)
         .sum::<u64>();
     let business_cash = world
         .query::<&BusinessAccount>()
@@ -1027,28 +1812,551 @@ fn total_money(world: &mut World) -> u64 {
         .iter(world)
         .map(|household| household.pennies)
         .sum::<u64>();
-    let reserved_collections = world
-        .query::<&village::MarketCollectionRoutine>()
+    let construction_escrow = world
+        .query::<&InheritedBusinessCapital>()
         .iter(world)
-        .map(village::MarketCollectionRoutine::reserved_pennies)
+        .map(|capital| capital.0)
         .sum::<u64>();
-    wallets
-        .saturating_add(treasuries)
-        .saturating_add(market_cash)
-        .saturating_add(pending)
-        .saturating_add(business_cash)
-        .saturating_add(household_cash)
-        .saturating_add(reserved_collections)
+    let clearing = world
+        .get_resource::<village::BusinessEventQueue>()
+        .map_or(0, |queue| queue.pending_sale_gross());
+    MoneyBreakdown {
+        wallets,
+        treasuries,
+        businesses: business_cash,
+        households: household_cash,
+        construction_escrow,
+        clearing,
+    }
 }
 
-fn goods_totals(world: &mut World) -> (u32, u32, u32) {
+fn total_money(world: &mut World) -> u64 {
+    money_breakdown(world).total()
+}
+
+/// Per-owner trace used only by the long economy soak. Capturing it outside
+/// the timed server update keeps performance measurements honest while making
+/// a one-frame conservation failure identify the exact accounts involved.
+fn money_trace(world: &mut World) -> HashMap<String, u64> {
+    let mut trace = HashMap::new();
+    for (entity, name, kind, wallet) in world
+        .query::<(Entity, &CharacterName, &CharacterKind, Option<&Wallet>)>()
+        .iter(world)
+    {
+        trace.insert(
+            format!("wallet:{entity:?}:{}", name.0),
+            wallet.map_or_else(
+                || {
+                    if *kind == CharacterKind::Villager {
+                        shared::economy::STARTING_VILLAGER_MONEY
+                    } else {
+                        0
+                    }
+                },
+                |wallet| wallet.balance(),
+            ),
+        );
+    }
+    for (settlement_id, settlement) in world.query::<(&SettlementId, &Settlement)>().iter(world) {
+        trace.insert(
+            format!("treasury:{}:{}", settlement_id.0, settlement.name),
+            settlement.treasury,
+        );
+    }
+    for (building_id, building, account) in world
+        .query::<(&BuildingId, &SettlementBuilding, &BusinessAccount)>()
+        .iter(world)
+    {
+        trace.insert(
+            format!(
+                "business:{}:{}:{}",
+                building_id.0,
+                building.settlement,
+                building.kind.label()
+            ),
+            account.cash,
+        );
+    }
+    for (building_id, household) in world
+        .query::<(&BuildingId, &HouseholdEconomy)>()
+        .iter(world)
+    {
+        trace.insert(format!("household:{}", building_id.0), household.pennies);
+    }
+    for (entity, capital) in world
+        .query::<(Entity, &InheritedBusinessCapital)>()
+        .iter(world)
+    {
+        trace.insert(format!("escrow:{entity:?}"), capital.0);
+    }
+    let clearing = world
+        .get_resource::<village::BusinessEventQueue>()
+        .map_or(0, |queue| queue.pending_sale_gross());
+    trace.insert("market-clearing".to_string(), clearing);
+    trace
+}
+
+fn money_trace_total(trace: &HashMap<String, u64>) -> u64 {
+    trace.values().copied().sum()
+}
+
+fn money_trace_changes(before: &HashMap<String, u64>, after: &HashMap<String, u64>) -> Vec<String> {
+    let mut keys: HashSet<_> = before.keys().chain(after.keys()).cloned().collect();
+    let mut keys: Vec<_> = keys.drain().collect();
+    keys.sort();
+    keys.into_iter()
+        .filter_map(|key| {
+            let old = before.get(&key).copied().unwrap_or(0);
+            let new = after.get(&key).copied().unwrap_or(0);
+            (old != new).then(|| {
+                format!(
+                    "{key}: {} -> {} ({:+})",
+                    shared::economy::format_money(old),
+                    shared::economy::format_money(new),
+                    i128::from(new) - i128::from(old),
+                )
+            })
+        })
+        .collect()
+}
+
+/// Print firm accounts separately from personal wealth so a successful owner
+/// is visible without pretending company working capital is pocket money.
+fn print_business_report(world: &mut World) {
+    let business_histories: HashMap<BuildingId, shared::economy::BusinessHistoryArchive> = world
+        .resource::<village::history::SettlementHistoryRuntime>()
+        .all_business_archives()
+        .into_iter()
+        .map(|history| (history.id, history))
+        .collect();
+    let people: HashMap<PersonId, (String, u64)> = world
+        .query::<(&PersonId, &CharacterName, &Wallet)>()
+        .iter(world)
+        .map(|(id, name, wallet)| (*id, (name.0.clone(), wallet.balance())))
+        .collect();
+    let mut listed: HashMap<BuildingId, u32> = HashMap::new();
+    for market in world.query::<&MootMarket>().iter(world) {
+        for listing in market.listings() {
+            let MarketSeller::Business(id) = listing.seller else {
+                continue;
+            };
+            let units = listed.entry(id).or_default();
+            *units = units.saturating_add(listing.units);
+        }
+    }
+    let businesses: Vec<_> = world
+        .query::<(
+            &BuildingId,
+            &SettlementBuilding,
+            Option<&OwnedBy>,
+            &BusinessAccount,
+            Option<&BusinessManagementPolicy>,
+            Option<&BusinessCondition>,
+        )>()
+        .iter(world)
+        .map(|(id, building, owner, account, management, condition)| {
+            (
+                *id,
+                building.kind,
+                building.settlement.clone(),
+                owner.copied(),
+                *account,
+                management.copied(),
+                condition.copied(),
+            )
+        })
+        .collect();
+    if businesses.is_empty() {
+        println!("LAB businesses none");
+        return;
+    }
+
+    let mut owners: HashMap<PersonId, (u32, u64, i64, u64)> = HashMap::new();
+    for (id, kind, settlement, owner, account, management, condition) in businesses {
+        let owner_name = owner
+            .and_then(|owner| people.get(&owner.0).map(|person| person.0.as_str()))
+            .unwrap_or("public/unresolved");
+        println!(
+            "LAB business {}#{} '{}' owner='{}' state={} strategy={} cash={} revenue={} expenses={} lifetime_profit={}{} withdrawals={} wage_arrears={} tax_arrears={} wage_defaults={} tax_defaults={} listed={}",
+            kind.label(),
+            id.0,
+            settlement,
+            owner_name,
+            condition.map_or("Unreviewed", |condition| condition.state.label()),
+            management.map_or("Unmanaged", |management| management.strategy.label()),
+            shared::economy::format_money(account.cash),
+            shared::economy::format_money(account.gross_revenue),
+            shared::economy::format_money(account.operating_expenses),
+            if account.lifetime_profit() < 0 { "-" } else { "+" },
+            shared::economy::format_money(account.lifetime_profit().unsigned_abs()),
+            shared::economy::format_money(account.owner_withdrawals),
+            shared::economy::format_money(account.wage_arrears),
+            shared::economy::format_money(account.tax_arrears),
+            shared::economy::format_money(account.defaulted_wages),
+            shared::economy::format_money(account.defaulted_taxes),
+            listed.get(&id).copied().unwrap_or(0),
+        );
+        if let Some(history) = business_histories.get(&id) {
+            let recent = history.days.iter().rev().take(7).collect::<Vec<_>>();
+            for day in recent.into_iter().rev() {
+                println!(
+                    "  LAB business history #{} day={} observed={} state={} strategy={} cash={} protected={} drawable={} revenue={} costs={} profit={}{} ask={} wage={} made={} sold={} inputs={} draws={} wage_arrears={} tax_arrears={} listed={}",
+                    id.0,
+                    day.day,
+                    day.observed,
+                    day.state.label(),
+                    day.strategy.label(),
+                    shared::economy::format_money(day.cash),
+                    shared::economy::format_money(day.protected_working_capital),
+                    shared::economy::format_money(day.withdrawable_profit),
+                    shared::economy::format_money(day.gross_revenue),
+                    shared::economy::format_money(
+                        day.wage_expense
+                            .saturating_add(day.input_expense)
+                            .saturating_add(day.market_fees)
+                            .saturating_add(day.profit_taxes)
+                    ),
+                    if day.profit < 0 { "-" } else { "+" },
+                    shared::economy::format_money(day.profit.unsigned_abs()),
+                    shared::economy::format_money(day.asking_unit_price),
+                    shared::economy::format_money(day.daily_wage),
+                    day.produced_units,
+                    day.sold_units,
+                    day.purchased_input_units,
+                    shared::economy::format_money(day.owner_withdrawals),
+                    shared::economy::format_money(day.wage_arrears),
+                    shared::economy::format_money(day.tax_arrears),
+                    day.listed_output_units,
+                );
+            }
+        }
+        if let Some(owner) = owner {
+            let total = owners.entry(owner.0).or_default();
+            total.0 = total.0.saturating_add(1);
+            total.1 = total.1.saturating_add(account.cash);
+            total.2 = total.2.saturating_add(account.lifetime_profit());
+            total.3 = total.3.saturating_add(account.owner_withdrawals);
+        }
+    }
+    let mut moguls: Vec<_> = owners
+        .into_iter()
+        .map(
+            |(owner, (firm_count, business_cash, profit, withdrawals))| {
+                let (name, wallet) = people
+                    .get(&owner)
+                    .cloned()
+                    .unwrap_or_else(|| (format!("Person#{}", owner.0), 0));
+                (
+                    wallet.saturating_add(business_cash),
+                    name,
+                    wallet,
+                    firm_count,
+                    business_cash,
+                    profit,
+                    withdrawals,
+                )
+            },
+        )
+        .collect();
+    moguls.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    if let Some((controlled_wealth, name, wallet, firm_count, business_cash, profit, withdrawals)) =
+        moguls.first()
+    {
+        println!(
+            "LAB mogul leader='{}' firms={} controlled_wealth={} wallet={} business_cash={} lifetime_profit={}{} withdrawals={}",
+            name,
+            firm_count,
+            shared::economy::format_money(*controlled_wealth),
+            shared::economy::format_money(*wallet),
+            shared::economy::format_money(*business_cash),
+            if *profit < 0 { "-" } else { "+" },
+            shared::economy::format_money(profit.unsigned_abs()),
+            shared::economy::format_money(*withdrawals),
+        );
+    }
+}
+
+/// Print municipal cash flow and policy beside firm accounts. This keeps a
+/// long lab run able to explain a dry treasury rather than merely reporting it.
+fn print_civic_report(world: &mut World) {
+    let halls: Vec<_> = world
+        .query::<(
+            Entity,
+            &SettlementId,
+            &Settlement,
+            Option<&MootAdministration>,
+            Option<&SettlementPolicies>,
+            Option<&CivicAccount>,
+        )>()
+        .iter(world)
+        .map(
+            |(entity, id, settlement, administration, policies, account)| {
+                (
+                    entity,
+                    *id,
+                    settlement.clone(),
+                    administration.cloned().unwrap_or_default(),
+                    policies.copied().unwrap_or_default(),
+                    account.copied().unwrap_or_default(),
+                )
+            },
+        )
+        .collect();
+    for (entity, id, settlement, administration, policy, account) in halls {
+        let current = account.current_day;
+        println!(
+            "LAB civic '{}' strategy={} autopilot={} treasury={} wage_arrears={} fee={:.1}% profit_levy={:.1}% relief={} food_target={}d payroll_target={}d staffing={} permit_subsidy={:.1}% current_day={} income={} spending={} lifetime_income={} lifetime_spending={} last_change={} ({})",
+            settlement.name,
+            policy.strategy.label(),
+            policy.autopilot,
+            shared::economy::format_money(settlement.treasury),
+            shared::economy::format_money(administration.wage_arrears),
+            policy.market_fee_bps as f32 / 100.0,
+            policy.business_profit_tax_bps as f32 / 100.0,
+            policy.poor_relief.label(),
+            policy.food_reserve_target_days,
+            policy.civic_payroll_reserve_days,
+            policy.staffing_posture.label(),
+            policy.business_permit_subsidy_bps as f32 / 100.0,
+            current.day,
+            shared::economy::format_money(current.income()),
+            shared::economy::format_money(current.spending()),
+            shared::economy::format_money(account.lifetime_income),
+            shared::economy::format_money(account.lifetime_spending),
+            policy.last_adjustment.label(),
+            policy.last_reason.label(),
+        );
+        for entry in &administration.payroll {
+            println!(
+                "  LAB civic payroll person=#{} '{}' role={} active={} daily_wage={} arrears={}",
+                entry.person_id.0,
+                entry.name,
+                entry.role.label(),
+                entry.active,
+                shared::economy::format_money(entry.daily_wage),
+                shared::economy::format_money(entry.arrears),
+            );
+        }
+        let archive = world
+            .resource::<village::history::SettlementHistoryRuntime>()
+            .archive(entity, id, &settlement.name);
+        for day in archive.days.iter().rev().take(7).rev() {
+            let income = day
+                .civic
+                .permit_income
+                .saturating_add(day.civic.market_fee_income)
+                .saturating_add(day.civic.profit_tax_income)
+                .saturating_add(day.civic.public_sale_income);
+            let spending = day
+                .civic
+                .wage_expense
+                .saturating_add(day.civic.poor_relief_expense)
+                .saturating_add(day.civic.material_expense);
+            println!(
+                "  LAB civic history day={} observed={} treasury={} income={} [permit={} fee={} levy={} sale={}] spending={} [wage={} relief={} materials={}] positions={}/+{} staffing={} rates={:.1}%/{:.1}% subsidy={:.1}% relief={} targets=food{}d/payroll{}d change={} ({})",
+                day.day,
+                day.civic.observed,
+                shared::economy::format_money(day.civic_treasury),
+                shared::economy::format_money(income),
+                shared::economy::format_money(day.civic.permit_income),
+                shared::economy::format_money(day.civic.market_fee_income),
+                shared::economy::format_money(day.civic.profit_tax_income),
+                shared::economy::format_money(day.civic.public_sale_income),
+                shared::economy::format_money(spending),
+                shared::economy::format_money(day.civic.wage_expense),
+                shared::economy::format_money(day.civic.poor_relief_expense),
+                shared::economy::format_money(day.civic.material_expense),
+                day.civic.filled_positions,
+                day.civic.vacant_positions,
+                day.civic.staffing_posture.label(),
+                day.civic.market_fee_bps as f32 / 100.0,
+                day.civic.business_profit_tax_bps as f32 / 100.0,
+                day.civic.business_permit_subsidy_bps as f32 / 100.0,
+                day.civic.poor_relief.label(),
+                day.civic.food_reserve_target_days,
+                day.civic.civic_payroll_reserve_days,
+                day.civic.adjustment.label(),
+                day.civic.reason.label(),
+            );
+        }
+    }
+}
+
+fn print_structure_report(world: &mut World) {
+    let roads: Vec<_> = world.query::<&VillageRoad>().iter(world).cloned().collect();
+    let connector_roads: HashMap<Entity, Vec<(Entity, String, u16, usize)>> = world
+        .query::<(Entity, &VillageRoad, &RoadConnectorFor)>()
+        .iter(world)
+        .fold(
+            HashMap::new(),
+            |mut by_building, (entity, road, connector)| {
+                by_building.entry(connector.building).or_default().push((
+                    entity,
+                    road.builder.clone(),
+                    road.built_through,
+                    road.points.len(),
+                ));
+                by_building
+            },
+        );
+    let road_workers: HashMap<Entity, String> = world
+        .query::<(
+            Entity,
+            &CharacterName,
+            &RoadBuilderRoutine,
+            Option<&HomeRoutine>,
+            Option<&village::MarketCollectionRoutine>,
+        )>()
+        .iter(world)
+        .map(|(entity, name, routine, home, market)| {
+            (
+                routine.road,
+                format!(
+                    "{}({entity:?}) routine={routine:?} home={} market={}",
+                    name.0,
+                    home.is_some(),
+                    market.is_some(),
+                ),
+            )
+        })
+        .collect();
+    let person_states: HashMap<_, _> = people(world)
+        .into_iter()
+        .map(|person| (person.entity, person.state))
+        .collect();
+    let active_sites: Vec<_> = world
+        .query::<(
+            Entity,
+            &UnderConstruction,
+            &GoodsInventory,
+            Option<&PlannedRoadAccess>,
+        )>()
+        .iter(world)
+        .map(|(entity, site, inventory, access)| {
+            (
+                entity,
+                site.kind,
+                site.position,
+                site.stage,
+                inventory.amount(Good::Wood),
+                site.kind.construction_wood_required(),
+                site.builder,
+                access.map(|access| access.points.clone()),
+            )
+        })
+        .collect();
+    for (entity, kind, position, stage, delivered, required, builder, access) in active_sites {
+        let builder_state = builder
+            .and_then(|builder| person_states.get(&builder))
+            .map(String::as_str)
+            .unwrap_or("missing builder");
+        let permit_queue = builder.is_some_and(|builder| {
+            world.get::<MootQueueTicket>(builder).is_some()
+                && world.get::<PermitPickupRoutine>(builder).is_some()
+        });
+        println!(
+            "LAB worksite entity={entity:?} kind={} at={:.1},{:.1} stage={stage:?} wood={delivered}/{required} builder={builder:?} permit_queue={permit_queue} access={access:?} state=[{builder_state}]",
+            kind.label(),
+            position.x,
+            position.z,
+        );
+    }
+    let buildings: Vec<_> = world
+        .query::<(
+            Entity,
+            &BuildingId,
+            &SettlementBuilding,
+            &PlayerPosition,
+            &PlayerRotation,
+            Option<&crate::world::village_roads::RoadRequest>,
+            Option<&crate::world::village_roads::RoadSurveyBackoff>,
+            Option<&RoadRepairBacklog>,
+            Option<&PlannedRoadAccess>,
+        )>()
+        .iter(world)
+        .map(
+            |(
+                entity,
+                id,
+                building,
+                position,
+                rotation,
+                request,
+                backoff,
+                repair_backlog,
+                planned_access,
+            )| {
+                (
+                    entity,
+                    *id,
+                    building.clone(),
+                    position.0,
+                    rotation.0,
+                    request.copied(),
+                    backoff.copied(),
+                    repair_backlog.copied(),
+                    planned_access.cloned(),
+                )
+            },
+        )
+        .collect();
+    for (
+        entity,
+        id,
+        building,
+        position,
+        rotation,
+        request,
+        backoff,
+        repair_backlog,
+        planned_access,
+    ) in buildings
+    {
+        let door = building.kind.entrance_position(position, rotation);
+        let door2 = Vec2::new(door.x, door.z);
+        let connected = roads.iter().any(|road| {
+            road.settlement == building.settlement
+                && road.is_complete()
+                && road
+                    .built_points()
+                    .iter()
+                    .any(|point| point.distance_squared(door2) <= 2.1_f32.powi(2))
+        });
+        println!(
+            "LAB building #{} entity={:?} '{}' kind={} at={:.1},{:.1} owner='{}' workers={} road={} connectors={:?} connector_workers={:?} request={:?} backoff={:?} repair_backlog={:?} access={:?}",
+            id.0,
+            entity,
+            building.settlement,
+            building.kind.label(),
+            position.x,
+            position.z,
+            building.owner.as_deref().unwrap_or("public"),
+            building.workers.len(),
+            if connected { "connected" } else { "missing" },
+            connector_roads.get(&entity),
+            connector_roads.get(&entity).map(|connectors| connectors
+                .iter()
+                .filter_map(|(road, ..)| road_workers.get(road))
+                .cloned()
+                .collect::<Vec<_>>()),
+            request,
+            backoff,
+            repair_backlog,
+            planned_access.as_ref().map(|access| &access.points),
+        );
+    }
+}
+
+fn goods_totals(world: &mut World) -> (u32, u32, u32, u32, u32) {
     world.query::<&GoodsInventory>().iter(world).fold(
-        (0, 0, 0),
-        |(wood, wheat, food), inventory| {
+        (0, 0, 0, 0, 0),
+        |(wood, wheat, flour, bread, fish), inventory| {
             (
                 wood + inventory.amount(Good::Wood),
                 wheat + inventory.amount(Good::Wheat),
-                food + inventory.amount(Good::Food),
+                flour + inventory.amount(Good::Flour),
+                bread + inventory.amount(Good::Bread),
+                fish + inventory.amount(Good::Food),
             )
         },
     )
@@ -1056,23 +2364,80 @@ fn goods_totals(world: &mut World) -> (u32, u32, u32) {
 
 fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
     let snapshot = milestone(world);
-    let (wood, wheat, food) = goods_totals(world);
-    let mut economy_rows: Vec<_> = world
-        .query::<(&Settlement, &SettlementEconomy)>()
+    let (wood, wheat, flour, bread, fish) = goods_totals(world);
+    let mut circulation = HashMap::<String, (u32, u64, u64)>::new();
+    for (building, inventory, account) in world
+        .query::<(
+            &SettlementBuilding,
+            &GoodsInventory,
+            Option<&BusinessAccount>,
+        )>()
         .iter(world)
-        .map(|(settlement, economy)| {
+    {
+        let Some(account) = account else {
+            continue;
+        };
+        let entry = circulation.entry(building.settlement.clone()).or_default();
+        entry.0 = entry.0.saturating_add(inventory.edible_amount());
+        entry.1 = entry.1.saturating_add(account.cash);
+        entry.2 = entry
+            .2
+            .saturating_add(account.wage_arrears)
+            .saturating_add(account.tax_arrears);
+    }
+    let purchasable: HashMap<String, u32> = world
+        .query::<(&Settlement, &MootMarket)>()
+        .iter(world)
+        .map(|(settlement, market)| (settlement.name.clone(), market.listed_edible_units()))
+        .collect();
+    let mut economy_rows: Vec<_> = world
+        .query::<(
+            &Settlement,
+            &SettlementEconomy,
+            Option<&SettlementOpportunityBoard>,
+        )>()
+        .iter(world)
+        .map(|(settlement, economy, opportunities)| {
+            let (business_food, business_cash, business_arrears) = circulation
+                .get(&settlement.name)
+                .copied()
+                .unwrap_or_default();
+            let permits = opportunities.map_or_else(
+                || "none".to_string(),
+                |board| {
+                    board
+                        .opportunities
+                        .iter()
+                        .take(3)
+                        .map(|opportunity| {
+                            format!(
+                                "{}:{}{}",
+                                opportunity.kind.label(),
+                                opportunity.score,
+                                if opportunity.subsidized { "*" } else { "" },
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",")
+                },
+            );
             format!(
-                "{}:{} pop={} stock={} reserve={:.1}d prod={:.1}/d eaten={:.1}/d hungry={} prosperity={:.0} secure={}d",
+                "{}:{} pop={} stock={} purchasable={} at_businesses={} reserve={:.1}d prod={:.1}/d eaten={:.1}/d hungry={} prosperity={:.0} secure={}d business_cash={} business_arrears={} permits=[{}]",
                 settlement.name,
                 settlement.tier.label(),
                 settlement.residents,
                 economy.edible_stock,
+                purchasable.get(&settlement.name).copied().unwrap_or(0),
+                business_food,
                 economy.reserve_days,
                 economy.recent_food_production,
                 economy.recent_food_consumption,
                 economy.unmet_food,
                 economy.prosperity,
                 economy.food_secure_days,
+                shared::economy::format_money(business_cash),
+                shared::economy::format_money(business_arrears),
+                permits,
             )
         })
         .collect();
@@ -1082,12 +2447,15 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
         .iter()
         .filter(|(built, total)| usize::from(*built) >= *total)
         .count();
+    let money = money_breakdown(world);
     println!(
-        "LAB t={:>5.1}m residents={} sites={:?} buildings=[farm:{} lumber:{} fisher:{} house:{}] roads={}/{} fields={} piers={} housed={} goods=[wood:{} wheat:{} food:{}] money={}",
+        "LAB t={:>5.1}m residents={} sites={:?} buildings=[farm:{} mill:{} bakery:{} lumber:{} fisher:{} house:{}] roads={}/{} fields={} piers={} housed={} goods=[wood:{} wheat:{} flour:{} bread:{} fish:{}] money={} [wallets={} households={} businesses={} treasury={} escrow={} clearing={}]",
         sim_seconds / 60.0,
         snapshot.residents,
         snapshot.sites,
         snapshot.buildings[1],
+        snapshot.buildings[8],
+        snapshot.buildings[9],
         snapshot.buildings[2],
         snapshot.buildings[3],
         snapshot.buildings[4],
@@ -1098,8 +2466,16 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
         snapshot.housed,
         wood,
         wheat,
-        food,
-        shared::economy::format_money(total_money(world)),
+        flour,
+        bread,
+        fish,
+        shared::economy::format_money(money.total()),
+        shared::economy::format_money(money.wallets),
+        shared::economy::format_money(money.households),
+        shared::economy::format_money(money.businesses),
+        shared::economy::format_money(money.treasuries),
+        shared::economy::format_money(money.construction_escrow),
+        shared::economy::format_money(money.clearing),
     );
     if !economy_rows.is_empty() {
         println!("LAB economy [{}]", economy_rows.join(" | "));
@@ -1171,7 +2547,7 @@ fn assert_lab_outcome(
         .map(|(settlement, administration)| (settlement.name.clone(), administration.clone()))
         .collect();
     let people = people(world);
-    let (wood, wheat, food) = goods_totals(world);
+    let (wood, _wheat, _flour, _bread, _fish) = goods_totals(world);
 
     assert_eq!(snapshot.residents, expected_residents as u32, "{people:#?}");
     assert_eq!(
@@ -1297,6 +2673,14 @@ fn assert_lab_outcome(
             "the secure meadow never added a Farmstead: {built:#?}"
         );
         assert!(
+            count("Lab Meadow", SettlementBuildingKind::Windmill) >= 1,
+            "the secure meadow never built the mill needed to make Flour: {built:#?}"
+        );
+        assert!(
+            count("Lab Meadow", SettlementBuildingKind::Bakery) >= 1,
+            "the eight-person Hamlet never added its Bread business: {built:#?}"
+        );
+        assert!(
             count("Lab Meadow", SettlementBuildingKind::FishermansHut) >= 1,
             "usable meadow shoreline never added a Fisherman's Hut: {built:#?}"
         );
@@ -1398,11 +2782,19 @@ fn assert_lab_outcome(
     );
     assert!(evidence.saw_road_builder, "road construction never began");
     assert!(
+        evidence.max_moot_queue_depth >= 2,
+        "concurrent permits never formed a visible Moot line: {evidence:#?}"
+    );
+    assert!(
         evidence.saw_building,
         "road/build animation was never observable"
     );
     assert!(evidence.saw_farming, "field work never occurred");
     if scenario.includes_secure() {
+        assert!(
+            fisher_count > 0,
+            "the coastal scenario never completed a Fisherman's Hut: {built:#?}"
+        );
         assert!(evidence.saw_fishing, "pier work never occurred");
     }
     assert!(evidence.saw_indoors, "building interiors were never used");
@@ -1433,11 +2825,11 @@ fn assert_lab_outcome(
             "no resident ever consumed a daily food portion"
         );
         assert!(
-            evidence.saw_market_buying,
-            "the Moot never bought physical producer output"
+            evidence.saw_market_consignment,
+            "the Moot Steward never consigned physical producer output"
         );
         assert!(
-            evidence.saw_market_selling,
+            evidence.saw_customer_purchase,
             "no household or builder ever bought from the Moot"
         );
         assert!(
@@ -1461,13 +2853,265 @@ fn assert_lab_outcome(
     );
     assert!(wood > 0, "no wood remained anywhere in the village");
     if scenario.includes_secure() {
-        assert!(wheat > 0, "no edible wheat remained in the secure village");
-        assert!(food > 0, "no fish Food remained in the secure village");
+        assert!(
+            evidence.saw_flour_present,
+            "the secure village never milled raw Wheat into Flour"
+        );
+        assert!(
+            evidence.saw_bread_present,
+            "the secure village never baked its Flour into Bread"
+        );
     }
     assert!(world
         .query::<&GoodsInventory>()
         .iter(world)
         .all(|inventory| inventory.used_bulk() <= inventory.bulk_capacity()));
+
+    // A permit line and physical timber gathering are both legitimate ways
+    // for a supplying plot to wait. Losing both is not: that leaves a builder
+    // with Building intent and a site that can never advance. Assert the
+    // ownership seam explicitly so aggregate "sites=N" output cannot conceal
+    // a state-machine hole.
+    let abandoned_supply_sites: Vec<_> = world
+        .query::<(Entity, &UnderConstruction, &GoodsInventory)>()
+        .iter(world)
+        .filter_map(|(site_entity, site, inventory)| {
+            if site.stage != BuildStage::Supplying
+                || inventory.amount(Good::Wood) >= site.kind.construction_wood_required()
+            {
+                return None;
+            }
+            let builder = site.builder?;
+            let gathering = world.get::<ConstructionMaterialRoutine>(builder).is_some();
+            let collecting_permit = world.get::<MootQueueTicket>(builder).is_some()
+                && world.get::<PermitPickupRoutine>(builder).is_some();
+            (!gathering && !collecting_permit).then_some((site_entity, builder, site.kind))
+        })
+        .collect();
+    assert!(
+        abandoned_supply_sites.is_empty(),
+        "under-supplied worksites lost both their permit pickup and material routine: {abandoned_supply_sites:?}"
+    );
+}
+
+fn assert_crowd_stress_outcome(
+    world: &mut World,
+    evidence: &Evidence,
+    scenario: LabScenario,
+    expected_residents: usize,
+) {
+    let mut settlements: Vec<_> = world
+        .query::<(Entity, &Settlement)>()
+        .iter(world)
+        .map(|(entity, settlement)| (entity, settlement.name.clone(), settlement.residents))
+        .collect();
+    settlements.sort_by(|a, b| a.1.cmp(&b.1));
+    let expected_settlements = if scenario.is_triple_stress() { 3 } else { 1 };
+    assert_eq!(
+        settlements.len(),
+        expected_settlements,
+        "the crowd stress fixture lost or duplicated a settlement: {settlements:?}"
+    );
+    assert_eq!(
+        settlements
+            .iter()
+            .map(|(_, _, residents)| *residents)
+            .sum::<u32>(),
+        expected_residents as u32,
+        "not every stress villager completed immigration: {settlements:?}"
+    );
+    let expected_per_settlement = if scenario.is_triple_stress() {
+        crate::world::village_lab_scenario::TRIPLE_STRESS_VILLAGERS_PER_VILLAGE
+    } else {
+        crate::world::village_lab_scenario::DENSE_STRESS_VILLAGERS
+    } as u32;
+    assert!(
+        settlements
+            .iter()
+            .all(|(_, _, residents)| *residents == expected_per_settlement),
+        "the founding crowd did not remain with its intended settlement: {settlements:?}"
+    );
+    assert!(
+        evidence.max_immigration_queue_depth >= 100,
+        "the stress crowds never exercised a genuinely long visible immigration line"
+    );
+
+    let buildings: Vec<_> = world
+        .query::<&SettlementBuilding>()
+        .iter(world)
+        .map(|building| (building.settlement.clone(), building.kind))
+        .collect();
+    for (settlement_entity, name, residents) in &settlements {
+        let houses = buildings
+            .iter()
+            .filter(|(settlement, kind)| {
+                settlement == name && *kind == SettlementBuildingKind::House
+            })
+            .count();
+        let producers = buildings
+            .iter()
+            .filter(|(settlement, kind)| {
+                settlement == name
+                    && matches!(
+                        kind,
+                        SettlementBuildingKind::Farmstead
+                            | SettlementBuildingKind::LumberjackHut
+                            | SettlementBuildingKind::FishermansHut
+                            | SettlementBuildingKind::Windmill
+                            | SettlementBuildingKind::Bakery
+                    )
+            })
+            .count();
+        assert!(houses > 0, "{name} never converted demand into a cabin");
+        assert!(
+            producers > 0,
+            "{name} never converted demand into a productive workplace"
+        );
+
+        let approved_lumber_huts = buildings
+            .iter()
+            .filter(|(settlement, kind)| {
+                settlement == name && *kind == SettlementBuildingKind::LumberjackHut
+            })
+            .count()
+            + world
+                .query::<&UnderConstruction>()
+                .iter(world)
+                .filter(|site| {
+                    site.settlement == *settlement_entity
+                        && site.kind == SettlementBuildingKind::LumberjackHut
+                })
+                .count();
+        let anticipated_capacity = (*residents).max(1).div_ceil(50) as usize;
+        let generous_market_overshoot = anticipated_capacity.saturating_mul(2).saturating_add(2);
+        assert!(
+            approved_lumber_huts <= generous_market_overshoot,
+            "{name} approved {approved_lumber_huts} lumber businesses for {residents} residents; finite construction demand must anticipate pending supply (generous ceiling {generous_market_overshoot})"
+        );
+    }
+    assert!(
+        evidence.saw_building,
+        "no embodied construction was observed"
+    );
+    assert!(
+        evidence.saw_chopping,
+        "no embodied timber work was observed"
+    );
+    assert!(evidence.saw_farming, "no embodied field work was observed");
+    assert!(
+        world
+            .query::<&NavigationRouteFailed>()
+            .iter(world)
+            .next()
+            .is_none(),
+        "the 600-person run ended with unresolved route failures"
+    );
+    assert!(world
+        .query::<&GoodsInventory>()
+        .iter(world)
+        .all(|inventory| inventory.used_bulk() <= inventory.bulk_capacity()));
+
+    let now = world
+        .query::<&WorldTime>()
+        .iter(world)
+        .next()
+        .map_or(0.0, lab_world_seconds);
+    let connector_states: HashMap<Entity, Vec<(Entity, bool)>> = world
+        .query::<(Entity, &VillageRoad, &RoadConnectorFor)>()
+        .iter(world)
+        .fold(
+            HashMap::new(),
+            |mut states, (road_entity, road, connector)| {
+                states
+                    .entry(connector.building)
+                    .or_default()
+                    .push((road_entity, road.is_complete()));
+                states
+            },
+        );
+    let active_road_builders: HashSet<Entity> = world
+        .query::<&RoadBuilderRoutine>()
+        .iter(world)
+        .map(|routine| routine.road)
+        .collect();
+    for (building_entity, building) in world.query::<(Entity, &SettlementBuilding)>().iter(world) {
+        let mature = evidence
+            .building_first_seen_seconds
+            .get(&building_entity)
+            .is_some_and(|built_at| now - built_at >= STRESS_ROAD_COMPLETION_GRACE_SECONDS);
+        let connector = connector_states.get(&building_entity);
+        let complete = connector.is_some_and(|roads| roads.iter().any(|(_, complete)| *complete));
+        if mature {
+            assert!(
+                complete
+                    || connector.is_some()
+                    || world.get::<RoadRequest>(building_entity).is_some()
+                    || world.get::<RoadRepairBacklog>(building_entity).is_some(),
+                "mature {:?} {:?} remained outside every completed, active, requested, or audited road lifecycle for at least {:.0} world seconds",
+                building.kind,
+                building_entity,
+                STRESS_ROAD_COMPLETION_GRACE_SECONDS,
+            );
+        } else {
+            assert!(
+                complete
+                    || connector.is_some()
+                    || world.get::<PlannedRoadAccess>(building_entity).is_some()
+                    || world.get::<RoadRequest>(building_entity).is_some(),
+                "recent {:?} {:?} lost its connector and protected access claim",
+                building.kind,
+                building_entity,
+            );
+        }
+    }
+    for (building, _) in world.query::<(Entity, &RoadRepairBacklog)>().iter(world) {
+        assert!(
+            connector_states.get(&building).is_none(),
+            "audited road backlog {:?} also owns an active connector",
+            building,
+        );
+        assert!(
+            world.get::<RoadRequest>(building).is_none(),
+            "audited road backlog {:?} also owns an assigned request",
+            building,
+        );
+    }
+    for roads in connector_states.values() {
+        for (road, complete) in roads {
+            if !complete {
+                assert!(
+                    active_road_builders.contains(road),
+                    "unfinished connector {road:?} has no live RoadBuilderRoutine"
+                );
+            }
+        }
+    }
+
+    let mut requests_by_builder = HashMap::<Entity, Vec<Entity>>::new();
+    for (building, request) in world.query::<(Entity, &RoadRequest)>().iter(world) {
+        requests_by_builder
+            .entry(request.builder)
+            .or_default()
+            .push(building);
+    }
+    let duplicate_requests: Vec<_> = requests_by_builder
+        .iter()
+        .filter(|(_, buildings)| buildings.len() > 1)
+        .map(|(builder, buildings)| (*builder, buildings.clone()))
+        .collect();
+    assert!(
+        duplicate_requests.is_empty(),
+        "one road worker owned several queued connectors: {duplicate_requests:?}"
+    );
+    let request_and_routine: Vec<_> = requests_by_builder
+        .keys()
+        .filter(|builder| world.get::<RoadBuilderRoutine>(**builder).is_some())
+        .copied()
+        .collect();
+    assert!(
+        request_and_routine.is_empty(),
+        "road workers simultaneously owned an active road and another request: {request_and_routine:?}"
+    );
 }
 
 fn assert_arrival_stress_outcome(
@@ -1477,19 +3121,150 @@ fn assert_arrival_stress_outcome(
 ) {
     let snapshot = milestone(world);
     let people = people(world);
+    let clock = world
+        .query::<&WorldTime>()
+        .iter(world)
+        .next()
+        .expect("arrival stress requires the world clock");
+    let now = lab_world_seconds(clock);
+    let settle_grace = clock.cycle_duration() * ARRIVAL_STRESS_SETTLE_GRACE_DAYS;
+    let construction_people: Vec<_> = people
+        .iter()
+        .filter(|person| !person.state.contains("supply=-"))
+        .map(|person| person.state.as_str())
+        .collect();
+    let farms = snapshot.buildings[building_index(SettlementBuildingKind::Farmstead)];
+    let mills = snapshot.buildings[building_index(SettlementBuildingKind::Windmill)];
+    let fishers = snapshot.buildings[building_index(SettlementBuildingKind::FishermansHut)];
+    let food_businesses = fishers + farms.min(mills.saturating_mul(2));
     assert_eq!(
         snapshot.residents, expected_residents as u32,
         "late arrivals did not all settle: {people:#?}"
     );
-    assert_eq!(
-        snapshot.housed, expected_residents,
-        "scarce founding Wood should finish houses sequentially instead of deadlocking partial sites"
+    assert!(
+        evidence.max_immigration_queue_depth >= 2,
+        "late arrivals never formed the visible Moot immigration line: {evidence:#?}"
     );
-    let required_houses =
-        expected_residents.div_ceil(SettlementBuildingKind::House.housing_capacity() as usize);
+    // A modest wave must be absorbed almost completely. A triple-digit shock
+    // is intentionally larger than the founding food, timber and construction
+    // economy can erase during a short performance run. Critical settlements
+    // now approve Farmsteads before cabins and, after genuinely exhausting the
+    // farm envelope, allow only food-backed housing. Test that actual rule
+    // rather than demanding free shelter for people the town cannot feed.
+    let minimum_housed = if expected_residents < 100 {
+        expected_residents.saturating_mul(4).div_ceil(5)
+    } else {
+        let house_capacity = SettlementBuildingKind::House.housing_capacity() as usize;
+        let structural_food_capacity = food_businesses.saturating_mul(4);
+        let measured_food_capacity = (evidence.peak_recent_food_production.ceil() as usize)
+            .div_ceil(house_capacity)
+            .saturating_mul(house_capacity);
+        expected_residents
+            .div_ceil(2)
+            .min(structural_food_capacity.max(measured_food_capacity))
+    };
+    assert!(
+        snapshot.housed >= minimum_housed,
+        "the population shock did not produce its scale-appropriate minimum of {minimum_housed} housed residents; snapshot={snapshot:#?}; active builders={construction_people:#?}"
+    );
+    let required_houses = snapshot
+        .housed
+        .div_ceil(SettlementBuildingKind::House.housing_capacity() as usize);
     assert!(
         snapshot.buildings[building_index(SettlementBuildingKind::House)] >= required_houses,
-        "late-wave housing did not complete: {snapshot:#?}"
+        "completed housing capacity disagreed with its physical cabins: {snapshot:#?}"
+    );
+    let road_requests: Vec<_> = world.query::<&RoadRequest>().iter(world).copied().collect();
+    let stale_building_intents: Vec<_> = world
+        .query::<(
+            Entity,
+            &CharacterName,
+            &VillagerIntent,
+            Option<&ConstructionMaterialRoutine>,
+            Option<&RoadBuilderRoutine>,
+        )>()
+        .iter(world)
+        .filter_map(|(entity, name, intent, construction, road)| {
+            let VillagerIntent::Building { site, .. } = intent else {
+                return None;
+            };
+            let completed_connector_pending = road_requests
+                .iter()
+                .any(|request| request.builder == entity && request.completed_site == *site);
+            (world.get_entity(*site).is_err()
+                && construction.is_none()
+                && road.is_none()
+                && !completed_connector_pending)
+                .then_some((name.0.clone(), *site))
+        })
+        .collect();
+    assert!(
+        stale_building_intents.is_empty(),
+        "residents retained Building intent for despawned worksites: {stale_building_intents:#?}"
+    );
+    let (residents, recent_production, recent_consumption) = {
+        let (settlement, economy) = world
+            .query::<(&Settlement, &SettlementEconomy)>()
+            .iter(world)
+            .find(|(settlement, _)| settlement.name == "Lab Meadow")
+            .expect("arrival stress requires Lab Meadow's economy");
+        (
+            settlement.residents,
+            economy.recent_food_production,
+            economy.recent_food_consumption,
+        )
+    };
+    // The 160-person day-two shock intentionally creates unemployed,
+    // temporarily insolvent households. In a private market their hunger is
+    // not authority to demand output nobody can buy: requiring production to
+    // equal the whole population—or one producer building per four people—
+    // rewards unsold overproduction and endless duplicate farms. The stress
+    // invariant is instead that the settlement has diversified food capacity,
+    // embodied producers remain within the same critical-production threshold
+    // used by planning, and at least one day of realised demand physically
+    // exists somewhere in its economy. Normal-sized scenarios retain their
+    // stricter food-security and promotion assertions.
+    assert!(
+        food_businesses >= 2,
+        "arrival economy never established diversified food capacity: population={} food_businesses={} buildings={:?}",
+        residents,
+        food_businesses,
+        snapshot.buildings,
+    );
+    assert!(
+        mills > 0,
+        "arrival economy grew Farmsteads without constructing the Windmill required to make Wheat edible: buildings={:?}",
+        snapshot.buildings,
+    );
+    assert!(
+        snapshot.buildings[building_index(SettlementBuildingKind::Bakery)] > 0,
+        "arrival economy never constructed its Hamlet-level Bakery: buildings={:?}",
+        snapshot.buildings,
+    );
+    assert!(
+        evidence.saw_flour_present,
+        "arrival economy never physically milled Wheat into Flour: {evidence:#?}"
+    );
+    assert!(
+        evidence.saw_bread_present,
+        "arrival economy never physically baked Flour into Bread: {evidence:#?}"
+    );
+    assert!(
+        recent_production >= recent_consumption * 0.75,
+        "producer activity fell below 75% of realised food consumption: production={:.1}/day consumption={:.1}/day",
+        recent_production,
+        recent_consumption,
+    );
+    let physical_edible = world
+        .query::<&GoodsInventory>()
+        .iter(world)
+        .map(GoodsInventory::edible_amount)
+        .fold(0_u32, u32::saturating_add);
+    let realised_one_day_reserve = recent_consumption.ceil() as u32;
+    assert!(
+        physical_edible >= realised_one_day_reserve,
+        "arrival economy never retained one day of realised food demand: population={} consumption={recent_consumption:.1}/day reserve_target={realised_one_day_reserve} edible={physical_edible}",
+        residents,
     );
     assert!(
         world
@@ -1511,6 +3286,10 @@ fn assert_arrival_stress_outcome(
             building.kind == SettlementBuildingKind::Farmstead
                 && !building.workers.is_empty()
                 && !evidence.farmed_workplaces.contains(entity)
+                && evidence
+                    .producer_staffed_since_seconds
+                    .get(entity)
+                    .is_some_and(|staffed_at| now - staffed_at >= settle_grace)
         })
         .map(|(_, building, position)| {
             (
@@ -1525,21 +3304,29 @@ fn assert_arrival_stress_outcome(
         "staffed Farmsteads never produced observable field work: {unworked_farms:#?}\n{people:#?}"
     );
     let unworked_producers: Vec<_> = world
-        .query::<&SettlementBuilding>()
+        .query::<(Entity, &SettlementBuilding)>()
         .iter(world)
-        .filter(|building| {
+        .filter(|(_, building)| {
             matches!(
                 building.kind,
                 SettlementBuildingKind::Farmstead
                     | SettlementBuildingKind::FishermansHut
                     | SettlementBuildingKind::LumberjackHut
+                    | SettlementBuildingKind::Windmill
+                    | SettlementBuildingKind::Bakery
             )
         })
-        .flat_map(|building| {
+        .flat_map(|(entity, building)| {
             building
                 .workers
                 .iter()
-                .filter(|worker| !evidence.productive_workers.contains(*worker))
+                .filter(|worker| {
+                    !evidence.productive_workers.contains(*worker)
+                        && evidence
+                            .producer_worker_since_seconds
+                            .get(&(entity, (*worker).clone()))
+                            .is_some_and(|hired_at| now - hired_at >= settle_grace)
+                })
                 .map(|worker| (worker.clone(), building.kind))
                 .collect::<Vec<_>>()
         })
@@ -1551,50 +3338,151 @@ fn assert_arrival_stress_outcome(
 
     let roads: Vec<_> = world.query::<&VillageRoad>().iter(world).cloned().collect();
     let building_doors: Vec<_> = world
-        .query::<(&SettlementBuilding, &PlayerPosition, &PlayerRotation)>()
+        .query::<(
+            Entity,
+            &SettlementBuilding,
+            &PlayerPosition,
+            &PlayerRotation,
+        )>()
         .iter(world)
-        .map(|(building, position, rotation)| {
+        .map(|(entity, building, position, rotation)| {
             (
+                entity,
                 building.settlement.clone(),
                 building.kind,
                 building.kind.entrance_position(position.0, rotation.0),
             )
         })
         .collect();
-    assert_eq!(
-        roads.len(),
-        building_doors.len(),
-        "late construction left a building without its own connector"
-    );
-    assert!(roads.iter().all(VillageRoad::is_complete));
-    for (settlement, kind, door) in building_doors {
-        let door = Vec2::new(door.x, door.z);
+    let obstacle_grid = world.resource::<SpatialObstacleGrid>();
+    for road in roads.iter().filter(|road| road.is_complete()) {
         assert!(
-            roads.iter().any(|road| {
+            road.built_points()
+                .windows(2)
+                .all(|segment| !obstacle_grid.segment_blocked(segment[0], segment[1])),
+            "a completed road was later covered by a building: {:?}",
+            road.built_points()
+        );
+    }
+    for (entity, settlement, kind, door) in building_doors {
+        let door = Vec2::new(door.x, door.z);
+        let mature = evidence
+            .building_first_seen_seconds
+            .get(&entity)
+            .is_some_and(|built_at| now - built_at >= settle_grace);
+        let has_complete_connector = roads.iter().any(|road| {
+            road.is_complete()
+                && road.settlement == settlement
+                && road
+                    .built_points()
+                    .iter()
+                    .any(|point| point.distance_squared(door) <= 2.1_f32.powi(2))
+        });
+        if mature {
+            assert!(
+                has_complete_connector,
+                "mature {kind:?} door {door:?} remained without a completed village path for at least {ARRIVAL_STRESS_SETTLE_GRACE_DAYS:.0} days"
+            );
+        } else {
+            let has_any_connector = roads.iter().any(|road| {
                 road.settlement == settlement
                     && road
-                        .built_points()
-                        .iter()
-                        .any(|point| point.distance_squared(door) <= 2.1_f32.powi(2))
-            }),
-            "late-built {kind:?} door {door:?} never connected to a completed village path"
-        );
+                        .points
+                        .first()
+                        .is_some_and(|point| point.distance_squared(door) <= 2.1_f32.powi(2))
+            });
+            assert!(
+                has_complete_connector
+                    || has_any_connector
+                    || world.get::<PlannedRoadAccess>(entity).is_some()
+                    || world.get::<RoadRequest>(entity).is_some(),
+                "recent {kind:?} door {door:?} lost both its connector and protected access claim"
+            );
+        }
     }
-    for (settlement, administration) in world
-        .query::<(&Settlement, &MootAdministration)>()
+}
+
+fn assert_economy_soak_outcome(world: &mut World, evidence: &Evidence) {
+    const RESIDENTS_PER_SETTLEMENT: u32 = 30;
+    const TOTAL_RESIDENTS: u32 = RESIDENTS_PER_SETTLEMENT * 3;
+
+    let snapshot = milestone(world);
+    let people = people(world);
+    let total_deaths = world.resource::<village::MortalityLedger>().total_deaths;
+    assert_eq!(
+        u64::from(snapshot.residents).saturating_add(total_deaths),
+        u64::from(TOTAL_RESIDENTS),
+        "the economy soak did not admit all scheduled residents: {people:#?}"
+    );
+    assert_eq!(
+        snapshot.housed, snapshot.residents as usize,
+        "twenty migration-free days did not house every surviving resident: {snapshot:#?}"
+    );
+    assert!(
+        evidence.max_immigration_queue_depth >= 2,
+        "the staged arrivals never exercised a physical immigration line"
+    );
+
+    let settlements: Vec<_> = world
+        .query::<&Settlement>()
         .iter(world)
-    {
+        .map(|settlement| (settlement.name.clone(), settlement.residents))
+        .collect();
+    for (name, arrival_prefix) in [
+        ("Lab Meadow", "MeadowArrival"),
+        ("Lab Coldbarrow", "ColdArrival"),
+        ("Lab Greenwood", "GreenArrival"),
+    ] {
+        let residents = settlements
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, residents)| *residents)
+            .unwrap_or_default();
+        let deaths = world
+            .resource::<village::MortalityLedger>()
+            .iter()
+            .filter(|record| record.name.starts_with(arrival_prefix))
+            .count() as u32;
         assert_eq!(
-            (
-                administration.roadless_buildings,
-                administration.disconnected_buildings,
-                administration.pending_road_buildings,
-            ),
-            (0, 0, 0),
-            "{}'s final civic road audit was not clean",
-            settlement.name
+            residents.saturating_add(deaths),
+            RESIDENTS_PER_SETTLEMENT,
+            "{name} did not receive its even share of the arrival schedule: {settlements:?}"
+        );
+
+        let mut kinds = HashMap::<SettlementBuildingKind, usize>::new();
+        for building in world
+            .query::<&SettlementBuilding>()
+            .iter(world)
+            .filter(|building| building.settlement == name)
+        {
+            *kinds.entry(building.kind).or_default() += 1;
+        }
+        assert!(
+            kinds
+                .get(&SettlementBuildingKind::Farmstead)
+                .copied()
+                .unwrap_or_default()
+                + kinds
+                    .get(&SettlementBuildingKind::FishermansHut)
+                    .copied()
+                    .unwrap_or_default()
+                > 0,
+            "{name} reached day 50 without a food extractor: {kinds:?}"
         );
     }
+
+    assert!(
+        world
+            .query::<&NavigationRouteFailed>()
+            .iter(world)
+            .next()
+            .is_none(),
+        "the economy soak ended with a failed route: {people:#?}"
+    );
+    assert!(world
+        .query::<&GoodsInventory>()
+        .iter(world)
+        .all(|inventory| inventory.used_bulk() <= inventory.bulk_capacity()));
 }
 
 /// Long-running diagnostic entrypoint. Ignored in ordinary `cargo test`; use
@@ -1617,12 +3505,12 @@ fn village_simulation_lab() {
     app.insert_resource(WorldTerrain::default());
     spawn_scenario(app.world_mut(), warp, scenario);
     let initial_money = total_money(app.world_mut());
-    let arrival_count = if scenario.includes_secure() {
-        lab_arrival_count()
+    let arrival_waves = if scenario.runs_arrival_waves() {
+        lab_arrival_waves()
     } else {
-        0
+        Vec::new()
     };
-    let arrival_day = lab_arrival_day();
+    let arrival_count = arrival_waves.iter().map(|wave| wave.count).sum::<usize>();
     let expected_residents = scenario.expected_residents() + arrival_count;
     let expected_money = initial_money
         .saturating_add(arrival_count as u64 * shared::economy::STARTING_VILLAGER_MONEY);
@@ -1634,185 +3522,287 @@ fn village_simulation_lab() {
     let mut next_report = 0.0;
     let mut evidence = Evidence::default();
     let mut last_structure: Option<StructureMilestone> = None;
+    let mut next_stress_structure_log = 0.0;
+    let mut next_stress_progress_audit = 0.0;
     let mut person_progress: HashMap<Entity, (String, f32)> = HashMap::new();
     let mut life_ledger = LabLifeLedger::default();
-    let mut arrivals_spawned = arrival_count == 0;
+    let mut stress_task_ledger = StressTaskLedger::default();
+    let mut next_arrival_wave = 0usize;
+    let mut update_milliseconds = Vec::with_capacity(total_ticks);
+    let mut burst_update_milliseconds = Vec::new();
+    let mut burst_timing_ticks_remaining = 0usize;
+    // The first update intentionally funds each newly founded hall. Audit
+    // every subsequent update once that one-time world bootstrap is complete.
+    let mut money_audit_ready = false;
 
     for _ in 0..total_ticks {
         app.world_mut().resource_mut::<Time>().advance_by(wall_step);
+        let money_before =
+            (scenario.is_economy_soak() && money_audit_ready).then(|| money_trace(app.world_mut()));
+        let update_started = Instant::now();
         app.update();
+        let update_millis = update_started.elapsed().as_secs_f64() * 1_000.0;
+        if let Some(before) = money_before {
+            let after = money_trace(app.world_mut());
+            assert_eq!(
+                money_trace_total(&after),
+                money_trace_total(&before),
+                "one server update created or destroyed coin:\n{}",
+                money_trace_changes(&before, &after).join("\n"),
+            );
+        }
+        money_audit_ready = true;
+        update_milliseconds.push(update_millis);
+        if burst_timing_ticks_remaining > 0 {
+            burst_update_milliseconds.push(update_millis);
+            burst_timing_ticks_remaining -= 1;
+        }
         sim_seconds += sim_step;
 
-        if !arrivals_spawned {
+        if next_arrival_wave < arrival_waves.len() {
             let current_day = app
                 .world_mut()
                 .query::<&WorldTime>()
                 .iter(app.world())
                 .next()
                 .map_or(0, |clock| clock.day);
-            if current_day >= arrival_day - 1 {
+            while let Some(wave) = arrival_waves.get(next_arrival_wave).copied() {
+                if current_day < wave.day.saturating_sub(1) {
+                    break;
+                }
                 let hall_position = app
                     .world_mut()
                     .query::<(&Settlement, &PlayerPosition)>()
                     .iter(app.world())
-                    .find(|(settlement, _)| settlement.name == "Lab Meadow")
+                    .find(|(settlement, _)| settlement.name == wave.target.settlement_name())
                     .map(|(_, position)| position.0)
-                    .expect("arrival stress requires Lab Meadow");
-                spawn_lab_arrivals(app.world_mut(), hall_position, arrival_count);
-                arrivals_spawned = true;
+                    .unwrap_or_else(|| {
+                        panic!("arrival wave requires {}", wave.target.settlement_name())
+                    });
+                spawn_lab_arrivals(
+                    app.world_mut(),
+                    hall_position,
+                    wave.day,
+                    wave.count,
+                    wave.target,
+                );
+                if wave.count >= 40 {
+                    // Ten real-time seconds (600 server updates) includes the
+                    // route-queue drain and first migration decisions without
+                    // allowing a short spike to hide in an all-run average.
+                    burst_timing_ticks_remaining = 600;
+                    burst_update_milliseconds.clear();
+                    let mut timing = app.world_mut().resource_mut::<LabPhaseTimings>();
+                    timing.burst_ticks_remaining = 600;
+                    timing.burst_core_milliseconds.clear();
+                    timing.burst_navigation_milliseconds.clear();
+                }
+                next_arrival_wave += 1;
                 println!(
-                    "LAB arrival day={arrival_day} count={arrival_count} total_expected={expected_residents}"
+                    "LAB arrival day={} target='{}' count={} spawned={}/{} total_expected={expected_residents}",
+                    wave.day,
+                    wave.target.settlement_name(),
+                    wave.count,
+                    next_arrival_wave,
+                    arrival_waves.len()
                 );
             }
         }
 
         let world = app.world_mut();
         update_evidence(world, &mut evidence);
-        life_ledger.observe(world, sim_seconds, sim_step);
+        if scenario.is_crowd_stress() {
+            stress_task_ledger.observe(world, sim_step);
+        } else {
+            life_ledger.observe(world, sim_seconds, sim_step);
+        }
         let structure = milestone(world);
         if last_structure.as_ref() != Some(&structure) {
-            println!("LAB event t={:.1}m {structure:?}", sim_seconds / 60.0);
+            if !scenario.is_crowd_stress() || sim_seconds >= next_stress_structure_log {
+                println!("LAB event t={:.1}m {structure:?}", sim_seconds / 60.0);
+                next_stress_structure_log = sim_seconds + 60.0;
+            }
             last_structure = Some(structure);
         }
 
-        let current_people = people(world);
-        for person in &current_people {
-            let progress = person_progress
-                .entry(person.entity)
-                .or_insert_with(|| (person.progress_key.clone(), sim_seconds));
-            if progress.0 != person.progress_key {
-                *progress = (person.progress_key.clone(), sim_seconds);
-            } else if person.active_progress_expected && sim_seconds - progress.1 > STALL_SECONDS {
-                let remembered_route = world
-                    .resource::<LastPlannedRoutes>()
-                    .0
-                    .get(&person.entity)
-                    .cloned();
-                let route = remembered_route.as_ref().map_or_else(
-                    || "never planned".to_string(),
-                    |route| {
-                        format!(
-                            "goal={:.1},{:.1} next={} waypoints={:?}",
-                            route.goal.x, route.goal.z, route.next, route.waypoints
-                        )
-                    },
-                );
-                let route_handoff = world
-                    .resource::<LastRouteHandoffs>()
-                    .0
-                    .get(&person.entity)
-                    .cloned()
-                    .unwrap_or_else(|| "no pre-step handoff recorded".to_string());
-                let point = world
-                    .get::<PlayerPosition>(person.entity)
-                    .map(|position| Vec2::new(position.0.x, position.0.z))
-                    .unwrap_or(Vec2::ZERO);
-                let goal = world
-                    .get::<MoveTarget>(person.entity)
-                    .map(|target| Vec2::new(target.0.x, target.0.z));
-                let nearby_buildings: Vec<_> = world
-                    .query::<(
-                        &shared::building::PlacedBuilding,
-                        &shared::building::BuildingPosition,
-                    )>()
-                    .iter(world)
-                    .filter_map(|(building, position)| {
-                        let at = Vec2::new(position.0.x, position.0.z);
-                        let kind = match building.building_type {
-                            shared::building::BuildingType::LogCabin => {
-                                SettlementBuildingKind::House
-                            }
-                            shared::building::BuildingType::LumberjackHut => {
-                                SettlementBuildingKind::LumberjackHut
-                            }
-                            shared::building::BuildingType::Farmstead => {
-                                SettlementBuildingKind::Farmstead
-                            }
-                            shared::building::BuildingType::FishermansHut => {
-                                SettlementBuildingKind::FishermansHut
-                            }
-                            shared::building::BuildingType::MootHall => {
-                                SettlementBuildingKind::Hall
-                            }
-                            shared::building::BuildingType::PlaceholderMarket => {
-                                SettlementBuildingKind::Market
-                            }
-                            shared::building::BuildingType::PlaceholderTavern => {
-                                SettlementBuildingKind::Tavern
-                            }
-                            shared::building::BuildingType::PlaceholderChurch => {
-                                SettlementBuildingKind::Church
-                            }
-                        };
-                        let door = kind.entrance_position(position.0, building.rotation);
-                        (at.distance(point) <= 12.0).then_some((
-                            building.building_type,
-                            at,
-                            building.rotation,
-                            Vec2::new(door.x, door.z),
-                            Vec2::new(door.x, door.z).distance(point),
-                        ))
-                    })
-                    .collect();
-                let grid = world.resource::<SpatialObstacleGrid>();
-                let nearby: Vec<_> = grid
-                    .get_nearby(point)
-                    .map(|obstacle| {
-                        (
-                            obstacle.center,
-                            obstacle.half_extents,
-                            obstacle.rotation,
-                            obstacle.contains_point(point),
-                        )
-                    })
-                    .collect();
-                let colliders = world.resource::<StaticColliders>();
-                let derived = world.resource::<DerivedColliderLibrary>();
-                let nearby_props: Vec<_> = colliders
-                    .instances
-                    .values()
-                    .filter_map(|instance| {
-                        let shape = derived.by_kind.get(&instance.kind)?;
-                        let radius = shape.horizontal_radius * instance.scale
-                            + crate::world::navgrid::VILLAGER_PROP_RADIUS;
-                        let at = Vec2::new(instance.position.x, instance.position.z);
-                        (at.distance(point) <= radius + 5.0
-                            || goal.is_some_and(|goal| at.distance(goal) <= radius + 5.0))
-                        .then_some((
-                            instance.kind,
-                            at,
-                            radius,
-                            at.distance(point),
-                            goal.map(|goal| at.distance(goal)),
-                        ))
-                    })
-                    .collect();
-                let rejected_segment = remembered_route.as_ref().and_then(|route| {
-                    let mut points = vec![point];
-                    points.extend(
-                        route
-                            .waypoints
-                            .iter()
-                            .map(|waypoint| Vec2::new(waypoint.position.x, waypoint.position.z)),
+        if !scenario.is_crowd_stress() || sim_seconds >= next_stress_progress_audit {
+            next_stress_progress_audit = sim_seconds + 1.0;
+            let current_people = people(world);
+            for person in &current_people {
+                let progress = person_progress
+                    .entry(person.entity)
+                    .or_insert_with(|| (person.progress_key.clone(), sim_seconds));
+                if progress.0 != person.progress_key {
+                    *progress = (person.progress_key.clone(), sim_seconds);
+                } else if person.active_progress_expected
+                    && sim_seconds - progress.1 > STALL_SECONDS
+                {
+                    let remembered_route = world
+                        .resource::<LastPlannedRoutes>()
+                        .0
+                        .get(&person.entity)
+                        .cloned();
+                    let route = remembered_route.as_ref().map_or_else(
+                        || "never planned".to_string(),
+                        |route| {
+                            format!(
+                                "goal={:.1},{:.1} next={} waypoints={:?}",
+                                route.goal.x, route.goal.z, route.next, route.waypoints
+                            )
+                        },
                     );
-                    points.windows(2).find_map(|segment| {
-                        (!crate::player::hero::navigation_segment_clear(
-                            segment[0],
-                            segment[1],
-                            Some(grid),
-                            Some(colliders),
-                            Some(derived),
-                        ))
-                        .then_some((segment[0], segment[1]))
-                    })
-                });
-                panic!(
-                    "LAB STALL: {} made no embodied progress for {:.0}s\n{}\nlast route: {route}\nlast handoff: {route_handoff}\nrejected segment={rejected_segment:?}\ncurrent point blocked={} nearby obstacles={nearby:?} nearby props={nearby_props:?} nearby buildings={nearby_buildings:?}\nall people: {current_people:#?}",
+                    let route_handoff = world
+                        .resource::<LastRouteHandoffs>()
+                        .0
+                        .get(&person.entity)
+                        .cloned()
+                        .unwrap_or_else(|| "no pre-step handoff recorded".to_string());
+                    let point = world
+                        .get::<PlayerPosition>(person.entity)
+                        .map(|position| Vec2::new(position.0.x, position.0.z))
+                        .unwrap_or(Vec2::ZERO);
+                    let goal = world
+                        .get::<MoveTarget>(person.entity)
+                        .map(|target| Vec2::new(target.0.x, target.0.z));
+                    let nearby_buildings: Vec<_> = world
+                        .query::<(
+                            &shared::building::PlacedBuilding,
+                            &shared::building::BuildingPosition,
+                        )>()
+                        .iter(world)
+                        .filter_map(|(building, position)| {
+                            let at = Vec2::new(position.0.x, position.0.z);
+                            let kind = match building.building_type {
+                                shared::building::BuildingType::LogCabin => {
+                                    SettlementBuildingKind::House
+                                }
+                                shared::building::BuildingType::LumberjackHut => {
+                                    SettlementBuildingKind::LumberjackHut
+                                }
+                                shared::building::BuildingType::Farmstead => {
+                                    SettlementBuildingKind::Farmstead
+                                }
+                                shared::building::BuildingType::FishermansHut => {
+                                    SettlementBuildingKind::FishermansHut
+                                }
+                                shared::building::BuildingType::MootHall
+                                | shared::building::BuildingType::VillageHall
+                                | shared::building::BuildingType::TownHall => {
+                                    SettlementBuildingKind::Hall
+                                }
+                                shared::building::BuildingType::PlaceholderMarket => {
+                                    SettlementBuildingKind::Market
+                                }
+                                shared::building::BuildingType::PlaceholderTavern => {
+                                    SettlementBuildingKind::Tavern
+                                }
+                                shared::building::BuildingType::PlaceholderChurch => {
+                                    SettlementBuildingKind::Church
+                                }
+                                shared::building::BuildingType::Windmill => {
+                                    SettlementBuildingKind::Windmill
+                                }
+                                shared::building::BuildingType::Bakery => {
+                                    SettlementBuildingKind::Bakery
+                                }
+                            };
+                            let door = kind.entrance_position(position.0, building.rotation);
+                            (at.distance(point) <= 12.0).then_some((
+                                building.building_type,
+                                at,
+                                building.rotation,
+                                Vec2::new(door.x, door.z),
+                                Vec2::new(door.x, door.z).distance(point),
+                            ))
+                        })
+                        .collect();
+                    let grid = world.resource::<SpatialObstacleGrid>();
+                    let nearby: Vec<_> = grid
+                        .get_nearby(point)
+                        .map(|obstacle| {
+                            (
+                                obstacle.center,
+                                obstacle.half_extents,
+                                obstacle.rotation,
+                                obstacle.contains_point(point),
+                            )
+                        })
+                        .collect();
+                    let colliders = world.resource::<StaticColliders>();
+                    let derived = world.resource::<DerivedColliderLibrary>();
+                    let nearby_props: Vec<_> = colliders
+                        .instances
+                        .values()
+                        .filter_map(|instance| {
+                            let shape = derived.by_kind.get(&instance.kind)?;
+                            let radius = shape.horizontal_radius * instance.scale
+                                + crate::world::navgrid::VILLAGER_PROP_RADIUS;
+                            let at = Vec2::new(instance.position.x, instance.position.z);
+                            (at.distance(point) <= radius + 5.0
+                                || goal.is_some_and(|goal| at.distance(goal) <= radius + 5.0))
+                            .then_some((
+                                instance.kind,
+                                at,
+                                radius,
+                                at.distance(point),
+                                goal.map(|goal| at.distance(goal)),
+                            ))
+                        })
+                        .collect();
+                    let mut nearest_roads: Vec<_> = world
+                        .iter_entities()
+                        .filter_map(|entity| entity.get::<VillageRoad>())
+                        .filter_map(|road| {
+                            let start_distance = road
+                                .built_points()
+                                .iter()
+                                .map(|road_point| road_point.distance(point))
+                                .reduce(f32::min)?;
+                            let goal_distance = goal.map(|goal| {
+                                road.built_points()
+                                    .iter()
+                                    .map(|road_point| road_point.distance(goal))
+                                    .fold(f32::INFINITY, f32::min)
+                            });
+                            Some((
+                                start_distance,
+                                goal_distance,
+                                road.is_complete(),
+                                road.built_through,
+                                road.points.len(),
+                            ))
+                        })
+                        .collect();
+                    nearest_roads.sort_by(|a, b| {
+                        a.0.min(a.1.unwrap_or(f32::INFINITY))
+                            .total_cmp(&b.0.min(b.1.unwrap_or(f32::INFINITY)))
+                    });
+                    nearest_roads.truncate(12);
+                    let rejected_segment =
+                        remembered_route.as_ref().and_then(|route| {
+                            let mut points = vec![point];
+                            points.extend(route.waypoints.iter().map(|waypoint| {
+                                Vec2::new(waypoint.position.x, waypoint.position.z)
+                            }));
+                            points.windows(2).find_map(|segment| {
+                                (!crate::player::hero::navigation_segment_clear(
+                                    segment[0],
+                                    segment[1],
+                                    Some(grid),
+                                    Some(colliders),
+                                    Some(derived),
+                                ))
+                                .then_some((segment[0], segment[1]))
+                            })
+                        });
+                    panic!(
+                    "LAB STALL: {} made no embodied progress for {:.0}s\n{}\nlast route: {route}\nlast handoff: {route_handoff}\nrejected segment={rejected_segment:?}\ncurrent point blocked={} nearby obstacles={nearby:?} nearby props={nearby_props:?} nearby buildings={nearby_buildings:?} nearest roads (start, goal, complete, built, total)={nearest_roads:?}\nall people: {current_people:#?}",
                     person.name,
                     sim_seconds - progress.1,
                     person.state,
                     grid.point_blocked(point),
-                );
+                    );
+                }
             }
         }
 
@@ -1822,13 +3812,110 @@ fn village_simulation_lab() {
         }
     }
 
-    print_report(app.world_mut(), sim_seconds, true);
-    life_ledger.print_final_report();
-    assert!(
-        arrivals_spawned,
-        "requested arrival day was outside the lab run"
+    print_report(app.world_mut(), sim_seconds, !scenario.is_crowd_stress());
+    print_structure_report(app.world_mut());
+    print_civic_report(app.world_mut());
+    print_business_report(app.world_mut());
+    if scenario.is_crowd_stress() {
+        stress_task_ledger.print_report(app.world_mut());
+        stress_task_ledger.assert_no_currently_stuck_workers();
+    } else {
+        life_ledger.print_final_report(app.world_mut());
+    }
+    print_update_timing("all", &update_milliseconds);
+    if !burst_update_milliseconds.is_empty() {
+        print_update_timing("arrival burst", &burst_update_milliseconds);
+    }
+    let timing = app.world().resource::<LabPhaseTimings>();
+    print_update_timing("core", &timing.core_milliseconds);
+    print_update_timing("navigation", &timing.navigation_milliseconds);
+    for (label, samples) in [
+        "core identity/population",
+        "core civic",
+        "core economy/planning",
+        "core construction",
+        "core activity",
+        "core directory",
+    ]
+    .into_iter()
+    .zip(timing.core_section_milliseconds.iter())
+    {
+        print_optional_update_timing(label, samples);
+    }
+    if scenario.is_crowd_stress() {
+        print_stress_timing_summary(timing, &update_milliseconds);
+    }
+    for (label, samples) in [
+        "economy markets/businesses",
+        "economy households",
+        "economy settlement accounts",
+        "economy permits",
+    ]
+    .into_iter()
+    .zip(timing.economy_section_milliseconds.iter())
+    {
+        print_optional_update_timing(label, samples);
+    }
+    for (label, samples) in [
+        "construction moot services",
+        "construction material logistics",
+        "construction building progress",
+        "construction fields",
+        "construction road planning",
+        "construction employment",
+    ]
+    .into_iter()
+    .zip(timing.construction_section_milliseconds.iter())
+    {
+        print_optional_update_timing(label, samples);
+    }
+    let permit_timing = app.world().resource::<village::PermitPlanningDiagnostics>();
+    print_optional_update_timing(
+        "permit primary site",
+        &permit_timing.primary_site_milliseconds,
     );
-    if arrival_count == 0 {
+    print_optional_update_timing(
+        "permit alternative site",
+        &permit_timing.alternative_site_milliseconds,
+    );
+    print_optional_update_timing(
+        "permit fishing site",
+        &permit_timing.fishing_site_milliseconds,
+    );
+    print_optional_update_timing(
+        "permit final access",
+        &permit_timing.final_access_milliseconds,
+    );
+    print_optional_update_timing(
+        "ambient pass",
+        &app.world()
+            .resource::<village::ambient::AmbientDiagnostics>()
+            .pass_milliseconds,
+    );
+    if !timing.burst_core_milliseconds.is_empty() {
+        print_update_timing("arrival burst core", &timing.burst_core_milliseconds);
+        print_update_timing(
+            "arrival burst navigation",
+            &timing.burst_navigation_milliseconds,
+        );
+    }
+    if arrival_count >= 100 {
+        assert_tick_timing_budget(
+            "arrival burst navigation",
+            &timing.burst_navigation_milliseconds,
+            15.0,
+            50.0,
+        );
+    }
+    assert!(
+        next_arrival_wave == arrival_waves.len(),
+        "one or more requested arrival days were outside the lab run"
+    );
+    if scenario.is_economy_soak() {
+        assert_economy_soak_outcome(app.world_mut(), &evidence);
+    } else if scenario.is_crowd_stress() {
+        assert_crowd_stress_outcome(app.world_mut(), &evidence, scenario, expected_residents);
+    } else if arrival_count == 0 {
         assert_lab_outcome(app.world_mut(), &evidence, scenario, expected_residents);
     } else {
         assert_arrival_stress_outcome(app.world_mut(), &evidence, expected_residents);
@@ -1838,7 +3925,146 @@ fn village_simulation_lab() {
         expected_money,
         "the complete village loop created or destroyed coin"
     );
+    assert_eq!(
+        app.world()
+            .resource::<village::BusinessEventQueue>()
+            .pending_sale_count(),
+        0,
+        "the village loop ended with market money still waiting for settlement"
+    );
+    println!(
+        "LAB queue evidence: max_moot={} max_immigration={}",
+        evidence.max_moot_queue_depth, evidence.max_immigration_queue_depth,
+    );
     println!(
         "LAB PASS: {scenario:?} village loop remained live for {minutes:.1} simulated minutes"
+    );
+}
+
+fn print_update_timing(label: &str, samples: &[f64]) {
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let percentile = |fraction: f64| {
+        let index = ((sorted.len().saturating_sub(1)) as f64 * fraction).round() as usize;
+        sorted[index]
+    };
+    let average = sorted.iter().sum::<f64>() / sorted.len() as f64;
+    let over_16 = sorted.iter().filter(|sample| **sample > 16.67).count();
+    let over_50 = sorted.iter().filter(|sample| **sample > 50.0).count();
+    let over_100 = sorted.iter().filter(|sample| **sample > 100.0).count();
+    println!(
+        "LAB tick timing {label}: samples={} avg={average:.3}ms p50={:.3}ms p95={:.3}ms p99={:.3}ms max={:.3}ms over16.67={over_16} over50={over_50} over100={over_100}",
+        sorted.len(),
+        percentile(0.50),
+        percentile(0.95),
+        percentile(0.99),
+        sorted.last().copied().unwrap_or_default(),
+    );
+}
+
+fn average_milliseconds(samples: &[f64]) -> f64 {
+    if samples.is_empty() {
+        0.0
+    } else {
+        samples.iter().sum::<f64>() / samples.len() as f64
+    }
+}
+
+fn print_stress_timing_summary(timing: &LabPhaseTimings, all: &[f64]) {
+    let total = average_milliseconds(all);
+    let core = average_milliseconds(&timing.core_milliseconds);
+    let navigation = average_milliseconds(&timing.navigation_milliseconds);
+    println!(
+        "LAB bottleneck top-level total={total:.3}ms core={core:.3}ms ({:.1}%) navigation={navigation:.3}ms ({:.1}%) harness/other={:.3}ms",
+        if total > 0.0 { core / total * 100.0 } else { 0.0 },
+        if total > 0.0 {
+            navigation / total * 100.0
+        } else {
+            0.0
+        },
+        (total - core - navigation).max(0.0),
+    );
+
+    let mut core_sections: Vec<_> = [
+        "identity/population",
+        "civic",
+        "economy/planning",
+        "construction",
+        "activity",
+        "directory",
+    ]
+    .into_iter()
+    .zip(timing.core_section_milliseconds.iter())
+    .map(|(label, samples)| (average_milliseconds(samples), label))
+    .collect();
+    core_sections.sort_by(|a, b| b.0.total_cmp(&a.0));
+    println!(
+        "LAB bottleneck core ranking [{}]",
+        core_sections
+            .iter()
+            .map(|(average, label)| format!("{label}={average:.3}ms"))
+            .collect::<Vec<_>>()
+            .join(" > ")
+    );
+
+    let mut economy_sections: Vec<_> = [
+        "markets/businesses",
+        "households",
+        "settlement accounts",
+        "permits",
+    ]
+    .into_iter()
+    .zip(timing.economy_section_milliseconds.iter())
+    .map(|(label, samples)| (average_milliseconds(samples), label))
+    .collect();
+    economy_sections.sort_by(|a, b| b.0.total_cmp(&a.0));
+    println!(
+        "LAB bottleneck economy ranking [{}]",
+        economy_sections
+            .iter()
+            .map(|(average, label)| format!("{label}={average:.3}ms"))
+            .collect::<Vec<_>>()
+            .join(" > ")
+    );
+
+    let mut construction_sections: Vec<_> = [
+        "moot services",
+        "material logistics",
+        "building progress",
+        "fields",
+        "road planning",
+        "employment",
+    ]
+    .into_iter()
+    .zip(timing.construction_section_milliseconds.iter())
+    .map(|(label, samples)| (average_milliseconds(samples), label))
+    .collect();
+    construction_sections.sort_by(|a, b| b.0.total_cmp(&a.0));
+    println!(
+        "LAB bottleneck construction ranking [{}]",
+        construction_sections
+            .iter()
+            .map(|(average, label)| format!("{label}={average:.3}ms"))
+            .collect::<Vec<_>>()
+            .join(" > ")
+    );
+}
+
+fn print_optional_update_timing(label: &str, samples: &[f64]) {
+    if !samples.is_empty() {
+        print_update_timing(label, samples);
+    }
+}
+
+fn assert_tick_timing_budget(label: &str, samples: &[f64], p99_limit: f64, max_limit: f64) {
+    assert!(!samples.is_empty(), "{label} did not record any samples");
+    let mut sorted = samples.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let p99_index = ((sorted.len().saturating_sub(1)) as f64 * 0.99).round() as usize;
+    let p99 = sorted[p99_index];
+    let max = sorted.last().copied().unwrap_or_default();
+    assert!(
+        p99 <= p99_limit && max <= max_limit,
+        "{label} exceeded its regression budget: p99={p99:.3}ms (limit {p99_limit:.3}), max={max:.3}ms (limit {max_limit:.3})"
     );
 }

@@ -13,12 +13,11 @@ use crate::player;
 use crate::telemetry;
 
 pub(crate) fn setup_resources(app: &mut App) {
-    let profile_storage_dir = std::path::PathBuf::from("server_data/players");
-
     app.init_resource::<WorldTerrain>();
     app.init_resource::<AuthoredCityLayout>();
     app.init_resource::<net::input::ClientInputs>();
     app.init_resource::<crate::player::hero::HeroIndex>();
+    app.init_resource::<crate::player::permits::PermitIdAllocator>();
     app.init_resource::<crate::world::dev::VillagerSeed>();
     app.init_resource::<net::input::ClientInputIngressStats>();
     app.init_resource::<player::index::PlayerEntityIndex>();
@@ -43,15 +42,10 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<crate::world::dev::DevMode>();
     app.init_resource::<collision::building_index::BuildingSpatialIndex>();
     app.init_resource::<collision::streaming::ColliderStreamingState>();
-    app.insert_resource(persistence::profiles::PlayerProfiles::new(
-        profile_storage_dir.clone(),
-    ));
-    app.insert_resource(player::roster_cache::PlayerRosterCache::from_storage_dir(
-        &profile_storage_dir,
-    ));
-    app.insert_resource(persistence::io_queue::ProfileIoQueue::new(
-        profile_storage_dir,
-    ));
+    // World and account state share one lifetime: reconnecting to this running
+    // process restores the live hero, retinue and view, while restarting the
+    // server deliberately starts clean and ignores old profile files.
+    app.insert_resource(persistence::profiles::PlayerProfiles::new_session());
     app.init_resource::<telemetry::perf::ServerPerfMonitor>();
     app.init_resource::<telemetry::network::ServerNetDebugWindow>();
 }

@@ -205,4 +205,10 @@ struct SelectionNameText;
 struct SelectionStatusText;
 
 #[derive(Component)]
+struct SelectionHealthTrack;
+
+#[derive(Component)]
+struct SelectionHealthFill;
+
+#[derive(Component)]
 struct SelectionExpandButton;

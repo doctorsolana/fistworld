@@ -36,12 +36,14 @@ pub(super) fn button_interactions(
             Option<&GraphicsToggle>,
             Option<&SliderStep>,
             Option<&InputSliderStep>,
+            Option<&DisplayConfirmationAction>,
         ),
         (Changed<Interaction>, With<Button>),
     >,
     settings: Res<GraphicsSettings>,
 ) {
-    for (interaction, mut bg_color, toggle_opt, slider_opt, input_slider_opt) in buttons.iter_mut()
+    for (interaction, mut bg_color, toggle_opt, slider_opt, input_slider_opt, confirmation_opt) in
+        buttons.iter_mut()
     {
         // For toggle buttons, use green/red based on state
         if let Some(toggle) = toggle_opt {
@@ -54,7 +56,6 @@ pub(super) fn button_interactions(
                 GraphicsToggle::FarTerrain => settings.far_terrain_enabled,
                 GraphicsToggle::Props => settings.props_enabled,
                 GraphicsToggle::Vsync => settings.vsync_enabled,
-                GraphicsToggle::Fullscreen => settings.fullscreen_enabled,
                 GraphicsToggle::FoliageCutout => settings.foliage_cutout_enabled,
             };
 
@@ -64,6 +65,16 @@ pub(super) fn button_interactions(
                 Color::srgb(0.55, 0.2, 0.2)
             };
 
+            *bg_color = match interaction {
+                Interaction::Pressed => BackgroundColor(base_color.lighter(0.15)),
+                Interaction::Hovered => BackgroundColor(base_color.lighter(0.08)),
+                Interaction::None => BackgroundColor(base_color),
+            };
+        } else if let Some(action) = confirmation_opt {
+            let base_color = match action {
+                DisplayConfirmationAction::Keep => Color::srgb(0.2, 0.55, 0.3),
+                DisplayConfirmationAction::Revert => Color::srgb(0.55, 0.2, 0.2),
+            };
             *bg_color = match interaction {
                 Interaction::Pressed => BackgroundColor(base_color.lighter(0.15)),
                 Interaction::Hovered => BackgroundColor(base_color.lighter(0.08)),
@@ -190,10 +201,6 @@ pub(super) fn handle_graphics_toggles(
                     settings.vsync_enabled = !settings.vsync_enabled;
                     settings.vsync_enabled
                 }
-                GraphicsToggle::Fullscreen => {
-                    settings.fullscreen_enabled = !settings.fullscreen_enabled;
-                    settings.fullscreen_enabled
-                }
                 GraphicsToggle::FoliageCutout => {
                     settings.foliage_cutout_enabled = !settings.foliage_cutout_enabled;
                     settings.foliage_cutout_enabled
@@ -233,10 +240,90 @@ pub(super) fn handle_slider_steps(
     buttons: Query<(&Interaction, &SliderStep), Changed<Interaction>>,
     mut settings: ResMut<GraphicsSettings>,
     mut slider_texts: Query<(&SliderValueText, &mut Text)>,
+    monitors: Query<&Monitor, With<PrimaryMonitor>>,
+    mut pending_display: Option<ResMut<PendingDisplayChange>>,
+    mut commands: Commands,
 ) {
+    let monitor = monitors.iter().next();
     for (interaction, step) in buttons.iter() {
         if *interaction == Interaction::Pressed {
             match step.control {
+                SliderControl::DisplayMode => {
+                    let current = settings.display_mode();
+                    let new_mode = if step.delta > 0 {
+                        current.next()
+                    } else {
+                        current.prev()
+                    };
+                    if new_mode != current {
+                        arm_display_confirmation(
+                            &mut commands,
+                            pending_display.as_deref_mut(),
+                            &settings,
+                        );
+                        settings.set_display_mode(new_mode);
+                        if new_mode != DisplayMode::Borderless {
+                            let choices = available_display_resolutions(
+                                new_mode,
+                                monitor,
+                                settings.display_resolution,
+                            );
+                            settings.display_resolution =
+                                nearest_resolution(settings.display_resolution, &choices);
+                        }
+                        info!("Display mode = {}", new_mode.label());
+                        for (text_control, mut text) in slider_texts.iter_mut() {
+                            match text_control.0 {
+                                SliderControl::DisplayMode => {
+                                    text.0 = new_mode.label().to_string();
+                                }
+                                SliderControl::Resolution => {
+                                    text.0 = settings.displayed_resolution_label(monitor);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                SliderControl::Resolution => {
+                    let display_mode = settings.display_mode();
+                    if display_mode == DisplayMode::Borderless {
+                        info!(
+                            "Borderless fullscreen uses the monitor's native resolution; select Windowed or Fullscreen to change it"
+                        );
+                        continue;
+                    }
+                    let choices = available_display_resolutions(
+                        display_mode,
+                        monitor,
+                        settings.display_resolution,
+                    );
+                    let current = nearest_resolution(settings.display_resolution, &choices);
+                    let current_idx = choices
+                        .iter()
+                        .position(|resolution| *resolution == current)
+                        .unwrap_or(0);
+                    let new_idx = if step.delta > 0 {
+                        (current_idx + 1).min(choices.len() - 1)
+                    } else {
+                        current_idx.saturating_sub(1)
+                    };
+                    let new_resolution = choices[new_idx];
+                    if new_resolution != settings.display_resolution {
+                        arm_display_confirmation(
+                            &mut commands,
+                            pending_display.as_deref_mut(),
+                            &settings,
+                        );
+                        settings.display_resolution = new_resolution;
+                        info!("Display resolution = {}", new_resolution.label());
+                        for (text_control, mut text) in slider_texts.iter_mut() {
+                            if matches!(text_control.0, SliderControl::Resolution) {
+                                text.0 = new_resolution.label();
+                            }
+                        }
+                    }
+                }
                 SliderControl::RenderScale => {
                     // 3D resolution scale: GPU cost scales with the square.
                     let steps = [0.5, 0.58, 0.66, 0.75, 0.85, 1.0];
@@ -275,6 +362,22 @@ pub(super) fn handle_slider_steps(
 
                         for (text_control, mut text) in slider_texts.iter_mut() {
                             if matches!(text_control.0, SliderControl::ShadowQuality) {
+                                text.0 = new_val.label().to_string();
+                            }
+                        }
+                    }
+                }
+                SliderControl::GroundCoverRenderer => {
+                    let new_val = if step.delta > 0 {
+                        settings.ground_cover_renderer.next()
+                    } else {
+                        settings.ground_cover_renderer.prev()
+                    };
+                    if new_val != settings.ground_cover_renderer {
+                        settings.ground_cover_renderer = new_val;
+                        info!("3D grass renderer = {}", new_val.label());
+                        for (text_control, mut text) in slider_texts.iter_mut() {
+                            if matches!(text_control.0, SliderControl::GroundCoverRenderer) {
                                 text.0 = new_val.label().to_string();
                             }
                         }
@@ -406,6 +509,88 @@ pub(super) fn handle_slider_steps(
                     }
                 }
             }
+        }
+    }
+}
+
+fn arm_display_confirmation(
+    commands: &mut Commands,
+    pending: Option<&mut PendingDisplayChange>,
+    settings: &GraphicsSettings,
+) {
+    if let Some(pending) = pending {
+        pending.restart_countdown();
+    } else {
+        commands.insert_resource(PendingDisplayChange::new(settings));
+    }
+}
+
+fn nearest_resolution(
+    requested: DisplayResolution,
+    choices: &[DisplayResolution],
+) -> DisplayResolution {
+    choices
+        .iter()
+        .copied()
+        .min_by_key(|choice| {
+            u64::from(choice.width.abs_diff(requested.width)).pow(2)
+                + u64::from(choice.height.abs_diff(requested.height)).pow(2)
+        })
+        .unwrap_or(requested)
+}
+
+pub(super) fn handle_display_confirmation(
+    buttons: Query<(&Interaction, &DisplayConfirmationAction), Changed<Interaction>>,
+    pending: Option<Res<PendingDisplayChange>>,
+    mut settings: ResMut<GraphicsSettings>,
+    mut commands: Commands,
+) {
+    let Some(pending) = pending else {
+        return;
+    };
+    for (interaction, action) in buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match action {
+            DisplayConfirmationAction::Keep => {
+                info!(
+                    "Kept display setting: {} at {}",
+                    settings.display_mode().label(),
+                    settings.display_resolution.label()
+                );
+            }
+            DisplayConfirmationAction::Revert => {
+                settings.set_display_mode(pending.previous_mode);
+                settings.display_resolution = pending.previous_resolution;
+                info!(
+                    "Restored display setting: {} at {}",
+                    pending.previous_mode.label(),
+                    pending.previous_resolution.label()
+                );
+            }
+        }
+        commands.remove_resource::<PendingDisplayChange>();
+    }
+}
+
+pub(super) fn sync_display_confirmation(
+    pending: Option<Res<PendingDisplayChange>>,
+    mut panels: Query<&mut Node, With<DisplayConfirmationPanel>>,
+    mut labels: Query<&mut Text, With<DisplayConfirmationText>>,
+) {
+    let visible = pending.is_some();
+    for mut panel in panels.iter_mut() {
+        panel.display = if visible {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    if let Some(pending) = pending {
+        let seconds = pending.seconds_left.ceil().max(0.0) as u32;
+        for mut label in labels.iter_mut() {
+            label.0 = format!("Keep this display setting? Reverting in {seconds}s");
         }
     }
 }

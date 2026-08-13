@@ -1,4 +1,4 @@
-use bevy::prelude::{Quat, Vec3};
+use bevy::prelude::{Quat, Vec2, Vec3};
 use image::ImageReader;
 use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::fs;
@@ -33,6 +33,10 @@ pub struct LoadedMap {
     /// rather than stored, exactly like the terrain itself — a river is not
     /// data, it is a consequence of the seed.
     pub rivers: std::sync::Arc<Vec<Vec<Vec3>>>,
+    /// River segments indexed by every terrain chunk whose props can be
+    /// affected by their clearance radius. Prop and grass streaming consults
+    /// this instead of rescanning the entire world's river graph per chunk.
+    pub river_segments_by_chunk: HashMap<(i32, i32), Vec<(Vec2, Vec2)>>,
     pub content_hash: u64,
     pub map_dir: PathBuf,
 }
@@ -279,6 +283,7 @@ fn build_loaded_map(
         .terrain_deltas_by_chunk()
         .map_err(|err| format!("Invalid map edits for '{}': {err}", definition.map_id))?;
     let objects_by_chunk = build_objects_by_chunk(&definition.objects);
+    let river_segments_by_chunk = build_river_segments_by_chunk(&rivers);
     let content_hash =
         compute_loaded_map_hash(&definition.map_id, map_bytes, &heightmap_bytes, edits_bytes);
 
@@ -290,9 +295,33 @@ fn build_loaded_map(
         objects_by_chunk,
         biome_field,
         rivers,
+        river_segments_by_chunk,
         content_hash,
         map_dir,
     })
+}
+
+fn build_river_segments_by_chunk(rivers: &[Vec<Vec3>]) -> HashMap<(i32, i32), Vec<(Vec2, Vec2)>> {
+    let mut by_chunk: HashMap<(i32, i32), Vec<(Vec2, Vec2)>> = HashMap::new();
+    let padding = crate::worldgen::RIVER_WATER_REACH;
+    for river in rivers {
+        for window in river.windows(2) {
+            let a = Vec2::new(window[0].x, window[0].z);
+            let b = Vec2::new(window[1].x, window[1].z);
+            let min = a.min(b) - Vec2::splat(padding);
+            let max = a.max(b) + Vec2::splat(padding);
+            let min_x = (min.x / CHUNK_SIZE).floor() as i32;
+            let min_z = (min.y / CHUNK_SIZE).floor() as i32;
+            let max_x = (max.x / CHUNK_SIZE).floor() as i32;
+            let max_z = (max.y / CHUNK_SIZE).floor() as i32;
+            for x in min_x..=max_x {
+                for z in min_z..=max_z {
+                    by_chunk.entry((x, z)).or_default().push((a, b));
+                }
+            }
+        }
+    }
+    by_chunk
 }
 
 fn compute_loaded_map_hash(

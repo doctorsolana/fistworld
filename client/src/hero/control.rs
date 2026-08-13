@@ -20,25 +20,47 @@ use crate::ui::hud::{GodCapability, HudMode};
 #[derive(Resource, Default)]
 pub struct SelectedOutfit(pub HeroOutfit);
 
-/// Whether the next terrain click places the hero (armed by the HUD button).
-#[derive(Resource, Default)]
-pub struct HeroSpawnArm(pub bool);
-
-/// Whether the next terrain click drops a villager (armed by the HUD button).
+/// The one operation allowed to own the next terrain click.
 ///
-/// Separate from [`HeroSpawnArm`] rather than one enum, because they arm from
-/// different buttons and only one can be armed at a time -- arming either
-/// disarms the other, which a shared bool could not express.
-#[derive(Resource, Default)]
-pub struct NpcSpawnArm(pub bool);
+/// Keeping this as one enum is more than tidiness: hero spawning, test crowds,
+/// settlement founding and paid permits must never be invisibly armed at the
+/// same time. Player permits retain their server-issued record here only as UI
+/// state; the authoritative copy remains on the replicated hero ledger.
+#[derive(Resource, Default, Debug, Clone)]
+pub enum WorldPlacementMode {
+    #[default]
+    None,
+    SpawnHero,
+    SpawnNpc,
+    FoundSettlement,
+    Permit {
+        permit: shared::components::PlayerPermit,
+        settlement_name: String,
+        rotation: f32,
+    },
+}
 
-/// Whether the next terrain click founds a settlement (armed by the HUD).
-#[derive(Resource, Default)]
-pub struct FoundSpawnArm(pub bool);
+impl WorldPlacementMode {
+    pub const fn is_armed(&self) -> bool {
+        !matches!(self, Self::None)
+    }
 
-/// True when any placement is armed, so the selection picker can stand aside.
-pub fn placement_armed(hero: &HeroSpawnArm, npc: &NpcSpawnArm, found: &FoundSpawnArm) -> bool {
-    hero.0 || npc.0 || found.0
+    pub const fn is_spawn_hero(&self) -> bool {
+        matches!(self, Self::SpawnHero)
+    }
+
+    pub const fn is_spawn_npc(&self) -> bool {
+        matches!(self, Self::SpawnNpc)
+    }
+
+    pub const fn is_found_settlement(&self) -> bool {
+        matches!(self, Self::FoundSettlement)
+    }
+}
+
+/// True when selection must stand aside for a world-placement click.
+pub fn placement_armed(mode: &WorldPlacementMode) -> bool {
+    mode.is_armed()
 }
 
 /// True when a replicated hero owned by the local peer exists.
@@ -63,14 +85,7 @@ pub(super) fn handle_world_clicks(
     mode: Res<HudMode>,
     capability: Res<GodCapability>,
     selected: Res<SelectedOutfit>,
-    // Grouped because Bevy caps a system at 16 parameters and these three
-    // always travel together anyway: they are the same question -- what is the
-    // next click for?
-    arms: (
-        ResMut<HeroSpawnArm>,
-        ResMut<NpcSpawnArm>,
-        ResMut<FoundSpawnArm>,
-    ),
+    mut placement: ResMut<WorldPlacementMode>,
     local: Option<Res<LocalPeerId>>,
     heroes: Query<&Hero>,
     ui_blockers: Query<&Interaction>,
@@ -85,22 +100,26 @@ pub(super) fn handle_world_clicks(
         (With<crate::GameClient>, With<Connected>),
     >,
 ) {
-    let (mut arm, mut npc_arm, mut found_arm) = arms;
     // Escape cancels an armed placement. (NOT right-click: RMB-drag is the
     // camera orbit, and cancelling on it silently killed every placement
     // that involved looking around first.)
-    if (arm.0 || npc_arm.0 || found_arm.0) && keyboard.just_pressed(KeyCode::Escape) {
-        arm.0 = false;
-        npc_arm.0 = false;
-        found_arm.0 = false;
+    if placement.is_armed() && keyboard.just_pressed(KeyCode::Escape) {
+        if matches!(*placement, WorldPlacementMode::Permit { .. }) {
+            notice.show("Placement closed — your permit is saved");
+        }
+        *placement = WorldPlacementMode::None;
         return;
     }
     // Losing god capability or leaving god mode disarms — an invisible armed
     // state must never swallow or convert a later click.
-    if (arm.0 || npc_arm.0 || found_arm.0) && (!capability.0 || *mode != HudMode::God) {
-        arm.0 = false;
-        npc_arm.0 = false;
-        found_arm.0 = false;
+    let dev_placement = matches!(
+        *placement,
+        WorldPlacementMode::SpawnHero
+            | WorldPlacementMode::SpawnNpc
+            | WorldPlacementMode::FoundSettlement
+    );
+    if dev_placement && (!capability.0 || *mode != HudMode::God) {
+        *placement = WorldPlacementMode::None;
     }
     if !mouse.just_pressed(MouseButton::Left) || input_state.ui_blocking() {
         return;
@@ -121,7 +140,14 @@ pub(super) fn handle_world_clicks(
     // Placement is the ONLY thing left click does here. Ordering the hero moved
     // to right click (see `crate::selection`), so a left click with nothing armed
     // is a selection click and belongs to the picker, not to this system.
-    if arm.0 {
+    if matches!(*placement, WorldPlacementMode::Permit { .. }) {
+        // The permit UI owns validation, the ghost and the authoritative
+        // placement request. Selection and dev placement must simply stand
+        // aside for this click.
+        return;
+    }
+
+    if placement.is_spawn_hero() {
         if !owns_hero {
             if let Ok(mut sender) = dev_sender.single_mut() {
                 sender.send::<ReliableChannel>(DevCommand::SpawnHero {
@@ -131,14 +157,14 @@ pub(super) fn handle_world_clicks(
                 info!("Hero spawn requested at {target:?}");
             }
         }
-        arm.0 = false;
+        *placement = WorldPlacementMode::None;
         return;
     }
 
     // Founding disarms after one placement: a settlement is a deliberate act,
     // not something to sprinkle, and the spacing rule would reject the second
     // one anyway.
-    if found_arm.0 {
+    if placement.is_found_settlement() {
         // Check BEFORE sending, and say why if the answer is no.
         //
         // The server enforces these rules and always will -- it is the
@@ -173,13 +199,13 @@ pub(super) fn handle_world_clicks(
             });
             info!("Settlement founding requested at {target:?}");
         }
-        found_arm.0 = false;
+        *placement = WorldPlacementMode::None;
         return;
     }
 
     // Villager placement stays armed, so a crowd can be dropped without
     // re-arming between each one. Escape or leaving god mode clears it.
-    if npc_arm.0 {
+    if placement.is_spawn_npc() {
         if let Ok(mut sender) = dev_sender.single_mut() {
             sender.send::<ReliableChannel>(DevCommand::SpawnNpc { pos: target });
             info!("Villager spawn requested at {target:?}");

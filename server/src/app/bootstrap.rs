@@ -84,7 +84,7 @@ pub(crate) fn configure_bootstrap(app: &mut App) {
             world::map_state::spawn_active_map_state_once,
             world::regions::build_region_registry,
             world::village_lab_scenario::stage_rendered_lab_once,
-            world::village_lab_scenario::stage_rendered_lab_day_two_arrivals,
+            world::village_lab_scenario::stage_rendered_lab_arrivals,
             world::village_lab_scenario::log_rendered_village_diagnostics,
         )
             .chain()

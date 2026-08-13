@@ -14,7 +14,8 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use shared::character::CharacterManifest;
 use shared::components::{
-    CharacterActivity, CharacterKind, HeroOutfit, PlayerPosition, PlayerRotation,
+    CharacterActivity, CharacterKind, CharacterMotion, HeroOutfit, PlayerPosition, PlayerRotation,
+    TimeWarp,
 };
 use shared::economy::{CarriedAppearance, CarriedLoad};
 use shared::player::HERO_MOVE_SPEED;
@@ -50,7 +51,7 @@ impl Plugin for HeroPlugin {
         app.init_resource::<HeroAssets>();
         app.init_resource::<CarriedLoadAssets>();
         app.init_resource::<ToolAssets>();
-        app.init_resource::<control::HeroSpawnArm>();
+        app.init_resource::<control::WorldPlacementMode>();
         app.add_systems(
             Update,
             (
@@ -63,7 +64,6 @@ impl Plugin for HeroPlugin {
                     sync_hero_transforms,
                 ),
                 (
-                    tag_builders,
                     tag_carry_attachments,
                     tag_tool_attachments,
                     sync_indoor_visibility,
@@ -127,6 +127,15 @@ pub struct HeroVisual {
     speed: f32,
 }
 
+/// Last authoritative position snapshot received by this client. Rendering
+/// extrapolates it for a tightly bounded interval using replicated velocity;
+/// decisions and route truth remain entirely server-authoritative.
+#[derive(Component)]
+pub(crate) struct HeroMotionSnapshot {
+    position: Vec3,
+    received_at: f64,
+}
+
 impl HeroVisual {
     /// Smoothed visual speed, m/s.
     ///
@@ -161,6 +170,43 @@ struct HeroDressed;
 #[derive(Component)]
 struct HeroSceneRoot;
 
+/// Root marker for an instantiated authored character rig.
+#[derive(Component)]
+pub(crate) struct HeroFullRig;
+/// One packet can be late without making a walking crowd pause. Beyond this
+/// horizon we hold the latest truth instead of inventing a long prediction.
+const MAX_MOTION_EXTRAPOLATION_SECONDS: f64 = 0.08;
+
+/// Rendering follows accelerated simulation in world time. Dividing the
+/// extrapolation horizon by the same factor that multiplied server velocity
+/// keeps its maximum spatial guess constant: 10x may move a villager ten
+/// times faster, but it must not draw them ten times farther beyond a queue
+/// place while waiting for the next snapshot.
+fn visual_time_factor(warp: f32) -> f32 {
+    if warp.is_finite() {
+        warp.max(1.0)
+    } else {
+        1.0
+    }
+}
+
+fn extrapolated_motion_target(
+    position: Vec3,
+    velocity: Vec3,
+    snapshot_age: f64,
+    time_factor: f32,
+) -> Vec3 {
+    let horizon = MAX_MOTION_EXTRAPOLATION_SECONDS / f64::from(time_factor.max(1.0));
+    position + velocity * snapshot_age.clamp(0.0, horizon) as f32
+}
+
+fn visual_position_blend(real_seconds: f32, time_factor: f32) -> f32 {
+    // ~12/world-second: at every warp, the visual body trails the
+    // authoritative body by the same WORLD distance instead of the same real
+    // time. This is particularly visible in tightly spaced Moot queues.
+    1.0 - (-12.0 * time_factor.max(1.0) * real_seconds).exp()
+}
+
 /// Link from the hero root to the AnimationPlayer entity inside its scene.
 #[derive(Component)]
 struct HeroAnim {
@@ -172,7 +218,13 @@ struct HeroAnim {
     harvest: Option<AnimationNodeIndex>,
     carry: Option<AnimationNodeIndex>,
     sit_idle: Option<AnimationNodeIndex>,
+    current_body: Option<AnimationNodeIndex>,
+    fading_body: Option<AnimationNodeIndex>,
+    body_fade_seconds: f32,
+    paused: bool,
 }
+
+const BODY_ANIMATION_FADE_SECONDS: f32 = 0.14;
 
 /// The authored resource scene parented to the rig's `attach.carry` joint.
 #[derive(Component)]
@@ -181,6 +233,12 @@ struct CarriedLoadVisual(CarriedAppearance);
 /// An authored rig node that accepts the current carried-goods visual.
 #[derive(Component)]
 struct CarryAttachment;
+
+/// Direct link from an authored attachment joint to its replicated character
+/// root. Resolving this once avoids walking the glTF hierarchy for every tool
+/// and carried-load check on every frame.
+#[derive(Component)]
+struct CharacterAttachmentOwner(Entity);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ToolKind {
@@ -214,16 +272,6 @@ struct ToolVisual(ToolKind);
 /// The authored right-hand joint that accepts the active work tool.
 #[derive(Component)]
 struct ToolAttachment;
-
-/// Marks a character the client believes is working on a building.
-///
-/// DERIVED from a replicated construction site standing next to them, not sent.
-/// The server already tells us where every site is and where every villager is;
-/// "that villager is building" is the two facts read together, and sending it
-/// as a third would be sending the same thing twice — the same reason the moot
-/// hall is drawn from the settlement's position rather than replicated.
-#[derive(Component)]
-struct Building;
 
 /// Spawn the (hidden-until-dressed) character scene under a rig root.
 /// Shared by replicated heroes and the creator's preview rig.
@@ -266,6 +314,7 @@ pub(crate) fn spawn_character_scene_child(
 /// forever.
 fn attach_hero_visuals(
     mut commands: Commands,
+    time: Res<Time>,
     asset_server: Res<AssetServer>,
     mut assets: ResMut<HeroAssets>,
     manifest: Res<HeroManifest>,
@@ -287,11 +336,16 @@ fn attach_hero_visuals(
                 Visibility::default(),
                 InheritedVisibility::default(),
                 HeroVisual { speed: 0.0 },
+                HeroMotionSnapshot {
+                    position: pos.0,
+                    received_at: time.elapsed_secs_f64(),
+                },
+                HeroFullRig,
             ))
             .with_children(|root| {
                 spawn_character_scene_child(root, &asset_server, &mut assets, &manifest);
             });
-        info!("Hero visuals attached for {entity:?}");
+        debug!("Hero character rig attached for {entity:?}");
     }
 }
 
@@ -303,7 +357,10 @@ fn attach_hero_visuals(
 fn dress_heroes(
     mut commands: Commands,
     manifest: Res<HeroManifest>,
-    heroes: Query<(Entity, &HeroOutfit), (With<HeroVisual>, Without<HeroDressed>)>,
+    heroes: Query<
+        (Entity, &HeroOutfit),
+        (With<HeroVisual>, With<HeroFullRig>, Without<HeroDressed>),
+    >,
     changed: Query<Entity, (With<HeroDressed>, Changed<HeroOutfit>)>,
     children_q: Query<&Children>,
     mut named: Query<(&Name, &mut Visibility)>,
@@ -385,9 +442,12 @@ fn apply_hero_skin(
     manifest: Res<HeroManifest>,
     mut assets: ResMut<HeroAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    heroes: Query<(Entity, &HeroOutfit, Option<&HeroSkinApplied>), With<HeroVisual>>,
+    heroes: Query<
+        (Entity, &HeroOutfit, Option<&HeroSkinApplied>),
+        (With<HeroVisual>, With<HeroFullRig>),
+    >,
     children_q: Query<&Children>,
-    primitives: Query<(&GltfMaterialName, &MeshMaterial3d<StandardMaterial>)>,
+    mut primitives: Query<(&GltfMaterialName, &mut MeshMaterial3d<StandardMaterial>)>,
 ) {
     for (hero, outfit, applied) in heroes.iter() {
         if applied.is_some_and(|applied| applied.0 == outfit.skin) {
@@ -397,7 +457,7 @@ fn apply_hero_skin(
         let mut stack = vec![hero];
         let mut target = None;
         while let Some(node) = stack.pop() {
-            if let Ok((material_name, mesh_material)) = primitives.get(node) {
+            if let Ok((material_name, mesh_material)) = primitives.get_mut(node) {
                 if material_name.0 == manifest.skin.material {
                     target = Some((node, mesh_material.0.clone()));
                     break;
@@ -429,8 +489,19 @@ fn apply_hero_skin(
             handle
         };
 
-        commands.entity(primitive).insert(MeshMaterial3d(handle));
-        commands.entity(hero).insert(HeroSkinApplied(outfit.skin));
+        // Mutate the live primitive immediately. Character LOD may have queued
+        // this glTF scene for despawn earlier in the same update; queuing an
+        // ordinary `insert` here used to run after that despawn and panic on the
+        // stale child entity during large crowd transitions.
+        if let Ok((_, mut mesh_material)) = primitives.get_mut(primitive) {
+            *mesh_material = MeshMaterial3d(handle);
+        }
+        // The replicated character root normally outlives its visual rig, but
+        // make the marker fallible as well so disconnect/despawn races cannot
+        // turn a cosmetic operation into a client crash.
+        commands
+            .entity(hero)
+            .try_insert(HeroSkinApplied(outfit.skin));
     }
 }
 
@@ -467,29 +538,40 @@ const CLIP_FACE_IDLE: &str = "face_idle";
 fn matte_character_materials(
     mut assets: ResMut<HeroAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    rigs: Query<Entity, Or<(With<CharacterKind>, With<HeroPreviewRig>)>>,
-    children_q: Query<&Children>,
-    primitives: Query<&MeshMaterial3d<StandardMaterial>>,
+    primitives: Query<
+        (Entity, &MeshMaterial3d<StandardMaterial>),
+        Added<MeshMaterial3d<StandardMaterial>>,
+    >,
+    parents: Query<&ChildOf>,
+    rigs: Query<(), Or<(With<CharacterKind>, With<HeroPreviewRig>)>>,
 ) {
-    for rig in rigs.iter() {
-        let mut stack = vec![rig];
-        while let Some(node) = stack.pop() {
-            if let Ok(mesh_material) = primitives.get(node) {
-                let id = mesh_material.0.id();
-                // Materials are shared across every hero, so this runs ~12
-                // times total. Re-mutating would re-upload to the GPU.
-                if assets.matted.insert(id) {
-                    if let Some(mut material) = materials.get_mut(&mesh_material.0) {
-                        crate::props::foliage::flatten_base(&mut material);
-                    } else {
-                        // Not loaded yet — retry next frame.
-                        assets.matted.remove(&id);
-                    }
-                }
+    // Scene primitives arrive with their material assets already registered.
+    // Inspect only newly instantiated primitives and walk upward once to prove
+    // they belong to a character. The previous implementation traversed every
+    // descendant of all 160 rigs every rendered frame to rediscover the same
+    // dozen shared handles.
+    for (entity, mesh_material) in primitives.iter() {
+        let mut ancestor = entity;
+        let belongs_to_character = loop {
+            if rigs.get(ancestor).is_ok() {
+                break true;
             }
-            if let Ok(children) = children_q.get(node) {
-                stack.extend(children.iter());
-            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break false;
+            };
+            ancestor = parent.parent();
+        };
+        if !belongs_to_character {
+            continue;
+        }
+
+        let id = mesh_material.0.id();
+        if assets.matted.contains(&id) {
+            continue;
+        }
+        if let Some(mut material) = materials.get_mut(&mesh_material.0) {
+            crate::props::foliage::flatten_base(&mut material);
+            assets.matted.insert(id);
         }
     }
 }
@@ -515,7 +597,6 @@ fn setup_hero_animation(
     parents: Query<&ChildOf>,
     names: Query<&Name>,
     children_q: Query<&Children>,
-    rigs: Query<(), Or<(With<CharacterKind>, With<HeroPreviewRig>)>>,
     rig_roots: Query<
         Entity,
         (
@@ -618,8 +699,8 @@ fn setup_hero_animation(
         let mut rig_root = None;
         while let Ok(child_of) = parents.get(ancestor) {
             ancestor = child_of.parent();
-            if rigs.get(ancestor).is_ok() {
-                rig_root = Some(ancestor);
+            if let Ok(root) = rig_roots.get(ancestor) {
+                rig_root = Some(root);
                 break;
             }
         }
@@ -629,11 +710,13 @@ fn setup_hero_animation(
 
         commands
             .entity(player_entity)
-            .insert(AnimationGraphHandle(hero_graph.handle.clone()));
+            .try_insert(AnimationGraphHandle(hero_graph.handle.clone()));
 
-        // Locomotion: both loops always active, cross-faded by weight (see
-        // drive_hero_locomotion). RepeatAnimation::Never is the default, so
-        // the explicit repeat() matters.
+        // Keep one steady body clip active. `drive_hero_locomotion` starts a
+        // second only for its short crossfade and then removes the old clip.
+        // Zero-weight clips are still traversed by Bevy's animation graph, so
+        // pre-starting every possible job animation multiplied the cost of a
+        // 160-person neighbourhood by seven.
         let idle = hero_graph.body.get(CLIP_IDLE).copied();
         let walk = hero_graph.body.get(CLIP_WALK).copied();
         let build = hero_graph.body.get(CLIP_BUILD).copied();
@@ -644,45 +727,30 @@ fn setup_hero_animation(
         if let Some(idle) = idle {
             player.play(idle).repeat().set_weight(1.0);
         }
-        if let Some(walk) = walk {
-            player.play(walk).repeat().set_weight(0.0);
-        }
-        // Started at zero like the others and cross-faded in, rather than
-        // played on demand: every locomotion clip is always resident, so the
-        // blend never has to wait for a clip to start.
-        if let Some(build) = build {
-            player.play(build).repeat().set_weight(0.0);
-        }
-        if let Some(chop) = chop {
-            player.play(chop).repeat().set_weight(0.0);
-        }
-        if let Some(harvest) = harvest {
-            player.play(harvest).repeat().set_weight(0.0);
-        }
-        if let Some(carry) = carry {
-            player.play(carry).repeat().set_weight(0.0);
-        }
-        if let Some(sit_idle) = sit_idle {
-            player.play(sit_idle).repeat().set_weight(0.0);
-        }
         // Resting expression on the face layer; body clips cannot touch it.
         if let Some(face_idle) = hero_graph.face.get(CLIP_FACE_IDLE).copied() {
             player.play(face_idle).repeat().set_weight(1.0);
         }
 
-        if rig_roots.get(rig_root).is_ok() {
-            commands.entity(rig_root).insert(HeroAnim {
-                player: player_entity,
-                idle,
-                walk,
-                build,
-                chop,
-                harvest,
-                carry,
-                sit_idle,
-            });
-        }
-        info!("Hero animation configured for {rig_root:?}");
+        // Both the glTF child and its replicated root may disappear between
+        // query collection and deferred command application (disconnect or
+        // world teardown). Cosmetic animation setup must never crash the
+        // client on either stale entity.
+        commands.entity(rig_root).try_insert(HeroAnim {
+            player: player_entity,
+            idle,
+            walk,
+            build,
+            chop,
+            harvest,
+            carry,
+            sit_idle,
+            current_body: idle,
+            fading_body: None,
+            body_fade_seconds: BODY_ANIMATION_FADE_SECONDS,
+            paused: false,
+        });
+        debug!("Hero animation configured for {rig_root:?}");
     }
 }
 
@@ -691,22 +759,36 @@ fn setup_hero_animation(
 /// Replication arrives at ~30Hz in steps; the visual lerp hides the steps.
 /// The observed visual speed feeds the walk animation, so the feet always
 /// match the motion on screen, whatever the network does.
-fn sync_hero_transforms(
+pub(crate) fn sync_hero_transforms(
     time: Res<Time>,
+    warp: Query<&TimeWarp>,
     mut heroes: Query<(
-        &PlayerPosition,
+        Ref<PlayerPosition>,
         &PlayerRotation,
+        Option<&CharacterMotion>,
         &mut Transform,
         &mut HeroVisual,
+        &mut HeroMotionSnapshot,
     )>,
 ) {
     let dt = time.delta_secs().max(1e-4);
-    // ~12/s: settles within ~2 replication intervals without floatiness.
-    let blend = 1.0 - (-12.0 * dt).exp();
+    let now = time.elapsed_secs_f64();
+    let time_factor = visual_time_factor(warp.iter().next().map_or(1.0, |warp| warp.0));
+    let blend = visual_position_blend(dt, time_factor);
 
-    for (pos, rot, mut transform, mut visual) in heroes.iter_mut() {
+    for (pos, rot, motion, mut transform, mut visual, mut snapshot) in heroes.iter_mut() {
+        if pos.is_changed() {
+            snapshot.position = pos.0;
+            snapshot.received_at = now;
+        }
+        let velocity = motion.map_or(Vec3::ZERO, |motion| motion.velocity);
         let before = transform.translation;
-        let target = pos.0;
+        let target = extrapolated_motion_target(
+            snapshot.position,
+            velocity,
+            now - snapshot.received_at,
+            time_factor,
+        );
         let next = if before.distance_squared(target) > 20.0 * 20.0 {
             target // Teleport-scale jumps snap instead of gliding.
         } else {
@@ -726,83 +808,33 @@ fn sync_hero_transforms(
     }
 }
 
-/// Cross-fade idle<->walk by observed visual speed, and scale the walk cycle
-/// so the feet track what the eye actually sees.
-///
-/// Hidden rigs (the parked creator preview) freeze outright: animation
-/// evaluation runs regardless of visibility, and a character nobody can see
-/// must not sample 16 bones per frame forever.
-/// Decide who is swinging a hammer.
-///
-/// A character standing on a live construction site is building. That is the
-/// whole rule, and it is derived from two things the server already sends:
-/// where the sites are and where the people are. The server's own
-/// `VillagerIntent::Building` never leaves the server, and it does not need to.
-///
-/// Radius rather than exact position because the builder stops within
-/// `BUILD_REACH` of the plot centre, not on it, and because a villager who
-/// wanders a metre while working should not flicker between clips.
-fn tag_builders(
-    mut commands: Commands,
-    sites: Query<&PlayerPosition, With<shared::components::ConstructionSite>>,
-    characters: Query<
-        (Entity, &PlayerPosition, Option<&Building>),
-        With<shared::components::CharacterKind>,
-    >,
-) {
-    /// Slightly wider than the server's own BUILD_REACH, so the clip is playing
-    /// by the time the walk stops rather than a frame later.
-    const BUILD_ANIM_RADIUS: f32 = 6.0;
-
-    if sites.is_empty() {
-        // Nothing under construction anywhere: clear every tag in one pass
-        // rather than distance-checking against an empty set.
-        for (entity, _, building) in characters.iter() {
-            if building.is_some() {
-                commands.entity(entity).remove::<Building>();
-            }
-        }
-        return;
-    }
-
-    for (entity, at, building) in characters.iter() {
-        let on_site = sites
-            .iter()
-            .any(|site| site.0.distance(at.0) <= BUILD_ANIM_RADIUS);
-        match (on_site, building.is_some()) {
-            (true, false) => {
-                commands.entity(entity).insert(Building);
-            }
-            (false, true) => {
-                commands.entity(entity).remove::<Building>();
-            }
-            _ => {}
-        }
-    }
-}
-
 /// A building is still an exterior shell today, so crossing its authored door
 /// hides the character until they come back out. The simulation keeps them at
 /// a shallow point beyond the threshold; visible interiors can later replace
 /// this with an interior scene without changing the worker state machine.
 fn sync_indoor_visibility(
-    characters: Query<(Option<&CharacterActivity>, Has<HeroDressed>), With<HeroVisual>>,
-    mut scene_roots: Query<(&ChildOf, &mut Visibility), With<HeroSceneRoot>>,
+    characters: Query<
+        (&Children, Option<&CharacterActivity>),
+        (
+            With<HeroVisual>,
+            With<HeroDressed>,
+            Or<(Changed<CharacterActivity>, Added<HeroDressed>)>,
+        ),
+    >,
+    mut scene_roots: Query<&mut Visibility, With<HeroSceneRoot>>,
 ) {
-    for (parent, mut visibility) in scene_roots.iter_mut() {
-        let Ok((activity, dressed)) = characters.get(parent.parent()) else {
-            continue;
-        };
-        if !dressed {
-            continue;
-        }
+    for (children, activity) in characters.iter() {
         let target = if activity.is_some_and(|activity| *activity == CharacterActivity::Indoors) {
             Visibility::Hidden
         } else {
             Visibility::Inherited
         };
-        if *visibility != target {
-            *visibility = target;
+        for child in children.iter() {
+            if let Ok(mut visibility) = scene_roots.get_mut(child) {
+                if *visibility != target {
+                    *visibility = target;
+                }
+            }
         }
     }
 }
@@ -811,10 +843,21 @@ fn sync_indoor_visibility(
 fn tag_carry_attachments(
     mut commands: Commands,
     named: Query<(Entity, &Name), (Added<Name>, Without<CarryAttachment>)>,
+    parents: Query<&ChildOf>,
+    characters: Query<(), With<CharacterKind>>,
 ) {
     for (entity, name) in named.iter() {
         if name.as_str() == "attach.carry" {
-            commands.entity(entity).insert(CarryAttachment);
+            let mut ancestor = entity;
+            while let Ok(parent) = parents.get(ancestor) {
+                ancestor = parent.parent();
+                if characters.get(ancestor).is_ok() {
+                    commands
+                        .entity(entity)
+                        .insert((CarryAttachment, CharacterAttachmentOwner(ancestor)));
+                    break;
+                }
+            }
         }
     }
 }
@@ -823,10 +866,21 @@ fn tag_carry_attachments(
 fn tag_tool_attachments(
     mut commands: Commands,
     named: Query<(Entity, &Name), (Added<Name>, Without<ToolAttachment>)>,
+    parents: Query<&ChildOf>,
+    characters: Query<(), With<CharacterKind>>,
 ) {
     for (entity, name) in named.iter() {
         if name.as_str() == "attach.tool.R" {
-            commands.entity(entity).insert(ToolAttachment);
+            let mut ancestor = entity;
+            while let Ok(parent) = parents.get(ancestor) {
+                ancestor = parent.parent();
+                if characters.get(ancestor).is_ok() {
+                    commands
+                        .entity(entity)
+                        .insert((ToolAttachment, CharacterAttachmentOwner(ancestor)));
+                    break;
+                }
+            }
         }
     }
 }
@@ -835,23 +889,19 @@ fn sync_carried_load_visuals(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut assets: ResMut<CarriedLoadAssets>,
-    attachments: Query<Entity, With<CarryAttachment>>,
-    parents: Query<&ChildOf>,
+    attachments: Query<(Entity, Ref<CarryAttachment>, &CharacterAttachmentOwner)>,
     children: Query<&Children>,
-    loads: Query<&CarriedLoad, With<CharacterKind>>,
+    loads: Query<Ref<CarriedLoad>, With<CharacterKind>>,
     existing_visuals: Query<&CarriedLoadVisual>,
 ) {
-    for attachment in attachments.iter() {
-        let mut ancestor = attachment;
-        let desired = loop {
-            let Ok(parent) = parents.get(ancestor) else {
-                break None;
-            };
-            ancestor = parent.parent();
-            if let Ok(load) = loads.get(ancestor) {
-                break load.visible_appearance();
-            }
+    for (attachment, marker, owner) in attachments.iter() {
+        let Ok(load) = loads.get(owner.0) else {
+            continue;
         };
+        if !marker.is_added() && !load.is_changed() {
+            continue;
+        }
+        let desired = load.visible_appearance();
         let existing = children.get(attachment).ok().and_then(|children| {
             children.iter().find_map(|child| {
                 existing_visuals
@@ -926,14 +976,16 @@ fn carried_asset_spec(appearance: CarriedAppearance) -> CarriedAssetSpec {
         CarriedAppearance::IronBundle => CarriedAssetSpec {
             scene_path: "game_assets/resources/carried/IronBundle.glb#Scene0",
         },
+        CarriedAppearance::FlourSack => CarriedAssetSpec {
+            scene_path: "game_assets/resources/carried/FlourSack.glb#Scene0",
+        },
+        CarriedAppearance::BreadBasket => CarriedAssetSpec {
+            scene_path: "game_assets/resources/carried/BreadBasket.glb#Scene0",
+        },
     }
 }
 
-fn desired_tool(
-    activity: Option<CharacterActivity>,
-    building: bool,
-    carrying: bool,
-) -> Option<ToolKind> {
+fn desired_tool(activity: Option<CharacterActivity>, carrying: bool) -> Option<ToolKind> {
     if carrying {
         return None;
     }
@@ -941,48 +993,43 @@ fn desired_tool(
         Some(CharacterActivity::Chopping) => Some(ToolKind::Axe),
         Some(CharacterActivity::Farming) => Some(ToolKind::Scythe),
         Some(CharacterActivity::Building) => Some(ToolKind::Hammer),
-        _ if building => Some(ToolKind::Hammer),
         _ => None,
     }
 }
 
 /// Attach only the tool required by the character's current visible work.
 ///
-/// Construction-site building is still derived client-side from proximity, so
-/// the `Building` marker participates alongside the replicated activity. A
-/// physical load always wins: a villager carrying wood cannot also hold a tool.
+/// A physical load always wins: a villager carrying wood cannot also hold a
+/// tool. `CharacterActivity` is authoritative, avoiding an N characters × M
+/// construction-sites proximity join on the client.
 fn sync_tool_visuals(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut assets: ResMut<ToolAssets>,
-    attachments: Query<Entity, With<ToolAttachment>>,
-    parents: Query<&ChildOf>,
+    attachments: Query<(Entity, Ref<ToolAttachment>, &CharacterAttachmentOwner)>,
     children: Query<&Children>,
     characters: Query<
-        (
-            Option<&CharacterActivity>,
-            Has<Building>,
-            Option<&CarriedLoad>,
-        ),
+        (Option<Ref<CharacterActivity>>, Option<Ref<CarriedLoad>>),
         With<CharacterKind>,
     >,
     existing_visuals: Query<&ToolVisual>,
 ) {
-    for attachment in attachments.iter() {
-        let mut ancestor = attachment;
-        let desired = loop {
-            let Ok(parent) = parents.get(ancestor) else {
-                break None;
-            };
-            ancestor = parent.parent();
-            if let Ok((activity, building, carried)) = characters.get(ancestor) {
-                break desired_tool(
-                    activity.copied(),
-                    building,
-                    carried.is_some_and(|load| !load.is_empty()),
-                );
-            }
+    for (attachment, marker, owner) in attachments.iter() {
+        let Ok((activity, carried)) = characters.get(owner.0) else {
+            continue;
         };
+        if !marker.is_added()
+            && !activity
+                .as_ref()
+                .is_some_and(|activity| activity.is_changed())
+            && !carried.as_ref().is_some_and(|carried| carried.is_changed())
+        {
+            continue;
+        }
+        let desired = desired_tool(
+            activity.as_deref().copied(),
+            carried.is_some_and(|load| !load.is_empty()),
+        );
         let existing = children.get(attachment).ok().and_then(|children| {
             children.iter().find_map(|child| {
                 existing_visuals
@@ -1020,176 +1067,122 @@ fn sync_tool_visuals(
     }
 }
 
+fn desired_body_animation(
+    visual: &HeroVisual,
+    anim: &HeroAnim,
+    activity: Option<CharacterActivity>,
+    carrying: bool,
+) -> (Option<AnimationNodeIndex>, f32, bool) {
+    // Different start/stop thresholds keep small replicated speed noise from
+    // continually restarting idle and walk.
+    let was_walking = anim.current_body.is_some() && anim.current_body == anim.walk;
+    let moving = visual.speed > if was_walking { 0.10 } else { 0.24 };
+    let stride_speed = (visual.speed / HERO_MOVE_SPEED).clamp(0.4, 1.6);
+
+    if carrying {
+        return (
+            anim.carry.or(anim.idle),
+            if moving { stride_speed } else { 0.0 },
+            !moving,
+        );
+    }
+    if moving {
+        return (anim.walk.or(anim.idle), stride_speed, false);
+    }
+
+    let clip = match activity {
+        Some(CharacterActivity::Sitting) => anim.sit_idle,
+        Some(CharacterActivity::Chopping) => anim.chop,
+        Some(CharacterActivity::Farming) => anim.harvest,
+        Some(CharacterActivity::Fishing | CharacterActivity::Building) => anim.build,
+        _ => anim.idle,
+    }
+    .or(anim.idle);
+    (clip, 1.0, false)
+}
+
+/// Keep exactly one body animation active in steady state and at most two for
+/// a short crossfade. The face loop remains a separate masked layer.
 fn drive_hero_locomotion(
-    heroes: Query<(
+    time: Res<Time>,
+    mut heroes: Query<(
         &HeroVisual,
-        &HeroAnim,
+        &mut HeroAnim,
         Option<&InheritedVisibility>,
-        Option<&Building>,
         Option<&CharacterActivity>,
         Option<&CarriedLoad>,
     )>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    for (visual, anim, inherited, building, activity, carried) in heroes.iter() {
+    for (visual, mut anim, inherited, activity, carried) in heroes.iter_mut() {
         let hidden = inherited.is_some_and(|visibility| !visibility.get())
             || activity.is_some_and(|activity| *activity == CharacterActivity::Indoors);
         let Ok(mut player) = players.get_mut(anim.player) else {
             continue;
         };
 
-        // 0 standing .. 1 full stride, with a small dead zone so replication
-        // jitter cannot flutter the blend.
-        let motion_blend = if hidden {
-            0.0
-        } else {
-            ((visual.speed - 0.15) / (HERO_MOVE_SPEED * 0.6)).clamp(0.0, 1.0)
-        };
-        let carrying = carried.is_some_and(|load| !load.is_empty()) && !hidden;
-        let walk_blend = if carrying { 0.0 } else { motion_blend };
-        // A loaded character owns the whole body layer even while standing.
-        // Otherwise the old idle clip pulls both arms away while the bundle
-        // remains attached at chest height.
-        let carry_blend = if carrying { 1.0 } else { 0.0 };
-        let sit_blend = if !carrying
-            && !hidden
-            && activity.is_some_and(|activity| *activity == CharacterActivity::Sitting)
-        {
-            1.0 - motion_blend
-        } else {
-            0.0
-        };
-        let chop_blend = if !carrying
-            && !hidden
-            && activity.is_some_and(|activity| *activity == CharacterActivity::Chopping)
-        {
-            1.0 - motion_blend
-        } else {
-            0.0
-        };
-        let harvest_blend = if !carrying
-            && !hidden
-            && activity.is_some_and(|activity| *activity == CharacterActivity::Farming)
-        {
-            1.0 - motion_blend
-        } else {
-            0.0
-        };
-        // Building wins over standing but NOT over walking: someone still
-        // crossing the plot should be seen walking, and the hammer starts when
-        // they stop. Falls out of the blend for free rather than needing a
-        // state machine.
-        let field_work = activity.is_some_and(|activity| *activity == CharacterActivity::Fishing);
-        let road_building =
-            activity.is_some_and(|activity| *activity == CharacterActivity::Building);
-        let build_blend = if !carrying
-            && (building.is_some() || field_work || road_building)
-            && !hidden
-            && chop_blend == 0.0
-            && harvest_blend == 0.0
-        {
-            1.0 - motion_blend
-        } else {
-            0.0
-        };
-        let stride_speed = if hidden {
-            0.0
-        } else {
-            (visual.speed / HERO_MOVE_SPEED).clamp(0.4, 1.6)
+        if hidden {
+            if !anim.paused {
+                player.pause_all();
+                anim.paused = true;
+            }
+            continue;
+        }
+        if anim.paused {
+            player.resume_all();
+            anim.paused = false;
+        }
+
+        let carrying = carried.is_some_and(|load| !load.is_empty());
+        let (desired, speed, freeze_at_contact) =
+            desired_body_animation(visual, &anim, activity.copied(), carrying);
+        let Some(desired) = desired else {
+            continue;
         };
 
-        if let Some(walk) = anim.walk {
-            if let Some(active) = player.animation_mut(walk) {
-                if (active.weight() - walk_blend).abs() > 0.01 {
-                    active.set_weight(walk_blend);
-                }
-                if (active.speed() - stride_speed).abs() > 0.01 {
-                    active.set_speed(stride_speed);
-                }
+        if anim.current_body != Some(desired) || !player.is_playing_animation(desired) {
+            if let Some(previous_fade) = anim.fading_body.take() {
+                player.stop(previous_fade);
+            }
+            let previous = anim
+                .current_body
+                .filter(|previous| *previous != desired && player.is_playing_animation(*previous));
+            // `start` deliberately restarts job clips at a readable contact
+            // pose. Only the old and new body clips coexist during this fade.
+            player
+                .start(desired)
+                .repeat()
+                .set_weight(if previous.is_some() { 0.0 } else { 1.0 });
+            anim.current_body = Some(desired);
+            anim.fading_body = previous;
+            anim.body_fade_seconds = 0.0;
+        }
+
+        if let Some(active) = player.animation_mut(desired) {
+            if freeze_at_contact && active.seek_time() != 0.0 {
+                active.set_seek_time(0.0);
+            }
+            if (active.speed() - speed).abs() > 0.01 {
+                active.set_speed(speed);
             }
         }
-        if let Some(build) = anim.build {
-            if let Some(active) = player.animation_mut(build) {
-                if (active.weight() - build_blend).abs() > 0.01 {
-                    active.set_weight(build_blend);
-                }
-                let build_speed = if hidden { 0.0 } else { 1.0 };
-                if (active.speed() - build_speed).abs() > 0.01 {
-                    active.set_speed(build_speed);
-                }
+
+        if let Some(fading) = anim.fading_body {
+            anim.body_fade_seconds += time.delta_secs();
+            let weight = (anim.body_fade_seconds / BODY_ANIMATION_FADE_SECONDS).clamp(0.0, 1.0);
+            if let Some(active) = player.animation_mut(desired) {
+                active.set_weight(weight);
             }
-        }
-        if let Some(chop) = anim.chop {
-            if let Some(active) = player.animation_mut(chop) {
-                if (active.weight() - chop_blend).abs() > 0.01 {
-                    active.set_weight(chop_blend);
-                }
-                let chop_speed = if hidden { 0.0 } else { 1.0 };
-                if (active.speed() - chop_speed).abs() > 0.01 {
-                    active.set_speed(chop_speed);
-                }
+            if let Some(active) = player.animation_mut(fading) {
+                active.set_weight(1.0 - weight);
             }
-        }
-        if let Some(harvest) = anim.harvest {
-            if let Some(active) = player.animation_mut(harvest) {
-                if (active.weight() - harvest_blend).abs() > 0.01 {
-                    active.set_weight(harvest_blend);
-                }
-                let harvest_speed = if hidden { 0.0 } else { 1.0 };
-                if (active.speed() - harvest_speed).abs() > 0.01 {
-                    active.set_speed(harvest_speed);
-                }
+            if weight >= 1.0 {
+                player.stop(fading);
+                anim.fading_body = None;
             }
-        }
-        if let Some(carry) = anim.carry {
-            if let Some(active) = player.animation_mut(carry) {
-                if (active.weight() - carry_blend).abs() > 0.01 {
-                    active.set_weight(carry_blend);
-                }
-                let carry_speed = if carrying && motion_blend > 0.0 {
-                    stride_speed
-                } else {
-                    0.0
-                };
-                if carrying && motion_blend == 0.0 && active.seek_time() != 0.0 {
-                    // Frame one is the neutral contact pose: legs centred,
-                    // both arms closed around the load. Freeze there until the
-                    // villager actually moves again.
-                    active.set_seek_time(0.0);
-                }
-                if (active.speed() - carry_speed).abs() > 0.01 {
-                    active.set_speed(carry_speed);
-                }
-            }
-        }
-        if let Some(sit_idle) = anim.sit_idle {
-            if let Some(active) = player.animation_mut(sit_idle) {
-                if (active.weight() - sit_blend).abs() > 0.01 {
-                    active.set_weight(sit_blend);
-                }
-                let sit_speed = if hidden { 0.0 } else { 1.0 };
-                if (active.speed() - sit_speed).abs() > 0.01 {
-                    active.set_speed(sit_speed);
-                }
-            }
-        }
-        if let Some(idle) = anim.idle {
-            if let Some(active) = player.animation_mut(idle) {
-                let idle_weight = 1.0
-                    - walk_blend
-                    - carry_blend
-                    - build_blend
-                    - chop_blend
-                    - harvest_blend
-                    - sit_blend;
-                if (active.weight() - idle_weight).abs() > 0.01 {
-                    active.set_weight(idle_weight);
-                }
-                // Freeze rather than idle-breathe an invisible preview.
-                let idle_speed = if hidden { 0.0 } else { 1.0 };
-                if (active.speed() - idle_speed).abs() > 0.01 {
-                    active.set_speed(idle_speed);
-                }
+        } else if let Some(active) = player.animation_mut(desired) {
+            if (active.weight() - 1.0).abs() > 0.01 {
+                active.set_weight(1.0);
             }
         }
     }
@@ -1201,6 +1194,152 @@ mod carried_tests {
 
     use super::*;
 
+    fn queue_skin_primitive_despawn(
+        mut commands: Commands,
+        primitives: Query<Entity, With<GltfMaterialName>>,
+    ) {
+        for primitive in primitives.iter() {
+            commands.entity(primitive).despawn();
+        }
+    }
+
+    fn queue_animation_rig_despawn(
+        mut commands: Commands,
+        roots: Query<Entity, (With<CharacterKind>, With<HeroFullRig>)>,
+    ) {
+        for root in roots.iter() {
+            commands.entity(root).despawn();
+        }
+    }
+
+    fn animation_setup_test_app() -> App {
+        let manifest = CharacterManifest::load().expect("shipped character manifest");
+        let mut app = App::new();
+        app.insert_resource(HeroManifest(manifest));
+        app.init_resource::<Assets<Gltf>>();
+        app.init_resource::<Assets<AnimationGraph>>();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<AnimationGraph>>()
+            .add(AnimationGraph::new());
+        app.insert_resource(HeroAssets {
+            graph: Some(HeroGraph {
+                handle,
+                body: HashMap::new(),
+                face: HashMap::new(),
+            }),
+            ..default()
+        });
+        app
+    }
+
+    #[test]
+    fn skin_application_survives_a_same_frame_primitive_despawn() {
+        let manifest = CharacterManifest::load().expect("shipped character manifest");
+        let skin_material_name = manifest.skin.material.clone();
+        let mut app = App::new();
+        app.insert_resource(HeroManifest(manifest));
+        app.init_resource::<HeroAssets>();
+        app.init_resource::<Assets<StandardMaterial>>();
+
+        let base = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let primitive = app
+            .world_mut()
+            .spawn((GltfMaterialName(skin_material_name), MeshMaterial3d(base)))
+            .id();
+        let hero = app
+            .world_mut()
+            .spawn((
+                HeroVisual { speed: 0.0 },
+                HeroFullRig,
+                HeroOutfit::default(),
+            ))
+            .add_child(primitive)
+            .id();
+
+        // A world teardown can queue the glTF child for despawn before deferred
+        // commands are flushed. Material mutation must not leave a stale
+        // entity command.
+        app.add_systems(
+            Update,
+            (queue_skin_primitive_despawn, apply_hero_skin).chain_ignore_deferred(),
+        );
+        app.update();
+
+        assert!(app.world().get_entity(primitive).is_err());
+        assert!(app.world().entity(hero).contains::<HeroSkinApplied>());
+    }
+
+    #[test]
+    fn animation_setup_survives_a_same_frame_rig_despawn() {
+        let mut app = animation_setup_test_app();
+        let player = app.world_mut().spawn(AnimationPlayer::default()).id();
+        let root = app
+            .world_mut()
+            .spawn((CharacterKind::Villager, HeroFullRig))
+            .add_child(player)
+            .id();
+
+        // A disconnect/world teardown can invalidate both deferred insertion
+        // targets after setup has already queried them. Fallible inserts must
+        // make that cosmetic race a no-op rather than an EntityMut panic.
+        app.add_systems(
+            Update,
+            (queue_animation_rig_despawn, setup_hero_animation).chain_ignore_deferred(),
+        );
+        app.update();
+
+        assert!(app.world().get_entity(root).is_err());
+        assert!(app.world().get_entity(player).is_err());
+    }
+
+    #[test]
+    fn motion_extrapolation_bridges_one_packet_but_never_runs_away() {
+        let position = Vec3::new(5.0, 2.0, -3.0);
+        let velocity = Vec3::new(10.0, 0.0, 0.0);
+        assert_eq!(
+            extrapolated_motion_target(position, velocity, 0.03, 1.0),
+            Vec3::new(5.3, 2.0, -3.0)
+        );
+        assert_eq!(
+            extrapolated_motion_target(position, velocity, 2.0, 1.0),
+            Vec3::new(5.8, 2.0, -3.0),
+            "a missing packet must not turn into long-running client authority"
+        );
+        assert_eq!(
+            extrapolated_motion_target(position, Vec3::ZERO, 2.0, 1.0),
+            position
+        );
+    }
+
+    #[test]
+    fn accelerated_motion_keeps_the_same_visual_spatial_error() {
+        let position = Vec3::new(5.0, 2.0, -3.0);
+        let base_velocity = Vec3::new(HERO_MOVE_SPEED, 0.0, 0.0);
+        let base_target = extrapolated_motion_target(position, base_velocity, 1.0, 1.0);
+        let base_offset = base_target - position;
+
+        for warp in [10.0_f32, 25.0, 100.0] {
+            let target = extrapolated_motion_target(position, base_velocity * warp, 1.0, warp);
+            assert!(
+                target.distance(base_target) < 1.0e-5,
+                "{warp}x extrapolated by {:?}, expected {:?}",
+                target - position,
+                base_offset,
+            );
+
+            let base_blend = visual_position_blend(1.0 / 60.0, 1.0);
+            let warped_blend = visual_position_blend(1.0 / 60.0, warp);
+            assert!(
+                warped_blend > base_blend,
+                "accelerated bodies must settle faster in real time"
+            );
+        }
+    }
+
     #[test]
     fn every_carried_appearance_has_an_authored_scene() {
         for appearance in [
@@ -1209,10 +1348,20 @@ mod carried_tests {
             CarriedAppearance::FishBasket,
             CarriedAppearance::StoneBundle,
             CarriedAppearance::IronBundle,
+            CarriedAppearance::FlourSack,
+            CarriedAppearance::BreadBasket,
         ] {
             let spec = carried_asset_spec(appearance);
             assert!(spec.scene_path.ends_with(".glb#Scene0"));
         }
+        assert_eq!(
+            carried_asset_spec(CarriedAppearance::FlourSack).scene_path,
+            "game_assets/resources/carried/FlourSack.glb#Scene0"
+        );
+        assert_eq!(
+            carried_asset_spec(CarriedAppearance::BreadBasket).scene_path,
+            "game_assets/resources/carried/BreadBasket.glb#Scene0"
+        );
         let wood = carried_bundle_transform();
         assert_eq!(wood.scale, Vec3::splat(1.35));
         assert_eq!(wood.translation.y, 0.0);
@@ -1222,38 +1371,31 @@ mod carried_tests {
     #[test]
     fn work_activity_selects_one_tool_and_carrying_selects_none() {
         assert_eq!(
-            desired_tool(Some(CharacterActivity::Chopping), false, false),
+            desired_tool(Some(CharacterActivity::Chopping), false),
             Some(ToolKind::Axe)
         );
         assert_eq!(
-            desired_tool(Some(CharacterActivity::Farming), false, false),
+            desired_tool(Some(CharacterActivity::Farming), false),
             Some(ToolKind::Scythe)
         );
         assert_eq!(
-            desired_tool(Some(CharacterActivity::Building), false, false),
+            desired_tool(Some(CharacterActivity::Building), false),
             Some(ToolKind::Hammer)
         );
-        assert_eq!(desired_tool(None, true, false), Some(ToolKind::Hammer));
-        assert_eq!(
-            desired_tool(Some(CharacterActivity::Chopping), false, true),
-            None
-        );
-        assert_eq!(
-            desired_tool(Some(CharacterActivity::Fishing), false, false),
-            None
-        );
+        assert_eq!(desired_tool(None, false), None);
+        assert_eq!(desired_tool(Some(CharacterActivity::Chopping), true), None);
+        assert_eq!(desired_tool(Some(CharacterActivity::Fishing), false), None);
     }
 
     #[test]
     fn farming_uses_harvest_without_leaking_into_the_build_clip() {
         let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
         let idle = AnimationNodeIndex::new(0);
         let build = AnimationNodeIndex::new(1);
         let harvest = AnimationNodeIndex::new(2);
         let mut player = AnimationPlayer::default();
         player.play(idle).repeat().set_weight(1.0);
-        player.play(build).repeat().set_weight(0.0);
-        player.play(harvest).repeat().set_weight(0.0);
         let player_entity = world.spawn(player).id();
         world.spawn((
             HeroVisual { speed: 0.0 },
@@ -1266,29 +1408,36 @@ mod carried_tests {
                 harvest: Some(harvest),
                 carry: None,
                 sit_idle: None,
+                current_body: Some(idle),
+                fading_body: None,
+                body_fade_seconds: 0.0,
+                paused: false,
             },
             CharacterActivity::Farming,
         ));
 
         world.run_system_once(drive_hero_locomotion).unwrap();
+        world
+            .resource_mut::<Time<()>>()
+            .advance_by(std::time::Duration::from_secs_f32(
+                BODY_ANIMATION_FADE_SECONDS,
+            ));
+        world.run_system_once(drive_hero_locomotion).unwrap();
 
         let player = world.get::<AnimationPlayer>(player_entity).unwrap();
         assert_eq!(player.animation(harvest).unwrap().weight(), 1.0);
-        assert_eq!(player.animation(build).unwrap().weight(), 0.0);
-        assert_eq!(player.animation(idle).unwrap().weight(), 0.0);
+        assert!(player.animation(build).is_none());
+        assert!(player.animation(idle).is_none());
+        assert_eq!(player.playing_animations().count(), 1);
     }
 
     #[test]
     fn a_loaded_stationary_villager_freezes_in_the_carry_pose() {
         let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
         let carry = AnimationNodeIndex::new(0);
         let idle = AnimationNodeIndex::new(1);
         let mut player = AnimationPlayer::default();
-        player
-            .play(carry)
-            .repeat()
-            .set_weight(0.0)
-            .set_seek_time(0.5);
         player.play(idle).repeat().set_weight(1.0);
         let player_entity = world.spawn(player).id();
         world.spawn((
@@ -1302,6 +1451,10 @@ mod carried_tests {
                 harvest: None,
                 carry: Some(carry),
                 sit_idle: None,
+                current_body: Some(idle),
+                fading_body: None,
+                body_fade_seconds: 0.0,
+                paused: false,
             },
             CarriedLoad {
                 good: Some(shared::economy::Good::Wood),
@@ -1311,12 +1464,19 @@ mod carried_tests {
         ));
 
         world.run_system_once(drive_hero_locomotion).unwrap();
+        world
+            .resource_mut::<Time<()>>()
+            .advance_by(std::time::Duration::from_secs_f32(
+                BODY_ANIMATION_FADE_SECONDS,
+            ));
+        world.run_system_once(drive_hero_locomotion).unwrap();
 
         let player = world.get::<AnimationPlayer>(player_entity).unwrap();
         let active_carry = player.animation(carry).unwrap();
         assert_eq!(active_carry.weight(), 1.0);
         assert_eq!(active_carry.speed(), 0.0);
         assert_eq!(active_carry.seek_time(), 0.0);
-        assert_eq!(player.animation(idle).unwrap().weight(), 0.0);
+        assert!(player.animation(idle).is_none());
+        assert_eq!(player.playing_animations().count(), 1);
     }
 }

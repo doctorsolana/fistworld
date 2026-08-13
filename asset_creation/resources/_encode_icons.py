@@ -3,8 +3,15 @@ import os, sys
 from PIL import Image, ImageDraw, ImageFont
 
 icons, sheets = sys.argv[1], sys.argv[2]
-ORDER = ["wood.png", "wheat.png", "fish.png", "stone.png", "iron.png",
-         "axe.png", "hammer.png", "scythe.png"]
+
+# ORDER COMES FROM THE MANIFEST, not from a list kept here. This script had its own hardcoded eight,
+# which is the precise failure item_manifest.py was written to stop -- and it duly happened again:
+# flour.png and bread.png shipped, and the sheet went on showing the old eight as though they did not
+# exist. A second list cannot help but disagree with the first eventually.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from item_manifest import ITEMS                                    # noqa: E402
+
+ORDER = [icon for _glb, icon in ITEMS.values() if icon]
 
 
 def font(size):

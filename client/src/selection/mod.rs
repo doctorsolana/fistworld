@@ -34,7 +34,9 @@ impl Plugin for SelectionPlugin {
                 tag_settlement_buildings_selectable,
                 tag_construction_sites_selectable,
                 clear_stale_selection,
-                pick::pick_on_left_click,
+                pick::pick_on_left_click
+                    .after(crate::camera_rts::update_cursor_terrain_hit)
+                    .after(crate::hero::sync_hero_transforms),
                 order::issue_order_on_right_click,
                 ring::sync_selection_ring,
             )
@@ -47,21 +49,50 @@ impl Plugin for SelectionPlugin {
 
 /// Anything the player can click on.
 ///
-/// `radius` is the world-space pick radius around the entity's vertical axis;
-/// `height` is how tall it is above its origin. The hero's origin is at its
-/// feet, so a hero is `height: 1.7`.
-#[derive(Component, Debug, Clone, Copy)]
+/// `radius` is the person's world-space pick radius or a building's cheap
+/// broad-phase radius; `shape` is the precise click volume. `height` is how
+/// tall it is above its origin. The hero's origin is at its feet, so a hero is
+/// `height: 1.7`.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct Selectable {
     pub radius: f32,
     pub height: f32,
+    pub shape: SelectableShape,
+}
+
+/// The visible volume a click is expected to hit.
+///
+/// Buildings used to be represented by one enclosing circle. In a dense town
+/// that circle includes a great deal of empty yard and could steal a click from
+/// a person who was visibly standing beside the wall. Keeping the authored
+/// footprint here makes selection agree with the object on screen.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SelectableShape {
+    Person,
+    Footprint {
+        half_extents: Vec2,
+        centre_offset: Vec2,
+        rotation: f32,
+    },
 }
 
 impl Selectable {
-    /// A building-sized target: a hall is clicked at its walls, not its axis.
-    pub fn hall() -> Self {
+    /// A level-aware Hall target. The assets keep their root at the permanent
+    /// doorway, so the radius must include the footprint's shifted centre.
+    pub fn hall(level: shared::components::CivicHallLevel) -> Self {
+        Self::hall_rotated(level, 0.0)
+    }
+
+    pub fn hall_rotated(level: shared::components::CivicHallLevel, rotation: f32) -> Self {
+        let definition = level.building_type().definition();
         Self {
-            radius: 4.5,
-            height: 5.0,
+            radius: definition.root_footprint_radius(),
+            height: definition.height,
+            shape: SelectableShape::Footprint {
+                half_extents: definition.footprint * 0.5,
+                centre_offset: definition.footprint_center,
+                rotation,
+            },
         }
     }
 
@@ -70,14 +101,27 @@ impl Selectable {
         Self {
             radius: 0.55,
             height: 1.7,
+            shape: SelectableShape::Person,
         }
     }
 
     pub fn settlement_building(kind: shared::components::SettlementBuildingKind) -> Self {
+        Self::settlement_building_rotated(kind, 0.0)
+    }
+
+    pub fn settlement_building_rotated(
+        kind: shared::components::SettlementBuildingKind,
+        rotation: f32,
+    ) -> Self {
         let definition = kind.art().definition();
         Self {
-            radius: definition.footprint.max_element() * 0.5,
+            radius: definition.root_footprint_radius(),
             height: definition.height,
+            shape: SelectableShape::Footprint {
+                half_extents: definition.footprint * 0.5,
+                centre_offset: definition.footprint_center,
+                rotation,
+            },
         }
     }
 }
@@ -272,33 +316,50 @@ fn clear_stale_selection(
 fn tag_settlements_selectable(
     mut commands: Commands,
     settlements: Query<
-        Entity,
         (
-            With<shared::components::Settlement>,
-            With<shared::components::PlayerPosition>,
-            Without<Selectable>,
+            Entity,
+            &shared::components::Settlement,
+            Option<&shared::components::CivicHallLevel>,
+            Option<&shared::components::PlayerRotation>,
+            Option<&Selectable>,
         ),
+        With<shared::components::PlayerPosition>,
     >,
 ) {
-    for entity in settlements.iter() {
-        commands.entity(entity).insert(Selectable::hall());
+    for (entity, settlement, level, rotation, selectable) in settlements.iter() {
+        let desired = Selectable::hall_rotated(
+            level
+                .copied()
+                .unwrap_or_else(|| shared::components::CivicHallLevel::for_tier(settlement.tier)),
+            rotation.map_or(0.0, |rotation| rotation.0),
+        );
+        if selectable != Some(&desired) {
+            commands.entity(entity).insert(desired);
+        }
     }
 }
 
 fn tag_settlement_buildings_selectable(
     mut commands: Commands,
     buildings: Query<
-        (Entity, &shared::components::SettlementBuilding),
+        (
+            Entity,
+            &shared::components::SettlementBuilding,
+            Option<&shared::components::PlayerRotation>,
+        ),
         (
             With<shared::components::PlayerPosition>,
             Without<Selectable>,
         ),
     >,
 ) {
-    for (entity, building) in buildings.iter() {
+    for (entity, building, rotation) in buildings.iter() {
         commands
             .entity(entity)
-            .insert(Selectable::settlement_building(building.kind));
+            .insert(Selectable::settlement_building_rotated(
+                building.kind,
+                rotation.map_or(0.0, |rotation| rotation.0),
+            ));
     }
 }
 
@@ -315,7 +376,10 @@ fn tag_construction_sites_selectable(
     for (entity, site) in sites.iter() {
         commands
             .entity(entity)
-            .insert(Selectable::settlement_building(site.kind));
+            .insert(Selectable::settlement_building_rotated(
+                site.kind,
+                site.rotation,
+            ));
     }
 }
 
@@ -630,5 +694,18 @@ mod tests {
             far > base * 10.0,
             "distant target radius {far} is too tight"
         );
+    }
+
+    #[test]
+    fn civic_hall_pick_shape_grows_with_the_physical_rung() {
+        use shared::components::CivicHallLevel;
+
+        let moot = Selectable::hall(CivicHallLevel::Moot);
+        let village = Selectable::hall(CivicHallLevel::Village);
+        let town = Selectable::hall(CivicHallLevel::Town);
+        assert!(moot.radius < village.radius && village.radius < town.radius);
+        assert!(moot.height < village.height && village.height < town.height);
+        assert!(town.radius > 11.0, "Town Hall rear shell is not clickable");
+        assert!(town.height > 21.0, "Town Hall belfry is not clickable");
     }
 }

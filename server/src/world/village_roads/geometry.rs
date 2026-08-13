@@ -56,6 +56,53 @@ pub(crate) fn road_segment_is_dry(terrain: &WorldTerrain, start: Vec2, end: Vec2
     road_segment_is_dry_at_width(terrain, start, end, VILLAGE_ROAD_WIDTH)
 }
 
+/// Cheap ordering hint for settlement site search.
+///
+/// This probes the centre and both shoulders every two metres instead of the
+/// authoritative nine-point disc every 20 centimetres. Generated headwaters
+/// are at least six metres wide, so it reliably pushes plots across visible
+/// water behind same-bank plots without making hundreds of thousands of river
+/// lookups per permit. It is never authority: the selected shortlist entry is
+/// checked by [`road_segment_is_dry`] (and then bounded terrain routing) before
+/// a permit is granted.
+pub(crate) fn road_segment_is_coarsely_dry(terrain: &WorldTerrain, start: Vec2, end: Vec2) -> bool {
+    road_segment_is_coarsely_dry_at_width(terrain, start, end, VILLAGE_ROAD_WIDTH)
+}
+
+/// Bounded permit-planning probe for a road reservation of `width` metres.
+///
+/// This is deliberately cheaper than the authoritative 20 cm corridor proof:
+/// permit A* can inspect thousands of four-metre edges while bending around a
+/// dense settlement, and doing nine terrain/water lookups every 20 cm on every
+/// rejected edge creates visible server hitches. The reconstructed route is
+/// still certified by [`road_corridor_is_dry`] before approval, so this helper
+/// can admit an edge to the search without ever granting it authority.
+pub(crate) fn road_segment_is_coarsely_dry_at_width(
+    terrain: &WorldTerrain,
+    start: Vec2,
+    end: Vec2,
+    width: f32,
+) -> bool {
+    const SITE_RANKING_SAMPLE_STEP: f32 = 2.0;
+    let direction = (end - start).normalize_or_zero();
+    let shoulder = Vec2::new(-direction.y, direction.x) * (width * 0.5 + 0.2);
+    let steps = (start.distance(end) / SITE_RANKING_SAMPLE_STEP)
+        .ceil()
+        .max(1.0) as usize;
+    (0..=steps).all(|step| {
+        let center = start.lerp(end, step as f32 / steps as f32);
+        [center, center + shoulder, center - shoulder]
+            .into_iter()
+            .all(|sample| {
+                terrain
+                    .water_surface_height(sample.x, sample.y)
+                    .is_none_or(|water| {
+                        terrain.get_height(sample.x, sample.y) >= water + ROAD_WATER_FREEBOARD
+                    })
+            })
+    })
+}
+
 pub(crate) fn road_segment_is_dry_at_width(
     terrain: &WorldTerrain,
     start: Vec2,

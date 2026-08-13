@@ -12,8 +12,8 @@ use bevy::ui::FocusPolicy;
 
 use shared::components::HeroOutfit;
 
-use crate::hero::control::{HeroSpawnArm, SelectedOutfit};
-use crate::hero::{spawn_character_scene_child, HeroPreviewRig, HeroVisual};
+use crate::hero::control::{SelectedOutfit, WorldPlacementMode};
+use crate::hero::{spawn_character_scene_child, HeroFullRig, HeroPreviewRig, HeroVisual};
 use crate::input::InputState;
 use crate::states::GameState;
 use crate::ui::modal::{handle_backdrop_pressed, update_modal_click_guard};
@@ -199,6 +199,10 @@ fn setup_preview_rig(
             let rig_entity = set
                 .spawn((
                     HeroPreviewRig,
+                    // The shared dresser and skin systems intentionally ignore
+                    // partial/LOD rigs. The preview is a complete rig too; a
+                    // refactor dropped this marker and left its scene hidden.
+                    HeroFullRig,
                     HeroVisual::walking_in_place(),
                     selected.0,
                     // Face the camera (+Z of the set); the model faces -Z.
@@ -568,7 +572,7 @@ fn handle_confirm_buttons(
     guard: Res<CreatorClickGuard>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut open: ResMut<HeroCreatorOpen>,
-    mut arm: ResMut<HeroSpawnArm>,
+    mut placement: ResMut<WorldPlacementMode>,
     place: Query<&Interaction, (With<PlaceButton>, Changed<Interaction>)>,
     cancel: Query<&Interaction, (With<CancelButton>, Changed<Interaction>)>,
 ) {
@@ -580,7 +584,7 @@ fn handle_confirm_buttons(
     for interaction in place.iter() {
         if *interaction == Interaction::Pressed {
             open.0 = false;
-            arm.0 = true;
+            *placement = WorldPlacementMode::SpawnHero;
         }
     }
     for interaction in cancel.iter() {

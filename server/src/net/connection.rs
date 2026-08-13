@@ -6,14 +6,13 @@ use lightyear::prelude::*;
 use std::time::Duration;
 
 use shared::components::{
-    CharacterAttributes, Player, PlayerPosition, PlayerProgression, PlayerRotation,
+    CharacterActivity, CharacterAttributes, CharacterMotion, Health, Player, PlayerPosition,
+    PlayerProgression, PlayerRotation,
 };
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 
 use crate::net::input::ClientInputs;
-use crate::persistence::io_queue::{ProfileIoQueue, SavePriority};
 use crate::persistence::profiles::PlayerProfiles;
-use crate::player::roster_cache::PlayerRosterCache;
 
 /// Replication send interval, applied app-wide via `ReplicationMetadata`.
 ///
@@ -60,9 +59,8 @@ pub fn handle_connections(
 /// This is an observer that triggers when a client gets `Disconnected` added.
 pub fn handle_disconnections(
     trigger: On<Add, Disconnected>,
+    mut commands: Commands,
     mut profiles: ResMut<PlayerProfiles>,
-    mut roster_cache: ResMut<PlayerRosterCache>,
-    mut io_queue: ResMut<ProfileIoQueue>,
     client_entities: Query<&RemoteId>,
     players: Query<(
         Entity,
@@ -73,11 +71,13 @@ pub fn handle_disconnections(
     )>,
     mut inputs: ResMut<ClientInputs>,
     heroes: Query<(
+        Entity,
         &shared::components::Hero,
         &PlayerPosition,
         &PlayerRotation,
         &shared::components::HeroOutfit,
         &CharacterAttributes,
+        &Health,
     )>,
 ) {
     let client_entity = trigger.entity;
@@ -97,15 +97,9 @@ pub fn handle_disconnections(
         client_entity, peer_id
     );
 
-    // The hero KEEPS STANDING in the world (it carries no ControlledBy, so no
-    // lifetime despawns it) and is re-adopted when this player returns.
-    //
-    // Its move order is deliberately NOT cancelled. Orders now live on the unit
-    // rather than in a per-peer map, and a retinue is keyed by account name, so
-    // a villager mid-walk keeps walking and finishes where it was sent -- the
-    // world is meant to carry on without you (WORLD-DESIGN pillar 1). The old
-    // per-peer map could not express that: one removal cancelled every order the
-    // player had given.
+    // The hero body survives for stable identity and re-adoption, but becomes
+    // dormant. Personal needs, movement and active rewards pause together, so
+    // disconnecting cannot kill a character or create offline progression.
 
     let name_lower = if let Some(name) = profiles.peer_to_name.get(&peer_id) {
         name.clone()
@@ -148,13 +142,27 @@ pub fn handle_disconnections(
         return;
     };
 
-    // Snapshot the hero so a SERVER RESTART can rebuild it; the live entity
-    // itself survives an ordinary disconnect.
-    let hero_snapshot = heroes.iter().find(|(hero, ..)| hero.owner == peer_id);
-    let hero_state = hero_snapshot.map(|(_, position, rotation, outfit, _)| {
-        crate::player::hero::hero_save(position, rotation, outfit)
+    // Snapshot the commander-facing profile for this running session. The live
+    // hero entity itself survives an ordinary disconnect with its exact goods,
+    // wallet, position and durable relationships intact.
+    let hero_snapshot = heroes.iter().find(|(_, hero, ..)| hero.owner == peer_id);
+    let hero_state = hero_snapshot.map(|(_, _, position, rotation, outfit, _, health)| {
+        crate::player::hero::hero_save(position, rotation, outfit, health)
     });
-    let attributes = hero_snapshot.map(|(_, _, _, _, attributes)| *attributes);
+    let attributes = hero_snapshot.map(|(_, _, _, _, _, attributes, _)| *attributes);
+    if let Some((hero_entity, ..)) = hero_snapshot {
+        commands
+            .entity(hero_entity)
+            .insert((
+                crate::player::hero::OfflineHero,
+                CharacterMotion::STATIONARY,
+                CharacterActivity::Idle,
+            ))
+            .remove::<crate::player::hero::MoveTarget>()
+            .remove::<crate::world::village_roads::TravelRoute>()
+            .remove::<crate::world::village_roads::NavigationRoutePending>()
+            .remove::<crate::world::village_roads::NavigationRouteFailed>();
+    }
 
     let profile = PlayerProfile {
         version: PROFILE_VERSION,
@@ -187,16 +195,10 @@ pub fn handle_disconnections(
             .unwrap_or(0),
     };
 
-    roster_cache.upsert_profile(&profile);
     profiles
         .profiles
         .insert(name_lower.clone(), profile.clone());
-    let job_id = io_queue.enqueue_profile_save(profile, SavePriority::High);
-    io_queue.track_disconnect_job(job_id, name_lower.clone());
-    info!(
-        "Queued disconnect save for player '{}' (job {})",
-        name_lower, job_id
-    );
+    info!("Retained player '{}' in this server session", name_lower);
 
     profiles.peer_to_name.remove(&peer_id);
     profiles.name_to_peer.remove(&name_lower);

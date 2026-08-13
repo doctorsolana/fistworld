@@ -94,6 +94,14 @@ impl RegionRegistry {
             .filter(|r| r.sim_level == SimLevel::Tactical)
             .count()
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_level_for_test(&mut self, coord: RegionCoord, sim_level: SimLevel) {
+        let mut state = RegionState::new(coord);
+        state.sim_level = sim_level;
+        self.regions.insert(coord, state);
+        self.revision = self.revision.wrapping_add(1);
+    }
 }
 
 /// Regions each connected client is interested in.

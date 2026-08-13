@@ -1,6 +1,23 @@
 //! UI module
 
 use bevy::prelude::*;
+use shared::economy::Good;
+
+/// Authored inventory icon shared by trade boards and historical ledgers.
+///
+/// Keeping this lookup in one place prevents a newly introduced good from
+/// quietly borrowing a different resource's icon in one of the menus.
+pub(super) const fn good_icon_path(good: Good) -> &'static str {
+    match good {
+        Good::Food => "ui/goods/fish.png",
+        Good::Wheat => "ui/goods/wheat.png",
+        Good::Wood => "ui/goods/wood.png",
+        Good::Stone => "ui/goods/stone.png",
+        Good::Iron => "ui/goods/iron.png",
+        Good::Flour => "ui/goods/flour.png",
+        Good::Bread => "ui/goods/bread.png",
+    }
+}
 
 /// True when the pointer is over ANY interactive UI, so a world click must not
 /// fall through.
@@ -31,6 +48,9 @@ pub mod main_menu;
 pub mod modal;
 pub mod name_entry;
 pub mod pause_menu;
+pub mod player_permits;
+pub mod property_market;
+pub mod scroll;
 pub mod settlement_panel;
 pub mod styles;
 pub mod world_map;
@@ -44,5 +64,8 @@ pub use main_menu::MainMenuPlugin;
 pub use main_menu::ServerAddress;
 pub use name_entry::NameEntryPlugin;
 pub use pause_menu::PauseMenuPlugin;
+pub use player_permits::PlayerPermitsPlugin;
+pub use property_market::PropertyMarketPlugin;
+pub use scroll::UiScrollPlugin;
 pub use settlement_panel::SettlementPanelPlugin;
 pub use world_map::WorldMapPlugin;

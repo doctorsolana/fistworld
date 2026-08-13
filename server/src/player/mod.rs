@@ -12,6 +12,7 @@
 pub mod commander;
 pub mod hero;
 pub mod index;
+pub mod market;
+pub mod permits;
 pub mod roster;
-pub mod roster_cache;
 pub mod spawn;

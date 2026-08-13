@@ -1,8 +1,8 @@
 (
   map_id: "village_lab",
   bounds: (
-    min: (-512.0, -512.0),
-    max: (512.0, 512.0),
+    min: (-560.0, -560.0),
+    max: (560.0, 560.0),
   ),
   terrain: (
     // Generated maps ignore this filename. Keeping it explicit makes the
@@ -17,7 +17,7 @@
     style: Mainland,
     seed: 3,
     generator_version: 8,
-    half_extent: 512.0,
+    half_extent: 560.0,
   )),
   player_spawn: Some((0.0, 8.0, 0.0)),
   // Authored timber is shared by rendering, collision, construction gathering,
@@ -46,6 +46,25 @@
     (kind: "tree_08", position: ( 63.0, 0.0, -169.0), rotation_degrees:  61.0, scale: 0.95),
     (kind: "tree_01", position: ( 76.0, 0.0, -171.0), rotation_degrees: 143.0, scale: 1.06),
     (kind: "tree_09", position: ( 89.0, 0.0, -165.0), rotation_degrees: 251.0, scale: 0.93),
+
+    // Lab Greenwood grove. This third stress settlement needs enough distinct
+    // tree interactions that 200 residents test a forestry district rather
+    // than queueing around the map's one incidental northern tree.
+    (kind: "tree_01", position: (-205.0, 0.0, 176.0), rotation_degrees:  11.0, scale: 1.04),
+    (kind: "tree_08", position: (-191.0, 0.0, 184.0), rotation_degrees:  57.0, scale: 0.92),
+    (kind: "tree_02", position: (-176.0, 0.0, 174.0), rotation_degrees: 103.0, scale: 1.08),
+    (kind: "tree_09", position: (-161.0, 0.0, 187.0), rotation_degrees: 149.0, scale: 0.96),
+    (kind: "tree_01", position: (-211.0, 0.0, 201.0), rotation_degrees: 194.0, scale: 0.89),
+    (kind: "tree_09", position: (-196.0, 0.0, 211.0), rotation_degrees: 238.0, scale: 1.10),
+    (kind: "tree_08", position: (-179.0, 0.0, 199.0), rotation_degrees: 281.0, scale: 1.01),
+    (kind: "tree_02", position: (-163.0, 0.0, 215.0), rotation_degrees: 327.0, scale: 0.94),
+    (kind: "tree_08", position: (-207.0, 0.0, 228.0), rotation_degrees:  34.0, scale: 1.07),
+    (kind: "tree_01", position: (-190.0, 0.0, 235.0), rotation_degrees:  79.0, scale: 0.91),
+    (kind: "tree_09", position: (-174.0, 0.0, 226.0), rotation_degrees: 126.0, scale: 1.05),
+    (kind: "tree_02", position: (-157.0, 0.0, 241.0), rotation_degrees: 172.0, scale: 0.98),
+    (kind: "tree_01", position: (-202.0, 0.0, 254.0), rotation_degrees: 219.0, scale: 0.93),
+    (kind: "tree_08", position: (-184.0, 0.0, 263.0), rotation_degrees: 266.0, scale: 1.09),
+    (kind: "tree_09", position: (-166.0, 0.0, 254.0), rotation_degrees: 313.0, scale: 0.90),
 
     (kind: "tree_02", position: (-360.0, 0.0, -360.0), rotation_degrees: 12.0, scale: 0.90),
     (kind: "tree_02", position: (-180.0, 0.0, -360.0), rotation_degrees: 43.0, scale: 1.05),

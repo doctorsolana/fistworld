@@ -58,7 +58,7 @@ pub fn sync_obstacle_grid(
         );
 
         grid.insert(ObstacleEntry {
-            center: Vec2::new(building.position.x, building.position.z),
+            center: def.world_footprint_center(building.position, building.rotation),
             half_extents,
             rotation: building.rotation,
             obstacle_type: building.building_type as u32,
@@ -88,11 +88,13 @@ mod tests {
                 ),
                 (BuildingType::Farmstead, SettlementBuildingKind::Farmstead),
                 (BuildingType::MootHall, SettlementBuildingKind::Hall),
+                (BuildingType::VillageHall, SettlementBuildingKind::Hall),
+                (BuildingType::TownHall, SettlementBuildingKind::Hall),
             ] {
                 let mut grid = SpatialObstacleGrid::default();
                 let definition = building_type.definition();
                 grid.insert(ObstacleEntry {
-                    center: Vec2::ZERO,
+                    center: definition.world_footprint_center(Vec3::ZERO, rotation),
                     half_extents: definition.footprint * 0.5 + Vec2::splat(VILLAGER_NAV_RADIUS),
                     rotation,
                     obstacle_type: building_type as u32,

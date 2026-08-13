@@ -34,6 +34,7 @@ macro_rules! stable_id {
 stable_id!(PersonId);
 stable_id!(SettlementId);
 stable_id!(BuildingId);
+stable_id!(PermitId);
 
 /// Lightweight world-directory record. This is the only settlement data that
 /// must be globally visible; markets, inventories, buildings and residents are
@@ -51,6 +52,10 @@ pub struct SettlementSummary {
     pub farmsteads: u16,
     pub fishing_huts: u16,
     pub lumber_huts: u16,
+    #[serde(default)]
+    pub windmills: u16,
+    #[serde(default)]
+    pub bakeries: u16,
 }
 
 /// Durable settlement membership. Runtime AI may still hold a session-local
@@ -89,10 +94,31 @@ pub struct EmployedAt(pub BuildingId);
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CivicRole {
     Reeve,
+    /// Legacy pre-v1. The live staffing system migrates this separate job into
+    /// [`Self::MootSteward`], but retaining the variant keeps old records
+    /// readable.
     MarketPorter,
+    /// Legacy pre-v1 road-only office. See [`Self::MootSteward`].
     RoadSteward,
     CityWorker,
     Guard,
+    /// A founding public-works job which operates a Moot goods cart, audits
+    /// the road network and builds or adopts missing connectors. A solvent
+    /// Hamlet may staff two people in this same role.
+    MootSteward,
+}
+
+impl CivicRole {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Reeve => "Reeve",
+            Self::MarketPorter => "Market Porter (legacy)",
+            Self::RoadSteward => "Road Steward (legacy)",
+            Self::CityWorker => "City Worker",
+            Self::Guard => "Guard",
+            Self::MootSteward => "Moot Steward",
+        }
+    }
 }
 
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]

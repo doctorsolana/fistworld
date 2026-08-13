@@ -6,8 +6,6 @@
 //! held as it appears, must not fall through onto whatever now sits under the
 //! cursor.
 
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
-use bevy::picking::hover::HoverMap;
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageSender};
 
@@ -111,77 +109,6 @@ pub(super) fn handle_person_rows(
         if *interaction == Interaction::Pressed && !name.is_empty() {
             selected.0 = Some(name.clone());
         }
-    }
-}
-
-const SCROLL_LINE_HEIGHT: f32 = 28.0;
-
-/// Send wheel input into the UI hierarchy under the pointer.
-///
-/// This follows Bevy 0.19's official scroll example: the event starts at the
-/// hovered leaf and bubbles until a scrollable ancestor consumes it. That is
-/// what lets the file tree and detail sheet scroll independently instead of a
-/// global wheel handler guessing which pane the player meant.
-pub(super) fn send_scroll_events(
-    mut wheel: MessageReader<MouseWheel>,
-    hover_map: Res<HoverMap>,
-    mut commands: Commands,
-) {
-    for event in wheel.read() {
-        let mut delta = -Vec2::new(event.x, event.y);
-        if event.unit == MouseScrollUnit::Line {
-            delta *= SCROLL_LINE_HEIGHT;
-        }
-        for pointer_map in hover_map.values() {
-            for entity in pointer_map.keys().copied() {
-                commands.trigger(EncyclopediaScroll { entity, delta });
-            }
-        }
-    }
-}
-
-/// Wheel delta in logical UI pixels, bubbling toward a scrollable ancestor.
-#[derive(EntityEvent, Debug)]
-#[entity_event(propagate, auto_propagate)]
-pub(super) struct EncyclopediaScroll {
-    entity: Entity,
-    delta: Vec2,
-}
-
-pub(super) fn on_scroll(
-    mut event: On<EncyclopediaScroll>,
-    mut nodes: Query<(&mut ScrollPosition, &Node, &ComputedNode)>,
-) {
-    let Ok((mut position, node, computed)) = nodes.get_mut(event.entity) else {
-        return;
-    };
-    let max_offset = (computed.content_size() - computed.size()) * computed.inverse_scale_factor();
-    let delta = &mut event.delta;
-
-    if node.overflow.x == OverflowAxis::Scroll && delta.x != 0.0 {
-        let at_edge = if delta.x > 0.0 {
-            position.x >= max_offset.x
-        } else {
-            position.x <= 0.0
-        };
-        if !at_edge {
-            position.x = (position.x + delta.x).clamp(0.0, max_offset.x.max(0.0));
-            delta.x = 0.0;
-        }
-    }
-    if node.overflow.y == OverflowAxis::Scroll && delta.y != 0.0 {
-        let at_edge = if delta.y > 0.0 {
-            position.y >= max_offset.y
-        } else {
-            position.y <= 0.0
-        };
-        if !at_edge {
-            position.y = (position.y + delta.y).clamp(0.0, max_offset.y.max(0.0));
-            delta.y = 0.0;
-        }
-    }
-    if *delta == Vec2::ZERO {
-        event.propagate(false);
     }
 }
 
@@ -319,43 +246,5 @@ mod tests {
         world.run_system_once(close_on_escape_or_backdrop).unwrap();
 
         assert!(!world.resource::<EncyclopediaOpen>().0);
-    }
-
-    #[test]
-    fn wheel_event_bubbles_to_and_scrolls_the_people_viewport() {
-        let mut app = App::new();
-        app.add_observer(on_scroll);
-
-        let viewport = app
-            .world_mut()
-            .spawn((
-                Node {
-                    overflow: Overflow::scroll_y(),
-                    ..default()
-                },
-                ComputedNode {
-                    size: Vec2::new(320.0, 100.0),
-                    content_size: Vec2::new(320.0, 300.0),
-                    inverse_scale_factor: 1.0,
-                    ..default()
-                },
-            ))
-            .id();
-        let hovered_row = app
-            .world_mut()
-            .spawn((Node::default(), ChildOf(viewport)))
-            .id();
-
-        app.world_mut()
-            .entity_mut(hovered_row)
-            .trigger(|entity| EncyclopediaScroll {
-                entity,
-                delta: Vec2::new(0.0, SCROLL_LINE_HEIGHT),
-            });
-
-        assert_eq!(
-            app.world().get::<ScrollPosition>(viewport).unwrap().y,
-            SCROLL_LINE_HEIGHT
-        );
     }
 }

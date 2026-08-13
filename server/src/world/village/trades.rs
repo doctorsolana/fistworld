@@ -5,6 +5,38 @@
 
 use super::*;
 
+pub(super) fn workplace_road_is_ready(
+    building: Entity,
+    kind: SettlementBuildingKind,
+    position: Vec3,
+    rotation: f32,
+    settlement_id: shared::components::SettlementId,
+    hall_position: Vec3,
+    hall_rotation: f32,
+    roads: &Query<(&VillageRoad, &shared::components::RoadOf)>,
+    road_requests: &Query<(), With<RoadRequest>>,
+) -> bool {
+    if road_requests.get(building).is_ok() {
+        return false;
+    }
+    let settlement_roads: Vec<_> = roads
+        .iter()
+        .filter_map(|(road, road_of)| (road_of.0 == settlement_id).then_some(road))
+        .collect();
+    // Focused unit fixtures predating physical roads retain their lightweight
+    // seam. A live settlement publishes a RoadRequest before the first road,
+    // so this fallback never opens a real unconnected workplace.
+    settlement_roads.is_empty()
+        || crate::world::village_roads::building_has_connected_road(
+            kind,
+            position,
+            rotation,
+            hall_position,
+            hall_rotation,
+            &settlement_roads,
+        )
+}
+
 /// Plant the two authored wheat fields beside every completed Farmstead.
 pub fn ensure_farm_fields(
     mut commands: Commands,
@@ -119,9 +151,14 @@ pub fn ensure_fishing_piers(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn assign_farmer_routines(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
+    terrain: Option<Res<WorldTerrain>>,
+    obstacles: Option<Res<SpatialObstacleGrid>>,
+    colliders: Option<Res<StaticColliders>>,
+    derived: Option<Res<DerivedColliderLibrary>>,
     farms: Query<(
         Entity,
         &SettlementBuilding,
@@ -130,8 +167,21 @@ pub fn assign_farmer_routines(
         &shared::components::BuildingId,
         &shared::components::BuildingOf,
     )>,
-    fields: Query<(Entity, &FarmField, &shared::components::AttachedTo)>,
-    settlements: Query<(Entity, &shared::components::SettlementId)>,
+    fields: Query<(
+        Entity,
+        &FarmField,
+        &PlayerPosition,
+        &PlayerRotation,
+        &shared::components::AttachedTo,
+    )>,
+    roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
+    road_requests: Query<(), With<RoadRequest>>,
+    settlements: Query<(
+        Entity,
+        &shared::components::SettlementId,
+        &PlayerPosition,
+        Option<&PlayerRotation>,
+    )>,
     villagers: Query<
         (
             Entity,
@@ -146,6 +196,9 @@ pub fn assign_farmer_routines(
             Without<FarmerRoutine>,
             Without<FishingRoutine>,
             Without<LumberjackRoutine>,
+            Without<ProcessingRoutine>,
+            Without<MootQueueTicket>,
+            Without<MootMealRoutine>,
             Without<strategic::StrategicPerson>,
         ),
     >,
@@ -169,41 +222,58 @@ pub fn assign_farmer_routines(
     if eligible_by_building.is_empty() {
         return;
     }
-    let mut fields_by_farm: HashMap<shared::components::BuildingId, Vec<(Entity, u8)>> =
+    let mut fields_by_farm: HashMap<shared::components::BuildingId, Vec<(Entity, u8, Vec3, f32)>> =
         HashMap::new();
-    for (field_entity, field, attached_to) in fields.iter() {
-        fields_by_farm
-            .entry(attached_to.0)
-            .or_default()
-            .push((field_entity, field.plot_index));
+    for (field_entity, field, position, rotation, attached_to) in fields.iter() {
+        fields_by_farm.entry(attached_to.0).or_default().push((
+            field_entity,
+            field.plot_index,
+            position.0,
+            rotation.0,
+        ));
     }
     for farm_fields in fields_by_farm.values_mut() {
-        farm_fields.sort_by_key(|(_, plot_index)| *plot_index);
+        farm_fields.sort_by_key(|(_, plot_index, _, _)| *plot_index);
     }
     let mut claimed = HashSet::new();
     for (farmstead, farm, position, rotation, building_id, building_of) in farms.iter() {
         if farm.kind != SettlementBuildingKind::Farmstead {
             continue;
         }
-        let Some(farm_fields) = fields_by_farm.get(building_id) else {
-            continue;
-        };
-        let Some((hall, _)) = settlements
-            .iter()
-            .find(|(_, settlement_id)| **settlement_id == building_of.0)
-        else {
-            continue;
-        };
         let Some(employees) = eligible_by_building.get(building_id) else {
             continue;
         };
+        let Some(farm_fields) = fields_by_farm.get(building_id) else {
+            continue;
+        };
+        let Some((hall, _, hall_position, hall_rotation)) = settlements
+            .iter()
+            .find(|(_, settlement_id, _, _)| **settlement_id == building_of.0)
+        else {
+            continue;
+        };
+        if !workplace_road_is_ready(
+            farmstead,
+            farm.kind,
+            position.0,
+            rotation.0,
+            building_of.0,
+            hall_position.0,
+            hall_rotation.map_or(0.0, |rotation| rotation.0),
+            &roads,
+            &road_requests,
+        ) {
+            defer_shift_until_workplace_access(&mut commands, employees, clock.day);
+            continue;
+        }
         for (worker_index, employee) in employees
             .iter()
             .take(farm.kind.positions() as usize)
             .enumerate()
         {
-            let field = farm_fields[worker_index % farm_fields.len()].0;
-            let Ok((worker, _, intent, _, off_duty, progress, employment)) =
+            let (field, _, field_position, field_rotation) =
+                farm_fields[worker_index % farm_fields.len()];
+            let Ok((worker, name, intent, _, off_duty, progress, employment)) =
                 villagers.get(*employee)
             else {
                 continue;
@@ -219,6 +289,35 @@ pub fn assign_farmer_routines(
             let harvest_seconds = progress
                 .filter(|progress| progress.farmstead == farmstead && progress.field == field)
                 .map_or(0.0, |progress| progress.seconds);
+            let worker_salt = stable_name_hash(&name.0);
+            let work_stand = if let Some(terrain) = terrain.as_deref() {
+                crate::world::village_roads::reachable_farm_work_stand(
+                    terrain,
+                    position.0,
+                    rotation.0,
+                    field_position,
+                    worker_salt,
+                    obstacles.as_deref(),
+                    colliders.as_deref(),
+                    derived.as_deref(),
+                )
+            } else {
+                farm_work_stand(
+                    field_position,
+                    field_rotation,
+                    worker_salt,
+                    obstacles.as_deref(),
+                    colliders.as_deref(),
+                    derived.as_deref(),
+                )
+            };
+            let Some(work_stand) = work_stand else {
+                debug!(
+                    "Farmer {} cannot reach a certified standing point for Farmstead {:?}",
+                    name.0, building_id
+                );
+                continue;
+            };
             claimed.insert(worker);
             commands
                 .entity(worker)
@@ -232,7 +331,9 @@ pub fn assign_farmer_routines(
                         farmstead,
                         field,
                         hall,
+                        work_stand,
                         harvest_seconds,
+                        failed_workplace_routes: 0,
                         production_day: u32::MAX,
                         produced_today: 0,
                         phase: FarmerPhase::GoingToFarmstead,
@@ -251,10 +352,8 @@ pub fn assign_farmer_routines(
 pub fn run_farmer_routines(
     simulation_time: crate::world::simulation_time::SimulationTime,
     world_time: Query<&WorldTime>,
-    obstacles: Option<Res<SpatialObstacleGrid>>,
-    colliders: Option<Res<StaticColliders>>,
-    derived: Option<Res<DerivedColliderLibrary>>,
-    mut economy_runtime: ResMut<SettlementEconomyRuntime>,
+    _economy_runtime: ResMut<SettlementEconomyRuntime>,
+    mut business_events: ResMut<BusinessEventQueue>,
     mut commands: Commands,
     farms: Query<
         (
@@ -266,17 +365,10 @@ pub fn run_farmer_routines(
         ),
         Without<CharacterKind>,
     >,
-    fields: Query<
-        (
-            &FarmField,
-            &PlayerPosition,
-            &PlayerRotation,
-            &shared::components::AttachedTo,
-        ),
-        Without<CharacterKind>,
-    >,
+    fields: Query<(&FarmField, &shared::components::AttachedTo), Without<CharacterKind>>,
     halls: Query<&shared::components::SettlementId, Without<CharacterKind>>,
     mut inventories: Query<&mut GoodsInventory>,
+    moot_service_busy: Query<(), Or<(With<MootQueueTicket>, With<MootMealRoutine>)>>,
     mut workers: Query<
         (
             Entity,
@@ -327,6 +419,7 @@ pub fn run_farmer_routines(
         }
         if home_routine.is_some()
             || shopping.is_some()
+            || moot_service_busy.get(worker).is_ok()
             || road_builder.is_some()
             || door_transit.is_some()
         {
@@ -360,8 +453,7 @@ pub fn run_farmer_routines(
             *activity = CharacterActivity::Idle;
             continue;
         }
-        let Ok((field, field_position, field_rotation, attached_to)) = fields.get(routine.field)
-        else {
+        let Ok((field, attached_to)) = fields.get(routine.field) else {
             continue;
         };
         let Ok(settlement_id) = halls.get(routine.hall) else {
@@ -387,11 +479,29 @@ pub fn run_farmer_routines(
                     None
                 }
             };
+            routine.failed_workplace_routes = routine.failed_workplace_routes.saturating_add(1);
             commands
                 .entity(worker)
                 .remove::<NavigationRouteFailed>()
                 .remove::<NavigationRoutePending>()
                 .remove::<TravelRoute>();
+            if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
+                warn!(
+                    "Farmer {} could not reach the workplace at {:.1},{:.1} after {} routes; ending this shift without discarding carried Wheat",
+                    name.0,
+                    failed.goal.x,
+                    failed.goal.z,
+                    routine.failed_workplace_routes,
+                );
+                finish_farmer_shift(
+                    &mut commands,
+                    worker,
+                    production_day,
+                    &routine,
+                    &mut activity,
+                );
+                continue;
+            }
             if let Some(target) = retry_target {
                 // One failed commute must not turn an employed farmer into an
                 // ambient idler for the rest of the day. Keep the exact work
@@ -458,6 +568,7 @@ pub fn run_farmer_routines(
         match routine.phase {
             FarmerPhase::GoingToFarmstead => {
                 if ground_distance(position.0, farm_entrance) <= DOOR_REACH {
+                    routine.failed_workplace_routes = 0;
                     if !workday_active {
                         finish_farmer_shift(
                             &mut commands,
@@ -490,23 +601,7 @@ pub fn run_farmer_routines(
                     routine.phase = FarmerPhase::Inside { seconds_left: left };
                     continue;
                 }
-                let Some(stand) = farm_work_stand(
-                    field_position.0,
-                    field_rotation.0,
-                    stable_name_hash(&name.0),
-                    obstacles.as_deref(),
-                    colliders.as_deref(),
-                    derived.as_deref(),
-                ) else {
-                    // Legacy worlds can contain a field planted before crop
-                    // plots reserved prop-free ground. Stay safely inside and
-                    // periodically re-evaluate instead of walking into a tree
-                    // or abandoning the entire paid shift.
-                    routine.phase = FarmerPhase::Inside {
-                        seconds_left: INDOOR_REST_SECONDS,
-                    };
-                    continue;
-                };
+                let stand = routine.work_stand;
                 *activity = CharacterActivity::Idle;
                 begin_workplace_exit(
                     &mut commands,
@@ -520,6 +615,7 @@ pub fn run_farmer_routines(
             }
             FarmerPhase::WalkingToField { stand } => {
                 if ground_distance(position.0, stand) <= WORK_REACH {
+                    routine.failed_workplace_routes = 0;
                     commands.entity(worker).remove::<MoveTarget>();
                     *activity = CharacterActivity::Farming;
                     routine.phase = FarmerPhase::Farming;
@@ -553,7 +649,9 @@ pub fn run_farmer_routines(
                             .max(0.0);
                     }
                     routine.produced_today = routine.produced_today.saturating_add(produced);
-                    economy_runtime.record_food_production(routine.hall, produced);
+                    business_events.record_production(production_day, *building_id, produced);
+                    // Wheat is agricultural output, not a ration. The mill
+                    // records food production only when this becomes Flour.
                     // Attribute progression remains once per productive day
                     // even though production itself has no daily cap.
                     if produced > 0 && first_harvest_today {
@@ -577,6 +675,7 @@ pub fn run_farmer_routines(
                     ensure_move_target(&mut commands, worker, move_target, farm_entrance);
                     continue;
                 }
+                routine.failed_workplace_routes = 0;
                 commands.entity(worker).remove::<MoveTarget>();
                 if let Ok([mut carrier, mut farm_store]) =
                     inventories.get_many_mut([worker, routine.farmstead])
@@ -631,7 +730,14 @@ pub fn assign_fishing_routines(
         &shared::components::BuildingOf,
     )>,
     piers: Query<(Entity, &FishingPier, &shared::components::AttachedTo)>,
-    settlements: Query<(Entity, &shared::components::SettlementId)>,
+    roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
+    road_requests: Query<(), With<RoadRequest>>,
+    settlements: Query<(
+        Entity,
+        &shared::components::SettlementId,
+        &PlayerPosition,
+        Option<&PlayerRotation>,
+    )>,
     villagers: Query<
         (
             Entity,
@@ -646,6 +752,9 @@ pub fn assign_fishing_routines(
             Without<FarmerRoutine>,
             Without<FishingRoutine>,
             Without<LumberjackRoutine>,
+            Without<ProcessingRoutine>,
+            Without<MootQueueTicket>,
+            Without<MootMealRoutine>,
             Without<strategic::StrategicPerson>,
         ),
     >,
@@ -674,21 +783,35 @@ pub fn assign_fishing_routines(
         if hut.kind != SettlementBuildingKind::FishermansHut {
             continue;
         }
+        let Some(employees) = eligible_by_building.get(building_id) else {
+            continue;
+        };
         let Some((pier, _, _)) = piers
             .iter()
             .find(|(_, _, attached_to)| attached_to.0 == *building_id)
         else {
             continue;
         };
-        let Some((hall, _)) = settlements
+        let Some((hall, _, hall_position, hall_rotation)) = settlements
             .iter()
-            .find(|(_, settlement_id)| **settlement_id == building_of.0)
+            .find(|(_, settlement_id, _, _)| **settlement_id == building_of.0)
         else {
             continue;
         };
-        let Some(employees) = eligible_by_building.get(building_id) else {
+        if !workplace_road_is_ready(
+            hut_entity,
+            hut.kind,
+            hut_position.0,
+            hut_rotation.0,
+            building_of.0,
+            hall_position.0,
+            hall_rotation.map_or(0.0, |rotation| rotation.0),
+            &roads,
+            &road_requests,
+        ) {
+            defer_shift_until_workplace_access(&mut commands, employees, clock.day);
             continue;
-        };
+        }
         for employee in employees.iter().take(hut.kind.positions() as usize) {
             let Ok((worker, worker_display_name, intent, _, off_duty, progress, employment)) =
                 villagers.get(*employee)
@@ -720,6 +843,7 @@ pub fn assign_fishing_routines(
                         pier,
                         hall,
                         catch_seconds,
+                        failed_workplace_routes: 0,
                         production_day: u32::MAX,
                         produced_today: 0,
                         phase: FishingPhase::GoingToHut,
@@ -788,6 +912,7 @@ pub fn run_fishing_routines(
     terrain: Option<Res<WorldTerrain>>,
     world_time: Query<&WorldTime>,
     mut economy_runtime: ResMut<SettlementEconomyRuntime>,
+    mut business_events: ResMut<BusinessEventQueue>,
     mut commands: Commands,
     huts: Query<
         (
@@ -810,6 +935,7 @@ pub fn run_fishing_routines(
     >,
     halls: Query<&shared::components::SettlementId, Without<CharacterKind>>,
     mut inventories: Query<&mut GoodsInventory>,
+    moot_service_busy: Query<(), Or<(With<MootQueueTicket>, With<MootMealRoutine>)>>,
     mut workers: Query<
         (
             Entity,
@@ -824,6 +950,7 @@ pub fn run_fishing_routines(
             &mut CharacterActivity,
             &mut FishingRoutine,
             Option<&MoveTarget>,
+            Option<&NavigationRouteFailed>,
         ),
         With<CharacterKind>,
     >,
@@ -851,6 +978,7 @@ pub fn run_fishing_routines(
         mut activity,
         mut routine,
         move_target,
+        route_failed,
     ) in workers.iter_mut()
     {
         if routine.production_day != production_day {
@@ -859,6 +987,7 @@ pub fn run_fishing_routines(
         }
         if home_routine.is_some()
             || shopping.is_some()
+            || moot_service_busy.get(worker).is_ok()
             || road_builder.is_some()
             || door_transit.is_some()
         {
@@ -931,6 +1060,35 @@ pub fn run_fishing_routines(
             deck_end: fish_spot,
         };
 
+        if let Some(failed) = route_failed {
+            routine.failed_workplace_routes = routine.failed_workplace_routes.saturating_add(1);
+            commands
+                .entity(worker)
+                .remove::<NavigationRouteFailed>()
+                .remove::<NavigationRoutePending>()
+                .remove::<TravelRoute>();
+            if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
+                warn!(
+                    "Fisher could not reach the hut at {:.1},{:.1} after {} routes; ending this shift without discarding carried Food",
+                    failed.goal.x,
+                    failed.goal.z,
+                    routine.failed_workplace_routes,
+                );
+                finish_fishing_shift(
+                    &mut commands,
+                    worker,
+                    production_day,
+                    &routine,
+                    &mut activity,
+                );
+            } else {
+                commands.entity(worker).insert(MoveTarget(entrance));
+                routine.phase = FishingPhase::ReturningToHut;
+                *activity = CharacterActivity::Idle;
+            }
+            continue;
+        }
+
         if !workday_active {
             match routine.phase {
                 FishingPhase::Inside { .. } => {
@@ -997,6 +1155,7 @@ pub fn run_fishing_routines(
         match routine.phase {
             FishingPhase::GoingToHut => {
                 if ground_distance(position.0, entrance) <= DOOR_REACH {
+                    routine.failed_workplace_routes = 0;
                     if !workday_active {
                         finish_fishing_shift(
                             &mut commands,
@@ -1039,6 +1198,7 @@ pub fn run_fishing_routines(
                     ensure_move_target(&mut commands, worker, move_target, staging);
                     continue;
                 }
+                routine.failed_workplace_routes = 0;
                 install_fishing_route(
                     &mut commands,
                     worker,
@@ -1081,6 +1241,7 @@ pub fn run_fishing_routines(
                             (routine.catch_seconds - seconds_per_food * produced as f32).max(0.0);
                     }
                     routine.produced_today = routine.produced_today.saturating_add(produced);
+                    business_events.record_production(production_day, *building_id, produced);
                     economy_runtime.record_food_production(routine.hall, produced);
                     if carrier.amount(Good::Food) < FISH_CARRY_BATCH_UNITS
                         && carrier.free_bulk() >= Good::Food.bulk_per_unit()
@@ -1115,6 +1276,7 @@ pub fn run_fishing_routines(
                     ensure_move_target(&mut commands, worker, move_target, entrance);
                     continue;
                 }
+                routine.failed_workplace_routes = 0;
                 commands.entity(worker).remove::<MoveTarget>();
                 if let Ok([mut carrier, mut hut_store]) =
                     inventories.get_many_mut([worker, routine.hut])
@@ -1164,7 +1326,14 @@ pub fn assign_lumberjack_routines(
         &shared::components::BuildingId,
         &shared::components::BuildingOf,
     )>,
-    settlements: Query<(Entity, &shared::components::SettlementId)>,
+    roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
+    road_requests: Query<(), With<RoadRequest>>,
+    settlements: Query<(
+        Entity,
+        &shared::components::SettlementId,
+        &PlayerPosition,
+        Option<&PlayerRotation>,
+    )>,
     villagers: Query<
         (
             Entity,
@@ -1179,6 +1348,9 @@ pub fn assign_lumberjack_routines(
             Without<FarmerRoutine>,
             Without<FishingRoutine>,
             Without<LumberjackRoutine>,
+            Without<ProcessingRoutine>,
+            Without<MootQueueTicket>,
+            Without<MootMealRoutine>,
             Without<strategic::StrategicPerson>,
         ),
     >,
@@ -1208,15 +1380,29 @@ pub fn assign_lumberjack_routines(
         if building.kind != SettlementBuildingKind::LumberjackHut {
             continue;
         }
-        let Some((hall, _)) = settlements
-            .iter()
-            .find(|(_, settlement_id)| **settlement_id == building_of.0)
-        else {
-            continue;
-        };
         let Some(employees) = eligible_by_building.get(building_id) else {
             continue;
         };
+        let Some((hall, _, hall_position, hall_rotation)) = settlements
+            .iter()
+            .find(|(_, settlement_id, _, _)| **settlement_id == building_of.0)
+        else {
+            continue;
+        };
+        if !workplace_road_is_ready(
+            hut_entity,
+            building.kind,
+            hut_position.0,
+            hut_rotation.0,
+            building_of.0,
+            hall_position.0,
+            hall_rotation.map_or(0.0, |rotation| rotation.0),
+            &roads,
+            &road_requests,
+        ) {
+            defer_shift_until_workplace_access(&mut commands, employees, clock.day);
+            continue;
+        }
         for employee in employees.iter().take(building.kind.positions() as usize) {
             let Ok((worker, worker_display_name, intent, _, off_duty, progress, employment)) =
                 villagers.get(*employee)
@@ -1251,6 +1437,7 @@ pub fn assign_lumberjack_routines(
                         hall,
                         cycle,
                         failed_tree_routes: 0,
+                        failed_hut_routes: 0,
                         chop_seconds,
                         production_day: u32::MAX,
                         produced_today: 0,
@@ -1280,6 +1467,7 @@ pub fn run_lumberjack_routines(
     derived: Option<Res<DerivedColliderLibrary>>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
     world_time: Query<&WorldTime>,
+    mut business_events: ResMut<BusinessEventQueue>,
     mut commands: Commands,
     huts: Query<
         (
@@ -1293,6 +1481,8 @@ pub fn run_lumberjack_routines(
     >,
     halls: Query<&shared::components::SettlementId, Without<CharacterKind>>,
     mut inventories: Query<&mut GoodsInventory>,
+    mut tree_candidates: Local<TreeWorkCandidateCache>,
+    moot_service_busy: Query<(), Or<(With<MootQueueTicket>, With<MootMealRoutine>)>>,
     mut workers: Query<
         (
             Entity,
@@ -1348,6 +1538,7 @@ pub fn run_lumberjack_routines(
         }
         if home_routine.is_some()
             || shopping.is_some()
+            || moot_service_busy.get(worker).is_ok()
             || road_builder.is_some()
             || door_transit.is_some()
         {
@@ -1405,19 +1596,38 @@ pub fn run_lumberjack_routines(
                 LumberjackPhase::GoingToHut | LumberjackPhase::ReturningToHut
             )
         {
+            let failed = route_failed.expect("checked above");
             // A failed route used to be handled only while walking to a tree.
             // A woodcutter carrying Wood home could therefore retain the
             // terminal failure forever and silently disable the business.
             // Clear the terminal navigation state and submit the hut entrance
             // again; the planner can then use updated obstacle geometry or a
             // different A* corridor without losing the carried goods.
-            commands
-                .entity(worker)
-                .remove::<NavigationRouteFailed>()
-                .remove::<NavigationRoutePending>()
-                .remove::<TravelRoute>()
-                .insert(MoveTarget(hut_entrance));
-            *activity = CharacterActivity::Idle;
+            routine.failed_hut_routes = routine.failed_hut_routes.saturating_add(1);
+            if routine.failed_hut_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
+                warn!(
+                    "Woodcutter {} could not reach the hut at {:.1},{:.1} after {} routes; ending this shift without discarding carried Wood",
+                    name.0,
+                    failed.goal.x,
+                    failed.goal.z,
+                    routine.failed_hut_routes,
+                );
+                finish_lumberjack_shift(
+                    &mut commands,
+                    worker,
+                    production_day,
+                    &routine,
+                    &mut activity,
+                );
+            } else {
+                commands
+                    .entity(worker)
+                    .remove::<NavigationRouteFailed>()
+                    .remove::<NavigationRoutePending>()
+                    .remove::<TravelRoute>()
+                    .insert(MoveTarget(hut_entrance));
+                *activity = CharacterActivity::Idle;
+            }
             continue;
         }
 
@@ -1476,6 +1686,7 @@ pub fn run_lumberjack_routines(
         match routine.phase {
             LumberjackPhase::GoingToHut => {
                 if ground_distance(position.0, hut_entrance) <= DOOR_REACH {
+                    routine.failed_hut_routes = 0;
                     if !workday_active {
                         finish_lumberjack_shift(
                             &mut commands,
@@ -1511,22 +1722,33 @@ pub fn run_lumberjack_routines(
                     continue;
                 }
                 let salt = stable_name_hash(&name.0);
-                let Some((tree, stand)) = find_tree_for_cycle(
+                let (tree, stand) = match find_tree_for_cycle_cached(
+                    &mut tree_candidates,
                     &terrain,
                     derived.as_deref(),
                     obstacles.as_deref(),
                     hut_position.0,
                     routine.cycle,
                     salt,
-                ) else {
-                    // Move through the deterministic pool when a tree has no
-                    // collision-free interaction point. Retrying the same
-                    // cycle here previously created a permanent indoor loop.
-                    routine.cycle = routine.cycle.wrapping_add(1);
-                    routine.phase = LumberjackPhase::Inside {
-                        seconds_left: INDOOR_REST_SECONDS,
-                    };
-                    continue;
+                ) {
+                    TreeCandidateLookup::Pending => {
+                        // Prop generation is deliberately spread across ticks
+                        // to avoid a first-search frame hitch. Remain ready to
+                        // leave as soon as the bounded cache finishes.
+                        routine.phase = LumberjackPhase::Inside { seconds_left: 0.0 };
+                        continue;
+                    }
+                    TreeCandidateLookup::Unavailable => {
+                        // Move through the deterministic pool when a tree has
+                        // no collision-free interaction point. Retrying the
+                        // same cycle here previously created an indoor loop.
+                        routine.cycle = routine.cycle.wrapping_add(1);
+                        routine.phase = LumberjackPhase::Inside {
+                            seconds_left: INDOOR_REST_SECONDS,
+                        };
+                        continue;
+                    }
+                    TreeCandidateLookup::Found { tree, stand } => (tree, stand),
                 };
                 *activity = CharacterActivity::Idle;
                 begin_workplace_exit(
@@ -1596,16 +1818,18 @@ pub fn run_lumberjack_routines(
                     *activity = CharacterActivity::Chopping;
                 }
                 routine.chop_seconds += dt;
-                if routine.chop_seconds < CHOP_SECONDS {
+                let required_seconds = lumber_seconds_per_tree(hut.quality);
+                if routine.chop_seconds < required_seconds {
                     continue;
                 }
                 let yield_units = lumber_tree_yield(hut.quality);
                 if let Ok(mut carrier) = inventories.get_mut(worker) {
                     let produced = carrier.add(Good::Wood, yield_units);
                     if produced > 0 {
-                        routine.chop_seconds = (routine.chop_seconds - CHOP_SECONDS).max(0.0);
+                        routine.chop_seconds = (routine.chop_seconds - required_seconds).max(0.0);
                     }
                     routine.produced_today = routine.produced_today.saturating_add(produced);
+                    business_events.record_production(production_day, *building_id, produced);
                 }
                 routine.cycle = routine.cycle.wrapping_add(1);
                 *activity = CharacterActivity::Idle;
@@ -1617,6 +1841,7 @@ pub fn run_lumberjack_routines(
                     ensure_move_target(&mut commands, worker, move_target, hut_entrance);
                     continue;
                 }
+                routine.failed_hut_routes = 0;
                 commands.entity(worker).remove::<MoveTarget>();
                 if let Ok([mut carrier, mut hut_store]) =
                     inventories.get_many_mut([worker, routine.hut])
@@ -1739,35 +1964,183 @@ pub(super) fn tree_approach_start(cycle: u32, choice_count: usize) -> usize {
     (cycle as usize / choice_count.max(1)) % TREE_APPROACH_ANGLES.len()
 }
 
-fn collect_tree_work_candidates(
-    terrain: &WorldTerrain,
-    hut: Vec3,
-) -> (Vec<shared::props::PropSpawn>, Vec<usize>) {
-    let origin = ChunkCoord::from_world_pos(hut);
-    let spawns: Vec<_> = origin
-        .chunks_in_radius(2)
-        .into_iter()
-        .flat_map(|chunk| shared::props::generate_chunk_prop_spawns(&terrain.generator, chunk))
-        .collect();
-    let mut trees: Vec<usize> = spawns
-        .iter()
-        .enumerate()
-        .filter(|(_, spawn)| spawn.kind.is_some_and(|kind| kind.is_tree()))
-        .filter(|(_, spawn)| {
-            let distance = Vec2::new(spawn.position.x - hut.x, spawn.position.z - hut.z).length();
-            (TREE_MIN_DISTANCE..=TREE_MAX_DISTANCE).contains(&distance)
-        })
-        .map(|(index, _)| index)
-        .collect();
-    trees.sort_by(|a, b| {
-        let a = spawns[*a].position;
-        let b = spawns[*b].position;
-        a.distance_squared(hut)
-            .total_cmp(&b.distance_squared(hut))
-            .then_with(|| a.x.total_cmp(&b.x))
-            .then_with(|| a.z.total_cmp(&b.z))
-    });
-    (spawns, trees)
+#[derive(Default)]
+struct TreeWorkCandidates {
+    spawns: Vec<shared::props::PropSpawn>,
+    trees: Vec<usize>,
+    blockers: Vec<TreeWorkBlocker>,
+    blocker_cells: HashMap<(i32, i32), Vec<usize>>,
+    max_blocker_radius: f32,
+    pending_chunks: Vec<ChunkCoord>,
+    complete: bool,
+}
+
+#[derive(Clone, Copy)]
+struct TreeWorkBlocker {
+    spawn_index: usize,
+    center: Vec2,
+    radius: f32,
+}
+
+const TREE_BLOCKER_CELL_SIZE: f32 = 8.0;
+
+fn tree_blocker_cell(point: Vec2) -> (i32, i32) {
+    (
+        (point.x / TREE_BLOCKER_CELL_SIZE).floor() as i32,
+        (point.y / TREE_BLOCKER_CELL_SIZE).floor() as i32,
+    )
+}
+
+impl TreeWorkCandidates {
+    fn pending(hut: Vec3) -> Self {
+        Self {
+            pending_chunks: ChunkCoord::from_world_pos(hut).chunks_in_radius(2),
+            ..default()
+        }
+    }
+
+    fn collect(
+        terrain: &WorldTerrain,
+        hut: Vec3,
+        derived: Option<&DerivedColliderLibrary>,
+    ) -> Self {
+        let mut candidates = Self::pending(hut);
+        candidates.advance(terrain, hut, derived, usize::MAX);
+        candidates
+    }
+
+    fn advance(
+        &mut self,
+        terrain: &WorldTerrain,
+        hut: Vec3,
+        derived: Option<&DerivedColliderLibrary>,
+        chunk_budget: usize,
+    ) {
+        if self.complete {
+            return;
+        }
+        for _ in 0..chunk_budget {
+            let Some(chunk) = self.pending_chunks.pop() else {
+                break;
+            };
+            self.spawns
+                .extend(shared::props::generate_chunk_prop_spawns(
+                    &terrain.generator,
+                    chunk,
+                ));
+        }
+        if !self.pending_chunks.is_empty() {
+            return;
+        }
+
+        self.trees = self
+            .spawns
+            .iter()
+            .enumerate()
+            .filter(|(_, spawn)| spawn.kind.is_some_and(|kind| kind.is_tree()))
+            .filter(|(_, spawn)| {
+                let distance =
+                    Vec2::new(spawn.position.x - hut.x, spawn.position.z - hut.z).length();
+                (TREE_MIN_DISTANCE..=TREE_MAX_DISTANCE).contains(&distance)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        self.trees.sort_by(|a, b| {
+            let a = self.spawns[*a].position;
+            let b = self.spawns[*b].position;
+            a.distance_squared(hut)
+                .total_cmp(&b.distance_squared(hut))
+                .then_with(|| a.x.total_cmp(&b.x))
+                .then_with(|| a.z.total_cmp(&b.z))
+        });
+
+        let mut blockers = Vec::new();
+        let mut blocker_cells: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+        let mut max_blocker_radius = 0.0_f32;
+        for (spawn_index, spawn) in self.spawns.iter().enumerate() {
+            let Some(kind) = spawn.kind.filter(|kind| kind.blocks_village_road()) else {
+                continue;
+            };
+            let radius = derived
+                .and_then(|library| library.by_kind.get(&kind))
+                .map_or(0.75, |shape| shape.horizontal_radius)
+                * spawn.scale
+                + VILLAGER_PROP_RADIUS;
+            let blocker_index = blockers.len();
+            let center = Vec2::new(spawn.position.x, spawn.position.z);
+            blockers.push(TreeWorkBlocker {
+                spawn_index,
+                center,
+                radius,
+            });
+            blocker_cells
+                .entry(tree_blocker_cell(center))
+                .or_default()
+                .push(blocker_index);
+            max_blocker_radius = max_blocker_radius.max(radius);
+        }
+        self.blockers = blockers;
+        self.blocker_cells = blocker_cells;
+        self.max_blocker_radius = max_blocker_radius;
+        self.complete = true;
+    }
+
+    fn stand_overlaps_prop(&self, stand: Vec2, tree_index: usize) -> bool {
+        let origin = tree_blocker_cell(stand);
+        let cell_radius = (self.max_blocker_radius / TREE_BLOCKER_CELL_SIZE).ceil() as i32 + 1;
+        for cell_x in (origin.0 - cell_radius)..=(origin.0 + cell_radius) {
+            for cell_z in (origin.1 - cell_radius)..=(origin.1 + cell_radius) {
+                let Some(indices) = self.blocker_cells.get(&(cell_x, cell_z)) else {
+                    continue;
+                };
+                for index in indices {
+                    let blocker = self.blockers[*index];
+                    if blocker.spawn_index != tree_index
+                        && blocker.center.distance_squared(stand) < blocker.radius * blocker.radius
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
+/// Generated prop candidates are immutable until the future depletion layer
+/// exists. Keep the expensive 5x5-chunk enumeration per workplace origin
+/// instead of regenerating every tree in those chunks for every retry tick.
+#[derive(Default)]
+pub(crate) struct TreeWorkCandidateCache {
+    by_origin: HashMap<ChunkCoord, TreeWorkCandidates>,
+}
+
+impl TreeWorkCandidateCache {
+    fn candidates<'a>(
+        &'a mut self,
+        terrain: &WorldTerrain,
+        derived: Option<&DerivedColliderLibrary>,
+        hut: Vec3,
+    ) -> Option<&'a TreeWorkCandidates> {
+        const CHUNKS_PER_SEARCH_TICK: usize = 1;
+        const MAX_CACHED_ORIGINS: usize = 512;
+        let origin = ChunkCoord::from_world_pos(hut);
+        if self.by_origin.len() >= MAX_CACHED_ORIGINS && !self.by_origin.contains_key(&origin) {
+            self.by_origin.clear();
+        }
+        let candidates = self
+            .by_origin
+            .entry(origin)
+            .or_insert_with(|| TreeWorkCandidates::pending(hut));
+        candidates.advance(terrain, hut, derived, CHUNKS_PER_SEARCH_TICK);
+        candidates.complete.then_some(candidates)
+    }
+}
+
+pub(super) enum TreeCandidateLookup {
+    Pending,
+    Unavailable,
+    Found { tree: Vec3, stand: Vec3 },
 }
 
 fn find_tree_in_candidates(
@@ -1777,18 +2150,17 @@ fn find_tree_in_candidates(
     hut: Vec3,
     cycle: u32,
     salt: u32,
-    spawns: &[shared::props::PropSpawn],
-    trees: &[usize],
+    candidates: &TreeWorkCandidates,
 ) -> Option<(Vec3, Vec3)> {
     // Keep a comfortably large deterministic candidate pool. Sparse coastal
     // groves may only contain two usable trees, while a dense forest should
     // not trap all workers on the same nearest twelve trunks.
-    let choice_count = trees.len().min(48);
+    let choice_count = candidates.trees.len().min(48);
     if choice_count == 0 {
         return None;
     }
-    let tree_index = trees[(cycle.wrapping_add(salt) as usize) % choice_count];
-    let tree_spawn = &spawns[tree_index];
+    let tree_index = candidates.trees[(cycle.wrapping_add(salt) as usize) % choice_count];
+    let tree_spawn = &candidates.spawns[tree_index];
     let tree = tree_spawn.position;
     let toward_hut = Vec2::new(hut.x - tree.x, hut.z - tree.z).normalize_or(Vec2::Y);
     let tree_radius = tree_spawn
@@ -1814,22 +2186,7 @@ fn find_tree_in_candidates(
         if obstacles.is_some_and(|grid| grid.point_blocked(stand_xz)) {
             continue;
         }
-        let overlaps_prop = spawns.iter().enumerate().any(|(index, spawn)| {
-            if index == tree_index {
-                return false;
-            }
-            let Some(kind) = spawn.kind.filter(|kind| kind.blocks_village_road()) else {
-                return false;
-            };
-            let radius = derived
-                .and_then(|library| library.by_kind.get(&kind))
-                .map_or(0.75, |shape| shape.horizontal_radius)
-                * spawn.scale
-                + VILLAGER_PROP_RADIUS;
-            Vec2::new(spawn.position.x, spawn.position.z).distance_squared(stand_xz)
-                < radius * radius
-        });
-        if overlaps_prop {
+        if candidates.stand_overlaps_prop(stand_xz, tree_index) {
             continue;
         }
         let stand = Vec3::new(
@@ -1842,18 +2199,22 @@ fn find_tree_in_candidates(
     None
 }
 
-pub(super) fn find_tree_for_cycle(
+pub(super) fn find_tree_for_cycle_cached(
+    cache: &mut TreeWorkCandidateCache,
     terrain: &WorldTerrain,
     derived: Option<&DerivedColliderLibrary>,
     obstacles: Option<&SpatialObstacleGrid>,
     hut: Vec3,
     cycle: u32,
     salt: u32,
-) -> Option<(Vec3, Vec3)> {
-    let (spawns, trees) = collect_tree_work_candidates(terrain, hut);
-    find_tree_in_candidates(
-        terrain, derived, obstacles, hut, cycle, salt, &spawns, &trees,
-    )
+) -> TreeCandidateLookup {
+    let Some(candidates) = cache.candidates(terrain, derived, hut) else {
+        return TreeCandidateLookup::Pending;
+    };
+    match find_tree_in_candidates(terrain, derived, obstacles, hut, cycle, salt, candidates) {
+        Some((tree, stand)) => TreeCandidateLookup::Found { tree, stand },
+        None => TreeCandidateLookup::Unavailable,
+    }
 }
 
 /// Permit-time proof that a lumber workplace has at least one usable tree on
@@ -1865,13 +2226,14 @@ pub(super) fn find_tree_for_cycle(
 /// villager or simulation tick.
 pub(crate) fn lumber_plot_has_reachable_tree(terrain: &WorldTerrain, hut: Vec3) -> bool {
     const PERMIT_TREE_CANDIDATES: usize = 12;
-    let (spawns, trees) = collect_tree_work_candidates(terrain, hut);
-    let attempts = trees.len().min(PERMIT_TREE_CANDIDATES);
+    let candidates = TreeWorkCandidates::collect(terrain, hut, None);
+    let attempts = candidates.trees.len().min(PERMIT_TREE_CANDIDATES);
     (0..attempts).any(|cycle| {
-        find_tree_in_candidates(terrain, None, None, hut, cycle as u32, 0, &spawns, &trees)
-            .is_some_and(|(_, stand)| {
+        find_tree_in_candidates(terrain, None, None, hut, cycle as u32, 0, &candidates).is_some_and(
+            |(_, stand)| {
                 crate::world::village_roads::embodied_land_route_exists(terrain, hut, stand)
-            })
+            },
+        )
     })
 }
 
@@ -1936,7 +2298,18 @@ pub(super) fn exterior_door_clearance_position(building: Vec3, door: Vec3) -> Ve
 }
 
 pub(super) fn ordinary_workday(clock: &WorldTime) -> bool {
-    clock.is_day() && clock.day_t() < WORKDAY_END_DAY_T
+    clock.is_ordinary_work_time()
+}
+
+/// A completed workplace can advertise positions one schedule pass before its
+/// connector joins the public road graph. Those employees still have a real
+/// job, but they cannot begin an embodied shift yet. Release them to ordinary
+/// household/ambient behaviour for this day instead of leaving the whole
+/// roster motionless outside their homes until the connector finishes.
+fn defer_shift_until_workplace_access(commands: &mut Commands, employees: &[Entity], day: u32) {
+    for employee in employees {
+        commands.entity(*employee).insert(WorkerOffDuty { day });
+    }
 }
 
 fn finish_farmer_shift(

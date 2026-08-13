@@ -16,38 +16,31 @@ pub struct BuildZoneEntry {
 
 impl BuildZoneEntry {
     #[inline]
+    pub fn from_rotated_rect(center: Vec2, half_extents: Vec2, rotation_y: f32) -> Self {
+        let cos_r = rotation_y.cos();
+        let sin_r = rotation_y.sin();
+
+        Self {
+            center,
+            half_extents,
+            rotation_y,
+            inv_basis_x: Vec2::new(cos_r, -sin_r),
+            inv_basis_z: Vec2::new(sin_r, cos_r),
+        }
+    }
+
+    #[inline]
     pub fn from_building(position: Vec3, building_type: BuildingType, rotation_y: f32) -> Self {
         let def = building_type.definition();
         let half_extents = Vec2::new(
             def.footprint.x / 2.0 + def.flatten_radius,
             def.footprint.y / 2.0 + def.flatten_radius,
         );
-        let cos_r = rotation_y.cos();
-        let sin_r = rotation_y.sin();
-
-        Self {
-            center: Vec2::new(position.x, position.z),
+        Self::from_rotated_rect(
+            def.world_footprint_center(position, rotation_y),
             half_extents,
             rotation_y,
-            // Inverse rotation basis for world->local projection.
-            //
-            // The signs are the whole correctness of this type, and they were
-            // wrong: the basis rotated by +r instead of -r, so the zone came out
-            // turned by DOUBLE the building's angle. On a square footprint that
-            // is invisible; on an oblong one it leaves an uncovered wedge, and a
-            // tree standing in that wedge survives into a finished house.
-            //
-            // Bevy's `Quat::from_rotation_y(r)` maps local->world as
-            //     x' =  x*cos + z*sin
-            //     z' = -x*sin + z*cos
-            // so the inverse, world->local, is
-            //     x  =  x'*cos - z'*sin
-            //     z  =  x'*sin + z'*cos
-            // which is these two rows. `world_to_local_is_the_exact_inverse_of_
-            // the_model_rotation` fails if either sign is flipped again.
-            inv_basis_x: Vec2::new(cos_r, -sin_r),
-            inv_basis_z: Vec2::new(sin_r, cos_r),
-        }
+        )
     }
 
     #[inline]
@@ -74,12 +67,43 @@ impl BuildZoneEntry {
     }
 }
 
+/// Every piece of ground claimed when a building is cleared.
+///
+/// Most buildings own only their landscaped footprint. A Farmstead also owns
+/// its two authored crop plots: this is the shared authority used by client
+/// foliage culling and server collider streaming, so a tree accepted as
+/// clearable by the planner cannot survive inside the finished wheat rows.
+pub fn clearance_zones_for_building(
+    position: Vec3,
+    building_type: BuildingType,
+    rotation_y: f32,
+) -> Vec<BuildZoneEntry> {
+    let mut zones = vec![BuildZoneEntry::from_building(
+        position,
+        building_type,
+        rotation_y,
+    )];
+    if building_type == BuildingType::Farmstead {
+        let kind = crate::components::SettlementBuildingKind::Farmstead;
+        if let (Some(fields), Some(half)) = (
+            kind.field_positions(position, rotation_y),
+            kind.field_half_extents(),
+        ) {
+            let half = half + Vec2::splat(crate::components::FARM_FIELD_TERRACE_MARGIN);
+            zones.extend(fields.into_iter().map(|field| {
+                BuildZoneEntry::from_rotated_rect(Vec2::new(field.x, field.z), half, rotation_y)
+            }));
+        }
+    }
+    zones
+}
+
 /// Build precomputed zone entries from placed building tuples.
 pub fn build_zone_entries(buildings: &[(Vec3, BuildingType, f32)]) -> Vec<BuildZoneEntry> {
     buildings
         .iter()
-        .map(|(position, building_type, rotation)| {
-            BuildZoneEntry::from_building(*position, *building_type, *rotation)
+        .flat_map(|(position, building_type, rotation)| {
+            clearance_zones_for_building(*position, *building_type, *rotation)
         })
         .collect()
 }
@@ -113,7 +137,9 @@ pub fn point_in_any_build_zone_entries(point_xz: Vec2, zones: &[BuildZoneEntry])
 /// Returns true if the point should be excluded (prop/collider should not spawn here).
 pub fn point_in_any_build_zone(point_xz: Vec2, buildings: &[(Vec3, BuildingType, f32)]) -> bool {
     buildings.iter().any(|(position, building_type, rotation)| {
-        BuildZoneEntry::from_building(*position, *building_type, *rotation).contains_point(point_xz)
+        clearance_zones_for_building(*position, *building_type, *rotation)
+            .iter()
+            .any(|zone| zone.contains_point(point_xz))
     })
 }
 
@@ -159,6 +185,28 @@ mod tests {
             assert_eq!(indexed, linear);
         }
     }
+
+    #[test]
+    fn farmstead_clearance_claims_both_authored_fields() {
+        let position = Vec3::new(92.0, 0.0, -20.0);
+        let rotation = 0.37;
+        let zones = clearance_zones_for_building(position, BuildingType::Farmstead, rotation);
+        assert_eq!(zones.len(), 3, "farmyard plus two crop plots");
+
+        let fields = crate::components::SettlementBuildingKind::Farmstead
+            .field_positions(position, rotation)
+            .unwrap();
+        for field in fields {
+            let point = Vec2::new(field.x, field.z);
+            assert!(zones.iter().any(|zone| zone.contains_point(point)));
+        }
+
+        assert_eq!(
+            clearance_zones_for_building(position, BuildingType::LogCabin, rotation).len(),
+            1,
+            "ordinary buildings still claim only their landscaped footprint"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -185,10 +233,10 @@ mod rotation_tests {
         // Corners of the real footprint, in the building's local frame.
         let half = def.footprint * 0.5;
         let local_corners = [
-            Vec2::new(half.x, half.y),
-            Vec2::new(-half.x, half.y),
-            Vec2::new(half.x, -half.y),
-            Vec2::new(-half.x, -half.y),
+            def.footprint_center + Vec2::new(half.x, half.y),
+            def.footprint_center + Vec2::new(-half.x, half.y),
+            def.footprint_center + Vec2::new(half.x, -half.y),
+            def.footprint_center + Vec2::new(-half.x, -half.y),
         ];
 
         for step in 0..16 {
@@ -223,10 +271,10 @@ mod rotation_tests {
             let def = kind.definition();
             let half = def.footprint * 0.5 + Vec2::splat(def.flatten_radius);
             for corner in [
-                Vec2::new(half.x, half.y),
-                Vec2::new(-half.x, half.y),
-                Vec2::new(half.x, -half.y),
-                Vec2::new(-half.x, -half.y),
+                def.footprint_center + Vec2::new(half.x, half.y),
+                def.footprint_center + Vec2::new(-half.x, half.y),
+                def.footprint_center + Vec2::new(half.x, -half.y),
+                def.footprint_center + Vec2::new(-half.x, -half.y),
             ] {
                 let world = centre + quat * Vec3::new(corner.x, 0.0, corner.y);
                 let cx = (world.x / CHUNK_SIZE).floor() as i32;
@@ -260,9 +308,10 @@ mod rotation_tests {
             let world = centre + Quat::from_rotation_y(rotation) * Vec3::new(local.x, 0.0, local.y);
             let rel = Vec2::new(world.x, world.z) - zone.center;
             let round_tripped = Vec2::new(rel.dot(zone.inv_basis_x), rel.dot(zone.inv_basis_z));
+            let expected = local - kind.definition().footprint_center;
             assert!(
-                (round_tripped - local).length() < 1e-3,
-                "rotation {rotation:.3}: local {local:?} -> world -> local came back as \
+                (round_tripped - expected).length() < 1e-3,
+                "rotation {rotation:.3}: root-local {local:?} -> zone-local came back as \
                  {round_tripped:?}; the zone is not the inverse of the model rotation"
             );
         }

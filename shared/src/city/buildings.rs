@@ -128,7 +128,7 @@ impl CityBuildingKind {
                 2.0,
                 1.5,
                 1.0,
-                Vec2::new(0.0000, -0.2800),
+                Vec2::new(0.0000, -0.2300),
                 -0.1600,
                 BuildingFrontAxis::PositiveZ,
                 0.0,

@@ -8,9 +8,9 @@ use bevy::prelude::*;
 #[cfg(test)]
 use shared::components::MootAdministration;
 use shared::components::{
-    CivicEmployment, CivicRole, PlayerPosition, PlayerRotation, RoadClass, RoadSurface, Settlement,
-    SettlementBuilding, SettlementBuildingKind, SettlementDevelopment, SettlementProgressGate,
-    SettlementTier, VillageRoad, WorldTime,
+    CivicEmployment, CivicHallLevel, CivicRole, PlayerPosition, PlayerRotation, RoadClass,
+    RoadSurface, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementDevelopment,
+    SettlementProgressGate, SettlementTier, VillageRoad, WorldTime,
 };
 use shared::economy::{
     Good, GoodsInventory, MootMarket, SettlementEconomy, CITY_MIN_PROSPERITY, CITY_MIN_RESIDENTS,
@@ -34,6 +34,31 @@ pub fn ensure_settlement_developments(
             development.plan_seed,
         );
         commands.entity(entity).insert(development);
+    }
+}
+
+/// Keep the physical Hall rung explicit while promotion still completes the
+/// upgrade immediately. The component is the future construction seam: a
+/// treasury-funded project can later leave it below the unlocked settlement
+/// tier without replacing the authoritative settlement entity.
+pub fn sync_civic_hall_levels(
+    mut commands: Commands,
+    settlements: Query<(Entity, &Settlement, Option<&CivicHallLevel>)>,
+) {
+    for (entity, settlement, current) in settlements.iter() {
+        let desired = CivicHallLevel::for_tier(settlement.tier);
+        if current.is_some_and(|current| *current == desired) {
+            continue;
+        }
+        if let Some(previous) = current {
+            info!(
+                "Settlement '{}': civic building upgraded from {} to {}",
+                settlement.name,
+                previous.label(),
+                desired.label()
+            );
+        }
+        commands.entity(entity).insert(desired);
     }
 }
 
@@ -244,7 +269,7 @@ pub fn upgrade_town_roads(
             employment.settlement == *settlement_id
                 && matches!(
                     employment.role,
-                    CivicRole::RoadSteward | CivicRole::CityWorker
+                    CivicRole::MootSteward | CivicRole::RoadSteward | CivicRole::CityWorker
                 )
         });
         if settlement.tier < SettlementTier::Town || !has_city_worker {
@@ -352,6 +377,51 @@ mod tests {
     }
 
     #[test]
+    fn promotion_changes_the_hall_level_without_replacing_the_settlement() {
+        let mut app = App::new();
+        app.add_systems(Update, sync_civic_hall_levels);
+        let settlement = app
+            .world_mut()
+            .spawn(Settlement {
+                name: "Doorstead".into(),
+                tier: SettlementTier::Hamlet,
+                residents: 0,
+                treasury: 73,
+            })
+            .id();
+
+        app.update();
+        assert_eq!(
+            app.world().get::<CivicHallLevel>(settlement),
+            Some(&CivicHallLevel::Moot)
+        );
+        app.world_mut()
+            .get_mut::<Settlement>(settlement)
+            .unwrap()
+            .tier = SettlementTier::Village;
+        app.update();
+        assert_eq!(
+            app.world().get::<CivicHallLevel>(settlement),
+            Some(&CivicHallLevel::Village)
+        );
+        assert_eq!(
+            app.world().get::<Settlement>(settlement).unwrap().treasury,
+            73,
+            "the authoritative Hall entity and its state must survive the art upgrade"
+        );
+
+        app.world_mut()
+            .get_mut::<Settlement>(settlement)
+            .unwrap()
+            .tier = SettlementTier::City;
+        app.update();
+        assert_eq!(
+            app.world().get::<CivicHallLevel>(settlement),
+            Some(&CivicHallLevel::Town)
+        );
+    }
+
+    #[test]
     fn stone_main_road_waits_for_physical_stone() {
         let mut app = development_test_app();
         app.add_systems(Update, upgrade_town_roads);
@@ -450,13 +520,11 @@ mod tests {
         app.add_systems(Update, update_settlement_developments);
         let clock = app.world_mut().spawn(WorldTime::new_default()).id();
         let mut market = MootMarket::founding();
-        let mut stock = 0u32;
+        let seller = shared::economy::MarketSeller::Business(shared::components::BuildingId(42));
         while market.total_volume() < TOWN_MIN_MARKET_VOLUME {
-            let bought = market.buy_from_producer(Good::Wood, stock, 1);
-            stock += bought.units;
-            let sold = market.sell_to_consumer(Good::Wood, stock, 1, u64::MAX);
-            stock -= sold.units;
-            assert!(bought.units + sold.units > 0, "market must keep trading");
+            market.consign(seller, Good::Wood, 1, Good::Wood.base_price());
+            let sold = market.purchase(Good::Wood, 1, u64::MAX, None, None);
+            assert_eq!(sold.trade.units, 1, "market must keep trading");
         }
         let mut economy = SettlementEconomy::default();
         economy.prosperity = TOWN_MIN_PROSPERITY;
@@ -547,7 +615,7 @@ mod tests {
     #[test]
     fn public_position_caps_expand_from_hamlet_to_village() {
         assert_eq!(SettlementTier::Hamlet.public_guard_positions(), 0);
-        assert_eq!(SettlementTier::Hamlet.public_worker_positions(), 1);
+        assert_eq!(SettlementTier::Hamlet.public_worker_positions(), 2);
         assert_eq!(SettlementTier::Village.public_guard_positions(), 2);
         assert_eq!(SettlementTier::Village.public_worker_positions(), 2);
     }

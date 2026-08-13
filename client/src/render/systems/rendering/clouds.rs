@@ -195,12 +195,6 @@ pub(super) fn setup_cloud_layers(
 /// ran half a percent slower than `CLOUD_WIND_SPEED` claimed and the storm's
 /// 400 m meander below was really 397.9 m. Both are exact now.
 const CLOUD_WIND_BEARING: Vec2 = crate::wind::WIND_DIRECTION;
-/// Wind speed wanders between these bounds (world units/sec) on slow swells,
-/// keeping the 1:3 calm-to-gust ratio. Deliberately far above realistic
-/// (~0.3): clouds should visibly ROLL over the world at 1x game speed.
-const CLOUD_WIND_SPEED_MIN: f32 = 1.5;
-const CLOUD_WIND_SPEED_MAX: f32 = 4.5;
-
 /// World-space cloud drift offset at an absolute world time.
 ///
 /// THE single source of wind for the cloud plane and the terrain/water cloud
@@ -215,23 +209,9 @@ const CLOUD_WIND_SPEED_MAX: f32 = 4.5;
 /// the drift per-frame, so cloud/shadow motion is frame-smooth while material
 /// re-uploads stay at ~1/sec.
 pub(super) fn cloud_wind_state(abs_seconds: f32, seed_phase: f32) -> (Vec2, f32) {
-    use std::f32::consts::TAU;
-    let amp = 0.5 * (CLOUD_WIND_SPEED_MAX - CLOUD_WIND_SPEED_MIN);
-    let mid = CLOUD_WIND_SPEED_MIN + amp;
-    // Two incommensurate swell periods so gusts never settle into a loop.
-    let w1 = TAU / 540.0;
-    let w2 = TAU / 197.0;
-    let p1 = seed_phase;
-    let p2 = seed_phase * 2.7;
-    // ∫ mid + amp·(0.7·sin(w1·t+p1) + 0.3·sin(w2·t+p2)) dt, anchored so the
-    // integral is 0 at t = 0.
-    let integral = mid * abs_seconds
-        + amp
-            * (0.7 * (p1.cos() - (w1 * abs_seconds + p1).cos()) / w1
-                + 0.3 * (p2.cos() - (w2 * abs_seconds + p2).cos()) / w2);
-    let speed =
-        mid + amp * (0.7 * (w1 * abs_seconds + p1).sin() + 0.3 * (w2 * abs_seconds + p2).sin());
-    (CLOUD_WIND_BEARING * integral, speed)
+    let (offset, speed) = crate::wind::wind_state(abs_seconds, seed_phase);
+    debug_assert_eq!(CLOUD_WIND_BEARING, crate::wind::WIND_DIRECTION);
+    (offset, speed)
 }
 
 /// How much slower THE storm system drifts than the clouds streaming through

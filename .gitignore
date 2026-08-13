@@ -25,6 +25,7 @@ server_data/
 
 # Logs
 *.log
+/logs/
 
 # Environment
 .env

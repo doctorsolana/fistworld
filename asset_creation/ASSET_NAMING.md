@@ -88,12 +88,14 @@ are compatibility input, not registered props.
 | Legacy humanoid donor | `character/humanoid_legacy_donor.blend` | not shipped | build input only |
 | Log cabin | `houses/log_cabin.blend` | `buildings/village/LogCabin.glb` | `BuildingType::LogCabin` |
 | Moot Hall | `houses/moot_hall.blend` | `buildings/village/MootHall.glb` | `BuildingType::MootHall` |
+| Village Hall | `houses/village_hall.blend` | `buildings/village/VillageHall.glb` | `BuildingType::VillageHall` |
+| Town Hall | `houses/town_hall.blend` | `buildings/village/TownHall.glb` | `BuildingType::TownHall` |
 | Carried goods | `resources/carried_resources.blend` | `resources/carried/*.glb` | item manifest |
 | Work tools | `resources/work_tools.blend` | `tools/*.glb` | item manifest |
 
-`BuildingType::MootHall` accepts the serialized variant `TownHall` as a load
-alias. The art depicts the founding Moot Hall used by the simulation; a future
-Village or Town Hall should be a different asset rather than reusing that name.
+The three civic levels have distinct runtime identities because each GLB has
+its own footprint and baked collider. `SettlementBuildingKind::Hall` remains
+their shared economic/administrative role.
 
 ## Adding or renaming an asset
 

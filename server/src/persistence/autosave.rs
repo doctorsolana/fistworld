@@ -2,24 +2,19 @@
 
 use bevy::prelude::*;
 use shared::components::{
-    CharacterAttributes, Hero, HeroOutfit, Player, PlayerPosition, PlayerProgression,
+    CharacterAttributes, Health, Hero, HeroOutfit, Player, PlayerPosition, PlayerProgression,
     PlayerRotation,
 };
 use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
 
-use crate::persistence::io_queue::{ProfileIoQueue, SavePriority};
 use crate::persistence::profiles::PlayerProfiles;
-use crate::player::roster_cache::PlayerRosterCache;
 
-/// How often to auto-save all players (seconds).
-/// This is a safety backup - primary save happens on disconnect.
+/// How often to refresh connection-independent session profiles (seconds).
 const AUTO_SAVE_INTERVAL: f32 = 30.0;
 
-/// Periodically save all connected players.
+/// Periodically refresh all connected players' reconnect snapshots.
 pub fn update_periodic_player_save(
-    profiles: Res<PlayerProfiles>,
-    mut io_queue: ResMut<ProfileIoQueue>,
-    mut roster_cache: ResMut<PlayerRosterCache>,
+    mut profiles: ResMut<PlayerProfiles>,
     players: Query<(
         &Player,
         &PlayerPosition,
@@ -32,6 +27,7 @@ pub fn update_periodic_player_save(
         &PlayerRotation,
         &HeroOutfit,
         &CharacterAttributes,
+        &Health,
     )>,
     time: Res<Time>,
     mut last_save_time: Local<f32>,
@@ -43,21 +39,21 @@ pub fn update_periodic_player_save(
 
     *last_save_time = now;
 
-    let mut saved_count = 0;
+    let mut snapshots = Vec::new();
     for (player, pos, rot, progression) in players.iter() {
         let Some(name_lower) = profiles.peer_to_name.get(&player.client_id) else {
             continue;
         };
 
-        // Heroes outlive connections, so the snapshot is only needed to
-        // survive a server restart -- but it must be current when one happens.
+        // Heroes outlive connections. The compact snapshot keeps the commander
+        // profile current; the live body retains exact inventory and wallet.
         let hero_snapshot = heroes
             .iter()
             .find(|(hero, ..)| hero.owner == player.client_id);
-        let hero_state = hero_snapshot.map(|(_, position, rotation, outfit, _)| {
-            crate::player::hero::hero_save(position, rotation, outfit)
+        let hero_state = hero_snapshot.map(|(_, position, rotation, outfit, _, health)| {
+            crate::player::hero::hero_save(position, rotation, outfit, health)
         });
-        let attributes = hero_snapshot.map(|(_, _, _, _, attributes)| *attributes);
+        let attributes = hero_snapshot.map(|(_, _, _, _, attributes, _)| *attributes);
 
         let profile = PlayerProfile {
             version: PROFILE_VERSION,
@@ -94,12 +90,10 @@ pub fn update_periodic_player_save(
                 .unwrap_or(0),
         };
 
-        roster_cache.upsert_profile(&profile);
-        let _job_id = io_queue.enqueue_profile_save(profile, SavePriority::Normal);
-        saved_count += 1;
+        snapshots.push((name_lower.clone(), profile));
     }
 
-    if saved_count > 0 {
-        info!("Queued auto-save for {} player profile(s)", saved_count);
+    for (name_lower, profile) in snapshots {
+        profiles.profiles.insert(name_lower, profile);
     }
 }

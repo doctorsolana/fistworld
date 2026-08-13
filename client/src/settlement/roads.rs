@@ -16,6 +16,11 @@ use shared::terrain::WorldTerrain;
 const ROAD_COLUMNS: [f32; 5] = [-1.0, -0.68, 0.0, 0.68, 1.0];
 const ROAD_VISUAL_SAMPLE_SPACING: f32 = 0.45;
 const ROAD_SURFACE_OFFSET: f32 = 0.055;
+/// Road progress may replicate many times per second at high world speed. The
+/// player cannot read sub-tenth-second ribbon growth, and rebuilding every
+/// densely sampled vertex from the beginning on every packet causes avoidable
+/// allocation/upload spikes.
+const ROAD_VISUAL_UPDATE_INTERVAL_SECONDS: f64 = 0.10;
 
 #[derive(Resource, Default)]
 pub(super) struct VillageRoadAssets {
@@ -25,18 +30,18 @@ pub(super) struct VillageRoadAssets {
 #[derive(Component)]
 pub(super) struct VillageRoadVisual {
     mesh: Handle<Mesh>,
+    dirty: bool,
+    last_update_seconds: f64,
 }
 
 pub(super) fn update_village_road_visuals(
     mut commands: Commands,
+    time: Res<Time>,
     terrain: Option<Res<WorldTerrain>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut assets: ResMut<VillageRoadAssets>,
-    roads: Query<
-        (Entity, &VillageRoad, Option<&VillageRoadVisual>),
-        Or<(Added<VillageRoad>, Changed<VillageRoad>)>,
-    >,
+    mut roads: Query<(Entity, Ref<VillageRoad>, Option<&mut VillageRoadVisual>)>,
 ) {
     let Some(terrain) = terrain else { return };
     if assets.material == Handle::default() {
@@ -54,21 +59,41 @@ pub(super) fn update_village_road_visuals(
         });
     }
 
-    for (entity, road, visual) in roads.iter() {
-        let Some(mesh) = build_village_road_mesh(road, &terrain) else {
-            continue;
-        };
-        if let Some(visual) = visual {
+    let now = time.elapsed_secs_f64();
+    for (entity, road, visual) in roads.iter_mut() {
+        let changed = road.is_changed();
+        if let Some(mut visual) = visual {
+            visual.dirty |= changed;
+            if !visual.dirty {
+                continue;
+            }
+            let due = now - visual.last_update_seconds >= ROAD_VISUAL_UPDATE_INTERVAL_SECONDS;
+            if !due && !road.is_complete() {
+                continue;
+            }
+            let Some(mesh) = build_village_road_mesh(&road, &terrain) else {
+                continue;
+            };
             if let Some(mut existing) = meshes.get_mut(&visual.mesh) {
                 *existing = mesh;
             }
+            visual.dirty = false;
+            visual.last_update_seconds = now;
             continue;
         }
+
+        let Some(mesh) = build_village_road_mesh(&road, &terrain) else {
+            continue;
+        };
 
         let mesh = meshes.add(mesh);
         commands.entity(entity).insert((
             Name::new(format!("{} path by {}", road.settlement, road.builder)),
-            VillageRoadVisual { mesh: mesh.clone() },
+            VillageRoadVisual {
+                mesh: mesh.clone(),
+                dirty: false,
+                last_update_seconds: now,
+            },
             Mesh3d(mesh),
             MeshMaterial3d(assets.material.clone()),
             Transform::default(),
@@ -226,5 +251,76 @@ mod tests {
         assert!(dense
             .windows(2)
             .all(|pair| pair[0].distance(pair[1]) <= ROAD_VISUAL_SAMPLE_SPACING + 1e-4));
+    }
+
+    #[test]
+    fn replicated_progress_is_coalesced_then_drawn_at_the_visual_cadence() {
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.init_resource::<Assets<Mesh>>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.init_resource::<VillageRoadAssets>();
+        app.insert_resource(WorldTerrain::default());
+        app.add_systems(Update, update_village_road_visuals);
+        let road_entity = app
+            .world_mut()
+            .spawn(VillageRoad {
+                settlement: "Oakmead".into(),
+                builder: "Mara".into(),
+                points: vec![
+                    Vec2::ZERO,
+                    Vec2::new(2.0, 0.0),
+                    Vec2::new(4.0, 0.0),
+                    Vec2::new(6.0, 0.0),
+                ],
+                built_through: 2,
+                width: 2.6,
+                reserved_width: 4.0,
+                surface: default(),
+                class: default(),
+                stone_committed: 0,
+            })
+            .id();
+        app.update();
+        let visual = app.world().get::<VillageRoadVisual>(road_entity).unwrap();
+        let initial_vertices = app
+            .world()
+            .resource::<Assets<Mesh>>()
+            .get(&visual.mesh)
+            .unwrap()
+            .count_vertices();
+
+        app.world_mut()
+            .get_mut::<VillageRoad>(road_entity)
+            .unwrap()
+            .built_through = 3;
+        app.update();
+        let visual = app.world().get::<VillageRoadVisual>(road_entity).unwrap();
+        assert!(visual.dirty);
+        assert_eq!(
+            app.world()
+                .resource::<Assets<Mesh>>()
+                .get(&visual.mesh)
+                .unwrap()
+                .count_vertices(),
+            initial_vertices
+        );
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f64(
+                ROAD_VISUAL_UPDATE_INTERVAL_SECONDS,
+            ));
+        app.update();
+        let visual = app.world().get::<VillageRoadVisual>(road_entity).unwrap();
+        assert!(!visual.dirty);
+        assert!(
+            app.world()
+                .resource::<Assets<Mesh>>()
+                .get(&visual.mesh)
+                .unwrap()
+                .count_vertices()
+                > initial_vertices
+        );
     }
 }

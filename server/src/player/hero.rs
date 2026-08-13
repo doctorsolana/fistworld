@@ -5,15 +5,15 @@
 //! to clients through the normal replication + region-interest path. Clients
 //! only ever send intent ([`HeroMoveTo`]); position/rotation truth lives here.
 
-use bevy::platform::collections::HashMap;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, NetworkTarget, PeerId, RemoteId, Replicate};
 
 use shared::components::{
     BuildingDoorUse, CharacterActivity, CharacterAffiliation, CharacterAttributes, CharacterKind,
-    CharacterName, CommandedBy, Hero, HeroOutfit, Player, PlayerPosition, PlayerProgression,
-    PlayerRotation,
+    CharacterMotion, CharacterName, CommandedBy, Health, Hero, HeroOutfit, Nutrition, Player,
+    PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation,
 };
 use shared::player::{HERO_ARRIVE_EPSILON, HERO_MOVE_SPEED};
 use shared::player_profile::HeroSave;
@@ -25,7 +25,8 @@ use shared::terrain::WorldTerrain;
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 use crate::world::navgrid::VILLAGER_PROP_RADIUS;
 use crate::world::village_roads::{
-    NavigationRouteFailed, NavigationRoutePending, TravelRoute, ROAD_SPEED_MULTIPLIER,
+    NavigationObstacleEscape, NavigationRouteFailed, NavigationRoutePending, TravelRoute,
+    VillageRoadGraph, ROAD_SPEED_MULTIPLIER,
 };
 
 /// Where a unit is walking, if anywhere.
@@ -38,6 +39,17 @@ use crate::world::village_roads::{
 /// all. Putting the target on the unit dissolves all four.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct MoveTarget(pub Vec3);
+
+/// A disconnected player's retained body. Dormant heroes remain available for
+/// identity and persistence but receive no movement or nutrition progression;
+/// they also cannot perform work, train or earn active-character rewards.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct OfflineHero;
+
+fn motion_materially_changed(current: CharacterMotion, next: CharacterMotion) -> bool {
+    current.is_moving() != next.is_moving()
+        || current.velocity.distance_squared(next.velocity) > 0.05 * 0.05
+}
 
 fn static_prop_blocks_segment(
     start: Vec2,
@@ -124,6 +136,7 @@ pub fn spawn_hero(
     rotation: f32,
     outfit: HeroOutfit,
     attributes: CharacterAttributes,
+    health: Health,
 ) -> Entity {
     let grounded = Vec3::new(
         position.x,
@@ -140,6 +153,8 @@ pub fn spawn_hero(
             CharacterName(display_name.to_string()),
             CharacterKind::Hero,
             attributes,
+            health,
+            Nutrition::default(),
             // Your hero obeys you. Keyed by ACCOUNT, so a reconnect needs no
             // repair -- unlike `Hero::owner`, which holds a per-session peer id
             // and has to be re-pointed by hand every time you come back.
@@ -147,15 +162,37 @@ pub fn spawn_hero(
             // Unaffiliated is the normal, permanent state -- not a gap.
             CharacterAffiliation::default(),
             outfit,
+            // Player heroes participate in the same physical economy as every
+            // other person. These components remain on the live body across a
+            // disconnect/reconnect, so cargo and coin cannot disappear.
+            (
+                shared::economy::GoodsInventory::new(shared::economy::capacity::VILLAGER),
+                shared::economy::CarriedLoad::default(),
+                shared::economy::Wallet::founding_hero(),
+                PlayerPermitLedger::default(),
+            ),
             // Opt into region interest BEFORE the visibility pass runs.
             shared::region::RegionCoord::from_world_pos(grounded),
             PlayerPosition(grounded),
+            CharacterMotion::STATIONARY,
             PlayerRotation(rotation),
             Replicate::to_clients(NetworkTarget::All),
         ))
         .id();
     index.by_name.insert(name_lower.to_string(), entity);
     entity
+}
+
+/// Backfill the permit ledger on a live hero created by an older session/test
+/// path. Normal hero creation already inserts it, so this is change-driven and
+/// effectively free in ordinary play.
+pub fn ensure_player_permit_ledgers(
+    mut commands: Commands,
+    heroes: Query<Entity, (With<Hero>, Without<PlayerPermitLedger>)>,
+) {
+    for hero in heroes.iter() {
+        commands.entity(hero).insert(PlayerPermitLedger::default());
+    }
 }
 
 /// Spawn a villager: a named person who lives in the world and belongs to
@@ -186,6 +223,7 @@ pub fn spawn_villager(
             CharacterName(name),
             CharacterKind::Villager,
             CharacterAttributes::from_seed(seed),
+            (Health::default(), Nutrition::default()),
             CharacterAffiliation::default(),
             // Bulk cargo is separate from equipment. A villager can carry a
             // few wood bundles or many food portions, and a full load is a
@@ -197,6 +235,7 @@ pub fn spawn_villager(
             outfit,
             shared::region::RegionCoord::from_world_pos(grounded),
             PlayerPosition(grounded),
+            CharacterMotion::STATIONARY,
             PlayerRotation(seed as f32 % std::f32::consts::TAU),
             Replicate::to_clients(NetworkTarget::All),
         ))
@@ -249,8 +288,9 @@ pub fn hero_save(
     position: &PlayerPosition,
     rotation: &PlayerRotation,
     outfit: &HeroOutfit,
+    health: &Health,
 ) -> HeroSave {
-    HeroSave::from_parts(position.0, rotation.0, outfit)
+    HeroSave::from_parts(position.0, rotation.0, outfit, health)
 }
 
 /// Turn [`UnitMoveOrder`] intents into [`MoveTarget`] components.
@@ -269,7 +309,7 @@ pub fn handle_unit_move_orders(
     mut commands: Commands,
     profiles: Res<crate::persistence::profiles::PlayerProfiles>,
     mut client_links: Query<(&RemoteId, &mut MessageReceiver<UnitMoveOrder>), With<ClientOf>>,
-    units: Query<&CommandedBy, With<CharacterKind>>,
+    units: Query<&CommandedBy, (With<CharacterKind>, Without<OfflineHero>)>,
 ) {
     for (remote_id, mut receiver) in client_links.iter_mut() {
         // Resolved ONCE per connection. Account name, not peer id: that is the
@@ -315,6 +355,8 @@ pub fn step_units(
     colliders: Option<Res<StaticColliders>>,
     derived: Option<Res<DerivedColliderLibrary>>,
     simulation_time: crate::world::simulation_time::SimulationTime,
+    mut road_graph: Option<ResMut<VillageRoadGraph>>,
+    mut reported_route_collisions: Local<HashSet<Entity>>,
     // `With<CharacterKind>` is load-bearing, not decoration: the commander
     // camera anchor carries the identical PlayerPosition + PlayerRotation +
     // RegionCoord shape, so without it this system would start walking the
@@ -327,14 +369,17 @@ pub fn step_units(
             &mut PlayerPosition,
             &mut PlayerRotation,
             &mut RegionCoord,
+            Option<&mut CharacterMotion>,
             Option<&mut TravelRoute>,
             Option<&NavigationRoutePending>,
             Option<&NavigationRouteFailed>,
+            Option<&NavigationObstacleEscape>,
             Option<&BuildingDoorUse>,
             Option<&crate::world::village::PierTraversal>,
         ),
         (
             With<CharacterKind>,
+            Without<OfflineHero>,
             Without<crate::world::village::strategic::StrategicPerson>,
         ),
     >,
@@ -355,14 +400,33 @@ pub fn step_units(
         mut pos,
         mut rot,
         mut region,
+        mut motion,
         mut route,
         pending,
         failed,
+        obstacle_escape,
         door_use,
         pier_traversal,
     ) in units.iter_mut()
     {
-        if *kind == CharacterKind::Villager && (pending.is_some() || failed.is_some()) {
+        let start_position = pos.0;
+        let real_dt = simulation_time.real_seconds().max(1.0e-5);
+        // Door and pier traversals are authored, collision-exempt movement
+        // modes. A route result can arrive on the same deferred-command
+        // boundary that a household/work routine begins one of those modes;
+        // that stale tactical state must never freeze the authored crossing.
+        // Arrival below clears it along with the MoveTarget.
+        let authored_traversal =
+            door_use.is_some() || pier_traversal.is_some() || obstacle_escape.is_some();
+        if *kind == CharacterKind::Villager
+            && !authored_traversal
+            && (pending.is_some() || failed.is_some())
+        {
+            if let Some(motion) = motion.as_deref_mut() {
+                if motion.is_moving() {
+                    *motion = CharacterMotion::STATIONARY;
+                }
+            }
             continue;
         }
         let final_target = target.0;
@@ -371,6 +435,7 @@ pub fn step_units(
         let mut remaining_seconds = dt;
         let mut last_direction = None;
         let mut arrived = false;
+        let mut escaping_building = obstacle_escape.is_some();
 
         // A route is only valid for the MoveTarget it was planned against.
         // Changed targets normally get a replacement earlier in this chained
@@ -430,24 +495,76 @@ pub fn step_units(
             } else {
                 current + direction * step
             };
+            let building_obstacles = (!escaping_building)
+                .then_some(obstacles.as_deref())
+                .flatten();
             if *kind == CharacterKind::Villager
                 && door_use.is_none()
                 && pier_traversal.is_none()
                 && !navigation_segment_clear(
                     current,
                     proposed,
-                    obstacles.as_deref(),
+                    building_obstacles,
                     colliders.as_deref(),
                     derived.as_deref(),
                 )
             {
-                commands
-                    .entity(entity)
-                    .remove::<TravelRoute>()
-                    .insert(NavigationRoutePending::new(final_target));
+                if use_route
+                    && std::env::var_os("FISTWORLD_LAB_ROUTE_DIAGNOSTICS").is_some()
+                    && reported_route_collisions.insert(entity)
+                {
+                    let building_blocked = obstacles
+                        .as_deref()
+                        .is_some_and(|grid| grid.segment_blocked(current, proposed));
+                    let prop_blocked = colliders.as_deref().zip(derived.as_deref()).is_some_and(
+                        |(colliders, derived)| {
+                            static_prop_blocks_segment(current, proposed, colliders, derived)
+                        },
+                    );
+                    let route_progress = route.as_deref().map_or_else(
+                        || "-".to_string(),
+                        |route| format!("{}/{}", route.next, route.waypoints.len()),
+                    );
+                    eprintln!(
+                        "LAB movement rejected certified route entity={entity:?} at={:.1},{:.1} proposed={:.1},{:.1} goal={:.1},{:.1} route={route_progress} building_blocked={building_blocked} prop_blocked={prop_blocked}",
+                        current.x,
+                        current.y,
+                        proposed.x,
+                        proposed.y,
+                        final_goal.x,
+                        final_goal.y,
+                    );
+                }
+                let mut entity_commands = commands.entity(entity);
+                entity_commands.remove::<TravelRoute>();
+                if use_route {
+                    // This segment was part of a route certified against an
+                    // earlier world snapshot. A newly completed building (or
+                    // streamed prop) has invalidated that proof. Purge cached
+                    // corridors before reporting the embodied failure, so an
+                    // owning routine which deliberately retries the same
+                    // critical destination receives a fresh survey rather
+                    // than the stale path again.
+                    if let Some(graph) = road_graph.as_deref_mut() {
+                        graph.invalidate_tactical_routes_after_embodied_rejection();
+                    }
+                    entity_commands
+                        .remove::<NavigationRoutePending>()
+                        .insert(NavigationRouteFailed { goal: final_target });
+                } else {
+                    entity_commands.insert(NavigationRoutePending::new(final_target));
+                }
                 break;
             }
             current = proposed;
+            if escaping_building
+                && obstacles
+                    .as_deref()
+                    .is_none_or(|grid| !grid.point_blocked(current))
+            {
+                escaping_building = false;
+                commands.entity(entity).remove::<NavigationObstacleEscape>();
+            }
             last_direction = Some(direction);
             remaining_seconds -= step / speed;
 
@@ -486,6 +603,23 @@ pub fn step_units(
         if *region != next_region {
             *region = next_region;
         }
+        let next_motion = if arrived {
+            CharacterMotion::STATIONARY
+        } else {
+            let velocity = (next_pos - start_position) / real_dt;
+            // Vertical terrain-following noise changes every step and is not
+            // useful for short client extrapolation. Keeping motion horizontal
+            // also means a straight route dirties this replicated component
+            // only once instead of at 60 Hz.
+            CharacterMotion::new(Vec3::new(velocity.x, 0.0, velocity.z))
+        };
+        if let Some(motion) = motion.as_deref_mut() {
+            if motion_materially_changed(*motion, next_motion) {
+                *motion = next_motion;
+            }
+        } else {
+            commands.entity(entity).insert(next_motion);
+        }
         if arrived {
             // Arrival is per UNIT now. Under the old peer-keyed map the first
             // unit to arrive removed the shared entry and silently cancelled
@@ -494,7 +628,8 @@ pub fn step_units(
                 .entity(entity)
                 .remove::<MoveTarget>()
                 .remove::<TravelRoute>()
-                .remove::<NavigationRoutePending>();
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationObstacleEscape>();
         }
     }
 }
@@ -524,6 +659,20 @@ mod tests {
         let slow = HERO_MOVE_SPEED / shared::protocol::FIXED_TIMESTEP_HZ as f32;
         let fast = HERO_MOVE_SPEED * 100.0 / shared::protocol::FIXED_TIMESTEP_HZ as f32;
         assert!(fast > slow * 50.0, "warp did not scale movement");
+    }
+
+    #[test]
+    fn replicated_motion_ignores_tiny_step_noise_but_reports_stops_and_turns() {
+        let east = CharacterMotion::new(Vec3::new(3.2, 0.0, 0.0));
+        assert!(!motion_materially_changed(
+            east,
+            CharacterMotion::new(Vec3::new(3.21, 0.0, 0.0))
+        ));
+        assert!(motion_materially_changed(
+            east,
+            CharacterMotion::new(Vec3::new(0.0, 0.0, 3.2))
+        ));
+        assert!(motion_materially_changed(east, CharacterMotion::STATIONARY));
     }
 
     #[test]
@@ -601,6 +750,35 @@ mod tests {
     }
 
     #[test]
+    fn offline_hero_is_dormant_until_reconnection() {
+        let mut app = App::new();
+        app.insert_resource(WorldTerrain::default());
+        app.add_systems(Update, step_units);
+        app.world_mut().spawn(TimeWarp::clamped(100.0));
+        let hero = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Hero,
+                OfflineHero,
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.0),
+                RegionCoord::default(),
+                MoveTarget(Vec3::new(20.0, 0.0, 0.0)),
+            ))
+            .id();
+
+        app.update();
+        assert_eq!(
+            app.world().get::<PlayerPosition>(hero).unwrap().0,
+            Vec3::ZERO
+        );
+
+        app.world_mut().entity_mut(hero).remove::<OfflineHero>();
+        app.update();
+        assert!(app.world().get::<PlayerPosition>(hero).unwrap().0.x > 0.0);
+    }
+
+    #[test]
     fn villager_cannot_cross_a_live_building_obstacle_even_at_100x() {
         let mut app = App::new();
         app.insert_resource(WorldTerrain::default());
@@ -638,6 +816,148 @@ mod tests {
             .world()
             .entity(mover)
             .contains::<NavigationRoutePending>());
+    }
+
+    #[test]
+    fn a_certified_route_blocked_by_new_construction_reports_ai_failure() {
+        let mut app = App::new();
+        app.insert_resource(WorldTerrain::default());
+        let mut obstacles = SpatialObstacleGrid::default();
+        obstacles.insert(shared::spatial::ObstacleEntry {
+            center: Vec2::new(5.0, 0.0),
+            half_extents: Vec2::new(1.5, 2.5),
+            rotation: 0.0,
+            obstacle_type: 0,
+        });
+        app.insert_resource(obstacles);
+        app.add_systems(Update, step_units);
+        app.world_mut().spawn(TimeWarp::clamped(100.0));
+
+        let goal = Vec3::new(10.0, 0.0, 0.0);
+        let mover = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.0),
+                RegionCoord::default(),
+                MoveTarget(goal),
+                TravelRoute {
+                    goal,
+                    waypoints: vec![RouteWaypoint {
+                        position: goal,
+                        on_road: false,
+                    }],
+                    next: 0,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        let mover = app.world().entity(mover);
+        assert_eq!(
+            mover
+                .get::<NavigationRouteFailed>()
+                .map(|failed| failed.goal),
+            Some(goal)
+        );
+        assert!(!mover.contains::<NavigationRoutePending>());
+        assert!(!mover.contains::<TravelRoute>());
+    }
+
+    #[test]
+    fn door_traversal_is_not_frozen_by_a_stale_pending_route() {
+        let mut app = App::new();
+        app.insert_resource(WorldTerrain::default());
+        let mut obstacles = SpatialObstacleGrid::default();
+        obstacles.insert(shared::spatial::ObstacleEntry {
+            center: Vec2::ZERO,
+            half_extents: Vec2::splat(3.0),
+            rotation: 0.0,
+            obstacle_type: 0,
+        });
+        app.insert_resource(obstacles);
+        app.add_systems(Update, step_units);
+        app.world_mut().spawn(TimeWarp::clamped(25.0));
+
+        // This is the exact state race caught in the long Village Lab run: a
+        // resident is inside their cabin, the home routine has authority to
+        // cross its doorway, but an earlier tactical request is still present.
+        let start = Vec3::new(0.0, 0.0, 0.0);
+        let goal = Vec3::new(1.0, 0.0, 0.0);
+        let mover = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                PlayerPosition(start),
+                PlayerRotation(0.0),
+                RegionCoord::default(),
+                MoveTarget(goal),
+                NavigationRoutePending::new(goal),
+                BuildingDoorUse {
+                    building: Vec3::ZERO,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        let position = app.world().get::<PlayerPosition>(mover).unwrap().0;
+        assert!(
+            position.x > start.x,
+            "the authored doorway crossing was frozen by tactical route state"
+        );
+        assert!(
+            !app.world().entity(mover).contains::<MoveTarget>(),
+            "25x should complete this short doorway crossing in one tick"
+        );
+        assert!(!app
+            .world()
+            .entity(mover)
+            .contains::<NavigationRoutePending>());
+    }
+
+    #[test]
+    fn certified_obstacle_escape_only_lasts_until_clear_ground() {
+        let mut app = App::new();
+        app.insert_resource(WorldTerrain::default());
+        let mut obstacles = SpatialObstacleGrid::default();
+        obstacles.insert(shared::spatial::ObstacleEntry {
+            center: Vec2::ZERO,
+            half_extents: Vec2::splat(3.0),
+            rotation: 0.0,
+            obstacle_type: 0,
+        });
+        app.insert_resource(obstacles);
+        app.add_systems(Update, step_units);
+        app.world_mut().spawn(TimeWarp::clamped(25.0));
+
+        let goal = Vec3::new(5.0, 0.0, 0.0);
+        let mover = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.0),
+                RegionCoord::default(),
+                MoveTarget(goal),
+                NavigationObstacleEscape,
+            ))
+            .id();
+
+        for _ in 0..5 {
+            app.update();
+        }
+
+        assert_eq!(
+            app.world().get::<PlayerPosition>(mover).unwrap().0.x,
+            goal.x
+        );
+        let mover = app.world().entity(mover);
+        assert!(!mover.contains::<NavigationObstacleEscape>());
+        assert!(!mover.contains::<NavigationRoutePending>());
+        assert!(!mover.contains::<MoveTarget>());
     }
 
     #[test]

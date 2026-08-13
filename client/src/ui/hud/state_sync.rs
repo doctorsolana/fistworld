@@ -5,13 +5,13 @@ use super::*;
 pub(super) fn reset_dev_grant(
     mut capability: ResMut<GodCapability>,
     mut mode: ResMut<HudMode>,
-    mut arm: ResMut<crate::hero::control::HeroSpawnArm>,
+    mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
 ) {
     capability.0 = false;
     *mode = HudMode::Play;
     // A stale armed placement surviving a reconnect would fire on the first
     // innocent click of the new session.
-    arm.0 = false;
+    *placement = crate::hero::control::WorldPlacementMode::None;
 }
 
 pub(super) fn receive_dev_status(
@@ -209,7 +209,7 @@ pub(super) fn style_warp_buttons(
 
 /// Spawn button reflects the real gate: armed, ready, or already spawned.
 pub(super) fn sync_spawn_hero_button(
-    mut arm: ResMut<crate::hero::control::HeroSpawnArm>,
+    mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
     heroes: Query<&shared::components::Hero>,
     mut buttons: Query<(&mut BackgroundColor, &mut BorderColor), With<SpawnHeroButton>>,
@@ -218,13 +218,13 @@ pub(super) fn sync_spawn_hero_button(
     let owns_hero = local
         .as_ref()
         .is_some_and(|local| crate::hero::control::local_hero_exists(&heroes, local));
-    if owns_hero && arm.0 {
-        arm.0 = false;
+    if owns_hero && placement.is_spawn_hero() {
+        *placement = crate::hero::control::WorldPlacementMode::None;
     }
 
     let (label, text_color, border) = if owns_hero {
         ("HERO ACTIVE", INK_MUTED, PLATE_RULE_SOFT)
-    } else if arm.0 {
+    } else if placement.is_spawn_hero() {
         // Armed is the one dev affordance that genuinely needs to shout, so it
         // takes the slate inversion rather than the reserved accent.
         ("CLICK TERRAIN", INK_INVERSE, PLATE_RULE)
@@ -233,7 +233,11 @@ pub(super) fn sync_spawn_hero_button(
     };
 
     for (mut bg, mut border_color) in buttons.iter_mut() {
-        let background = if arm.0 { BUTTON_PRESSED } else { BUTTON_NORMAL };
+        let background = if placement.is_spawn_hero() {
+            BUTTON_PRESSED
+        } else {
+            BUTTON_NORMAL
+        };
         if bg.0 != background {
             bg.0 = background;
         }
@@ -269,12 +273,22 @@ pub(super) fn sync_selection_plate(
         &shared::components::PlayerPosition,
         Option<&shared::components::CommandedBy>,
         Option<&shared::components::CharacterAttributes>,
+        Option<&shared::components::CharacterObjective>,
+        Option<&shared::components::CharacterNavigationStatus>,
+        Option<&shared::components::Health>,
     )>,
-    mut plates: Query<&mut Node, (With<SelectionPlate>, Without<SelectionExpandButton>)>,
     mut glyphs: Query<&mut BorderColor, With<SelectionRingGlyph>>,
     mut names: Query<&mut Text, (With<SelectionNameText>, Without<SelectionStatusText>)>,
     mut statuses: Query<&mut Text, (With<SelectionStatusText>, Without<SelectionNameText>)>,
-    mut expand: Query<&mut Node, (With<SelectionExpandButton>, Without<SelectionPlate>)>,
+    mut nodes: ParamSet<(
+        Query<&mut Node, (With<SelectionPlate>, Without<SelectionExpandButton>)>,
+        Query<&mut Node, (With<SelectionHealthTrack>, Without<SelectionHealthFill>)>,
+        Query<
+            (&mut Node, &mut BackgroundColor),
+            (With<SelectionHealthFill>, Without<SelectionHealthTrack>),
+        >,
+        Query<&mut Node, (With<SelectionExpandButton>, Without<SelectionPlate>)>,
+    )>,
     visuals: Query<&crate::hero::HeroVisual>,
 ) {
     let count = selection.len();
@@ -289,13 +303,13 @@ pub(super) fn sync_selection_plate(
     } else {
         Display::None
     };
-    for mut node in plates.iter_mut() {
+    for mut node in nodes.p0().iter_mut() {
         if node.display != display {
             node.display = display;
         }
     }
     let show_expand = count == 1 && is_person;
-    for mut node in expand.iter_mut() {
+    for mut node in nodes.p3().iter_mut() {
         let display = if show_expand {
             Display::Flex
         } else {
@@ -309,8 +323,32 @@ pub(super) fn sync_selection_plate(
         return;
     };
     // Position is no longer read here: movement comes from the smoothed
-    // visual, not from diffing the replicated position frame to frame.
-    let (name, kind, _position, commanded, attributes) = primary;
+    // visual, not from diffing the replicated position frame to frame. The
+    // compact plate leads with the person's purpose; attributes remain in the
+    // expanded encyclopedia record.
+    let (name, kind, _position, commanded, attributes, objective, navigation, health) = primary;
+
+    let health_percentage = health.map(shared::components::Health::percentage);
+    for mut node in nodes.p1().iter_mut() {
+        node.display = if count == 1 && health_percentage.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+    if let Some(percentage) = health_percentage {
+        let color = if percentage > 0.6 {
+            Color::srgb(0.29, 0.58, 0.29)
+        } else if percentage > 0.3 {
+            Color::srgb(0.78, 0.55, 0.18)
+        } else {
+            Color::srgb(0.72, 0.20, 0.16)
+        };
+        for (mut node, mut background) in nodes.p2().iter_mut() {
+            node.width = Val::Percent(percentage * 100.0);
+            background.0 = color;
+        }
+    }
 
     let my_account = account
         .as_ref()
@@ -328,7 +366,7 @@ pub(super) fn sync_selection_plate(
         .filter(|entity| {
             characters
                 .get(**entity)
-                .is_ok_and(|(_, _, _, c, _)| owns(c))
+                .is_ok_and(|(_, _, _, c, _, _, _, _)| owns(c))
         })
         .count();
 
@@ -390,6 +428,11 @@ pub(super) fn sync_selection_plate(
             n if n == count => format!("{n} WILL MOVE"),
             n => format!("{n} OF {count} WILL MOVE"),
         }
+    } else if let Some(objective) = objective {
+        navigation.and_then(|state| state.label()).map_or_else(
+            || objective.label().to_uppercase(),
+            |state| format!("{} · {}", objective.label(), state).to_uppercase(),
+        )
     } else if let Some(attributes) = attributes {
         format!(
             "P{} I{} C{}",
@@ -461,21 +504,18 @@ pub(super) fn sync_selection_box(
 
 /// Villager button reflects whether placement is armed.
 pub(super) fn sync_spawn_npc_button(
-    npc_arm: Res<crate::hero::control::NpcSpawnArm>,
+    placement: Res<crate::hero::control::WorldPlacementMode>,
     mut buttons: Query<(&mut BackgroundColor, &mut BorderColor), With<SpawnNpcButton>>,
     mut labels: Query<(&mut Text, &mut TextColor), With<SpawnNpcLabel>>,
 ) {
-    let (label, text_color, border) = if npc_arm.0 {
+    let armed = placement.is_spawn_npc();
+    let (label, text_color, border) = if armed {
         ("CLICK TO PLACE", INK_INVERSE, PLATE_RULE)
     } else {
         ("SPAWN VILLAGER", INK, PLATE_RULE_SOFT)
     };
     for (mut bg, mut border_color) in buttons.iter_mut() {
-        let background = if npc_arm.0 {
-            BUTTON_PRESSED
-        } else {
-            BUTTON_NORMAL
-        };
+        let background = if armed { BUTTON_PRESSED } else { BUTTON_NORMAL };
         if bg.0 != background {
             bg.0 = background;
         }
@@ -496,21 +536,18 @@ pub(super) fn sync_spawn_npc_button(
 
 /// Found button reflects whether founding is armed.
 pub(super) fn sync_found_village_button(
-    found_arm: Res<crate::hero::control::FoundSpawnArm>,
+    placement: Res<crate::hero::control::WorldPlacementMode>,
     mut buttons: Query<(&mut BackgroundColor, &mut BorderColor), With<FoundVillageButton>>,
     mut labels: Query<(&mut Text, &mut TextColor), With<FoundVillageLabel>>,
 ) {
-    let (label, text_color, border) = if found_arm.0 {
+    let armed = placement.is_found_settlement();
+    let (label, text_color, border) = if armed {
         ("CLICK TO FOUND", INK_INVERSE, PLATE_RULE)
     } else {
         ("FOUND VILLAGE", INK, PLATE_RULE_SOFT)
     };
     for (mut bg, mut border_color) in buttons.iter_mut() {
-        let background = if found_arm.0 {
-            BUTTON_PRESSED
-        } else {
-            BUTTON_NORMAL
-        };
+        let background = if armed { BUTTON_PRESSED } else { BUTTON_NORMAL };
         if bg.0 != background {
             bg.0 = background;
         }

@@ -6,6 +6,175 @@ use super::clouds::CloudLayer;
 use super::*;
 use crate::camera_rts::CommanderCamera;
 use bevy::pbr::ContactShadows;
+use bevy::window::{Monitor, VideoMode};
+
+/// Player-facing display mode. `Borderless` deliberately uses the monitor's
+/// current/native mode; only `Fullscreen` is allowed to change the monitor's
+/// video mode and therefore apply a lower physical resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DisplayMode {
+    Windowed,
+    Borderless,
+    Fullscreen,
+}
+
+impl DisplayMode {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Windowed => "Windowed",
+            Self::Borderless => "Borderless",
+            Self::Fullscreen => "Fullscreen",
+        }
+    }
+
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Windowed => Self::Borderless,
+            Self::Borderless => Self::Fullscreen,
+            Self::Fullscreen => Self::Fullscreen,
+        }
+    }
+
+    pub const fn prev(self) -> Self {
+        match self {
+            Self::Windowed => Self::Windowed,
+            Self::Borderless => Self::Windowed,
+            Self::Fullscreen => Self::Borderless,
+        }
+    }
+}
+
+/// Requested client-area resolution in physical pixels.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub struct DisplayResolution {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl DisplayResolution {
+    pub const fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
+
+    pub fn label(self) -> String {
+        format!("{} x {}", self.width, self.height)
+    }
+}
+
+pub const DISPLAY_CONFIRMATION_SECONDS: f32 = 15.0;
+
+/// A reversible output-mode change. Rendering applies the candidate
+/// immediately, while settings persistence waits until the player keeps it.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct PendingDisplayChange {
+    pub previous_mode: DisplayMode,
+    pub previous_resolution: DisplayResolution,
+    pub seconds_left: f32,
+}
+
+impl PendingDisplayChange {
+    pub fn new(settings: &GraphicsSettings) -> Self {
+        Self {
+            previous_mode: settings.display_mode(),
+            previous_resolution: settings.display_resolution,
+            seconds_left: DISPLAY_CONFIRMATION_SECONDS,
+        }
+    }
+
+    pub fn restart_countdown(&mut self) {
+        self.seconds_left = DISPLAY_CONFIRMATION_SECONDS;
+    }
+}
+
+const COMMON_WINDOWED_RESOLUTIONS: &[DisplayResolution] = &[
+    DisplayResolution::new(1024, 576),
+    DisplayResolution::new(1280, 720),
+    DisplayResolution::new(1280, 800),
+    DisplayResolution::new(1366, 768),
+    DisplayResolution::new(1440, 900),
+    DisplayResolution::new(1600, 900),
+    DisplayResolution::new(1680, 1050),
+    DisplayResolution::new(1920, 1080),
+    DisplayResolution::new(1920, 1200),
+    DisplayResolution::new(2560, 1440),
+    DisplayResolution::new(2560, 1600),
+    DisplayResolution::new(3840, 2160),
+];
+
+/// Resolutions the current display mode can genuinely apply.
+///
+/// Exclusive fullscreen only exposes exact modes reported by the OS. Passing
+/// an invented mode to Bevy 0.19 is rejected by `bevy_winit`, so this list is
+/// also the authoritative safety boundary for the pause-menu selector.
+pub fn available_display_resolutions(
+    display_mode: DisplayMode,
+    monitor: Option<&Monitor>,
+    current: DisplayResolution,
+) -> Vec<DisplayResolution> {
+    let mut resolutions = match display_mode {
+        DisplayMode::Borderless => monitor
+            .map(|monitor| {
+                vec![DisplayResolution::new(
+                    monitor.physical_width,
+                    monitor.physical_height,
+                )]
+            })
+            .unwrap_or_else(|| vec![current]),
+        DisplayMode::Fullscreen => monitor
+            .map(|monitor| {
+                monitor
+                    .video_modes
+                    .iter()
+                    .filter(|mode| mode.physical_size.x >= 1024 && mode.physical_size.y >= 576)
+                    .map(|mode| DisplayResolution::new(mode.physical_size.x, mode.physical_size.y))
+                    .collect()
+            })
+            .unwrap_or_else(|| vec![current]),
+        DisplayMode::Windowed => COMMON_WINDOWED_RESOLUTIONS
+            .iter()
+            .copied()
+            .filter(|resolution| {
+                monitor.is_none_or(|monitor| {
+                    resolution.width <= monitor.physical_width
+                        && resolution.height <= monitor.physical_height
+                })
+            })
+            .chain(std::iter::once(current))
+            .collect(),
+    };
+    resolutions.sort_unstable_by_key(|resolution| {
+        (
+            u64::from(resolution.width) * u64::from(resolution.height),
+            resolution.width,
+            resolution.height,
+        )
+    });
+    resolutions.dedup();
+    if resolutions.is_empty() {
+        resolutions.push(current);
+    }
+    resolutions
+}
+
+/// Pick the exact Bevy video mode for an exclusive-fullscreen request.
+/// Duplicate resolutions are common; prefer the highest refresh rate, then
+/// the greatest bit depth, just as a conventional game would when refresh is
+/// not exposed as a separate setting.
+pub fn best_fullscreen_video_mode(
+    monitor: &Monitor,
+    requested: DisplayResolution,
+) -> Option<VideoMode> {
+    monitor
+        .video_modes
+        .iter()
+        .copied()
+        .filter(|mode| {
+            mode.physical_size.x == requested.width && mode.physical_size.y == requested.height
+        })
+        .max_by_key(|mode| (mode.refresh_rate_millihertz, mode.bit_depth))
+}
 
 /// Directional-shadow quality tier. Drives cascade count, cascade range, and
 /// shadow map resolution together so they stay coherent.
@@ -14,6 +183,34 @@ pub enum ShadowQuality {
     Low,
     Medium,
     High,
+}
+
+/// Ground-cover implementation. `Chunked` is the production default: it stores
+/// deterministic tufts in compact GPU instance buffers grouped into
+/// camera-cullable terrain sectors. `Legacy` retains one entity per patch as a
+/// reversible compatibility/debug path.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GroundCoverRenderer {
+    Legacy,
+    #[default]
+    Chunked,
+}
+
+impl GroundCoverRenderer {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Legacy => "Legacy",
+            Self::Chunked => "Chunked",
+        }
+    }
+
+    pub const fn next(self) -> Self {
+        Self::Chunked
+    }
+
+    pub const fn prev(self) -> Self {
+        Self::Legacy
+    }
 }
 
 impl ShadowQuality {
@@ -107,6 +304,9 @@ pub struct GraphicsSettings {
     pub shadow_quality: ShadowQuality,
     /// Use alpha cutout for foliage instead of alpha blending.
     pub foliage_cutout_enabled: bool,
+    /// Selects the production entity-light GPU-instanced renderer or the
+    /// retained compatibility renderer. Default: Chunked.
+    pub ground_cover_renderer: GroundCoverRenderer,
     pub bloom_enabled: bool,
     pub shadows_enabled: bool,
     pub atmosphere_enabled: bool,
@@ -114,7 +314,16 @@ pub struct GraphicsSettings {
     pub far_terrain_enabled: bool,
     pub props_enabled: bool,
     pub vsync_enabled: bool,
+    /// Legacy-compatible half of the three-way display mode. Old settings
+    /// files contain only this field, so retaining it preserves the player's
+    /// previous Windowed/Borderless choice during migration.
     pub fullscreen_enabled: bool,
+    /// When fullscreen is enabled, choose an exact monitor video mode instead
+    /// of native-resolution borderless fullscreen.
+    pub exclusive_fullscreen_enabled: bool,
+    /// Physical output resolution for Windowed and exclusive Fullscreen.
+    /// Borderless fullscreen is always native by platform definition.
+    pub display_resolution: DisplayResolution,
     /// Dev-only (no UI): grade + lighting are tuned for AgX. Not persisted.
     #[serde(skip, default = "default_tonemapping")]
     pub tonemapping: Tonemapping,
@@ -194,6 +403,7 @@ impl Default for GraphicsSettings {
             ssao_enabled: false,
             shadow_quality: ShadowQuality::Medium,
             foliage_cutout_enabled: true,
+            ground_cover_renderer: GroundCoverRenderer::Chunked,
             bloom_enabled: true,
             shadows_enabled: true,
             atmosphere_enabled: true,
@@ -204,6 +414,11 @@ impl Default for GraphicsSettings {
             // Fullscreen-on-play is the shipped default; the toggle persists
             // the player's preference from there.
             fullscreen_enabled: true,
+            exclusive_fullscreen_enabled: false,
+            display_resolution: DisplayResolution::new(
+                LAUNCHER_RESOLUTION.0,
+                LAUNCHER_RESOLUTION.1,
+            ),
             tonemapping: default_tonemapping(),
             grade_exposure: 0.2,
             view_distance: 8,
@@ -216,6 +431,47 @@ impl Default for GraphicsSettings {
 }
 
 impl GraphicsSettings {
+    pub const fn display_mode(&self) -> DisplayMode {
+        match (self.fullscreen_enabled, self.exclusive_fullscreen_enabled) {
+            (false, _) => DisplayMode::Windowed,
+            (true, false) => DisplayMode::Borderless,
+            (true, true) => DisplayMode::Fullscreen,
+        }
+    }
+
+    pub fn set_display_mode(&mut self, mode: DisplayMode) {
+        match mode {
+            DisplayMode::Windowed => {
+                self.fullscreen_enabled = false;
+                self.exclusive_fullscreen_enabled = false;
+            }
+            DisplayMode::Borderless => {
+                self.fullscreen_enabled = true;
+                self.exclusive_fullscreen_enabled = false;
+            }
+            DisplayMode::Fullscreen => {
+                self.fullscreen_enabled = true;
+                self.exclusive_fullscreen_enabled = true;
+            }
+        }
+    }
+
+    pub fn displayed_resolution_label(&self, monitor: Option<&Monitor>) -> String {
+        if self.display_mode() == DisplayMode::Borderless {
+            monitor.map_or_else(
+                || "Native".to_string(),
+                |monitor| {
+                    format!(
+                        "Native {} x {}",
+                        monitor.physical_width, monitor.physical_height
+                    )
+                },
+            )
+        } else {
+            self.display_resolution.label()
+        }
+    }
+
     /// Test hooks: headless profiling runs ablate one subsystem at a time
     /// without input automation. Absent vars leave the current values, so
     /// these apply cleanly on top of the settings file too (env wins).
@@ -239,26 +495,76 @@ impl GraphicsSettings {
         self.atmosphere_enabled = env_bool("FISTFORCE_ATMOSPHERE", self.atmosphere_enabled);
         self.clouds_enabled = env_bool("FISTFORCE_CLOUDS", self.clouds_enabled);
         self.props_enabled = env_bool("FISTFORCE_PROPS", self.props_enabled);
+        if let Ok(raw) = std::env::var("FISTFORCE_GRASS_RENDERER") {
+            self.ground_cover_renderer = match raw.trim().to_ascii_lowercase().as_str() {
+                "legacy" | "patches" => GroundCoverRenderer::Legacy,
+                "chunked" | "batched" => GroundCoverRenderer::Chunked,
+                _ => {
+                    warn!("Ignoring invalid FISTFORCE_GRASS_RENDERER='{raw}'");
+                    self.ground_cover_renderer
+                }
+            };
+        }
         self.vsync_enabled = env_bool("FISTFORCE_VSYNC", self.vsync_enabled);
         self.fullscreen_enabled = env_bool("FISTFORCE_FULLSCREEN", self.fullscreen_enabled);
+        self.exclusive_fullscreen_enabled = env_bool(
+            "FISTFORCE_EXCLUSIVE_FULLSCREEN",
+            self.exclusive_fullscreen_enabled,
+        );
+        if let Ok(raw) = std::env::var("FISTFORCE_DISPLAY_MODE") {
+            let mode = match raw.trim().to_ascii_lowercase().as_str() {
+                "windowed" | "window" => Some(DisplayMode::Windowed),
+                "borderless" | "borderless-fullscreen" => Some(DisplayMode::Borderless),
+                "fullscreen" | "exclusive" | "exclusive-fullscreen" => {
+                    Some(DisplayMode::Fullscreen)
+                }
+                _ => None,
+            };
+            if let Some(mode) = mode {
+                self.set_display_mode(mode);
+            } else {
+                warn!("Ignoring invalid FISTFORCE_DISPLAY_MODE='{raw}'");
+            }
+        }
+        if let Ok(raw) = std::env::var("FISTFORCE_RESOLUTION") {
+            let parsed = raw
+                .trim()
+                .to_ascii_lowercase()
+                .split_once('x')
+                .and_then(|(width, height)| {
+                    Some((
+                        width.trim().parse::<u32>().ok()?,
+                        height.trim().parse::<u32>().ok()?,
+                    ))
+                })
+                .filter(|(width, height)| *width >= 1024 && *height >= 576);
+            if let Some((width, height)) = parsed {
+                self.display_resolution = DisplayResolution::new(width, height);
+            } else {
+                warn!("Ignoring invalid FISTFORCE_RESOLUTION='{raw}'; expected WIDTHxHEIGHT");
+            }
+        }
     }
 
     /// Settings for this run: the saved file (if any) under the env overrides.
     /// FISTFORCE_NO_SETTINGS_FILE skips the file for reproducible captures.
     pub fn load_or_default() -> Self {
-        if std::env::var("FISTFORCE_NO_SETTINGS_FILE").is_ok() {
-            return Self::default();
-        }
-        let mut settings = std::fs::read_to_string(SETTINGS_FILE)
-            .ok()
-            .and_then(|text| match ron::from_str::<GraphicsSettings>(&text) {
-                Ok(parsed) => Some(parsed),
-                Err(err) => {
-                    warn!("Ignoring malformed {SETTINGS_FILE}: {err}");
-                    None
-                }
-            })
-            .unwrap_or_default();
+        let mut settings = if std::env::var("FISTFORCE_NO_SETTINGS_FILE").is_ok() {
+            Self::default()
+        } else {
+            std::fs::read_to_string(SETTINGS_FILE)
+                .ok()
+                .and_then(|text| match ron::from_str::<GraphicsSettings>(&text) {
+                    Ok(parsed) => Some(parsed),
+                    Err(err) => {
+                        warn!("Ignoring malformed {SETTINGS_FILE}: {err}");
+                        None
+                    }
+                })
+                .unwrap_or_default()
+        };
+        // Reproducible captures and profiling runs skip only the user's file;
+        // their explicit environment overrides must still take effect.
         settings.apply_env_overrides();
         settings
     }
@@ -269,6 +575,7 @@ impl GraphicsSettings {
 pub fn save_graphics_settings(
     settings: Res<GraphicsSettings>,
     time: Res<Time>,
+    pending_display: Option<Res<PendingDisplayChange>>,
     mut deadline: Local<Option<f32>>,
 ) {
     if settings.is_changed() && !settings.is_added() {
@@ -277,6 +584,11 @@ pub fn save_graphics_settings(
     let Some(due) = *deadline else {
         return;
     };
+    // A candidate display mode may be perfectly valid to the OS but unusable
+    // on a particular screen. Never persist it until the player confirms.
+    if pending_display.is_some() {
+        return;
+    }
     if time.elapsed_secs() < due {
         return;
     }
@@ -296,6 +608,34 @@ pub fn save_graphics_settings(
         Ok(()) => info!("Saved graphics settings to {SETTINGS_FILE}"),
         Err(err) => warn!("Could not write {SETTINGS_FILE}: {err}"),
     }
+}
+
+/// Automatically restore the last confirmed output settings when a candidate
+/// is not confirmed. This runs even if the pause menu is closed after making
+/// the change, so the player cannot accidentally strand the countdown UI.
+pub fn tick_display_change_confirmation(
+    time: Res<Time>,
+    pending: Option<ResMut<PendingDisplayChange>>,
+    mut settings: ResMut<GraphicsSettings>,
+    mut commands: Commands,
+) {
+    let Some(mut pending) = pending else {
+        return;
+    };
+    pending.seconds_left -= time.delta_secs();
+    if pending.seconds_left > 0.0 {
+        return;
+    }
+    let previous_mode = pending.previous_mode;
+    let previous_resolution = pending.previous_resolution;
+    settings.set_display_mode(previous_mode);
+    settings.display_resolution = previous_resolution;
+    commands.remove_resource::<PendingDisplayChange>();
+    warn!(
+        "Display change was not confirmed; restored {} at {}",
+        previous_mode.label(),
+        previous_resolution.label()
+    );
 }
 
 /// Runtime-adjustable input settings for player controls.
@@ -347,18 +687,20 @@ pub fn apply_graphics_settings(
     }
 
     info!(
-        "Applying graphics settings: render_scale={:.2} ssao={} shadow_quality={:?} foliage_cutout={} bloom={}, shadows={}, atmosphere={}, clouds={}, far_terrain={}, vsync={}, fullscreen={}, tonemapping={:?}, exposure={:.2}",
+        "Applying graphics settings: render_scale={:.2} ssao={} shadow_quality={:?} foliage_cutout={} grass_renderer={:?} bloom={}, shadows={}, atmosphere={}, clouds={}, far_terrain={}, vsync={}, display_mode={:?}, resolution={}, tonemapping={:?}, exposure={:.2}",
         settings.render_scale,
         settings.ssao_enabled,
         settings.shadow_quality,
         settings.foliage_cutout_enabled,
+        settings.ground_cover_renderer,
         settings.bloom_enabled,
         settings.shadows_enabled,
         settings.atmosphere_enabled,
         settings.clouds_enabled,
         settings.far_terrain_enabled,
         settings.vsync_enabled,
-        settings.fullscreen_enabled,
+        settings.display_mode(),
+        settings.display_resolution.label(),
         settings.tonemapping,
         settings.grade_exposure
     );
@@ -436,30 +778,18 @@ pub fn apply_graphics_settings(
         *vis = cloud_visibility;
     }
 
-    // Apply vsync (present mode) and the fullscreen preference.
+    // Apply VSync and the complete persisted display request. The helper is
+    // idempotent, so unrelated graphics changes never retrigger an OS
+    // fullscreen transition.
     let monitor = monitors.iter().next();
     for mut window in windows.iter_mut() {
-        let wants_fullscreen = settings.fullscreen_enabled;
-        let is_fullscreen = !matches!(window.mode, WindowMode::Windowed);
-        if wants_fullscreen != is_fullscreen {
-            crate::app_wiring::apply_window_mode(
-                &mut window,
-                &mut ui_scale,
-                monitor,
-                wants_fullscreen,
-            );
-        } else {
-            #[cfg(target_os = "macos")]
-            {
-                let base_scale = window.resolution.base_scale_factor();
-                window.resolution.set_scale_factor_override(Some(1.0));
-                ui_scale.0 = base_scale;
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                ui_scale.0 = 1.0;
-            }
-        }
+        crate::app_wiring::apply_window_mode(
+            &mut window,
+            &mut ui_scale,
+            monitor,
+            settings.display_mode(),
+            settings.display_resolution,
+        );
         window.present_mode = if settings.vsync_enabled {
             PresentMode::AutoVsync
         } else {
@@ -467,8 +797,9 @@ pub fn apply_graphics_settings(
         };
 
         info!(
-            "Window state: mode={:?} physical={}x{} logical={:.0}x{:.0} scale(base={:.2} override={:?}) ui_scale={:.2}",
+            "Window request: mode={:?} selected={} physical_now={}x{} logical_now={:.0}x{:.0} scale(base={:.2} override={:?}) ui_scale={:.2}",
             window.mode,
+            settings.displayed_resolution_label(monitor),
             window.resolution.physical_width(),
             window.resolution.physical_height(),
             window.resolution.width(),
@@ -546,6 +877,8 @@ mod tests {
         let settings = GraphicsSettings {
             render_scale: 0.6,
             fullscreen_enabled: false,
+            exclusive_fullscreen_enabled: false,
+            display_resolution: DisplayResolution::new(1280, 720),
             view_distance: 12,
             ..Default::default()
         };
@@ -554,6 +887,8 @@ mod tests {
         let parsed: GraphicsSettings = ron::from_str(&text).expect("parse");
         assert_eq!(parsed.render_scale, 0.6);
         assert!(!parsed.fullscreen_enabled);
+        assert_eq!(parsed.display_mode(), DisplayMode::Windowed);
+        assert_eq!(parsed.display_resolution, DisplayResolution::new(1280, 720));
         assert_eq!(parsed.view_distance, 12);
         // Skipped field falls back to the pinned default.
         assert_eq!(parsed.tonemapping, Tonemapping::AgX);
@@ -566,5 +901,109 @@ mod tests {
         let parsed: GraphicsSettings = ron::from_str("(render_scale: 0.55)").expect("parse");
         assert_eq!(parsed.render_scale, 0.55);
         assert!(parsed.shadows_enabled);
+        // Files written before the grass setting existed migrate to the new
+        // production renderer; an explicit saved Legacy choice still wins.
+        assert_eq!(parsed.ground_cover_renderer, GroundCoverRenderer::Chunked);
+        assert_eq!(parsed.display_mode(), DisplayMode::Borderless);
+        assert_eq!(
+            parsed.display_resolution,
+            DisplayResolution::new(LAUNCHER_RESOLUTION.0, LAUNCHER_RESOLUTION.1)
+        );
+    }
+
+    #[test]
+    fn explicit_legacy_grass_choice_survives_loading() {
+        let parsed: GraphicsSettings =
+            ron::from_str("(ground_cover_renderer: Legacy)").expect("parse explicit fallback");
+        assert_eq!(parsed.ground_cover_renderer, GroundCoverRenderer::Legacy);
+    }
+
+    #[test]
+    fn legacy_fullscreen_preference_maps_into_the_three_display_modes() {
+        let windowed: GraphicsSettings =
+            ron::from_str("(fullscreen_enabled: false)").expect("parse old windowed settings");
+        let borderless: GraphicsSettings =
+            ron::from_str("(fullscreen_enabled: true)").expect("parse old fullscreen settings");
+        assert_eq!(windowed.display_mode(), DisplayMode::Windowed);
+        assert_eq!(borderless.display_mode(), DisplayMode::Borderless);
+
+        let mut settings = borderless;
+        settings.set_display_mode(DisplayMode::Fullscreen);
+        assert!(settings.fullscreen_enabled);
+        assert!(settings.exclusive_fullscreen_enabled);
+        assert_eq!(settings.display_mode(), DisplayMode::Fullscreen);
+    }
+
+    #[test]
+    fn exclusive_resolution_list_contains_only_monitor_video_modes() {
+        let monitor = Monitor {
+            name: None,
+            physical_height: 1440,
+            physical_width: 2560,
+            physical_position: IVec2::ZERO,
+            refresh_rate_millihertz: Some(60_000),
+            scale_factor: 1.0,
+            video_modes: vec![
+                VideoMode {
+                    physical_size: UVec2::new(1920, 1080),
+                    bit_depth: 24,
+                    refresh_rate_millihertz: 60_000,
+                },
+                VideoMode {
+                    physical_size: UVec2::new(1920, 1080),
+                    bit_depth: 30,
+                    refresh_rate_millihertz: 120_000,
+                },
+                VideoMode {
+                    physical_size: UVec2::new(2560, 1440),
+                    bit_depth: 30,
+                    refresh_rate_millihertz: 60_000,
+                },
+            ],
+        };
+        assert_eq!(
+            available_display_resolutions(
+                DisplayMode::Fullscreen,
+                Some(&monitor),
+                DisplayResolution::new(1600, 900),
+            ),
+            vec![
+                DisplayResolution::new(1920, 1080),
+                DisplayResolution::new(2560, 1440),
+            ]
+        );
+        let best = best_fullscreen_video_mode(&monitor, DisplayResolution::new(1920, 1080))
+            .expect("supported mode");
+        assert_eq!(best.refresh_rate_millihertz, 120_000);
+    }
+
+    #[test]
+    fn unconfirmed_display_change_restores_the_last_safe_settings() {
+        let mut original = GraphicsSettings::default();
+        original.set_display_mode(DisplayMode::Windowed);
+        original.display_resolution = DisplayResolution::new(1600, 900);
+        let mut candidate = original.clone();
+        candidate.set_display_mode(DisplayMode::Fullscreen);
+        candidate.display_resolution = DisplayResolution::new(1920, 1080);
+
+        let mut pending = PendingDisplayChange::new(&original);
+        pending.seconds_left = 0.01;
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.insert_resource(candidate);
+        app.insert_resource(pending);
+        app.add_systems(Update, tick_display_change_confirmation);
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(0.1));
+        app.update();
+
+        let restored = app.world().resource::<GraphicsSettings>();
+        assert_eq!(restored.display_mode(), DisplayMode::Windowed);
+        assert_eq!(
+            restored.display_resolution,
+            DisplayResolution::new(1600, 900)
+        );
+        assert!(!app.world().contains_resource::<PendingDisplayChange>());
     }
 }

@@ -12,27 +12,34 @@ use bevy::prelude::*;
 use shared::components::{
     AttachedTo, BuildingId, BuildingOf, CharacterActivity, CharacterAffiliation,
     CharacterAttributes, CharacterKind, CharacterName, CivicEmployment, CivicRole, EmployedAt,
-    FarmField, Household, LivesAt, MootAdministration, Occupation, PersonId, PlayerPosition,
-    PlayerRotation, Residence, ResidentOf, Settlement, SettlementBuilding, SettlementBuildingKind,
-    SettlementId, SettlementPolicies, SettlementTier, TimeWarp, WorkStatus, WorldTime,
+    FarmField, Health, Household, LivesAt, MootAdministration, Nutrition, Occupation, OwnedBy,
+    PersonId, PlayerPosition, PlayerRotation, Residence, ResidentOf, Settlement,
+    SettlementBuilding, SettlementBuildingKind, SettlementId, SettlementPolicies, SettlementTier,
+    TimeWarp, WorkStatus, WorldTime,
 };
 use shared::economy::{
-    BusinessAccount, BusinessSalePolicy, CarriedLoad, Good, GoodsInventory, HouseholdEconomy,
-    MootMarket, SettlementEconomy, Wallet, PENNIES_PER_COIN, STARTING_TREASURY_MONEY,
+    BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessProcurementPolicy,
+    BusinessSalePolicy, BusinessWagePolicy, CarriedLoad, CivicAccount, Good, GoodsInventory,
+    HouseholdEconomy, MootMarket, SettlementEconomy, Wallet, PENNIES_PER_COIN,
+    STARTING_TREASURY_MONEY,
 };
 use shared::region::RegionCoord;
 use shared::spatial::SpatialObstacleGrid;
 use shared::terrain::WorldTerrain;
 
 use super::ambient::{self, AmbientClock, AmbientRoutine, AmbientSpotCache};
+use super::collect_business_profit_taxes;
+use super::history::{capture_settlement_history, SettlementHistoryRuntime};
 use super::{
-    assign_farmer_routines, assign_households, ensure_farm_fields, fill_vacancies,
-    reconcile_work_statuses, recount_residents, run_business_payroll_and_owner_leisure,
-    run_farmer_routines, run_household_schedules, run_workplace_door_transits,
-    settle_pending_market_payments, sync_building_door_demands, sync_carried_load,
+    advance_nutrition_health, apply_nutrition_condition, assign_farmer_routines, assign_households,
+    ensure_farm_fields, fill_vacancies, reconcile_work_statuses, recount_residents,
+    review_business_management, review_civic_policies, run_business_payroll_and_owner_leisure,
+    run_civic_payroll, run_farmer_routines, run_household_schedules, run_workplace_door_transits,
+    sync_building_door_demands, sync_carried_load, sync_civic_market_policy,
     update_household_budgets_and_pantries, update_moot_market_targets, update_settlement_economies,
     FarmerPhase, FarmerRoutine, HomeAssignment, SettlementEconomyRuntime, VillagerIntent,
 };
+use super::{apply_business_events, BusinessEventQueue};
 use crate::collision::library::StaticColliders;
 use crate::player::hero::{step_units, MoveTarget};
 use crate::world::pathfinding::PathfindingBudgetSettings;
@@ -69,6 +76,8 @@ struct PhysicalWorkBench;
 struct EconomyIdleBench;
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 struct EconomyDailyBench;
+#[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
+struct NutritionHealthBench;
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
 struct TacticalMovementBench;
 #[derive(ScheduleLabel, Clone, Debug, PartialEq, Eq, Hash)]
@@ -115,9 +124,15 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                 SettlementEconomy::default(),
                 SettlementPolicies::default(),
                 MootAdministration {
-                    market_porter: Some(names_for_porter(town_index)),
+                    market_porter: Some(name_for_porter(town_index, 0)),
+                    road_steward: Some(name_for_porter(town_index, 0)),
+                    city_workers: vec![
+                        name_for_porter(town_index, 0),
+                        name_for_porter(town_index, 1),
+                    ],
                     ..default()
                 },
+                CivicAccount::default(),
                 MootMarket::founding(),
                 hall_inventory,
                 PlayerPosition(hall_position),
@@ -165,7 +180,7 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
             houses.push((house, building_id));
         }
 
-        let farm_workers = names.get(1..).unwrap_or_default();
+        let farm_workers = names.get(2..).unwrap_or_default();
         let mut farms = Vec::with_capacity(farm_workers.len().div_ceil(2));
         for (farm_index, workers) in farm_workers.chunks(2).enumerate() {
             let row = farm_index / 14;
@@ -174,10 +189,12 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                 + Vec3::new(column as f32 * 18.0 - 115.0, 0.0, 65.0 + row as f32 * 24.0);
             let building_id = BuildingId(next_building_id);
             next_building_id += 1;
+            let owner_id = PersonId(next_person_id + 2 + (farm_index * 2) as u64);
             let farm = world
                 .spawn((
                     building_id,
                     BuildingOf(SettlementId(town_index as u64 + 1)),
+                    OwnedBy(owner_id),
                     SettlementBuilding {
                         kind: SettlementBuildingKind::Farmstead,
                         settlement: place.clone(),
@@ -191,7 +208,10 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                         ..default()
                     },
                     BusinessSalePolicy::default(),
-                    shared::economy::BusinessWagePolicy::default(),
+                    BusinessWagePolicy::default(),
+                    BusinessProcurementPolicy::default(),
+                    BusinessManagementPolicy::default(),
+                    BusinessCondition::default(),
                     PlayerPosition(position),
                     PlayerRotation(0.0),
                 ))
@@ -220,7 +240,7 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
         for resident in 0..resident_count {
             let name = names[resident].clone();
             let (home, home_id) = houses[resident / 4];
-            let farmer = resident.checked_sub(1).map(|worker_index| {
+            let farmer = resident.checked_sub(2).map(|worker_index| {
                 let (farmstead, farm_id, fields, farm_position) = farms[worker_index / 2];
                 let field = fields[worker_index % fields.len()];
                 (farmstead, farm_id, field, farm_position)
@@ -238,6 +258,8 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                 GoodsInventory::new(shared::economy::capacity::VILLAGER),
                 CarriedLoad::default(),
                 Wallet::new(1_000_000),
+                Health::default(),
+                Nutrition::default(),
                 PlayerPosition(position),
                 PlayerRotation(0.0),
             ));
@@ -257,7 +279,9 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                         farmstead,
                         field,
                         hall,
+                        work_stand: position,
                         harvest_seconds: 0.0,
+                        failed_workplace_routes: 0,
                         production_day: u32::MAX,
                         produced_today: 0,
                         phase: FarmerPhase::Inside {
@@ -269,10 +293,12 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
             } else {
                 person.insert((
                     CharacterActivity::Idle,
-                    Occupation(Some("Market Porter".to_string())),
+                    Occupation(Some("Moot Steward".to_string())),
+                    crate::world::village_roads::RoadSteward { settlement: hall },
+                    super::MarketPorter { settlement: hall },
                     CivicEmployment {
                         settlement: SettlementId(town_index as u64 + 1),
-                        role: CivicRole::MarketPorter,
+                        role: CivicRole::MootSteward,
                     },
                 ));
             }
@@ -283,14 +309,16 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
     world.spawn((WorldTime::new_default(), TimeWarp::clamped(1.0)));
 }
 
-fn names_for_porter(town_index: usize) -> String {
-    format!("T{town_index:02}Resident000")
+fn name_for_porter(town_index: usize, porter_index: usize) -> String {
+    format!("T{town_index:02}Resident{porter_index:03}")
 }
 
 fn configure_app(towns: usize, npcs: usize) -> App {
     let mut app = App::new();
     app.init_resource::<Time>();
     app.init_resource::<SettlementEconomyRuntime>();
+    app.init_resource::<SettlementHistoryRuntime>();
+    app.init_resource::<BusinessEventQueue>();
     app.init_resource::<crate::world::identity::WorldIdAllocator>();
     app.init_resource::<crate::world::identity::WorldIdentityIndex>();
     app.init_resource::<StrategicStep>();
@@ -312,15 +340,27 @@ fn configure_app(towns: usize, npcs: usize) -> App {
     app.add_systems(FieldBench, ensure_farm_fields);
     app.add_systems(VacancyBench, fill_vacancies);
     app.add_systems(RoutineAssignmentBench, assign_farmer_routines);
-    app.add_systems(PhysicalWorkBench, run_farmer_routines);
+    app.add_systems(
+        PhysicalWorkBench,
+        (run_farmer_routines, apply_business_events).chain(),
+    );
     app.add_systems(
         EconomyIdleBench,
         (
             reconcile_work_statuses,
+            run_civic_payroll,
+            sync_civic_market_policy,
             update_moot_market_targets,
             update_household_budgets_and_pantries,
             update_settlement_economies,
+            apply_nutrition_condition,
+            advance_nutrition_health,
             run_business_payroll_and_owner_leisure,
+            collect_business_profit_taxes,
+            review_business_management,
+            apply_business_events,
+            review_civic_policies,
+            capture_settlement_history,
         )
             .chain(),
     );
@@ -328,14 +368,24 @@ fn configure_app(towns: usize, npcs: usize) -> App {
         EconomyDailyBench,
         (
             reconcile_work_statuses,
+            run_civic_payroll,
+            sync_civic_market_policy,
             update_moot_market_targets,
             update_household_budgets_and_pantries,
             update_settlement_economies,
+            apply_nutrition_condition,
+            advance_nutrition_health,
             run_business_payroll_and_owner_leisure,
+            collect_business_profit_taxes,
+            review_business_management,
+            apply_business_events,
+            review_civic_policies,
+            capture_settlement_history,
         )
             .chain(),
     );
     app.add_systems(TacticalMovementBench, step_units);
+    app.add_systems(NutritionHealthBench, advance_nutrition_health);
     app.add_systems(
         IdentitySteadyBench,
         (
@@ -362,10 +412,16 @@ fn configure_app(towns: usize, npcs: usize) -> App {
         (
             recount_residents,
             reconcile_work_statuses,
+            run_civic_payroll,
+            sync_civic_market_policy,
             update_moot_market_targets,
             update_household_budgets_and_pantries,
             update_settlement_economies,
+            apply_nutrition_condition,
+            advance_nutrition_health,
             run_business_payroll_and_owner_leisure,
+            collect_business_profit_taxes,
+            review_business_management,
             fill_vacancies,
             ensure_farm_fields,
             assign_households,
@@ -374,11 +430,13 @@ fn configure_app(towns: usize, npcs: usize) -> App {
             (
                 assign_farmer_routines,
                 run_farmer_routines,
+                apply_business_events,
                 ambient::run_ambient_routines,
-                settle_pending_market_payments,
                 (sync_carried_load, sync_building_door_demands).chain(),
             )
                 .chain(),
+            review_civic_policies,
+            capture_settlement_history,
         )
             .chain(),
     );
@@ -452,6 +510,38 @@ fn bench_daily_economy(world: &mut World, samples: usize) -> Timing {
         let started = Instant::now();
         world.run_schedule(EconomyDailyBench);
         durations.push(started.elapsed());
+    }
+    durations.sort_unstable();
+    let total: Duration = durations.iter().copied().sum();
+    Timing {
+        average: total / samples as u32,
+        p50: percentile(&durations, 50),
+        p95: percentile(&durations, 95),
+        p99: percentile(&durations, 99),
+        max: *durations.last().expect("at least one sample"),
+    }
+}
+
+fn bench_nutrition_health(world: &mut World, samples: usize) -> Timing {
+    let residents: Vec<Entity> = world
+        .query_filtered::<Entity, With<CharacterKind>>()
+        .iter(world)
+        .collect();
+    let mut durations = Vec::with_capacity(samples);
+    for serial in 0..(WARMUP_RUNS + samples) {
+        for resident in &residents {
+            let mut entity = world.entity_mut(*resident);
+            entity.get_mut::<Health>().expect("fixture Health").current = 50.0;
+            entity.insert(super::mortality::NutritionHealthAdjustment::recovering());
+        }
+        world
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(5.0));
+        let started = Instant::now();
+        world.run_schedule(NutritionHealthBench);
+        if serial >= WARMUP_RUNS {
+            durations.push(started.elapsed());
+        }
     }
     durations.sort_unstable();
     let total: Duration = durations.iter().copied().sum();
@@ -607,6 +697,10 @@ fn village_scale_lab() {
         (
             "economy daily burst",
             bench_daily_economy(app.world_mut(), samples),
+        ),
+        (
+            "nutrition active 5k",
+            bench_nutrition_health(app.world_mut(), samples),
         ),
         (
             "village steady bundle",

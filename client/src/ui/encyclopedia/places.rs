@@ -13,12 +13,14 @@
 use bevy::prelude::*;
 
 use shared::components::{
-    ConstructionSite, FarmField, FishingPier, Household, MootAdministration, PlayerPosition,
-    Settlement, SettlementBuilding, SettlementBuildingKind, SettlementDevelopment,
-    SettlementPolicies, SettlementTier,
+    CivicHallLevel, ConstructionSite, FarmField, FishingPier, Household, MootAdministration,
+    PlayerPosition, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementDevelopment,
+    SettlementOpportunityBoard, SettlementPolicies, SettlementTier,
 };
 use shared::economy::{
-    format_money, next_settlement_building, Good, GoodsInventory, MootMarket, SettlementEconomy,
+    business_working_capital, format_money, BusinessAccount, BusinessCondition, BusinessForSale,
+    BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy, BusinessWagePolicy,
+    Good, GoodsInventory, MootMarket, SettlementEconomy,
 };
 
 use super::*;
@@ -31,6 +33,9 @@ pub struct PlaceRecord {
     pub id: shared::components::SettlementId,
     pub name: String,
     pub tier: SettlementTier,
+    /// Physical civic building, separate from the unlocked settlement tier so
+    /// future paid construction may lag behind promotion.
+    pub hall_level: CivicHallLevel,
     pub position: Vec3,
     /// How many people live there. Zero means a founded site with no life in it
     /// yet, which is a real and distinct state rather than a missing number.
@@ -41,14 +46,15 @@ pub struct PlaceRecord {
     pub economy: Option<SettlementEconomy>,
     pub administration: Option<MootAdministration>,
     pub development: Option<SettlementDevelopment>,
-    pub poor_relief: bool,
+    pub policies: Option<SettlementPolicies>,
+    pub opportunities: Option<SettlementOpportunityBoard>,
     pub inventory: Vec<(Good, u32)>,
     pub inventory_used: u32,
     pub inventory_capacity: u32,
     pub buildings: Vec<PlaceBuildingRecord>,
     /// Counts from the global lightweight directory. Detailed records replace
     /// these when the settlement is inside the client's interest area.
-    pub summary_buildings: [u16; 4],
+    pub summary_buildings: [u16; 6],
     pub wheat_fields: u32,
     pub fishing_piers: u32,
     pub permits: Vec<PlacePermitRecord>,
@@ -56,15 +62,31 @@ pub struct PlaceRecord {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaceBuildingRecord {
+    pub id: Option<shared::components::BuildingId>,
     pub kind: SettlementBuildingKind,
     pub position: Vec3,
     pub owner: Option<String>,
+    pub for_sale: Option<BusinessForSale>,
     pub quality: f32,
     pub workers: Vec<String>,
     pub residents: Vec<String>,
     pub inventory: Vec<(Good, u32)>,
     pub inventory_used: u32,
     pub inventory_capacity: u32,
+    pub business: Option<PlaceBusinessRecord>,
+}
+
+/// Last-known live operating record for one private workplace. Historical
+/// archives stay pull-based; this is only the current state already replicated
+/// for nearby building inspection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlaceBusinessRecord {
+    pub account: BusinessAccount,
+    pub sale: Option<BusinessSalePolicy>,
+    pub wage: Option<BusinessWagePolicy>,
+    pub management: Option<BusinessManagementPolicy>,
+    pub procurement: Option<BusinessProcurementPolicy>,
+    pub condition: Option<BusinessCondition>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,6 +95,7 @@ pub struct PlacePermitRecord {
     pub raising: bool,
     pub delivered_wood: u32,
     pub required_wood: u32,
+    pub for_sale: Option<BusinessForSale>,
 }
 
 /// Every settlement the client is aware of.
@@ -121,10 +144,13 @@ pub(super) fn learn_settlement_summaries(
             summary.farmsteads,
             summary.fishing_huts,
             summary.lumber_huts,
+            summary.windmills,
+            summary.bakeries,
         ];
         let unchanged = existing.is_some_and(|index| {
             let record = &places.records[index];
             record.tier == summary.tier
+                && record.hall_level == CivicHallLevel::for_tier(summary.tier)
                 && record.position == position.0
                 && record.residents == summary.residents
                 && record.treasury == summary.treasury
@@ -136,6 +162,7 @@ pub(super) fn learn_settlement_summaries(
         if let Some(index) = existing {
             let record = &mut places.records[index];
             record.tier = summary.tier;
+            record.hall_level = CivicHallLevel::for_tier(summary.tier);
             record.position = position.0;
             record.residents = summary.residents;
             record.treasury = summary.treasury;
@@ -145,6 +172,7 @@ pub(super) fn learn_settlement_summaries(
                 id: summary.id,
                 name: summary.name.clone(),
                 tier: summary.tier,
+                hall_level: CivicHallLevel::for_tier(summary.tier),
                 position: position.0,
                 residents: summary.residents,
                 treasury: summary.treasury,
@@ -152,7 +180,8 @@ pub(super) fn learn_settlement_summaries(
                 economy: None,
                 administration: None,
                 development: None,
-                poor_relief: false,
+                policies: None,
+                opportunities: None,
                 inventory: Vec::new(),
                 inventory_used: 0,
                 inventory_capacity: 0,
@@ -219,6 +248,11 @@ pub struct PlaceDetailLabel(pub usize);
 #[derive(Component, Clone, Copy)]
 pub struct PlaceDetailValue(pub usize);
 
+/// Static action slot in the Places detail card. It becomes a real
+/// `BusinessHistoryButton` only while a stable private business is selected.
+#[derive(Component)]
+pub struct PlaceBusinessHistoryAction;
+
 // --- systems ---------------------------------------------------------------
 
 /// Fold replicated settlements into the registry.
@@ -227,9 +261,11 @@ pub struct PlaceDetailValue(pub usize);
 /// delivers a settlement's name and position in separate batches and `Added`
 /// fires once — the same trap that has now bitten characters, selection and
 /// affiliation in this codebase.
+#[allow(clippy::type_complexity)]
 pub(super) fn learn_settlements(
     seen: Query<(
         &Settlement,
+        Option<&CivicHallLevel>,
         Option<&shared::components::SettlementId>,
         &PlayerPosition,
         Option<&GoodsInventory>,
@@ -238,13 +274,22 @@ pub(super) fn learn_settlements(
         Option<&MootAdministration>,
         Option<&SettlementDevelopment>,
         Option<&SettlementPolicies>,
+        Option<&SettlementOpportunityBoard>,
     )>,
     buildings: Query<(
         &SettlementBuilding,
         Option<&shared::components::BuildingOf>,
+        Option<&shared::components::BuildingId>,
         &PlayerPosition,
         Option<&GoodsInventory>,
         Option<&Household>,
+        Option<&BusinessAccount>,
+        Option<&BusinessSalePolicy>,
+        Option<&BusinessWagePolicy>,
+        Option<&BusinessManagementPolicy>,
+        Option<&BusinessProcurementPolicy>,
+        Option<&BusinessCondition>,
+        Option<&BusinessForSale>,
     )>,
     fields: Query<&FarmField>,
     piers: Query<&FishingPier>,
@@ -252,6 +297,7 @@ pub(super) fn learn_settlements(
         &ConstructionSite,
         Option<&shared::components::BuildingOf>,
         Option<&GoodsInventory>,
+        Option<&BusinessForSale>,
     )>,
     mut places: ResMut<KnownPlaces>,
 ) {
@@ -268,17 +314,33 @@ pub(super) fn learn_settlements(
                     settlement_id: Option<&shared::components::SettlementId>| {
         let mut records: Vec<PlaceBuildingRecord> = buildings
             .iter()
-            .filter(|(building, owner, _, _, _)| {
+            .filter(|(building, owner, ..)| {
                 settlement_id.map_or_else(
                     || building.settlement == settlement.name,
                     |id| owner.is_some_and(|owner| owner.0 == *id),
                 )
             })
             .map(
-                |(building, _, position, inventory, household)| PlaceBuildingRecord {
+                |(
+                    building,
+                    _,
+                    building_id,
+                    position,
+                    inventory,
+                    household,
+                    account,
+                    sale,
+                    wage,
+                    management,
+                    procurement,
+                    condition,
+                    for_sale,
+                )| PlaceBuildingRecord {
+                    id: building_id.copied(),
                     kind: building.kind,
                     position: position.0,
                     owner: building.owner.clone(),
+                    for_sale: for_sale.copied(),
                     quality: building.quality,
                     workers: building.workers.clone(),
                     residents: household
@@ -287,6 +349,14 @@ pub(super) fn learn_settlements(
                     inventory: inventory_contents(inventory),
                     inventory_used: inventory_bulk(inventory).0,
                     inventory_capacity: inventory_bulk(inventory).1,
+                    business: account.map(|account| PlaceBusinessRecord {
+                        account: *account,
+                        sale: sale.copied(),
+                        wage: wage.copied(),
+                        management: management.copied(),
+                        procurement: procurement.copied(),
+                        condition: condition.copied(),
+                    }),
                 },
             )
             .collect();
@@ -303,17 +373,18 @@ pub(super) fn learn_settlements(
         |settlement: &Settlement, settlement_id: Option<&shared::components::SettlementId>| {
             let mut records: Vec<PlacePermitRecord> = sites
                 .iter()
-                .filter(|(site, owner, _)| {
+                .filter(|(site, owner, _, _)| {
                     settlement_id.map_or_else(
                         || site.settlement == settlement.name,
                         |id| owner.is_some_and(|owner| owner.0 == *id),
                     )
                 })
-                .map(|(site, _, inventory)| PlacePermitRecord {
+                .map(|(site, _, inventory, for_sale)| PlacePermitRecord {
                     kind: site.kind,
                     raising: site.raising,
                     delivered_wood: inventory.map_or(0, |store| store.amount(Good::Wood)),
                     required_wood: site.kind.construction_wood_required(),
+                    for_sale: for_sale.copied(),
                 })
                 .collect();
             records.sort_by_key(|permit| permit.kind.label());
@@ -322,6 +393,7 @@ pub(super) fn learn_settlements(
     let needs_update = seen.iter().any(
         |(
             settlement,
+            hall_level,
             settlement_id,
             position,
             inventory,
@@ -330,6 +402,7 @@ pub(super) fn learn_settlements(
             administration,
             development,
             policies,
+            opportunities,
         )| {
             let building_records = snapshot(settlement, settlement_id);
             let permits = permit_snapshot(settlement, settlement_id);
@@ -353,6 +426,10 @@ pub(super) fn learn_settlements(
             match record {
                 Some(record) => {
                     record.tier != settlement.tier
+                        || record.hall_level
+                            != hall_level
+                                .copied()
+                                .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier))
                         || record.position != position.0
                         || record.residents != settlement.residents
                         || record.treasury != settlement.treasury
@@ -361,7 +438,8 @@ pub(super) fn learn_settlements(
                         || record.economy.as_ref() != economy
                         || record.administration.as_ref() != administration
                         || record.development.as_ref() != development
-                        || record.poor_relief != policies.is_some_and(|policy| policy.poor_relief)
+                        || record.policies.as_ref() != policies
+                        || record.opportunities.as_ref() != opportunities
                         || (record.inventory_used, record.inventory_capacity)
                             != inventory_bulk(inventory)
                         || record.buildings != building_records
@@ -379,6 +457,7 @@ pub(super) fn learn_settlements(
 
     for (
         settlement,
+        hall_level,
         settlement_id,
         position,
         inventory,
@@ -387,8 +466,12 @@ pub(super) fn learn_settlements(
         administration,
         development,
         policies,
+        opportunities,
     ) in seen.iter()
     {
+        let hall_level = hall_level
+            .copied()
+            .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
         let building_records = snapshot(settlement, settlement_id);
         let summary_buildings = summarize_buildings(&building_records);
         let permits = permit_snapshot(settlement, settlement_id);
@@ -415,6 +498,7 @@ pub(super) fn learn_settlements(
                     record.id = *id;
                 }
                 record.tier = settlement.tier;
+                record.hall_level = hall_level;
                 record.position = position.0;
                 record.residents = settlement.residents;
                 record.treasury = settlement.treasury;
@@ -422,7 +506,8 @@ pub(super) fn learn_settlements(
                 record.economy = economy.cloned();
                 record.administration = administration.cloned();
                 record.development = development.cloned();
-                record.poor_relief = policies.is_some_and(|policy| policy.poor_relief);
+                record.policies = policies.copied();
+                record.opportunities = opportunities.cloned();
                 record.inventory = inventory;
                 record.inventory_used = inventory_used;
                 record.inventory_capacity = inventory_capacity;
@@ -436,6 +521,7 @@ pub(super) fn learn_settlements(
                 id: settlement_id.copied().unwrap_or_default(),
                 name: settlement.name.clone(),
                 tier: settlement.tier,
+                hall_level,
                 position: position.0,
                 residents: settlement.residents,
                 treasury: settlement.treasury,
@@ -443,7 +529,8 @@ pub(super) fn learn_settlements(
                 economy: economy.cloned(),
                 administration: administration.cloned(),
                 development: development.cloned(),
-                poor_relief: policies.is_some_and(|policy| policy.poor_relief),
+                policies: policies.copied(),
+                opportunities: opportunities.cloned(),
                 inventory,
                 inventory_used,
                 inventory_capacity,
@@ -457,7 +544,7 @@ pub(super) fn learn_settlements(
     }
 }
 
-fn summarize_buildings(records: &[PlaceBuildingRecord]) -> [u16; 4] {
+fn summarize_buildings(records: &[PlaceBuildingRecord]) -> [u16; 6] {
     let count = |kind| {
         records
             .iter()
@@ -470,6 +557,8 @@ fn summarize_buildings(records: &[PlaceBuildingRecord]) -> [u16; 4] {
         count(SettlementBuildingKind::Farmstead),
         count(SettlementBuildingKind::FishermansHut),
         count(SettlementBuildingKind::LumberjackHut),
+        count(SettlementBuildingKind::Windmill),
+        count(SettlementBuildingKind::Bakery),
     ]
 }
 
@@ -492,55 +581,31 @@ fn inventory_bulk(inventory: Option<&GoodsInventory>) -> (u32, u32) {
 }
 
 fn next_permit_summary(place: &PlaceRecord) -> String {
-    let count = |kind: SettlementBuildingKind| {
-        let detailed = place
-            .buildings
-            .iter()
-            .filter(|building| building.kind == kind)
-            .count()
-            + place
-                .permits
-                .iter()
-                .filter(|permit| permit.kind == kind)
-                .count();
-        let directory = match kind {
-            SettlementBuildingKind::House => place.summary_buildings[0] as usize,
-            SettlementBuildingKind::Farmstead => place.summary_buildings[1] as usize,
-            SettlementBuildingKind::FishermansHut => place.summary_buildings[2] as usize,
-            SettlementBuildingKind::LumberjackHut => place.summary_buildings[3] as usize,
-            _ => 0,
-        };
-        detailed.max(directory)
+    let Some(board) = place
+        .opportunities
+        .as_ref()
+        .filter(|board| !board.opportunities.is_empty())
+    else {
+        return "No active opportunity signals".to_string();
     };
-    let next = next_settlement_building(
-        count(SettlementBuildingKind::Farmstead),
-        count(SettlementBuildingKind::FishermansHut),
-        count(SettlementBuildingKind::LumberjackHut),
-        count(SettlementBuildingKind::House),
-        place.residents,
-        place.economy.as_ref(),
-    );
-    let Some(kind) = next else {
-        return "No measured shortage".to_string();
-    };
-    let reason = match kind {
-        SettlementBuildingKind::Farmstead
-            if count(SettlementBuildingKind::Farmstead)
-                + count(SettlementBuildingKind::FishermansHut)
-                == 0 =>
-        {
-            "first food supply"
-        }
-        SettlementBuildingKind::Farmstead => "food production or reserve shortage",
-        SettlementBuildingKind::LumberjackHut => "no local timber workplace",
-        SettlementBuildingKind::House => "not enough assigned beds",
-        SettlementBuildingKind::FishermansHut => "food supply",
-        SettlementBuildingKind::Hall => "civic foundation",
-        SettlementBuildingKind::Market => "village trade infrastructure",
-        SettlementBuildingKind::Tavern => "town amenity",
-        SettlementBuildingKind::Church => "regional civic amenity",
-    };
-    format!("{} / {reason}", kind.label())
+    board
+        .opportunities
+        .iter()
+        .take(4)
+        .map(|opportunity| {
+            format!(
+                "{}: {} signal / {}",
+                opportunity.kind.label(),
+                opportunity.score,
+                if opportunity.subsidized {
+                    "discounted permit"
+                } else {
+                    "full-price permit"
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" / ")
 }
 
 fn permit_queue_summary(place: &PlaceRecord) -> String {
@@ -551,7 +616,7 @@ fn permit_queue_summary(place: &PlaceRecord) -> String {
         .permits
         .iter()
         .map(|permit| {
-            format!(
+            let state = format!(
                 "{}: {} ({}/{})",
                 permit.kind.label(),
                 if permit.raising {
@@ -561,7 +626,14 @@ fn permit_queue_summary(place: &PlaceRecord) -> String {
                 },
                 permit.delivered_wood,
                 permit.required_wood
-            )
+            );
+            permit.for_sale.map_or(state.clone(), |listing| {
+                format!(
+                    "{state}, FOR SALE {} coin / {}",
+                    format_money(listing.asking_price),
+                    listing.reason.label(),
+                )
+            })
         })
         .collect::<Vec<_>>()
         .join(" / ")
@@ -645,7 +717,7 @@ pub(super) fn rebuild_place_list(
                     list,
                     &record.name,
                     SelectedPlaceEntry::Hall,
-                    SettlementBuildingKind::Hall.label(),
+                    record.hall_level.label(),
                     "COMMON STORE",
                 );
                 for (index, building) in record.buildings.iter().enumerate() {
@@ -975,6 +1047,76 @@ pub(super) fn sync_place_detail(
     }
 }
 
+/// Bind the expanded building record's action to the same pull-based business
+/// history view used by the compact world card.
+pub(super) fn sync_place_business_history_action(
+    mut commands: Commands,
+    places: Res<KnownPlaces>,
+    selected: Res<SelectedPlace>,
+    selected_entry: Res<SelectedPlaceEntry>,
+    settlements: Query<(
+        Entity,
+        &Settlement,
+        Option<&shared::components::SettlementId>,
+    )>,
+    mut buttons: Query<
+        (
+            Entity,
+            &mut Node,
+            Option<&crate::ui::history::BusinessHistoryButton>,
+        ),
+        With<PlaceBusinessHistoryAction>,
+    >,
+) {
+    let target = selected
+        .0
+        .as_deref()
+        .and_then(|name| places.find(name))
+        .and_then(|place| {
+            let SelectedPlaceEntry::Building(index) = *selected_entry else {
+                return None;
+            };
+            let building = place.buildings.get(index)?;
+            building.business.as_ref()?;
+            let building_id = building.id.filter(|id| id.is_assigned())?;
+            let settlement = settlements
+                .iter()
+                .find(|(_, settlement, id)| {
+                    if place.id.is_assigned() {
+                        id.is_some_and(|id| *id == place.id)
+                    } else {
+                        settlement.name == place.name
+                    }
+                })
+                .map(|(entity, ..)| entity)?;
+            Some(crate::ui::history::BusinessHistoryButton {
+                settlement,
+                place: place.name.clone(),
+                business: building_id,
+            })
+        });
+
+    for (entity, mut node, current) in buttons.iter_mut() {
+        node.display = if target.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        match (&target, current) {
+            (Some(target), Some(current)) if current == target => {}
+            (Some(target), _) => {
+                commands.entity(entity).insert(target.clone());
+            }
+            (None, Some(_)) => {
+                commands
+                    .entity(entity)
+                    .remove::<crate::ui::history::BusinessHistoryButton>();
+            }
+            (None, None) => {}
+        }
+    }
+}
+
 struct PlaceDetailModel {
     title: String,
     subtitle: String,
@@ -1060,20 +1202,23 @@ fn place_detail_model(
             }
         }
         SelectedPlaceEntry::Hall => {
-            let steward = place
-                .administration
-                .as_ref()
-                .and_then(|office| office.road_steward.clone())
-                .unwrap_or_else(|| "Vacant".to_string());
+            let moot_stewards = place.administration.as_ref().map_or_else(
+                || "Vacant".to_string(),
+                |office| {
+                    if office.city_workers.is_empty() {
+                        office
+                            .road_steward
+                            .clone()
+                            .unwrap_or_else(|| "Vacant".to_string())
+                    } else {
+                        office.city_workers.join(", ")
+                    }
+                },
+            );
             let reeve = place
                 .administration
                 .as_ref()
                 .and_then(|office| office.reeve.clone())
-                .unwrap_or_else(|| "Vacant".to_string());
-            let porter = place
-                .administration
-                .as_ref()
-                .and_then(|office| office.market_porter.clone())
                 .unwrap_or_else(|| "Vacant".to_string());
             let roads = place.administration.as_ref().map_or_else(
                 || "No audit recorded".to_string(),
@@ -1090,16 +1235,66 @@ fn place_detail_model(
             let public_jobs = place.administration.as_ref().map_or_else(
                 || "Administration starting".to_string(),
                 |office| {
+                    let (worker_target, guard_target) = place.policies.as_ref().map_or(
+                        (
+                            place.tier.public_worker_positions(),
+                            place.tier.public_guard_positions(),
+                        ),
+                        |policy| policy.staffing_posture.targets(place.tier),
+                    );
+                    let stewards = if office.city_workers.is_empty() {
+                        office
+                            .road_steward
+                            .as_deref()
+                            .unwrap_or("vacant")
+                            .to_string()
+                    } else {
+                        office.city_workers.join(", ")
+                    };
                     format!(
-                        "Reeve {} / porter {} / steward {} / guards {}/{}",
+                        "Reeve {} / Moot Stewards {} ({}/{}) / guards {}/{}",
                         office.reeve.as_deref().unwrap_or("vacant"),
-                        office.market_porter.as_deref().unwrap_or("vacant"),
-                        office.road_steward.as_deref().unwrap_or("vacant"),
+                        stewards,
+                        office.city_workers.len(),
+                        worker_target,
                         office.guards.len(),
-                        place.tier.public_guard_positions(),
+                        guard_target,
                     )
                 },
             );
+            let policy = place.policies.as_ref().map_or_else(
+                || "Awaiting charter".to_string(),
+                |policy| {
+                    format!(
+                        "{} / {} / {:.1}% market fee / {:.1}% profit levy",
+                        policy.strategy.label(),
+                        if policy.autopilot {
+                            "autopilot"
+                        } else {
+                            "manual"
+                        },
+                        policy.market_fee_bps as f32 / 100.0,
+                        policy.business_profit_tax_bps as f32 / 100.0,
+                    )
+                },
+            );
+            let social_policy = place.policies.as_ref().map_or_else(
+                || "Awaiting charter".to_string(),
+                |policy| {
+                    format!(
+                        "Relief {} / food reserve {} days / payroll reserve {} days / staffing {} / permit subsidy {:.1}%",
+                        policy.poor_relief.label(),
+                        policy.food_reserve_target_days,
+                        policy.civic_payroll_reserve_days,
+                        policy.staffing_posture.label(),
+                        policy.business_permit_subsidy_bps as f32 / 100.0,
+                    )
+                },
+            );
+            let civic_arrears = place
+                .administration
+                .as_ref()
+                .map_or(0, |office| office.wage_arrears);
             let plan = place.development.as_ref().map_or_else(
                 || "Awaiting charter".to_string(),
                 |development| {
@@ -1150,17 +1345,50 @@ fn place_detail_model(
                     )
                 },
             );
-            let (liquidity, volume) = place.market.as_ref().map_or_else(
+            let purchasable_food = place
+                .market
+                .as_ref()
+                .map_or(0, MootMarket::listed_edible_units);
+            let business_cash = place
+                .buildings
+                .iter()
+                .filter_map(|building| building.business.map(|business| business.account.cash))
+                .fold(0u64, u64::saturating_add);
+            let business_arrears = place
+                .buildings
+                .iter()
+                .filter_map(|building| building.business.map(|business| business.account))
+                .fold((0u64, 0u64), |(wages, taxes), account| {
+                    (
+                        wages.saturating_add(account.wage_arrears),
+                        taxes.saturating_add(account.tax_arrears),
+                    )
+                });
+            let unlisted_business_food = place
+                .buildings
+                .iter()
+                .flat_map(|building| building.inventory.iter())
+                .filter(|(good, _)| good.is_edible())
+                .map(|(_, units)| *units)
+                .fold(0u32, u32::saturating_add);
+            let (market_model, volume) = place.market.as_ref().map_or_else(
                 || ("Not operating".to_string(), "No trades".to_string()),
                 |market| {
                     (
-                        format!("{} coin", format_money(market.total_liquidity())),
+                        format!(
+                            "Private consignment / {} listed units / {}% fee",
+                            Good::ALL
+                                .into_iter()
+                                .map(|good| market.listed_units(good))
+                                .sum::<u32>(),
+                            market.market_fee_bps() as f32 / 100.0,
+                        ),
                         format!("{} coin", format_money(market.total_volume())),
                     )
                 },
             );
             PlaceDetailModel {
-                title: SettlementBuildingKind::Hall.label().to_string(),
+                title: place.hall_level.label().to_string(),
                 subtitle: format!("{} / CIVIC & MARKET RECORD", place.name.to_uppercase()),
                 rows: vec![
                     ("OWNER".into(), "The settlement common".into()),
@@ -1168,19 +1396,32 @@ fn place_detail_model(
                         "SERVICES".into(),
                         "Permits / market / common storage".into(),
                     ),
-                    ("ROAD STEWARD".into(), steward),
+                    ("MOOT STEWARDS".into(), moot_stewards),
                     ("REEVE".into(), reeve),
-                    ("MARKET PORTER".into(), porter),
                     ("PUBLIC POSITIONS".into(), public_jobs),
+                    ("CIVIC POLICY".into(), policy),
+                    ("SOCIAL / GROWTH POLICY".into(), social_policy),
+                    (
+                        "CIVIC WAGE ARREARS".into(),
+                        format!("{} coin", format_money(civic_arrears)),
+                    ),
                     ("ROAD AUDIT".into(), roads),
                     ("ROAD MATERIALS".into(), road_materials),
                     ("LAYOUT CHARTER".into(), plan),
                     ("DEFENCE RESERVES".into(), walls),
-                    ("NEXT PERMIT".into(), next_permit_summary(place)),
+                    ("PERMIT MARKET".into(), next_permit_summary(place)),
                     ("APPROVED WORKS".into(), permit_queue_summary(place)),
                     (
                         "PERMIT POLICY".into(),
-                        "Needed housing free / businesses pay need-priced fees".into(),
+                        place.policies.as_ref().map_or_else(
+                            || "Needed housing free / businesses pay need-priced fees".into(),
+                            |policy| {
+                                format!(
+                                    "Needed housing free / requested businesses receive {:.1}% permit discount",
+                                    policy.business_permit_subsidy_bps as f32 / 100.0,
+                                )
+                            },
+                        ),
                     ),
                     (
                         "COMMON STORE".into(),
@@ -1194,17 +1435,37 @@ fn place_detail_model(
                         "TREASURY".into(),
                         format!("{} coin", format_money(place.treasury)),
                     ),
-                    ("MARKET LIQUIDITY".into(), liquidity),
+                    ("MARKET MODEL".into(), market_model),
                     ("LIFETIME TRADE".into(), volume),
                     ("FOOD SECURITY".into(), food),
                     (
+                        "PURCHASABLE / AT BUSINESSES".into(),
+                        format!("{purchasable_food} / {unlisted_business_food} food units"),
+                    ),
+                    (
+                        "PRIVATE BUSINESS CASH".into(),
+                        format!("{} coin", format_money(business_cash)),
+                    ),
+                    (
+                        "BUSINESS ARREARS".into(),
+                        format!(
+                            "{} wage / {} tax coin",
+                            format_money(business_arrears.0),
+                            format_money(business_arrears.1),
+                        ),
+                    ),
+                    (
                         "POOR RELIEF".into(),
-                        if place.poor_relief {
-                            "On / sustainable surplus only"
-                        } else {
-                            "Off / households buy their own meals"
-                        }
-                        .into(),
+                        place.policies.as_ref().map_or_else(
+                            || "Awaiting charter".into(),
+                            |policy| {
+                                format!(
+                                    "{} / preserves {} full reserve days",
+                                    policy.poor_relief.label(),
+                                    policy.food_reserve_target_days,
+                                )
+                            },
+                        ),
                     ),
                     ("LOCATION".into(), location(place.position)),
                 ],
@@ -1217,7 +1478,16 @@ fn place_detail_model(
             let mut rows = vec![
                 (
                     "OWNER".into(),
-                    building.owner.as_deref().unwrap_or("The settlement").into(),
+                    building.for_sale.map_or_else(
+                        || building.owner.as_deref().unwrap_or("The settlement").into(),
+                        |listing| {
+                            format!(
+                                "FOR SALE — {} coin / {}",
+                                format_money(listing.asking_price),
+                                listing.reason.label(),
+                            )
+                        },
+                    ),
                 ),
                 (
                     "PURPOSE".into(),
@@ -1242,6 +1512,12 @@ fn place_detail_model(
                             "Food and lodging amenity / 2 work positions".into()
                         }
                         SettlementBuildingKind::Church => "Civic amenity / 1 work position".into(),
+                        SettlementBuildingKind::Windmill => {
+                            "Buys Wheat, produces Flour / 2 work positions".into()
+                        }
+                        SettlementBuildingKind::Bakery => {
+                            "Buys 2 Flour, produces 4 Bread / 2 work positions".into()
+                        }
                     },
                 ),
             ];
@@ -1279,10 +1555,186 @@ fn place_detail_model(
                         building.workers.join(", ")
                     },
                 ));
-                rows.push((
-                    "PLOT QUALITY".into(),
-                    format!("{:.0}%", building.quality * 100.0),
-                ));
+                if let Some(label) = building.kind.site_quality_label() {
+                    rows.push((label.into(), format!("{:.0}%", building.quality * 100.0)));
+                }
+            }
+            if let Some(business) = building.business {
+                let account = business.account;
+                let previous = account.previous_day;
+                let previous_profit = previous.profit();
+                let protected = match (business.wage, business.management, business.procurement) {
+                    (Some(wage), Some(management), Some(procurement)) => business_working_capital(
+                        building.kind.positions(),
+                        &wage,
+                        &management,
+                        &procurement,
+                        place.market.as_ref(),
+                    ),
+                    _ => Default::default(),
+                };
+                rows.extend([
+                    (
+                        "BUSINESS STATUS".into(),
+                        business.condition.map_or_else(
+                            || "Operating record loading".into(),
+                            |condition| {
+                                let mut parts = vec![condition.state.label().to_string()];
+                                if condition.cash_tight_days > 0 {
+                                    parts
+                                        .push(format!("cash-tight {}d", condition.cash_tight_days));
+                                }
+                                if condition.insolvent_days > 0 {
+                                    parts.push(format!("insolvent {}d", condition.insolvent_days));
+                                }
+                                parts.join(" / ")
+                            },
+                        ),
+                    ),
+                    (
+                        "MANAGEMENT".into(),
+                        business.management.map_or_else(
+                            || "Owner policy loading".into(),
+                            |policy| {
+                                format!(
+                                    "{} / {} / {} payroll days protected",
+                                    policy.strategy.label(),
+                                    if policy.autopilot {
+                                        "autopilot"
+                                    } else {
+                                        "manual"
+                                    },
+                                    policy.payroll_reserve_days,
+                                )
+                            },
+                        ),
+                    ),
+                    (
+                        "BUSINESS CASH".into(),
+                        format!("{} coin", format_money(account.cash)),
+                    ),
+                    (
+                        "PROTECTED / DRAWABLE".into(),
+                        format!(
+                            "{} / {} coin",
+                            format_money(protected.total_with_liabilities(&account)),
+                            format_money(account.withdrawable_profit(protected.total())),
+                        ),
+                    ),
+                    (
+                        "LIABILITIES".into(),
+                        format!(
+                            "{} wage / {} tax arrears · {} wage / {} tax defaulted",
+                            format_money(account.wage_arrears),
+                            format_money(account.tax_arrears),
+                            format_money(account.defaulted_wages),
+                            format_money(account.defaulted_taxes),
+                        ),
+                    ),
+                    (
+                        "YESTERDAY P&L".into(),
+                        if previous.day == u32::MAX {
+                            "First business day still open".into()
+                        } else {
+                            format!(
+                                "revenue {} / costs {} / {}{} coin",
+                                format_money(previous.gross_revenue),
+                                format_money(previous.operating_expenses()),
+                                if previous_profit < 0 { "-" } else { "+" },
+                                format_money(previous_profit.unsigned_abs()),
+                            )
+                        },
+                    ),
+                    ("LIFETIME RESULT".into(), {
+                        let profit = account.lifetime_profit();
+                        format!(
+                            "{}{} coin / {} withdrawn",
+                            if profit < 0 { "-" } else { "+" },
+                            format_money(profit.unsigned_abs()),
+                            format_money(account.owner_withdrawals),
+                        )
+                    }),
+                    (
+                        "SALE POLICY".into(),
+                        business.sale.map_or_else(
+                            || "No offer configured".into(),
+                            |policy| {
+                                format!(
+                                    "{} each / keep {} / collect {} / {} pricing",
+                                    format_money(policy.asking_unit_price),
+                                    policy.keep_units,
+                                    policy.max_units_per_collection,
+                                    if policy.automatic_pricing {
+                                        "automatic"
+                                    } else {
+                                        "manual"
+                                    },
+                                )
+                            },
+                        ),
+                    ),
+                    (
+                        "WAGE OFFER".into(),
+                        business.wage.map_or_else(
+                            || "No private wage".into(),
+                            |policy| {
+                                let mut value = format!(
+                                    "{} coin/day / {}",
+                                    format_money(policy.daily_wage),
+                                    if policy.automatic {
+                                        "automatic"
+                                    } else {
+                                        "owner-set"
+                                    },
+                                );
+                                if policy.vacancy_days > 0 {
+                                    value.push_str(&format!(" / vacant {}d", policy.vacancy_days));
+                                }
+                                value
+                            },
+                        ),
+                    ),
+                    (
+                        "INPUT ORDERS".into(),
+                        business.procurement.map_or_else(
+                            || "No procurement policy".into(),
+                            |policy| {
+                                let orders = Good::ALL
+                                    .into_iter()
+                                    .filter_map(|good| {
+                                        let rule = policy.rule(good);
+                                        rule.enabled.then(|| {
+                                            format!(
+                                                "{} below {} → {} (max {})",
+                                                good.label(),
+                                                rule.reorder_below,
+                                                rule.target_units,
+                                                format_money(rule.maximum_unit_price),
+                                            )
+                                        })
+                                    })
+                                    .collect::<Vec<_>>();
+                                if orders.is_empty() {
+                                    "No purchased inputs".into()
+                                } else {
+                                    orders.join(" / ")
+                                }
+                            },
+                        ),
+                    ),
+                    (
+                        "LOCAL PROFIT LEVY".into(),
+                        place.policies.as_ref().map_or_else(
+                            || "Settlement charter unavailable".into(),
+                            |policy| {
+                                format!(
+                                    "{:.1}% of positive daily profit",
+                                    policy.business_profit_tax_bps as f32 / 100.0,
+                                )
+                            },
+                        ),
+                    ),
+                ]);
             }
             rows.push((
                 "STORE".into(),
@@ -1340,6 +1792,8 @@ fn compass_bearing(position: Vec3) -> String {
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::system::RunSystemOnce;
+
     use super::*;
 
     #[test]
@@ -1355,6 +1809,7 @@ mod tests {
                 id: shared::components::SettlementId::UNASSIGNED,
                 name: name.to_string(),
                 tier,
+                hall_level: CivicHallLevel::for_tier(tier),
                 position: Vec3::ZERO,
                 residents: 0,
                 treasury: 0,
@@ -1362,12 +1817,13 @@ mod tests {
                 economy: None,
                 administration: None,
                 development: None,
-                poor_relief: false,
+                policies: None,
+                opportunities: None,
                 inventory: Vec::new(),
                 inventory_used: 0,
                 inventory_capacity: 0,
                 buildings: Vec::new(),
-                summary_buildings: [0; 4],
+                summary_buildings: [0; 6],
                 wheat_fields: 0,
                 fishing_piers: 0,
                 permits: Vec::new(),
@@ -1397,6 +1853,7 @@ mod tests {
             id: shared::components::SettlementId(1),
             name: "Brackwater".into(),
             tier: SettlementTier::Village,
+            hall_level: CivicHallLevel::Village,
             position: Vec3::new(120.0, 0.0, -80.0),
             residents: 7,
             treasury: 0,
@@ -1404,22 +1861,26 @@ mod tests {
             economy: None,
             administration: None,
             development: None,
-            poor_relief: false,
+            policies: None,
+            opportunities: None,
             inventory: vec![(Good::Wood, 3)],
             inventory_used: 12,
             inventory_capacity: 200,
             buildings: vec![PlaceBuildingRecord {
+                id: Some(shared::components::BuildingId(10)),
                 kind: SettlementBuildingKind::Farmstead,
                 position: Vec3::new(145.0, 0.0, -100.0),
                 owner: Some("Ada".into()),
+                for_sale: None,
                 quality: 0.76,
                 workers: vec!["Ada".into()],
                 residents: Vec::new(),
                 inventory: vec![(Good::Wheat, 4)],
                 inventory_used: 8,
                 inventory_capacity: 80,
+                business: None,
             }],
-            summary_buildings: [0, 1, 0, 0],
+            summary_buildings: [0, 1, 0, 0, 0, 0],
             wheat_fields: 1,
             fishing_piers: 0,
             permits: Vec::new(),
@@ -1455,10 +1916,122 @@ mod tests {
         assert!(model
             .rows
             .iter()
-            .any(|(label, value)| label == "PLOT QUALITY" && value == "76%"));
+            .any(|(label, value)| label == "FARMLAND QUALITY" && value == "76%"));
         assert!(model
             .rows
             .iter()
             .any(|(label, value)| label == "STORE" && value.contains("Wheat 4")));
+    }
+
+    #[test]
+    fn processor_detail_sheets_do_not_claim_land_controls_output() {
+        let mut place = explorer_place();
+        place.buildings[0].kind = SettlementBuildingKind::Windmill;
+        let mill = place_detail_model(&place, SelectedPlaceEntry::Building(0), true);
+        assert!(mill
+            .rows
+            .iter()
+            .all(|(label, _)| !label.contains("QUALITY")));
+
+        place.buildings[0].kind = SettlementBuildingKind::Bakery;
+        let bakery = place_detail_model(&place, SelectedPlaceEntry::Building(0), true);
+        assert!(bakery
+            .rows
+            .iter()
+            .all(|(label, _)| !label.contains("QUALITY")));
+    }
+
+    #[test]
+    fn expanded_business_shows_operating_finance_and_management() {
+        let mut place = explorer_place();
+        place.policies = Some(SettlementPolicies::default());
+        let mut account = BusinessAccount::with_capital(2_000);
+        account.record_sale(1, 800, 40, 4);
+        account.incur_wages(1, 200);
+        account.roll_to_day(2);
+        place.buildings[0].business = Some(PlaceBusinessRecord {
+            account,
+            sale: Some(BusinessSalePolicy::for_good(Good::Wheat)),
+            wage: Some(BusinessWagePolicy::default()),
+            management: Some(BusinessManagementPolicy::default()),
+            procurement: Some(BusinessProcurementPolicy::default()),
+            condition: Some(BusinessCondition::default()),
+        });
+
+        let model = place_detail_model(&place, SelectedPlaceEntry::Building(0), true);
+        for label in [
+            "BUSINESS STATUS",
+            "MANAGEMENT",
+            "BUSINESS CASH",
+            "LIABILITIES",
+            "YESTERDAY P&L",
+            "SALE POLICY",
+            "WAGE OFFER",
+            "INPUT ORDERS",
+            "LOCAL PROFIT LEVY",
+        ] {
+            assert!(
+                model.rows.iter().any(|(actual, _)| actual == label),
+                "missing {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn business_history_action_exists_only_for_a_stable_selected_business() {
+        let mut place = explorer_place();
+        place.buildings[0].business = Some(PlaceBusinessRecord {
+            account: BusinessAccount::default(),
+            sale: Some(BusinessSalePolicy::for_good(Good::Wheat)),
+            wage: Some(BusinessWagePolicy::default()),
+            management: Some(BusinessManagementPolicy::default()),
+            procurement: Some(BusinessProcurementPolicy::default()),
+            condition: Some(BusinessCondition::default()),
+        });
+
+        let mut world = World::new();
+        world.insert_resource(KnownPlaces {
+            records: vec![place],
+        });
+        world.insert_resource(SelectedPlace(Some("Brackwater".into())));
+        world.insert_resource(SelectedPlaceEntry::Building(0));
+        world.spawn((
+            Settlement {
+                name: "Brackwater".into(),
+                tier: SettlementTier::Village,
+                residents: 7,
+                treasury: 0,
+            },
+            shared::components::SettlementId(1),
+        ));
+        let button = world
+            .spawn((
+                PlaceBusinessHistoryAction,
+                Button,
+                Node {
+                    display: Display::None,
+                    ..default()
+                },
+            ))
+            .id();
+
+        world
+            .run_system_once(sync_place_business_history_action)
+            .unwrap();
+        assert_eq!(world.get::<Node>(button).unwrap().display, Display::Flex);
+        let history = world
+            .get::<crate::ui::history::BusinessHistoryButton>(button)
+            .unwrap();
+        assert_eq!(history.place, "Brackwater");
+        assert_eq!(history.business, shared::components::BuildingId(10));
+
+        world.insert_resource(SelectedPlaceEntry::Overview);
+        world
+            .run_system_once(sync_place_business_history_action)
+            .unwrap();
+        assert_eq!(world.get::<Node>(button).unwrap().display, Display::None);
+        assert!(world
+            .get::<crate::ui::history::BusinessHistoryButton>(button)
+            .is_none());
     }
 }

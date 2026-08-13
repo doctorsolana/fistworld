@@ -74,6 +74,7 @@ fn configure_server_fixed_schedule(app: &mut App) {
             collision::streaming::update_static_collider_streaming,
             world::navgrid::sync_obstacle_grid,
             world::regions::tick_strategic_world,
+            world::village::strategic::advance_strategic_travel,
             world::village::strategic::advance_strategic_villages,
             world::regions::log_region_telemetry,
         )
@@ -93,6 +94,9 @@ fn configure_server_fixed_schedule(app: &mut App) {
             net::input::handle_client_input_messages,
             player::commander::sync_commander_views,
             player::hero::handle_unit_move_orders,
+            player::market::handle_hero_market_orders,
+            player::hero::ensure_player_permit_ledgers,
+            player::permits::handle_hero_permit_orders,
             world::regions::update_client_interest,
             world::regions::apply_region_visibility,
             world::regions::update_region_sim_levels,
@@ -112,11 +116,7 @@ fn configure_server_fixed_schedule(app: &mut App) {
 
     app.add_systems(
         FixedUpdate,
-        (
-            persistence::autosave::update_periodic_player_save,
-            persistence::io_queue::update_profile_io_acks,
-        )
-            .chain()
+        persistence::autosave::update_periodic_player_save
             .in_set(ServerSet::Persistence)
             .run_if(server_is_started),
     );
@@ -126,14 +126,20 @@ fn configure_server_fixed_schedule(app: &mut App) {
         (
             telemetry::perf::handle_perf_tick_begin.before(world::time::handle_set_time_of_day),
             telemetry::perf::handle_perf_core_phase_begin
-                .before(world::time::handle_set_time_of_day),
-            // Phase brackets anchor on SystemSets, not individual systems, so that
-            // deleting any single gameplay system cannot silently skew the timings.
-            telemetry::perf::handle_perf_core_phase_end.after(ServerSet::WorldTick),
+                .after(world::navgrid::sync_obstacle_grid)
+                .before(world::village::schedule::VillageSimulationSet::Core),
+            // Bracket the exact sets. A mere `before(rebuild_graph)` constraint
+            // can legally run at the start of NetIngress and accidentally
+            // include the preceding village core, making an expensive permit
+            // search look like a navigation stall.
+            telemetry::perf::handle_perf_core_phase_end
+                .after(world::village::schedule::VillageSimulationSet::Core)
+                .before(world::regions::tick_strategic_world),
             telemetry::perf::handle_perf_navigation_phase_begin
-                .before(world::village_roads::rebuild_village_road_graph),
+                .after(player::hero::handle_unit_move_orders)
+                .before(world::village::schedule::VillageSimulationSet::Navigation),
             telemetry::perf::handle_perf_navigation_phase_end
-                .after(player::hero::step_units)
+                .after(world::village::schedule::VillageSimulationSet::Navigation)
                 .before(world::regions::update_client_interest),
             telemetry::perf::update_server_perf_log.after(ServerSet::Persistence),
             telemetry::network::sample_replication_change_pressure.after(ServerSet::Persistence),

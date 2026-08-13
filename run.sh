@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run script for Fistworld
-# Usage: ./run.sh [server|client|both|testworld|realworld|multi] [--release|--dev]
+# Usage: ./run.sh [server|client|both|testworld|economyworld|stressworld|denseworld|realworld|multi] [--release|--dev]
 #
 # BUILD PROFILE. This used to build --release every time, which meant a ten
 # minute wait for a one line change: release turns on thin LTO, which re-links
@@ -49,25 +49,60 @@ MODE=${1:-both}
 # be matched to authoritative server state after the window closes.
 CAPTURE_VILLAGE_LOGS=0
 VILLAGE_LOG_DIR=""
+STREAM_VILLAGE_LOGS="${FISTWORLD_STREAM_LOGS:-1}"
 
 # The rendered Village Lab is explicit rather than tied to the map id. This
 # preserves `CITYSIM_MAP_ID=village_lab ./run.sh` as an empty god-mode sandbox.
-if [[ "$MODE" == "testworld" || "$MODE" == "testlab" ]]; then
+if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
     export CITYSIM_MAP_ID="village_lab"
     export FISTWORLD_VILLAGE_LAB_RUNTIME="${FISTWORLD_VILLAGE_LAB_RUNTIME:-1}"
-    # One seeded village is the default visual debugging fixture. The dual
-    # climate comparison remains available with FISTWORLD_LAB_SCENARIO=dual.
-    export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-secure}"
-    export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-1}"
+    if [[ "$MODE" == "economyworld" ]]; then
+        export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-economy-soak}"
+        export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-10}"
+        export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:--95,-120}"
+        export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-720}"
+        export FISTFORCE_SERVER_PERF="${FISTFORCE_SERVER_PERF:-1}"
+        export FISTFORCE_CLIENT_PERF="${FISTFORCE_CLIENT_PERF:-1}"
+    elif [[ "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
+        export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-10}"
+        export FISTWORLD_LAB_DAY_TWO_ARRIVALS="${FISTWORLD_LAB_DAY_TWO_ARRIVALS:-0}"
+        if [[ "$MODE" == "denseworld" ]]; then
+            # One 1,000-person settlement: all bodies remain replicated and
+            # visible. Neighbourhood views use at most 160 full rigs; the wide
+            # opening view uses the continuously moving crowd representation.
+            export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-dense-stress}"
+            export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:-112,-158}"
+            export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-520}"
+        else
+            # Three settlements and 600 founders on the compact map. The wide
+            # opening camera keeps all three regions tactical.
+            export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-triple-stress}"
+            export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:--95,-120}"
+            export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-720}"
+        fi
+        export FISTFORCE_SERVER_PERF="${FISTFORCE_SERVER_PERF:-1}"
+        export FISTFORCE_CLIENT_PERF="${FISTFORCE_CLIENT_PERF:-1}"
+        # Six hundred actor setup/queue INFO lines can make terminal rendering
+        # the bottleneck being measured. Preserve every byte in the two log
+        # files, but keep the stress terminal quiet unless explicitly asked.
+        STREAM_VILLAGE_LOGS="${FISTWORLD_STREAM_LOGS:-0}"
+    else
+        # One seeded village is the default visual debugging fixture. The dual
+        # climate comparison remains available with FISTWORLD_LAB_SCENARIO=dual.
+        export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-secure}"
+        export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-1}"
+        export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:-112,-158}"
+        export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-190}"
+    fi
     export FISTWORLD_VILLAGE_TRACE="${FISTWORLD_VILLAGE_TRACE:-1}"
     export RUST_LOG="${FISTWORLD_TESTWORLD_RUST_LOG:-info}"
-    # Open directly over the fertile settlement at a useful inspection scale.
-    # These remain overridable for debugging another part of the map.
-    export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:-112,-158}"
-    export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-190}"
     export FISTFORCE_AUTOCONNECT="${FISTFORCE_AUTOCONNECT:-LabObserver}"
     CAPTURE_VILLAGE_LOGS=1
-    VILLAGE_LOG_DIR="${FISTWORLD_RUN_LOG_DIR:-$(pwd)/logs/testworld-$(date +%Y%m%d-%H%M%S)}"
+    if [[ "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
+        VILLAGE_LOG_DIR="${FISTWORLD_RUN_LOG_DIR:-$(pwd)/logs/${MODE}-$(date +%Y%m%d-%H%M%S)}"
+    else
+        VILLAGE_LOG_DIR="${FISTWORLD_RUN_LOG_DIR:-$(pwd)/logs/testworld-$(date +%Y%m%d-%H%M%S)}"
+    fi
     mkdir -p "$VILLAGE_LOG_DIR"
 fi
 
@@ -141,6 +176,28 @@ cleanup_server() {
     sleep 0.5
 }
 
+# Bevy/Lightyear can take longer than an ordinary shell process to leave its
+# network loop after SIGTERM. Never let closing a rendered lab strand this
+# launcher in `wait` forever: allow a short graceful window, then reap only the
+# exact child PID that this script started.
+stop_spawned_process() {
+    local pid="$1"
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        return
+    fi
+    kill "$pid" 2>/dev/null || true
+    local attempt
+    for attempt in {1..20}; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            wait "$pid" 2>/dev/null || true
+            return
+        fi
+        sleep 0.1
+    done
+    kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+}
+
 cleanup_all() {
     if [[ "$CLEANED_UP" -eq 1 ]]; then
         return
@@ -148,16 +205,13 @@ cleanup_all() {
     CLEANED_UP=1
 
     if [[ -n "$CLIENT1_PID" ]]; then
-        kill "$CLIENT1_PID" 2>/dev/null || true
-        wait "$CLIENT1_PID" 2>/dev/null || true
+        stop_spawned_process "$CLIENT1_PID"
     fi
     if [[ -n "$CLIENT2_PID" ]]; then
-        kill "$CLIENT2_PID" 2>/dev/null || true
-        wait "$CLIENT2_PID" 2>/dev/null || true
+        stop_spawned_process "$CLIENT2_PID"
     fi
     if [[ -n "$SERVER_PID" ]]; then
-        kill "$SERVER_PID" 2>/dev/null || true
-        wait "$SERVER_PID" 2>/dev/null || true
+        stop_spawned_process "$SERVER_PID"
     fi
 
     if [[ "$STARTED_SERVER" -eq 1 ]]; then
@@ -186,9 +240,9 @@ case $MODE in
         echo -e "${BLUE}Starting client...${NC}"
         cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
         ;;
-    both|testworld|testlab|realworld|reallab)
+    both|testworld|testlab|economyworld|stressworld|denseworld|realworld|reallab)
         cleanup_server
-        if [[ "$MODE" == "testworld" || "$MODE" == "testlab" ]]; then
+        if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
             echo -e "${YELLOW}Village Lab: ${FISTWORLD_LAB_SCENARIO}, seed 3, starting at ${FISTWORLD_LAB_WARP}x (HUD: pause / 1x / 10x / 25x / 100x)${NC}"
             echo -e "${YELLOW}Logs: ${VILLAGE_LOG_DIR}${NC}"
         fi
@@ -198,7 +252,11 @@ case $MODE in
         fi
         echo -e "${GREEN}Starting server in background...${NC}"
         if [[ "$CAPTURE_VILLAGE_LOGS" -eq 1 ]]; then
-            cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p server 2>&1 | tee "$VILLAGE_LOG_DIR/server.log" &
+            if [[ "$STREAM_VILLAGE_LOGS" -eq 1 ]]; then
+                cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p server 2>&1 | tee "$VILLAGE_LOG_DIR/server.log" &
+            else
+                cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p server >"$VILLAGE_LOG_DIR/server.log" 2>&1 &
+            fi
         else
             cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p server &
         fi
@@ -210,7 +268,11 @@ case $MODE in
         
         echo -e "${BLUE}Starting client...${NC}"
         if [[ "$CAPTURE_VILLAGE_LOGS" -eq 1 ]]; then
-            cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client 2>&1 | tee "$VILLAGE_LOG_DIR/client.log"
+            if [[ "$STREAM_VILLAGE_LOGS" -eq 1 ]]; then
+                cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client 2>&1 | tee "$VILLAGE_LOG_DIR/client.log"
+            else
+                cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client >"$VILLAGE_LOG_DIR/client.log" 2>&1
+            fi
         else
             cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
         fi
@@ -267,11 +329,14 @@ case $MODE in
         echo -e "${GREEN}Client closed. Stopping server...${NC}"
         ;;
     *)
-        echo "Usage: ./run.sh [server|client|both|testworld|realworld|multi|windows] [--release|--dev]"
+        echo "Usage: ./run.sh [server|client|both|testworld|economyworld|stressworld|denseworld|realworld|multi|windows] [--release|--dev]"
         echo "  server  - Start only the server"
         echo "  client  - Start only the client"
         echo "  both    - Start server then client (default)"
         echo "  testworld - Watch one deterministic logged Village Lab settlement (starts at 1x)"
+        echo "  economyworld - Watch the three-village 50-day economy schedule (starts at 10x)"
+        echo "  stressworld - Watch three logged 200-person villages together (starts at 10x)"
+        echo "  denseworld - Watch one logged 1,000-person village at 10x"
         echo "  realworld - Watch a logged 32-villager stress village on big_world"
         echo "  multi   - Start server + 2 clients for multiplayer testing"
         echo "  windows - Build & run Windows client with GPU (for WSL2)"

@@ -1,3 +1,4 @@
+use bevy::platform::collections::HashMap as FastHashMap;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -174,7 +175,7 @@ impl RiverWaterSegment {
 /// query to a handful of segments rather than every river in the world.
 #[derive(Default)]
 struct RiverWaterIndex {
-    by_chunk: HashMap<(i32, i32), Vec<RiverWaterSegment>>,
+    by_chunk: FastHashMap<(i32, i32), Vec<RiverWaterSegment>>,
 }
 
 impl RiverWaterIndex {

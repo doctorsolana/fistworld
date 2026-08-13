@@ -1,4 +1,4 @@
-//! Settlements on the client: draw the moot hall, and say where places are.
+//! Settlements on the client: draw the current civic hall, and say where places are.
 //!
 //! A settlement replicates as a NAME, a TIER and a POSITION -- not as a bag of
 //! buildings. Its moot hall is drawn here from that position, because buildings
@@ -7,6 +7,7 @@
 //! derivable, so sending it would be sending the same fact twice.
 
 mod roads;
+mod smoke;
 
 use bevy::animation::AnimatedBy;
 use bevy::gltf::{Gltf, GltfMaterialName};
@@ -14,13 +15,14 @@ use bevy::light::NotShadowCaster;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
-use shared::building::{BuildingPosition, PlacedBuilding};
+use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
 use shared::components::{
-    BuildingDoorDemand, ConstructionSite, FarmField, FishingPier, Household, PlayerPosition,
-    PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind, WorldTime,
+    BuildingDoorDemand, CivicHallLevel, CloudSeed, ConstructionSite, FarmField, FishingPier,
+    Household, PlayerPosition, PlayerRotation, Settlement, SettlementBuilding,
+    SettlementBuildingKind, TimeWarp, WorldTime,
 };
 use shared::debug::DebugGizmoMode;
-use shared::economy::{Good, GoodsInventory};
+use shared::economy::{BusinessCondition, BusinessState, Good, GoodsInventory};
 use shared::terrain::WorldTerrain;
 
 use crate::states::GameState;
@@ -29,6 +31,7 @@ pub struct SettlementPlugin;
 
 impl Plugin for SettlementPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(smoke::BakerySmokePlugin);
         app.init_resource::<BuildingDoorAssets>();
         app.init_resource::<roads::VillageRoadAssets>();
         app.add_systems(
@@ -44,10 +47,16 @@ impl Plugin for SettlementPlugin {
                 claim_building_ground,
                 raise_construction_visuals,
                 (setup_house_window_lighting, sync_house_window_lighting).chain(),
-                (setup_coastal_lighting, sync_coastal_lighting).chain(),
-                setup_building_door_animations,
-                trace_replicated_building_door_demands,
-                drive_building_doors,
+                (setup_building_night_lighting, sync_building_night_lighting).chain(),
+                (setup_bakery_bread_display, sync_bakery_bread_display).chain(),
+                (
+                    recover_stale_building_animation_wiring,
+                    setup_building_door_animations,
+                    drive_windmill_motion,
+                    trace_replicated_building_door_demands,
+                    drive_building_doors,
+                )
+                    .chain(),
                 debug_draw_settlement_planning_rings,
             )
                 .run_if(in_state(GameState::Playing)),
@@ -61,7 +70,12 @@ impl Plugin for SettlementPlugin {
 fn debug_draw_settlement_planning_rings(
     mut gizmos: Gizmos,
     debug_mode: Res<DebugGizmoMode>,
-    settlements: Query<&PlayerPosition, With<Settlement>>,
+    settlements: Query<(
+        &Settlement,
+        &PlayerPosition,
+        Option<&PlayerRotation>,
+        Option<&CivicHallLevel>,
+    )>,
 ) {
     if !debug_mode.0 {
         return;
@@ -71,7 +85,31 @@ fn debug_draw_settlement_planning_rings(
     let house = SettlementBuildingKind::House.preferred_ring();
     let work = SettlementBuildingKind::Farmstead.preferred_ring();
     let fishing = SettlementBuildingKind::FishermansHut.preferred_ring();
-    for position in settlements.iter() {
+    for (settlement, position, rotation, level) in settlements.iter() {
+        let rotation = rotation.map_or(0.0, |rotation| rotation.0);
+        let level = level
+            .copied()
+            .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
+        let current = level.building_type().definition();
+        let current_center = current.world_footprint_center(position.0, rotation);
+        let reserved_center = CivicHallLevel::reserved_world_center(position.0, rotation);
+        let horizontal = Quat::from_rotation_y(rotation) * horizontal;
+        gizmos.rect(
+            Isometry3d::new(
+                Vec3::new(current_center.x, position.0.y + 0.42, current_center.y),
+                horizontal,
+            ),
+            current.footprint,
+            Color::srgba(1.0, 0.78, 0.18, 0.95),
+        );
+        gizmos.rect(
+            Isometry3d::new(
+                Vec3::new(reserved_center.x, position.0.y + 0.40, reserved_center.y),
+                horizontal,
+            ),
+            CivicHallLevel::reserved_half_extents() * 2.0,
+            Color::srgba(0.92, 0.24, 1.0, 0.92),
+        );
         let centre = position.0 + Vec3::Y * 0.35;
         for radius in [house.0, house.1] {
             gizmos
@@ -102,8 +140,10 @@ fn debug_draw_settlement_planning_rings(
 }
 
 /// Marks a settlement that already has its hall drawn.
-#[derive(Component)]
-pub struct SettlementVisual;
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettlementVisual {
+    building_type: BuildingType,
+}
 
 /// Marks a settlement building that already has its model drawn.
 #[derive(Component)]
@@ -127,6 +167,7 @@ struct ConstructionSupplyBundle {
 #[derive(Component)]
 struct DoorVisualSource {
     kind: SettlementBuildingKind,
+    building_type: BuildingType,
     gltf: Handle<Gltf>,
 }
 
@@ -135,11 +176,12 @@ struct DoorGraph {
     handle: Handle<AnimationGraph>,
     open: AnimationNodeIndex,
     close: AnimationNodeIndex,
+    sails: Option<AnimationNodeIndex>,
 }
 
 #[derive(Resource, Default)]
 struct BuildingDoorAssets {
-    graphs: HashMap<SettlementBuildingKind, DoorGraph>,
+    graphs: HashMap<BuildingType, DoorGraph>,
 }
 
 #[derive(Component)]
@@ -162,20 +204,47 @@ struct HouseWindowLighting {
     glass: Handle<StandardMaterial>,
     lamps: Vec<Entity>,
     strength: f32,
+    lamp_strength: f32,
+}
+
+#[derive(Default)]
+struct HouseLightBudget {
+    candidates: Vec<(f32, Entity)>,
+    enabled: HashSet<Entity>,
+    last_update_seconds: f64,
+    initialized: bool,
 }
 
 #[derive(Component)]
 struct HouseWindowLamp;
 
 #[derive(Component)]
-struct CoastalLighting {
+struct BuildingNightLighting {
     lamps: Vec<Entity>,
     strength: f32,
 }
 
 #[derive(Component)]
-struct CoastalLamp {
+struct BuildingNightLamp {
     lumens: f32,
+}
+
+/// Six authored loaf meshes presenting the bakery's real Bread inventory.
+#[derive(Component)]
+struct BakeryBreadDisplay {
+    loaves: [Entity; BAKERY_BREAD_MESH_COUNT],
+    visible: u8,
+}
+
+/// The windmill's permanent mechanical animation wiring. The cap continuously
+/// follows the local wind bearing; the sails' playback speed follows the
+/// deterministic wind swell and the master time warp.
+#[derive(Component)]
+struct WindmillMotion {
+    player: Entity,
+    sails: AnimationNodeIndex,
+    cap: Entity,
+    cap_rest_rotation: Quat,
 }
 
 #[derive(Component)]
@@ -213,6 +282,14 @@ const WINDOW_LIGHT_LUMENS: f32 = 950_000.0;
 const WINDOW_LIGHT_RANGE: f32 = 6.0;
 const WINDOW_FADE_PER_SECOND: f32 = 1.5;
 const WINDOW_EMISSIVE: LinearRgba = LinearRgba::new(13.0, 4.25, 0.80, 1.0);
+const BAKERY_BREAD_MESH_COUNT: usize = 6;
+/// Emissive panes sell a whole living town cheaply. Real clustered point
+/// lights are reserved for the close neighbourhood where their ground spill
+/// is visible; hundreds of distant domestic lights only burden light
+/// preparation and fragment shading.
+const MAX_ACTIVE_HOUSE_POINT_LIGHTS: usize = 40;
+const HOUSE_POINT_LIGHT_RADIUS: f32 = 190.0;
+const HOUSE_LIGHT_BUDGET_INTERVAL_SECONDS: f64 = 0.25;
 
 /// Draw one small timber bundle per delivered wood unit while a site waits.
 /// The pile is deliberately literal: the player can watch four carried loads
@@ -471,10 +548,15 @@ fn raise_construction_visuals(
 /// appears standing in a thicket.
 fn claim_building_ground(
     mut commands: Commands,
-    halls: Query<
-        (Entity, &PlayerPosition, Option<&PlayerRotation>),
-        (With<Settlement>, Without<PlacedBuilding>),
-    >,
+    halls: Query<(
+        Entity,
+        &Settlement,
+        &PlayerPosition,
+        Option<&PlayerRotation>,
+        Option<&CivicHallLevel>,
+        Option<&PlacedBuilding>,
+        Option<&BuildingPosition>,
+    )>,
     built: Query<
         (
             Entity,
@@ -486,14 +568,20 @@ fn claim_building_ground(
     >,
     sites: Query<(Entity, &ConstructionSite, &PlayerPosition), Without<PlacedBuilding>>,
 ) {
-    for (entity, position, rotation) in halls.iter() {
-        commands.entity(entity).insert((
-            PlacedBuilding {
-                building_type: SettlementBuildingKind::Hall.art(),
-                rotation: rotation.map_or(0.0, |rotation| rotation.0),
-            },
-            BuildingPosition(position.0),
-        ));
+    for (entity, settlement, position, rotation, level, placed, building_position) in halls.iter() {
+        let level = level
+            .copied()
+            .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
+        let desired = PlacedBuilding {
+            building_type: level.building_type(),
+            rotation: rotation.map_or(0.0, |rotation| rotation.0),
+        };
+        if placed != Some(&desired) {
+            commands.entity(entity).insert(desired);
+        }
+        if building_position.is_none_or(|current| current.0 != position.0) {
+            commands.entity(entity).insert(BuildingPosition(position.0));
+        }
     }
     for (entity, building, position, rotation) in built.iter() {
         commands.entity(entity).insert((
@@ -562,6 +650,7 @@ fn attach_building_visuals(
                 common,
                 DoorVisualSource {
                     kind: building.kind,
+                    building_type: art,
                     gltf: asset_server.load(gltf_path),
                 },
                 WorldAssetRoot(asset_server.load(scene)),
@@ -602,50 +691,63 @@ fn attach_building_visuals(
     }
 }
 
-/// Give every replicated settlement a moot hall.
+/// Draw the physical Hall rung without ever replacing the settlement entity.
 ///
-/// Polls `Without<SettlementVisual>` rather than reacting to `Added<Settlement>`
-/// because replication delivers a settlement's components in separate batches --
-/// the same reason the character visual path polls. A one-shot on `Added` would
-/// miss any settlement whose position arrived on a later tick, and it would
-/// stay invisible forever.
+/// Polling also handles replication arriving in separate batches. Changing a
+/// `WorldAssetRoot` is a supported Bevy operation: its spawner removes the old
+/// instance and attaches the new one to this same root, preserving selection,
+/// inventory, queues and every replicated component.
 fn attach_settlement_visuals(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     terrain: Option<Res<WorldTerrain>>,
-    founded: Query<(Entity, &Settlement, &PlayerPosition), Without<SettlementVisual>>,
+    founded: Query<(
+        Entity,
+        &Settlement,
+        &PlayerPosition,
+        Option<&CivicHallLevel>,
+        Option<&SettlementVisual>,
+    )>,
 ) {
     let Some(terrain) = terrain else {
         return;
     };
-    for (entity, settlement, position) in founded.iter() {
+    for (entity, settlement, position, level, visual) in founded.iter() {
+        let level = level
+            .copied()
+            .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
+        let art = level.building_type();
+        if visual.is_some_and(|visual| visual.building_type == art) {
+            continue;
+        }
         // The hall stands on the ground, not at the replicated Y: the server
         // snapped it once at founding, but terrain deltas can move under it.
         let ground = terrain.get_height(position.0.x, position.0.z);
-        // Through the KIND, not a hardcoded model: the hall was a LogCabin
-        // placeholder and is now the Moot Hall, and a second copy of that fact
-        // here is how the hall and the panel end up disagreeing about what a
-        // hall is.
-        let Some(scene) = SettlementBuildingKind::Hall.art().scene_path() else {
+        let Some(scene) = art.scene_path() else {
             continue;
         };
         let gltf_path = scene.split('#').next().unwrap_or(scene).to_string();
 
-        commands.entity(entity).insert((
-            SettlementVisual,
-            DoorVisualSource {
-                kind: SettlementBuildingKind::Hall,
-                gltf: asset_server.load(gltf_path),
-            },
-            Name::new(format!("Settlement({})", settlement.name)),
-            WorldAssetRoot(asset_server.load(scene)),
-            Transform::from_xyz(position.0.x, ground, position.0.z),
-            Visibility::Inherited,
-        ));
+        commands
+            .entity(entity)
+            .remove::<BuildingDoorAnimation>()
+            .insert((
+                SettlementVisual { building_type: art },
+                DoorVisualSource {
+                    kind: SettlementBuildingKind::Hall,
+                    building_type: art,
+                    gltf: asset_server.load(gltf_path),
+                },
+                Name::new(format!("{} ({})", level.label(), settlement.name)),
+                WorldAssetRoot(asset_server.load(scene)),
+                Transform::from_xyz(position.0.x, ground, position.0.z),
+                Visibility::Inherited,
+            ));
         info!(
-            "Settlement '{}' ({}) drawn at {:.0},{:.0}",
+            "Settlement '{}' ({}) drew {} at {:.0},{:.0}",
             settlement.name,
             settlement.tier.label(),
+            level.label(),
             position.0.x,
             position.0.z
         );
@@ -747,6 +849,7 @@ fn setup_house_window_lighting(
             glass,
             lamps,
             strength: 0.0,
+            lamp_strength: 0.0,
         });
     }
 }
@@ -761,15 +864,65 @@ fn sync_house_window_lighting(
     mut commands: Commands,
     time: Res<Time>,
     world_time: Query<&WorldTime>,
-    mut houses: Query<(Entity, &Household, &mut HouseWindowLighting)>,
+    camera: Query<&crate::camera_rts::CommanderCamera>,
+    mut houses: Query<(
+        Entity,
+        &Household,
+        Option<&PlayerPosition>,
+        &mut HouseWindowLighting,
+    )>,
     mut lamps: Query<(&mut PointLight, &mut Visibility), With<HouseWindowLamp>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut budget: Local<HouseLightBudget>,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
     };
 
-    for (house, household, mut window) in houses.iter_mut() {
+    let now = time.elapsed_secs_f64();
+    if !budget.initialized
+        || now - budget.last_update_seconds >= HOUSE_LIGHT_BUDGET_INTERVAL_SECONDS
+    {
+        budget.initialized = true;
+        budget.last_update_seconds = now;
+        budget.candidates.clear();
+        budget.enabled.clear();
+
+        if let Ok(camera) = camera.single() {
+            if camera.zoom <= 420.0 {
+                for (house, household, position, _) in houses.iter() {
+                    if household.residents.is_empty() {
+                        continue;
+                    }
+                    let Some(position) = position else { continue };
+                    let distance_squared =
+                        Vec2::new(position.0.x - camera.focus.x, position.0.z - camera.focus.z)
+                            .length_squared();
+                    if distance_squared <= HOUSE_POINT_LIGHT_RADIUS * HOUSE_POINT_LIGHT_RADIUS {
+                        budget.candidates.push((distance_squared, house));
+                    }
+                }
+                budget
+                    .candidates
+                    .sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+                let count = budget.candidates.len().min(MAX_ACTIVE_HOUSE_POINT_LIGHTS);
+                for index in 0..count {
+                    let house = budget.candidates[index].1;
+                    budget.enabled.insert(house);
+                }
+            }
+        } else {
+            // Headless visual tests and unusual camera-less transitions contain
+            // only a handful of houses; preserve the straightforward behavior.
+            for (house, household, _, _) in houses.iter() {
+                if !household.residents.is_empty() {
+                    budget.enabled.insert(house);
+                }
+            }
+        }
+    }
+
+    for (house, household, _position, mut window) in houses.iter_mut() {
         // Scene streaming/re-instantiation can replace a house's descendants
         // while the replicated building entity survives. The old component
         // then points at despawned lamps and used to remain permanently dark
@@ -783,42 +936,157 @@ fn sync_house_window_lighting(
         }
         let occupied = !household.residents.is_empty();
         let target = house_window_target(clock, occupied);
-        let next = move_towards(
+        let next_glow = move_towards(
             window.strength,
             target,
             time.delta_secs() * WINDOW_FADE_PER_SECOND,
         );
-        if (next - window.strength).abs() <= f32::EPSILON {
+        let lamp_target = if budget.enabled.contains(&house) {
+            target
+        } else {
+            0.0
+        };
+        let next_lamp = move_towards(
+            window.lamp_strength,
+            lamp_target,
+            time.delta_secs() * WINDOW_FADE_PER_SECOND,
+        );
+
+        if (next_glow - window.strength).abs() > f32::EPSILON {
+            window.strength = next_glow;
+            if let Some(mut glass) = materials.get_mut(&window.glass) {
+                glass.emissive = WINDOW_EMISSIVE * next_glow;
+            }
+        }
+        if (next_lamp - window.lamp_strength).abs() > f32::EPSILON {
+            window.lamp_strength = next_lamp;
+            for lamp in &window.lamps {
+                if let Ok((mut light, mut visibility)) = lamps.get_mut(*lamp) {
+                    light.intensity = WINDOW_LIGHT_LUMENS * next_lamp;
+                    *visibility = if next_lamp > 0.001 {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    };
+                }
+            }
+        }
+    }
+}
+
+/// Discover the bakery's six separately authored loaf meshes once its scene
+/// has instantiated. Their visibility is derived locally from the already
+/// replicated inventory, so this visual truth costs no additional packets.
+fn setup_bakery_bread_display(
+    mut commands: Commands,
+    bakeries: Query<
+        (Entity, &SettlementBuilding, &GoodsInventory),
+        (With<BuildingVisual>, Without<BakeryBreadDisplay>),
+    >,
+    children: Query<&Children>,
+    names: Query<&Name>,
+    mut visibility: Query<&mut Visibility>,
+) {
+    for (bakery, building, inventory) in bakeries.iter() {
+        if building.kind != SettlementBuildingKind::Bakery {
             continue;
         }
-        window.strength = next;
 
-        if let Some(mut glass) = materials.get_mut(&window.glass) {
-            glass.emissive = WINDOW_EMISSIVE * next;
+        let mut loaves = [Entity::PLACEHOLDER; BAKERY_BREAD_MESH_COUNT];
+        let mut found = 0usize;
+        let mut stack = vec![bakery];
+        while let Some(entity) = stack.pop() {
+            if let Ok(name) = names.get(entity) {
+                if let Some(index) = name
+                    .as_str()
+                    .strip_prefix("Stock_Bread_")
+                    .and_then(|suffix| suffix.parse::<usize>().ok())
+                    .and_then(|number| number.checked_sub(1))
+                    .filter(|index| *index < BAKERY_BREAD_MESH_COUNT)
+                {
+                    if loaves[index] == Entity::PLACEHOLDER {
+                        found += 1;
+                    }
+                    loaves[index] = entity;
+                }
+            }
+            if let Ok(entity_children) = children.get(entity) {
+                stack.extend(entity_children.iter());
+            }
         }
-        for lamp in &window.lamps {
-            if let Ok((mut light, mut visibility)) = lamps.get_mut(*lamp) {
-                light.intensity = WINDOW_LIGHT_LUMENS * next;
-                *visibility = if next > 0.001 {
+        if found == BAKERY_BREAD_MESH_COUNT {
+            let visible = bakery_bread_level(inventory);
+            for (index, loaf) in loaves.iter().enumerate() {
+                if let Ok(mut current) = visibility.get_mut(*loaf) {
+                    *current = if index < usize::from(visible) {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    };
+                }
+            }
+            commands
+                .entity(bakery)
+                .insert(BakeryBreadDisplay { loaves, visible });
+        }
+    }
+}
+
+fn bakery_bread_level(inventory: &GoodsInventory) -> u8 {
+    let bread = inventory.amount(Good::Bread);
+    if bread == 0 {
+        return 0;
+    }
+    let maximum = (inventory.bulk_capacity() / Good::Bread.bulk_per_unit()).max(1);
+    bread
+        .saturating_mul(BAKERY_BREAD_MESH_COUNT as u32)
+        .div_ceil(maximum)
+        .clamp(1, BAKERY_BREAD_MESH_COUNT as u32) as u8
+}
+
+fn sync_bakery_bread_display(
+    mut commands: Commands,
+    mut bakeries: Query<(Entity, &GoodsInventory, &mut BakeryBreadDisplay)>,
+    mut visibility: Query<&mut Visibility>,
+) {
+    for (bakery, inventory, mut display) in bakeries.iter_mut() {
+        if display
+            .loaves
+            .iter()
+            .any(|loaf| visibility.get(*loaf).is_err())
+        {
+            // Scene streaming can replace descendants while retaining the
+            // replicated root. Let setup discover the replacement nodes.
+            commands.entity(bakery).remove::<BakeryBreadDisplay>();
+            continue;
+        }
+        let visible = bakery_bread_level(inventory);
+        if visible == display.visible {
+            continue;
+        }
+        for (index, loaf) in display.loaves.iter().enumerate() {
+            if let Ok(mut current) = visibility.get_mut(*loaf) {
+                *current = if index < usize::from(visible) {
                     Visibility::Inherited
                 } else {
                     Visibility::Hidden
                 };
             }
         }
+        display.visible = visible;
     }
 }
 
-/// Turn the art-authored fisherman-hut hearth and pier lantern anchors into
-/// restrained warm lights. The anchors remain the source of placement truth,
-/// so a future art revision can move a lantern without a matching code edit.
-fn setup_coastal_lighting(
+/// Turn art-authored workplace and pier anchors into restrained warm night
+/// lights. The anchors remain the source of placement truth, so art can move a
+/// lantern or hearth without a matching code edit.
+fn setup_building_night_lighting(
     mut commands: Commands,
     roots: Query<
         Entity,
         (
             Or<(With<BuildingVisual>, With<FishingPierVisual>)>,
-            Without<CoastalLighting>,
+            Without<BuildingNightLighting>,
         ),
     >,
     buildings: Query<&SettlementBuilding>,
@@ -827,84 +1095,95 @@ fn setup_coastal_lighting(
     names: Query<&Name>,
 ) {
     for root in roots.iter() {
-        let (anchor_name, lumens, range) = if pier_roots.get(root).is_ok() {
+        let building_kind = buildings.get(root).ok().map(|building| building.kind);
+        let light_specs: &[(&str, f32, f32)] = if pier_roots.get(root).is_ok() {
             // This world uses Exposure::SUNLIGHT; physical point lights must
             // be in the same calibrated range as occupied cabin lamps.
-            ("Light_Lantern", 520_000.0, 8.5)
-        } else if buildings
-            .get(root)
-            .is_ok_and(|building| building.kind == SettlementBuildingKind::FishermansHut)
-        {
-            ("Light_Interior", 820_000.0, 10.0)
+            &[("Light_Lantern", 520_000.0, 8.5)]
         } else {
-            continue;
+            match building_kind {
+                Some(SettlementBuildingKind::FishermansHut) => {
+                    &[("Light_Interior", 820_000.0, 10.0)]
+                }
+                Some(SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery) => &[
+                    ("Light_Interior", 720_000.0, 9.0),
+                    ("Light_Lantern", 440_000.0, 7.5),
+                ],
+                _ => continue,
+            }
         };
 
+        let mut anchors = HashMap::new();
         let mut stack = vec![root];
-        let mut anchor = None;
         while let Some(entity) = stack.pop() {
-            if names
-                .get(entity)
-                .is_ok_and(|name| name.as_str() == anchor_name)
-            {
-                anchor = Some(entity);
-                break;
+            if let Ok(name) = names.get(entity) {
+                for (wanted, _, _) in light_specs {
+                    if name.as_str() == *wanted {
+                        anchors.insert(*wanted, entity);
+                    }
+                }
             }
             if let Ok(entity_children) = children.get(entity) {
                 stack.extend(entity_children.iter());
             }
         }
-        let Some(anchor) = anchor else {
+        if anchors.len() != light_specs.len() {
             // The glTF scene is still loading.
             continue;
-        };
-        let mut lamp = Entity::PLACEHOLDER;
-        commands.entity(anchor).with_children(|parent| {
-            lamp = parent
-                .spawn((
-                    Name::new(format!("Coastal glow at {anchor_name}")),
-                    CoastalLamp { lumens },
-                    PointLight {
-                        color: Color::srgb(1.0, 0.49, 0.18),
-                        intensity: 0.0,
-                        range,
-                        radius: 0.28,
-                        shadow_maps_enabled: false,
-                        ..default()
-                    },
-                    Transform::default(),
-                    Visibility::Hidden,
-                ))
-                .id();
-        });
-        commands.entity(root).insert(CoastalLighting {
-            lamps: vec![lamp],
+        }
+
+        let mut lamps = Vec::with_capacity(light_specs.len());
+        for (anchor_name, lumens, range) in light_specs {
+            let anchor = anchors[anchor_name];
+            commands.entity(anchor).with_children(|parent| {
+                lamps.push(
+                    parent
+                        .spawn((
+                            Name::new(format!("Night glow at {anchor_name}")),
+                            BuildingNightLamp { lumens: *lumens },
+                            PointLight {
+                                color: Color::srgb(1.0, 0.49, 0.18),
+                                intensity: 0.0,
+                                range: *range,
+                                radius: 0.28,
+                                shadow_maps_enabled: false,
+                                ..default()
+                            },
+                            Transform::default(),
+                            Visibility::Hidden,
+                        ))
+                        .id(),
+                );
+            });
+        }
+        commands.entity(root).insert(BuildingNightLighting {
+            lamps,
             strength: 0.0,
         });
     }
 }
 
-fn sync_coastal_lighting(
+fn sync_building_night_lighting(
     time: Res<Time>,
     world_time: Query<&WorldTime>,
-    mut roots: Query<&mut CoastalLighting>,
-    mut lamps: Query<(&CoastalLamp, &mut PointLight, &mut Visibility)>,
+    mut roots: Query<&mut BuildingNightLighting>,
+    mut lamps: Query<(&BuildingNightLamp, &mut PointLight, &mut Visibility)>,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
     };
     let target = house_window_target(clock, true);
-    for mut coastal in roots.iter_mut() {
+    for mut lighting in roots.iter_mut() {
         let next = move_towards(
-            coastal.strength,
+            lighting.strength,
             target,
             time.delta_secs() * WINDOW_FADE_PER_SECOND,
         );
-        if (next - coastal.strength).abs() <= f32::EPSILON {
+        if (next - lighting.strength).abs() <= f32::EPSILON {
             continue;
         }
-        coastal.strength = next;
-        for lamp in &coastal.lamps {
+        lighting.strength = next;
+        for lamp in &lighting.lamps {
             if let Ok((lamp, mut light, mut visibility)) = lamps.get_mut(*lamp) {
                 light.intensity = lamp.lumens * next;
                 *visibility = if next > 0.001 {
@@ -937,8 +1216,50 @@ fn move_towards(current: f32, target: f32, max_delta: f32) -> f32 {
     }
 }
 
+/// Scene streaming may replace every glTF descendant while retaining the
+/// replicated building root. Never let that root's cached player entity turn
+/// into a permanent "wired" lie: clear the stale relationship and the target
+/// marker so the ordinary discovery system can bind the replacement scene on
+/// this same frame boundary.
+fn recover_stale_building_animation_wiring(
+    mut commands: Commands,
+    roots: Query<(Entity, &BuildingDoorAnimation, Option<&WindmillMotion>)>,
+    players: Query<(), With<AnimationPlayer>>,
+    transforms: Query<(), With<Transform>>,
+    children: Query<&Children>,
+    wired_targets: Query<(), With<DoorTargetWired>>,
+) {
+    for (root, door, windmill) in roots.iter() {
+        let door_missing = players.get(door.player).is_err();
+        let mechanism_missing = windmill.is_some_and(|motion| {
+            players.get(motion.player).is_err() || transforms.get(motion.cap).is_err()
+        });
+        if !door_missing && !mechanism_missing {
+            continue;
+        }
+
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            if wired_targets.get(entity).is_ok() {
+                commands.entity(entity).remove::<DoorTargetWired>();
+            }
+            if let Ok(entity_children) = children.get(entity) {
+                stack.extend(entity_children.iter());
+            }
+        }
+        commands
+            .entity(root)
+            .remove::<BuildingDoorAnimation>()
+            .remove::<WindmillMotion>();
+        debug!(
+            "discarded stale building animation wiring at {:?} (door missing={}, mechanism missing={})",
+            root, door_missing, mechanism_missing
+        );
+    }
+}
+
 /// Connect each instantiated building scene's node-animation player to the two
-/// authored door clips. Graphs are shared per semantic building kind; the
+/// authored door clips. Graphs are shared per authored building type; the
 /// player and open/close state remain per physical building.
 fn setup_building_door_animations(
     mut commands: Commands,
@@ -948,6 +1269,9 @@ fn setup_building_door_animations(
     targets: Query<(Entity, &Name, &AnimatedBy), Without<DoorTargetWired>>,
     mut players: Query<&mut AnimationPlayer>,
     parents: Query<&ChildOf>,
+    children: Query<&Children>,
+    names: Query<&Name>,
+    mut node_transforms: Query<&mut Transform>,
     sources: Query<&DoorVisualSource>,
     wired_roots: Query<(), With<BuildingDoorAnimation>>,
 ) {
@@ -980,7 +1304,7 @@ fn setup_building_door_animations(
             continue;
         };
 
-        let door_graph = if let Some(graph) = assets.graphs.get(&source.kind) {
+        let door_graph = if let Some(graph) = assets.graphs.get(&source.building_type) {
             graph.clone()
         } else {
             let Some(gltf) = gltfs.get(&source.gltf) else {
@@ -999,15 +1323,76 @@ fn setup_building_door_animations(
             let mut graph = AnimationGraph::new();
             let open = graph.add_clip(open_clip.clone(), 1.0, graph.root);
             let close = graph.add_clip(close_clip.clone(), 1.0, graph.root);
+            let sails = gltf
+                .named_animations
+                .get("sails_turn")
+                .map(|clip| graph.add_clip(clip.clone(), 1.0, graph.root));
             let graph = DoorGraph {
                 handle: graphs.add(graph),
                 open,
                 close,
+                sails,
             };
-            assets.graphs.insert(source.kind, graph.clone());
+            assets.graphs.insert(source.building_type, graph.clone());
             graph
         };
 
+        let windmill_motion = if let Some(sails) = door_graph.sails {
+            let mut stack = vec![root];
+            let mut cap = None;
+            let mut sails_player = None;
+            while let Some(entity) = stack.pop() {
+                if let Ok(name) = names.get(entity) {
+                    match name.as_str() {
+                        "WindMillCap" => cap = Some(entity),
+                        "WindMillSails" => {
+                            if let Ok((_, _, animated_by)) = targets.get(entity) {
+                                sails_player = Some(animated_by.0);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if cap.is_some() && sails_player.is_some() {
+                    break;
+                }
+                if let Ok(entity_children) = children.get(entity) {
+                    stack.extend(entity_children.iter());
+                }
+            }
+            let (Some(cap), Some(sails_player)) = (cap, sails_player) else {
+                // Door, cap and sails arrive in one glTF scene, but retain the
+                // poll in case Bevy has not instantiated every sibling and its
+                // AnimatedBy relationship this frame.
+                continue;
+            };
+            let Ok(cap_transform) = node_transforms.get_mut(cap) else {
+                continue;
+            };
+            let cap_rest_rotation = cap_transform.rotation;
+            let Ok(mut player) = players.get_mut(sails_player) else {
+                continue;
+            };
+            player.play(sails).repeat();
+            if sails_player != player_entity {
+                commands.entity(sails_player).insert((
+                    AnimationGraphHandle(door_graph.handle.clone()),
+                    DoorPlayerWired,
+                ));
+            }
+            debug!(
+                "windmill animation players: door {:?}, sails {:?}",
+                player_entity, sails_player
+            );
+            Some(WindmillMotion {
+                player: sails_player,
+                sails,
+                cap,
+                cap_rest_rotation,
+            })
+        } else {
+            None
+        };
         commands
             .entity(player_entity)
             .insert((AnimationGraphHandle(door_graph.handle), DoorPlayerWired));
@@ -1018,12 +1403,79 @@ fn setup_building_door_animations(
             close: door_graph.close,
             state: DoorState::Shut,
         });
+        if let Some(motion) = windmill_motion {
+            commands.entity(root).insert(motion);
+        }
         debug!(
             "wired {} door animation (root {:?}, player {:?})",
             source.kind.label(),
             root,
             player_entity
         );
+    }
+}
+
+/// Local cap yaw which points the mill's authored -Z front into the wind. The
+/// prevailing vector describes downwind travel, so the visible sails face its
+/// opposite while retaining the building's permanent plot rotation.
+fn windmill_cap_yaw(root_yaw: f32, downwind: Vec2) -> f32 {
+    downwind.x.atan2(downwind.y) - root_yaw
+}
+
+fn drive_windmill_motion(
+    world_time: Query<&WorldTime>,
+    cloud_seed: Query<&CloudSeed>,
+    warp: Query<&TimeWarp>,
+    windmills: Query<(
+        &WindmillMotion,
+        &SettlementBuilding,
+        &GoodsInventory,
+        Option<&BusinessCondition>,
+        Option<&PlayerRotation>,
+    )>,
+    mut players: Query<&mut AnimationPlayer>,
+    mut cap_transforms: Query<&mut Transform>,
+) {
+    let Some(clock) = world_time.iter().next() else {
+        return;
+    };
+    let absolute_seconds = clock.day as f32 * clock.cycle_duration() + clock.seconds_in_cycle;
+    let seed_phase = crate::wind::wind_seed_phase(
+        cloud_seed
+            .iter()
+            .next()
+            .map_or(0, |cloud_seed| cloud_seed.seed),
+    );
+    let (_, wind_speed) = crate::wind::wind_state(absolute_seconds, seed_phase);
+    let wind_direction = crate::wind::wind_direction(absolute_seconds, seed_phase);
+    let time_factor = warp.iter().next().map_or(1.0, |warp| warp.0);
+    let natural_speed = 0.5 * (crate::wind::WIND_SPEED_MIN + crate::wind::WIND_SPEED_MAX);
+    let playback_speed = wind_speed / natural_speed * time_factor;
+
+    for (motion, building, inventory, condition, root_rotation) in windmills.iter() {
+        if let Ok(mut cap_transform) = cap_transforms.get_mut(motion.cap) {
+            let root_yaw = root_rotation.map_or(0.0, |rotation| rotation.0);
+            cap_transform.rotation =
+                Quat::from_rotation_y(windmill_cap_yaw(root_yaw, wind_direction))
+                    * motion.cap_rest_rotation;
+        }
+        let Ok(mut player) = players.get_mut(motion.player) else {
+            continue;
+        };
+        let has_work = clock.is_ordinary_work_time()
+            && !building.workers.is_empty()
+            && condition.is_none_or(|condition| condition.state != BusinessState::Closed)
+            && inventory.amount(Good::Wheat) > 0
+            && inventory
+                .free_bulk()
+                .saturating_add(Good::Wheat.bulk_per_unit())
+                >= Good::Flour.bulk_per_unit();
+        let playback_speed = if has_work { playback_speed } else { 0.0 };
+        if let Some(sails) = player.animation_mut(motion.sails) {
+            sails.set_speed(playback_speed);
+        } else {
+            player.play(motion.sails).repeat().set_speed(playback_speed);
+        }
     }
 }
 
@@ -1069,7 +1521,9 @@ fn drive_building_doors(
                 DoorCommand::Close => (door.close, 0.0),
             };
             debug!("door at {:?}: {:?}", position.0, command);
-            player.stop_all();
+            // Door clips share a player with persistent mechanical animations
+            // such as windmill sails. Stop only the opposing door clips.
+            player.stop(door.open).stop(door.close);
             player
                 .play(clip)
                 .set_seek_time(seek_seconds)
@@ -1200,6 +1654,98 @@ mod door_tests {
     }
 
     #[test]
+    fn stale_scene_players_release_the_root_for_rewiring() {
+        let mut app = App::new();
+        app.add_systems(Update, recover_stale_building_animation_wiring);
+        let graph = AnimationGraph::new();
+        let node = graph.root;
+        let root = app
+            .world_mut()
+            .spawn(BuildingDoorAnimation {
+                player: Entity::PLACEHOLDER,
+                open: node,
+                close: node,
+                state: DoorState::Shut,
+            })
+            .id();
+        let old_target = app.world_mut().spawn(DoorTargetWired).id();
+        app.world_mut().entity_mut(root).add_child(old_target);
+
+        app.update();
+
+        assert!(
+            app.world().get::<BuildingDoorAnimation>(root).is_none(),
+            "a dead animation player must not leave the building permanently wired"
+        );
+        assert!(
+            app.world().get::<DoorTargetWired>(old_target).is_none(),
+            "the replacement scene's target must be eligible for discovery"
+        );
+    }
+
+    #[test]
+    fn a_replaced_windmill_cap_releases_the_root_for_rewiring() {
+        let mut app = App::new();
+        app.add_systems(Update, recover_stale_building_animation_wiring);
+        let graph = AnimationGraph::new();
+        let node = graph.root;
+        let player = app.world_mut().spawn(AnimationPlayer::default()).id();
+        let root = app
+            .world_mut()
+            .spawn((
+                BuildingDoorAnimation {
+                    player,
+                    open: node,
+                    close: node,
+                    state: DoorState::Shut,
+                },
+                WindmillMotion {
+                    player,
+                    sails: node,
+                    cap: Entity::PLACEHOLDER,
+                    cap_rest_rotation: Quat::IDENTITY,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        assert!(app.world().get::<BuildingDoorAnimation>(root).is_none());
+        assert!(app.world().get::<WindmillMotion>(root).is_none());
+    }
+
+    #[test]
+    fn windmill_cap_faces_upwind_after_any_plot_rotation() {
+        for direction in [
+            Vec2::X,
+            Vec2::NEG_X,
+            Vec2::Y,
+            Vec2::NEG_Y,
+            crate::wind::WIND_DIRECTION,
+        ] {
+            for root_yaw in [0.0, 0.4, -1.2, 2.7] {
+                let world_yaw = root_yaw + windmill_cap_yaw(root_yaw, direction);
+                let front = Quat::from_rotation_y(world_yaw) * Vec3::NEG_Z;
+                let upwind = -direction;
+                assert!((front.x - upwind.x).abs() < 1e-5);
+                assert!((front.z - upwind.y).abs() < 1e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn bakery_loaves_present_empty_partial_and_full_real_stock() {
+        let mut inventory = GoodsInventory::new(240);
+        assert_eq!(bakery_bread_level(&inventory), 0);
+        inventory.add(Good::Bread, 1);
+        assert_eq!(bakery_bread_level(&inventory), 1);
+        inventory.add(Good::Bread, 119);
+        assert_eq!(bakery_bread_level(&inventory), 3);
+        inventory.add(Good::Bread, 120);
+        assert_eq!(bakery_bread_level(&inventory), 6);
+    }
+
+    #[test]
     fn cabin_windows_require_both_darkness_and_an_occupied_household() {
         let mut clock = WorldTime::new(600.0, 300.0, 0.0);
 
@@ -1250,6 +1796,7 @@ mod door_tests {
                     glass: glass.clone(),
                     lamps: vec![lamp],
                     strength: 0.0,
+                    lamp_strength: 0.0,
                 },
             ))
             .id();
@@ -1282,5 +1829,72 @@ mod door_tests {
             app.world().get::<HouseWindowLighting>(house).is_none(),
             "despawned scene descendants must release stale wiring so setup can discover the replacement scene"
         );
+    }
+
+    #[test]
+    fn dense_neighbourhood_keeps_all_windows_emissive_but_caps_real_lights() {
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.init_resource::<Assets<StandardMaterial>>();
+        app.add_systems(Update, sync_house_window_lighting);
+        let mut clock = WorldTime::new(600.0, 300.0, 0.0);
+        clock.set_normalized_time(0.0);
+        app.world_mut().spawn(clock);
+        app.world_mut().spawn(crate::camera_rts::CommanderCamera {
+            zoom: 190.0,
+            zoom_target: 190.0,
+            ..default()
+        });
+
+        let mut lamps = Vec::new();
+        for index in 0..(MAX_ACTIVE_HOUSE_POINT_LIGHTS + 8) {
+            let glass = app
+                .world_mut()
+                .resource_mut::<Assets<StandardMaterial>>()
+                .add(StandardMaterial::default());
+            let lamp = app
+                .world_mut()
+                .spawn((
+                    HouseWindowLamp,
+                    PointLight {
+                        intensity: 0.0,
+                        ..default()
+                    },
+                    Visibility::Hidden,
+                ))
+                .id();
+            lamps.push(lamp);
+            app.world_mut().spawn((
+                Household {
+                    residents: vec![format!("Resident {index}")],
+                    ..default()
+                },
+                PlayerPosition(Vec3::new(index as f32, 0.0, 0.0)),
+                HouseWindowLighting {
+                    glass,
+                    lamps: vec![lamp],
+                    strength: 0.0,
+                    lamp_strength: 0.0,
+                },
+            ));
+        }
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs(1));
+
+        app.update();
+
+        let active = lamps
+            .iter()
+            .filter(|lamp| {
+                app.world()
+                    .get::<PointLight>(**lamp)
+                    .is_some_and(|light| light.intensity > 0.0)
+            })
+            .count();
+        assert_eq!(active, MAX_ACTIVE_HOUSE_POINT_LIGHTS);
+        let world = app.world_mut();
+        let mut windows = world.query::<&HouseWindowLighting>();
+        assert!(windows.iter(world).all(|window| window.strength > 0.0));
     }
 }

@@ -82,6 +82,22 @@ if g.get("skins"):
 
 print("\n-- animations --")
 acc = g["accessors"]
+
+
+def _float_accessor(index):
+    """Read the tightly/strided FLOAT accessor shapes used by prop clips."""
+    a = acc[index]
+    assert a["componentType"] == 5126, f"accessor {index} is not FLOAT"
+    components = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}[a["type"]]
+    view = g["bufferViews"][a["bufferView"]]
+    start = view.get("byteOffset", 0) + a.get("byteOffset", 0)
+    stride = view.get("byteStride", components * 4)
+    return [
+        struct.unpack_from("<" + "f" * components, BIN, start + row * stride)
+        for row in range(a["count"])
+    ]
+
+
 for a in g.get("animations", []):
     paths = Counter(c["target"]["path"] for c in a["channels"])
     targets = {g["nodes"][c["target"]["node"]].get("name") for c in a["channels"]}
@@ -92,6 +108,22 @@ for a in g.get("animations", []):
     bad = set(paths) - {"translation", "rotation", "scale", "weights"}
     if bad:
         fails.append(f"animation {a['name']} targets {bad}, which core glTF cannot carry")
+    if a["name"] == "sails_turn":
+        rotation_channels = [c for c in a["channels"] if c["target"]["path"] == "rotation"]
+        assert len(rotation_channels) == 1, (
+            f"sails_turn has {len(rotation_channels)} rotation channels, expected one")
+        sampler = a["samplers"][rotation_channels[0]["sampler"]]
+        samples = _float_accessor(sampler["output"])
+        sample = max(samples, key=lambda q: q[0] ** 2 + q[1] ** 2 + q[2] ** 2)
+        axis_length = sum(v * v for v in sample[:3]) ** 0.5
+        axis = tuple(v / axis_length for v in sample[:3])
+        print(f"    rotation axis ~= ({axis[0]:+.3f}, {axis[1]:+.3f}, {axis[2]:+.3f})")
+        # The exported mill faces -Z, so its windshaft and the only physically
+        # valid sail rotation axis are Z. X means the source Blender action was
+        # not conjugated through the exporter's -90 degree facing turn.
+        if abs(axis[2]) < 0.999 or abs(axis[0]) > 0.001 or abs(axis[1]) > 0.001:
+            fails.append(
+                f"sails_turn rotates around {axis}, expected the exported windshaft Z axis")
 
 print("\n-- materials --")
 for m in g.get("materials", []):
@@ -117,16 +149,53 @@ for im in g.get("images", []):
 # every terrain tile; one that starts well below y=0 sinks. A little below is right -- a foundation
 # should bed INTO the ground so no seam shows on uneven terrain.
 print("\n-- bounds (glTF space: +Y up, -Z forward) --")
+
+
+def _node_matrix(n):
+    if "matrix" in n:                       # column-major in glTF
+        m = n["matrix"]
+        return [[m[c * 4 + r] for c in range(4)] for r in range(4)]
+    t = n.get("translation", (0.0, 0.0, 0.0))
+    sc = n.get("scale", (1.0, 1.0, 1.0))
+    x, y, z, w = n.get("rotation", (0.0, 0.0, 0.0, 1.0))
+    rot = [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+           [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+           [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+    return ([[rot[r][c] * sc[c] for c in range(3)] + [t[r]] for r in range(3)]
+            + [[0.0, 0.0, 0.0, 1.0]])
+
+
+def _mul(a, b):
+    return [[sum(a[r][k] * b[k][c] for k in range(4)) for c in range(4)] for r in range(4)]
+
+
+# WALK THE SCENE GRAPH, DO NOT ITERATE NODES FLATLY. The previous version added only each node's OWN
+# translation, so any mesh parented to another node was measured in its parent's local space. On the
+# windmill -- whose sails are a child of the yawing cap -- that put the sail tips 3 m underground and
+# produced a "base runs deep" warning about a model whose real base is at -0.18. The same bug could
+# just as easily FAIL a correct asset for floating, so it is not merely cosmetic.
 lo, hi = [1e9] * 3, [-1e9] * 3
-for n in g.get("nodes", []):
-    if "mesh" not in n:
-        continue
-    t = n.get("translation", (0, 0, 0))
-    for p in g["meshes"][n["mesh"]]["primitives"]:
-        a = g["accessors"][p["attributes"]["POSITION"]]
-        for i in range(3):
-            lo[i] = min(lo[i], a["min"][i] + t[i])
-            hi[i] = max(hi[i], a["max"][i] + t[i])
+_ident = [[1.0 if r == c else 0.0 for c in range(4)] for r in range(4)]
+
+
+def _walk(i, mat):
+    n = g["nodes"][i]
+    mat = _mul(mat, _node_matrix(n))
+    if "mesh" in n:
+        for prim in g["meshes"][n["mesh"]]["primitives"]:
+            a = g["accessors"][prim["attributes"]["POSITION"]]
+            for corner in range(8):         # every corner of the local AABB, then transform
+                v = [a["max"][k] if (corner >> k) & 1 else a["min"][k] for k in range(3)]
+                for r in range(3):
+                    w = sum(mat[r][c] * v[c] for c in range(3)) + mat[r][3]
+                    lo[r] = min(lo[r], w)
+                    hi[r] = max(hi[r], w)
+    for ch in n.get("children", []):
+        _walk(ch, mat)
+
+
+for _root in g["scenes"][g.get("scene", 0)]["nodes"]:
+    _walk(_root, _ident)
 print(f"  X {lo[0]:+.3f}..{hi[0]:+.3f}   Y {lo[1]:+.3f}..{hi[1]:+.3f}   Z {lo[2]:+.3f}..{hi[2]:+.3f}")
 print(f"  footprint {hi[0]-lo[0]:.2f} x {hi[2]-lo[2]:.2f} m, height {hi[1]-lo[1]:.2f} m")
 # Two different rules, because they have different consequences.

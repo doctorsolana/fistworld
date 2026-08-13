@@ -5,22 +5,17 @@ use super::*;
 pub(super) fn apply_launcher_window_settings(
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut ui_scale: ResMut<UiScale>,
+    monitors: Query<&Monitor, With<PrimaryMonitor>>,
 ) {
+    let monitor = monitors.iter().next();
     for mut window in windows.iter_mut() {
-        window.mode = WindowMode::Windowed;
-        #[cfg(target_os = "macos")]
-        {
-            let base_scale = window.resolution.base_scale_factor();
-            window.resolution.set_scale_factor_override(Some(1.0));
-            ui_scale.0 = base_scale;
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            ui_scale.0 = 1.0;
-        }
-        window
-            .resolution
-            .set(LAUNCHER_RESOLUTION.0 as f32, LAUNCHER_RESOLUTION.1 as f32);
+        crate::app_wiring::apply_window_mode(
+            &mut window,
+            &mut ui_scale,
+            monitor,
+            DisplayMode::Windowed,
+            DisplayResolution::new(LAUNCHER_RESOLUTION.0, LAUNCHER_RESOLUTION.1),
+        );
     }
 }
 

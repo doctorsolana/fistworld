@@ -37,6 +37,8 @@ pub fn ensure_households(
 pub fn update_household_budgets_and_pantries(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
+    mut business_events: ResMut<BusinessEventQueue>,
+    mut queue_clock: Option<ResMut<MootQueueClock>>,
     regions: Option<Res<RegionRegistry>>,
     mut halls: Query<
         (
@@ -79,6 +81,8 @@ pub fn update_household_budgets_and_pantries(
             With<HomeRoutine>,
             With<WorkplaceDoorTransit>,
             With<MarketCollectionRoutine>,
+            With<MootQueueTicket>,
+            With<MootMealRoutine>,
         )>,
     >,
 ) {
@@ -143,12 +147,12 @@ pub fn update_household_budgets_and_pantries(
         let Some(hall_entity) = hall_by_id.get(&building_of.0).copied() else {
             continue;
         };
-        let Ok((_, _, _, hall_position, hall_rotation, mut hall_store, mut market)) =
+        let Ok((_, _, _, _hall_position, _hall_rotation, mut hall_store, mut market)) =
             halls.get_mut(hall_entity)
         else {
             continue;
         };
-        let estimated_unit_price = [Good::Food, Good::Wheat]
+        let estimated_unit_price = Good::HOUSEHOLD_FOOD_PRIORITY
             .into_iter()
             .filter(|good| hall_store.amount(*good) > 0)
             .map(|good| market.pool(good).ask)
@@ -197,43 +201,55 @@ pub fn update_household_budgets_and_pantries(
                     })
                 })
         });
-        if tactical_shopper && clock.is_day() {
+        let can_purchase_now = estimated_unit_price > 0 && economy.pennies >= estimated_unit_price;
+        if tactical_shopper && can_purchase_now && clock.is_day() {
             if let Some(shopper) = shopper_entity {
-                let entrance = SettlementBuildingKind::Hall.entrance_position(
-                    hall_position.0,
-                    hall_rotation.map_or(0.0, |rotation| rotation.0),
-                );
-                commands.entity(shopper).insert((
-                    HouseholdShoppingRoutine {
+                if let Some(queue_clock) = queue_clock.as_deref_mut() {
+                    commands.entity(shopper).insert(HouseholdShoppingRoutine {
                         home: house_entity,
                         hall: hall_entity,
                         phase: HouseholdShoppingPhase::GoingToMarket,
-                    },
-                    MoveTarget(entrance),
-                ));
-                economy.last_budget_day = day;
-                continue;
+                    });
+                    moot_services::enqueue_moot_service(
+                        &mut commands,
+                        queue_clock,
+                        shopper,
+                        hall_entity,
+                        MootServiceKind::HouseholdShopping,
+                    );
+                    economy.last_budget_day = day;
+                    continue;
+                }
             }
         }
 
         let mut remaining = deficit;
-        for good in [Good::Food, Good::Wheat] {
+        for good in Good::HOUSEHOLD_FOOD_PRIORITY {
             if remaining == 0 {
                 break;
             }
+            if hall_store.amount(good) == 0 {
+                // Food groups are substitutes. Do not claim that every cabin
+                // demanded every absent food before successfully buying one of
+                // the later choices; generic food pressure records a wholly
+                // empty market. Once a good is actually offered, rejected and
+                // partially filled demand is economically meaningful.
+                continue;
+            }
             let room = pantry.free_bulk() / good.bulk_per_unit();
-            let requested = remaining.min(room).min(hall_store.amount(good));
-            let trade =
-                market.sell_to_consumer(good, hall_store.amount(good), requested, economy.pennies);
-            if trade.units == 0 {
+            let requested = remaining.min(room);
+            let purchase =
+                market.purchase_recording_demand(good, requested, economy.pennies, None, None);
+            if purchase.trade.units == 0 {
                 continue;
             }
-            if economy.pennies < trade.pennies {
+            if economy.pennies < purchase.trade.pennies {
                 continue;
             }
-            economy.pennies -= trade.pennies;
-            let moved = hall_store.transfer_to(&mut pantry, good, trade.units);
-            debug_assert_eq!(moved, trade.units);
+            economy.pennies -= purchase.trade.pennies;
+            let moved = hall_store.transfer_to(&mut pantry, good, purchase.trade.units);
+            debug_assert_eq!(moved, purchase.trade.units);
+            business_events.record_market_purchase(day, building_of.0, purchase.fills);
             remaining = remaining.saturating_sub(moved);
         }
         economy.last_budget_day = day;
@@ -246,8 +262,11 @@ pub fn update_household_budgets_and_pantries(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn run_household_shopping(
     mut commands: Commands,
+    world_time: Query<&WorldTime>,
+    mut business_events: ResMut<BusinessEventQueue>,
     mut halls: Query<
         (
+            &shared::components::SettlementId,
             &PlayerPosition,
             Option<&PlayerRotation>,
             &mut GoodsInventory,
@@ -277,25 +296,41 @@ pub fn run_household_shopping(
             &mut CharacterActivity,
             &mut GoodsInventory,
             &mut HouseholdShoppingRoutine,
+            Option<&MootQueueTicket>,
             Option<&MoveTarget>,
             Option<&HomeRoutine>,
+            Option<&NavigationRouteFailed>,
         ),
         (With<CharacterKind>, Without<strategic::StrategicPerson>),
     >,
 ) {
-    for (shopper, position, mut activity, mut carrier, mut routine, move_target, home) in
-        shoppers.iter_mut()
+    let day = world_time.iter().next().map_or(0, |clock| clock.day);
+    for (
+        shopper,
+        position,
+        mut activity,
+        mut carrier,
+        mut routine,
+        queue_ticket,
+        move_target,
+        home,
+        route_failed,
+    ) in shoppers.iter_mut()
     {
         if home.is_some() {
             continue;
         }
-        let Ok((hall_position, hall_rotation, mut hall_store, mut market)) =
+        let Ok((settlement_id, hall_position, hall_rotation, mut hall_store, mut market)) =
             halls.get_mut(routine.hall)
         else {
             commands
                 .entity(shopper)
                 .remove::<HouseholdShoppingRoutine>()
-                .remove::<MoveTarget>();
+                .remove::<MootQueueTicket>()
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>();
             continue;
         };
         let Ok((building, home_position, home_rotation, household, mut economy, mut pantry)) =
@@ -304,7 +339,11 @@ pub fn run_household_shopping(
             commands
                 .entity(shopper)
                 .remove::<HouseholdShoppingRoutine>()
-                .remove::<MoveTarget>();
+                .remove::<MootQueueTicket>()
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>();
             continue;
         };
         let hall_entrance = SettlementBuildingKind::Hall.entrance_position(
@@ -314,45 +353,85 @@ pub fn run_household_shopping(
         let home_entrance = building
             .kind
             .entrance_position(home_position.0, home_rotation.0);
+        if route_failed.is_some() && queue_ticket.is_none() {
+            let mut shopper_commands = commands.entity(shopper);
+            shopper_commands
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>();
+            match routine.phase {
+                HouseholdShoppingPhase::GoingToMarket => {
+                    // Nothing has been purchased yet. Release this attempt so
+                    // the household can select a shopper again on its next
+                    // budget pass instead of leaving one resident asleep on a
+                    // terminal navigation result forever.
+                    shopper_commands.remove::<HouseholdShoppingRoutine>();
+                }
+                HouseholdShoppingPhase::ReturningHome => {
+                    // Purchased food is physical cargo. Preserve both it and
+                    // the routine, then request the cabin entrance again; a
+                    // road/prop revision may make the retry viable next tick.
+                    shopper_commands.insert(MoveTarget(home_entrance));
+                }
+            }
+            continue;
+        }
         *activity = CharacterActivity::Idle;
         match routine.phase {
             HouseholdShoppingPhase::GoingToMarket => {
-                if ground_distance(position.0, hall_entrance) > WORK_REACH {
+                if let Some(ticket) = queue_ticket {
+                    if !ticket.is_ready() {
+                        continue;
+                    }
+                } else if ground_distance(position.0, hall_entrance) > WORK_REACH {
+                    // Compatibility for a pre-queue save or a focused test
+                    // that creates only the shopping routine.
                     ensure_move_target(&mut commands, shopper, move_target, hall_entrance);
                     continue;
                 }
                 let target = (household.resident_ids.len() as u32)
                     .saturating_mul(u32::from(economy.pantry_target_days));
                 let mut remaining = target.saturating_sub(pantry.edible_amount());
-                for good in [Good::Food, Good::Wheat] {
+                for good in Good::HOUSEHOLD_FOOD_PRIORITY {
                     if remaining == 0 {
                         break;
                     }
-                    let requested = remaining
-                        .min(carrier.free_bulk() / good.bulk_per_unit())
-                        .min(hall_store.amount(good));
-                    let trade = market.sell_to_consumer(
-                        good,
-                        hall_store.amount(good),
-                        requested,
-                        economy.pennies,
-                    );
-                    if trade.units == 0 || economy.pennies < trade.pennies {
+                    if hall_store.amount(good) == 0 {
                         continue;
                     }
-                    economy.pennies -= trade.pennies;
-                    let moved = hall_store.transfer_to(&mut carrier, good, trade.units);
-                    debug_assert_eq!(moved, trade.units);
+                    let requested = remaining.min(carrier.free_bulk() / good.bulk_per_unit());
+                    let purchase = market.purchase_recording_demand(
+                        good,
+                        requested,
+                        economy.pennies,
+                        None,
+                        None,
+                    );
+                    if purchase.trade.units == 0 || economy.pennies < purchase.trade.pennies {
+                        continue;
+                    }
+                    economy.pennies -= purchase.trade.pennies;
+                    let moved = hall_store.transfer_to(&mut carrier, good, purchase.trade.units);
+                    debug_assert_eq!(moved, purchase.trade.units);
+                    business_events.record_market_purchase(day, *settlement_id, purchase.fills);
                     remaining = remaining.saturating_sub(moved);
                 }
                 if carrier.edible_amount() == 0 {
                     commands
                         .entity(shopper)
                         .remove::<HouseholdShoppingRoutine>()
+                        .remove::<MootQueueTicket>()
                         .remove::<MoveTarget>();
                     continue;
                 }
-                commands.entity(shopper).insert(MoveTarget(home_entrance));
+                commands
+                    .entity(shopper)
+                    .insert(MoveTarget(home_entrance))
+                    .remove::<MootQueueTicket>()
+                    .remove::<TravelRoute>()
+                    .remove::<NavigationRoutePending>()
+                    .remove::<NavigationRouteFailed>();
                 routine.phase = HouseholdShoppingPhase::ReturningHome;
             }
             HouseholdShoppingPhase::ReturningHome => {
@@ -360,7 +439,7 @@ pub fn run_household_shopping(
                     ensure_move_target(&mut commands, shopper, move_target, home_entrance);
                     continue;
                 }
-                for good in [Good::Food, Good::Wheat] {
+                for good in Good::HOUSEHOLD_FOOD_PRIORITY {
                     carrier.transfer_to(&mut pantry, good, u32::MAX);
                 }
                 commands
@@ -577,11 +656,19 @@ pub fn run_household_schedules(
         Without<CharacterKind>,
     >,
     roads: Query<&shared::components::VillageRoad>,
+    moot_service_busy: Query<
+        (),
+        Or<(
+            With<MootQueueTicket>,
+            With<MootMealRoutine>,
+            With<HouseholdShoppingRoutine>,
+        )>,
+    >,
     mut villagers: Query<
         (
             Entity,
             &shared::components::PersonId,
-            &PlayerPosition,
+            &mut PlayerPosition,
             &mut PlayerRotation,
             &mut CharacterActivity,
             &HomeAssignment,
@@ -590,8 +677,10 @@ pub fn run_household_schedules(
             Option<&mut FarmerRoutine>,
             Option<&mut LumberjackRoutine>,
             Option<&mut FishingRoutine>,
+            Option<&mut ProcessingRoutine>,
             Option<&mut RoadBuilderRoutine>,
             Option<&WorkplaceDoorTransit>,
+            Option<&NavigationRouteFailed>,
         ),
         (With<CharacterKind>, Without<strategic::StrategicPerson>),
     >,
@@ -605,7 +694,7 @@ pub fn run_household_schedules(
     for (
         villager,
         person_id,
-        position,
+        mut position,
         mut facing,
         mut activity,
         assignment,
@@ -614,10 +703,15 @@ pub fn run_household_schedules(
         mut farmer,
         mut lumberjack,
         mut fisher,
+        mut processor,
         mut road_builder,
         workplace_transit,
+        route_failed,
     ) in villagers.iter_mut()
     {
+        if moot_service_busy.get(villager).is_ok() {
+            continue;
+        }
         let assigned_home = homes.get(assignment.home).ok();
 
         let Some(mut routine) = routine else {
@@ -673,6 +767,21 @@ pub fn run_household_schedules(
                                 )
                             })
                     })
+                })
+                .or_else(|| {
+                    processor.as_deref().and_then(|processor| {
+                        processor
+                            .is_working_inside()
+                            .then(|| workplaces.get(processor.workplace()).ok())
+                            .flatten()
+                            .map(|(building, position, rotation)| {
+                                (
+                                    position.0,
+                                    building.kind.entrance_position(position.0, rotation.0),
+                                    building.kind.interior_door_position(position.0, rotation.0),
+                                )
+                            })
+                    })
                 });
 
             // Unfinished work waits for morning. Resetting the spatial phase is
@@ -691,6 +800,9 @@ pub fn run_household_schedules(
                     .remove::<PierTraversal>()
                     .remove::<TravelRoute>()
                     .remove::<NavigationRoutePending>();
+            }
+            if let Some(processor) = processor.as_deref_mut() {
+                processor.reset_for_morning();
             }
             if let Some(road_builder) = road_builder.as_deref_mut() {
                 if let Ok(road) = roads.get(road_builder.road) {
@@ -723,9 +835,11 @@ pub fn run_household_schedules(
                     commands.entity(villager).insert(MoveTarget(door));
                     HomePhase::GoingToDoor
                 };
-            commands
-                .entity(villager)
-                .insert(HomeRoutine { home, phase });
+            commands.entity(villager).insert(HomeRoutine {
+                home,
+                phase,
+                failed_routes: 0,
+            });
             continue;
         };
 
@@ -770,6 +884,39 @@ pub fn run_household_schedules(
         let door_use = BuildingDoorUse {
             building: home_position.0,
         };
+
+        if route_failed.is_some() {
+            routine.failed_routes = routine.failed_routes.saturating_add(1);
+            commands
+                .entity(villager)
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>();
+            if is_day {
+                // The ordinary daylight branch below releases this routine.
+            } else if routine.failed_routes < 3 {
+                // A road or prop revision may make the same essential trip
+                // viable. Retrying is bounded so bad geometry cannot create a
+                // permanent sleeper or an unbounded route-warning loop.
+                commands.entity(villager).insert(MoveTarget(door));
+                routine.phase = HomePhase::GoingToDoor;
+                continue;
+            } else {
+                // Shelter is an aggregate guarantee as well as visible
+                // behaviour. Compress only the impossible remainder of this
+                // trip after three certified route failures. Ordinary homes
+                // still walk through the threshold and animate their door.
+                position.0 = inside;
+                *activity = CharacterActivity::Indoors;
+                commands
+                    .entity(villager)
+                    .remove::<BuildingDoorUse>()
+                    .remove::<MoveTarget>();
+                routine.phase = HomePhase::Sleeping;
+                continue;
+            }
+        }
 
         if is_day {
             match routine.phase {
@@ -856,6 +1003,7 @@ pub fn run_household_schedules(
             HomePhase::GoingToDoor => {
                 *activity = CharacterActivity::Idle;
                 if ground_distance(position.0, door) <= DOOR_REACH {
+                    routine.failed_routes = 0;
                     commands
                         .entity(villager)
                         .remove::<MoveTarget>()
@@ -889,6 +1037,7 @@ pub fn run_household_schedules(
                 *activity = CharacterActivity::Idle;
                 commands.entity(villager).insert(door_use);
                 if ground_distance(position.0, inside) <= DOOR_REACH {
+                    routine.failed_routes = 0;
                     *activity = CharacterActivity::Indoors;
                     commands
                         .entity(villager)

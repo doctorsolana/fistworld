@@ -22,11 +22,11 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::ButtonState;
 use bevy::prelude::*;
 use bevy::ui::UiScale;
-use bevy::window::{PrimaryWindow, WindowMode};
+use bevy::window::{Monitor, PrimaryMonitor, PrimaryWindow};
 use serde::Deserialize;
 
 use super::styles::*;
-use crate::render::systems::LAUNCHER_RESOLUTION;
+use crate::render::systems::{DisplayMode, DisplayResolution, LAUNCHER_RESOLUTION};
 use crate::states::GameState;
 use shared::protocol::SERVER_PORT;
 

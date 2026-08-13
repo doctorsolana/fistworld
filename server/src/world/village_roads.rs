@@ -11,6 +11,7 @@ mod geometry;
 mod routing;
 mod steward;
 
+pub(crate) use construction::hall_connected_road_keys;
 use construction::{
     absolute_world_seconds, building_road_status, hall_road_network, BuildingRoadStatus,
 };
@@ -20,14 +21,20 @@ pub use routing::{
     plan_villager_travel_routes, queue_villager_travel_routes, rebuild_village_road_graph,
     retry_failed_routes_after_obstacle_change, VillageRoadGraph,
 };
+
+pub(crate) fn road_point_key(point: Vec2) -> (i32, i32) {
+    graph_key(point)
+}
 #[cfg(test)]
 use routing::{reverse_route_clears_goal_prop_exemption, RoadGraphNode};
+#[cfg(test)]
+pub use steward::staff_moot_stewards as staff_and_pay_road_stewards;
 pub use steward::{
-    audit_village_roads, ensure_moot_administrations, staff_and_pay_road_stewards,
-    staff_public_positions,
+    audit_village_roads, ensure_moot_administrations, staff_moot_stewards, staff_public_positions,
 };
 
 use bevy::ecs::system::SystemParam;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use lightyear::prelude::{NetworkTarget, Replicate};
 use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
@@ -36,25 +43,51 @@ use shared::components::{
     MootAdministration, Occupation, PlayerPosition, PlayerRotation, RoadClass, RoadSurface,
     Settlement, SettlementBuilding, SettlementBuildingKind, VillageRoad, WorkStatus, WorldTime,
 };
-use shared::economy::{Wallet, ROAD_STEWARD_DAILY_SALARY};
+#[cfg(test)]
+use shared::economy::Wallet;
+use shared::economy::ROAD_STEWARD_DAILY_SALARY;
 use shared::spatial::SpatialObstacleGrid;
 use shared::terrain::{world_pos_in_bounds, ChunkCoord, WorldTerrain, CHUNK_SIZE};
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{BinaryHeap, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::player::hero::MoveTarget;
-use crate::world::navgrid::{NAVIGATION_SAMPLE_STEP, VILLAGER_PROP_RADIUS};
-use crate::world::village::{HomeRoutine, PierTraversal, VillagerIntent};
+use crate::world::navgrid::{NAVIGATION_SAMPLE_STEP, VILLAGER_NAV_RADIUS, VILLAGER_PROP_RADIUS};
+use crate::world::village::{
+    ambient::AmbientRoutine, FarmerRoutine, FishingRoutine, HomeRoutine, HouseholdShoppingRoutine,
+    LumberjackRoutine, MarketCollectionRoutine, MootQueueTicket, PierTraversal, UnderConstruction,
+    VillagerIntent, CHOP_SECONDS,
+};
 use crate::{
     collision::library::{DerivedColliderLibrary, StaticColliders},
     world::pathfinding::PathfindingBudgetSettings,
 };
 
 pub(crate) use geometry::{
-    road_corridor_is_dry, road_sample_is_dry, road_segment_is_dry, road_segment_is_dry_at_width,
+    road_corridor_is_dry, road_sample_is_dry, road_segment_is_coarsely_dry,
+    road_segment_is_coarsely_dry_at_width, road_segment_is_dry, road_segment_is_dry_at_width,
     surface_width_for_tier,
 };
+
+/// Whether a completed building's own connector belongs to the component
+/// rooted at the Moot Hall door. Production jobs use this before sending an
+/// embodied worker across town; a merely complete but detached lane is still
+/// a Road Steward problem, not an operational commute.
+pub(crate) fn building_has_connected_road(
+    kind: SettlementBuildingKind,
+    position: Vec3,
+    rotation: f32,
+    hall_position: Vec3,
+    hall_rotation: f32,
+    roads: &[&VillageRoad],
+) -> bool {
+    let door3 = kind.entrance_position(position, rotation);
+    let door = Vec2::new(door3.x, door3.z);
+    let hall3 = SettlementBuildingKind::Hall.entrance_position(hall_position, hall_rotation);
+    let network = hall_road_network(Vec2::new(hall3.x, hall3.z), roads);
+    building_road_status(door, roads, &network, false) == BuildingRoadStatus::Connected
+}
 
 /// The live collision sources used by tactical travel planning. They must be
 /// read together: buildings alone are not enough when a doorway or connector
@@ -83,10 +116,26 @@ const AGENT_SURVEY_MAX_NODES: usize = 400;
 /// that preserves the cheap common case while avoiding false failures on the
 /// settlement's outer envelope.
 const EXTENDED_LOCAL_SURVEY_MAX_NODES: usize = 2_400;
+/// A retained long-distance A* must make enough progress that one difficult
+/// commute cannot remain at zero expansion merely because preparation spent
+/// this tick's deadline. Eight cells keep that overrun bounded; the fair
+/// cursor rotates retained jobs, while transaction-specific failure recovery
+/// remains the owning routine's responsibility.
+const MIN_INCREMENTAL_ROUTE_CELLS_PER_SLICE: usize = 8;
 const EXTENDED_LOCAL_SURVEY_MIN_DISTANCE: f32 = 48.0;
-const EXTENDED_LOCAL_SURVEY_MAX_DISTANCE: f32 = 160.0;
+// Mature settlements can legitimately place an outer workplace more than
+// 200 m from a resident's cabin. Keep a finite direct-search envelope for
+// broken or cross-world destinations, but do not misclassify ordinary town
+// commutes as the cheap 400-node case.
+const EXTENDED_LOCAL_SURVEY_MAX_DISTANCE: f32 = 512.0;
 const ROAD_BUILD_SECONDS: f32 = 0.55;
 const ROAD_REACH: f32 = 0.45;
+/// Surveyed road points are spaced about two metres apart. Generic actor
+/// routing can reject an exact point on the inflated edge of a source
+/// building even after bringing the worker beside it. At that distance the
+/// road segment is physically within the worker's construction area and must
+/// not trigger an identical destroy/resurvey loop.
+const ROAD_FAILED_WAYPOINT_WORK_REACH: f32 = 3.0;
 /// Civic inspections are frequent enough to recover a stranded connector in
 /// the same play session, but remain settlement-level work rather than a scan
 /// performed for every villager on every frame.
@@ -107,11 +156,27 @@ const ROAD_SURVEY_RETRY_BASE_SECONDS: f64 = 0.5;
 const ROAD_SURVEY_RETRY_MAX_SECONDS: f64 = 30.0;
 const ROAD_ROUTE_JOIN_DISTANCE: f32 = 32.0;
 const ROAD_ROUTE_CANDIDATES: usize = 4;
+/// Search beyond the four geometrically closest road nodes before ranking
+/// usable connector pairs. A resident can stand among several short cabin
+/// spurs which are still under construction; those disconnected nodes must
+/// not hide the completed street only a few metres farther away.
+const ROAD_ROUTE_CANDIDATE_POOL: usize = 16;
 /// Connector surveys are full terrain A* searches. Rank several graph options
 /// cheaply, but only survey the best couple so one unreachable villager cannot
 /// monopolise a server tick trying every road combination.
-const AGENT_ROAD_CANDIDATES_TO_SURVEY: usize = 2;
+const AGENT_ROAD_CANDIDATES_TO_SURVEY: usize = 8;
 const ROAD_MAX_WEIGHTED_DETOUR: f32 = 1.35;
+/// A failed embodied route is deterministic until the road/building/prop
+/// geometry or destination changes. Keep retries on real time so a work
+/// routine reasserting the same doorway cannot turn one bad plot into a
+/// pathfinding request every server tick.
+const AGENT_ROUTE_RETRY_BASE_SECONDS: f64 = 1.0;
+const AGENT_ROUTE_RETRY_MAX_SECONDS: f64 = 30.0;
+/// Interior threshold points sit 1.35 m behind an authored door and the
+/// movement reach tolerance can leave a few additional centimetres. Keep the
+/// recovery band large enough to recognize that legitimate interior state,
+/// but far too small to grant an arbitrary actor passage across a building.
+const NAVIGATION_DOOR_RECOVERY_DISTANCE: f32 = 2.0;
 /// Grid samples must not ride the exact edge of a continuous field/ribbon
 /// intersection. This tiny cushion absorbs rounding without visibly widening
 /// the requested crop clearance.
@@ -137,13 +202,12 @@ pub(crate) fn doorway_road_apron_is_dry(
     )
 }
 
-/// A permit must not put a permanent doorway apron through a tree or rock.
+/// A permit must not put a permanent doorway apron through a rock.
 ///
 /// Buildings clear props inside their own authored footprint, but the road
-/// apron begins outside that footprint. Checking the streamed collision truth
-/// here prevents a valid-looking workplace from trapping its staff between the
-/// door and scenery that neither the road builder nor ordinary navigation is
-/// allowed to erase.
+/// apron begins outside that footprint. Trees are legal only because the road
+/// crew now performs a visible chopping job before laying that section; rocks
+/// remain an immutable obstruction.
 pub(crate) fn doorway_road_apron_is_clear_of_props(
     kind: SettlementBuildingKind,
     position: Vec3,
@@ -153,7 +217,57 @@ pub(crate) fn doorway_road_apron_is_clear_of_props(
 ) -> bool {
     let (door, approach) = doorway_approach(kind, position, rotation);
     let road_half_width = RoadClass::Lane.initial_reserved_width() * 0.5;
-    !static_collider_overlaps_segment(colliders, derived, door, approach, road_half_width + 0.2)
+    !static_collider_overlaps_segment_filtered(
+        colliders,
+        derived,
+        door,
+        approach,
+        road_half_width + 0.2,
+        false,
+    )
+}
+
+/// Building ground reserved at permit time is not enough: the authored door
+/// also needs a narrow, dry route to the existing public network. This
+/// server-only claim survives construction and remains on the completed shell
+/// until its real [`VillageRoad`] is physically complete. Later permits treat
+/// it as occupied access space, preventing a simultaneous batch of cabins
+/// from boxing in one another's entrances while the road is only surveyed or
+/// partially built.
+#[derive(Component, Debug, Clone)]
+pub(crate) struct PlannedRoadAccess {
+    pub(crate) settlement_id: shared::components::SettlementId,
+    pub(crate) points: Vec<Vec2>,
+    pub(crate) half_width: f32,
+}
+
+/// Keeps a surveyed-but-unfinished connector tied to the building whose
+/// permit-time access corridor it is replacing. The old reservation remains
+/// authoritative until this road is physically complete; if embodied
+/// construction rejects the survey and despawns the road, later permits still
+/// cannot box in the doorway before the retry.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct RoadConnectorFor {
+    pub(crate) building: Entity,
+}
+
+/// A completed building which the latest civic audit found roadless or on a
+/// detached component while every physical steward was occupied.
+///
+/// This is an explicit deterministic backlog claim, not just a panel counter. It lets
+/// diagnostics distinguish a deliberately queued repair from a building that
+/// silently lost its request. The next free audit takes detached components
+/// before roadless plots, then the oldest stable `BuildingId` in that class.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct RoadRepairBacklog;
+
+impl PlannedRoadAccess {
+    pub(crate) fn intersects_circle(&self, center: Vec2, radius: f32) -> bool {
+        let clearance = radius + self.half_width;
+        self.points.windows(2).any(|segment| {
+            point_segment_distance_squared(center, segment[0], segment[1]) <= clearance * clearance
+        })
+    }
 }
 
 /// Attached to a newly completed building until its original builder surveys
@@ -182,7 +296,7 @@ pub(crate) struct RoadSurveyBackoff {
 }
 
 impl RoadSurveyBackoff {
-    fn after_failure(previous: Option<Self>, now: f64) -> Self {
+    pub(crate) fn after_failure(previous: Option<Self>, now: f64) -> Self {
         let failures = previous.map_or(1, |state| state.failures.saturating_add(1));
         let exponent = u32::from(failures.saturating_sub(1)).min(10);
         let delay = (ROAD_SURVEY_RETRY_BASE_SECONDS * 2_f64.powi(exponent as i32))
@@ -217,7 +331,6 @@ pub struct RoadSteward {
 
 #[derive(Component, Debug, Clone)]
 pub(crate) struct MootAdministrationRuntime {
-    last_paid_day: u32,
     last_audit_at: Option<f64>,
     road_progress: HashMap<Entity, RoadProgressObservation>,
 }
@@ -231,8 +344,40 @@ struct RoadProgressObservation {
 
 #[derive(Debug, Clone, Copy)]
 enum RoadBuildPhase {
-    GoingTo { point: usize },
-    Working { point: usize, seconds_left: f32 },
+    GoingTo {
+        point: usize,
+    },
+    GoingToTree {
+        point: usize,
+        tree: Vec2,
+        stand: Vec2,
+        radius: f32,
+        approach: u8,
+    },
+    ChoppingTree {
+        point: usize,
+        tree: Vec2,
+        radius: f32,
+        seconds_left: f32,
+    },
+    Working {
+        point: usize,
+        seconds_left: f32,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RoadTreeObstruction {
+    point: Vec2,
+    radius: f32,
+}
+
+/// Trees intersecting an accepted road ribbon, ordered from its source door
+/// toward the public network. This stays server-only: clients remove the
+/// matching visual prop as each built road prefix reaches it.
+#[derive(Component, Debug, Default)]
+pub(crate) struct RoadTreeClearancePlan {
+    trees: Vec<RoadTreeObstruction>,
 }
 
 impl RoadBuilderRoutine {
@@ -243,6 +388,18 @@ impl RoadBuilderRoutine {
             .min(road.points.len())
             .saturating_sub(1);
         self.phase = RoadBuildPhase::GoingTo { point: last_built };
+    }
+
+    pub(crate) const fn objective(&self) -> shared::components::CharacterObjective {
+        use shared::components::CharacterObjective;
+        match self.phase {
+            RoadBuildPhase::GoingToTree { .. } | RoadBuildPhase::ChoppingTree { .. } => {
+                CharacterObjective::ClearingRoadTree
+            }
+            RoadBuildPhase::GoingTo { .. } | RoadBuildPhase::Working { .. } => {
+                CharacterObjective::BuildingRoad
+            }
+        }
     }
 }
 
@@ -261,7 +418,6 @@ pub struct TravelRoute {
 pub struct NavigationRoutePending {
     pub goal: Vec3,
     attempts: u8,
-    obstacle_version: u64,
 }
 
 /// The bounded planner could not certify a route to this destination.
@@ -274,13 +430,80 @@ pub struct NavigationRouteFailed {
     pub goal: Vec3,
 }
 
-impl NavigationRoutePending {
-    pub fn new(goal: Vec3) -> Self {
+/// One-route permission to leave a building footprint through its certified
+/// doorway apron.
+///
+/// This is recovery state, not ordinary noclip. It is installed only when a
+/// route begins just inside an authored door (for example when a completed
+/// building's obstacle expands around its builder) and movement removes it as
+/// soon as the actor reaches clear ground.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct NavigationObstacleEscape;
+
+/// Persistent circuit breaker for an embodied route failure.
+///
+/// High-level routines may consume [`NavigationRouteFailed`] while preserving
+/// their work transaction or carried goods. This separate component retains
+/// the expensive negative result, preventing that routine from immediately
+/// launching the identical A* again. It is removed after a successful route
+/// or a genuinely different destination.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct NavigationRouteBackoff {
+    goal: Vec3,
+    failures: u8,
+    retry_after: f64,
+    /// Building and prop collision truth. Road growth is tracked separately:
+    /// a new walkable ribbon can create an opportunity, but cannot make a
+    /// previously certified route unsafe.
+    geometry_version: u64,
+    /// Revision of road points close enough to affect either route endpoint.
+    road_opportunity_version: u64,
+}
+
+impl NavigationRouteBackoff {
+    fn after_failure(
+        previous: Option<Self>,
+        goal: Vec3,
+        geometry_version: u64,
+        road_opportunity_version: u64,
+        now: f64,
+        entity: Entity,
+    ) -> Self {
+        let failures = previous
+            .filter(|state| {
+                state.goal.distance_squared(goal) <= 0.01
+                    && state.geometry_version == geometry_version
+                    && state.road_opportunity_version == road_opportunity_version
+            })
+            .map_or(1, |state| state.failures.saturating_add(1));
+        let exponent = u32::from(failures.saturating_sub(1)).min(10);
+        let delay = (AGENT_ROUTE_RETRY_BASE_SECONDS * 2_f64.powi(exponent as i32))
+            .min(AGENT_ROUTE_RETRY_MAX_SECONDS);
+        // A burst of immigrants often shares one destination. Stable jitter
+        // prevents all failed routes from waking on the same future tick.
+        let hash = entity.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let jitter = 0.75 + (hash & 1023) as f64 / 1023.0 * 0.5;
         Self {
             goal,
-            attempts: 0,
-            obstacle_version: u64::MAX,
+            failures,
+            retry_after: now + delay * jitter,
+            geometry_version,
+            road_opportunity_version,
         }
+    }
+
+    fn matches(self, goal: Vec3) -> bool {
+        self.goal.distance_squared(goal) <= 0.01
+    }
+
+    fn should_warn(self) -> bool {
+        self.failures == 1 || self.failures.is_power_of_two()
+    }
+}
+
+impl NavigationRoutePending {
+    pub fn new(goal: Vec3) -> Self {
+        Self { goal, attempts: 0 }
     }
 
     pub fn exhausted(&self) -> bool {
@@ -322,15 +545,12 @@ impl RoutePropChunkCache {
         self.chunks
             .entry(chunk)
             .or_insert_with(|| {
-                shared::props::generate_chunk_prop_spawns(&terrain.generator, chunk)
+                shared::props::generate_chunk_blocking_props(&terrain.generator, chunk)
                     .into_iter()
-                    .filter_map(|spawn| {
-                        let kind = spawn.kind.filter(|kind| kind.blocks_village_road())?;
-                        Some(CachedRouteProp {
-                            point: Vec2::new(spawn.position.x, spawn.position.z),
-                            kind,
-                            scale: spawn.scale,
-                        })
+                    .map(|spawn| CachedRouteProp {
+                        point: spawn.position,
+                        kind: spawn.kind,
+                        scale: spawn.scale,
                     })
                     .collect()
             })
@@ -513,10 +733,11 @@ impl RoadSurvey<'_> {
             let endpoint_clear = point.distance_squared(self.start)
                 <= (NAVIGATION_SAMPLE_STEP * 0.25).powi(2)
                 || point.distance_squared(self.goal) < 2.0f32.powi(2);
-            self.live_buildings
-                .is_some_and(|grid| grid.point_blocked(point))
-                || self.buildings.iter().any(|blocker| blocker.contains(point))
-                || (!endpoint_clear && self.props.blocks(point))
+            let building_blocked = self.live_buildings.map_or_else(
+                || self.buildings.iter().any(|blocker| blocker.contains(point)),
+                |grid| grid.point_blocked(point),
+            );
+            building_blocked || (!endpoint_clear && self.props.blocks(point))
         };
         scratch.blocked.insert(key, blocked);
         blocked
@@ -543,14 +764,15 @@ impl RoadSurvey<'_> {
         // geometry. Do the same here before the terrain/prop samples below;
         // otherwise A* can repeatedly choose a leg whose sample points happen
         // to straddle a thin corner that movement correctly rejects.
-        if self
-            .live_buildings
-            .is_some_and(|grid| grid.segment_blocked(start, end))
-            || self
-                .buildings
-                .iter()
-                .any(|blocker| blocker.blocks_segment(start, end))
-        {
+        let building_blocked = self.live_buildings.map_or_else(
+            || {
+                self.buildings
+                    .iter()
+                    .any(|blocker| blocker.blocks_segment(start, end))
+            },
+            |grid| grid.segment_blocked(start, end),
+        );
+        if building_blocked {
             scratch.lines.insert(key, false);
             return false;
         }
@@ -591,6 +813,18 @@ struct SurveyOpen {
     cell: SurveyCell,
 }
 
+#[derive(Default)]
+struct SurveySearchState {
+    initialized: bool,
+    expanded: usize,
+}
+
+enum SurveySearchResult {
+    Pending,
+    Found(Vec<Vec2>),
+    Failed,
+}
+
 impl Eq for SurveyOpen {}
 impl PartialEq for SurveyOpen {
     fn eq(&self, other: &Self) -> bool {
@@ -627,25 +861,47 @@ fn survey_heuristic(a: SurveyCell, b: SurveyCell) -> f32 {
     Vec2::new((a.x - b.x) as f32, (a.z - b.z) as f32).length()
 }
 
-fn survey_a_star(survey: &RoadSurvey<'_>, scratch: &mut SurveyScratch) -> Vec<Vec2> {
+fn resume_survey_a_star(
+    survey: &RoadSurvey<'_>,
+    scratch: &mut SurveyScratch,
+    state: &mut SurveySearchState,
+    deadline: Option<Instant>,
+) -> SurveySearchResult {
     let start = survey_cell(survey.start);
     let goal = survey_cell(survey.goal);
-    scratch.score.insert(start, 0.0);
-    scratch.open.push(SurveyOpen {
-        cost: (survey_heuristic(start, goal) * 1000.0) as i32,
-        cell: start,
-    });
+    if !state.initialized {
+        scratch.begin_search();
+        scratch.score.insert(start, 0.0);
+        scratch.open.push(SurveyOpen {
+            cost: (survey_heuristic(start, goal) * 1000.0) as i32,
+            cell: start,
+        });
+        state.initialized = true;
+        state.expanded = 0;
+    }
 
-    let mut expanded = 0usize;
-    while let Some(SurveyOpen { cell: current, .. }) = scratch.open.pop() {
+    let mut expanded_this_slice = 0usize;
+    loop {
+        // A long tactical search yields after a small guaranteed slice. One
+        // cell per tick made a worst-case 2,400-cell proof hold the priority
+        // lane for forty seconds, leaving an entire town waiting at its doors.
+        if expanded_this_slice >= MIN_INCREMENTAL_ROUTE_CELLS_PER_SLICE
+            && deadline.is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return SurveySearchResult::Pending;
+        }
+        let Some(SurveyOpen { cell: current, .. }) = scratch.open.pop() else {
+            return SurveySearchResult::Failed;
+        };
         if !scratch.closed.insert(current) {
             continue;
         }
-        expanded += 1;
-        scratch.metrics.expanded_nodes = scratch.metrics.expanded_nodes.saturating_add(1);
-        if expanded > survey.max_nodes {
-            break;
+        if state.expanded >= survey.max_nodes {
+            return SurveySearchResult::Failed;
         }
+        state.expanded += 1;
+        expanded_this_slice += 1;
+        scratch.metrics.expanded_nodes = scratch.metrics.expanded_nodes.saturating_add(1);
         let current_point = if current == start {
             survey.start
         } else {
@@ -673,7 +929,7 @@ fn survey_a_star(survey: &RoadSurvey<'_>, scratch: &mut SurveyScratch) -> Vec<Ve
             {
                 points.push(survey.goal);
             }
-            return points;
+            return SurveySearchResult::Found(points);
         }
 
         let current_height = survey.height(current_point, scratch);
@@ -743,7 +999,15 @@ fn survey_a_star(survey: &RoadSurvey<'_>, scratch: &mut SurveyScratch) -> Vec<Ve
             }
         }
     }
-    Vec::new()
+}
+
+fn survey_a_star(survey: &RoadSurvey<'_>, scratch: &mut SurveyScratch) -> Vec<Vec2> {
+    let mut state = SurveySearchState::default();
+    match resume_survey_a_star(survey, scratch, &mut state, None) {
+        SurveySearchResult::Found(points) => points,
+        SurveySearchResult::Failed => Vec::new(),
+        SurveySearchResult::Pending => unreachable!("an unbounded survey cannot yield"),
+    }
 }
 
 fn simplify_visible(
@@ -898,7 +1162,7 @@ fn survey_village_road(
     resample_path(&rounded, 2.0)
 }
 
-fn doorway_approach(
+pub(crate) fn doorway_approach(
     kind: SettlementBuildingKind,
     building_position: Vec3,
     rotation: f32,
@@ -927,6 +1191,17 @@ fn static_collider_overlaps_segment(
     end: Vec2,
     extra_clearance: f32,
 ) -> bool {
+    static_collider_overlaps_segment_filtered(colliders, derived, start, end, extra_clearance, true)
+}
+
+fn static_collider_overlaps_segment_filtered(
+    colliders: &StaticColliders,
+    derived: &DerivedColliderLibrary,
+    start: Vec2,
+    end: Vec2,
+    extra_clearance: f32,
+    clearable_trees_are_blockers: bool,
+) -> bool {
     const COLLIDER_CELL: f32 = 16.0;
     // Baked prop radii are small relative to a collision cell. Two extra cells
     // cover the largest authored rock/tree plus a future road reservation.
@@ -954,6 +1229,9 @@ fn static_collider_overlaps_segment(
                 let Some(instance) = colliders.instances.get(id) else {
                     continue;
                 };
+                if !clearable_trees_are_blockers && instance.kind.is_road_clearable() {
+                    continue;
+                }
                 let Some(shape) = derived.by_kind.get(&instance.kind) else {
                     continue;
                 };
@@ -976,9 +1254,119 @@ pub(crate) fn navigation_point_is_clear_of_props(
     !static_collider_overlaps_segment(colliders, derived, point, point, VILLAGER_PROP_RADIUS)
 }
 
+fn embodied_segment_is_dry(terrain: &WorldTerrain, start: Vec2, end: Vec2) -> bool {
+    let steps = (start.distance(end) / NAVIGATION_SAMPLE_STEP)
+        .ceil()
+        .max(1.0) as usize;
+    let mut previous_height = None;
+    (0..=steps).all(|step| {
+        let point = start.lerp(end, step as f32 / steps as f32);
+        if !road_sample_is_dry(terrain, point) {
+            return false;
+        }
+        let height = terrain.get_height(point.x, point.y);
+        let clear = previous_height.is_none_or(|previous: f32| (height - previous).abs() <= 0.47);
+        previous_height = Some(height);
+        clear
+    })
+}
+
+/// Select a field standing point with a certified corridor from the authored
+/// Farmstead door around the building shell.
+///
+/// Checking only the final point allowed a clear patch behind a Farmstead to
+/// be chosen even when water, a prop, or dense neighboring geometry sealed the
+/// route to it. The returned corridor is deliberately simple and cheap to
+/// prove; the ordinary tactical planner may later choose an equivalent route.
+pub(crate) fn reachable_farm_work_stand(
+    terrain: &WorldTerrain,
+    farm: Vec3,
+    rotation: f32,
+    field: Vec3,
+    worker_salt: u32,
+    obstacles: Option<&SpatialObstacleGrid>,
+    colliders: Option<&StaticColliders>,
+    derived: Option<&DerivedColliderLibrary>,
+) -> Option<Vec3> {
+    let kind = SettlementBuildingKind::Farmstead;
+    let side = if worker_salt & 1 == 0 { -1.5 } else { 1.5 };
+    let candidates = [
+        Vec2::new(side, 0.0),
+        Vec2::new(-side, 0.0),
+        Vec2::new(0.0, 2.0),
+        Vec2::new(0.0, -2.0),
+        Vec2::new(side, 2.5),
+        Vec2::new(-side, 2.5),
+        Vec2::new(side, -2.5),
+        Vec2::new(-side, -2.5),
+    ];
+    let door = kind.entrance_position(farm, rotation);
+    let outward = Vec2::new(door.x - farm.x, door.z - farm.z).normalize_or_zero();
+    let start = Vec2::new(door.x, door.z) + outward * 0.75;
+    let definition = kind.art().definition();
+    let footprint_half = definition.footprint * 0.5 + Vec2::splat(VILLAGER_NAV_RADIUS);
+    let own_building = BuildingBlocker {
+        center: definition.world_footprint_center(farm, rotation),
+        half: footprint_half,
+        rotation,
+    };
+    let front_y = kind.door_offset().y - 0.75;
+
+    for local_offset in candidates {
+        let offset = shared::rotation::local_to_world_xz(local_offset, rotation);
+        let point = Vec2::new(field.x + offset.x, field.z + offset.y);
+        if obstacles.is_some_and(|grid| grid.point_blocked(point))
+            || colliders.zip(derived).is_some_and(|(colliders, derived)| {
+                !navigation_point_is_clear_of_props(point, colliders, derived)
+            })
+        {
+            continue;
+        }
+        let local_goal =
+            shared::rotation::world_to_local_xz(point - Vec2::new(farm.x, farm.z), rotation);
+        let preferred_sign = if local_goal.x.abs() > 0.25 {
+            local_goal.x.signum()
+        } else if worker_salt & 1 == 0 {
+            -1.0
+        } else {
+            1.0
+        };
+        for sign in [preferred_sign, -preferred_sign] {
+            let side_x = sign * (footprint_half.x + 0.55);
+            let local_route = [Vec2::new(side_x, front_y), Vec2::new(side_x, local_goal.y)];
+            let mut route = vec![start];
+            route.extend(local_route.into_iter().map(|local| {
+                let world = shared::rotation::local_to_world_xz(local, rotation);
+                Vec2::new(farm.x + world.x, farm.z + world.y)
+            }));
+            route.push(point);
+            let own_shell_clear = route
+                .windows(2)
+                .all(|segment| !own_building.blocks_segment(segment[0], segment[1]));
+            let terrain_clear = route
+                .windows(2)
+                .all(|segment| embodied_segment_is_dry(terrain, segment[0], segment[1]));
+            if own_shell_clear
+                && terrain_clear
+                && polyline_clear_live_world_with_start_escape(
+                    &route, obstacles, colliders, derived, false,
+                )
+            {
+                return Some(Vec3::new(
+                    point.x,
+                    terrain.get_height(point.x, point.y),
+                    point.y,
+                ));
+            }
+        }
+    }
+    None
+}
+
 /// Whether an authored crop/yard rectangle has enough horizontal clearance
 /// from every collidable prop. This uses circle-vs-rotated-box distance and the
 /// same baked horizontal radii as villager movement.
+#[cfg(test)]
 pub(crate) fn rotated_rect_is_clear_of_props(
     center: Vec2,
     half: Vec2,
@@ -986,6 +1374,50 @@ pub(crate) fn rotated_rect_is_clear_of_props(
     extra_clearance: f32,
     colliders: &StaticColliders,
     derived: &DerivedColliderLibrary,
+) -> bool {
+    rotated_rect_is_clear_of_props_matching(
+        center,
+        half,
+        rotation,
+        extra_clearance,
+        colliders,
+        derived,
+        |_| true,
+    )
+}
+
+/// Whether a crop rectangle is free of permanent authored obstacles.
+///
+/// Trees and dead trunks are deliberately ignored: an approved Farmstead now
+/// clears those when its ground claim becomes active. Rocks remain blockers,
+/// so agricultural earthworks cannot silently erase a boulder.
+pub(crate) fn rotated_rect_is_clear_of_permanent_props(
+    center: Vec2,
+    half: Vec2,
+    rotation: f32,
+    extra_clearance: f32,
+    colliders: &StaticColliders,
+    derived: &DerivedColliderLibrary,
+) -> bool {
+    rotated_rect_is_clear_of_props_matching(
+        center,
+        half,
+        rotation,
+        extra_clearance,
+        colliders,
+        derived,
+        |kind| !kind.is_road_clearable(),
+    )
+}
+
+fn rotated_rect_is_clear_of_props_matching(
+    center: Vec2,
+    half: Vec2,
+    rotation: f32,
+    extra_clearance: f32,
+    colliders: &StaticColliders,
+    derived: &DerivedColliderLibrary,
+    mut blocks: impl FnMut(shared::props::PropKind) -> bool,
 ) -> bool {
     const COLLIDER_CELL: f32 = 16.0;
     const MAX_AUTHORED_PROP_RADIUS: f32 = 8.0;
@@ -1018,6 +1450,9 @@ pub(crate) fn rotated_rect_is_clear_of_props(
                 let Some(instance) = colliders.instances.get(id) else {
                     continue;
                 };
+                if !blocks(instance.kind) {
+                    continue;
+                }
                 let Some(shape) = derived.by_kind.get(&instance.kind) else {
                     continue;
                 };
@@ -1042,6 +1477,29 @@ fn add_static_collider_blockers(
     goal: Vec2,
     padding: f32,
     extra_clearance: f32,
+) {
+    add_static_collider_blockers_filtered(
+        blockers,
+        colliders,
+        derived,
+        start,
+        goal,
+        padding,
+        extra_clearance,
+        true,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_static_collider_blockers_filtered(
+    blockers: &mut PropBlockers,
+    colliders: Option<&StaticColliders>,
+    derived: Option<&DerivedColliderLibrary>,
+    start: Vec2,
+    goal: Vec2,
+    padding: f32,
+    extra_clearance: f32,
+    clearable_trees_are_blockers: bool,
 ) {
     let (Some(colliders), Some(derived)) = (colliders, derived) else {
         return;
@@ -1070,6 +1528,9 @@ fn add_static_collider_blockers(
                 let Some(instance) = colliders.instances.get(id) else {
                     continue;
                 };
+                if !clearable_trees_are_blockers && instance.kind.is_road_clearable() {
+                    continue;
+                }
                 let Some(shape) = derived.by_kind.get(&instance.kind) else {
                     continue;
                 };
@@ -1091,7 +1552,9 @@ fn blockers_for_route(
     colliders: Option<&StaticColliders>,
     derived: Option<&DerivedColliderLibrary>,
     cache: &mut RoutePropChunkCache,
-) -> PropBlockers {
+    prop_generation_used: &mut bool,
+    clearable_trees_are_blockers: bool,
+) -> Option<PropBlockers> {
     let min = start.min(goal) - Vec2::splat(SURVEY_PADDING + PropBlockers::CLEARANCE);
     let max = start.max(goal) + Vec2::splat(SURVEY_PADDING + PropBlockers::CLEARANCE);
     let min_chunk = ChunkCoord::new(
@@ -1105,7 +1568,22 @@ fn blockers_for_route(
     let mut blockers = PropBlockers::default();
     for x in min_chunk.x..=max_chunk.x {
         for z in min_chunk.z..=max_chunk.z {
-            for prop in cache.chunk(terrain, ChunkCoord::new(x, z)) {
+            let chunk = ChunkCoord::new(x, z);
+            if !cache.chunks.contains_key(&chunk) {
+                if *prop_generation_used {
+                    return None;
+                }
+                // Authored prop generation includes river clearance and can
+                // be a meaningful unit of work. Populate only one unseen
+                // survey chunk per server tick; the retained RoadRequest
+                // resumes on the next tick with exactly the same candidates.
+                let _ = cache.chunk(terrain, chunk);
+                *prop_generation_used = true;
+            }
+            for prop in cache.chunk(terrain, chunk) {
+                if !clearable_trees_are_blockers && prop.kind.is_road_clearable() {
+                    continue;
+                }
                 if buildings
                     .iter()
                     .any(|building| building.contains(prop.point))
@@ -1119,7 +1597,7 @@ fn blockers_for_route(
             }
         }
     }
-    add_static_collider_blockers(
+    add_static_collider_blockers_filtered(
         &mut blockers,
         colliders,
         derived,
@@ -1127,15 +1605,94 @@ fn blockers_for_route(
         goal,
         SURVEY_PADDING + PropBlockers::CLEARANCE,
         road_half_width + 0.3,
+        clearable_trees_are_blockers,
     );
-    blockers
+    Some(blockers)
+}
+
+fn clearable_trees_intersecting_road(
+    terrain: &WorldTerrain,
+    points: &[Vec2],
+    road_width: f32,
+    derived: Option<&DerivedColliderLibrary>,
+    cache: &mut RoutePropChunkCache,
+) -> Vec<RoadTreeObstruction> {
+    let Some(first) = points.first().copied() else {
+        return Vec::new();
+    };
+    let (mut min, mut max) = (first, first);
+    for point in points.iter().copied().skip(1) {
+        min = min.min(point);
+        max = max.max(point);
+    }
+    let padding = road_width * 0.5 + 3.0;
+    min -= Vec2::splat(padding);
+    max += Vec2::splat(padding);
+    let min_chunk = ChunkCoord::new(
+        (min.x / CHUNK_SIZE).floor() as i32,
+        (min.y / CHUNK_SIZE).floor() as i32,
+    );
+    let max_chunk = ChunkCoord::new(
+        (max.x / CHUNK_SIZE).floor() as i32,
+        (max.y / CHUNK_SIZE).floor() as i32,
+    );
+
+    let mut trees = Vec::new();
+    for x in min_chunk.x..=max_chunk.x {
+        for z in min_chunk.z..=max_chunk.z {
+            for prop in cache.chunk(terrain, ChunkCoord::new(x, z)) {
+                if !prop.kind.is_road_clearable() {
+                    continue;
+                }
+                let radius = derived
+                    .and_then(|library| library.by_kind.get(&prop.kind))
+                    .map_or(1.05, |shape| shape.horizontal_radius * prop.scale);
+                let clearance = radius + road_width * 0.5 + 0.15;
+                let mut progress = 0.0;
+                let mut nearest = None;
+                for segment in points.windows(2) {
+                    let length = segment[0].distance(segment[1]);
+                    let delta = segment[1] - segment[0];
+                    let t = if length <= f32::EPSILON {
+                        0.0
+                    } else {
+                        ((prop.point - segment[0]).dot(delta) / delta.length_squared())
+                            .clamp(0.0, 1.0)
+                    };
+                    let distance_sq = prop.point.distance_squared(segment[0] + delta * t);
+                    if nearest.is_none_or(|(_, best)| distance_sq < best) {
+                        nearest = Some((progress + length * t, distance_sq));
+                    }
+                    progress += length;
+                }
+                if let Some((progress, distance_sq)) = nearest {
+                    if distance_sq <= clearance * clearance {
+                        trees.push((
+                            progress,
+                            RoadTreeObstruction {
+                                point: prop.point,
+                                radius,
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    trees.sort_by(|a, b| {
+        a.0.total_cmp(&b.0)
+            .then_with(|| a.1.point.x.total_cmp(&b.1.point.x))
+            .then_with(|| a.1.point.y.total_cmp(&b.1.point.y))
+    });
+    trees.dedup_by(|a, b| a.1.point.distance_squared(b.1.point) <= 0.01);
+    trees.into_iter().map(|(_, tree)| tree).collect()
 }
 
 fn blockers_for_agent_route(
     terrain: &WorldTerrain,
     start: Vec2,
     goal: Vec2,
-    buildings: &[BuildingBlocker],
+    buildings: &SpatialObstacleGrid,
     derived: Option<&DerivedColliderLibrary>,
     colliders: Option<&StaticColliders>,
     connector_reach: f32,
@@ -1158,10 +1715,7 @@ fn blockers_for_agent_route(
             for prop in cache.chunk(terrain, ChunkCoord::new(x, z)) {
                 // These deterministic props are cleared from completed plots.
                 // Do not resurrect an invisible trunk inside a building.
-                if buildings
-                    .iter()
-                    .any(|building| building.contains(prop.point))
-                {
+                if buildings.point_blocked(prop.point) {
                     continue;
                 }
                 let authored_radius = derived
@@ -1257,6 +1811,144 @@ pub(crate) fn embodied_land_route_exists(terrain: &WorldTerrain, start: Vec3, go
         >= 2
 }
 
+/// Permit-time proof that two points share a road-width dry landmass.
+///
+/// This deliberately answers only connectivity; it does not build an actor
+/// route. Running the 1.5 m embodied planner with 0.2 m edge samples during a
+/// permit decision produced multi-second server stalls beside rivers. A 4 m
+/// A* with one-metre, full-road-width edge samples remains conservative about
+/// water and slope while reducing the search graph by roughly an order of
+/// magnitude. Construction still performs the precise obstacle-aware survey
+/// before a road or actor actually traverses the result.
+pub(crate) fn permit_land_route_exists(terrain: &WorldTerrain, start: Vec3, goal: Vec3) -> bool {
+    const CELL: f32 = 4.0;
+    const EDGE_SAMPLE: f32 = 1.0;
+    const PADDING: f32 = 28.0;
+    const MAX_NODES: usize = 2_000;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    struct Cell {
+        x: i32,
+        z: i32,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Open {
+        estimate: i32,
+        cell: Cell,
+    }
+
+    impl Ord for Open {
+        fn cmp(&self, other: &Self) -> Ordering {
+            other
+                .estimate
+                .cmp(&self.estimate)
+                .then_with(|| self.cell.x.cmp(&other.cell.x))
+                .then_with(|| self.cell.z.cmp(&other.cell.z))
+        }
+    }
+
+    impl PartialOrd for Open {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    let start = Vec2::new(start.x, start.z);
+    let goal = Vec2::new(goal.x, goal.z);
+    let min = start.min(goal) - Vec2::splat(PADDING);
+    let max = start.max(goal) + Vec2::splat(PADDING);
+    let cell_for = |point: Vec2| Cell {
+        x: (point.x / CELL).round() as i32,
+        z: (point.y / CELL).round() as i32,
+    };
+    let point_for = |cell: Cell| Vec2::new(cell.x as f32 * CELL, cell.z as f32 * CELL);
+    let heuristic = |a: Cell, b: Cell| Vec2::new((a.x - b.x) as f32, (a.z - b.z) as f32).length();
+    let edge_is_dry = |from: Vec2, to: Vec2| {
+        let steps = (from.distance(to) / EDGE_SAMPLE).ceil().max(1.0) as usize;
+        let mut previous_height = None;
+        (0..=steps).all(|step| {
+            let point = from.lerp(to, step as f32 / steps as f32);
+            if !road_sample_is_dry(terrain, point) {
+                return false;
+            }
+            let height = terrain.get_height(point.x, point.y);
+            let acceptable =
+                previous_height.is_none_or(|previous: f32| (height - previous).abs() <= 0.7);
+            previous_height = Some(height);
+            acceptable
+        })
+    };
+
+    if edge_is_dry(start, goal) {
+        return true;
+    }
+
+    let start_cell = cell_for(start);
+    let goal_cell = cell_for(goal);
+    let mut open = BinaryHeap::new();
+    let mut closed = HashSet::new();
+    let mut scores = HashMap::new();
+    scores.insert(start_cell, 0.0f32);
+    open.push(Open {
+        estimate: (heuristic(start_cell, goal_cell) * 1_000.0) as i32,
+        cell: start_cell,
+    });
+
+    while let Some(Open { cell: current, .. }) = open.pop() {
+        if !closed.insert(current) || closed.len() > MAX_NODES {
+            continue;
+        }
+        let current_point = if current == start_cell {
+            start
+        } else {
+            point_for(current)
+        };
+        if current_point.distance(goal) <= CELL * 1.6 && edge_is_dry(current_point, goal) {
+            return true;
+        }
+        let current_score = scores.get(&current).copied().unwrap_or(f32::INFINITY);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                if dx == 0 && dz == 0 {
+                    continue;
+                }
+                let next = Cell {
+                    x: current.x + dx,
+                    z: current.z + dz,
+                };
+                if closed.contains(&next) {
+                    continue;
+                }
+                let next_point = point_for(next);
+                if next_point.x < min.x
+                    || next_point.y < min.y
+                    || next_point.x > max.x
+                    || next_point.y > max.y
+                    || !edge_is_dry(current_point, next_point)
+                {
+                    continue;
+                }
+                let step_cost = if dx != 0 && dz != 0 {
+                    std::f32::consts::SQRT_2
+                } else {
+                    1.0
+                };
+                let tentative = current_score + step_cost;
+                if tentative >= scores.get(&next).copied().unwrap_or(f32::INFINITY) {
+                    continue;
+                }
+                scores.insert(next, tentative);
+                open.push(Open {
+                    estimate: ((tentative + heuristic(next, goal_cell)) * 1_000.0) as i32,
+                    cell: next,
+                });
+            }
+        }
+    }
+    false
+}
+
 #[derive(Clone, Copy)]
 struct NavigationBuilding {
     blocker: BuildingBlocker,
@@ -1273,33 +1965,55 @@ pub(crate) struct NavigationBuildingCache {
     initialized: bool,
     buildings: Vec<NavigationBuilding>,
     blockers: Vec<BuildingBlocker>,
+    spatial: SpatialObstacleGrid,
 }
 
 impl NavigationBuildingCache {
     fn rebuild<'a>(
         &mut self,
         placed: impl Iterator<Item = (&'a PlacedBuilding, &'a BuildingPosition)>,
-    ) {
+    ) -> Vec<BuildingBlocker> {
+        let previous = std::mem::take(&mut self.blockers);
         self.buildings.clear();
-        self.buildings.extend(placed.map(|(building, position)| {
+        self.spatial.clear();
+        for (building, position) in placed {
             let kind = settlement_kind_for_art(building.building_type);
-            let half = building.building_type.definition().footprint * 0.5
+            let definition = building.building_type.definition();
+            let half = definition.footprint * 0.5
                 + Vec2::splat(crate::world::navgrid::VILLAGER_NAV_RADIUS);
-            NavigationBuilding {
+            let navigation = NavigationBuilding {
                 blocker: BuildingBlocker {
-                    center: Vec2::new(position.0.x, position.0.z),
+                    center: definition.world_footprint_center(position.0, building.rotation),
                     half,
                     rotation: building.rotation,
                 },
                 kind,
                 position: position.0,
                 rotation: building.rotation,
-            }
-        }));
-        self.blockers.clear();
-        self.blockers
-            .extend(self.buildings.iter().map(|building| building.blocker));
+            };
+            self.spatial.insert(shared::spatial::ObstacleEntry {
+                center: navigation.blocker.center,
+                half_extents: navigation.blocker.half,
+                rotation: navigation.blocker.rotation,
+                obstacle_type: building.building_type as u32,
+            });
+            self.blockers.push(navigation.blocker);
+            self.buildings.push(navigation);
+        }
         self.initialized = true;
+        let same = |a: &BuildingBlocker, b: &BuildingBlocker| {
+            a.center == b.center && a.half == b.half && a.rotation.to_bits() == b.rotation.to_bits()
+        };
+        previous
+            .iter()
+            .filter(|old| !self.blockers.iter().any(|new| same(old, new)))
+            .chain(
+                self.blockers
+                    .iter()
+                    .filter(|new| !previous.iter().any(|old| same(old, new))),
+            )
+            .copied()
+            .collect()
     }
 }
 
@@ -1309,10 +2023,14 @@ fn settlement_kind_for_art(building_type: BuildingType) -> SettlementBuildingKin
         BuildingType::LumberjackHut => SettlementBuildingKind::LumberjackHut,
         BuildingType::Farmstead => SettlementBuildingKind::Farmstead,
         BuildingType::FishermansHut => SettlementBuildingKind::FishermansHut,
-        BuildingType::MootHall => SettlementBuildingKind::Hall,
+        BuildingType::MootHall | BuildingType::VillageHall | BuildingType::TownHall => {
+            SettlementBuildingKind::Hall
+        }
         BuildingType::PlaceholderMarket => SettlementBuildingKind::Market,
         BuildingType::PlaceholderTavern => SettlementBuildingKind::Tavern,
         BuildingType::PlaceholderChurch => SettlementBuildingKind::Church,
+        BuildingType::Windmill => SettlementBuildingKind::Windmill,
+        BuildingType::Bakery => SettlementBuildingKind::Bakery,
     }
 }
 
@@ -1320,6 +2038,7 @@ fn settlement_kind_for_art(building_type: BuildingType) -> SettlementBuildingKin
 struct NavigationEndpoint {
     actual: Vec2,
     survey: Vec2,
+    escaping_building: bool,
 }
 
 fn navigation_endpoint(point: Vec2, buildings: &[NavigationBuilding]) -> NavigationEndpoint {
@@ -1329,12 +2048,21 @@ fn navigation_endpoint(point: Vec2, buildings: &[NavigationBuilding]) -> Navigat
             let (door, approach) =
                 doorway_approach(building.kind, building.position, building.rotation);
             let distance = point.distance(door);
-            (distance <= 1.1).then_some((distance, approach))
+            let inside = building.blocker.contains(point);
+            // Near-door recovery is the normal case (a shell completed around
+            // its builder). A god-mode or migration burst can also be caught
+            // deeper inside a newly published footprint. Once containment is
+            // proven, route that actor to the authored apron regardless of
+            // door distance; this is bounded recovery state and is removed as
+            // soon as movement reaches clear ground.
+            (inside || distance <= NAVIGATION_DOOR_RECOVERY_DISTANCE)
+                .then_some((distance, approach, inside))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0));
     NavigationEndpoint {
         actual: point,
-        survey: nearest_door.map_or(point, |(_, approach)| approach),
+        survey: nearest_door.map_or(point, |(_, approach, _)| approach),
+        escaping_building: nearest_door.is_some_and(|(_, _, inside)| inside),
     }
 }
 
@@ -1361,6 +2089,7 @@ fn prop_safe_navigation_endpoint(
         NavigationEndpoint {
             actual: endpoint.actual,
             survey: endpoint.actual,
+            escaping_building: false,
         }
     } else {
         endpoint
@@ -1388,16 +2117,36 @@ fn polyline_clear_live_buildings(points: &[Vec2], grid: &SpatialObstacleGrid) ->
     })
 }
 
+#[cfg(test)]
 fn polyline_clear_live_world(
     points: &[Vec2],
     buildings: Option<&SpatialObstacleGrid>,
     colliders: Option<&StaticColliders>,
     derived: Option<&DerivedColliderLibrary>,
 ) -> bool {
+    polyline_clear_live_world_with_start_escape(points, buildings, colliders, derived, false)
+}
+
+fn polyline_clear_live_world_with_start_escape(
+    points: &[Vec2],
+    buildings: Option<&SpatialObstacleGrid>,
+    colliders: Option<&StaticColliders>,
+    derived: Option<&DerivedColliderLibrary>,
+    allow_start_escape: bool,
+) -> bool {
+    let mut escaping = allow_start_escape;
     points.windows(2).all(|segment| {
-        crate::player::hero::navigation_segment_clear(
-            segment[0], segment[1], buildings, colliders, derived,
-        )
+        let clear = crate::player::hero::navigation_segment_clear(
+            segment[0],
+            segment[1],
+            escaping.then_some(None).unwrap_or(buildings),
+            colliders,
+            derived,
+        );
+        if escaping && buildings.is_none_or(|grid| !grid.point_blocked(segment[1])) {
+            escaping = false;
+        }
+        clear
     })
 }
 

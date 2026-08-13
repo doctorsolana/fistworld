@@ -2512,6 +2512,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "bevy",
+ "bytemuck",
  "image",
  "lightyear",
  "noise",

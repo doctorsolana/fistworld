@@ -468,8 +468,23 @@ glass_me.materials.append(glass_mat)
 # rather than inside the collider. Anchor_Notice is where someone stands to read the board.
 LMID = (LOWER[0] + LOWER[1]) / 2
 UMID = (UPPER[0] + UPPER[1]) / 2
+# CIVIC DOOR CONVENTION: the anchor sits DOOR_STANDOFF in front of the frontmost geometry.
+#
+# Live settlements place the hall glb straight at the settlement position -- they do not use the
+# authored-city plot path -- and `SettlementBuildingKind::door_offset(Hall)` is a single hardcoded
+# Vec2(0, -5.20). So if the three halls put Anchor_Door at different local offsets, upgrading a
+# settlement silently moves the door, and with it the road endpoint, the immigration and relief
+# queues, permit collection and every cached route.
+#
+# Fixing it in the ASSET rather than in Rust means the shipped glbs all resolve Anchor_Door to the
+# same world point, the existing constant stays correct for every level, and no level-aware door
+# lookup is needed at all. export_prop_glb.py translates each model so this lands on the canon.
+#
+# Measured from the frontmost vertex rather than from HW, so it stays correct when the steps change.
+DOOR_STANDOFF = 0.60
+_front_x = min(v.co.x for v in me.vertices)
 for nm, loc in (
-    ("Anchor_Door",     (-HW - 1.60, 0.0, 0.0)),
+    ("Anchor_Door",     (_front_x - DOOR_STANDOFF, 0.0, 0.0)),
     ("Anchor_Notice",   (-HW - 1.70, NB_Y, 0.0)),
     ("Light_Interior",  (0.0, 0.0, 1.30)),
     ("Light_Upper",     (0.0, 0.0, 3.50)),

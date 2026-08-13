@@ -8,6 +8,7 @@ pub(super) fn spawn_pause_menu(
     input_settings: Res<InputSettings>,
     open: Res<PauseMenuOpen>,
     existing: Query<Entity, With<PauseMenuRoot>>,
+    monitors: Query<&Monitor, With<PrimaryMonitor>>,
 ) {
     if !open.0 || !existing.is_empty() {
         return;
@@ -57,7 +58,7 @@ pub(super) fn spawn_pause_menu(
                             col.spawn((
                                 Text::new("PAUSED"),
                                 title_text_style(),
-                                TextColor(TEXT_COLOR),
+                                TextColor(PAUSE_TEXT_COLOR),
                                 Node {
                                     margin: UiRect::bottom(Val::Px(40.0)),
                                     ..default()
@@ -86,7 +87,7 @@ pub(super) fn spawn_pause_menu(
                                     font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
-                                TextColor(TEXT_MUTED),
+                                TextColor(PAUSE_MUTED_TEXT_COLOR),
                                 Node {
                                     margin: UiRect::top(Val::Px(30.0)),
                                     ..default()
@@ -95,7 +96,7 @@ pub(super) fn spawn_pause_menu(
                         });
 
                     // Graphics settings panel (hidden by default, appears to the right)
-                    spawn_graphics_panel(container, &settings);
+                    spawn_graphics_panel(container, &settings, monitors.iter().next());
 
                     // Controls settings panel (hidden by default, appears to the right)
                     spawn_controls_panel(container, &input_settings);

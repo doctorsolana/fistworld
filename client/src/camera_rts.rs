@@ -34,6 +34,14 @@ pub struct LocalPeerId(pub u64);
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct CursorTerrainHit(pub Option<Vec3>);
 
+/// Deterministic cursor ground point for renderer/capture fixtures.
+///
+/// Normal gameplay never inserts this resource. Keeping the override explicit
+/// avoids teaching world-placement tools about screenshots or depending on an
+/// OS cursor being present in an offscreen window.
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct CursorTerrainOverride(pub Vec2);
+
 /// The world-space ray under the mouse cursor.
 ///
 /// Published here rather than recomputed by every picker, because turning a
@@ -296,12 +304,22 @@ pub fn release_cursor_for_rts(
 
 pub fn update_cursor_terrain_hit(
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    cameras: Query<(&Camera, &Transform), With<Camera3d>>,
     terrain: Res<WorldTerrain>,
+    forced: Option<Res<CursorTerrainOverride>>,
     mut hit: ResMut<CursorTerrainHit>,
     mut cursor_ray: ResMut<CursorRay>,
-    mut last_inputs: Local<Option<(Vec2, Vec3, Quat)>>,
+    mut last_inputs: Local<Option<(Vec2, Vec2, Vec2, Vec3, Quat)>>,
 ) {
+    if let Some(forced) = forced {
+        hit.0 = Some(Vec3::new(
+            forced.0.x,
+            terrain.get_height(forced.0.x, forced.0.y),
+            forced.0.y,
+        ));
+        cursor_ray.0 = None;
+        return;
+    }
     let Ok(window) = windows.single() else {
         hit.0 = None;
         cursor_ray.0 = None;
@@ -334,8 +352,10 @@ pub fn update_cursor_terrain_hit(
     // not pay for it (this runs every Update frame forever).
     let inputs = (
         cursor_pos,
-        camera_transform.translation(),
-        camera_transform.rotation(),
+        window_size,
+        viewport_size,
+        camera_transform.translation,
+        camera_transform.rotation,
     );
     if *last_inputs == Some(inputs) && !terrain.is_changed() {
         return;
@@ -343,7 +363,12 @@ pub fn update_cursor_terrain_hit(
     *last_inputs = Some(inputs);
 
     let viewport_pos = cursor_pos / window_size * viewport_size;
-    let Ok(ray) = camera.viewport_to_world(camera_transform, viewport_pos) else {
+    // The commander camera is an unparented root. Its local Transform has
+    // already been updated above in this Update schedule, while GlobalTransform
+    // is propagated only in PostUpdate. Building the equivalent value here
+    // prevents the picker from aiming with last frame's camera.
+    let camera_global = GlobalTransform::from(*camera_transform);
+    let Ok(ray) = camera.viewport_to_world(&camera_global, viewport_pos) else {
         hit.0 = None;
         cursor_ray.0 = None;
         return;

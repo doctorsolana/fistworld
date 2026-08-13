@@ -1,6 +1,10 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+/// Conservative trunk-radius padding used when a built road persists a tree
+/// clearance across client prop streaming and server collider reloads.
+pub const ROAD_CLEARED_TREE_PADDING: f32 = 1.35;
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum RoadSurface {
     #[default]

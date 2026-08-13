@@ -9,8 +9,6 @@ pub fn setup_resources(app: &mut App) {
     // Top-down commander camera
     app.init_resource::<camera_rts::CursorTerrainHit>();
     app.init_resource::<camera_rts::CursorRay>();
-    app.init_resource::<crate::hero::control::NpcSpawnArm>();
-    app.init_resource::<crate::hero::control::FoundSpawnArm>();
     app.init_resource::<terrain::map_view::MapViewBlend>();
     app.init_resource::<perf_overlay::PerfOverlayEnabled>();
     app.init_resource::<perf_overlay::PerfDropMonitor>();

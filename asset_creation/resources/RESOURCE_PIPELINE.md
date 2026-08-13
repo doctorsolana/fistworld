@@ -95,6 +95,8 @@ seats the base, differing heights cost nothing.
 | FishBasket | 0.49 × 0.38 × 0.23 | 468 | 33 KB |
 | StoneBundle | 0.46 × 0.21 × 0.34 | 72 | 7 KB |
 | IronBundle | 0.48 × 0.30 × 0.36 | 144 | 12 KB |
+| FlourSack | 0.46 × 0.32 × 0.38 | 180 | 15 KB |
+| BreadBasket | 0.48 × 0.37 × 0.21 | 372 | 29 KB |
 
 ---
 
@@ -154,6 +156,47 @@ correct **vertical** tail fin — from above, a one-pixel line, and the fish rea
 Fish are now built in **plan**: a forked tail flaring horizontally, a pinched waist, a deep body, a
 blunt head. Four changes of width along one axis, all visible from directly above, plus a darker back
 stripe because a uniform taper is a leaf rather than a fish.
+
+### A soft mass is the hardest thing to say in boxes — the flour sack took five goes
+
+Everything else in this set is **discrete hard objects**: blocks, bars, logs, stalks, fish. Boxes
+describe those honestly. A sack is one soft continuous mass, and four attempts failed before one
+worked. They are worth listing because each is a different wrong instinct:
+
+1. **Six stacked horizontal bands** → a wedding cake. Near-equal widths make a ziggurat, not a bulge.
+2. **A flat sewn top with corner ears** → an open paper grocery bag. Two compounding errors: a *pale*
+   seam across the top reads as a mouth with light inside, and the bands under it read as the box the
+   bag is standing in. The taper was also non-monotonic — the pinch came out wider than the shoulder
+   below it, so the top flared like a rim.
+3. **Straight creases added to (2)** → a zip up the front. A straight prism cuts the chord of a
+   bulging body, so it ran *inside* the belly and only its corners surfaced, as two dark buttons.
+4. **Eight vertical cloth gores** → a bunch of bananas. This one is arithmetic, not taste: the belly
+   ring is 1.019 m round, so eight gores sit 0.127 apart while each prism is 0.120 wide. They never
+   touched and the gaps showed daylight. *Check the perimeter before choosing a count.*
+5. **Two lofted segments, each drawn again at 45° and 0.75 scale** → a sack.
+
+The rule that came out of it: **build the body solid and keep detail ON it, not make the body OUT of
+detail.** The reverse — stalks, logs, fish — works only where the object really is a collection.
+
+#### The 45° corner-softening trick, and its one number
+
+Drawing a form twice with the copy turned 45° knocks the four hard arrises off. The scale factor is
+the whole trick, because both copies are *drawn* and the silhouette is their **union**:
+
+* at **0.75**, the copy's corners land 6% proud of the original's edges → a soft octagonal mass;
+* at **0.92**, they land 30% proud → an eight-pointed **star**;
+* below 0.71 the copy is entirely inside the original and contributes nothing.
+
+And it must be done in **normalised space with the x/y scales applied after the rotation**. Rotating a
+rectangle directly always yields *equal* x and y extents — that is what dragged an early sack out to
+0.513 × 0.513, square in plan and the bulkiest thing in the set.
+
+#### Research the object before modelling it
+
+Two of those failures would not have happened if the reference had been read first. The flour sack is
+the oldest character-design exercise in animation precisely because of its corners: the little floppy
+tufts read as limbs, and *"without them you have a much less expressive shape"*. Knowing that ruled
+out the drawstring pouch immediately — a different object entirely.
 
 ### You cannot describe a container with solid boxes
 
@@ -250,15 +293,62 @@ sits at. Solve these, don't eyeball them.
 
 ---
 
+## 4b. Bread reuses the fish basket, deliberately
+
+`BreadBasket` is built on the **same tray** as `FishBasket` — same walls, same vertical staves, same
+rim-as-four-boxes, same shadowed floor. That is not laziness. A village has one basket maker, so a
+bread tray and a fish tray being visibly the same object is correct, and it took three rebuilds to
+learn how to build an open container in this style. Re-deriving it for bread would only have found
+the same three traps.
+
+What separates them at icon size is everything *on* the tray: warm crust against cold fish-blue, a
+pale cloth the fish tray does not have, and rounded loaves against long tapered bodies. The loaf shape
+is copied verbatim from `build_bakery.py` — the loaves on the bakery counter and the loaves in a
+baker's arms are the same bread, and two recipes for one object is how they drift apart.
+
+Two of the fish basket's rules transferred directly and both were broken first:
+
+* **Two that read, one that peeks.** Three loaves at similar heights and near-parallel merged into a
+  single orange mass. The two front loaves are now turned hard across each other; the third is small,
+  low and at the back where the rim cuts it.
+* **The cloth is small and dull.** At full extent and full brightness it stopped being a cloth and
+  became a white slab through the middle of the icon, brighter than the bread above it.
+
+Crust tones are all **below 1.0**. At the bakery's own brightness, against wicker instead of dark
+timber, the crust went luminous orange.
+
 ## 5. Integration status and open appearance question
 
 The attachment/orientation/base-transform work is integrated. One appearance-model question
 remains as more food trades are added.
 
-**`Good::Food` is generic but its appearance is not.** A fisherman carries fish; a baker would carry
+**`Good::Food` is generic but its appearance is not.** A fisherman carries fish; a baker carries
 bread. Splitting the accounting resource from its look — `Good::Food` +
-`CarriedAppearance::{FishBasket, BreadBasket, MeatBundle}` — is the right shape, and only `FishBasket`
-exists so far.
+`CarriedAppearance::{FishBasket, BreadBasket, MeatBundle}` — is the right shape. `FishBasket`,
+`BreadBasket` and `FlourSack` now exist; `MeatBundle` does not.
+
+### Flour and Bread — integrated
+
+The dedicated carried models and inventory icons are connected to the runtime. Keep these mappings
+when presentation code is reorganized:
+
+**a.** `client/src/hero/mod.rs` — `carried_asset_spec()`:
+
+```rust
+CarriedAppearance::FlourSack   => "game_assets/resources/carried/FlourSack.glb#Scene0"
+CarriedAppearance::BreadBasket => "game_assets/resources/carried/BreadBasket.glb#Scene0"
+```
+
+**b.** The shared UI icon lookup in `client/src/ui/mod.rs`:
+
+```rust
+Good::Flour => "ui/goods/flour.png"
+Good::Bread => "ui/goods/bread.png"
+```
+
+Both icons are shipped at `client/assets/ui/goods/`, 512×512 RGBA, rendered from the same fixed studio
+as the other eight (flour 30.1% canvas coverage, bread 26.5% — comfortably over the 5% empty-render
+assert).
 
 **Loaded villagers now keep the carry body layer at full weight while standing**, so the
 idle clip no longer pulls their arms away from an attached bundle. A purpose-authored

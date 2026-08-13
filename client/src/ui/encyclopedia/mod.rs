@@ -34,7 +34,6 @@ impl Plugin for EncyclopediaPlugin {
         app.init_resource::<places::SelectedPlace>();
         app.init_resource::<places::SelectedPlaceEntry>();
         app.init_resource::<ClickGuard>();
-        app.add_observer(actions::on_scroll);
         app.add_systems(
             Update,
             (
@@ -74,7 +73,6 @@ impl Plugin for EncyclopediaPlugin {
                 actions::handle_banner_buttons,
                 actions::handle_retinue_button,
                 actions::close_on_escape_or_backdrop,
-                actions::send_scroll_events,
                 state_sync::rebuild_people_list,
                 state_sync::sync_tab_visuals,
                 state_sync::sync_filter_visuals,
@@ -86,6 +84,7 @@ impl Plugin for EncyclopediaPlugin {
                 places::handle_place_rows,
                 places::rebuild_place_list,
                 places::sync_place_detail,
+                places::sync_place_business_history_action,
                 places::style_place_rows,
                 state_sync::sync_retinue_button,
                 state_sync::style_person_rows,
@@ -221,6 +220,10 @@ pub struct PersonRecord {
     pub level: u32,
     pub prestige: u32,
     pub online: bool,
+    pub alive: bool,
+    pub health: Option<shared::components::Health>,
+    pub death_day: Option<u32>,
+    pub death_cause: Option<shared::components::DeathCause>,
     /// Whether THIS player knows of them.
     ///
     /// Today's rule is deliberately simple and honest: you know yourself and
@@ -241,6 +244,8 @@ pub struct PersonRecord {
     pub wallet: Option<u64>,
     pub nutrition: Option<shared::components::Nutrition>,
     pub activity: Option<shared::components::CharacterActivity>,
+    pub objective: Option<shared::components::CharacterObjective>,
+    pub navigation: Option<shared::components::CharacterNavigationStatus>,
     pub attributes: Option<shared::components::CharacterAttributes>,
     pub work_status: Option<shared::components::WorkStatus>,
     pub daily_wage: Option<u64>,
@@ -345,6 +350,7 @@ pub struct DetailStat(pub DetailField);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DetailField {
     Attributes,
+    Health,
     Home,
     Work,
     Employment,
@@ -359,8 +365,9 @@ pub enum DetailField {
 }
 
 impl DetailField {
-    pub const ALL: [DetailField; 12] = [
+    pub const ALL: [DetailField; 13] = [
         DetailField::Attributes,
+        DetailField::Health,
         DetailField::Home,
         DetailField::Work,
         DetailField::Employment,
@@ -377,6 +384,7 @@ impl DetailField {
     pub fn label(self) -> &'static str {
         match self {
             DetailField::Attributes => "ATTRIBUTES",
+            DetailField::Health => "HEALTH",
             DetailField::Home => "HOME",
             DetailField::Work => "WORK",
             DetailField::Employment => "EMPLOYMENT",
@@ -404,6 +412,7 @@ impl DetailField {
             | DetailField::Employment
             | DetailField::Hunger => kind == PersonKind::Villager,
             DetailField::Attributes
+            | DetailField::Health
             | DetailField::Wealth
             | DetailField::Inventory
             | DetailField::Activity

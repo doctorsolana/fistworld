@@ -138,6 +138,129 @@ impl bevy::ecs::entity::MapEntities for UnitMoveOrder {
     }
 }
 
+/// A physical trade performed by the sender's live hero at a nearby public
+/// exchange. Selling is consignment: the hero chooses an ask and is paid only
+/// when a later buyer clears the listing.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
+pub enum HeroMarketAction {
+    Buy,
+    PostSellOrder { unit_price: u64 },
+}
+
+/// Client -> server request to trade physical goods at a Hall market.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroMarketOrder {
+    pub market: Entity,
+    pub good: crate::economy::Good,
+    pub action: HeroMarketAction,
+    pub units: u32,
+}
+
+/// A single packet cannot turn one click into unbounded market work.
+pub const MAX_HERO_MARKET_ORDER_UNITS: u32 = 100;
+
+impl bevy::ecs::entity::MapEntities for HeroMarketOrder {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        self.market = mapper.get_mapped(self.market);
+    }
+}
+
+/// Server -> client acknowledgement suitable for the compact trade notice.
+/// The authoritative Wallet, inventory and market still arrive as replicated
+/// components; this message explains rejection without trusting the client.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroMarketResult {
+    pub success: bool,
+    pub message: String,
+}
+
+/// One authoritative player interaction with the Hall's permit ledger.
+///
+/// Quotes and purchases require the embodied hero at `hall`. Once purchased,
+/// a permit may be placed or surrendered from the settlement view without
+/// pretending the stamped right is a physical inventory item.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub enum HeroPermitAction {
+    RequestQuote {
+        hall: Entity,
+        kind: crate::components::SettlementBuildingKind,
+    },
+    Purchase {
+        hall: Entity,
+        kind: crate::components::SettlementBuildingKind,
+        quoted_fee: u64,
+        quoted_startup_capital: u64,
+    },
+    Place {
+        permit: crate::components::PermitId,
+        position: Vec3,
+        rotation: f32,
+    },
+    Surrender {
+        permit: crate::components::PermitId,
+    },
+}
+
+impl bevy::ecs::entity::MapEntities for HeroPermitAction {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        match self {
+            Self::RequestQuote { hall, .. } | Self::Purchase { hall, .. } => {
+                *hall = mapper.get_mapped(*hall);
+            }
+            Self::Place { .. } | Self::Surrender { .. } => {}
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct HeroPermitOrder {
+    pub action: HeroPermitAction,
+}
+
+impl bevy::ecs::entity::MapEntities for HeroPermitOrder {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        self.action.map_entities(mapper);
+    }
+}
+
+/// Exact, person-specific permit price returned by the authoritative server.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroPermitQuote {
+    pub settlement: crate::components::SettlementId,
+    pub settlement_name: String,
+    pub kind: crate::components::SettlementBuildingKind,
+    pub fee: u64,
+    pub startup_capital: u64,
+    pub wallet_balance: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub enum HeroPermitOutcome {
+    Quote(HeroPermitQuote),
+    Purchased {
+        permit: crate::components::PlayerPermit,
+        settlement_name: String,
+    },
+    Placed {
+        permit: crate::components::PermitId,
+    },
+    Surrendered {
+        permit: crate::components::PermitId,
+        refunded: u64,
+    },
+    Rejected {
+        permit: Option<crate::components::PermitId>,
+    },
+}
+
+/// Server explanation for a quote, purchase, placement or surrender attempt.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroPermitResult {
+    pub success: bool,
+    pub outcome: HeroPermitOutcome,
+    pub message: String,
+}
+
 /// Server -> Client: whether this connection may use god mode.
 ///
 /// Sent once after the player's name is accepted. Purely capability discovery for the
@@ -159,7 +282,7 @@ pub struct SubmitPlayerName {
 pub enum NameSubmissionResult {
     /// Name accepted, player can now spawn
     Accepted {
-        /// Whether an existing profile was loaded from disk
+        /// Whether this account was resumed in the current server session.
         profile_loaded: bool,
     },
     /// Name rejected, must try again
@@ -208,6 +331,10 @@ pub struct CharacterRosterEntry {
     pub kind: crate::components::CharacterKind,
     pub affiliation: crate::components::CharacterAffiliation,
     pub attributes: crate::components::CharacterAttributes,
+    pub health: crate::components::Health,
+    pub alive: bool,
+    pub death_day: Option<u32>,
+    pub death_cause: Option<crate::components::DeathCause>,
     /// For a hero, whether its owner is connected right now. Villagers are never
     /// "online" -- they are simply present, which is a different thing.
     pub online: bool,
@@ -318,6 +445,56 @@ mod tests {
         let decoded: UnitMoveOrder = bincode::deserialize(&bytes).unwrap();
 
         assert_eq!(decoded, msg);
+    }
+
+    #[test]
+    fn hero_market_order_roundtrips() {
+        let message = HeroMarketOrder {
+            market: Entity::from_raw_u32(17).unwrap(),
+            good: crate::economy::Good::Bread,
+            action: HeroMarketAction::PostSellOrder { unit_price: 275 },
+            units: 3,
+        };
+        let bytes = bincode::serialize(&message).unwrap();
+        assert_eq!(
+            bincode::deserialize::<HeroMarketOrder>(&bytes).unwrap(),
+            message
+        );
+    }
+
+    #[test]
+    fn hero_permit_order_and_quote_roundtrip() {
+        let order = HeroPermitOrder {
+            action: HeroPermitAction::Purchase {
+                hall: Entity::from_raw_u32(23).unwrap(),
+                kind: crate::components::SettlementBuildingKind::Windmill,
+                quoted_fee: 450,
+                quoted_startup_capital: 625,
+            },
+        };
+        let bytes = bincode::serialize(&order).unwrap();
+        assert_eq!(
+            bincode::deserialize::<HeroPermitOrder>(&bytes).unwrap(),
+            order
+        );
+
+        let result = HeroPermitResult {
+            success: true,
+            outcome: HeroPermitOutcome::Quote(HeroPermitQuote {
+                settlement: crate::components::SettlementId(9),
+                settlement_name: "Oakfell".into(),
+                kind: crate::components::SettlementBuildingKind::Windmill,
+                fee: 450,
+                startup_capital: 625,
+                wallet_balance: 2_000,
+            }),
+            message: "Exact terms".into(),
+        };
+        let bytes = bincode::serialize(&result).unwrap();
+        assert_eq!(
+            bincode::deserialize::<HeroPermitResult>(&bytes).unwrap(),
+            result
+        );
     }
 
     /// Every unit in the order must be remapped, not just the first: a partially

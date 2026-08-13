@@ -21,22 +21,26 @@ pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, ac
 pub(super) fn spawn_graphics_panel(
     parent: &mut ChildSpawnerCommands<'_>,
     settings: &GraphicsSettings,
+    monitor: Option<&Monitor>,
 ) {
     parent
         .spawn((
             GraphicsSettingsPanel,
             Node {
                 flex_direction: FlexDirection::Column,
-                justify_content: JustifyContent::Center,
+                justify_content: JustifyContent::FlexStart,
                 align_items: AlignItems::FlexStart,
                 padding: UiRect::all(Val::Px(24.0)),
                 min_width: Val::Px(0.0),
+                max_height: Val::Vh(88.0),
+                overflow: Overflow::scroll_y(),
+                scrollbar_width: 8.0,
                 // Start hidden so it doesn't affect layout
                 display: Display::None,
                 border_radius: BorderRadius::all(Val::Px(12.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.06, 0.055, 0.05, 0.95)),
+            BackgroundColor(PAUSE_PANEL_BACKGROUND),
         ))
         .with_children(|panel| {
             // Panel title
@@ -46,7 +50,7 @@ pub(super) fn spawn_graphics_panel(
                     font_size: FontSize::Px(26.0),
                     ..default()
                 },
-                TextColor(ACCENT_COLOR),
+                TextColor(PAUSE_HEADING_COLOR),
                 Node {
                     margin: UiRect::bottom(Val::Px(8.0)),
                     ..default()
@@ -60,7 +64,7 @@ pub(super) fn spawn_graphics_panel(
                     font_size: FontSize::Px(12.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(PAUSE_MUTED_TEXT_COLOR),
                 Node {
                     margin: UiRect::bottom(Val::Px(20.0)),
                     ..default()
@@ -98,13 +102,6 @@ pub(super) fn spawn_graphics_panel(
                 GraphicsToggle::Vsync,
                 settings.vsync_enabled,
             );
-            spawn_toggle(
-                panel,
-                "Fullscreen",
-                GraphicsToggle::Fullscreen,
-                settings.fullscreen_enabled,
-            );
-
             // Separator
             panel.spawn((
                 Node {
@@ -119,7 +116,94 @@ pub(super) fn spawn_graphics_panel(
             // Slider controls
             spawn_slider(
                 panel,
-                "Render Scale",
+                "Display Mode",
+                SliderControl::DisplayMode,
+                settings.display_mode().label(),
+            );
+            spawn_slider(
+                panel,
+                "Resolution",
+                SliderControl::Resolution,
+                &settings.displayed_resolution_label(monitor),
+            );
+            panel
+                .spawn((
+                    DisplayConfirmationPanel,
+                    Node {
+                        display: Display::None,
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Stretch,
+                        row_gap: Val::Px(8.0),
+                        padding: UiRect::all(Val::Px(10.0)),
+                        margin: UiRect::bottom(Val::Px(12.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.18, 0.13, 0.06, 0.96)),
+                    BorderColor::from(PAUSE_HEADING_COLOR),
+                ))
+                .with_children(|confirmation| {
+                    confirmation.spawn((
+                        DisplayConfirmationText,
+                        Text::new("Keep this display setting?"),
+                        TextFont {
+                            font_size: FontSize::Px(13.0),
+                            ..default()
+                        },
+                        TextColor(PAUSE_TEXT_COLOR),
+                    ));
+                    confirmation
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            justify_content: JustifyContent::SpaceBetween,
+                            column_gap: Val::Px(8.0),
+                            ..default()
+                        })
+                        .with_children(|buttons| {
+                            for (label, action, color) in [
+                                (
+                                    "KEEP",
+                                    DisplayConfirmationAction::Keep,
+                                    Color::srgb(0.2, 0.55, 0.3),
+                                ),
+                                (
+                                    "REVERT",
+                                    DisplayConfirmationAction::Revert,
+                                    Color::srgb(0.55, 0.2, 0.2),
+                                ),
+                            ] {
+                                buttons
+                                    .spawn((
+                                        Button,
+                                        action,
+                                        Node {
+                                            height: Val::Px(30.0),
+                                            flex_grow: 1.0,
+                                            justify_content: JustifyContent::Center,
+                                            align_items: AlignItems::Center,
+                                            border_radius: BorderRadius::all(Val::Px(5.0)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(color),
+                                    ))
+                                    .with_children(|button| {
+                                        button.spawn((
+                                            Text::new(label),
+                                            TextFont {
+                                                font_size: FontSize::Px(12.0),
+                                                ..default()
+                                            },
+                                            TextColor(PAUSE_TEXT_COLOR),
+                                        ));
+                                    });
+                            }
+                        });
+                });
+            spawn_slider(
+                panel,
+                "3D Render Scale",
                 SliderControl::RenderScale,
                 &format!("{:.0}%", settings.render_scale * 100.0),
             );
@@ -128,6 +212,12 @@ pub(super) fn spawn_graphics_panel(
                 "Shadow Quality",
                 SliderControl::ShadowQuality,
                 settings.shadow_quality.label(),
+            );
+            spawn_slider(
+                panel,
+                "3D Grass Renderer",
+                SliderControl::GroundCoverRenderer,
+                settings.ground_cover_renderer.label(),
             );
             spawn_slider(
                 panel,
@@ -187,7 +277,7 @@ pub(super) fn spawn_toggle(
                     font_size: FontSize::Px(18.0),
                     ..default()
                 },
-                TextColor(TEXT_COLOR),
+                TextColor(PAUSE_TEXT_COLOR),
                 Node {
                     margin: UiRect::right(Val::Px(40.0)),
                     ..default()
@@ -222,7 +312,7 @@ pub(super) fn spawn_toggle(
                         font_size: FontSize::Px(14.0),
                         ..default()
                     },
-                    TextColor(TEXT_COLOR),
+                    TextColor(PAUSE_TEXT_COLOR),
                 ));
             });
         });
@@ -251,7 +341,7 @@ pub(super) fn spawn_slider(
                     font_size: FontSize::Px(18.0),
                     ..default()
                 },
-                TextColor(TEXT_COLOR),
+                TextColor(PAUSE_TEXT_COLOR),
                 Node {
                     margin: UiRect::right(Val::Px(20.0)),
                     ..default()
@@ -288,7 +378,7 @@ pub(super) fn spawn_slider(
                                 font_size: FontSize::Px(18.0),
                                 ..default()
                             },
-                            TextColor(TEXT_COLOR),
+                            TextColor(PAUSE_TEXT_COLOR),
                         ));
                     });
 
@@ -300,9 +390,10 @@ pub(super) fn spawn_slider(
                         font_size: FontSize::Px(14.0),
                         ..default()
                     },
-                    TextColor(TEXT_COLOR),
+                    TextLayout::no_wrap(),
+                    TextColor(PAUSE_TEXT_COLOR),
                     Node {
-                        min_width: Val::Px(70.0),
+                        min_width: Val::Px(82.0),
                         justify_content: JustifyContent::Center,
                         ..default()
                     },
@@ -330,7 +421,7 @@ pub(super) fn spawn_slider(
                                 font_size: FontSize::Px(18.0),
                                 ..default()
                             },
-                            TextColor(TEXT_COLOR),
+                            TextColor(PAUSE_TEXT_COLOR),
                         ));
                     });
             });
@@ -355,7 +446,7 @@ pub(super) fn spawn_controls_panel(
                 border_radius: BorderRadius::all(Val::Px(12.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.06, 0.055, 0.05, 0.95)),
+            BackgroundColor(PAUSE_PANEL_BACKGROUND),
         ))
         .with_children(|panel| {
             // Panel title
@@ -365,7 +456,7 @@ pub(super) fn spawn_controls_panel(
                     font_size: FontSize::Px(26.0),
                     ..default()
                 },
-                TextColor(ACCENT_COLOR),
+                TextColor(PAUSE_HEADING_COLOR),
                 Node {
                     margin: UiRect::bottom(Val::Px(8.0)),
                     ..default()
@@ -379,7 +470,7 @@ pub(super) fn spawn_controls_panel(
                     font_size: FontSize::Px(12.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(PAUSE_MUTED_TEXT_COLOR),
                 Node {
                     margin: UiRect::bottom(Val::Px(20.0)),
                     ..default()
@@ -419,7 +510,7 @@ pub(super) fn spawn_input_slider(
                     font_size: FontSize::Px(18.0),
                     ..default()
                 },
-                TextColor(TEXT_COLOR),
+                TextColor(PAUSE_TEXT_COLOR),
                 Node {
                     margin: UiRect::right(Val::Px(20.0)),
                     ..default()
@@ -456,7 +547,7 @@ pub(super) fn spawn_input_slider(
                                 font_size: FontSize::Px(18.0),
                                 ..default()
                             },
-                            TextColor(TEXT_COLOR),
+                            TextColor(PAUSE_TEXT_COLOR),
                         ));
                     });
 
@@ -468,7 +559,7 @@ pub(super) fn spawn_input_slider(
                         font_size: FontSize::Px(14.0),
                         ..default()
                     },
-                    TextColor(TEXT_COLOR),
+                    TextColor(PAUSE_TEXT_COLOR),
                     Node {
                         min_width: Val::Px(70.0),
                         justify_content: JustifyContent::Center,
@@ -498,7 +589,7 @@ pub(super) fn spawn_input_slider(
                                 font_size: FontSize::Px(18.0),
                                 ..default()
                             },
-                            TextColor(TEXT_COLOR),
+                            TextColor(PAUSE_TEXT_COLOR),
                         ));
                     });
             });

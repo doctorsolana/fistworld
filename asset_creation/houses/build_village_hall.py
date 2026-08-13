@@ -233,7 +233,10 @@ def stone_course(z0, z1, k):
     door = overlaps(z0, z1, GD_Z0, GD_Z0 + GD_H)
     win = overlaps(z0, z1, *GWIN_Z)
     # long faces (normal on y), running along x
-    gaps_x = [(wx - GW, wx + GW) for wx in GWIN_X] if win else []
+    # Cut 0.02 WIDER than the dressing on each side. Cut to exactly GW, the rubble reveal and the
+    # dressing's inner face land on the same plane facing the same way -- and unlike buried
+    # coplanarity this one is in plain sight in the window opening.
+    gaps_x = [(wx - GW - 0.02, wx + GW + 0.02) for wx in GWIN_X] if win else []
     for sy in (-1, 1):
         lo, hi = sorted((sy * (HD - ST), sy * HD))
         for a0, a1 in span_minus(-HW, HW, gaps_x):
@@ -244,7 +247,7 @@ def stone_course(z0, z1, k):
         if sx < 0 and door:
             gaps_y.append((-GDW - 0.02, GDW + 0.02))
         if sx > 0 and win:
-            gaps_y += [(wy - GW, wy + GW) for wy in GWIN_Y]
+            gaps_y += [(wy - GW - 0.02, wy + GW + 0.02) for wy in GWIN_Y]
         lo, hi = sorted((sx * (HW - ST), sx * HW))
         for a0, a1 in span_minus(-HD + ST, HD - ST, gaps_y):
             rubble_run('y', lo, hi, a0, a1, z0, z1, k)
@@ -258,6 +261,8 @@ while _z < GROUND_H - 1e-6:
     _z = _zt
     _k += 1
 
+QUOIN_PROUD = 0.022
+QUOIN_JOINT = 0.006
 # quoins: dressed pale blocks up the four corners, alternating long/short. This is the detail that
 # stops a rubble box from looking like a pile and says the masons were paid.
 for sx in (-1, 1):
@@ -268,8 +273,15 @@ for sx in (-1, 1):
             long_x = q % 2 == 0
             lx = 0.62 if long_x else 0.34
             ly = 0.34 if long_x else 0.62
-            box(*sorted((sx * HW, sx * (HW - lx))), *sorted((sy * HD, sy * (HD - ly))),
-                qz0, qz1, stone_tone(9 + q, q, pale=True))
+            # PROUD, AND SHORT OF THE COURSE. Drawn flush and to the full course height, a quoin's
+            # top face lands on exactly the same plane as the rubble block it covers, facing the same
+            # way -- 0.21 m2 per corner per course, which is the flicker seen along every stone
+            # corner in-engine. Standing them 0.022 proud with a 0.006 joint top and bottom removes
+            # every shared plane at once, and is also what dressed quoins look like: raised blocks
+            # with a recessed mortar line, not flush infill.
+            box(*sorted((sx * (HW + QUOIN_PROUD), sx * (HW - lx))),
+                *sorted((sy * (HD + QUOIN_PROUD), sy * (HD - ly))),
+                qz0 + QUOIN_JOINT, qz1 - QUOIN_JOINT, stone_tone(9 + q, q, pale=True))
 
 # door and window dressings
 for sy in (-1, 1):
@@ -349,6 +361,8 @@ UZ0 = GROUND_H
 SILL_H, RAIL_H, HEAD_H = 0.20, 0.15, 0.20
 RAIL_Z = UZ0 + 0.92
 UWIN_Z = (RAIL_Z + RAIL_H + 0.14, UZ0 + UP_H - HEAD_H - 0.12)
+PJ = 0.006            # how far the plaster tucks under the rails
+WJ = 0.006            # and past the studs at a window jamb
 
 
 def bays(half):
@@ -365,18 +379,31 @@ def frame_face(axis, sgn, half, other_half, win_bays):
     p0, p1 = sorted((face, inner))
     pos, n = bays(half)
 
-    # plaster field, cut for the windows
+    # plaster field, cut for the windows. The cut runs WJ past the stud edge on each side so the
+    # plaster's own edge is buried inside the stud rather than landing on its face -- the same
+    # same-plane/same-facing fault as the corner posts, repeated at every window jamb.
     gaps = []
     for b in win_bays:
-        gaps.append((pos[b] + STUD, pos[b + 1] - STUD))
-    for a0, a1 in span_minus(-half, half, gaps):
-        for zz0, zz1, tone in ((UZ0, RAIL_Z, C_PLASTER), (RAIL_Z, UZ0 + UP_H, C_PLASTER_2)):
+        gaps.append((pos[b] + STUD - WJ, pos[b + 1] - STUD + WJ))
+    # PLASTER STOPS AT THE CORNER POSTS. Run out to +/-half it ends on exactly the plane where the
+    # corner post's end face is, facing the same way -- 0.21 m2 per corner, full storey height, on all
+    # four corners. That was the flicker visible in-engine along every corner of the building.
+    #
+    # Ending at +/-(half - POST) buries the plaster's end face inside the post, which spans
+    # [half - 2*POST, half]. Nothing is lost visually: the post is solid through the full frame depth,
+    # so plaster behind it was never drawn anyway.
+    # The plaster's own top and bottom are tucked INSIDE the rails for the same reason its ends are
+    # tucked inside the corner posts: run flush, they share a horizontal plane with the sill, the
+    # mid-rail and the head, facing the same way, right around the building.
+    for a0, a1 in span_minus(-half + POST, half - POST, gaps):
+        for zz0, zz1, tone in ((UZ0 + PJ, RAIL_Z + PJ, C_PLASTER),
+                               (RAIL_Z + PJ, UZ0 + UP_H - PJ, C_PLASTER_2)):
             plank(axis, p0 + 0.004, p1 - 0.004, a0, a1, zz0, zz1, tone)
     # the window heads still need plaster above and below them
     for b in win_bays:
-        a0, a1 = pos[b] + STUD, pos[b + 1] - STUD
-        plank(axis, p0 + 0.004, p1 - 0.004, a0, a1, UZ0, UWIN_Z[0], C_PLASTER)
-        plank(axis, p0 + 0.004, p1 - 0.004, a0, a1, UWIN_Z[1], UZ0 + UP_H, C_PLASTER_2)
+        a0, a1 = pos[b] + STUD - WJ, pos[b + 1] - STUD + WJ
+        plank(axis, p0 + 0.004, p1 - 0.004, a0, a1, UZ0 + PJ, UWIN_Z[0], C_PLASTER)
+        plank(axis, p0 + 0.004, p1 - 0.004, a0, a1, UWIN_Z[1], UZ0 + UP_H - PJ, C_PLASTER_2)
 
     # sill, mid-rail, head
     # Rails run BETWEEN the corner posts and studs run BETWEEN the rails, which is how a frame is
@@ -443,7 +470,11 @@ for sx in (-1, 1):
         # and drawing a collar on every one banded the gable exactly the way the stone was banded --
         # ten horizontal stripes in a triangle. The gable is a small area seen end-on; it wants to
         # read as one pale panel with a frame, not as a ladder.
-        box(p0, p1, -y_in - EPS, y_in + EPS, z_bot - EPS, z_top, C_PLASTER)
+        # MEET, do not overlap. Stacked steps sharing the gable plane and overlapping by EPS in z
+        # put two same-facing faces on that plane for the height of the overlap -- a thin flickering
+        # line at every step. Butted exactly, the shared plane has one face up and one down, which
+        # backface culling resolves for free.
+        box(p0, p1, -y_in - EPS, y_in + EPS, z_bot, z_top, C_PLASTER)
         box(p0 - 0.01, p1 + 0.01, -STUD, STUD, z_bot, z_top, C_FRAME)
         if i in (2, 6):
             box(p0 - 0.01, p1 + 0.01, -y_in - EPS, y_in + EPS, z_bot - 0.055, z_bot + 0.055, C_FRAME)
@@ -688,8 +719,23 @@ glass_me.materials.append(glass_mat)
 # --- anchors ------------------------------------------------------------------------------------------------
 GMID = (GWIN_Z[0] + GWIN_Z[1]) / 2
 UMID = (UWIN_Z[0] + UWIN_Z[1]) / 2
+# CIVIC DOOR CONVENTION: the anchor sits DOOR_STANDOFF in front of the frontmost geometry.
+#
+# Live settlements place the hall glb straight at the settlement position -- they do not use the
+# authored-city plot path -- and `SettlementBuildingKind::door_offset(Hall)` is a single hardcoded
+# Vec2(0, -5.20). So if the three halls put Anchor_Door at different local offsets, upgrading a
+# settlement silently moves the door, and with it the road endpoint, the immigration and relief
+# queues, permit collection and every cached route.
+#
+# Fixing it in the ASSET rather than in Rust means the shipped glbs all resolve Anchor_Door to the
+# same world point, the existing constant stays correct for every level, and no level-aware door
+# lookup is needed at all. export_prop_glb.py translates each model so this lands on the canon.
+#
+# Measured from the frontmost vertex rather than from HW, so it stays correct when the steps change.
+DOOR_STANDOFF = 0.60
+_front_x = min(v.co.x for v in me.vertices)
 for nm, loc in (
-    ("Anchor_Door",     (-HW - 1.55, 0.0, 0.0)),
+    ("Anchor_Door",     (_front_x - DOOR_STANDOFF, 0.0, 0.0)),
     ("Light_Ground",    (0.0, 0.0, 1.40)),
     ("Light_Hall",      (0.0, 0.0, GROUND_H + 1.20)),
     ("Light_Window.L",  (0.0, -(HD - ST - 0.22), GMID)),

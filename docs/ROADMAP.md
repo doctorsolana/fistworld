@@ -54,16 +54,18 @@ on a local binary.
       traveller and army promotion remain separate work.
 - [x] Fix the interest cache that could never hit (~4k-entry set rebuilt at 60Hz per client)
 - [x] Stop replicating the whole world to connected-but-unnamed clients
-- [x] Persist heroes across disconnect and server restart
-- [ ] **Add a `[mounts]` volume to `fly.toml`** — `server_data/` is on ephemeral storage
-      today, so every deploy wipes every profile. Hero persistence is meaningless on the
-      hosted server until this lands. Highest-value remaining item in the phase.
+- [x] Retain heroes, personal cargo/coin and account-keyed retinues across disconnects to
+      the same running server. The default server intentionally ignores legacy profile files
+      at boot, so process restart and world restart are one clean boundary.
+- [ ] Decide whether a future hosted world is seasonal/resetting or durable before adding a
+      storage volume. Durable account state must share the world save's version and lifetime;
+      loading a hero into a freshly reset society would create orphan ownership.
 - [ ] A non-dev spawn path: move hero creation out of the god panel and out of `DevCommand`
 - [ ] Decide and document what a player sees before they have a hero
 - [ ] Redeploy and verify a real client can join, get a body, disconnect, and return
 
-**Exit:** a non-dev client on the hosted server spawns a hero, walks it, disconnects,
-and finds it again after a redeploy.
+**Exit:** a non-dev client spawns a hero, walks and trades, disconnects, and finds the exact
+live body again while that server session continues.
 
 ---
 
@@ -81,13 +83,12 @@ join keys or on-disk contracts that are ruinous to change later.
       The allocator observes loaded ids before issuing another, ready for the versioned
       world-state file below.
 - [ ] **World-state file, versioned and self-describing.** NOT bincode: it is positional,
-      which is exactly why `PROFILE_VERSION` is at 7 and the profile loader has an explicit
-      v6 migration plus reject-and-backup for unknown layouts. A wipe is an inconvenience for an outfit and fatal for months of
+      which is exactly why `PROFILE_VERSION` is at 8 and the profile loader has explicit
+      v6/v7 migrations plus reject-and-backup for unknown layouts. A wipe is an inconvenience for an outfit and fatal for months of
       settlement state. RON is already a workspace dependency.
 - [ ] **Write the v1 to v2 migration before there is anything to lose.** A migration path
       that is never exercised is the one that fails when it matters.
-- [ ] Route world saves through the existing background IO worker
-      (`server/src/persistence/io_queue.rs`), not the main thread
+- [ ] Route future world saves through a bounded background IO worker, not the main thread
 - [ ] Backup rotation and load-newest-valid-on-corrupt for the world file
 - [x] **The replication split:** one globally replicated `SettlementSummary` entity and
       `RegionCoord`-scoped halls, buildings, markets, inventories, worksites, roads, fields
@@ -160,6 +161,14 @@ answer "can a village run itself?" before any of the economy above exists):
       grids, great avenues and neighbourhood clusters bias future frontage while plot
       scoring still rejects slope, water, overlap, roads and reserved civic space.
       Geography and demand decide what is built; the seed influences where it fits.
+      If every grammar sample is occupied, a denser deterministic open-land pass
+      preserves growth without moving anything already built. Same-landmass plots
+      rank ahead of unreachable high-quality ground, and all building kinds prove
+      a dry land route before approval. Permit access treats the proposed shell
+      and fields as blockers and may join only the completed Moot-connected road
+      component, preventing self-crossing reservations and detached-road anchors.
+      The current site-search envelope has a hard 320m radius; rising serviced-land
+      prices and charter-boundary expansion remain future anti-sprawl work.
 - [x] Geometry-led coastal siting: the whole Fisherman's Hut and side route stay
       dry, the authored pier side rotates seaward, and its work end must reach
       broad submerged water. Halls use footprint-wide water checks and may sit
@@ -173,17 +182,18 @@ answer "can a village run itself?" before any of the economy above exists):
       stock and their wallet allow, but a settlement without affordable stock can bootstrap
       by chopping real trees, carrying bounded loads, and depositing them at the
       site. Raising cannot start until the last required unit arrives; completion
-      consumes the committed Wood. Market Wood is a real wallet-to-pool purchase.
+      consumes the committed Wood. Market Wood is a real buyer-to-seller purchase.
 - [x] End-to-end test over the real scheduled systems:
       `village::tests::three_villagers_settle_and_build_a_village_unaided`.
 - [x] Bounded bulk inventories on villagers, completed buildings and the hall.
-      Five physical goods share capacity; coin is a separate fixed-point ledger.
+      Seven physical goods share capacity; coin is a separate fixed-point ledger.
 - [x] Occupations and bounded workplace slots. Farmsteads employ Farmers,
       Fisherman's Huts employ Fishers, Lumberjack Huts employ a Woodcutter, and
-      Houses employ nobody.
+      Windmills and Bakeries employ Millers and Bakers. Houses employ nobody.
 - [x] First observed production loop: hut door → indoors → real tree → chop
-      animation → bounded carried load → hut deposit → Moot sale. Realised sale
-      proceeds split 80% to worker and 20% to the workplace owner.
+      animation → bounded carried load → hut deposit → Moot consignment. Revenue
+      reaches the business only when a real customer buys it; workers receive wages
+      and the owner may withdraw only retained profit above protected working cash.
 - [x] Farmstead → two authored nearby wheat fields → visible field work → bounded
       wheat carry → Farmstead deposit → hall haul under storage pressure.
 - [x] Fisherman's Hut → authored paired pier → safe over-water deck traversal →
@@ -191,7 +201,8 @@ answer "can a village run itself?" before any of the economy above exists):
       under storage pressure. Hut and pier use authored-anchor lighting after dark.
 - [x] Completed buildings and active worksites are selectable. Houses expose
       owner, beds and storage; workplaces expose owner, quality, workers and
-      inventory; the hall exposes Moot stock, liquidity and quotes. Worksites show delivered and
+      inventory plus business state, strategy, price, inputs and P&L; the hall exposes
+      physical Moot stock, private offers, last-sale prices and trade volume. Worksites show delivered and
       required Wood in the panel and as visible timber bundles in the world. The
       encyclopedia retains the same completed-building snapshot in an expandable
       settlement/building explorer with a dedicated detail sheet per record.
@@ -205,11 +216,13 @@ answer "can a village run itself?" before any of the economy above exists):
 - [x] Cheap ambient life for unemployed or unhoused residents. Only observed
       tactical regions receive deterministic walking/resting orders; villagers
       reuse the bounded road route queue, sit on collision-checked path verges,
-      and use the authored seated loop. A shared 4Hz real-time decision pass and
-      cached gathering geometry keep cost independent of frame rate and warp;
+      and use the authored seated loop. Stable per-person world-time deadlines
+      and cached gathering geometry keep cost independent of frame rate and warp
+      without synchronized crowd batches;
       unobserved regions receive no ambient movement work. Ordinary residents
-      now demote to durable strategic records; traveller and army round trips
-      remain Phase 2 work.
+      now demote to durable strategic records, while an existing personal journey
+      keeps a cheap route cursor and resumes losslessly on promotion; regional
+      traveller and army round trips remain Phase 2 work.
 - [x] Builder-made local paths. The person who finishes a building surveys from
       its authored door to the closest existing village path (or hall door),
       visibly builds the route in sections, pauses for their household at night,
@@ -223,7 +236,16 @@ answer "can a village run itself?" before any of the economy above exists):
       queues one budgeted local survey, compares its safe direct path with entry
       and exit connectors through the cached road graph, and waits for that answer
       instead of taking a speculative straight step. Movement rechecks the live
-      building and baked prop broadphases every 20cm, including at 100x.
+      building and baked prop broadphases every 20cm, including at 100x. Retained
+      2,400-cell fallbacks advance by at least eight cells per visit, bounding the
+      formerly queue-blocking one-cell-per-tick search to five real seconds at 60 Hz.
+- [x] Burst-safe tactical migration. Settlement admission accepts at most eight
+      idle migrants every quarter real second regardless of world warp, while the
+      accepted crowd still forms a stable visible FIFO immigration line. Nearby
+      migrants join a certified cohort route through collision-checked local
+      connectors; queue-rank changes use short forecourt steps, building/prop edits
+      invalidate only intersecting cached routes, and identical blocked-goal warnings
+      are coalesced instead of flooding the server log.
 - [x] Door-safe obstacle registration. The derived moot hall participates in
       the same building/nav indexes as completed houses and workplaces, and a
       forced short front apron makes every surveyed path enter its destination
@@ -267,11 +289,18 @@ answer "can a village run itself?" before any of the economy above exists):
 - [x] Villager wallets and settlement treasury movement. Every new villager has
       10.00 coin; needed housing permits remain free, business permits always
       cost coin, and the panel states both rules and current balances.
-- [x] Explicit Poor Relief policy. Disabled settlements let insolvent residents
-      go hungry; enabled settlements buy their ration from public treasury coin
+- [x] Explicit Poor Relief policy. `Off` settlements let insolvent residents
+      go hungry; `Surplus Only` settlements buy their ration from public treasury coin
       only when recent production covers the population and the purchase leaves
-      a three-day emergency reserve, while both Moot stock and funds last. The panel
+      their enacted food-reserve target intact, while both Moot stock and funds last. The panel
       and encyclopedia expose it.
+- [x] Full civic policy charter. Balanced foundations enact a 5% market fee, 10%
+      positive-profit levy, three food-reserve days, seven payroll-reserve days,
+      Balanced staffing and a demand-only business-permit subsidy. Essential/Balanced/Full
+      staffing changes real vacancies, the food target changes food-capacity demand,
+      manual control freezes policy, and weekly autopilot changes at most one lever.
+      The implemented formulas, money flows and review order are maintained in
+      [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
 - [x] First tier advancement: a Hamlet with at least four residents becomes a
       Village after three consecutive days with three reserve days, recent food
       production covering population, no hunger and prosperity at least 65.
@@ -280,6 +309,11 @@ answer "can a village run itself?" before any of the economy above exists):
       sustained days. A Town with at least 24 residents, a Church and prosperity 75
       becomes a City after five sustained days. Civic buildings use placeholder art
       but real plots, material supply, staffing, storage and road connections.
+- [x] Physical civic-hall ladder. The authoritative settlement entity retains its
+      identity and state while its replicated Hall level changes Moot Hall → Village
+      Hall → Town Hall. All three assets pin the door to one threshold. Foundations,
+      permits and road surveys reserve the largest Town Hall shell from day one;
+      level-specific colliders, panels and encyclopedia labels follow the current rung.
 
 **Deliberately deferred:** a billboard/impostor/symbol renderer. Settlements read as
 screen-projected UI labels, using the world-to-panel projection the map already has. That
@@ -307,11 +341,12 @@ learn to look away at the right moment — that is the look-away exploit, falsif
 one entity and zero combat code.
 
 The first half of this seam is now exercised by ordinary villagers: outside tactical
-regions they retain durable identity, household, wallet and employment state, shed routes
-and animation phases, and contribute through aggregate workplace production and Moot
-commerce. Re-observation rebuilds their embodied routines. This proves the scheduling and
-state-shedding mechanism, but it does not satisfy the traveller round-trip or arrival-time
-contract below.
+regions they retain durable identity, household, wallet and employment state, shed tactical
+pathfinding and animation phases, and contribute through aggregate workplace production and
+Moot commerce. A journey already in progress keeps its waypoint cursor, advances at 1 Hz,
+and restores the exact remaining route when observed again. This proves the scheduling,
+state-shedding and individual resident travel mechanism, but it does not satisfy the
+regional traveller/army round-trip or formula-vs-observed arrival-time contract below.
 
 - [ ] One strategic traveller entity: position, route, ETA
 - [ ] Promotion: strategic entity to a real walking body, deterministic from strategic state
@@ -333,7 +368,7 @@ change when it arrives.
 
 **Playable:** watch a meadows village outgrow a moor one; starve a hamlet down to Ruins.
 
-The strategic tick now advances aggregate off-screen workplace production, porter commerce
+The strategic tick now advances aggregate off-screen workplace production, Moot Steward commerce
 and household purchasing. Tactical villagers retain the visible per-trip loops; unobserved
 ordinary residents shed paths, door choreography and work-animation phases.
 
@@ -341,15 +376,18 @@ ordinary residents shed paths, door choreography and work-animation phases.
 - [x] One quality-scaled observed Wood loop from a filled Lumberjack Hut slot
 - [x] One quality-scaled observed Wheat loop from filled Farmstead slots
 - [x] One quality-scaled direct Food loop from filled Fisherman's Hut slots
-- [x] Wheat is directly edible during the prototype. At each world-day boundary
-      every resident tries to buy one portion from the Moot's physical hall stock;
-      prepared Food is tried before Wheat. If a wallet cannot pay, the resident
-      goes hungry unless Poor Relief spends treasury coin on the same ration.
-      Current stock, reserve days, unmet
+- [x] Wheat is a raw, non-edible business input. Staffed Windmills buy it through
+      the Moot and turn it into Flour. Housed households may consume Flour as an
+      abstracted home-baked ration; unhoused people and Poor Relief require ready-to-eat
+      Fish or Bread. Staffed Bakeries buy two Flour and produce four Bread, making
+      Bread the first higher-efficiency food. Current stock, reserve days, unmet
       portions and three-day production/consumption averages are replicated.
 - [x] Shortage-responsive early planner: repeat Houses for missing beds and,
       after a measured day, repeat Farmsteads when reserves or recent production
       are inadequate (currently capped at one Farmstead per four residents).
+- [x] Seeded layouts remain compact without becoming a hard border: cabins use
+      footprint-appropriate yard spacing, founding rings are tried first, and
+      deterministic search bands widen as the occupied envelope fills.
 - [x] Prosperity scalar with a panel breakdown: reserve 40, production 30,
       housing 20, employment 10, and hunger penalty down to -30.
 - [x] Hamlet → Village → Town → City advancement with inspectable population,
@@ -362,11 +400,17 @@ ordinary residents shed paths, door choreography and work-animation phases.
 - [x] Reconcile observed per-trip production with the distant strategic tick. Both use the
       same quality-scaled rates, worker counts, one-field/two-field Farmstead capacity,
       storage limits, sale policy and market transaction code.
-- [ ] Wheat-to-Food processing from FILLED SLOTS. Direct fishing already obeys
-      filled slots; an unstaffed farm or mill must likewise produce nothing.
-- [ ] Births against a food-supported cap, and deaths, as roster events
-- [ ] Food processing beyond direct-edible Wheat, household budgets and
-      differentiated consumption
+- [x] Filled-slot processing businesses: Windmills transform Wheat to Flour and
+      Bakeries transform Flour to Bread only while a real employee is working.
+      Both use bounded inventories, private input procurement, wages, prices,
+      solvency, Moot Steward transport and strategic/tactical parity.
+- [x] Starvation mortality as a real roster event: every embodied person has
+      100 Health, each missed daily meal removes 10, and zero Health atomically
+      releases jobs/homes, settles the estate and lists owned firms for takeover.
+      The bounded mortality ledger keeps dead people inspectable without retaining
+      thousands of dead ECS bodies.
+- [ ] Births against a food-supported cap, aging and non-starvation mortality
+- [ ] Further food processing, recipes, nutrition quality and differentiated diets
 - [x] Later tier ladder requirements: Marketplace and Tavern plus sustained trade
       advance a Village to Town; Church plus sustained regional prosperity advances a
       Town to City. Placeholder civic meshes preserve the semantic/build pipeline until
@@ -397,16 +441,46 @@ ordinary residents shed paths, door choreography and work-animation phases.
 **Playable:** buy grain cheap in a meadows village, cart it to the highland quarry town,
 sell it dear. The M&B opening hour.
 
-- [x] Five bounded physical goods: Wheat, Food, Wood, Stone and Iron
+- [x] Seven bounded physical goods: Wheat, Fish (the stable internal `Food` id),
+      Flour, Bread, Wood, Stone and Iron
 - [x] NPC coin and workplace ownership ledgers
 - [x] Bounded physical stores on villagers, workplaces, houses and halls
 - [ ] Persisted settlement stock semantics and ownership
-- [x] Local Moot prices from physical stock, target reserves and buying liquidity
+- [x] Local private consignment offers. The Moot begins empty, retains each seller's
+      stable identity, pays only on customer purchase and sends its fee to the treasury.
+- [x] Real business accounting: contributed capital, gross revenue, wage/input/fee
+      expenses, liabilities, retained profit and bounded owner withdrawals.
+- [x] NPC owner autopilot with Balanced, Growth, High-Margin, Cautious and Opportunistic
+      strategies, bounded daily repricing, adaptive wages, personal rescue capital and
+      durable new/cash-tight/distressed/insolvent/liquidating/for-sale states.
+- [x] Business working-capital protection covers strategy-defined payroll, planned inputs,
+      liabilities and an operating buffer before an owner can withdraw retained profit.
+- [x] Insolvent firms liquidate every physical input/output through discounted private
+      listings, pay stable worker claims before tax, and only then auction the property.
+- [x] Portfolio and processor expansion gates: owners cannot compound unfinished/new or
+      distressed firms; second and later processors require realised utilisation, sales,
+      positive profit and uncovered upstream throughput.
+- [x] Pull-based 365-day business histories with daily P&L, cash, protected/drawable cash, arrears, prices,
+      wages, production, sales, inputs, stock, owner draws and policy/state adjustments.
+- [x] Civic accounts and policy: up to two combined Moot Stewards, budget-gated hiring,
+      explicit arrears for every public role, market-fee and positive-profit revenue,
+      paid private procurement, weekly one-lever Reeve review, and pull-based daily
+      income/spending/rate/change history.
+- [x] Generic per-good input procurement through the same market and physical porter;
+      focused coverage proves a future processing business can reorder Wheat without a
+      one-off purchasing system.
 - [x] Generic carry capacity and lossless bounded transfers
-- [ ] Player buy/sell UI — NPC wallets and live Moot quotes are visible now, but
-      player quantity controls and player-owned trading stock do not exist
-- [ ] Coin as server-owned player state (`PlayerProgression` is the only per-player numeric
-      state today and nothing has ever mutated it — there is no precedent to copy)
+- [x] First player buy/sell UI: an embodied hero within 12m buys one real listed unit or
+      posts one carried unit under their stable identity; custom quantities and asks remain
+      part of merchant/business management.
+- [x] Coin as server-owned hero state, retained across reconnects for the running server.
+- [x] First player land/business ownership loop: exact Hall quotes, fee/processor-capital
+      escrow, bounded unused-permit tray and refunds, magnetic Hall-connected road frontage,
+      Shift free placement, Farmstead field previews, live farm/timber quality, and
+      server-authoritative plot/access validation. Accepted plots enter the ordinary physical
+      Wood, builder, road and business pipeline; same-tick claims cannot overlap.
+- [ ] Player business controls for asking prices, wages, procurement, owner withdrawals and
+      autopilot/manual strategy selection.
 
 **Does NOT need flow fields.** The old build order claimed the cart required them. A hand
 cart is one unit following one order, which the hero loop already does end to end.
@@ -472,12 +546,17 @@ building it early would burn months without falsifying anything.
 **Playable:** hire a squad, escort caravans for real money, own a sawmill that pays while
 you are logged off.
 
-- [ ] **Combat, from zero.** Commit `041deaa` stripped ~9,600 lines of weapons and combat;
-      `Health` survives registered for replication and attached to nothing. Both docs
-      claimed combat existed. It does not. This is the largest hidden cost in the roadmap.
+- [ ] **Combat, from zero.** Commit `041deaa` stripped ~9,600 lines of weapons and combat.
+      Shared 100-point Health, replication, inspection and the zero-Health death/estate
+      pipeline now exist, but weapons, attacks, armour, healing and combat damage do not.
+      Those combat systems remain the largest hidden cost in the roadmap.
 - [ ] Hiring, wages, upkeep
-- [ ] Business slots and passive income
-- [ ] Death and loss model for hero and retinue
+- [ ] Player-facing business acquisition/control and offline income. The autonomous NPC
+      firm engine, accounting, strategy policies, procurement and bankruptcy states exist;
+      player commands and persistence do not.
+- [ ] Combat-specific loss/respawn policy for hero and retinue. Zero-Health despawn and
+      hero-slot cleanup already exist; the open decision is what a defeated player may
+      create or recover afterward.
 - [ ] Offline income rules
 
 **Exit:** income arrives while logged off, and losing a fight costs something real.

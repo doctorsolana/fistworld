@@ -12,24 +12,33 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, MessageSender};
 
 use shared::components::{
-    BuildingId, BuildingOf, CivicEmployment, EmployedAt, MootAdministration, Nutrition, ResidentOf,
-    Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId, WorldTime,
+    BuildingId, BuildingOf, CivicEmployment, EmployedAt, MootAdministration, Nutrition, OwnedBy,
+    PersonId, ResidentOf, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
+    SettlementPolicies, WorldTime,
 };
 use shared::economy::{
-    BusinessAccount, Good, GoodsInventory, HouseholdEconomy, MarketGoodHistoryDay, MootMarket,
-    SettlementEconomy, SettlementHistoryArchive, SettlementHistoryDay, Wallet, WorldHistoryArchive,
-    WorldHistoryDay, SETTLEMENT_HISTORY_DAYS,
+    business_working_capital, BusinessAccount, BusinessCondition, BusinessDayLedger,
+    BusinessHistoryArchive, BusinessHistoryDay, BusinessManagementPolicy,
+    BusinessProcurementPolicy, BusinessSalePolicy, BusinessWagePolicy, CivicAccount,
+    CivicHistoryDay, Good, GoodsInventory, HouseholdEconomy, MarketGoodHistoryDay, MarketSeller,
+    MootMarket, SettlementEconomy, SettlementHistoryArchive, SettlementHistoryDay, Wallet,
+    WorldHistoryArchive, WorldHistoryDay, SETTLEMENT_HISTORY_DAYS,
 };
 use shared::protocol::{
     ReliableChannel, RequestSettlementHistory, RequestWorldHistory, SettlementHistoryResponse,
     WorldHistoryResponse,
 };
 
-use super::{MarketCollectionRoutine, PendingMarketPayment, SettlementEconomyRuntime};
+use super::SettlementEconomyRuntime;
 
 #[derive(Default)]
 struct SettlementAggregate {
     resident_wallets: u64,
+    household_cash: u64,
+    business_cash: u64,
+    business_wage_arrears: u64,
+    business_tax_arrears: u64,
+    unlisted_business_food: u32,
     hungry: u32,
     employed: u32,
     stock: [u32; Good::COUNT],
@@ -39,14 +48,42 @@ struct SettlementAggregate {
     filled_jobs: u16,
 }
 
-/// Authoritative archive. At thirty settlements the bounded data remains only
-/// a few megabytes, while clients pay its network cost only for the place they
-/// actively inspect.
+#[derive(Clone)]
+struct BusinessSnapshot {
+    id: BuildingId,
+    settlement: SettlementId,
+    kind: SettlementBuildingKind,
+    owner_id: Option<PersonId>,
+    owner_name: Option<String>,
+    output_good: Option<Good>,
+    account: BusinessAccount,
+    sale: BusinessSalePolicy,
+    wage: BusinessWagePolicy,
+    management: BusinessManagementPolicy,
+    procurement: BusinessProcurementPolicy,
+    condition: BusinessCondition,
+    stock: [u32; Good::COUNT],
+}
+
+struct BusinessHistoryRecord {
+    settlement: SettlementId,
+    kind: SettlementBuildingKind,
+    owner_id: Option<PersonId>,
+    owner_name: Option<String>,
+    output_good: Option<Good>,
+    days: VecDeque<BusinessHistoryDay>,
+    last_seen_day: u32,
+}
+
+/// Authoritative bounded archive. It is sampled only at world-day boundaries,
+/// and clients pay its network cost only for the place they actively inspect.
 #[derive(Resource, Default)]
 pub struct SettlementHistoryRuntime {
     days: HashMap<Entity, VecDeque<SettlementHistoryDay>>,
+    business_days: HashMap<BuildingId, BusinessHistoryRecord>,
     world_days: VecDeque<WorldHistoryDay>,
     last_world_day: HashMap<Entity, u32>,
+    last_capture_day: Option<u32>,
 }
 
 impl SettlementHistoryRuntime {
@@ -58,7 +95,54 @@ impl SettlementHistoryRuntime {
         days.push_back(day);
     }
 
-    pub fn archive(&self, settlement: Entity, name: &str) -> SettlementHistoryArchive {
+    fn push_business(&mut self, snapshot: &BusinessSnapshot, day: BusinessHistoryDay) {
+        let record =
+            self.business_days
+                .entry(snapshot.id)
+                .or_insert_with(|| BusinessHistoryRecord {
+                    settlement: snapshot.settlement,
+                    kind: snapshot.kind,
+                    owner_id: snapshot.owner_id,
+                    owner_name: snapshot.owner_name.clone(),
+                    output_good: snapshot.output_good,
+                    days: VecDeque::new(),
+                    last_seen_day: day.day,
+                });
+        // A takeover keeps the firm's stable history but updates its current
+        // owner metadata for future UI and lab reports.
+        record.settlement = snapshot.settlement;
+        record.kind = snapshot.kind;
+        record.owner_id = snapshot.owner_id;
+        record.owner_name.clone_from(&snapshot.owner_name);
+        record.output_good = snapshot.output_good;
+        record.last_seen_day = day.day;
+        if record.days.len() == SETTLEMENT_HISTORY_DAYS {
+            record.days.pop_front();
+        }
+        record.days.push_back(day);
+    }
+
+    pub fn archive(
+        &self,
+        settlement: Entity,
+        settlement_id: SettlementId,
+        name: &str,
+    ) -> SettlementHistoryArchive {
+        let mut businesses: Vec<_> = self
+            .business_days
+            .iter()
+            .filter(|(_, record)| record.settlement == settlement_id)
+            .map(|(id, record)| BusinessHistoryArchive {
+                id: *id,
+                settlement: record.settlement,
+                kind: record.kind,
+                owner_id: record.owner_id,
+                owner_name: record.owner_name.clone(),
+                output_good: record.output_good,
+                days: record.days.iter().copied().collect(),
+            })
+            .collect();
+        businesses.sort_unstable_by_key(|business| business.id);
         SettlementHistoryArchive {
             settlement: name.to_string(),
             days: self
@@ -66,7 +150,27 @@ impl SettlementHistoryRuntime {
                 .get(&settlement)
                 .map(|days| days.iter().cloned().collect())
                 .unwrap_or_default(),
+            businesses,
         }
+    }
+
+    #[cfg(test)]
+    pub fn all_business_archives(&self) -> Vec<BusinessHistoryArchive> {
+        let mut businesses: Vec<_> = self
+            .business_days
+            .iter()
+            .map(|(id, record)| BusinessHistoryArchive {
+                id: *id,
+                settlement: record.settlement,
+                kind: record.kind,
+                owner_id: record.owner_id,
+                owner_name: record.owner_name.clone(),
+                output_good: record.output_good,
+                days: record.days.iter().copied().collect(),
+            })
+            .collect();
+        businesses.sort_unstable_by_key(|business| business.id);
+        businesses
     }
 
     pub fn world_archive(&self) -> WorldHistoryArchive {
@@ -91,13 +195,18 @@ impl SettlementHistoryRuntime {
             employed: 0,
             hungry: 0,
             civic_treasury: 0,
-            market_cash: 0,
             resident_wallet_money: 0,
-            pending_payments: 0,
+            household_cash: 0,
+            business_cash: 0,
+            business_wage_arrears: 0,
+            business_tax_arrears: 0,
+            civic_wage_arrears: 0,
             total_local_coin: 0,
             stock_liquidation_value: 0,
             physical_stock: [0; Good::COUNT],
             food_reserves: 0,
+            purchasable_food: 0,
+            unlisted_business_food: 0,
             food_produced: 0,
             food_consumed: 0,
             buildings: 0,
@@ -111,19 +220,20 @@ impl SettlementHistoryRuntime {
             world.employed = world.employed.saturating_add(snapshot.employed);
             world.hungry = world.hungry.saturating_add(snapshot.hungry);
             world.civic_treasury = world.civic_treasury.saturating_add(snapshot.civic_treasury);
-            world.market_cash = world.market_cash.saturating_add(
-                snapshot
-                    .market_cash
-                    .iter()
-                    .copied()
-                    .fold(0, u64::saturating_add),
-            );
             world.resident_wallet_money = world
                 .resident_wallet_money
                 .saturating_add(snapshot.resident_wallet_money);
-            world.pending_payments = world
-                .pending_payments
-                .saturating_add(snapshot.pending_payments);
+            world.household_cash = world.household_cash.saturating_add(snapshot.household_cash);
+            world.business_cash = world.business_cash.saturating_add(snapshot.business_cash);
+            world.business_wage_arrears = world
+                .business_wage_arrears
+                .saturating_add(snapshot.business_wage_arrears);
+            world.business_tax_arrears = world
+                .business_tax_arrears
+                .saturating_add(snapshot.business_tax_arrears);
+            world.civic_wage_arrears = world
+                .civic_wage_arrears
+                .saturating_add(snapshot.civic_wage_arrears);
             world.total_local_coin = world
                 .total_local_coin
                 .saturating_add(snapshot.total_local_coin);
@@ -131,6 +241,12 @@ impl SettlementHistoryRuntime {
                 .stock_liquidation_value
                 .saturating_add(snapshot.stock_liquidation_value);
             world.food_reserves = world.food_reserves.saturating_add(snapshot.food_reserves);
+            world.purchasable_food = world
+                .purchasable_food
+                .saturating_add(snapshot.purchasable_food);
+            world.unlisted_business_food = world
+                .unlisted_business_food
+                .saturating_add(snapshot.unlisted_business_food);
             world.food_produced = world.food_produced.saturating_add(snapshot.food_produced);
             world.food_consumed = world.food_consumed.saturating_add(snapshot.food_consumed);
             world.buildings = world
@@ -168,6 +284,16 @@ impl SettlementHistoryRuntime {
         }
         self.world_days.push_back(day);
     }
+
+    fn prune_stale_businesses(&mut self, current_day: u32) {
+        // Preserve closed firms for a full in-game year so their history
+        // remains useful, but do not retain every demolished or bankrupt
+        // business identity for the lifetime of a persistent server.
+        self.business_days.retain(|_, record| {
+            current_day.saturating_sub(record.last_seen_day)
+                <= SETTLEMENT_HISTORY_DAYS.min(u32::MAX as usize) as u32
+        });
+    }
 }
 
 /// Close daily market counters and record a conservation-oriented settlement
@@ -185,6 +311,8 @@ pub fn capture_settlement_history(
         &mut MootMarket,
         &SettlementEconomy,
         Option<&MootAdministration>,
+        Option<&CivicAccount>,
+        Option<&SettlementPolicies>,
     )>,
     buildings: Query<(
         &BuildingId,
@@ -193,6 +321,12 @@ pub fn capture_settlement_history(
         Option<&GoodsInventory>,
         Option<&BusinessAccount>,
         Option<&HouseholdEconomy>,
+        Option<&BusinessSalePolicy>,
+        Option<&BusinessWagePolicy>,
+        Option<&BusinessManagementPolicy>,
+        Option<&BusinessProcurementPolicy>,
+        Option<&BusinessCondition>,
+        Option<&OwnedBy>,
     )>,
     residents: Query<(
         &ResidentOf,
@@ -203,12 +337,16 @@ pub fn capture_settlement_history(
         Option<&GoodsInventory>,
     )>,
     employment: Query<&EmployedAt>,
-    pending: Query<&PendingMarketPayment>,
-    collections: Query<&MarketCollectionRoutine>,
 ) {
     let Some(day) = world_time.iter().next().map(|time| time.day) else {
         return;
     };
+    // History is daily data. Avoid walking every resident, building and firm
+    // on all the simulation ticks between two day boundaries.
+    if history.last_capture_day == Some(day) {
+        return;
+    }
+    history.last_capture_day = Some(day);
 
     let mut filled_jobs: HashMap<BuildingId, u16> = HashMap::new();
     for employed_at in employment.iter() {
@@ -216,8 +354,21 @@ pub fn capture_settlement_history(
         *count = count.saturating_add(1);
     }
     let mut aggregates: HashMap<SettlementId, SettlementAggregate> = HashMap::new();
-    for (building_id, building_of, building, inventory, business_account, household_economy) in
-        buildings.iter()
+    let mut business_snapshots: HashMap<SettlementId, Vec<BusinessSnapshot>> = HashMap::new();
+    for (
+        building_id,
+        building_of,
+        building,
+        inventory,
+        business_account,
+        household_economy,
+        sale,
+        wage,
+        management,
+        procurement,
+        condition,
+        owner,
+    ) in buildings.iter()
     {
         let aggregate = aggregates.entry(building_of.0).or_default();
         aggregate.buildings = aggregate.buildings.saturating_add(1);
@@ -226,6 +377,8 @@ pub fn capture_settlement_history(
             SettlementBuildingKind::Farmstead
                 | SettlementBuildingKind::LumberjackHut
                 | SettlementBuildingKind::FishermansHut
+                | SettlementBuildingKind::Windmill
+                | SettlementBuildingKind::Bakery
         ) {
             aggregate.productive_buildings = aggregate.productive_buildings.saturating_add(1);
         }
@@ -236,12 +389,49 @@ pub fn capture_settlement_history(
             .filled_jobs
             .saturating_add(filled_jobs.get(building_id).copied().unwrap_or(0));
         add_inventory(&mut aggregate.stock, inventory);
-        // Keep the existing private-money band conservation-complete as coin
-        // moves from personal wallets into household and business ledgers.
-        aggregate.resident_wallets = aggregate
-            .resident_wallets
-            .saturating_add(business_account.map_or(0, |account| account.cash))
+        aggregate.business_cash = aggregate
+            .business_cash
+            .saturating_add(business_account.map_or(0, |account| account.cash));
+        aggregate.business_wage_arrears = aggregate
+            .business_wage_arrears
+            .saturating_add(business_account.map_or(0, |account| account.wage_arrears));
+        aggregate.business_tax_arrears = aggregate
+            .business_tax_arrears
+            .saturating_add(business_account.map_or(0, |account| account.tax_arrears));
+        if business_account.is_some() {
+            aggregate.unlisted_business_food = aggregate
+                .unlisted_business_food
+                .saturating_add(inventory.map_or(0, GoodsInventory::edible_amount));
+        }
+        aggregate.household_cash = aggregate
+            .household_cash
             .saturating_add(household_economy.map_or(0, |economy| economy.pennies));
+        if let Some(account) = business_account.copied() {
+            let output_good = super::business_output(building.kind);
+            let mut stock = [0; Good::COUNT];
+            add_inventory(&mut stock, inventory);
+            business_snapshots
+                .entry(building_of.0)
+                .or_default()
+                .push(BusinessSnapshot {
+                    id: *building_id,
+                    settlement: building_of.0,
+                    kind: building.kind,
+                    owner_id: owner.map(|owner| owner.0),
+                    owner_name: building.owner.clone(),
+                    output_good,
+                    account,
+                    sale: sale.copied().unwrap_or_else(|| {
+                        output_good
+                            .map_or_else(BusinessSalePolicy::default, BusinessSalePolicy::for_good)
+                    }),
+                    wage: wage.copied().unwrap_or_default(),
+                    management: management.copied().unwrap_or_default(),
+                    procurement: procurement.copied().unwrap_or_default(),
+                    condition: condition.copied().unwrap_or_default(),
+                    stock,
+                });
+        }
     }
     for (resident_of, employed_at, civic_job, wallet, nutrition, inventory) in residents.iter() {
         let aggregate = aggregates.entry(resident_of.0).or_default();
@@ -256,19 +446,18 @@ pub fn capture_settlement_history(
             .saturating_add(u32::from(employed_at.is_some() || civic_job.is_some()));
         add_inventory(&mut aggregate.stock, inventory);
     }
-    let mut pending_by_settlement: HashMap<Entity, u64> = HashMap::new();
-    for payment in pending.iter() {
-        let total = pending_by_settlement.entry(payment.settlement).or_default();
-        *total = total.saturating_add(payment.pennies);
-    }
-    for collection in collections.iter() {
-        let total = pending_by_settlement.entry(collection.hall).or_default();
-        *total = total.saturating_add(collection.reserved_pennies);
-    }
-
     let mut completed_days = HashSet::new();
-    for (entity, settlement_id, settlement, hall_inventory, mut market, economy, administration) in
-        halls.iter_mut()
+    for (
+        entity,
+        settlement_id,
+        settlement,
+        hall_inventory,
+        mut market,
+        economy,
+        administration,
+        civic_account,
+        policies,
+    ) in halls.iter_mut()
     {
         let previous = history.last_world_day.insert(entity, day);
         let Some(previous) = previous else {
@@ -280,19 +469,15 @@ pub fn capture_settlement_history(
         }
 
         let aggregate = aggregates.remove(settlement_id).unwrap_or_default();
+        let snapshots = business_snapshots.remove(settlement_id).unwrap_or_default();
         let mut physical_stock = aggregate.stock;
         add_inventory(&mut physical_stock, Some(hall_inventory));
-        let pending_payments = pending_by_settlement
-            .get(&entity)
-            .copied()
-            .unwrap_or(0)
-            .saturating_add(administration.map_or(0, |office| office.wage_arrears));
+        let civic_wage_arrears = administration.map_or(0, |office| office.wage_arrears);
 
         for offset in 0..elapsed {
             let is_latest = offset + 1 == elapsed;
             let completed_day = previous.saturating_add(offset).saturating_add(1);
             let mut market_days = [MarketGoodHistoryDay::default(); Good::COUNT];
-            let mut market_cash = [0u64; Good::COUNT];
             let mut liquidation_value = 0u64;
             for good in Good::ALL {
                 let pool = market.pool(good);
@@ -322,11 +507,12 @@ pub fn capture_settlement_history(
                     producer_coin: flow.producer_coin,
                     consumer_units: flow.consumer_units,
                     consumer_coin: flow.consumer_coin,
+                    unavailable_units: flow.unavailable_units,
+                    unaffordable_units: flow.unaffordable_units,
                     closing_stock: hall_inventory.amount(good),
                     target_stock: pool.target_stock,
-                    pool_cash: pool.cash,
+                    listed_units: market.listed_units(good),
                 };
-                market_cash[good.index()] = pool.cash;
                 liquidation_value = liquidation_value.saturating_add(
                     u64::from(physical_stock[good.index()]).saturating_mul(pool.bid),
                 );
@@ -335,12 +521,27 @@ pub fn capture_settlement_history(
             let history_index = elapsed.saturating_sub(offset).saturating_sub(1) as usize;
             let (food_produced, food_consumed) =
                 economy_runtime.historical_food(entity, history_index);
-            let market_total = market_cash.into_iter().fold(0u64, u64::saturating_add);
             let total_local_coin = settlement
                 .treasury
-                .saturating_add(market_total)
                 .saturating_add(aggregate.resident_wallets)
-                .saturating_add(pending_payments);
+                .saturating_add(aggregate.household_cash)
+                .saturating_add(aggregate.business_cash);
+            let civic_ledger = civic_account
+                .and_then(|account| account.ledger_for_day(completed_day))
+                .unwrap_or_else(|| shared::economy::CivicDayLedger::empty(completed_day));
+            let civic_observed = civic_account
+                .and_then(|account| account.ledger_for_day(completed_day))
+                .is_some();
+            let filled_positions = administration.map_or(0, |office| {
+                crate::world::village::civic::filled_civic_positions(office)
+                    .min(usize::from(u16::MAX)) as u16
+            });
+            let policy = policies.copied().unwrap_or_default();
+            let desired_positions = crate::world::village::civic::desired_civic_positions(
+                settlement.tier,
+                policy.staffing_posture,
+            )
+            .min(usize::from(u16::MAX)) as u16;
 
             history.push(
                 entity,
@@ -348,9 +549,39 @@ pub fn capture_settlement_history(
                     day: completed_day,
                     market: market_days,
                     civic_treasury: settlement.treasury,
-                    market_cash,
                     resident_wallet_money: aggregate.resident_wallets,
-                    pending_payments,
+                    household_cash: aggregate.household_cash,
+                    business_cash: aggregate.business_cash,
+                    business_wage_arrears: aggregate.business_wage_arrears,
+                    business_tax_arrears: aggregate.business_tax_arrears,
+                    civic_wage_arrears,
+                    civic: CivicHistoryDay {
+                        observed: civic_observed,
+                        permit_income: civic_ledger.permit_income,
+                        market_fee_income: civic_ledger.market_fee_income,
+                        profit_tax_income: civic_ledger.profit_tax_income,
+                        public_sale_income: civic_ledger.public_sale_income,
+                        wage_expense: civic_ledger.wage_expense,
+                        poor_relief_expense: civic_ledger.poor_relief_expense,
+                        material_expense: civic_ledger.material_expense,
+                        filled_positions,
+                        vacant_positions: desired_positions.saturating_sub(filled_positions),
+                        market_fee_bps: policy.market_fee_bps,
+                        business_profit_tax_bps: policy.business_profit_tax_bps,
+                        poor_relief: policy.poor_relief,
+                        food_reserve_target_days: policy.food_reserve_target_days,
+                        civic_payroll_reserve_days: policy.civic_payroll_reserve_days,
+                        staffing_posture: policy.staffing_posture,
+                        business_permit_subsidy_bps: policy.business_permit_subsidy_bps,
+                        strategy: policy.strategy,
+                        autopilot: policy.autopilot,
+                        adjustment: (policy.last_change_day == completed_day)
+                            .then_some(policy.last_adjustment)
+                            .unwrap_or_default(),
+                        reason: (policy.last_change_day == completed_day)
+                            .then_some(policy.last_reason)
+                            .unwrap_or_default(),
+                    },
                     physical_stock,
                     stock_liquidation_value: liquidation_value,
                     total_local_coin,
@@ -358,6 +589,8 @@ pub fn capture_settlement_history(
                     employed: aggregate.employed,
                     hungry: aggregate.hungry,
                     food_reserves: economy.edible_stock,
+                    purchasable_food: market.listed_edible_units(),
+                    unlisted_business_food: aggregate.unlisted_business_food,
                     food_produced,
                     food_consumed,
                     buildings: aggregate.buildings.saturating_add(1),
@@ -372,6 +605,70 @@ pub fn capture_settlement_history(
                     hunger_penalty: economy.hunger_penalty,
                 },
             );
+            for snapshot in &snapshots {
+                let ledger = if is_latest {
+                    snapshot.account.previous_day
+                } else {
+                    BusinessDayLedger::empty(completed_day)
+                };
+                let observed = is_latest && ledger.day != u32::MAX;
+                let listed_output_units = snapshot.output_good.map_or(0, |good| {
+                    market.seller_listed_units(MarketSeller::Business(snapshot.id), good)
+                });
+                history.push_business(
+                    snapshot,
+                    BusinessHistoryDay {
+                        day: completed_day,
+                        observed,
+                        cash: snapshot.account.cash,
+                        protected_working_capital: business_working_capital(
+                            snapshot.kind.positions(),
+                            &snapshot.wage,
+                            &snapshot.management,
+                            &snapshot.procurement,
+                            Some(&market),
+                        )
+                        .total_with_liabilities(&snapshot.account),
+                        withdrawable_profit: snapshot.account.withdrawable_profit(
+                            business_working_capital(
+                                snapshot.kind.positions(),
+                                &snapshot.wage,
+                                &snapshot.management,
+                                &snapshot.procurement,
+                                Some(&market),
+                            )
+                            .total(),
+                        ),
+                        wage_arrears: snapshot.account.wage_arrears,
+                        tax_arrears: snapshot.account.tax_arrears,
+                        gross_revenue: if observed { ledger.gross_revenue } else { 0 },
+                        wage_expense: if observed { ledger.wage_expense } else { 0 },
+                        input_expense: if observed { ledger.input_expense } else { 0 },
+                        market_fees: if observed { ledger.market_fees } else { 0 },
+                        profit_taxes: if observed { ledger.profit_taxes } else { 0 },
+                        owner_withdrawals: if observed {
+                            ledger.owner_withdrawals
+                        } else {
+                            0
+                        },
+                        profit: if observed { ledger.profit() } else { 0 },
+                        produced_units: if observed { ledger.produced_units } else { 0 },
+                        sold_units: if observed { ledger.sold_units } else { 0 },
+                        purchased_input_units: if observed {
+                            ledger.purchased_input_units
+                        } else {
+                            0
+                        },
+                        workplace_stock: snapshot.stock,
+                        listed_output_units,
+                        asking_unit_price: snapshot.sale.asking_unit_price,
+                        daily_wage: snapshot.wage.daily_wage,
+                        strategy: snapshot.management.strategy,
+                        autopilot: snapshot.management.autopilot,
+                        state: snapshot.condition.state,
+                    },
+                );
+            }
             completed_days.insert(completed_day);
         }
         market.begin_new_day();
@@ -385,6 +682,7 @@ pub fn capture_settlement_history(
     for day in world_days {
         history.push_world(day);
     }
+    history.prune_stale_businesses(day);
 }
 
 fn add_inventory(target: &mut [u32; Good::COUNT], inventory: Option<&GoodsInventory>) {
@@ -399,7 +697,7 @@ fn add_inventory(target: &mut [u32; Good::COUNT], inventory: Option<&GoodsInvent
 /// Serve history only when a client opens a relevant page.
 pub fn handle_settlement_history_requests(
     history: Res<SettlementHistoryRuntime>,
-    settlements: Query<&Settlement>,
+    settlements: Query<(&Settlement, &SettlementId)>,
     mut clients: Query<
         (
             &mut MessageReceiver<RequestSettlementHistory>,
@@ -410,12 +708,12 @@ pub fn handle_settlement_history_requests(
 ) {
     for (mut receiver, mut sender) in clients.iter_mut() {
         for request in receiver.receive() {
-            let Ok(settlement) = settlements.get(request.settlement) else {
+            let Ok((settlement, settlement_id)) = settlements.get(request.settlement) else {
                 continue;
             };
             sender.send::<ReliableChannel>(SettlementHistoryResponse {
                 settlement: request.settlement,
-                archive: history.archive(request.settlement, &settlement.name),
+                archive: history.archive(request.settlement, *settlement_id, &settlement.name),
             });
         }
     }
@@ -449,9 +747,13 @@ mod tests {
             day,
             market: [MarketGoodHistoryDay::default(); Good::COUNT],
             civic_treasury: 0,
-            market_cash: [0; Good::COUNT],
             resident_wallet_money: 0,
-            pending_payments: 0,
+            household_cash: 0,
+            business_cash: 0,
+            business_wage_arrears: 0,
+            business_tax_arrears: 0,
+            civic_wage_arrears: 0,
+            civic: CivicHistoryDay::default(),
             physical_stock: [0; Good::COUNT],
             stock_liquidation_value: 0,
             total_local_coin: 0,
@@ -459,6 +761,8 @@ mod tests {
             employed: 0,
             hungry: 0,
             food_reserves: 0,
+            purchasable_food: 0,
+            unlisted_business_food: 0,
             food_produced: 0,
             food_consumed: 0,
             buildings: 0,
@@ -481,7 +785,7 @@ mod tests {
         for day in 1..=400 {
             history.push(settlement, empty_day(day));
         }
-        let archive = history.archive(settlement, "Brackwater");
+        let archive = history.archive(settlement, SettlementId(7), "Brackwater");
         assert_eq!(archive.days.len(), 365);
         assert_eq!(archive.days.first().unwrap().day, 36);
         assert_eq!(archive.days.last().unwrap().day, 400);
@@ -507,5 +811,80 @@ mod tests {
         assert_eq!(day_one.settlements, 2);
         assert_eq!(day_one.population, 11);
         assert_eq!(day_three.population, 33);
+    }
+
+    #[test]
+    fn business_archive_is_bounded_and_scoped_by_stable_settlement_id() {
+        let settlement_entity = Entity::from_bits(9);
+        let settlement_id = SettlementId(17);
+        let snapshot = BusinessSnapshot {
+            id: BuildingId(42),
+            settlement: settlement_id,
+            kind: SettlementBuildingKind::Farmstead,
+            owner_id: Some(PersonId(3)),
+            owner_name: Some("Edric".to_string()),
+            output_good: Some(Good::Wheat),
+            account: BusinessAccount::default(),
+            sale: BusinessSalePolicy::for_good(Good::Wheat),
+            wage: BusinessWagePolicy::default(),
+            management: BusinessManagementPolicy::default(),
+            procurement: BusinessProcurementPolicy::default(),
+            condition: BusinessCondition::default(),
+            stock: [0; Good::COUNT],
+        };
+        let mut history = SettlementHistoryRuntime::default();
+        for day in 1..=400 {
+            history.push_business(
+                &snapshot,
+                BusinessHistoryDay {
+                    day,
+                    observed: true,
+                    cash: u64::from(day),
+                    protected_working_capital: 0,
+                    withdrawable_profit: 0,
+                    wage_arrears: 0,
+                    tax_arrears: 0,
+                    gross_revenue: 10,
+                    wage_expense: 4,
+                    input_expense: 0,
+                    market_fees: 1,
+                    profit_taxes: 0,
+                    owner_withdrawals: 0,
+                    profit: 5,
+                    produced_units: 2,
+                    sold_units: 1,
+                    purchased_input_units: 0,
+                    workplace_stock: [0; Good::COUNT],
+                    listed_output_units: 1,
+                    asking_unit_price: 80,
+                    daily_wage: 100,
+                    strategy: shared::economy::BusinessStrategy::Balanced,
+                    autopilot: true,
+                    state: shared::economy::BusinessState::Operating,
+                },
+            );
+        }
+
+        let archive = history.archive(settlement_entity, settlement_id, "Brackwater");
+        assert_eq!(archive.businesses.len(), 1);
+        let business = &archive.businesses[0];
+        assert_eq!(business.id, BuildingId(42));
+        assert_eq!(business.owner_id, Some(PersonId(3)));
+        assert_eq!(business.days.len(), SETTLEMENT_HISTORY_DAYS);
+        assert_eq!(business.days.first().unwrap().day, 36);
+        assert_eq!(business.days.last().unwrap().day, 400);
+
+        assert!(history
+            .archive(settlement_entity, SettlementId(18), "Elsewhere")
+            .businesses
+            .is_empty());
+
+        history.prune_stale_businesses(400 + SETTLEMENT_HISTORY_DAYS as u32);
+        assert_eq!(history.business_days.len(), 1);
+        history.prune_stale_businesses(401 + SETTLEMENT_HISTORY_DAYS as u32);
+        assert!(
+            history.business_days.is_empty(),
+            "a firm remains inspectable for one year after closure, not forever"
+        );
     }
 }

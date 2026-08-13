@@ -183,6 +183,138 @@ impl CharacterActivity {
     }
 }
 
+/// The current purpose behind a villager's visible activity.
+///
+/// [`CharacterActivity`] remains the small animation state (idle, walking,
+/// farming, and so on). This component answers the more useful inspection
+/// question: *why* is this person standing or walking? It is deliberately a
+/// compact enum rather than a replicated debug string, so thousands of NPCs
+/// only send a few bytes when their actual objective changes.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CharacterObjective {
+    #[default]
+    Idle,
+    LookingForSettlement,
+    TravellingToSettlement,
+    WaitingToRetryMigration,
+    QueuedForImmigration,
+    RegisteringImmigration,
+    QueuedForPermit,
+    CollectingPermit,
+    QueuedForHouseholdFood,
+    QueuedForPersonalFood,
+    QueuedForPoorRelief,
+    CollectingFood,
+    Eating,
+    FindingConstructionWood,
+    CarryingConstructionWood,
+    ConstructingBuilding,
+    BuildingRoad,
+    ClearingRoadTree,
+    GoingHome,
+    EnteringHome,
+    Sleeping,
+    LeavingHome,
+    GoingHouseholdShopping,
+    ReturningWithHouseholdFood,
+    CollectingMarketGoods,
+    DeliveringMarketGoods,
+    GoingToFarm,
+    Farming,
+    ReturningHarvest,
+    GoingFishing,
+    Fishing,
+    ReturningCatch,
+    GoingToLumberWork,
+    ChoppingTimber,
+    ReturningTimber,
+    GoingToProcessingWork,
+    MillingFlour,
+    BakingBread,
+    EndingWorkShift,
+    WalkingAroundTown,
+    Resting,
+    ShelteringAtMoot,
+    OffDuty,
+    LookingForWork,
+    WalkingToDestination,
+}
+
+impl CharacterObjective {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "Idle",
+            Self::LookingForSettlement => "Looking for a settlement",
+            Self::TravellingToSettlement => "Going to register at the Moot Hall",
+            Self::WaitingToRetryMigration => "Waiting to retry settlement travel",
+            Self::QueuedForImmigration => "In line to register as a resident",
+            Self::RegisteringImmigration => "Registering at the Moot Hall",
+            Self::QueuedForPermit => "In line to collect a permit",
+            Self::CollectingPermit => "Collecting a permit",
+            Self::QueuedForHouseholdFood => "In line for household food",
+            Self::QueuedForPersonalFood => "In line to buy food",
+            Self::QueuedForPoorRelief => "In line for Poor Relief",
+            Self::CollectingFood => "Carrying food from the Moot Hall",
+            Self::Eating => "Eating at the Moot commons",
+            Self::FindingConstructionWood => "Finding Wood for a building site",
+            Self::CarryingConstructionWood => "Delivering Wood to a building site",
+            Self::ConstructingBuilding => "Constructing a building",
+            Self::BuildingRoad => "Building a road",
+            Self::ClearingRoadTree => "Clearing a tree from a road",
+            Self::GoingHome => "Going home for the night",
+            Self::EnteringHome => "Entering home",
+            Self::Sleeping => "Sleeping at home",
+            Self::LeavingHome => "Leaving home",
+            Self::GoingHouseholdShopping => "Going to buy household food",
+            Self::ReturningWithHouseholdFood => "Taking food home",
+            Self::CollectingMarketGoods => "Collecting goods for the market",
+            Self::DeliveringMarketGoods => "Delivering goods to the Moot Hall",
+            Self::GoingToFarm => "Going to farm work",
+            Self::Farming => "Working the wheat field",
+            Self::ReturningHarvest => "Taking Wheat to the farmstead",
+            Self::GoingFishing => "Going to the fishing grounds",
+            Self::Fishing => "Fishing",
+            Self::ReturningCatch => "Taking the catch to the fishing hut",
+            Self::GoingToLumberWork => "Going to lumber work",
+            Self::ChoppingTimber => "Cutting timber",
+            Self::ReturningTimber => "Taking Wood to the lumber hut",
+            Self::GoingToProcessingWork => "Going to processing work",
+            Self::MillingFlour => "Milling Wheat into Flour",
+            Self::BakingBread => "Baking Bread",
+            Self::EndingWorkShift => "Finishing the work shift",
+            Self::WalkingAroundTown => "Walking around town",
+            Self::Resting => "Resting",
+            Self::ShelteringAtMoot => "Sheltering at the Moot Hall",
+            Self::OffDuty => "Off duty",
+            Self::LookingForWork => "Looking for work",
+            Self::WalkingToDestination => "Walking to a destination",
+        }
+    }
+}
+
+/// Inspection-only route state paired with [`CharacterObjective`]. This is
+/// kept separate so a blocked farmer still reads as “going to farm work” while
+/// the UI also exposes that route planning—not job selection—is the blocker.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CharacterNavigationStatus {
+    #[default]
+    Stationary,
+    Walking,
+    PlanningRoute,
+    RouteBlocked,
+}
+
+impl CharacterNavigationStatus {
+    pub const fn label(self) -> Option<&'static str> {
+        match self {
+            Self::Stationary => None,
+            Self::Walking => Some("walking"),
+            Self::PlanningRoute => Some("finding a route"),
+            Self::RouteBlocked => Some("route blocked"),
+        }
+    }
+}
+
 impl CharacterKind {
     pub fn label(self) -> &'static str {
         match self {
@@ -214,19 +346,83 @@ pub struct Settlement {
     pub residents: u32,
     /// Local coin. Permit fees land here, including for independent
     /// settlements: a place's income is its own, and belongs to nobody else.
-    /// First and repeat permits are all free in the pre-wallet prototype, so
-    /// this stays at zero and says so honestly.
+    /// Market fees, positive-profit levies and public-sale receipts join that
+    /// income; wages, relief and public procurement spend the same real cash.
     pub treasury: u64,
+}
+
+/// The physical civic building standing on the settlement entity.
+///
+/// This is intentionally distinct from [`SettlementTier`]. Today promotion
+/// completes the matching Hall level immediately; keeping the physical state
+/// explicit lets a later treasury-funded construction project delay that
+/// completion without replacing the settlement, its inventory, queues or
+/// stable identity.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CivicHallLevel {
+    #[default]
+    Moot,
+    Village,
+    Town,
+}
+
+impl CivicHallLevel {
+    /// Current automatic ladder. A City retains its Town Hall until authored
+    /// City Hall art and construction rules exist.
+    pub const fn for_tier(tier: SettlementTier) -> Self {
+        match tier {
+            SettlementTier::Ruins | SettlementTier::Hamlet => Self::Moot,
+            SettlementTier::Village => Self::Village,
+            SettlementTier::Town | SettlementTier::City => Self::Town,
+        }
+    }
+
+    pub const fn building_type(self) -> crate::building::BuildingType {
+        match self {
+            Self::Moot => crate::building::BuildingType::MootHall,
+            Self::Village => crate::building::BuildingType::VillageHall,
+            Self::Town => crate::building::BuildingType::TownHall,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Moot => "MOOT HALL",
+            Self::Village => "VILLAGE HALL",
+            Self::Town => "TOWN HALL",
+        }
+    }
+
+    /// Largest authored rung that every new civic centre must reserve.
+    pub const fn largest_supported() -> Self {
+        Self::Town
+    }
+
+    /// Centre of the permanent, largest-supported Hall footprint in world X/Z.
+    pub fn reserved_world_center(root: Vec3, rotation_y: f32) -> Vec2 {
+        Self::largest_supported()
+            .building_type()
+            .definition()
+            .world_footprint_center(root, rotation_y)
+    }
+
+    pub fn reserved_half_extents() -> Vec2 {
+        Self::largest_supported()
+            .building_type()
+            .definition()
+            .footprint
+            * 0.5
+    }
 }
 
 /// The small public office operated from a settlement's Moot Hall.
 ///
 /// This is separate from [`Settlement`] because administration is optional
 /// state that can grow without making every old settlement constructor and
-/// save record know about future civic jobs. The first office has one bounded
-/// position: a road steward who audits paths and repairs connections to the
-/// hall. It is replicated so clicking the hall exposes who holds the job and
-/// what the public purse owes them.
+/// save record know about future civic jobs. The founding roster has a Reeve
+/// and up to two combined Moot Stewards; later tier and policy targets can
+/// advertise Guards. It is replicated so clicking the hall exposes who
+/// holds each job and what the public purse owes them.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct MootAdministration {
     /// Senior civic clerk. The Reeve remains accountable for permits and the
@@ -242,10 +438,16 @@ pub struct MootAdministration {
     /// patrol/combat behaviour is implemented.
     #[serde(default)]
     pub guards: Vec<String>,
-    /// Public works positions. The first worker is also the road steward so
-    /// existing road audits keep one clear accountable owner.
+    /// Public works positions. Founding worker slots are combined Moot
+    /// Stewards: both haul goods and either can accept road repairs. The
+    /// singular fields above remain the readable primary steward aliases.
     #[serde(default)]
     pub city_workers: Vec<String>,
+    /// One payable per present or former public employee. Inactive entries
+    /// remain until their arrears are actually paid, so changing jobs cannot
+    /// erase a municipal debt.
+    #[serde(default)]
+    pub payroll: Vec<CivicPayrollEntry>,
     pub road_steward_daily_salary: u64,
     pub wage_arrears: u64,
     pub roadless_buildings: u16,
@@ -264,6 +466,7 @@ impl Default for MootAdministration {
             road_steward: None,
             guards: Vec::new(),
             city_workers: Vec::new(),
+            payroll: Vec::new(),
             road_steward_daily_salary: crate::economy::ROAD_STEWARD_DAILY_SALARY,
             wage_arrears: 0,
             roadless_buildings: 0,
@@ -272,6 +475,20 @@ impl Default for MootAdministration {
             last_road_audit_day: 0,
         }
     }
+}
+
+/// A durable public wage claim. Civic positions use the same explicit cash
+/// and arrears rules as private businesses rather than silently volunteering
+/// whenever the treasury is empty.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct CivicPayrollEntry {
+    pub person_id: super::PersonId,
+    pub name: String,
+    pub role: super::CivicRole,
+    pub daily_wage: u64,
+    pub arrears: u64,
+    pub last_accrual_day: u32,
+    pub active: bool,
 }
 
 /// What a building in a settlement IS, as distinct from what it looks like.
@@ -298,6 +515,10 @@ pub enum SettlementBuildingKind {
     Market,
     Tavern,
     Church,
+    /// Buys Wheat and mills it into household-edible Flour.
+    Windmill,
+    /// Buys Flour and bakes higher-efficiency Bread.
+    Bakery,
 }
 
 impl SettlementBuildingKind {
@@ -321,14 +542,13 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Market => "MARKETPLACE",
             SettlementBuildingKind::Tavern => "TAVERN",
             SettlementBuildingKind::Church => "CHURCH",
+            SettlementBuildingKind::Windmill => "WINDMILL",
+            SettlementBuildingKind::Bakery => "BAKERY",
         }
     }
 
-    /// The art that stands in for this role today.
-    ///
-    /// A windmill is not a farmstead and a log cabin is not a moot hall; both
-    /// read closely enough to test the systems, and swapping them later is one
-    /// line here rather than a change to any rule.
+    /// The art used for this semantic role. Keeping this mapping separate from
+    /// the economy means future regional skins remain visual-only changes.
     pub fn art(self) -> crate::building::BuildingType {
         use crate::building::BuildingType as Art;
         match self {
@@ -340,6 +560,8 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Market => Art::PlaceholderMarket,
             SettlementBuildingKind::Tavern => Art::PlaceholderTavern,
             SettlementBuildingKind::Church => Art::PlaceholderChurch,
+            SettlementBuildingKind::Windmill => Art::Windmill,
+            SettlementBuildingKind::Bakery => Art::Bakery,
         }
     }
 
@@ -357,13 +579,53 @@ impl SettlementBuildingKind {
             // Fishing quality is geometry rather than a land resource: the
             // server measures navigable open water around the authored pier.
             SettlementBuildingKind::FishermansHut => 0.5,
-            // A hall and a house harvest nothing. Neutral rather than zero, so
-            // "quality" never reads as "this house is broken".
+            // These buildings transform supplied goods or provide services;
+            // the soil beneath them does not change their output. Keep the
+            // shared storage field neutral while omitting it from their UI.
             SettlementBuildingKind::Hall
             | SettlementBuildingKind::House
             | SettlementBuildingKind::Market
             | SettlementBuildingKind::Tavern
-            | SettlementBuildingKind::Church => 0.5,
+            | SettlementBuildingKind::Church
+            | SettlementBuildingKind::Windmill
+            | SettlementBuildingKind::Bakery => 0.5,
+        }
+    }
+
+    /// Geographic preference used while choosing a plot. This is deliberately
+    /// separate from [`Self::yield_quality`]: a Windmill belongs on open ground
+    /// visually and for wind access, but its actual Flour rate is controlled
+    /// by Wheat, workers and elapsed mill time rather than a land multiplier.
+    pub fn placement_suitability(self, profile: &crate::worldgen::ResourceProfile) -> f32 {
+        match self {
+            SettlementBuildingKind::Farmstead => profile.farmland,
+            SettlementBuildingKind::LumberjackHut => profile.wood,
+            SettlementBuildingKind::Windmill => (1.0 - profile.wood * 0.75).clamp(0.0, 1.0),
+            SettlementBuildingKind::Hall
+            | SettlementBuildingKind::FishermansHut
+            | SettlementBuildingKind::House
+            | SettlementBuildingKind::Market
+            | SettlementBuildingKind::Tavern
+            | SettlementBuildingKind::Church
+            | SettlementBuildingKind::Bakery => 0.5,
+        }
+    }
+
+    /// Player-facing site-yield label, present only where geography changes
+    /// physical output. Processor throughput instead depends on inputs,
+    /// staffing and work time.
+    pub const fn site_quality_label(self) -> Option<&'static str> {
+        match self {
+            SettlementBuildingKind::Farmstead => Some("FARMLAND QUALITY"),
+            SettlementBuildingKind::LumberjackHut => Some("TIMBER QUALITY"),
+            SettlementBuildingKind::FishermansHut => Some("FISHING QUALITY"),
+            SettlementBuildingKind::Hall
+            | SettlementBuildingKind::House
+            | SettlementBuildingKind::Market
+            | SettlementBuildingKind::Tavern
+            | SettlementBuildingKind::Church
+            | SettlementBuildingKind::Windmill
+            | SettlementBuildingKind::Bakery => None,
         }
     }
 
@@ -378,6 +640,8 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Market => Some("Market Trader"),
             SettlementBuildingKind::Tavern => Some("Innkeeper"),
             SettlementBuildingKind::Church => Some("Cleric"),
+            SettlementBuildingKind::Windmill => Some("Miller"),
+            SettlementBuildingKind::Bakery => Some("Baker"),
         }
     }
 
@@ -391,11 +655,15 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Farmstead => 2,
             SettlementBuildingKind::LumberjackHut => 1,
             SettlementBuildingKind::FishermansHut => 2,
+            // The founding hall employs a Reeve and up to two combined Moot
+            // Stewards. Each steward both collects consignments and maintains
+            // roads; those duties must never become separate jobs.
             SettlementBuildingKind::Hall => 3,
             SettlementBuildingKind::House => 0,
             SettlementBuildingKind::Market => 2,
             SettlementBuildingKind::Tavern => 2,
             SettlementBuildingKind::Church => 1,
+            SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => 2,
         }
     }
 
@@ -414,6 +682,8 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Market => crate::economy::capacity::MARKET,
             SettlementBuildingKind::Tavern => crate::economy::capacity::TAVERN,
             SettlementBuildingKind::Church => crate::economy::capacity::CHURCH,
+            SettlementBuildingKind::Windmill => crate::economy::capacity::WINDMILL,
+            SettlementBuildingKind::Bakery => crate::economy::capacity::BAKERY,
         }
     }
 
@@ -430,7 +700,9 @@ impl SettlementBuildingKind {
             | SettlementBuildingKind::FishermansHut
             | SettlementBuildingKind::Market
             | SettlementBuildingKind::Tavern
-            | SettlementBuildingKind::Church => 0,
+            | SettlementBuildingKind::Church
+            | SettlementBuildingKind::Windmill
+            | SettlementBuildingKind::Bakery => 0,
         }
     }
 
@@ -450,6 +722,9 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Market => 14,
             SettlementBuildingKind::Tavern => 12,
             SettlementBuildingKind::Church => 16,
+            // Small enough to bootstrap from a founder's ten coins while
+            // retaining some working capital for the first input purchase.
+            SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => 8,
         }
     }
 
@@ -473,6 +748,9 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Market => Vec2::new(0.0, -4.0),
             SettlementBuildingKind::Tavern => Vec2::new(0.0, -4.0),
             SettlementBuildingKind::Church => Vec2::new(0.0, -6.5),
+            SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => {
+                Vec2::new(0.0, -4.0)
+            }
         }
     }
 
@@ -591,21 +869,87 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Market => (18.0, 54.0),
             SettlementBuildingKind::Tavern => (18.0, 66.0),
             SettlementBuildingKind::Church => (24.0, 78.0),
+            SettlementBuildingKind::Windmill => (30.0, 96.0),
+            SettlementBuildingKind::Bakery => (18.0, 60.0),
         }
     }
 
     /// Ground a building of this kind needs to itself, in metres.
     pub fn clearance(self) -> f32 {
         match self {
-            SettlementBuildingKind::Hall => 10.0,
+            // The Moot is also the founding market, permit office and relief
+            // counter. Reserve a real civic forecourt for its visible service
+            // line and commons instead of allowing later cabins to pinch the
+            // authored doorway down to a single overlapping navigation point.
+            SettlementBuildingKind::Hall => 16.0,
             SettlementBuildingKind::Farmstead => 12.0,
             SettlementBuildingKind::LumberjackHut => 9.0,
             SettlementBuildingKind::FishermansHut => 11.0,
-            SettlementBuildingKind::House => 8.0,
+            // A 6.0 x 6.94 m cabin does not need the old sixteen-metre
+            // centre-to-centre exclusion. Twelve metres still leaves useful
+            // yards between cabins while allowing seeded lanes and grid
+            // frontages to read as an actual neighbourhood. Door aprons,
+            // roads, prop collision and the authored footprints remain
+            // separate hard constraints.
+            SettlementBuildingKind::House => 6.0,
             SettlementBuildingKind::Market => 11.0,
             SettlementBuildingKind::Tavern => 10.0,
             SettlementBuildingKind::Church => 12.0,
+            SettlementBuildingKind::Windmill => 11.0,
+            SettlementBuildingKind::Bakery => 9.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod settlement_building_kind_tests {
+    use super::*;
+
+    #[test]
+    fn only_extractive_workplaces_expose_site_quality() {
+        assert_eq!(
+            SettlementBuildingKind::Farmstead.site_quality_label(),
+            Some("FARMLAND QUALITY")
+        );
+        assert_eq!(
+            SettlementBuildingKind::LumberjackHut.site_quality_label(),
+            Some("TIMBER QUALITY")
+        );
+        assert_eq!(
+            SettlementBuildingKind::FishermansHut.site_quality_label(),
+            Some("FISHING QUALITY")
+        );
+        assert_eq!(SettlementBuildingKind::Windmill.site_quality_label(), None);
+        assert_eq!(SettlementBuildingKind::Bakery.site_quality_label(), None);
+
+        let dense_forest = crate::worldgen::ResourceProfile {
+            wood: 1.0,
+            stone: 0.0,
+            iron: 0.0,
+            farmland: 0.0,
+        };
+        assert_eq!(
+            SettlementBuildingKind::Windmill.yield_quality(&dense_forest),
+            0.5,
+            "processor output must not change with the land resource profile"
+        );
+        assert_eq!(
+            SettlementBuildingKind::Bakery.yield_quality(&dense_forest),
+            0.5
+        );
+        let open_ground = crate::worldgen::ResourceProfile {
+            wood: 0.0,
+            ..dense_forest
+        };
+        assert!(
+            SettlementBuildingKind::Windmill.placement_suitability(&open_ground)
+                > SettlementBuildingKind::Windmill.placement_suitability(&dense_forest),
+            "Windmills should prefer open plots without turning that preference into output quality"
+        );
+        assert_eq!(
+            SettlementBuildingKind::Bakery.placement_suitability(&open_ground),
+            SettlementBuildingKind::Bakery.placement_suitability(&dense_forest)
+        );
     }
 }
 
@@ -726,6 +1070,119 @@ pub struct SettlementDevelopment {
     pub stone_needed: u32,
 }
 
+/// Current permit-market signals published by the settlement hall.
+///
+/// These are invitations, not construction orders. A subsidized opportunity
+/// receives the enacted permit discount; residents may still choose a lower
+/// signal at full price or decline every offer. Scores are quantized so normal
+/// stock movement does not create noisy high-frequency replication.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PermitMarketOpportunity {
+    pub kind: SettlementBuildingKind,
+    pub score: u8,
+    pub subsidized: bool,
+    /// Competition signals are meant to admit a new owner, rather than let
+    /// the incumbent use a public discount to deepen the same monopoly.
+    #[serde(default)]
+    pub requires_independent_owner: bool,
+}
+
+#[derive(Component, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct SettlementOpportunityBoard {
+    /// Highest signal first; bounded by the server to the small founding set.
+    pub opportunities: Vec<PermitMarketOpportunity>,
+}
+
+/// One unspent land-use right purchased by a player-controlled person.
+///
+/// The permit fee and any processor startup capital are escrow rather than
+/// liquid money. Placing the plot releases the fee to the settlement and
+/// carries the startup money into the worksite; surrendering an unused permit
+/// returns both amounts. NPC permits select their plot in the approval tick,
+/// so the same escrow boundary is simply instantaneous for them.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PlayerPermit {
+    pub id: super::PermitId,
+    pub settlement: super::SettlementId,
+    pub kind: SettlementBuildingKind,
+    pub fee_escrow: u64,
+    pub startup_capital_escrow: u64,
+    pub purchased_day: u32,
+}
+
+impl PlayerPermit {
+    pub const fn total_escrow(&self) -> u64 {
+        self.fee_escrow.saturating_add(self.startup_capital_escrow)
+    }
+}
+
+/// Small replicated permit wallet on a player's live hero.
+///
+/// This is deliberately separate from cargo: a stamped land right has no
+/// physical bulk. The server caps it and remains the only authority allowed to
+/// append, consume or refund an entry.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlayerPermitLedger {
+    pub permits: Vec<PlayerPermit>,
+}
+
+impl PlayerPermitLedger {
+    pub const MAX_ACTIVE: usize = 8;
+
+    pub fn contains_kind(
+        &self,
+        settlement: super::SettlementId,
+        kind: SettlementBuildingKind,
+    ) -> bool {
+        self.permits
+            .iter()
+            .any(|permit| permit.settlement == settlement && permit.kind == kind)
+    }
+
+    pub fn get(&self, id: super::PermitId) -> Option<&PlayerPermit> {
+        self.permits.iter().find(|permit| permit.id == id)
+    }
+}
+
+/// Whether a property listing is a finished workplace or a permitted site
+/// whose materials and construction duty transfer with the purchase.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PropertyListingStage {
+    CompletedBusiness,
+    UnfinishedWorksite,
+}
+
+impl PropertyListingStage {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::CompletedBusiness => "Completed business",
+            Self::UnfinishedWorksite => "Unfinished worksite",
+        }
+    }
+}
+
+/// One small, globally useful property-market record published by the hall.
+///
+/// Buildings themselves remain detailed world entities. This summary lets a
+/// settlement menu stay complete even when a large town's outer workplace is
+/// beyond the client's detailed replication radius.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct PropertyMarketListing {
+    pub kind: SettlementBuildingKind,
+    pub stage: PropertyListingStage,
+    pub asking_price: u64,
+    pub listed_day: u32,
+    pub reason: crate::economy::BusinessSaleReason,
+    pub position: Vec3,
+}
+
+/// Current private buildings and unfinished business permits offered for
+/// takeover in this settlement. Empty is a real market state, not missing data.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct SettlementPropertyBoard {
+    pub listings: Vec<PropertyMarketListing>,
+}
+
 impl SettlementDevelopment {
     pub fn from_foundation(name: &str, position: Vec3, day: u32) -> Self {
         let mut seed = 0xcbf2_9ce4_8422_2325_u64;
@@ -789,13 +1246,15 @@ pub fn minimum_building_ground(
     rotation_y: f32,
 ) -> f32 {
     const GRID: usize = 5;
-    let half = kind.art().definition().footprint * 0.5 + Vec2::splat(0.25);
+    let definition = kind.art().definition();
+    let half = definition.footprint * 0.5 + Vec2::splat(0.25);
     let mut lowest = f32::INFINITY;
     for x_step in 0..GRID {
         for z_step in 0..GRID {
             let t_x = x_step as f32 / (GRID - 1) as f32;
             let t_z = z_step as f32 / (GRID - 1) as f32;
-            let local = Vec2::new(-half.x + half.x * 2.0 * t_x, -half.y + half.y * 2.0 * t_z);
+            let local = definition.footprint_center
+                + Vec2::new(-half.x + half.x * 2.0 * t_x, -half.y + half.y * 2.0 * t_z);
             let offset = crate::rotation::local_to_world_xz(local, rotation_y);
             lowest = lowest.min(terrain.get_height(centre.x + offset.x, centre.z + offset.y));
         }
@@ -848,9 +1307,42 @@ pub fn minimum_building_water_clearance(
     kind: SettlementBuildingKind,
     rotation_y: f32,
 ) -> f32 {
-    let half = kind.art().definition().footprint * 0.5 + Vec2::splat(0.25);
-    let footprint = minimum_rotated_rect_water_clearance(terrain, centre, half, rotation_y);
+    let definition = kind.art().definition();
+    let half = definition.footprint * 0.5 + Vec2::splat(0.25);
+    let footprint_center = definition.world_footprint_center(centre, rotation_y);
+    let footprint = minimum_rotated_rect_water_clearance(
+        terrain,
+        Vec3::new(footprint_center.x, centre.y, footprint_center.y),
+        half,
+        rotation_y,
+    );
     let door = kind.entrance_position(centre, rotation_y);
+    let door_clearance = terrain
+        .water_surface_height(door.x, door.z)
+        .map_or(f32::INFINITY, |water| {
+            terrain.get_height(door.x, door.z) - water
+        });
+    footprint.min(door_clearance)
+}
+
+/// Local-water clearance beneath the complete civic shell reserved on the
+/// founding day, not merely beneath the currently visible Moot Hall.
+pub fn minimum_civic_hall_reservation_water_clearance(
+    terrain: &crate::terrain::WorldTerrain,
+    root: Vec3,
+    rotation_y: f32,
+) -> f32 {
+    let definition = CivicHallLevel::largest_supported()
+        .building_type()
+        .definition();
+    let footprint_center = definition.world_footprint_center(root, rotation_y);
+    let footprint = minimum_rotated_rect_water_clearance(
+        terrain,
+        Vec3::new(footprint_center.x, root.y, footprint_center.y),
+        definition.footprint * 0.5 + Vec2::splat(0.25),
+        rotation_y,
+    );
+    let door = SettlementBuildingKind::Hall.entrance_position(root, rotation_y);
     let door_clearance = terrain
         .water_surface_height(door.x, door.z)
         .map_or(f32::INFINITY, |water| {
@@ -902,9 +1394,7 @@ pub fn settlement_founding_refusal(
     centre: Vec3,
     nearest_settlement: Option<(&str, f32)>,
 ) -> Option<String> {
-    if minimum_building_water_clearance(terrain, centre, SettlementBuildingKind::Hall, 0.0)
-        < SETTLEMENT_FREEBOARD
-    {
+    if minimum_civic_hall_reservation_water_clearance(terrain, centre, 0.0) < SETTLEMENT_FREEBOARD {
         return Some("The Moot Hall would touch the water".to_string());
     }
     founding_refusal(f32::INFINITY, None, nearest_settlement)
@@ -952,30 +1442,126 @@ impl WorkStatus {
     }
 }
 
-/// One villager's meal history.
+/// Readable nutrition state derived from consecutive daily meal outcomes.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NutritionCondition {
+    Unassessed,
+    Fed,
+    Hungry,
+    Starving,
+    Critical,
+}
+
+impl NutritionCondition {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Unassessed => "Not yet assessed",
+            Self::Fed => "Fed",
+            Self::Hungry => "Hungry",
+            Self::Starving => "Starving",
+            Self::Critical => "Critical starvation",
+        }
+    }
+}
+
+/// One character's meal history.
 ///
 /// Settlement food security remains the planning aggregate; this is the small
-/// per-person fact needed by inspection UI and, later, health and migration.
+/// per-person fact used by inspection UI and Health, and later by migration.
 /// `None` means the villager has not crossed a simulated meal boundary yet --
 /// importantly different from claiming they are either fed or hungry.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Nutrition {
     pub last_meal_day: Option<u32>,
     pub consecutive_missed_meals: u16,
+    /// Lifetime successful daily meals. This gives Health the same
+    /// time-warp-safe, exactly-once accounting used for missed meals.
+    #[serde(default)]
+    pub total_meals: u32,
+    /// Lifetime missed daily meals. Unlike the consecutive counter this does
+    /// not reset after eating, which lets the health system apply every missed
+    /// day exactly once even when a time warp crosses several day boundaries
+    /// in one simulation update.
+    #[serde(default)]
+    pub total_missed_meals: u32,
 }
 
 impl Nutrition {
     pub fn record_meal(&mut self, day: u32) {
-        self.last_meal_day = Some(day);
+        if self.last_meal_day.is_none_or(|last_day| day > last_day) {
+            self.last_meal_day = Some(day);
+            self.total_meals = self.total_meals.saturating_add(1);
+        }
         self.consecutive_missed_meals = 0;
     }
 
     pub fn record_missed_meal(&mut self) {
         self.consecutive_missed_meals = self.consecutive_missed_meals.saturating_add(1);
+        self.total_missed_meals = self.total_missed_meals.saturating_add(1);
     }
 
     pub const fn is_hungry(self) -> bool {
         self.consecutive_missed_meals > 0
+    }
+
+    pub const fn condition(self) -> NutritionCondition {
+        match self.consecutive_missed_meals {
+            0 if self.last_meal_day.is_none() => NutritionCondition::Unassessed,
+            0 => NutritionCondition::Fed,
+            1..=2 => NutritionCondition::Hungry,
+            3..=10 => NutritionCondition::Starving,
+            _ => NutritionCondition::Critical,
+        }
+    }
+
+    /// Food-conditioned Health ceiling as a percentage of the character's
+    /// normal maximum. Ten hungry days can make someone extremely vulnerable,
+    /// but ordinary hunger cannot itself reduce the ceiling below ten percent.
+    pub const fn health_ceiling_percent(self) -> u8 {
+        match self.consecutive_missed_meals {
+            0 => 100,
+            1 => 80,
+            2 => 70,
+            3 => 60,
+            missed @ 4..=10 => 60 - (((missed - 3) * 50) / 7) as u8,
+            _ => 10,
+        }
+    }
+}
+
+#[cfg(test)]
+mod nutrition_tests {
+    use super::*;
+
+    #[test]
+    fn hunger_conditions_lower_health_without_a_lethal_ceiling() {
+        let expected = [80, 70, 60, 53, 46, 39, 32, 25, 18, 10];
+        let mut nutrition = Nutrition::default();
+        for (index, ceiling) in expected.into_iter().enumerate() {
+            nutrition.record_missed_meal();
+            assert_eq!(
+                nutrition.health_ceiling_percent(),
+                ceiling,
+                "miss {}",
+                index + 1
+            );
+        }
+        assert_eq!(nutrition.condition(), NutritionCondition::Starving);
+        nutrition.record_missed_meal();
+        assert_eq!(nutrition.health_ceiling_percent(), 10);
+        assert_eq!(nutrition.condition(), NutritionCondition::Critical);
+    }
+
+    #[test]
+    fn one_meal_day_resets_hunger_and_is_counted_once() {
+        let mut nutrition = Nutrition::default();
+        nutrition.record_missed_meal();
+        nutrition.record_meal(7);
+        nutrition.record_meal(7);
+        assert_eq!(nutrition.total_meals, 1);
+        assert_eq!(nutrition.consecutive_missed_meals, 0);
+        assert_eq!(nutrition.condition(), NutritionCondition::Fed);
+        assert_eq!(nutrition.health_ceiling_percent(), 100);
     }
 }
 
@@ -1051,8 +1637,30 @@ pub struct SettlementBuilding {
     pub workers: Vec<String>,
 }
 
+/// Replicated evidence that useful work is currently happening inside a
+/// processing workplace.
+///
+/// This component is intentionally transient: the server adds it only while
+/// one or more embodied workers can consume a real input batch and store its
+/// output. Clients can therefore drive chimney smoke, machinery and sound from
+/// production truth without replaying the server's inventory rules.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct WorkplaceOperation {
+    pub active_workers: u8,
+}
+
+impl WorkplaceOperation {
+    pub const fn is_active(self) -> bool {
+        self.active_workers > 0
+    }
+}
+
 /// Visual breathing room kept around the authored soil slab.
 pub const FARM_FIELD_EDGE_CLEARANCE: f32 = 0.45;
+/// Graded verge around a field. Terrain vertices are two metres apart, so the
+/// level inner rectangle extends one complete sample beyond the visible soil;
+/// otherwise bilinear interpolation can leave a model corner tilted.
+pub const FARM_FIELD_TERRACE_MARGIN: f32 = 2.0;
 
 /// Two fields are required for a Farmstead's full production capacity.
 pub const FARM_FIELDS_PER_FARMSTEAD: u8 = 2;
@@ -1107,6 +1715,152 @@ pub struct Household {
     pub residents: Vec<String>,
 }
 
+/// Stable civic temperament used by the automatic Reeve. These are priorities,
+/// not separate economies: every current strategy still trades through private
+/// seller-owned offers.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CivicStrategy {
+    #[default]
+    Balanced,
+    Frugal,
+    Mercantile,
+    MutualAid,
+    Growth,
+}
+
+impl CivicStrategy {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Balanced => "Balanced",
+            Self::Frugal => "Frugal",
+            Self::Mercantile => "Mercantile",
+            Self::MutualAid => "Mutual aid",
+            Self::Growth => "Growth",
+        }
+    }
+}
+
+/// Whether the treasury may buy food for residents who cannot afford a meal.
+/// `SurplusOnly` never creates stock or ignores scarcity: recent production
+/// must cover the population and the enacted reserve floor must remain after
+/// the purchase.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PoorReliefMode {
+    #[default]
+    Off,
+    SurplusOnly,
+}
+
+impl PoorReliefMode {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::SurplusOnly => "Surplus only",
+        }
+    }
+
+    pub const fn allows_purchase(self) -> bool {
+        matches!(self, Self::SurplusOnly)
+    }
+}
+
+/// How many of the tier's available public positions the settlement attempts
+/// to fill. Treasury runway remains a hard constraint under every posture.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CivicStaffingPosture {
+    Essential,
+    #[default]
+    Balanced,
+    Full,
+}
+
+impl CivicStaffingPosture {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Essential => "Essential",
+            Self::Balanced => "Balanced",
+            Self::Full => "Full",
+        }
+    }
+
+    pub const fn level(self) -> u8 {
+        match self {
+            Self::Essential => 0,
+            Self::Balanced => 1,
+            Self::Full => 2,
+        }
+    }
+
+    pub fn targets(self, tier: SettlementTier) -> (u8, u8) {
+        let workers = tier.public_worker_positions();
+        let guards = tier.public_guard_positions();
+        match self {
+            Self::Essential => (workers.min(1), 0),
+            Self::Balanced => (workers, guards.min(1)),
+            Self::Full => (workers, guards),
+        }
+    }
+}
+
+/// Why the automatic Reeve last changed an enacted policy.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CivicPolicyReason {
+    #[default]
+    None,
+    PayrollArrears,
+    TreasuryStress,
+    SustainableRelief,
+    FoodStress,
+    HealthySurplus,
+}
+
+impl CivicPolicyReason {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::None => "No adjustment",
+            Self::PayrollArrears => "Civic payroll arrears",
+            Self::TreasuryStress => "Low treasury runway",
+            Self::SustainableRelief => "Sustainable food surplus",
+            Self::FoodStress => "Food reserve stress",
+            Self::HealthySurplus => "Healthy civic surplus",
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CivicPolicyAdjustment {
+    #[default]
+    None,
+    RaisedMarketFee,
+    LoweredMarketFee,
+    RaisedProfitTax,
+    LoweredProfitTax,
+    EnabledPoorRelief,
+    DisabledPoorRelief,
+    RaisedGrowthSubsidy,
+    LoweredGrowthSubsidy,
+    ExpandedStaffing,
+    ReducedStaffing,
+}
+
+impl CivicPolicyAdjustment {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::None => "No policy change",
+            Self::RaisedMarketFee => "Raised market fee",
+            Self::LoweredMarketFee => "Lowered market fee",
+            Self::RaisedProfitTax => "Raised profit levy",
+            Self::LoweredProfitTax => "Lowered profit levy",
+            Self::EnabledPoorRelief => "Enabled Poor Relief",
+            Self::DisabledPoorRelief => "Disabled Poor Relief",
+            Self::RaisedGrowthSubsidy => "Raised growth subsidy",
+            Self::LoweredGrowthSubsidy => "Lowered growth subsidy",
+            Self::ExpandedStaffing => "Expanded civic staffing",
+            Self::ReducedStaffing => "Reduced civic staffing",
+        }
+    }
+}
+
 /// Public rules chosen by a settlement rather than hidden simulation switches.
 ///
 /// The first policy is deliberately narrow: it does not make food free. When
@@ -1117,29 +1871,111 @@ pub struct Household {
 /// scarcity.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SettlementPolicies {
-    pub poor_relief: bool,
-    #[serde(default = "default_poor_relief_reserve_days")]
-    pub poor_relief_reserve_days: u8,
+    #[serde(default = "default_poor_relief")]
+    pub poor_relief: PoorReliefMode,
+    #[serde(default = "default_food_reserve_target_days")]
+    pub food_reserve_target_days: u8,
+    #[serde(default)]
+    pub strategy: CivicStrategy,
+    #[serde(default = "default_true")]
+    pub autopilot: bool,
+    #[serde(default = "default_market_fee_bps")]
+    pub market_fee_bps: u16,
+    #[serde(default = "default_business_profit_tax_bps")]
+    pub business_profit_tax_bps: u16,
+    #[serde(default = "default_civic_payroll_reserve_days")]
+    pub civic_payroll_reserve_days: u8,
+    #[serde(default)]
+    pub staffing_posture: CivicStaffingPosture,
+    /// Discount on settlement-requested private business permits. This is
+    /// foregone permit revenue, not a treasury payment or newly created coin.
+    #[serde(default = "default_business_permit_subsidy_bps")]
+    pub business_permit_subsidy_bps: u16,
+    #[serde(default = "unreviewed_day")]
+    pub last_review_day: u32,
+    #[serde(default = "unreviewed_day")]
+    pub last_change_day: u32,
+    #[serde(default)]
+    pub last_adjustment: CivicPolicyAdjustment,
+    #[serde(default)]
+    pub last_reason: CivicPolicyReason,
 }
 
-const fn default_poor_relief_reserve_days() -> u8 {
+const fn default_poor_relief() -> PoorReliefMode {
+    PoorReliefMode::SurplusOnly
+}
+
+const fn default_food_reserve_target_days() -> u8 {
     3
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+const fn default_market_fee_bps() -> u16 {
+    crate::economy::DEFAULT_MARKET_FEE_BPS
+}
+
+const fn default_business_profit_tax_bps() -> u16 {
+    crate::economy::DEFAULT_BUSINESS_PROFIT_TAX_BPS
+}
+
+const fn default_civic_payroll_reserve_days() -> u8 {
+    crate::economy::DEFAULT_CIVIC_PAYROLL_RESERVE_DAYS
+}
+
+const fn default_business_permit_subsidy_bps() -> u16 {
+    crate::economy::DEFAULT_BUSINESS_PERMIT_SUBSIDY_BPS
+}
+
+const fn unreviewed_day() -> u32 {
+    u32::MAX
 }
 
 impl Default for SettlementPolicies {
     fn default() -> Self {
         Self {
-            poor_relief: false,
-            poor_relief_reserve_days: default_poor_relief_reserve_days(),
+            poor_relief: default_poor_relief(),
+            food_reserve_target_days: default_food_reserve_target_days(),
+            strategy: CivicStrategy::Balanced,
+            autopilot: true,
+            market_fee_bps: default_market_fee_bps(),
+            business_profit_tax_bps: default_business_profit_tax_bps(),
+            civic_payroll_reserve_days: default_civic_payroll_reserve_days(),
+            staffing_posture: CivicStaffingPosture::Balanced,
+            business_permit_subsidy_bps: default_business_permit_subsidy_bps(),
+            last_review_day: u32::MAX,
+            last_change_day: u32::MAX,
+            last_adjustment: CivicPolicyAdjustment::None,
+            last_reason: CivicPolicyReason::None,
         }
     }
 }
 
 impl SettlementPolicies {
+    /// Visual settlement seeds choose streets and centre form, not politics.
+    /// Every foundation begins from the agreed Balanced charter; later Reeve
+    /// reviews or player control may enact different values.
+    pub fn from_foundation(_name: &str, _position: Vec3) -> Self {
+        Self::default()
+    }
+
     pub const fn poor_relief() -> Self {
         Self {
-            poor_relief: true,
-            poor_relief_reserve_days: default_poor_relief_reserve_days(),
+            poor_relief: PoorReliefMode::SurplusOnly,
+            food_reserve_target_days: default_food_reserve_target_days(),
+            strategy: CivicStrategy::Balanced,
+            autopilot: true,
+            market_fee_bps: default_market_fee_bps(),
+            business_profit_tax_bps: default_business_profit_tax_bps(),
+            civic_payroll_reserve_days: default_civic_payroll_reserve_days(),
+            staffing_posture: CivicStaffingPosture::Balanced,
+            business_permit_subsidy_bps: default_business_permit_subsidy_bps(),
+            last_review_day: u32::MAX,
+            last_change_day: u32::MAX,
+            last_adjustment: CivicPolicyAdjustment::None,
+            last_reason: CivicPolicyReason::None,
         }
     }
 }
@@ -1218,8 +2054,10 @@ impl SettlementTier {
     pub const fn public_worker_positions(self) -> u8 {
         match self {
             SettlementTier::Ruins => 0,
-            SettlementTier::Hamlet => 1,
-            SettlementTier::Village | SettlementTier::Town | SettlementTier::City => 2,
+            SettlementTier::Hamlet
+            | SettlementTier::Village
+            | SettlementTier::Town
+            | SettlementTier::City => 2,
         }
     }
 }
@@ -1379,6 +2217,37 @@ impl HeroOutfit {
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct PlayerPosition(pub Vec3);
 
+/// Authoritative world-space velocity for an embodied character.
+///
+/// Position snapshots normally arrive less frequently than the server's 60 Hz
+/// movement step. Replicating velocity only when direction or speed changes
+/// lets clients render continuous motion between snapshots without predicting
+/// decisions, routes, or arrivals themselves.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+pub struct CharacterMotion {
+    pub velocity: Vec3,
+}
+
+impl CharacterMotion {
+    pub const STATIONARY: Self = Self {
+        velocity: Vec3::ZERO,
+    };
+
+    pub fn new(velocity: Vec3) -> Self {
+        Self {
+            velocity: if velocity.is_finite() {
+                velocity
+            } else {
+                Vec3::ZERO
+            },
+        }
+    }
+
+    pub fn is_moving(self) -> bool {
+        self.velocity.length_squared() > 0.01
+    }
+}
+
 /// Player rotation (yaw only for simplicity) - replicated across network.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct PlayerRotation(pub f32);
@@ -1489,5 +2358,60 @@ mod affiliation_tests {
         for value in [first.physique(), first.intelligence(), first.charm()] {
             assert!((8..=20).contains(&value));
         }
+    }
+}
+
+#[cfg(test)]
+mod civic_hall_level_tests {
+    use super::*;
+
+    #[test]
+    fn settlement_tiers_map_to_the_authored_civic_ladder() {
+        assert_eq!(
+            CivicHallLevel::for_tier(SettlementTier::Hamlet),
+            CivicHallLevel::Moot
+        );
+        assert_eq!(
+            CivicHallLevel::for_tier(SettlementTier::Village),
+            CivicHallLevel::Village
+        );
+        assert_eq!(
+            CivicHallLevel::for_tier(SettlementTier::Town),
+            CivicHallLevel::Town
+        );
+        assert_eq!(
+            CivicHallLevel::for_tier(SettlementTier::City),
+            CivicHallLevel::Town,
+            "City deliberately retains the Town Hall until a fourth asset exists"
+        );
+    }
+
+    #[test]
+    fn founding_reservation_contains_every_supported_hall_footprint() {
+        let reserved = CivicHallLevel::largest_supported()
+            .building_type()
+            .definition();
+        let reserved_min = reserved.footprint_center - reserved.footprint * 0.5;
+        let reserved_max = reserved.footprint_center + reserved.footprint * 0.5;
+
+        for level in [
+            CivicHallLevel::Moot,
+            CivicHallLevel::Village,
+            CivicHallLevel::Town,
+        ] {
+            let definition = level.building_type().definition();
+            let minimum = definition.footprint_center - definition.footprint * 0.5;
+            let maximum = definition.footprint_center + definition.footprint * 0.5;
+            assert!(
+                minimum.cmpge(reserved_min).all() && maximum.cmple(reserved_max).all(),
+                "{} exceeds the founding civic reservation",
+                level.label()
+            );
+        }
+
+        assert!(
+            reserved.root_footprint_radius() <= SettlementBuildingKind::Hall.clearance(),
+            "the planning clearance must contain the complete future Hall shell"
+        );
     }
 }

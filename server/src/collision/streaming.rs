@@ -58,12 +58,20 @@ fn cell_key(x: f32, z: f32) -> (i32, i32) {
     )
 }
 
+fn bump_chunk_version(colliders: &mut StaticColliders, chunk: ChunkCoord) {
+    colliders.next_chunk_version = colliders.next_chunk_version.wrapping_add(1).max(1);
+    colliders
+        .chunk_versions
+        .insert(chunk, colliders.next_chunk_version);
+}
+
 /// Stream in/out static colliders based on player positions.
 pub fn update_static_collider_streaming(
     terrain: Res<WorldTerrain>,
     library: Option<Res<BakedColliderLibrary>>,
     building_index: Res<BuildingSpatialIndex>,
     players: Query<&PlayerPosition>,
+    roads: Query<&shared::components::VillageRoad>,
     mut colliders: ResMut<StaticColliders>,
     mut state: ResMut<ColliderStreamingState>,
 ) {
@@ -125,6 +133,7 @@ pub fn update_static_collider_streaming(
                 &mut colliders,
                 chunk,
                 state.zones_by_chunk.get(&chunk).map(Vec::as_slice),
+                &roads,
             );
         }
     }
@@ -161,6 +170,7 @@ pub fn update_static_collider_streaming(
                 &mut colliders,
                 chunk,
                 state.zones_by_chunk.get(&chunk).map(Vec::as_slice),
+                &roads,
             );
             loaded_this_tick += 1;
         }
@@ -176,6 +186,7 @@ fn unload_chunk(colliders: &mut StaticColliders, chunk: ChunkCoord) {
     let Some(ids) = colliders.chunk_instances.remove(&chunk) else {
         if removed {
             colliders.version = colliders.version.wrapping_add(1);
+            bump_chunk_version(colliders, chunk);
         }
         return;
     };
@@ -191,6 +202,7 @@ fn unload_chunk(colliders: &mut StaticColliders, chunk: ChunkCoord) {
         }
     }
     colliders.version = colliders.version.wrapping_add(1);
+    bump_chunk_version(colliders, chunk);
 }
 
 fn load_chunk(
@@ -199,6 +211,7 @@ fn load_chunk(
     colliders: &mut StaticColliders,
     chunk: ChunkCoord,
     chunk_zones: Option<&[BuildZoneEntry]>,
+    roads: &Query<&shared::components::VillageRoad>,
 ) {
     let spawns = shared::props::generate_chunk_prop_spawns(&terrain.generator, chunk);
 
@@ -210,6 +223,16 @@ fn load_chunk(
         if let Some(zones) = chunk_zones {
             let point_xz = Vec2::new(spawn.position.x, spawn.position.z);
             if point_in_any_build_zone_entries(point_xz, zones) {
+                continue;
+            }
+        }
+        if kind.is_road_clearable() {
+            let point = Vec2::new(spawn.position.x, spawn.position.z);
+            if colliders.road_tree_was_cleared(point)
+                || roads.iter().any(|road| {
+                    road.contains_built_point(point, shared::components::ROAD_CLEARED_TREE_PADDING)
+                })
+            {
                 continue;
             }
         }
@@ -239,6 +262,7 @@ fn load_chunk(
     colliders.loaded_chunks.insert(chunk);
     colliders.chunk_instances.insert(chunk, ids);
     colliders.version = colliders.version.wrapping_add(1);
+    bump_chunk_version(colliders, chunk);
 }
 
 #[cfg(test)]

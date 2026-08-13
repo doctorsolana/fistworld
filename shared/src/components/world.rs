@@ -84,6 +84,9 @@ impl WorldTime {
     pub const SUNRISE_NORMALIZED: f32 = 6.0 / 24.0;
     /// Displayed clock hour of sunset (22:00).
     pub const SUNSET_NORMALIZED: f32 = 22.0 / 24.0;
+    /// Ordinary production shifts end three quarters through daylight (about
+    /// 18:00 on the deliberately long summer display day).
+    pub const WORKDAY_END_DAY_T: f32 = 0.75;
 
     pub fn new(day_duration: f32, night_duration: f32, seconds_in_cycle: f32) -> Self {
         let mut wt = Self {
@@ -111,6 +114,11 @@ impl WorldTime {
 
     pub fn is_day(&self) -> bool {
         self.seconds_in_cycle < self.day_duration
+    }
+
+    /// Whether ordinary private production is currently on shift.
+    pub fn is_ordinary_work_time(&self) -> bool {
+        self.is_day() && self.day_t() < Self::WORKDAY_END_DAY_T
     }
 
     pub fn day_t(&self) -> f32 {

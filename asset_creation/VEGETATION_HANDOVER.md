@@ -252,9 +252,9 @@ Grass is generated deterministically per nearby terrain chunk rather than loaded
 old 38,578 authored `Env_Grass_Tall_04` entries. `client/src/props/ground_cover.rs` owns a
 four-chunk streaming ring, a 256-instance per-frame spawn budget, building/road clearance
 and independent cleanup. `GrassShortA`/`GrassTallA` use the one-entity swapped-mesh LOD path,
-cast no shadows and stop at 240 m. A representative meadow ring is about 22,500 patches;
-raising density or range must be measured as an entity/visibility cost even though each
-mesh is cheap.
+cast no shadows and stop at 240 m. A representative 81-chunk Village Lab ring is about 16,400
+patches (exactly biome-dependent). Raising density or range must be measured as an
+entity/visibility cost even though each mesh is cheap.
 
 Built by `asset_creation/vegetation/build_grass.py`, which generates the texture procedurally; there is no
 source image to keep in sync.

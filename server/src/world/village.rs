@@ -6,25 +6,34 @@
 //! an occupation or a plot.
 //!
 //! The first local monetary loop is also server truth: villagers have
-//! fixed-point wallets, the Moot quotes from physical stock and earmarked cash,
-//! producers split realised sale proceeds with workplace owners, households buy
-//! one daily ration, builders buy Wood or gather it themselves, and the Moot
-//! pays its one road steward. Births, boats and remote trade remain deferred.
+//! fixed-point wallets, businesses consign physically delivered stock under a
+//! stable seller identity, buyers pay the firm only when a sale clears, households
+//! buy daily provisions, builders buy Wood or gather it themselves, and the Moot
+//! earns fees while paying civic workers. Births, boats and remote trade remain
+//! deferred.
 //!
 //! Everything in this module is server truth. Clients receive settlements and
 //! buildings and draw them; they never decide anything.
 
 pub mod ambient;
+mod businesses;
+pub(crate) mod civic;
 mod commerce;
 mod construction;
+mod development_market;
 mod economy;
 mod employment;
 pub mod history;
 mod households;
+mod moot_services;
+pub(crate) mod mortality;
 mod movement;
+mod objectives;
 mod planning;
 mod population;
+mod processing;
 mod production;
+mod property_market;
 #[cfg(test)]
 mod scale_lab;
 pub mod schedule;
@@ -32,33 +41,65 @@ mod settlement_economy;
 pub mod strategic;
 mod trades;
 
-use commerce::business_output;
+pub use businesses::{apply_business_events, review_business_management, BusinessEventQueue};
+pub use civic::{
+    collect_business_profit_taxes, ensure_civic_accounts, review_civic_policies, run_civic_payroll,
+    sync_civic_market_policy,
+};
+pub(crate) use commerce::{automatic_owner_strategy, business_output};
 pub use commerce::{
     ensure_business_economies, reconcile_work_statuses, run_business_payroll_and_owner_leisure,
     run_market_collections, staff_moot_hall_roles,
 };
 pub use construction::{advance_construction, run_construction_material_logistics};
+pub(crate) use development_market::minimum_startup_capital;
 pub(crate) use economy::review_automatic_wage_offer;
 pub use employment::fill_vacancies;
 pub use households::{
     assign_households, ensure_households, run_household_schedules, run_household_shopping,
     update_household_budgets_and_pantries,
 };
+#[cfg(test)]
+pub(crate) use moot_services::PermitPickupRoutine;
+pub(crate) use moot_services::{
+    advance_moot_service_queues, complete_moot_permit_pickups, run_moot_meal_collections,
+    MootMealRoutine, MootQueueClock, MootQueueTicket, MootQueueTransit, MootServiceKind,
+};
+pub use mortality::{
+    acquire_businesses_for_sale, advance_nutrition_health, apply_nutrition_condition,
+    ensure_character_vitals, process_character_deaths, recover_orphaned_construction,
+    MortalityLedger,
+};
 use movement::{ensure_move_target, stable_name_hash};
+pub use objectives::sync_character_objectives;
 #[cfg(test)]
 pub(crate) use planning::find_site;
-pub use planning::{consider_permits, find_fishing_site, FREEBOARD};
+pub use planning::{consider_permits, find_fishing_site, PermitPlanningDiagnostics, FREEBOARD};
+pub(crate) use planning::{
+    development_pipeline_has_capacity, road_access_blockers_for_plot, validate_manual_plot,
+    ManualPlotApproval,
+};
 #[cfg(test)]
-use planning::{find_site_with_plan, next_need, slope_at};
+use planning::{find_site_with_plan, planned_road_access_path, slope_at};
 pub use population::{
     arrive_at_settlement, recount_residents, seek_settlement, tag_villager_intent,
 };
-pub(crate) use production::{farmer_seconds_per_wheat, fisher_seconds_per_food, lumber_tree_yield};
-pub(crate) use settlement_economy::PendingMarketPayment;
+pub(crate) use processing::ProcessorWorkProgress;
+pub use processing::{
+    assign_processing_routines, run_processing_routines, sync_workplace_operations,
+    ProcessingRoutine,
+};
+pub(crate) use production::{
+    farmer_seconds_per_wheat, fisher_seconds_per_food, lumber_seconds_per_tree, lumber_tree_yield,
+    maximum_viable_input_unit_price, process_available_cycles, processing_recipe,
+    rated_daily_production, viable_processing_input_purchase, ProcessingRecipe,
+    SELF_SUPPLY_TREE_YIELD,
+};
+pub use property_market::publish_property_boards;
 use settlement_economy::{buy_from_moot, sell_carried_to_moot};
 pub use settlement_economy::{
-    ensure_settlement_economies, ensure_village_finances, settle_pending_market_payments,
-    update_moot_market_targets, update_settlement_economies, SettlementEconomyRuntime,
+    ensure_settlement_economies, ensure_village_finances, update_moot_market_targets,
+    update_settlement_economies, SettlementEconomyRuntime,
 };
 pub(crate) use trades::lumber_plot_has_reachable_tree;
 #[cfg(test)]
@@ -71,8 +112,9 @@ pub use trades::{
     run_lumberjack_routines, sync_carried_load,
 };
 use trades::{
-    build_clip_facing, exterior_door_clearance_position, find_tree_for_cycle, ground_distance,
-    postpone_construction_store_route, postpone_construction_tree_search,
+    build_clip_facing, exterior_door_clearance_position, find_tree_for_cycle_cached,
+    ground_distance, postpone_construction_store_route, postpone_construction_tree_search,
+    TreeCandidateLookup, TreeWorkCandidateCache,
 };
 
 use bevy::ecs::system::SystemParam;
@@ -83,14 +125,18 @@ use lightyear::prelude::{NetworkTarget, Replicate};
 use shared::components::{
     BuildingDoorDemand, BuildingDoorUse, CharacterActivity, CharacterAttributes, CharacterKind,
     CharacterName, FarmField, FishingPier, Household, MootAdministration, Nutrition, Occupation,
-    PlayerPosition, PlayerRotation, Residence, Settlement, SettlementBuilding,
-    SettlementBuildingKind, SettlementPolicies, VillageRoad, WorkStatus, WorldTime,
+    PlayerPosition, PlayerRotation, Residence, RoadClass, Settlement, SettlementBuilding,
+    SettlementBuildingKind, SettlementPolicies, VillageRoad, WorkStatus, WorkplaceOperation,
+    WorldTime,
 };
 use shared::economy::{
-    permit_price, BusinessAccount, BusinessSalePolicy, BusinessWagePolicy, CarriedLoad, Good,
-    GoodsInventory, HouseholdEconomy, MootMarket, SettlementEconomy, Wallet, WorkforceRequirements,
-    FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE, MAXIMUM_BUSINESS_DAILY_WAGE,
-    MINIMUM_BUSINESS_DAILY_WAGE, PENNIES_PER_COIN, STARTING_TREASURY_MONEY, VILLAGE_MIN_PROSPERITY,
+    permit_price_with_subsidy, BusinessAccount, BusinessCondition, BusinessForSale,
+    BusinessInputRule, BusinessLiquidation, BusinessManagementPolicy, BusinessProcurementPolicy,
+    BusinessSalePolicy, BusinessState, BusinessWageClaim, BusinessWagePolicy, CarriedLoad, Good,
+    GoodsInventory, HouseholdEconomy, MarketSeller, MootMarket, SettlementEconomy, Wallet,
+    WorkforceRequirements, BASIS_POINTS, FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE,
+    MAXIMUM_BUSINESS_DAILY_WAGE, MINIMUM_BUSINESS_DAILY_WAGE, PENNIES_PER_COIN,
+    PROPERTY_MARKET_EXPOSURE_DAYS, STARTING_TREASURY_MONEY, VILLAGE_MIN_PROSPERITY,
     VILLAGE_MIN_RESIDENTS, VILLAGE_REQUIRED_SECURE_DAYS, WEALTHY_OWNER_MONEY,
 };
 use shared::region::{RegionCoord, SimLevel};
@@ -102,8 +148,8 @@ use crate::player::hero::MoveTarget;
 use crate::world::navgrid::VILLAGER_PROP_RADIUS;
 use crate::world::regions::RegionRegistry;
 use crate::world::village_roads::{
-    NavigationRouteFailed, NavigationRoutePending, RoadBuilderRoutine, RoadRequest, RouteWaypoint,
-    TravelRoute,
+    NavigationRouteFailed, NavigationRoutePending, PlannedRoadAccess, RoadBuilderRoutine,
+    RoadRequest, RouteWaypoint, TravelRoute, VillageRoadGraph,
 };
 
 /// Terrain and collision truth needed while choosing a plot. Keeping these
@@ -114,6 +160,8 @@ pub struct PermitPlanningResources<'w, 's> {
     terrain: Option<Res<'w, WorldTerrain>>,
     colliders: Option<Res<'w, StaticColliders>>,
     derived: Option<Res<'w, DerivedColliderLibrary>>,
+    diagnostics: Option<ResMut<'w, PermitPlanningDiagnostics>>,
+    planned_road_accesses: Query<'w, 's, &'static PlannedRoadAccess>,
     permit_busy: Query<
         'w,
         's,
@@ -122,11 +170,23 @@ pub struct PermitPlanningResources<'w, 's> {
             With<FarmerRoutine>,
             With<FishingRoutine>,
             With<LumberjackRoutine>,
+            With<ProcessingRoutine>,
             With<MarketCollectionRoutine>,
             With<HouseholdShoppingRoutine>,
+            With<MootQueueTicket>,
+            With<MootMealRoutine>,
             With<WorkplaceDoorTransit>,
             With<PierTraversal>,
         )>,
+    >,
+    portfolios: Query<
+        'w,
+        's,
+        (
+            &'static shared::components::OwnedBy,
+            Option<&'static BusinessCondition>,
+            Option<&'static BusinessForSale>,
+        ),
     >,
 }
 
@@ -135,27 +195,40 @@ pub struct PermitPlanningResources<'w, 's> {
 /// without this derivation roads and the nav grid see an empty plot here.
 pub fn claim_settlement_hall_obstacles(
     mut commands: Commands,
-    halls: Query<
-        (Entity, &PlayerPosition, Option<&PlayerRotation>),
-        (With<Settlement>, Without<shared::building::PlacedBuilding>),
-    >,
+    halls: Query<(
+        Entity,
+        &Settlement,
+        &PlayerPosition,
+        Option<&PlayerRotation>,
+        Option<&shared::components::CivicHallLevel>,
+        Option<&shared::building::PlacedBuilding>,
+        Option<&shared::building::BuildingPosition>,
+    )>,
 ) {
-    for (hall, position, rotation) in halls.iter() {
-        commands.entity(hall).insert((
-            shared::building::PlacedBuilding {
-                building_type: SettlementBuildingKind::Hall.art(),
-                rotation: rotation.map_or(0.0, |rotation| rotation.0),
-            },
-            shared::building::BuildingPosition(position.0),
-        ));
+    for (hall, settlement, position, rotation, level, placed, building_position) in halls.iter() {
+        let level = level
+            .copied()
+            .unwrap_or_else(|| shared::components::CivicHallLevel::for_tier(settlement.tier));
+        let desired = shared::building::PlacedBuilding {
+            building_type: level.building_type(),
+            rotation: rotation.map_or(0.0, |rotation| rotation.0),
+        };
+        if placed != Some(&desired) {
+            commands.entity(hall).insert(desired);
+        }
+        if building_position.is_none_or(|current| current.0 != position.0) {
+            commands
+                .entity(hall)
+                .insert(shared::building::BuildingPosition(position.0));
+        }
     }
 }
 
-/// How often an uncommitted villager looks for somewhere to live.
-///
-/// Seconds, not frames: this is a decision, and decisions should not get more
-/// frequent because the server is running well.
-const SEEK_INTERVAL: f32 = 3.0;
+/// Real-time cadence for admitting a bounded batch of uncommitted villagers
+/// into migration. Using world time here made unpausing at 25x hand hundreds
+/// of people the same hall destination on one server tick.
+const SEEK_INTERVAL: f32 = 0.25;
+const MAX_MIGRATION_ADMISSIONS_PER_PASS: usize = 8;
 
 /// Failed migration is route-planner work, so retry pacing follows real time,
 /// not warped world time. Otherwise 100x turns a world-minute cooldown into a
@@ -172,12 +245,15 @@ const TIMBER_RETRY_MAX_SECONDS: f64 = 60.0;
 /// How often a settlement considers what it needs next.
 const PERMIT_INTERVAL: f32 = 4.0;
 
-/// How close a villager must get to the hall to have arrived.
+/// How close a villager must get to the Hall forecourt before the visible line
+/// takes ownership of their movement.
 ///
-/// Generous, because arrival is the point rather than the precision: a villager
-/// who stops a metre short and stands there forever is a bug the player will
-/// read as the whole system being broken.
-const ARRIVAL_RADIUS: f32 = 6.0;
+/// This is deliberately wider than the exact door offset. Requiring every
+/// migrant to solve a route to one point on the threshold made the occasional
+/// person on the far side of a crowded forecourt fail and cool down while
+/// everyone beside them visibly queued. The queue already owns collision-aware
+/// last-metre movement and its bounded counter fallback.
+const ARRIVAL_RADIUS: f32 = 12.0;
 
 /// Physical work-loop tuning. Prices decide whether a transfer can happen, but
 /// walking, work duration and carried capacity still decide when it happens.
@@ -187,7 +263,11 @@ const INDOOR_REST_SECONDS: f32 = 4.0;
 // physical: field quality controls how much labour makes one Wheat, and a
 // farmer works continuously until the shift ends instead of receiving a daily
 // production allowance.
-const CHOP_SECONDS: f32 = 90.0;
+pub(crate) const CHOP_SECONDS: f32 = 90.0;
+/// A worker preserves their job and carried cargo across transient commute
+/// failures, but one unreachable hut must not pin them outside a cabin for an
+/// entire day. A later shift can retry after roads or obstacles change.
+const MAX_WORKPLACE_ROUTE_FAILURES: u8 = 3;
 /// At 100% quality, one Wheat takes 2m50s of actual field work. The ordinary
 /// 06:00-ish to 18:00 shift contains about 1,050 simulation seconds, so a
 /// perfect field approaches six Wheat after allowing for short local trips.
@@ -197,7 +277,7 @@ const FARM_CARRY_BATCH_UNITS: u32 = 2;
 const FISH_CARRY_BATCH_UNITS: u32 = 2;
 /// Daylight spans 06:00-22:00. A 75% cutoff ends ordinary work near 18:00,
 /// leaving a visible evening for shopping, socialising and household tasks.
-const WORKDAY_END_DAY_T: f32 = 0.75;
+pub(crate) const WORKDAY_END_DAY_T: f32 = WorldTime::WORKDAY_END_DAY_T;
 const TREE_MIN_DISTANCE: f32 = 10.0;
 const TREE_MAX_DISTANCE: f32 = 120.0;
 const DOOR_REACH: f32 = 0.4;
@@ -239,10 +319,19 @@ pub struct MigrationCooldown {
     settlement: Entity,
     retry_after: f64,
     failures: u8,
+    /// Cohort-route proof visible when this attempt failed. A larger value
+    /// means somebody else has since established a fresh approach to the same
+    /// hall and this villager should reconsider immediately.
+    cohort_opportunity_version: u64,
 }
 
 impl MigrationCooldown {
-    fn after_failure(previous: Option<Self>, settlement: Entity, now: f64) -> Self {
+    fn after_failure(
+        previous: Option<Self>,
+        settlement: Entity,
+        now: f64,
+        cohort_opportunity_version: u64,
+    ) -> Self {
         let failures = previous
             .filter(|previous| previous.settlement == settlement)
             .map_or(1, |previous| previous.failures.saturating_add(1));
@@ -253,7 +342,14 @@ impl MigrationCooldown {
             settlement,
             retry_after: now + delay,
             failures,
+            cohort_opportunity_version,
         }
+    }
+
+    fn blocks(self, settlement: Entity, now: f64, current_cohort_opportunity_version: u64) -> bool {
+        self.settlement == settlement
+            && now < self.retry_after
+            && current_cohort_opportunity_version <= self.cohort_opportunity_version
     }
 }
 
@@ -323,6 +419,9 @@ pub struct UnderConstruction {
     /// Where the builder stands to work. Arrival is judged against THIS, not
     /// the plot centre, or they would walk into the middle of the site.
     pub stand: Vec3,
+    /// Failed final approaches rotate around the plot instead of pinning a
+    /// fully supplied worksite to one obstructed hammering point forever.
+    pub failed_stand_routes: u8,
     pub stage: BuildStage,
     /// How good this ground is for what is being built, 0..1. Sampled once,
     /// where it is built. See `site_quality`.
@@ -343,10 +442,29 @@ pub struct ConstructionMaterialRoutine {
 }
 
 impl ConstructionMaterialRoutine {
+    pub(crate) const fn new(site: Entity) -> Self {
+        Self {
+            site,
+            cycle: 0,
+            failed_tree_routes: 0,
+            failed_store_routes: 0,
+            failed_delivery_routes: 0,
+            tree_retry_after: 0.0,
+            store_retry_after: 0.0,
+            phase: ConstructionMaterialPhase::Seeking,
+        }
+    }
+
     pub(crate) fn is_waiting_for_materials(&self) -> bool {
         matches!(self.phase, ConstructionMaterialPhase::Seeking)
     }
 }
+
+/// Working capital reserved for an unfinished private business. Permit
+/// applicants fund it at approval and takeover buyers inherit it; the component
+/// follows the worksite and becomes the completed firm's opening account.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct InheritedBusinessCapital(pub u64);
 
 #[derive(Debug, Clone, Copy)]
 enum ConstructionMaterialPhase {
@@ -355,7 +473,9 @@ enum ConstructionMaterialPhase {
     CollectingFromStore { source: Entity, entrance: Vec3 },
     WalkingToTree { tree: Vec3, stand: Vec3 },
     Chopping { tree: Vec3, seconds_left: f32 },
+    ApproachingDeliveryAccess { entry: Vec3 },
     Delivering { destination: Vec3 },
+    LeavingDeliveryAccess { exit: Vec3 },
 }
 
 /// Server-only detail for one woodcutter's routine.
@@ -369,6 +489,7 @@ pub struct LumberjackRoutine {
     hall: Entity,
     cycle: u32,
     failed_tree_routes: u8,
+    failed_hut_routes: u8,
     chop_seconds: f32,
     production_day: u32,
     produced_today: u32,
@@ -397,9 +518,12 @@ pub struct FarmerRoutine {
     farmstead: Entity,
     field: Entity,
     hall: Entity,
+    /// Door-to-field certified standing point selected once per shift.
+    work_stand: Vec3,
     /// Productive seconds already invested in the next Wheat. This is copied
     /// into FarmerHarvestProgress when the shift ends and restored tomorrow.
     harvest_seconds: f32,
+    failed_workplace_routes: u8,
     production_day: u32,
     produced_today: u32,
     phase: FarmerPhase,
@@ -450,6 +574,7 @@ pub struct FishingRoutine {
     pier: Entity,
     hall: Entity,
     catch_seconds: f32,
+    failed_workplace_routes: u8,
     production_day: u32,
     produced_today: u32,
     phase: FishingPhase,
@@ -462,34 +587,29 @@ pub(crate) struct FishingWorkProgress {
     seconds: f32,
 }
 
-/// The founding Moot Hall's commercial worker. A porter is the sole early
-/// long-distance hauler between private workplace stores and the public market.
+/// One of the founding Moot Hall's commercial workers. A solvent Hamlet can
+/// staff two long-distance haulers between private stores and the public market.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct MarketPorter {
-    settlement: Entity,
+    pub(crate) settlement: Entity,
 }
 
 #[derive(Component, Debug, Clone)]
 pub struct MarketCollectionRoutine {
     business: Entity,
+    seller: shared::components::BuildingId,
     hall: Entity,
     good: Good,
     reserved_units: u32,
-    reserved_pennies: u64,
+    unit_price: u64,
     phase: MarketCollectionPhase,
-}
-
-impl MarketCollectionRoutine {
-    #[cfg(test)]
-    pub(crate) fn reserved_pennies(&self) -> u64 {
-        self.reserved_pennies
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MarketCollectionPhase {
     GoingToBusiness,
     ReturningToHall,
+    DeliveringInput,
 }
 
 /// A tactical-region household's one visible restocking trip. Strategic
@@ -581,7 +701,7 @@ enum WorkplaceDoorPhase {
     Crossing,
 }
 
-fn begin_workplace_entry(
+pub(super) fn begin_workplace_entry(
     commands: &mut Commands,
     worker: Entity,
     building: Vec3,
@@ -606,7 +726,7 @@ fn begin_workplace_entry(
         });
 }
 
-fn begin_workplace_exit(
+pub(super) fn begin_workplace_exit(
     commands: &mut Commands,
     worker: Entity,
     building: Vec3,
@@ -793,6 +913,10 @@ pub fn sync_building_door_demands(
 pub struct HomeRoutine {
     home: Entity,
     phase: HomePhase,
+    /// Consecutive terminal routes while satisfying this night's shelter need.
+    /// Ordinary retries remain embodied; the bounded fallback prevents one
+    /// impossible local route from leaving a resident outdoors forever.
+    failed_routes: u8,
 }
 
 /// Server-side identity-safe link from one villager entity to one cabin.
@@ -845,17 +969,30 @@ pub struct PublishedTerrainDeltas {
 pub struct VillageClock {
     seek: f32,
     permit: f32,
+    /// Monotonic permit-review sequence. Resource searches defer themselves
+    /// for a few reviews after spending their bounded terrain budget so one
+    /// difficult farm plot cannot monopolise every development decision.
+    permit_round: u64,
+    deferred_opportunities: HashMap<(Entity, SettlementBuildingKind), u64>,
     /// An unchanged village cannot make an unchanged failed plot search
-    /// succeed. Remember that exact geometry until residents, buildings,
-    /// roads, or edited terrain change instead of rescanning and logging the
-    /// same failure every four simulated seconds at 100x.
+    /// succeed. Remember that exact geometry until buildings, roads, or edited
+    /// terrain change instead of rescanning and logging the
+    /// same failure every four simulated seconds at 100x. Population is not
+    /// geometry: immigration alone must not invalidate this cache.
     failed_site_searches: HashMap<Entity, FailedSiteSearch>,
+    /// Last successful outward ring for each settlement/building kind.
+    /// Completed plots never relocate or free their ground, so restarting a
+    /// mature Farmstead search at its founding ring is pure repeated work.
+    site_search_radii: HashMap<(Entity, SettlementBuildingKind), f32>,
+    /// A coastline that has been exhausted ring by ring cannot become a
+    /// fishing site merely because another inland house was completed. Retry
+    /// only after edited terrain changes the physical shoreline.
+    failed_fishing_terrain_versions: HashMap<Entity, u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FailedSiteSearch {
     kind: SettlementBuildingKind,
-    residents: u32,
     occupied_plots: usize,
     roads: usize,
     terrain_version: u32,
@@ -866,7 +1003,11 @@ impl Default for VillageClock {
         Self {
             seek: 0.0,
             permit: 0.0,
+            permit_round: 0,
+            deferred_opportunities: HashMap::new(),
             failed_site_searches: HashMap::new(),
+            site_search_radii: HashMap::new(),
+            failed_fishing_terrain_versions: HashMap::new(),
         }
     }
 }

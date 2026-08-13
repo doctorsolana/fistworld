@@ -44,17 +44,22 @@ pub struct VillagerSeed(pub u64);
 /// route planner correctly reject every migration route, which looked like an
 /// AI decision failure. Scatter the requested point slightly and choose the
 /// nearest genuinely navigable sample before the villager exists.
-fn safe_villager_spawn_position(
+pub(crate) fn safe_villager_spawn_position(
     requested: Vec3,
     seed: u64,
     terrain: &WorldTerrain,
     obstacles: Option<&SpatialObstacleGrid>,
     colliders: Option<&StaticColliders>,
     derived: Option<&DerivedColliderLibrary>,
-) -> Vec3 {
+) -> Option<Vec3> {
     const RING_STEP: f32 = 0.75;
-    const RINGS: usize = 16;
-    const SAMPLES_PER_RING: usize = 16;
+    // The first 12 metres handle ordinary trees and cabin clicks. Continue
+    // out to 48 metres for burst spawns beside a shoreline business: a whole
+    // row can otherwise overlap the hut, its pier, water and nearby props and
+    // fall back to the known-blocked requested point.
+    const RINGS: usize = 64;
+    const MIN_SAMPLES_PER_RING: usize = 16;
+    const MAX_SAMPLES_PER_RING: usize = 96;
     const GOLDEN_ANGLE: f32 = 2.399_963_1;
 
     // A burst of villagers receives a small deterministic disc distribution,
@@ -65,45 +70,97 @@ fn safe_villager_spawn_position(
     let scatter_angle = seed as f32 * GOLDEN_ANGLE;
     let centre = Vec2::new(requested.x, requested.z)
         + Vec2::new(scatter_angle.cos(), scatter_angle.sin()) * scatter_radius;
+    let mut rejected = [0usize; 5];
+
+    let mut validate = |point: Vec2| -> Option<Vec3> {
+        if !world_pos_in_bounds(point.x, point.y) {
+            rejected[0] += 1;
+            return None;
+        }
+        let height = terrain.get_height(point.x, point.y);
+        if terrain
+            .water_surface_height(point.x, point.y)
+            .is_some_and(|water| height < water + crate::world::village::FREEBOARD)
+        {
+            rejected[1] += 1;
+            return None;
+        }
+        if 1.0 - terrain.get_normal(point.x, point.y).y.clamp(0.0, 1.0) > 0.24 {
+            rejected[2] += 1;
+            return None;
+        }
+        if obstacles.is_some_and(|grid| grid.point_blocked(point)) {
+            rejected[3] += 1;
+            return None;
+        }
+        if !crate::player::hero::navigation_segment_clear(point, point, None, colliders, derived) {
+            rejected[4] += 1;
+            return None;
+        }
+        Some(Vec3::new(point.x, height, point.y))
+    };
 
     for ring in 0..=RINGS {
-        let samples = if ring == 0 { 1 } else { SAMPLES_PER_RING };
+        // A fixed angular count leaves wider and wider holes between samples:
+        // at 48 m the old sixteen-sample ring had almost 19 m arcs and could
+        // jump across the narrow dry strip behind a fishing hut. Increase
+        // angular resolution with radius while keeping a hard upper bound.
+        let samples = if ring == 0 {
+            1
+        } else {
+            (ring * 4).clamp(MIN_SAMPLES_PER_RING, MAX_SAMPLES_PER_RING)
+        };
         for sample in 0..samples {
             let angle = scatter_angle
                 + sample as f32 * std::f32::consts::TAU / samples as f32
                 + ring as f32 * 0.31;
             let radius = ring as f32 * RING_STEP;
             let point = centre + Vec2::new(angle.cos(), angle.sin()) * radius;
-            if !world_pos_in_bounds(point.x, point.y) {
-                continue;
+            if let Some(position) = validate(point) {
+                return Some(position);
             }
-            let height = terrain.get_height(point.x, point.y);
-            if terrain
-                .water_surface_height(point.x, point.y)
-                .is_some_and(|water| height < water + crate::world::village::FREEBOARD)
-            {
-                continue;
-            }
-            if 1.0 - terrain.get_normal(point.x, point.y).y.clamp(0.0, 1.0) > 0.24 {
-                continue;
-            }
-            if !crate::player::hero::navigation_segment_clear(
-                point, point, obstacles, colliders, derived,
-            ) {
-                continue;
-            }
-            return Vec3::new(point.x, height, point.y);
         }
     }
 
-    // Preserve the old finite, terrain-grounded behavior if an exceptionally
-    // hostile click has no safe sample nearby. The migration state machine
-    // will report its route failure instead of silently deleting the person.
-    Vec3::new(
-        requested.x,
-        terrain.get_height(requested.x, requested.z),
-        requested.z,
-    )
+    // Polar samples are cheap and near-first, but even dense angular rings can
+    // phase past a thin, irregular shoreline strip. A bounded square lattice
+    // covers every 75 cm cell in the same 48 m search radius. This slower
+    // fallback is only reached for hostile clicks (normally water or a dense
+    // harbour) and guarantees that a narrow piece of dry ground is not missed
+    // merely because none of the radial angles crossed it.
+    for ring in 1..=RINGS as i32 {
+        for x in -ring..=ring {
+            for z in [-ring, ring] {
+                let point = centre + Vec2::new(x as f32, z as f32) * RING_STEP;
+                if let Some(position) = validate(point) {
+                    return Some(position);
+                }
+            }
+        }
+        for z in (-ring + 1)..ring {
+            for x in [-ring, ring] {
+                let point = centre + Vec2::new(x as f32, z as f32) * RING_STEP;
+                if let Some(position) = validate(point) {
+                    return Some(position);
+                }
+            }
+        }
+    }
+
+    // Never create a person at a point already proven unreachable. The caller
+    // can report/refuse an exceptionally hostile water or obstacle click;
+    // manufacturing an Idle villager inside it creates an immortal route
+    // retry instead of honoring the spawn request.
+    warn!(
+        "No safe villager spawn within 48 metres of {requested:?}: rejected [bounds={}, water={}, slope={}, building={}, prop={}]",
+        rejected[0], rejected[1], rejected[2], rejected[3], rejected[4]
+    );
+    #[cfg(test)]
+    eprintln!(
+        "LAB safe-spawn rejection at {requested:?}: bounds={} water={} slope={} building={} prop={}",
+        rejected[0], rejected[1], rejected[2], rejected[3], rejected[4]
+    );
+    None
 }
 
 pub fn handle_dev_commands(
@@ -210,6 +267,7 @@ pub fn handle_dev_commands(
                             .get(&name_lower)
                             .map(|profile| profile.character_attributes())
                             .unwrap_or_default(),
+                        shared::components::Health::default(),
                     );
                     spawned_this_run.insert(remote_id.0);
                     info!("Dev: hero {entity:?} spawned for '{name_lower}' at {pos:?}");
@@ -226,14 +284,19 @@ pub fn handle_dev_commands(
                     // person, and a villager must keep its name if the world is
                     // later rebuilt around it.
                     villager_seed.0 = villager_seed.0.wrapping_add(1);
-                    let safe_position = safe_villager_spawn_position(
+                    let Some(safe_position) = safe_villager_spawn_position(
                         pos,
                         villager_seed.0,
                         terrain,
                         obstacles.as_deref(),
                         colliders.as_deref(),
                         derived.as_deref(),
-                    );
+                    ) else {
+                        warn!(
+                            "Dev: refusing villager spawn at {pos:?}: no navigable ground within 48 metres"
+                        );
+                        continue;
+                    };
                     let entity = crate::player::hero::spawn_villager(
                         &mut commands,
                         terrain,
@@ -323,7 +386,9 @@ pub fn handle_dev_commands(
                                     .storage_bulk_capacity(),
                             ),
                             shared::economy::MootMarket::founding(),
-                            shared::components::SettlementPolicies::default(),
+                            shared::components::SettlementPolicies::from_foundation(
+                                &name, grounded,
+                            ),
                             shared::components::PlayerPosition(grounded),
                             // The shared village schedule tags the physical hall
                             // with RegionCoord before network visibility is
@@ -407,10 +472,32 @@ mod tests {
         });
 
         let safe =
-            safe_villager_spawn_position(requested, 97, &terrain, Some(&obstacles), None, None);
+            safe_villager_spawn_position(requested, 97, &terrain, Some(&obstacles), None, None)
+                .expect("the blocked click has nearby navigable ground");
 
         assert!(safe.is_finite());
         assert!(!obstacles.point_blocked(Vec2::new(safe.x, safe.z)));
         assert!(safe.distance(requested) > 5.0);
+    }
+
+    #[test]
+    fn burst_spawn_search_reaches_clear_ground_beyond_the_old_twelve_metre_limit() {
+        let terrain = WorldTerrain::default();
+        let requested = Vec3::new(1_700.0, terrain.get_height(1_700.0, 0.0), 0.0);
+        let mut obstacles = SpatialObstacleGrid::default();
+        obstacles.insert(ObstacleEntry {
+            center: Vec2::new(requested.x, requested.z),
+            half_extents: Vec2::splat(14.0),
+            rotation: 0.0,
+            obstacle_type: 1,
+        });
+
+        let safe =
+            safe_villager_spawn_position(requested, 97, &terrain, Some(&obstacles), None, None)
+                .expect("the extended search must find navigable ground");
+
+        assert!(safe.is_finite());
+        assert!(!obstacles.point_blocked(Vec2::new(safe.x, safe.z)));
+        assert!(safe.distance(requested) > 14.0);
     }
 }

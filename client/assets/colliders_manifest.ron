@@ -253,6 +253,44 @@
       vertex_filter: LowerYPercent ( percent: 0.558 ),
       collidable: true,
     ),
+    // ---------------------------------------------------------------------------------------------
+    // CIVIC LADDER (L2/L3).
+    //
+    // `percent` is (eaves - base_y) / height, so the hull is sliced at the eaves and the roof
+    // overhang does not inflate the footprint. It is DERIVED PER LEVEL, never copied: the town hall
+    // carries a 6.3 m roof and a 21.6 m belfry over a 9.1 m wall, so the moot hall's 0.558 would
+    // swallow most of the roof and part of the tower. The same formula reproduces the moot hall's
+    // existing 0.558 from its own numbers, which is how these two were checked.
+    //
+    ( kind: "building_village_hall",
+      gltf_path: "game_assets/buildings/village/VillageHall.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.555 ),
+      collidable: true ),
+    ( kind: "building_town_hall",
+      gltf_path: "game_assets/buildings/village/TownHall.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.431 ),
+      collidable: true ),
+    // ---------------------------------------------------------------------------------------------
+    // Processing industries. These slices end at the usable wall/cabin head,
+    // excluding roofs and, critically, the windmill's 8.8 m animated sail
+    // disc from its ground-level navigation hull.
+    (
+      kind: "building_windmill",
+      gltf_path: "game_assets/buildings/village/WindMill.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.189 ),
+      collidable: true,
+    ),
+    (
+      kind: "building_bakery",
+      gltf_path: "game_assets/buildings/village/Bakery.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.443 ),
+      collidable: true,
+    ),
+    // ---------------------------------------------------------------------------------------------
     (
       kind: "building_farmstead",
       gltf_path: "game_assets/buildings/village/Farmstead.glb#Scene0",

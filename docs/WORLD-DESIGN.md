@@ -58,7 +58,9 @@ one persistent, always-simulating multiplayer world.
    > **[current implementation]** `BiomeField::resources()` now drives Farmstead plot
    > quality and therefore observed and strategic output. Lumber sites additionally
    > require reachable generated trees, while fishing sites require a dry hut and broad
-   > open water at the authored pier end. There is not yet a radius aggregator for
+   > open water at the authored pier end. Windmills prefer open, low-tree plots during
+   > placement, but that visual/wind-access preference is not an output multiplier;
+   > mill and Bakery throughput depends on inputs, staffing and work time. There is not yet a radius aggregator for
    > founding or future resource districts; current permit planning evaluates legal
    > candidate plots directly. The climate and surface-band rules also drive rendering,
    > so the first local economy is grounded in the same geography the player sees.
@@ -527,39 +529,128 @@ with a player who does nothing but found the hall and put people on the map.
    incremented on arrival. A counter nudged by events drifts the first time an
    event is missed, and a population that disagrees with the people standing in
    the square is the exact lie the encyclopedia must never tell.
-5. Every 4s a settlement asks what it still lacks. Bootstrap remains ordered:
-   **food source → Lumberjack Hut → enough Houses for the roster**. The food source is a Farmstead
-   inland or a Fisherman's Hut where the complete hut/pier geometry reaches
-   usable open water. What is already APPROVED counts as
-   had, which prevents duplicate starter permits while allowing different worksites to
-   overlap. With three available residents the village can approve a Farmstead,
-   Lumberjack Hut and cabin on successive decision ticks instead of waiting for
-   each building and its path to finish before considering the next. A larger
-   roster repeats cabins until every resident has a bed. After the first measured
-   day, low reserves or production below one portion per resident request more
-   Farmsteads, capped at one per four residents. A viable meadow shoreline may
-   add both a Fisherman's Hut and a Farmstead rather than treating them as
-   mutually exclusive forever.
+5. Every 4s the Moot publishes a ranked **permit market**, not one compulsory
+   next building. Housing pressure, food security, real Wheat/Flour/Bread stock
+   and flow, construction Wood demand, existing and already-approved business
+   capacity, prices, successful sales, unavailable demand and unaffordable
+   demand create several simultaneous opportunities.
+   A score of 60 or more receives the enacted growth subsidy; lower-scoring
+   firms remain legal at full permit price. Houses are independent, free
+   household applications and do not become illegal merely because food is
+   scarce. Farmsteads and Fisherman's Huts compete as food investments, mills
+   become attractive when actual Wheat begins to accumulate, bakeries respond
+   to Flour and Bread demand, and timber demand anticipates the output of huts
+   already under construction. This prevents both rigid
+   **farm → mill → lumber → house** towns and a construction spike
+   spawning one woodshed per unfinished cabin.
+
+   Each eligible resident evaluates those signals through a stable business
+   strategy (Cautious, Balanced, Growth, High Margin or Opportunistic), expected
+   output and input prices, wages, site quality, current holdings and a small
+   deterministic personal bias. The highest willing applicant wins that review.
+   Poor businesses are therefore possible: prices can move, labour can vanish,
+   and an opportunist can accept a marginal plot. They are choices with
+   consequences, not random permit mistakes or hall orders. An opportunity that
+   finds no willing applicant or legal site is briefly deferred so it cannot
+   monopolise every review while other houses and firms are feasible.
+
+   The seeded grammar is the preferred site pass, not a zoning wall: an exhausted grammar falls back to a
+   denser deterministic open-land sweep. Reachable same-landmass plots rank
+   ahead of attractive soil across water, and every building receives the same
+   land-route proof before its permit is approved. Applicant eligibility and
+   affordability are checked before that potentially expensive geometry pass:
+   a busy Reeve or an unaffordable private permit must not resurvey thousands
+   of mature-town terrain/prop samples every decision tick. In an established
+   street network, a completed road is already the certified route back to the
+   centre, so permit planning considers frontage only on the completed component
+   that actually reaches the Moot Hall, then proves only the new frontage-to-door
+   leg. The proposed shell and both future Farmstead fields already block that
+   proof; the reserved lane therefore cannot bend through the floor that will
+   exist after construction. Isolated
+   plots use a coarse, road-width terrain-connectivity proof; exact actor and
+   construction routes still use the detailed obstacle-aware planner. This
+   prevents civic permits beside a winding riverside road from performing a
+   multi-second movement A* on the simulation thread. Farm and timber searches
+   resume one outward ring per permit decision. Shoreline search does the same:
+   it compares one four-metre ring at a time, remembers its cursor, and caches
+   a fully exhausted coast until terrain is edited. Fishing is a repeatable
+   first-class opportunity: its permit can only succeed when the complete
+   hut/pier geometry reaches usable open water, while an inland refusal leaves
+   farming and every other market opportunity free to proceed. Once the bounded
+   search proves the current terrain has no coast, the hall stops advertising
+   and subsidising fishing until a terrain edit invalidates that knowledge.
 6. A resident applies. No residents, no permit — an empty foundation does not
    build itself, which is the whole point of §1's "a hall is a site, not a
-   village". The applicant becomes the building's owner, by durable `PersonId`, and it is
-   whoever holds the FEWEST buildings already. That last part is not a detail:
-   taking whichever resident the query returned first gave one villager the
-   entire village and left the other two owning nothing, which makes the roster
-   decorative and makes "the wheat farm stopped because the farmer died"
-   meaningless — one death would take everything with it. Zero-holding
-   residents therefore receive their first permit before repeat owners. Needed
-   housing permits are civic approvals and remain free. Farmstead, Fisherman's
-   Hut and Lumberjack Hut permits debit the applicant's wallet into the general
-   settlement treasury; settlement-requested businesses are discounted and
-   repeat holdings become progressively dearer.
+   village". The applicant becomes the building's owner, by durable `PersonId`,
+   and is the willing resident with the strongest individual decision score.
+   Existing owners may expand when the opportunity is good, but every holding
+   lowers the score and raises the next permit price by 50%, so ownership
+   concentration is possible rather than scripted. Needed housing permits are
+   civic approvals and remain free. Farmstead, Fisherman's Hut, Windmill,
+   Bakery and Lumberjack Hut permits debit the applicant's wallet into the
+   general settlement treasury; high-signal businesses are discounted and
+   speculative firms pay full price. Approval reserves its plot and
+   transfers any fee immediately, but an observed applicant then takes a stable
+   FIFO place in the Moot forecourt and collects the stamped permit before material
+   work begins. Strategic regions compress this short administrative trip.
+   The current physical search envelope is capped at 320 metres from the Moot
+   Hall. That is a hard implementation boundary, not the final land-market model:
+   continued immigration can still fill the envelope with free housing. The
+   planned follow-up is a finite charter boundary whose serviced land/permit
+   price rises with occupied plots and distance, with boundary expansion enacted
+   as an explicit tier/civic project rather than unlimited automatic sprawl.
+   Development signals compare durable *throughput*, not the contents of one
+   storehouse. For processors, the hall normalises the last two days of upstream
+   output and amortises stock on hand over seven days before comparing it with
+   existing and already-approved capacity. Thus a one-time Flour pile cannot
+   justify a street of Bakeries. Missing beds add a strong civic preference for
+   Houses and remove growth discounts from ordinary businesses while shelter is
+   critically short. They do not prohibit a resident from paying full price for
+   a speculative firm, and the first viable food extractor remains exempt so a
+   new settlement cannot shelter itself into starvation.
+   Processor entry has a second bounded route for competition: two days of
+   demand, positive incumbent profit, rejected buyers or a thin order book, real
+   upstream input and an ask at least 50% above sustainable local cost invite one
+   owner who does not already own that processor kind. This score exceeds the
+   Hall's incentive threshold, so the enacted permit subsidy explicitly answers
+   a Wheat-rich, Flour-expensive monopoly. A pending or three-day-new challenger
+   closes the signal until the market has had time to respond.
+
+   An embodied player may take the other side of this same permit market. Standing within
+   12 metres of the Hall makes every ordinary private permit visible: low demand means full
+   price, not a prohibition, while impossible processor prerequisites and unstable existing
+   holdings remain real eligibility rules. The Hall returns an exact hero-specific quote.
+   Purchasing creates a bounded, replicated stamped permit and escrows its fee plus any
+   processor startup capital; it does not choose land or create a building. Escape closes
+   placement without losing the permit, and the permanent permit tray can resume or surrender
+   it for a full refund.
+
+   The placement tool magnetically locks the authored door to legal frontage on the completed
+   Hall-connected road graph, cycles nearby frontage with Tab, flips/rotates with R, and allows
+   a Shift-held off-road expansion. Green means existing road frontage, amber means a legal new
+   connector, and red means locally predicted rejection. Farmsteads draw both future field
+   reservations and a live farmland-quality meter; Lumberjack Huts show timber quality. The
+   server independently snaps to terrain and proves charter distance, slope/earthworks, dry
+   footprint and door, permanent props, every building/field/road reservation, extractive work
+   access and a full-width route to the Hall component. It also reserves accepted same-tick
+   plots before deferred ECS spawning, so simultaneous players cannot claim the same ground.
+   Acceptance releases only the fee to the treasury, carries processor startup escrow into the
+   finished account, and creates the ordinary empty Wood worksite and road-access reservation.
+   A local unemployed resident can adopt the build; market Wood is billed to the player owner,
+   never the carrier, with direct gathering as the physical fallback.
 7. Ordinary siting is deterministic and charter-led. A settlement's name and
    founding position choose organic lanes, radial commons, an ordered grid, a great
    avenue or neighbourhood clusters plus a civic-centre form. Those grammars bias
    frontage and preserve centre space; demand and geography still choose the building
-   count and winning plot. Candidate scoring rejects slope, wet ground, overlaps,
+   count and winning plot. Candidate scoring rejects excessive earthworks, wet ground, overlaps,
    road reservations and adjunct fields/piers, rewards appropriate farmland/forest,
    and faces completed roads when one is close. Completed buildings never relocate.
+   Farmsteads may cut and fill a modest terrace: the yard may move by at most
+   1.75 metres and either field by at most 2.25 metres. Naturally flat land still
+   wins the score. Both authored fields, their two-metre graded verge and the
+   farmyard are reserved as one land claim; ordinary trees/dead trunks in that
+   claim are cleared, while permanent rocks and genuinely steep ground still
+   reject the permit.
    Determinism makes the same settlement state reproduce the same choice and bug.
    A coastal food search is geometry-led: it keeps the whole Fisherman's Hut
    and its side route dry, rotates the authored `Anchor_Pier` side seaward, and
@@ -570,9 +661,15 @@ with a player who does nothing but found the hall and put people on the map.
    the Moot's Wood stock when the owner can afford its current ask. If it cannot
    supply the job — including empty stock or an owner short of coin — they walk
    to a real tree, face it, play the chop action, and carry a bounded load back.
+   This emergency self-supply recovers two usable Wood bundles per completed tree
+   interaction. It prevents a founding deadlock, but is intentionally much less
+   productive than hiring a professional woodcutter or buying their stock.
    Loads accumulate visibly and construction cannot begin on nine of ten logs.
    Only when the exact requirement is present does the builder walk to the plot,
    face the work, clear and level the ground, then spend ten seconds raising it.
+   Farmstead earthworks add a small effort-scaled amount of builder time and
+   publish the resulting yard and two-field terraces as replicated terrain deltas,
+   so the server's collision ground and every client's visible ground stay identical.
    Completing the building consumes the committed site inventory. A DECISION
    and its RESULT remain separate events — otherwise "under construction" is
    not a state the panel can honestly show.
@@ -588,40 +685,101 @@ with a player who does nothing but found the hall and put people on the map.
    side or rear. The derived hall is registered as a real obstacle too. Later permits
    reject footprints that would overwrite any planned road's protected corridor,
    including its unfinished suffix.
-10. Completed workplaces expose bounded job slots. Residents fill vacancies by
-   walking person and name; Farmsteads hold two Farmers, Fisherman's Huts two
-   Fishers, Lumberjack Huts one Woodcutter, and Houses deliberately employ nobody.
-11. Every villager and completed building has bounded bulk storage. Food, Wheat,
-    Wood, Stone and Iron share that capacity; coin is deliberately not cargo.
+10. Completed workplaces expose bounded job slots. Residents fill vacancies through
+   durable person/building IDs; Farmsteads hold two Farmers, Fisherman's Huts two
+   Fishers, Windmills two Millers, Bakeries two Bakers, Lumberjack Huts one
+   Woodcutter, and Houses deliberately employ nobody. Equal-wage founding hiring
+   staffs each essential production link once before filling a workplace's second
+   position; an owner's higher wage still overrides that tie-break.
+11. Every villager and completed building has bounded bulk storage. Fish, Wheat,
+    Flour, Bread, Wood, Stone and Iron share that capacity; coin is deliberately not cargo.
 12. Every completed Farmstead plants two authored wheat fields beside its plot.
     Its named Farmers enter through the authored door, rest out of sight, walk
     into their assigned fields, work them, carry bounded wheat loads back, and
     deposit them. One field unlocks 50% of the workplace's land capacity; both
-    unlock full capacity. Output then scales per active Farmer, with a maximum
-    of four Wheat per Farmer per day on good land (eight for two Farmers), and
-    poorer ground lowers that daily cap.
+    unlock full capacity. Output scales per active Farmer and field quality as
+    continuous work time, with no artificial daily grant or trip cap.
 13. A staffed Lumberjack Hut runs an observed physical loop: the woodcutter
     enters through the authored door, rests out of sight, walks to a real tree
     prop, plays the chop action, carries only what fits, and deposits it at the
-    hut. Ground quality changes the harvest per trip.
+    hut. A professional harvest yields three bundles per interaction versus two
+    for emergency self-supply. Ground quality shortens the professional's harvest
+    cycle, so a good forest improves output per hour while even a poor valid
+    Lumberjack Hut remains more productive than an untrained builder.
 14. Every completed Fisherman's Hut places its separate collider-free authored
     pier at water level. Its named Fishers use the hut door, follow a safe
     authored route around the solid hut, walk on the deck plane rather than the
     lake bed, perform the temporary visible work action at `Anchor_FishSpot`,
     and carry quality-scaled edible Food back to bounded hut storage.
+14a. Wheat is not edible. A staffed Windmill buys physical Wheat through the same
+    private Moot market and transforms one Wheat into one Flour after real indoor
+    work. Flour is a household food because a cabin abstracts the final home baking;
+    unhoused residents cannot eat it directly. A staffed Bakery buys two Flour and
+    produces four ready-to-eat Bread, so Bread is the first level-two,
+    higher-efficiency food. Both processors retain partial labour between shifts,
+    stop when inputs are absent or output storage is full, enter through their doors,
+    receive wages, adjust prices, can fail financially, and run the same recipe when
+    strategically simulated off-screen. Neither exposes a land-quality percentage or
+    multiplies production by the ground beneath it. Windmills still prefer open plots;
+    Bakeries use ordinary accessible town plots. Permit investors derive rated daily
+    capacity from these same worker slots, shift duration and recipe times (currently
+    12 Wheat for an ideal Farmstead, 18 Wheat input for a Windmill, and 30 Flour input /
+    60 Bread output for a Bakery), rather than maintaining a second hand-tuned output
+    table. Their temporary blockout buildings are replaced
+    by authored assets without changing these economic identities.
+14b. The selected-person UI separates visible animation from intent. The compact
+    `CharacterActivity` still drives animation, while a replicated
+    `CharacterObjective` says why the person is moving or waiting and an independent
+    `CharacterNavigationStatus` reports walking, route planning or a blocked route.
+    The selection plate and encyclopedia `NOW` row therefore show statuses such as
+    “In line to register as a resident”, “Taking Wheat to the farmstead” and
+    “Going to farm work · route blocked” instead of reducing all stationary states
+    to “Idle”. Both are compact change-gated enums; private routine state and paths
+    remain server-only, so inspection does not replicate debug strings per NPC.
 15. Producers now stay at their trades: field/pier/tree output returns only to
     bounded workplace storage. The founding Moot Hall has three named positions:
-    Market Porter, Reeve and Road Steward, with at least one founder deliberately
-    left outside civic work. The porter reserves a sale at the current bid, walks
-    to the offering business, carries a bounded load back, and settles only on
-    physical delivery. Sale receipts enter a business account; daily payroll pays
-    real workers, including old arrears before owner profit, then only cash above
-    two days of wages, remaining arrears and working capital becomes an owner
-    draw. Each owner exposes a daily wage offer. NPC owners raise it after two
+    one Reeve and up to two Moot Stewards, with at least one founder deliberately
+    left outside civic work. Each Moot Steward combines market collection and road
+    maintenance as one job, walks to an offering business, carries a
+    bounded load back and consigns it under that business's stable `BuildingId`.
+    Delivery is not a sale: the firm receives revenue only when a household,
+    builder or another business buys the stock. The Moot keeps no dealer fund or
+    founding inventory; its fee is credited to the civic treasury. Business
+    accounts separate contributed capital, gross revenue, wages, purchased inputs,
+    market fees, positive-profit levies, profit and owner withdrawals. Payroll pays real workers and old
+    arrears before profit can be withdrawn, while each strategy protects several
+    payroll days plus working cash. Each owner exposes a daily wage offer. NPC owners raise it after two
     affordable vacancy days and lower it only after persistent payroll stress (or
     a long fully-staffed but cash-tight spell); a future player owner edits the
-    same policy directly. Higher offers recruit first. Product pools retain separate quotes and
-    history but share one finite operating fund. Construction temporarily pauses
+    same policy directly. Higher offers recruit first. Owners also choose Balanced,
+    Growth, High-Margin, Cautious or Opportunistic autopilot; the same replicated
+    policy can later be placed in manual player control. Asking prices move only by
+    a bounded daily step using realised unit cost, sell-through, stale stock and
+    solvency. Generic input rules now supply Windmills and Bakeries and are the same
+    seam future taverns, breweries and smithies use. Processor autopilot derives its
+    maximum input bid from the current output ask, physical recipe, wage offer, market
+    fee and target margin; it is not pinned forever to a multiple of an input's base
+    price. A processor permit escrows its first complete input batch and full-staffed
+    payroll. The Hall never sets the entrant's asking price: Growth owners may open
+    below the recent quote, Balanced or Cautious owners may match it, and High-Margin
+    or scarcity-seeking Opportunistic owners may ask more. Persistent high prices and
+    unmet demand can therefore attract another independent entrant after the bounded
+    probation window. A firm that
+    cannot meet payroll progresses through cash-tight, distressed and insolvent
+    states and eventually closes; closed workplaces cannot silently rehire or reopen.
+    Municipal finance follows the same scarcity rule. Every public role accrues a
+    durable personal wage claim; leaving office cannot erase arrears. New civic
+    hiring requires the enacted payroll reserve. Permit receipts, market fees,
+    positive-profit levies and public sales are separate income lines; wages,
+    Poor Relief and construction purchases are separate spending lines. Public
+    projects may buy private consignments only by paying their seller and cannot
+    consume protected payroll cash. Each foundation deterministically begins
+    Balanced, Frugal, Mercantile, Mutual-Aid or Growth, and an automatic Reeve
+    reviews at most weekly and adjusts at most one rate or relief decision. The
+    treasury, all flows, vacancies, rates and policy reasons are retained in the
+    pull-based settlement history.
+
+    Construction temporarily pauses
     a worker's job and consumes their time. Public tier buildings are the
     Reeve's projects and are serialised through that one position, so civic
     expansion cannot pull every essential producer off work at once.
@@ -636,30 +794,73 @@ with a player who does nothing but found the hall and put people on the map.
     household fades up that cabin's authored glass panes and `Light_Window.*`
     anchors; empty cabins and daytime panes remain dark. This visual derives
     from the cabin's own replicated roster so it remains correct when separate
-    resident entities are outside the client's streamed set.
+    resident entities are outside the client's streamed set. A terminal route
+    to an otherwise assigned cabin is consumed by the home routine, retried a
+    bounded two times, and then only the impossible remainder is compressed
+    into the cabin. Bad local collision geometry therefore cannot leave one
+    resident outdoors, flood route warnings or prevent work the next morning.
 17. During daylight, a resident who is unemployed OR still lacks a cabin no
     longer waits in one place. In an observed tactical region they occasionally
     reuse the shared path graph to walk to a collision-checked Moot gathering
     point or the verge of a finished village path, then stand or play the
-    authored seated rest loop facing the road. One 4Hz wall-clock pass serves
-    the whole population, roadside geometry is cached until infrastructure or
-    colliders change, and 100x warp scales dwell time rather than decision
-    frequency. An unobserved strategic region creates no ambient route or
-    movement work; unhoused residents gather outside the Moot after dark.
+    authored seated rest loop facing the road. A wall-clock token budget spreads
+    four decisions across each ordinary 60Hz update (about 240 per real second)
+    in fair round-robin order instead of visibly changing 64 people in one
+    quarter-second pulse. Each routine remembers its own elapsed world time, so
+    a 350-person town does not slow or synchronize dwell timers merely because
+    residents are revisited in slices. Raw roadside geometry is shared and
+    cached; optional destinations remain within 46 metres of the actor and only
+    the chosen local candidates are checked against current buildings and
+    streamed props. A new house therefore cannot force the whole crowd to
+    resurvey every old road verge, and cosmetic loitering cannot create a queue
+    of cross-town routes. 100x warp scales dwell time rather than decision
+    frequency. An
+    unobserved strategic region creates no ambient route or movement work;
+    unhoused residents gather outside the Moot after dark.
 18. Each cabin has a shared necessities purse and bounded pantry. Once per world
     day its residents contribute only enough to refill a three-day target while
     retaining personal discretionary coin; an available household member is named
-    as shopper. The household buys from the Moot and each housed resident consumes
+    as shopper. In a tactical region that shopper joins the Moot's shared FIFO
+    service line, buys physical stock at the counter and carries it home; strategic
+    households settle the same bounded purchase directly. Each housed resident consumes
     exactly one physical pantry portion per day. Unhoused residents still buy one
     ration personally. If neither can afford food they go hungry unless the
     settlement has Poor Relief enabled. Solvent residents buy first; relief then
     spends general treasury coin at the same market ask only when recent production
     covers the population and the subsidised ration leaves a full three-day
     emergency reserve. Public money, sustainable production and surplus stock can
-    all run out. Prepared `Food` is tried first and raw `Wheat` is directly edible for
-    this prototype. The
+    all run out. Housed households prefer Bread, then Fish, then Flour; Flour represents
+    bread made in the cabin and raw Wheat is never edible. Unhoused personal buyers and
+    Poor Relief require ready-to-eat Bread or Fish and also queue
+    outside the observed Moot, collect one reserved ration as visible cargo and eat
+    it in the civic commons. Payment and seller settlement happen when the ration is
+    reserved, while personal nutrition is recorded only when it is collected; the
+    reservation prevents the hall selling the same unit again. The
     settlement tracks current edible stock, reserve days, unmet portions, and
     three-day average production and consumption.
+18a. The founding hall reserves a 16-metre planning clearance for its forecourt and
+    commons. That reservation contains the full authored Town Hall footprint from
+    foundation day onward, even while the visible building is still a Moot Hall.
+    Building permits and road surveys both treat that largest shell as occupied, so
+    promotion never moves an existing building or discovers a road beneath the new
+    hall. The three assets share one exporter-enforced door threshold, preserving
+    their road endpoint and every queue position across the upgrade. F4 draws the
+    current shell in amber and the permanent maximum shell in magenta.
+
+    The hall exposes two stable-serial FIFO lines on opposite sides: immigration
+    registration has its own counter lane, while permits, household shopping,
+    personal food purchases and Poor Relief share the resident lane. A large migrant
+    wave therefore still produces one long, visible arrival line without preventing
+    an existing household from collecting food. Moving forward by one queue place
+    uses a collision-checked local step rather than requesting a new town-scale A*
+    route for every person. Food handovers take one world second, immigration two and
+    permits three; a hundred-household resident line must clear in under five world
+    minutes at both 1x and 10x. The stuck-head fallback counts only time without
+    measurable movement, never an ordinary long walk. A tactical migrant becomes a resident only after reaching
+    the hall, taking a place and being served; strategic migration uses the same
+    settlement choice without manufacturing an off-screen local line. Only active
+    service users pay for these local routes; ordinary ambient crowds and every
+    off-screen settlement retain the cheaper simulation paths.
 19. Prosperity is a visible 0–100 breakdown, not an unexplained counter: food
     reserve contributes 40, recent production 30, housing coverage 20 and
     employment coverage 10, while hunger can subtract 30. A Hamlet with at
@@ -672,7 +873,10 @@ with a player who does nothing but found the hall and put people on the map.
     planning temperaments (organic, radial, grid, avenue or polycentric), a
     centre form and independent inner/outer wall forms. It biases only FUTURE
     candidate plots; completed buildings never move, and permits/demand still
-    decide the number of farms, houses and businesses. Wall forms are reserved
+    decide the number of farms, houses and businesses. The authored founding
+    rings are density preferences rather than city boundaries: compact cabin
+    frontage gaps are tried first, then deterministic search bands widen with
+    the occupied envelope. Wall forms are reserved
     planning metadata in this slice, not yet physical fortifications.
 21. Village and Town progression is authoritative and inspectable. A Village
     requests a placeholder Marketplace and Tavern after survival shortages are
@@ -683,12 +887,17 @@ with a player who does nothing but found the hall and put people on the map.
     These generated blockout boxes are semantic buildings with real plots,
     wood supply, staffing, storage, collision and door-connected roads; authored
     art can replace them without changing progression.
-22. Public positions are explicit named rosters at the hall. A Hamlet exposes
-    one city-worker position and no guards; Village and later rungs expose two
-    city-worker and two guard positions. Vacancies remain visible when population is too small, and further
+    The settlement entity itself also carries a replicated physical hall rung:
+    Hamlet/Ruins use the Moot Hall, Village uses the Village Hall, and Town/City
+    use the Town Hall until City Hall art exists. Promotion swaps only the visual,
+    collider and ground claim on that same entity; treasury, market, queues,
+    policies, history and stable settlement identity remain intact.
+22. Public positions are explicit named rosters at the hall. A Hamlet and later
+    rungs expose two combined Moot-Steward worker positions; Village and later
+    rungs additionally expose two guard positions. Vacancies remain visible when population is too small, and further
     civic hiring stops at population minus one so a tiny foundation does not
-    consume every new arrival. The first city worker remains the Road
-    Steward; guards are real employment but patrol/combat behaviour is pending.
+    consume every new arrival. Both founding workers haul goods and maintain roads;
+    guards are real employment but patrol/combat behaviour is pending.
 23. Roads carry class and material. Ordinary lanes remain dirt. A Town's
     principal hall connector is widened and upgraded one unit per elapsed day
     by public works, but only by removing physical `Stone` from bounded hall
@@ -712,19 +921,21 @@ between client frames; presentation never delays authoritative simulation.
 
 **Clicking the hall opens the settlement panel** — name, tier, residents and
 their wallets, treasury, Moot inventory and capacity, each good's stock target,
-bid, ask and buying liquidity, Poor Relief policy, edible stock, reserve days,
+last sale, cheapest owner offer, listing count, Poor Relief policy, edible stock, reserve days,
 recent production/consumption, hunger, the prosperity breakdown and Hamlet →
 Village secure-day progress, what stands (with each building's
 owner by name), every worksite's delivered/required Wood, who lives there, and
 what a permit costs. Worksites are themselves selectable and show whether they
 are gathering materials, ready, or raising; corner stakes and delivered timber
 bundles make the same progress visible in the world. Clicking any completed
-building opens its own details: owner, plot quality, housing or job capacity,
-designated cabin residents, named workers, and its bounded inventory. The same
+building opens its own details: owner, relevant farmland/timber/fishing quality, housing or job capacity,
+designated cabin residents, named workers, bounded inventory and, for a business,
+state, owner strategy, cash, arrears, asking price, purchased-input rules and daily
+profit/loss. The same
 building, household and inventory snapshot is retained in the encyclopedia as
 an expandable settlement tree: selecting the village shows its overview, while
 selecting the hall, cabin or workplace opens that building's own structured sheet.
-The encyclopedia also retains aggregate Moot liquidity and traded volume. The
+The encyclopedia also retains the consignment model, listed stock and traded volume. The
 panel is a window onto decisions already made; direct player trading controls
 remain deferred.
 
@@ -750,17 +961,33 @@ are local door-to-door village paths, not Phase 5's regional caravan network and
 not Phase 6's group flow fields.
 
 An embodied trip still needs short connectors from its actual position to that
-graph and back. Destination changes therefore enter a fair round-robin queue with
-a real CPU-time budget, compare the obstacle-safe direct route against up to four
-nearby graph joins, and prefer the road whenever its speed-weighted detour remains
+graph and back. Destination changes therefore enter a two-lane bounded queue:
+committed migration, production, shopping and construction work is served before
+cosmetic ambient wandering, with fair round-robin service within each lane. Routes have
+a real CPU-time budget, compare the obstacle-safe direct route against up to eight
+candidate road routes assembled from nearby graph joins, and prefer the road whenever its speed-weighted detour remains
 sensible. The complete certified route is cached by its exact endpoints and its
 reverse is cached when the reversed endpoint clearances are also certified, so
 repeated home/work/market commutes become lookups without reusing an unsafe
-tree-interaction exemption. Road topology or
-live obstacle-version changes invalidate the affected cache wholesale; a final
-live broadphase check remains mandatory on every reuse. Stable navigation-building
+    tree-interaction exemption. Migrants sharing one exact hall destination may join
+    one of eight nearby certified cohort approaches with a separately surveyed local
+    connector, so a god-mode crowd does not pay for hundreds of equivalent full
+    searches. Admission into migration is capped at eight people every quarter real
+    second, independently of world warp; this paces CPU work but deliberately does not
+    shorten or remove the visible hall line. Adding a road preserves certified positive routes
+    and only wakes failed routes whose start or goal lies near the changed 32-metre
+    road-opportunity cells. Removed roads and live building/prop geometry changes
+    invalidate only cached polylines intersecting the changed building or 64-metre
+    prop-streaming chunks. A final live broadphase check
+remains mandatory on every reuse. Stable navigation-building
 blockers are rebuilt only when placed buildings change, and each A* survey reuses
-its allocated search memory and memoizes repeated geometry samples. This is not
+its allocated search memory and memoizes repeated geometry samples. Extended
+direct A* keeps its frontier between ticks and yields at the wall-clock deadline,
+so a difficult route cannot turn the nominal 2 ms allowance into one multi-second
+server tick. Each retained search nevertheless expands at least eight cells per
+visit; at 60 Hz its 2,400-cell hard cap therefore resolves in at most five real
+seconds instead of holding every committed journey behind a forty-second
+one-cell-per-tick proof. This is not
 per-frame pathfinding: plain waypoints are followed until the destination changes.
 Building footprints and deterministic baked-tree/rock radii block the survey; the
 movement step samples the live broadphase again so a 100x step or a new obstacle
@@ -773,7 +1000,17 @@ expanded-node counts, geometry-memo hit rates, blocker/prop/direct/graph/connect
 certification time, and maximum planner-call time. The default planner allowance is
 2ms per server tick (`CITYSIM_PATHFINDING_MILLISECONDS_PER_TICK`), plus a request
 ceiling (`CITYSIM_PATHFINDING_REQUESTS_PER_TICK`). At least one request is served so
-an individually difficult route cannot leave the queue permanently stuck.
+    an individually difficult route cannot leave the queue permanently stuck. Repeated
+    failures for the same two-metre destination cell are coalesced into one warning per
+    five real seconds, preserving the diagnosis without letting a crowd flood the log.
+
+A permitted construction plot is already a navigation reservation. Road surveys
+avoid the future shell and both unpublished Farmstead fields, closing the race in
+which a later-completed building covered an earlier road. Settlements admit one
+concurrent worksite per twelve residents, clamped to three through twelve, rather
+than converting a migration burst into an unbounded collection of half-supplied
+sites. Farmers, fishers, woodcutters, millers and bakers are not assigned until their workplace's
+completed connector belongs to the Moot Hall road component.
 
 Ambient behaviour and ordinary-villager LOD now exercise the first half of §1a's
 embodiment boundary. Region interest prevents unobserved people reaching clients;
@@ -784,13 +1021,14 @@ economic/social state. Phase 2 still owns derived-route `Travelling` records and
 lossless traveller/army promotion contract.
 
 **Deliberately not in this slice:** births, boats, remote markets and caravans,
-processing Wheat into prepared Food, tree
+recipes beyond Flour and Bread, tree
 depletion/regrowth, decline, physical walls and guard patrol/combat behaviour.
-The implemented local Moot is a dealer with physical stock, earmarked buying
-cash and inventory-aware bid/ask quotes; it is not yet a player trade screen or
-a regional economy. Wheat is temporarily edible
-directly, fishing lands prepared Food, and the shortage response can repeat
-cabins and Farmsteads, but this is not yet a complete regional economy. The seeded
+The implemented local Moot is a private consignment exchange with physical stock,
+seller-owned listings, last-sale/best-offer quotes and a civic transaction fee; it
+is not yet a player trade screen or a regional economy. Wheat must be milled,
+households can finish Flour at home, Bakeries add efficient Bread, fishing lands
+ready-to-eat Fish, and the shortage response can repeat cabins, Farmsteads and their
+processors when individual owners accept the current signals, but this is not yet a complete regional economy. The seeded
 planner now handles frontage, layouts, farmland, reachable timber, coast geometry,
 roads and civic reservations; future districts/walls extend it rather than replacing it.
 
@@ -831,8 +1069,9 @@ crossed the exterior wall plane rather than disappearing in front of it.
 The road suite separately proves obstacle wrapping and bidirectional route-cache
 reuse, then runs both the original-builder handoff and multi-waypoint travel at
 100x. Focused economy tests lock one portion per resident per day, Food-before-
-Wheat consumption, exact wallet-to-market payment, coin conservation, unmet
-demand and the three-secure-day promotion. `cargo
+Wheat consumption, exact buyer-to-business/treasury payment, profit accounting,
+generic input procurement, durable bankruptcy, coin conservation, unmet demand
+and the three-secure-day promotion. `cargo
 village-lab` is the broader regression laboratory: it loads a dedicated 1km map
 with real baked prop colliders, founds one deterministic eight-person meadow
 settlement and soaks the complete world for 190 simulated minutes at 100x by
@@ -846,30 +1085,67 @@ own door connector, even when an existing path is less than two metres away, all
 worksites were supplied incrementally, day/night thresholds were crossed, and no
 bounded inventory overflowed. It also requires the meadow settlement to build
 both food sources, feed everyone, sustain its reserve and advance to Village,
-while Coldbarrow records hunger, repeats Farmsteads in response and remains a
+while Coldbarrow records hunger, raises food-investment signals and remains a
 Hamlet without a secure reserve. The full dual contract passes at the normal lab warp; a diagnostic
 1,000x run may skip sub-second door presentation while retaining authoritative
 threshold crossing and the same world-time accounting.
 
 ## 2. Goods and markets
 
-Start with **five physical goods + coin**: Wheat, Food, Wood, Stone, Iron. Wheat
-is the harvested crop; Food is what a household can actually consume. Keeping
-that conversion seam lets milling/baking or a simple Farmstead recipe become a
-real decision later, and it can still be collapsed if processing proves to add
-no gameplay. Tools/luxuries come later as demand sinks that make cities need the
-countryside.
+Start with **seven physical goods + coin**: Wheat, Flour, Bread, Food (currently
+fish), Wood, Stone and Iron. Wheat is a raw crop and can never satisfy hunger.
+A Windmill turns one Wheat into one household-edible Flour; that Flour represents
+the household baking its ordinary ration at home. A Bakery turns two Flour into
+four ready-to-eat Bread, making Bread the first tier-two food. Tools and luxuries
+come later as demand sinks that make cities need the countryside.
 
-**Local prices from local stocks.** The Moot dealer maintains a separate accounting
-band, target stock, bid and ask for each good while all bands can lend from one
-finite operating fund. Scarcity raises the midpoint;
-low buying cash widens the spread and suppresses bids, so an empty pool cannot
-promise imaginary payment. Trades walk the curve one integer unit at a time for
-deterministic slippage. No global market, no order books. Player trading will be:
-buy where it's cheap, cart
-it somewhere it isn't. The map IS the market screen — a highlands town starving
-next to a meadows village bursting with grain is a visible business
-opportunity.
+**Local prices from local owners.** The Moot stores physical consignments and a
+small seller-aware offer book. Firms choose asking prices from realised costs,
+target margins, sell-through, unsold stock and cash stress; customers buy the
+cheapest acceptable units. Payment moves directly from buyer to seller at purchase,
+minus the Moot's civic fee. The hall never invents purchasing liquidity and begins
+with no stock. Successful purchases, unavailable requested units and units rejected
+for price or insufficient buyer cash are retained separately for the current and
+preceding market day. Those readings let the Hall distinguish “nobody asked” from
+“people asked but the monopoly was too expensive.” This is a local order book,
+not a global market: offers exist only where their goods were physically delivered.
+The first player trading verb is live: an embodied hero within 12 metres of a Hall can buy
+real listed stock into bounded personal cargo or consign carried stock under their own
+`PersonId`. A sale does not make the Hall pay them; coin arrives only when a real later buyer
+clears that listing, minus the enacted fee. The first UI lists at the exchange's current ask;
+explicit player-chosen asks and quantity controls come with business/merchant management.
+The first ownership verb is live too: the same Hall exposes exact permit quotes and lets the
+hero place a House, Farmstead, Fisherman's Hut, Lumberjack Hut, Windmill or Bakery through the
+authoritative construction pipeline. Manual price, wage, procurement and withdrawal controls
+for the completed firm remain the next business-management layer.
+The next transport step is to buy where it is cheap and cart it somewhere it is not. The map
+IS the market screen — a highlands town starving next to a meadows village bursting with
+grain is a visible business opportunity.
+
+**Civic revenue is not a market subsidy.** The settlement owns a treasury, not
+the goods in its hall. It receives priced business permits, its enacted 2–10%
+market fee, public-stock sale receipts, and an enacted 0–15% levy on positive business
+profit after wages, inputs and market charges. The Balanced founding levy is 10%;
+losses and contributed capital are never taxed. Wage and tax underpayments remain
+explicit liabilities. The Reeve's weekly review reacts to payroll arrears, treasury
+runway, recent income/spending and sustainable food surplus instead of using a
+fictional market-buying pool.
+
+**Enacted civic policy.** New settlements begin with one explicit Balanced charter:
+5% market fee, 10% levy on positive business profit, Surplus-Only Poor Relief, a
+three-day food reserve target, seven funded civic-payroll days, Balanced staffing and
+a 45% discount on settlement-requested private business permits. There is no household
+or food-consumption tax. `Essential`, `Balanced` and `Full` staffing postures choose how
+many tier-bounded public jobs are advertised, but the payroll reserve still prevents an
+unfunded hire. The food target controls both the relief floor and when food capacity is
+requested. Growth subsidy is foregone permit revenue—not invented cash—and never applies
+to speculative firms. NPC Reeve autopilot reviews at most weekly and changes at most one
+lever; manual mode freezes the enacted values for future player control. Visual layout
+seeds deliberately do not randomise politics.
+
+The exact transaction order, formulas, strategy targets, staffing table, review priority
+and debugging surfaces live in [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md). That document is the
+source of truth when implementation detail and this higher-level design summary differ.
 
 **Consumption.** Population eats food; construction (tier upgrades, businesses)
 consumes wood/stone; unit recruitment and gear consume iron. These sinks keep
@@ -887,22 +1163,75 @@ owning buildings in places worth defending. No magic global bank.
 storage for villagers, workplaces, houses and halls. `CarriedLoad` exposes only
 the small visual summary needed for carry animation. `Wallet` and `MootMarket`
 are fixed-point server-owned ledgers: coin has no cargo bulk and every implemented
-transfer has two sides. `BusinessAccount` receives sales and pays daily wages;
+transfer has two sides. `BusinessAccount` records capital, revenue, operating
+expenses, wage/tax liabilities, retained profit and withdrawals; it receives sales only
+when a buyer clears a consigned offer, pays daily wages and settles profit levies.
+`CivicAccount` records permits, market fees, profit levies, public sales, civic
+wages, relief and construction materials without replacing the treasury's cash;
 `HouseholdEconomy` holds the shared necessities purse while the cabin inventory
 is its pantry. `WorkStatus` is deliberately only `Employed`, `LookingForWork` or
 `Chilling`. At 30 personal coins, an owner with two secure payroll days and an
 available replacement leaves hands-on work, chills, and is preferred as investor
-when the settlement later requests another business. Player inventories and
+when the settlement later requests another business. Every firm retains a bounded,
+pull-based 365-day history of P&L, cash, liabilities, prices, wages, physical flow,
+stock, owner decisions and solvency changes; it is sent only when its history view
+or settlement archive is requested rather than added to ordinary replication. Player inventories and
 remote ownership ledgers remain later work.
+
+**Business lifecycle.** A private firm begins `New`, operates after three reviewed
+days, and can become cash-tight, distressed or insolvent as real liabilities exceed
+cash. Owner withdrawals protect strategy-defined payroll days, configured input targets,
+tax/wage arrears and an operating buffer; opening capital is never distributable profit.
+Owners may expand only when every existing firm is completed, past probation and not in
+distress. The first Windmill or Bakery may anticipate an upstream trade, but later copies
+require measured input utilisation, sales, positive recent profit and uncovered supply.
+
+After five insolvent days the firm stops production and enters physical liquidation. Moot
+Stewards carry all workplace goods—including edible processor inputs—to seller-owned hall
+listings, whose price falls daily to a bounded floor. Receipts pay former workers by stable
+identity before taxes. Only after workplace stock, porter cargo and listings are empty does
+the building become a takeover property. Food can therefore be unaffordable or far away,
+but it cannot remain forever hidden in a dead bakery while residents starve.
 
 **Character aptitudes.** Every embodied hero and villager has Physique,
 Intelligence and Charm in the hard range 0–100. Generated villagers begin with
-stable seed-based variation; heroes persist the values in their player profile
-(v6 profiles migrate safely to v7). A successful farm-work cycle currently adds
+stable seed-based variation; a hero's live entity retains those values across reconnects
+within the running server session. Legacy v6/v7 profile tooling still migrates safely to v8,
+but the default server does not load it after restart. A successful farm-work cycle currently adds
 one Physique, once per cycle rather than once per rendered frame, so time warp
 cannot multiply training. `WorkforceRequirements` is the future specialist-job
 gate and the labour market already honours it, but Farmsteads, Fisherman's Huts
 and Lumberjack Huts deliberately carry no minimum requirements.
+
+**Health and starvation.** Every embodied Hero and Villager has 100 Health. At
+each world-day meal boundary, a resident who receives no edible ration records
+one missed meal. Hunger changes the safe Health ceiling rather than inflicting an
+immediate ten-point wound: the first three misses lower it to 80, 70 and 60, then it
+falls progressively to a nonlethal 10 after ten consecutive misses. Further missed
+days inflict 10 direct starvation damage, making the eleventh consecutive hungry day
+the first lethal boundary. Eating immediately resets the streak and restores the
+100-point ceiling; actual Health regenerates gradually rather than jumping.
+
+Lifetime successful- and missed-meal counters prevent either outcome from being
+applied twice under time warp. Health transitions run only on characters carrying a
+short-lived adjustment component and publish in five-world-second buckets; healthy
+people create no steady per-frame nutrition scan. A disconnected Hero receives an
+`OfflineHero` dormancy marker: movement, nutrition progression and active rewards all
+pause until re-adoption, so disconnecting is safe but cannot create offline progress.
+The later player inventory/eating interaction will record outcomes on the same
+`Nutrition` component and therefore use exactly the NPC thresholds.
+
+At zero Health the server resolves relationships before despawning the body. The
+stable `PersonId` leaves every private or civic job available; household membership
+is removed; personal money and carried goods enter the home purse/pantry, then the
+settlement hall if there is no home or capacity. Owned houses become unowned without
+evicting survivors. Productive businesses and unfinished private firms receive a
+replicated takeover listing. A local buyer pays the listed price into the firm's
+working capital—never into a ghost seller—and becomes its stable owner. Supplied
+non-business worksites retain their material and are adopted by another available
+resident. Heroes are also removed from their account's live hero slot. A bounded
+mortality ledger keeps the name, identity, attributes, day and cause available to
+the encyclopedia and Village Lab without retaining dead pathfinding entities.
 
 ## 3. Trade: caravans and roads
 
@@ -1032,8 +1361,10 @@ exercised:
    > anchor; the body is the Hero, and the only path to one is a god command the
    > server drops unless `FISTWORLD_DEV=1`. **The sword does not exist at all** —
    > weapons and combat were stripped wholesale in commit `041deaa` (~9,600 lines)
-   > and never replaced. `Health` survives, registered for replication and attached
-   > to nothing. Rung 1 is not done.
+   > and never replaced. A shared 100-point `Health` component is now attached to
+   > every Hero and Villager, replicated, inspectable and connected to starvation
+   > mortality and estate cleanup. Weapons, combat input and combat damage still do
+   > not exist, so rung 1 is not done.
 2. **First coin.** Trade runs with a hand cart (buy grain, walk it to the
    quarry town), escort a caravan for a fee, bounty on a bandit camp. All of
    these are "move a unit next to a thing" — no new UI concepts.
@@ -1080,25 +1411,28 @@ garrisons → sieges) so coin keeps mattering.
   > map screen, the map screen no longer justifies whole-world interest, so the view
   > radius can be clamped hard. That is simultaneously the render-LOD/sim-LOD decoupling
   > ARCHITECTURE §4 demands and the structural fix for zoom-driven replication cost.
-- **Persistence.** One world-state file (settlements, clans, caravans,
-  ownership) saved like player profiles, small enough to snapshot whole. The
+- **Persistence.** One future world-state file (settlements, accounts, heroes, clans,
+  caravans and ownership), small enough to snapshot whole. The
   deterministic site list and settlement plans are NOT stored — recomputed
   from seed; only mutable state persists (a settlement's layout is one
   cursor + damage bits). The derived region-control map is not saved at all.
 
-  > **[correction]** "Like player profiles" means *the same save discipline*, NOT the
-  > same format. Profiles are bincode, which is **positional**: it carries no field
+  > **[correction]** Legacy profile tooling is not the model for the world format.
+  > Those profiles are bincode, which is **positional**: it carries no field
   > names, so the `#[serde(default)]` attributes on `PlayerProfile` are inert and the
   > loader is forced to reject-and-backup on any layout change. `PROFILE_VERSION` is
-  > already at 6 — that is six wipes. A wipe is an inconvenience for a name and an
-  > outfit; for a world file holding months of population, prosperity and build cursors
+  > already at 8. A wipe is an inconvenience for a name and an outfit; for a future
+  > world file holding months of population, prosperity and build cursors
   > it deletes the game. Use a versioned self-describing format (RON is already a
   > workspace dependency) with a real migration chain, and write the v1 to v2 migration
   > while the payload is still trivial.
   >
-  > Durability is a separate axis from format and is equally unbuilt: the world file
+  > Durability is a separate axis from format and is equally unbuilt. The live server now
+  > deliberately treats process lifetime as world lifetime: player profiles, heroes and
+  > settlements all start fresh together rather than restoring accounts into an empty world.
+  > A future durable world file
   > needs backup rotation and load-newest-valid-on-corrupt, and it must be written
-  > through the existing background IO worker rather than the main thread. Note also
+  > through a bounded background IO worker rather than the main thread. Note also
   > that **`fly.toml` declares no volume**, so today `server_data/` is ephemeral and
   > every deploy destroys it — persistence code of any format is worthless until that
   > is fixed (ROADMAP Phase 0).
@@ -1141,8 +1475,9 @@ Two smaller corrections to this section's assumptions, both verified against the
   frozen at panel centre. The marker layer is greenfield.
 - **Carry capacity and inventory (old Phase 3).** This gap is now partly closed by
   `shared::economy::GoodsInventory`: people and buildings have bounded bulk capacity and
-  transfers are lossless. Workplace, house and hall stores are inspectable; player-owned
-  storage, persistence and player inventory UI remain absent.
+  transfers are lossless. Workplace, house, Hall and hero stores are inspectable through
+  their relevant panels; nearby Hall buy/consign actions are authoritative. Durable restart
+  persistence and larger player-owned storage remain absent.
 
 ## 9. Deliberately NOT building (yet)
 
@@ -1158,7 +1493,7 @@ Two smaller corrections to this section's assumptions, both verified against the
   people who are `AtPlace` or `Travelling`. A handful of villagers standing in
   a village you are looking at is not that population. The farmer and lumberjack
   observed work loops are also live; broad daily schedules and per-person needs remain deferred.
-- A goods graph beyond the current five physical goods + coin — tools/luxury/cloth wait until cities exist
+- A goods graph beyond the current seven physical goods + coin — tools/luxury/cloth wait until cities exist
   and need demand sinks.
 - Diplomacy UI — relations are consequences of actions until proven boring.
 - Sieges — a rung 6/7 problem; the economy has to be worth fighting over first.
@@ -1181,8 +1516,9 @@ Two smaller corrections to this section's assumptions, both verified against the
   razing rules and the offline-protection rules must be designed together.
   (Likely: settlements are attackable in windows tied to garrison strength —
   decide in Phase 7.)
-- Death/loss model for the commander and retinue (respawn cost vs permadeath
-  posture — decide in Phase 5).
+- Combat loss posture for the commander and retinue (respawn cost versus
+  permadeath). Zero-Health removal and hero-slot cleanup are implemented; what
+  follows a combat defeat is still a Phase 7 decision.
 - Coin faucet/sink balance for multiplayer inflation (watch from Phase 3).
 - How many settlements per 8km world feels alive but legible (start ~25–40,
   tune in Phase 2).

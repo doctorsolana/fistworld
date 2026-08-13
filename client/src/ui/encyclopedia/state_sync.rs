@@ -46,6 +46,10 @@ pub(super) fn receive_character_roster(
                     existing.kind = kind;
                     existing.affiliation = entry.affiliation;
                     existing.online = entry.online;
+                    existing.alive = entry.alive;
+                    existing.health = Some(entry.health);
+                    existing.death_day = entry.death_day;
+                    existing.death_cause = entry.death_cause;
                     existing.is_self = entry.is_self;
                     existing.attributes = Some(entry.attributes);
                     // Knowing OF someone from the roster does not make them
@@ -64,6 +68,10 @@ pub(super) fn receive_character_roster(
                         level: 0,
                         prestige: 0,
                         online: entry.online,
+                        alive: entry.alive,
+                        health: Some(entry.health),
+                        death_day: entry.death_day,
+                        death_cause: entry.death_cause,
                         commanded_by: None,
                         residence: None,
                         home: None,
@@ -72,6 +80,8 @@ pub(super) fn receive_character_roster(
                         wallet: None,
                         nutrition: None,
                         activity: None,
+                        objective: None,
+                        navigation: None,
                         attributes: Some(entry.attributes),
                         work_status: None,
                         daily_wage: None,
@@ -135,6 +145,10 @@ pub(super) fn learn_visible_characters(
                 level: 0,
                 prestige: 0,
                 online: false,
+                alive: true,
+                health: None,
+                death_day: None,
+                death_cause: None,
                 known: true,
                 is_self: false,
                 commanded_by: commanded.map(|c| c.0.clone()),
@@ -145,6 +159,8 @@ pub(super) fn learn_visible_characters(
                 wallet: None,
                 nutrition: None,
                 activity: None,
+                objective: None,
+                navigation: None,
                 attributes: None,
                 work_status: None,
                 daily_wage: None,
@@ -168,8 +184,15 @@ pub(super) fn refresh_visible_person_facts(
         Option<&shared::components::Occupation>,
         Option<&shared::components::WorkStatus>,
         Option<&shared::economy::Wallet>,
-        Option<&shared::components::Nutrition>,
+        (
+            Option<&shared::components::Nutrition>,
+            Option<&shared::components::Health>,
+        ),
         Option<&shared::components::CharacterActivity>,
+        (
+            Option<&shared::components::CharacterObjective>,
+            Option<&shared::components::CharacterNavigationStatus>,
+        ),
         Option<&shared::components::CharacterAttributes>,
         Option<&shared::economy::GoodsInventory>,
         Option<&shared::economy::CarriedLoad>,
@@ -202,8 +225,9 @@ pub(super) fn refresh_visible_person_facts(
         occupation,
         work_status,
         wallet,
-        nutrition,
+        (nutrition, health),
         activity,
+        (objective, navigation),
         attributes,
         inventory,
         carried,
@@ -237,25 +261,37 @@ pub(super) fn refresh_visible_person_facts(
                     shared::components::CivicRole::Reeve => {
                         ("Reeve", Some(shared::economy::FOUNDING_DAILY_WAGE))
                     }
-                    shared::components::CivicRole::MarketPorter => {
-                        ("Market Porter", Some(shared::economy::FOUNDING_DAILY_WAGE))
+                    shared::components::CivicRole::MarketPorter => (
+                        "Market Porter (legacy)",
+                        Some(shared::economy::FOUNDING_DAILY_WAGE),
+                    ),
+                    shared::components::CivicRole::RoadSteward => (
+                        "Road Steward (legacy)",
+                        Some(office.road_steward_daily_salary),
+                    ),
+                    shared::components::CivicRole::CityWorker => {
+                        ("City Worker", Some(shared::economy::FOUNDING_DAILY_WAGE))
                     }
-                    shared::components::CivicRole::RoadSteward => {
-                        ("Road Steward", Some(office.road_steward_daily_salary))
+                    shared::components::CivicRole::Guard => {
+                        ("Guard", Some(shared::economy::FOUNDING_DAILY_WAGE))
                     }
-                    shared::components::CivicRole::CityWorker => ("City Worker", None),
-                    shared::components::CivicRole::Guard => ("Guard", None),
+                    shared::components::CivicRole::MootSteward => {
+                        ("Moot Steward", Some(office.road_steward_daily_salary))
+                    }
                 }
             } else if office.reeve.as_deref() == Some(name.0.as_str()) {
                 ("Reeve", Some(shared::economy::FOUNDING_DAILY_WAGE))
-            } else if office.market_porter.as_deref() == Some(name.0.as_str()) {
-                ("Market Porter", Some(shared::economy::FOUNDING_DAILY_WAGE))
             } else if office.road_steward.as_deref() == Some(name.0.as_str()) {
-                ("Road Steward", Some(office.road_steward_daily_salary))
+                ("Moot Steward", Some(office.road_steward_daily_salary))
+            } else if office.market_porter.as_deref() == Some(name.0.as_str()) {
+                (
+                    "Market Porter (legacy)",
+                    Some(shared::economy::FOUNDING_DAILY_WAGE),
+                )
             } else if office.guards.iter().any(|guard| guard == &name.0) {
-                ("Guard", None)
+                ("Guard", Some(shared::economy::FOUNDING_DAILY_WAGE))
             } else if office.city_workers.iter().any(|worker| worker == &name.0) {
-                ("City Worker", None)
+                ("City Worker", Some(shared::economy::FOUNDING_DAILY_WAGE))
             } else {
                 return None;
             };
@@ -288,7 +324,11 @@ pub(super) fn refresh_visible_person_facts(
             .or_else(|| work_status.map(|status| status.label().to_string()));
         let next_wallet = wallet.map(|wallet| wallet.balance());
         let next_nutrition = nutrition.copied();
+        let next_health = health.cloned();
+        let next_alive = !health.is_some_and(|health| health.is_dead());
         let next_activity = activity.copied();
+        let next_objective = objective.copied();
+        let next_navigation = navigation.copied();
         let next_attributes = attributes.copied();
         let next_work_status = work_status.copied();
         let next_inventory = inventory.cloned();
@@ -306,7 +346,11 @@ pub(super) fn refresh_visible_person_facts(
             || current.workplace != workplace
             || current.wallet != next_wallet
             || current.nutrition != next_nutrition
+            || current.health != next_health
+            || current.alive != next_alive
             || current.activity != next_activity
+            || current.objective != next_objective
+            || current.navigation != next_navigation
             || current.attributes != next_attributes
             || current.work_status != next_work_status
             || current.daily_wage != next_daily_wage
@@ -329,7 +373,11 @@ pub(super) fn refresh_visible_person_facts(
             record.workplace = workplace;
             record.wallet = next_wallet;
             record.nutrition = next_nutrition;
+            record.health = next_health;
+            record.alive = next_alive;
             record.activity = next_activity;
+            record.objective = next_objective;
+            record.navigation = next_navigation;
             record.attributes = next_attributes;
             record.work_status = next_work_status;
             record.daily_wage = next_daily_wage;
@@ -678,6 +726,20 @@ pub(super) fn sync_detail_panel(
                     )
                 },
             ),
+            DetailField::Health => record.health.as_ref().map_or_else(
+                || "No recent reading".to_string(),
+                |health| {
+                    if record.alive {
+                        format!("{:.0} / {:.0}", health.current, health.max)
+                    } else {
+                        format!(
+                            "DEAD / {} / day {}",
+                            record.death_cause.map_or("Unknown", |cause| cause.label()),
+                            record.death_day.unwrap_or(0),
+                        )
+                    }
+                },
+            ),
             DetailField::Home => {
                 if !record.known {
                     "Unrecorded".to_string()
@@ -728,13 +790,15 @@ pub(super) fn sync_detail_panel(
             }
             DetailField::Hunger => match record.nutrition {
                 Some(nutrition) if nutrition.is_hungry() => format!(
-                    "Hungry / missed {} meal{}",
+                    "{} / missed {} consecutive meal{} / Health ceiling {}%",
+                    nutrition.condition().label(),
                     nutrition.consecutive_missed_meals,
                     if nutrition.consecutive_missed_meals == 1 {
                         ""
                     } else {
                         "s"
-                    }
+                    },
+                    nutrition.health_ceiling_percent(),
                 ),
                 Some(nutrition) if nutrition.last_meal_day.is_some() => {
                     format!("Fed / last ate day {}", nutrition.last_meal_day.unwrap())
@@ -773,10 +837,23 @@ pub(super) fn sync_detail_panel(
                     )
                 },
             ),
-            DetailField::Activity => record
-                .activity
-                .map(|activity| activity.label().to_string())
-                .unwrap_or_else(|| "Not nearby".to_string()),
+            DetailField::Activity => record.objective.map_or_else(
+                || {
+                    record
+                        .activity
+                        .map(|activity| activity.label().to_string())
+                        .unwrap_or_else(|| "Not nearby".to_string())
+                },
+                |objective| {
+                    record
+                        .navigation
+                        .and_then(|navigation| navigation.label())
+                        .map_or_else(
+                            || objective.label().to_string(),
+                            |navigation| format!("{} · {navigation}", objective.label()),
+                        )
+                },
+            ),
             DetailField::Affiliation => {
                 if record.known {
                     record.affiliation.label().to_string()

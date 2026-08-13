@@ -4,14 +4,13 @@ use serde::{Deserialize, Serialize};
 /// Types of buildings that can be constructed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum BuildingType {
-    /// Every one of these is built in-repo from asset_creation/houses/. The
-    /// bought sets -- desert, train, multistory, and the village buildings we
-    /// did not make -- were deleted: this game uses four buildings.
+    /// Authored buildings are built in-repo from `asset_creation/houses/`.
+    /// Keep existing variants in this order: binary replication and baked data
+    /// use their enum discriminants, so new variants are appended below.
     #[default]
     LogCabin,
     LumberjackHut,
     Farmstead,
-    #[serde(alias = "TownHall")]
     MootHall,
     FishermansHut,
     /// Generated blockouts used by the settlement simulation until authored
@@ -20,6 +19,16 @@ pub enum BuildingType {
     PlaceholderMarket,
     PlaceholderTavern,
     PlaceholderChurch,
+    VillageHall,
+    TownHall,
+    /// First processing industries. Appended here originally as blockouts;
+    /// keep their position stable because replicated discriminants and baked
+    /// collider records depend on it. The aliases read pre-art RON data while
+    /// all newly serialized state uses the permanent semantic names.
+    #[serde(alias = "PlaceholderWindmill")]
+    Windmill,
+    #[serde(alias = "PlaceholderBakery")]
+    Bakery,
 }
 
 /// All building types with GLTF models (for collider baking).
@@ -28,7 +37,11 @@ pub const ALL_BUILDING_TYPES: &[BuildingType] = &[
     BuildingType::LumberjackHut,
     BuildingType::Farmstead,
     BuildingType::MootHall,
+    BuildingType::VillageHall,
+    BuildingType::TownHall,
     BuildingType::FishermansHut,
+    BuildingType::Windmill,
+    BuildingType::Bakery,
 ];
 
 impl BuildingType {
@@ -43,10 +56,14 @@ impl BuildingType {
             BuildingType::LumberjackHut => "building_lumberjack_hut",
             BuildingType::Farmstead => "building_farmstead",
             BuildingType::MootHall => "building_moot_hall",
+            BuildingType::VillageHall => "building_village_hall",
+            BuildingType::TownHall => "building_town_hall",
             BuildingType::FishermansHut => "building_fishermans_hut",
             BuildingType::PlaceholderMarket => "placeholder_market",
             BuildingType::PlaceholderTavern => "placeholder_tavern",
             BuildingType::PlaceholderChurch => "placeholder_church",
+            BuildingType::Windmill => "building_windmill",
+            BuildingType::Bakery => "building_bakery",
         }
     }
 
@@ -59,9 +76,15 @@ impl BuildingType {
             }
             BuildingType::Farmstead => Some("game_assets/buildings/village/Farmstead.glb#Scene0"),
             BuildingType::MootHall => Some("game_assets/buildings/village/MootHall.glb#Scene0"),
+            BuildingType::VillageHall => {
+                Some("game_assets/buildings/village/VillageHall.glb#Scene0")
+            }
+            BuildingType::TownHall => Some("game_assets/buildings/village/TownHall.glb#Scene0"),
             BuildingType::FishermansHut => {
                 Some("game_assets/buildings/village/FishermansHut.glb#Scene0")
             }
+            BuildingType::Windmill => Some("game_assets/buildings/village/WindMill.glb#Scene0"),
+            BuildingType::Bakery => Some("game_assets/buildings/village/Bakery.glb#Scene0"),
             BuildingType::PlaceholderMarket
             | BuildingType::PlaceholderTavern
             | BuildingType::PlaceholderChurch => None,
@@ -70,6 +93,10 @@ impl BuildingType {
 
     pub const fn has_baked_collider(&self) -> bool {
         self.scene_path().is_some()
+    }
+
+    pub const fn is_civic_hall(self) -> bool {
+        matches!(self, Self::MootHall | Self::VillageHall | Self::TownHall)
     }
 
     pub fn definition(&self) -> BuildingDef {
@@ -81,6 +108,7 @@ impl BuildingType {
                 building_type: *self,
                 display_name: "Log Cabin",
                 footprint: Vec2::new(6.0, 6.94),
+                footprint_center: Vec2::ZERO,
                 height: 4.33,
                 flatten_radius: 1.5,
                 color: Color::srgb(0.42, 0.28, 0.18),
@@ -93,6 +121,7 @@ impl BuildingType {
                 building_type: *self,
                 display_name: "Lumberjack Hut",
                 footprint: Vec2::new(5.16, 5.40),
+                footprint_center: Vec2::new(0.3296, -0.1800),
                 height: 3.76,
                 flatten_radius: 1.4,
                 color: Color::srgb(0.40, 0.27, 0.17),
@@ -105,6 +134,7 @@ impl BuildingType {
                 building_type: *self,
                 display_name: "Farmstead",
                 footprint: Vec2::new(5.41, 6.62),
+                footprint_center: Vec2::new(0.1354, -0.1704),
                 height: 4.07,
                 flatten_radius: 1.6,
                 color: Color::srgb(0.44, 0.30, 0.19),
@@ -116,10 +146,31 @@ impl BuildingType {
                 building_type: *self,
                 display_name: "Moot Hall",
                 footprint: Vec2::new(6.45, 8.74),
+                footprint_center: Vec2::new(0.0, -0.2300),
                 height: 8.18,
                 flatten_radius: 2.2,
                 color: Color::srgb(0.43, 0.29, 0.18),
                 model_path: Some("game_assets/buildings/village/MootHall.glb#Scene0"),
+            },
+            BuildingType::VillageHall => BuildingDef {
+                building_type: *self,
+                display_name: "Village Hall",
+                footprint: Vec2::new(7.7779, 10.4400),
+                footprint_center: Vec2::new(0.0, 0.6200),
+                height: 9.44,
+                flatten_radius: 2.4,
+                color: Color::srgb(0.45, 0.36, 0.27),
+                model_path: Some("game_assets/buildings/village/VillageHall.glb#Scene0"),
+            },
+            BuildingType::TownHall => BuildingDef {
+                building_type: *self,
+                display_name: "Town Hall",
+                footprint: Vec2::new(10.2400, 14.4900),
+                footprint_center: Vec2::new(0.0, 2.6450),
+                height: 21.62,
+                flatten_radius: 2.8,
+                color: Color::srgb(0.47, 0.44, 0.39),
+                model_path: Some("game_assets/buildings/village/TownHall.glb#Scene0"),
             },
             // The PIER is a separate asset (PropKind::FishingPier) because it must be walkable —
             // a convex hull over hut + jetty would enclose the open water between them. This
@@ -129,6 +180,7 @@ impl BuildingType {
                 building_type: *self,
                 display_name: "Fisherman's Hut",
                 footprint: Vec2::new(6.44, 6.51),
+                footprint_center: Vec2::new(-0.4000, -0.5125),
                 height: 3.86,
                 flatten_radius: 1.4,
                 color: Color::srgb(0.41, 0.28, 0.18),
@@ -138,6 +190,7 @@ impl BuildingType {
                 building_type: *self,
                 display_name: "Marketplace (blockout)",
                 footprint: Vec2::new(9.0, 7.0),
+                footprint_center: Vec2::ZERO,
                 height: 3.2,
                 flatten_radius: 1.8,
                 color: Color::srgb(0.67, 0.48, 0.23),
@@ -147,6 +200,7 @@ impl BuildingType {
                 building_type: *self,
                 display_name: "Tavern (blockout)",
                 footprint: Vec2::new(8.0, 7.0),
+                footprint_center: Vec2::ZERO,
                 height: 4.4,
                 flatten_radius: 1.7,
                 color: Color::srgb(0.52, 0.25, 0.16),
@@ -156,10 +210,34 @@ impl BuildingType {
                 building_type: *self,
                 display_name: "Church (blockout)",
                 footprint: Vec2::new(8.0, 12.0),
+                footprint_center: Vec2::ZERO,
                 height: 7.0,
                 flatten_radius: 2.0,
                 color: Color::srgb(0.58, 0.58, 0.54),
                 model_path: None,
+            },
+            // Solid tower footprint only: the animated sails sweep 8.80 m
+            // overhead but clear the cabin at every cap yaw. Reserving their
+            // whole disc on the ground would make villagers avoid empty air.
+            BuildingType::Windmill => BuildingDef {
+                building_type: *self,
+                display_name: "Windmill",
+                footprint: Vec2::new(5.8180, 5.8180),
+                footprint_center: Vec2::new(0.0, -0.4910),
+                height: 12.58,
+                flatten_radius: 1.8,
+                color: Color::srgb(0.68, 0.60, 0.43),
+                model_path: Some("game_assets/buildings/village/WindMill.glb#Scene0"),
+            },
+            BuildingType::Bakery => BuildingDef {
+                building_type: *self,
+                display_name: "Bakery",
+                footprint: Vec2::new(7.0420, 8.2400),
+                footprint_center: Vec2::new(0.0990, 0.7200),
+                height: 5.33,
+                flatten_radius: 1.6,
+                color: Color::srgb(0.64, 0.37, 0.20),
+                model_path: Some("game_assets/buildings/village/Bakery.glb#Scene0"),
             },
         }
     }
@@ -179,6 +257,7 @@ fn multistory_def(
         building_type,
         display_name,
         footprint,
+        footprint_center: Vec2::ZERO,
         height,
         flatten_radius: 1.5,
         color: Color::srgb(0.58, 0.56, 0.53),
@@ -193,6 +272,11 @@ pub struct BuildingDef {
     pub display_name: &'static str,
     /// Building footprint in meters (width x depth).
     pub footprint: Vec2,
+    /// Centre of that footprint relative to the model/root origin.
+    ///
+    /// This is deliberately separate from `BuildingPosition`: civic halls pin
+    /// their root to one permanent doorway while larger levels grow behind it.
+    pub footprint_center: Vec2,
     /// Building height in meters.
     pub height: f32,
     /// Extra radius around footprint for terrain flattening (smooth transition).
@@ -204,6 +288,28 @@ pub struct BuildingDef {
 }
 
 impl BuildingDef {
+    /// World-space X/Z centre of this model's rotated ground footprint.
+    #[inline]
+    pub fn world_footprint_center(&self, root: Vec3, rotation_y: f32) -> Vec2 {
+        Vec2::new(root.x, root.z)
+            + crate::rotation::local_to_world_xz(self.footprint_center, rotation_y)
+    }
+
+    /// Furthest footprint corner from the model/root origin.
+    #[inline]
+    pub fn root_footprint_radius(&self) -> f32 {
+        let half = self.footprint * 0.5;
+        [
+            Vec2::new(-half.x, -half.y),
+            Vec2::new(-half.x, half.y),
+            Vec2::new(half.x, -half.y),
+            Vec2::new(half.x, half.y),
+        ]
+        .into_iter()
+        .map(|corner| (self.footprint_center + corner).length())
+        .fold(0.0, f32::max)
+    }
+
     /// Get the total area that needs terrain flattening.
     pub fn flatten_footprint(&self) -> Vec2 {
         Vec2::new(

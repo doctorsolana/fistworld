@@ -19,7 +19,7 @@ const LIST_WIDTH: f32 = 320.0;
 // Civic and workplace records are intentionally deeper than the compact map
 // card. The pane scrolls, so a real permit/market/staffing record should not be
 // squeezed into six generic rows.
-const PLACE_DETAIL_LINES: usize = 14;
+const PLACE_DETAIL_LINES: usize = 28;
 
 pub(super) fn spawn_encyclopedia(
     mut commands: Commands,
@@ -245,9 +245,9 @@ fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
 /// second layout to read the other.
 fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
     use super::places::{
-        PlaceCountText, PlaceDetailCard, PlaceDetailEmptyState, PlaceDetailLabel, PlaceDetailLine,
-        PlaceDetailName, PlaceDetailSubtitle, PlaceDetailValue, PlacesListContent,
-        PlacesListViewport,
+        PlaceBusinessHistoryAction, PlaceCountText, PlaceDetailCard, PlaceDetailEmptyState,
+        PlaceDetailLabel, PlaceDetailLine, PlaceDetailName, PlaceDetailSubtitle, PlaceDetailValue,
+        PlacesListContent, PlacesListViewport,
     };
 
     body.spawn((
@@ -424,32 +424,69 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                     ..default()
                                 },
                             ));
-                            card.spawn((
-                                crate::ui::history::VillageHistoryButton,
-                                Button,
-                                Node {
-                                    width: Val::Px(126.0),
-                                    height: Val::Px(30.0),
-                                    align_self: AlignSelf::FlexEnd,
-                                    justify_content: JustifyContent::Center,
-                                    align_items: AlignItems::Center,
-                                    margin: UiRect::bottom(Val::Px(10.0)),
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    border_radius: BorderRadius::all(Val::Px(RADIUS)),
-                                    ..default()
-                                },
-                                BackgroundColor(BUTTON_NORMAL),
-                                BorderColor::all(PLATE_RULE_SOFT),
-                            ))
-                            .with_child((
-                                Text::new("VILLAGE HISTORY"),
-                                TextFont {
-                                    font_size: FontSize::Px(8.5),
-                                    ..default()
-                                },
-                                TextColor(INK),
-                                Pickable::IGNORE,
-                            ));
+                            card.spawn(Node {
+                                align_self: AlignSelf::FlexEnd,
+                                flex_direction: FlexDirection::Row,
+                                flex_wrap: FlexWrap::Wrap,
+                                justify_content: JustifyContent::FlexEnd,
+                                column_gap: Val::Px(7.0),
+                                row_gap: Val::Px(7.0),
+                                margin: UiRect::bottom(Val::Px(10.0)),
+                                ..default()
+                            })
+                            .with_children(|actions| {
+                                actions
+                                    .spawn((
+                                        PlaceBusinessHistoryAction,
+                                        Button,
+                                        Node {
+                                            display: Display::None,
+                                            width: Val::Px(136.0),
+                                            height: Val::Px(30.0),
+                                            justify_content: JustifyContent::Center,
+                                            align_items: AlignItems::Center,
+                                            border: UiRect::all(Val::Px(1.0)),
+                                            border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(BUTTON_NORMAL),
+                                        BorderColor::all(PLATE_RULE_SOFT),
+                                    ))
+                                    .with_child((
+                                        Text::new("BUSINESS HISTORY"),
+                                        TextFont {
+                                            font_size: FontSize::Px(8.5),
+                                            ..default()
+                                        },
+                                        TextColor(INK),
+                                        Pickable::IGNORE,
+                                    ));
+                                actions
+                                    .spawn((
+                                        crate::ui::history::VillageHistoryButton,
+                                        Button,
+                                        Node {
+                                            width: Val::Px(146.0),
+                                            height: Val::Px(30.0),
+                                            justify_content: JustifyContent::Center,
+                                            align_items: AlignItems::Center,
+                                            border: UiRect::all(Val::Px(1.0)),
+                                            border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(BUTTON_NORMAL),
+                                        BorderColor::all(PLATE_RULE_SOFT),
+                                    ))
+                                    .with_child((
+                                        Text::new("SETTLEMENT HISTORY"),
+                                        TextFont {
+                                            font_size: FontSize::Px(8.5),
+                                            ..default()
+                                        },
+                                        TextColor(INK),
+                                        Pickable::IGNORE,
+                                    ));
+                            });
                             for index in 0..PLACE_DETAIL_LINES {
                                 card.spawn((
                                     PlaceDetailLine(index),
@@ -894,6 +931,7 @@ mod tests {
     use bevy::ui::FocusPolicy;
 
     use super::*;
+    use crate::ui::encyclopedia::places::{PlaceBusinessHistoryAction, PlaceDetailLine};
 
     #[test]
     fn encyclopedia_panel_captures_clicks_and_people_content_can_overflow() {
@@ -913,6 +951,16 @@ mod tests {
         let viewport = viewports.single(&world).unwrap();
         assert_eq!(viewport.min_height, Val::Px(0.0));
         assert_eq!(viewport.overflow.y, OverflowAxis::Scroll);
+
+        let mut business_history =
+            world.query_filtered::<&Node, With<PlaceBusinessHistoryAction>>();
+        assert_eq!(
+            business_history.single(&world).unwrap().display,
+            Display::None
+        );
+
+        let mut place_lines = world.query_filtered::<Entity, With<PlaceDetailLine>>();
+        assert_eq!(place_lines.iter(&world).count(), PLACE_DETAIL_LINES);
 
         let mut close_buttons = world.query_filtered::<Entity, With<EncyclopediaCloseButton>>();
         assert_eq!(close_buttons.iter(&world).count(), 1);

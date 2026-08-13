@@ -22,6 +22,7 @@ ron = "0.8"
 serde = { workspace = true }
 arboard = "3"
 image = { workspace = true }
+bytemuck = { version = "1", features = ["derive"] }
 
 [package.metadata.bundle]
 name = "3DGame"

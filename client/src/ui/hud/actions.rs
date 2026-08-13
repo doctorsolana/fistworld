@@ -97,7 +97,7 @@ pub(super) fn handle_warp_buttons(
 /// arms placement on PLACE). Dead while a hero exists — one per player.
 pub(super) fn handle_spawn_hero_button(
     mut creator: ResMut<crate::ui::hero_creator::HeroCreatorOpen>,
-    mut arm: ResMut<crate::hero::control::HeroSpawnArm>,
+    mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
     heroes: Query<(
         &shared::components::Hero,
@@ -126,7 +126,7 @@ pub(super) fn handle_spawn_hero_button(
                 .map(|(_, at)| at.0)
         });
         if let Some(at) = mine {
-            arm.0 = false;
+            *placement = crate::hero::control::WorldPlacementMode::None;
             for mut camera in cameras.iter_mut() {
                 camera.focus = at;
             }
@@ -134,7 +134,7 @@ pub(super) fn handle_spawn_hero_button(
             continue;
         }
         // An armed placement reopens the creator instead of toggling blind.
-        arm.0 = false;
+        *placement = crate::hero::control::WorldPlacementMode::None;
         creator.0 = true;
     }
 }
@@ -142,8 +142,7 @@ pub(super) fn handle_spawn_hero_button(
 /// Arm villager placement. Stays armed across clicks so a crowd can be dropped
 /// in one go; Escape or leaving god mode clears it.
 pub(super) fn handle_spawn_npc_button(
-    mut npc_arm: ResMut<crate::hero::control::NpcSpawnArm>,
-    mut hero_arm: ResMut<crate::hero::control::HeroSpawnArm>,
+    mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
     buttons: Query<&Interaction, (With<SpawnNpcButton>, Changed<Interaction>)>,
 ) {
     for interaction in buttons.iter() {
@@ -152,25 +151,28 @@ pub(super) fn handle_spawn_npc_button(
         }
         // Only one placement can be armed: an invisible second armed mode would
         // make the next click do something the player did not ask for.
-        hero_arm.0 = false;
-        npc_arm.0 = !npc_arm.0;
+        *placement = if placement.is_spawn_npc() {
+            crate::hero::control::WorldPlacementMode::None
+        } else {
+            crate::hero::control::WorldPlacementMode::SpawnNpc
+        };
     }
 }
 
 /// Arm settlement founding. Disarms the other placements: only one thing can be
 /// waiting on the next click.
 pub(super) fn handle_found_village_button(
-    mut found_arm: ResMut<crate::hero::control::FoundSpawnArm>,
-    mut hero_arm: ResMut<crate::hero::control::HeroSpawnArm>,
-    mut npc_arm: ResMut<crate::hero::control::NpcSpawnArm>,
+    mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
     buttons: Query<&Interaction, (With<FoundVillageButton>, Changed<Interaction>)>,
 ) {
     for interaction in buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;
         }
-        hero_arm.0 = false;
-        npc_arm.0 = false;
-        found_arm.0 = !found_arm.0;
+        *placement = if placement.is_found_settlement() {
+            crate::hero::control::WorldPlacementMode::None
+        } else {
+            crate::hero::control::WorldPlacementMode::FoundSettlement
+        };
     }
 }

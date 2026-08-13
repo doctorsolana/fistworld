@@ -80,16 +80,27 @@ pub fn seek_settlement(
         &mut VillagerIntent,
         Option<&MigrationCooldown>,
     )>,
+    road_graph: Option<Res<VillageRoadGraph>>,
 ) {
-    clock.seek += simulation_time.world_seconds();
+    // Migration admission is a CPU-facing decision queue. It deliberately
+    // follows real time rather than world warp: 25x should make an admitted
+    // person walk faster, not create 250 long A* requests on one tick.
+    if simulation_time.factor() <= 0.0 {
+        return;
+    }
+    clock.seek += simulation_time.real_seconds();
     if clock.seek < SEEK_INTERVAL {
         return;
     }
-    clock.seek = 0.0;
+    clock.seek = (clock.seek - SEEK_INTERVAL).min(SEEK_INTERVAL);
 
     let now = simulation_time.elapsed_real_seconds_f64();
+    let mut admitted = 0usize;
 
     for (entity, position, mut intent, cooldown) in villagers.iter_mut() {
+        if admitted >= MAX_MIGRATION_ADMISSIONS_PER_PASS {
+            break;
+        }
         if !matches!(*intent, VillagerIntent::Idle) {
             continue;
         }
@@ -100,9 +111,14 @@ pub fn seek_settlement(
             .filter(|(_, settlement, _, _)| {
                 settlement.tier != shared::components::SettlementTier::Ruins
             })
-            .filter(|(entity, ..)| {
+            .filter(|(entity, _, hall, rotation)| {
                 cooldown.is_none_or(|cooldown| {
-                    cooldown.settlement != *entity || now >= cooldown.retry_after
+                    let entrance = SettlementBuildingKind::Hall
+                        .entrance_position(hall.0, rotation.map_or(0.0, |rotation| rotation.0));
+                    let opportunity = road_graph.as_deref().map_or(0, |graph| {
+                        graph.cohort_route_opportunity_version(Vec2::new(entrance.x, entrance.z))
+                    });
+                    !cooldown.blocks(*entity, now, opportunity)
                 })
             })
             .min_by(|a, b| {
@@ -121,6 +137,7 @@ pub fn seek_settlement(
         *intent = VillagerIntent::Travelling {
             settlement: settlement_entity,
         };
+        admitted += 1;
         // The hall centre is inside its solid navigation footprint. Before
         // authored building obstacles existed, walking there happened to work;
         // now it correctly produces no route and can strand every founder in
@@ -136,6 +153,7 @@ pub fn seek_settlement(
 pub fn arrive_at_settlement(
     mut commands: Commands,
     simulation_time: crate::world::simulation_time::SimulationTime,
+    mut queue_clock: Option<ResMut<MootQueueClock>>,
     halls: Query<(&PlayerPosition, &Settlement, Option<&PlayerRotation>)>,
     mut villagers: Query<(
         Entity,
@@ -144,10 +162,22 @@ pub fn arrive_at_settlement(
         Option<&MoveTarget>,
         Option<&NavigationRouteFailed>,
         Option<&MigrationCooldown>,
+        Option<&MootQueueTicket>,
+        Has<strategic::StrategicPerson>,
     )>,
+    road_graph: Option<Res<VillageRoadGraph>>,
 ) {
     let now = simulation_time.elapsed_real_seconds_f64();
-    for (entity, position, mut intent, move_target, route_failed, cooldown) in villagers.iter_mut()
+    for (
+        entity,
+        position,
+        mut intent,
+        move_target,
+        route_failed,
+        cooldown,
+        queue_ticket,
+        strategic,
+    ) in villagers.iter_mut()
     {
         let VillagerIntent::Travelling { settlement } = *intent else {
             continue;
@@ -158,16 +188,43 @@ pub fn arrive_at_settlement(
             commands
                 .entity(entity)
                 .remove::<MoveTarget>()
+                .remove::<MootQueueTicket>()
                 .remove::<Residence>();
             continue;
         };
-        if position.0.distance(hall.0) > ARRIVAL_RADIUS {
+
+        // Once the tactical migrant reaches the hall, the visible Moot line
+        // owns their movement. Some queue slots are deliberately farther than
+        // ARRIVAL_RADIUS from the hall, so ordinary migration repair must not
+        // pull a waiting applicant out of the line.
+        if let Some(ticket) = queue_ticket {
+            if ticket.hall == settlement && ticket.kind == MootServiceKind::Immigration {
+                if !ticket.is_ready() {
+                    continue;
+                }
+                finish_immigration(&mut commands, entity, &mut intent, settlement, place);
+                continue;
+            }
+            // A travelling villager cannot legitimately use another hall
+            // service yet. Let that authoritative service finish instead of
+            // fighting its queue destination.
+            continue;
+        }
+        // Terrain height and the Hall's raised foundation are irrelevant to
+        // reaching its forecourt. Comparing full 3-D distance could reject the
+        // lone migrant standing beside everyone else on a steep plot.
+        if ground_distance(position.0, hall.0) > ARRIVAL_RADIUS {
             if let Some(failed) = route_failed {
                 debug!(
                     "Villager could not migrate to '{}' through {:.1},{:.1}; reconsidering after cooldown",
                     place.name, failed.goal.x, failed.goal.z
                 );
                 *intent = VillagerIntent::Idle;
+                let entrance = SettlementBuildingKind::Hall
+                    .entrance_position(hall.0, rotation.map_or(0.0, |rotation| rotation.0));
+                let cohort_opportunity_version = road_graph.as_deref().map_or(0, |graph| {
+                    graph.cohort_route_opportunity_version(Vec2::new(entrance.x, entrance.z))
+                });
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
@@ -178,6 +235,7 @@ pub fn arrive_at_settlement(
                         cooldown.copied(),
                         settlement,
                         now,
+                        cohort_opportunity_version,
                     ));
                 continue;
             }
@@ -190,18 +248,43 @@ pub fn arrive_at_settlement(
             ensure_move_target(&mut commands, entity, move_target, entrance);
             continue;
         }
-        *intent = VillagerIntent::Resident { settlement };
-        // Residence is the replicated half of the same fact, so a client can
-        // name who lives where without knowing anything about intents.
-        commands
-            .entity(entity)
-            .remove::<MoveTarget>()
-            .remove::<TravelRoute>()
-            .remove::<NavigationRoutePending>()
-            .remove::<NavigationRouteFailed>()
-            .remove::<MigrationCooldown>()
-            .insert(Residence(place.name.clone()));
+
+        // Strategic migrants have no embodied forecourt to display. Tactical
+        // migrants register through the same FIFO line used by permits and
+        // food, becoming residents only when the counter serves them.
+        if strategic || queue_clock.is_none() {
+            finish_immigration(&mut commands, entity, &mut intent, settlement, place);
+        } else if let Some(clock) = queue_clock.as_deref_mut() {
+            moot_services::enqueue_moot_service(
+                &mut commands,
+                clock,
+                entity,
+                settlement,
+                MootServiceKind::Immigration,
+            );
+        }
     }
+}
+
+fn finish_immigration(
+    commands: &mut Commands,
+    entity: Entity,
+    intent: &mut VillagerIntent,
+    settlement: Entity,
+    place: &Settlement,
+) {
+    *intent = VillagerIntent::Resident { settlement };
+    // Residence is the replicated half of the same fact, so a client can
+    // name who lives where without knowing anything about intents.
+    commands
+        .entity(entity)
+        .remove::<MootQueueTicket>()
+        .remove::<MoveTarget>()
+        .remove::<TravelRoute>()
+        .remove::<NavigationRoutePending>()
+        .remove::<NavigationRouteFailed>()
+        .remove::<MigrationCooldown>()
+        .insert(Residence(place.name.clone()));
 }
 
 /// Recount every settlement's residents from the villagers who live there.

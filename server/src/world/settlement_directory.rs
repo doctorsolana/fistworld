@@ -38,13 +38,15 @@ pub fn sync_settlement_directory(
     // Count physical detail once. The previous nested hall/building scan grew
     // as settlements × buildings and made the global directory unnecessarily
     // expensive in large worlds.
-    let mut building_counts: HashMap<SettlementId, [u16; 4]> = HashMap::new();
+    let mut building_counts: HashMap<SettlementId, [u16; 6]> = HashMap::new();
     for (owner, building) in buildings.iter() {
         let index = match building.kind {
             SettlementBuildingKind::House => 0,
             SettlementBuildingKind::Farmstead => 1,
             SettlementBuildingKind::FishermansHut => 2,
             SettlementBuildingKind::LumberjackHut => 3,
+            SettlementBuildingKind::Windmill => 4,
+            SettlementBuildingKind::Bakery => 5,
             _ => continue,
         };
         let counts = building_counts.entry(owner.0).or_default();
@@ -54,7 +56,7 @@ pub fn sync_settlement_directory(
     let mut live = HashSet::new();
     for (id, settlement, position, economy) in halls.iter() {
         live.insert(*id);
-        let [houses, farmsteads, fishing_huts, lumber_huts] =
+        let [houses, farmsteads, fishing_huts, lumber_huts, windmills, bakeries] =
             building_counts.get(id).copied().unwrap_or_default();
         let summary = SettlementSummary {
             id: *id,
@@ -68,6 +70,8 @@ pub fn sync_settlement_directory(
             farmsteads,
             fishing_huts,
             lumber_huts,
+            windmills,
+            bakeries,
         };
         if let Some(entity) = directory
             .entries

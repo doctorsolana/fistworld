@@ -72,12 +72,21 @@ fn wire_common_systems(app: &mut App) {
             // see this frame's MapViewBlend.
             game_systems::update_day_night_cycle.after(terrain::map_view::update_map_view_state),
             game_systems::update_atmosphere,
-            game_systems::apply_graphics_settings,
+            (
+                game_systems::tick_display_change_confirmation,
+                game_systems::apply_graphics_settings,
+                game_systems::save_graphics_settings,
+            )
+                .chain(),
             game_systems::sync_atmosphere_enabled,
             game_systems::sync_shadow_cascades_to_zoom,
-            game_systems::save_graphics_settings,
         )
             .run_if(in_state(GameState::Playing)),
+    );
+
+    app.add_systems(
+        Update,
+        crate::capture::drive_live_lab_capture.run_if(in_state(GameState::Playing)),
     );
     app.add_systems(
         Update,
@@ -121,8 +130,11 @@ fn wire_game_systems(app: &mut App) {
         Update,
         (
             camera_rts::ensure_commander_camera_controller,
-            camera_rts::update_cursor_terrain_hit,
             camera_rts::update_commander_camera,
+            // Pick from the camera transform that will actually be rendered
+            // this frame. Computing the ray before smoothing the camera made
+            // clicks lag a frame behind during pan, orbit and zoom.
+            camera_rts::update_cursor_terrain_hit,
             // Map view reads camera zoom, so it must follow the camera update.
             terrain::map_view::update_map_view_state,
         )

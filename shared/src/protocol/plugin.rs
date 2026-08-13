@@ -3,16 +3,20 @@ use lightyear::prelude::*;
 
 use crate::components::{
     ActiveMapState, AttachedTo, BuildingDoorDemand, BuildingId, BuildingOf, CharacterActivity,
-    CharacterAffiliation, CharacterAttributes, CharacterKind, CharacterName, CivicEmployment,
-    CloudSeed, CommandedBy, ConstructionSite, EmployedAt, FarmField, FishingPier, Health, Hero,
-    HeroOutfit, Household, LivesAt, MootAdministration, Nutrition, Occupation, OwnedBy, PersonId,
-    Player, PlayerPosition, PlayerProgression, PlayerRotation, Residence, ResidentOf, Settlement,
-    SettlementBuilding, SettlementDevelopment, SettlementId, SettlementPolicies, SettlementSummary,
-    TimeWarp, VillageRoad, WorkStatus, WorldTime,
+    CharacterAffiliation, CharacterAttributes, CharacterKind, CharacterMotion, CharacterName,
+    CharacterNavigationStatus, CharacterObjective, CivicEmployment, CivicHallLevel, CloudSeed,
+    CommandedBy, ConstructionSite, EmployedAt, FarmField, FishingPier, Health, Hero, HeroOutfit,
+    Household, LivesAt, MootAdministration, Nutrition, Occupation, OwnedBy, PersonId, Player,
+    PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation, Residence, ResidentOf,
+    Settlement, SettlementBuilding, SettlementDevelopment, SettlementId,
+    SettlementOpportunityBoard, SettlementPolicies, SettlementPropertyBoard, SettlementSummary,
+    TimeWarp, VillageRoad, WorkStatus, WorkplaceOperation, WorldTime,
 };
 use crate::economy::{
-    BusinessAccount, BusinessSalePolicy, BusinessWagePolicy, CarriedLoad, GoodsInventory,
-    HouseholdEconomy, MootMarket, SettlementEconomy, Wallet, WorkforceRequirements,
+    BusinessAccount, BusinessCondition, BusinessForSale, BusinessLiquidation,
+    BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy, BusinessWagePolicy,
+    CarriedLoad, CivicAccount, GoodsInventory, HouseholdEconomy, MootMarket, SettlementEconomy,
+    Wallet, WorkforceRequirements,
 };
 use crate::terrain::TerrainDeltaChunk;
 
@@ -34,6 +38,7 @@ impl Plugin for ProtocolPlugin {
         // === HERO (embodied character; server-authoritative position) ===
         app.component::<Hero>().replicate();
         app.component::<HeroOutfit>().replicate();
+        app.component::<PlayerPermitLedger>().replicate();
 
         // === CHARACTERS (heroes and villagers alike) ===
         app.component::<CharacterName>().replicate();
@@ -50,7 +55,10 @@ impl Plugin for ProtocolPlugin {
         app.component::<LivesAt>().replicate();
         app.component::<CharacterKind>().replicate();
         app.component::<CharacterAttributes>().replicate();
+        app.component::<CharacterMotion>().replicate();
         app.component::<CharacterActivity>().replicate();
+        app.component::<CharacterObjective>().replicate();
+        app.component::<CharacterNavigationStatus>().replicate();
         app.component::<Occupation>().replicate();
         app.component::<WorkStatus>().replicate();
         app.component::<Nutrition>().replicate();
@@ -62,16 +70,26 @@ impl Plugin for ProtocolPlugin {
         app.component::<CharacterAffiliation>().replicate();
         app.component::<CommandedBy>().replicate();
         app.component::<Settlement>().replicate();
+        app.component::<CivicHallLevel>().replicate();
         app.component::<SettlementDevelopment>().replicate();
+        app.component::<SettlementOpportunityBoard>().replicate();
+        app.component::<SettlementPropertyBoard>().replicate();
         app.component::<MootAdministration>().replicate();
         app.component::<SettlementPolicies>().replicate();
+        app.component::<CivicAccount>().replicate();
         app.component::<SettlementBuilding>().replicate();
+        app.component::<WorkplaceOperation>().replicate();
         app.component::<ConstructionSite>().replicate();
         app.component::<FarmField>().replicate();
         app.component::<FishingPier>().replicate();
         app.component::<Household>().replicate();
         app.component::<HouseholdEconomy>().replicate();
         app.component::<BusinessAccount>().replicate();
+        app.component::<BusinessCondition>().replicate();
+        app.component::<BusinessForSale>().replicate();
+        app.component::<BusinessLiquidation>().replicate();
+        app.component::<BusinessManagementPolicy>().replicate();
+        app.component::<BusinessProcurementPolicy>().replicate();
         app.component::<BusinessSalePolicy>().replicate();
         app.component::<BusinessWagePolicy>().replicate();
         app.component::<WorkforceRequirements>().replicate();
@@ -115,6 +133,12 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<UnitMoveOrder>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<HeroMarketOrder>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<HeroPermitOrder>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ClientToServer);
 
         // Server -> Client
         app.register_message::<NameSubmissionResult>()
@@ -127,6 +151,10 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<WorldHistoryResponse>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<DevStatus>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<HeroMarketResult>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<HeroPermitResult>()
             .add_direction(NetworkDirection::ServerToClient);
 
         // === CHANNELS ===

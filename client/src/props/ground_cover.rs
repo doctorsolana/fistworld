@@ -18,7 +18,7 @@ use shared::building::point_in_any_build_zone_entries;
 use shared::components::VillageRoad;
 use shared::terrain::{ChunkCoord, WorldTerrain};
 
-use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
+use crate::render::systems::{ClientWorldRoot, GraphicsSettings, GroundCoverRenderer};
 use crate::streaming::{streaming_anchor, AnchorCamera, AnchorPlayer};
 use crate::terrain::LoadedChunks;
 
@@ -34,7 +34,7 @@ use super::{PropAssets, SimplePropMeshCache};
 ///
 /// The budget behind the number, measured rather than guessed: 278 patches per
 /// chunk in temperate meadow (50 in the north, 54 in the desert -- the farmland
-/// gradient), so 81 chunks is ~22,500 patches, one entity each.
+/// gradient), so 81 chunks is usually about 16,000 patches, one entity each.
 const GROUND_COVER_CHUNK_RADIUS: i32 = 4;
 
 /// Spawn budget per frame. Higher than the prop budget because there are two
@@ -59,6 +59,25 @@ pub struct GroundCoverIndex {
 #[derive(Resource, Default)]
 pub struct PendingGroundCover {
     pub queue: std::collections::VecDeque<(ChunkCoord, Vec<shared::props::PropSpawn>)>,
+    reported_entities: usize,
+}
+
+/// Opt-in renderer stress input. This is deliberately not a saved graphics
+/// setting: ordinary worlds remain at 1x, while captures can request a much
+/// denser meadow with `FISTFORCE_GRASS_STRESS_DENSITY`.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct GroundCoverStressDensity(pub f32);
+
+impl Default for GroundCoverStressDensity {
+    fn default() -> Self {
+        let multiplier = std::env::var("FISTFORCE_GRASS_STRESS_DENSITY")
+            .ok()
+            .and_then(|raw| raw.parse::<f32>().ok())
+            .filter(|value| value.is_finite())
+            .unwrap_or(1.0)
+            .clamp(1.0, 32.0);
+        Self(multiplier)
+    }
 }
 
 fn in_radius(coord: ChunkCoord, anchor: ChunkCoord, radius: i32) -> bool {
@@ -85,6 +104,7 @@ pub(super) fn stream_ground_cover(
     mut index: ResMut<GroundCoverIndex>,
     world_root_query: Query<Entity, With<ClientWorldRoot>>,
     settings: Res<GraphicsSettings>,
+    stress_density: Res<GroundCoverStressDensity>,
     build_zone_index: Res<super::BuildZoneChunkIndex>,
     roads: Query<&VillageRoad>,
 ) {
@@ -99,6 +119,9 @@ pub(super) fn stream_ground_cover(
         return;
     };
     if !settings.props_enabled {
+        return;
+    }
+    if settings.ground_cover_renderer != GroundCoverRenderer::Legacy {
         return;
     }
 
@@ -117,7 +140,11 @@ pub(super) fn stream_ground_cover(
     });
 
     if let Some(coord) = desired.first().copied() {
-        let mut spawns = shared::props::generate_chunk_grass(&terrain.generator, coord);
+        let mut spawns = shared::props::generate_chunk_grass_at_density(
+            &terrain.generator,
+            coord,
+            stress_density.0,
+        );
         // Ground cover respects build zones exactly as the props do. It is easy
         // to forget precisely because grass is generated rather than authored --
         // it never passed through the prop spawner, so it never inherited the
@@ -142,7 +169,9 @@ pub(super) fn stream_ground_cover(
     }
 
     // Stage 2: realise a bounded number of queued patches.
-    let mut budget = MAX_GROUND_COVER_SPAWNS_PER_FRAME;
+    let mut budget = ((MAX_GROUND_COVER_SPAWNS_PER_FRAME as f32 * stress_density.0).ceil()
+        as usize)
+        .min(MAX_GROUND_COVER_SPAWNS_PER_FRAME * 32);
     while budget > 0 {
         let Some((coord, spawns)) = pending.queue.front_mut() else {
             break;
@@ -170,6 +199,19 @@ pub(super) fn stream_ground_cover(
             pending.queue.pop_front();
         }
     }
+
+    if desired.is_empty() && pending.queue.is_empty() {
+        let entities = index.by_chunk.values().map(Vec::len).sum::<usize>();
+        if entities > 0 && pending.reported_entities != entities {
+            info!(
+                "Legacy 3D grass ready: {} chunks, {} render entities at {:.1}x stress density",
+                loaded.chunks.len(),
+                entities,
+                stress_density.0,
+            );
+            pending.reported_entities = entities;
+        }
+    }
 }
 
 /// Trample grass as a path grows, without unloading or blinking whole chunks.
@@ -179,7 +221,11 @@ pub(super) fn clear_ground_cover_for_built_village_roads(
     mut pending: ResMut<PendingGroundCover>,
     mut index: ResMut<GroundCoverIndex>,
     transforms: Query<&GlobalTransform, With<GroundCover>>,
+    settings: Res<GraphicsSettings>,
 ) {
+    if settings.ground_cover_renderer != GroundCoverRenderer::Legacy {
+        return;
+    }
     for road in changed_roads.iter() {
         let Some((min_chunk, max_chunk)) = road_chunk_bounds(road, 0.32) else {
             continue;
@@ -257,9 +303,13 @@ pub(super) fn clear_ground_cover_for_new_buildings(
     mut pending: ResMut<PendingGroundCover>,
     mut index: ResMut<GroundCoverIndex>,
     transforms: Query<&GlobalTransform>,
+    settings: Res<GraphicsSettings>,
 ) {
+    if settings.ground_cover_renderer != GroundCoverRenderer::Legacy {
+        return;
+    }
     for (building, position) in added.iter() {
-        let zone = shared::building::BuildZoneEntry::from_building(
+        let zones = shared::building::clearance_zones_for_building(
             position.0,
             building.building_type,
             building.rotation,
@@ -267,35 +317,60 @@ pub(super) fn clear_ground_cover_for_new_buildings(
         // Only the patches ON the plot, for the same reason the props are
         // culled surgically: re-growing whole chunks makes the whole meadow
         // blink every time a hut goes up.
-        let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
-        for cx in min_x..=max_x {
-            for cz in min_z..=max_z {
-                let coord = ChunkCoord::new(cx, cz);
-                if let Some(entities) = index.by_chunk.get_mut(&coord) {
-                    entities.retain(|patch| {
-                        let Ok(transform) = transforms.get(*patch) else {
-                            return true;
-                        };
-                        let at = transform.translation();
-                        if zone.contains_point(Vec2::new(at.x, at.z)) {
-                            commands.entity(*patch).despawn();
-                            false
-                        } else {
-                            true
-                        }
-                    });
-                }
-                for (queued, spawns) in pending.queue.iter_mut() {
-                    if *queued != coord {
-                        continue;
+        for zone in zones {
+            let (min_x, max_x, min_z, max_z) = zone.chunk_bounds();
+            for cx in min_x..=max_x {
+                for cz in min_z..=max_z {
+                    let coord = ChunkCoord::new(cx, cz);
+                    if let Some(entities) = index.by_chunk.get_mut(&coord) {
+                        entities.retain(|patch| {
+                            let Ok(transform) = transforms.get(*patch) else {
+                                return true;
+                            };
+                            let at = transform.translation();
+                            if zone.contains_point(Vec2::new(at.x, at.z)) {
+                                commands.entity(*patch).despawn();
+                                false
+                            } else {
+                                true
+                            }
+                        });
                     }
-                    spawns.retain(|spawn| {
-                        !zone.contains_point(Vec2::new(spawn.position.x, spawn.position.z))
-                    });
+                    for (queued, spawns) in pending.queue.iter_mut() {
+                        if *queued != coord {
+                            continue;
+                        }
+                        spawns.retain(|spawn| {
+                            !zone.contains_point(Vec2::new(spawn.position.x, spawn.position.z))
+                        });
+                    }
                 }
             }
         }
     }
+}
+
+/// Tear down the retained patch renderer immediately when the player selects
+/// the chunked renderer. Its resources stay initialized so switching back is
+/// a normal stream-in, not a restart.
+pub(super) fn sync_legacy_ground_cover_mode(
+    mut commands: Commands,
+    settings: Res<GraphicsSettings>,
+    cover: Query<Entity, With<GroundCover>>,
+    mut loaded: ResMut<LoadedGroundCoverChunks>,
+    mut pending: ResMut<PendingGroundCover>,
+    mut index: ResMut<GroundCoverIndex>,
+) {
+    if settings.ground_cover_renderer == GroundCoverRenderer::Legacy {
+        return;
+    }
+    for entity in cover.iter() {
+        commands.entity(entity).despawn();
+    }
+    loaded.chunks.clear();
+    pending.queue.clear();
+    pending.reported_entities = 0;
+    index.by_chunk.clear();
 }
 
 /// Drop ground cover once its chunk leaves the ring.

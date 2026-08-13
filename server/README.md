@@ -9,10 +9,10 @@ top-level modules and calls `app::run()`; runtime rules belong to their domain.
 |---|---|
 | `app` | Bootstrap, resources and ordered fixed-update wiring |
 | `net` | Connections, peer identity and client-message ingress |
-| `player` | Commander views, hero lifecycle, rosters, movement orders and player indexes |
+| `player` | Commander views, hero lifecycle, rosters, movement orders, nearby Hall trading, permit escrow/placement and player indexes |
 | `collision` | Baked/derived building colliders, spatial indexes, raycasts and streamed static collision |
 | `world` | Time, identity, regions, settlements, village simulation, roads, development and lab fixtures |
-| `persistence` | Versioned player profiles, autosave and background IO; full world-state persistence is not built |
+| `persistence` | Session profile snapshots plus legacy profile migration/IO tooling; the live server deliberately starts fresh |
 | `telemetry` | Tick/phase timing, replication pressure and opt-in diagnostics |
 | `city` | Synchronisation for authored plot buildings; autonomous settlements live under `world` |
 
@@ -33,26 +33,40 @@ rule more precisely.
   main-road upgrades.
 - `village.rs`: public village state/facade. Implementation is split by domain under
   `world/village/`:
-  - `population`: migration and resident reconciliation
+  - `population`: settlement choice, migration, visible Moot registration and resident reconciliation
   - `planning`: demand, permits and geography/layout-aware siting
   - `construction`: physical material supply and building work
   - `employment`: private vacancy matching
-  - `commerce`: porter work, business accounts, payroll and owner leisure
+  - `commerce`: physical Moot Steward collection work and owner leisure
+  - `businesses`: sale settlement, accounts, pricing/strategy, protected profit draws,
+    insolvency, physical stock liquidation and property takeover
+  - `civic`: municipal hiring budgets, unified payroll/arrears, profit levies, staffing posture,
+    growth subsidies and bounded policy review
   - `settlement_economy`: Moot transactions, food security and prosperity
   - `households`: homes, pantry funding, shopping, meals and daily schedules
-  - `trades` / `production`: physical and aggregate farming, fishing and lumber work
+  - `trades` / `production`: physical and aggregate farming, fishing and lumber work,
+    plus the shared Wheat → Flour → Bread recipes
+  - `processing`: embodied Windmill and Bakery shifts using bounded private inventories
+  - `property_market`: compact Hall-published takeover listings for completed firms and worksites
   - `strategic`: off-screen person compression and aggregate settlement work
   - `history`: bounded person/settlement records and request handlers
-  - `ambient`: cheap observed-region idle life
-  - `schedule`: the shared ordered schedule used by production and Village Lab
+  - `mortality`: sparse time-warp-safe hunger ceilings, gradual fed recovery, critical starvation damage, death records,
+    household estates, civic/job cleanup, orphaned construction and business succession
+  - `ambient`: continuously budgeted, neighbourhood-local observed-region idle life
+  - `schedule`: the shared ordered production/Lab schedule, with explicit
+    identity, civic, economy, construction, activity and directory timing sets
 - `village_roads.rs`: local-road public state and survey facade. Implementation under
-  `world/village_roads/` owns connector construction, cached routing, geometry and Road
-  Steward repair.
+  `world/village_roads/` owns connector construction, cached routing, geometry and the Moot
+  Steward's road-repair duty.
 - `village_lab.rs` and `village_lab_scenario.rs`: deterministic integration harness and
   rendered fixture setup. They must use the shared village schedule, never a copied list.
 
 Extend those ownership seams instead of moving implementation back into `village.rs` or
 `village_roads.rs`.
+
+The exact civic money flows, policy ranges, staffing targets and weekly Reeve decision
+order are documented in [`docs/CIVIC-ECONOMY.md`](../docs/CIVIC-ECONOMY.md). Update that
+guide whenever a civic revenue source, expense, liability or policy effect changes.
 
 ## Scheduling rules
 
@@ -67,7 +81,7 @@ The important dependencies are:
 3. Run village core decisions, households, economy, construction and physical work.
 4. Run bounded road/route planning and actor movement.
 5. Apply interest visibility and update simulation LOD.
-6. Persist player state and close telemetry brackets.
+6. Refresh reconnectable session state and close telemetry brackets.
 
 Add a village rule to its existing shared set. Do not multiply Bevy `Time` by `TimeWarp`
 inside the new system, and do not add lab-only ordering to make a test pass.
@@ -84,7 +98,8 @@ inside the new system, and do not add lab-only ordering to make a test pass.
   command requires flow fields rather than multiplying local A*.
 - Avoid per-tick full-population scans, string joins and allocations. Reconcile on changed
   state or slow world boundaries.
-- Player profiles use positional bincode and require `PROFILE_VERSION` changes. The planned
+- The live server does not load player or world state after restart. Legacy player-profile
+  tooling uses positional bincode and requires `PROFILE_VERSION` changes; any future durable
   settlement/world save must be versioned and self-describing instead.
 
 ## Verification
@@ -98,6 +113,10 @@ cargo village-lab
 cargo village-scale-lab
 ```
 
-Use `./run.sh testworld` for a rendered deterministic village and `./run.sh realworld` for
-the logged generated-world stress fixture. Full usage and diagnostics are in
+Use `./run.sh testworld` for a rendered deterministic village,
+`./run.sh stressworld` for three rendered 200-person villages at 10x, and
+`./run.sh denseworld` for one rendered 1,000-person village at 10x. Use
+`./run.sh realworld` for the logged generated-world stress fixture. Full usage and diagnostics are in
 [`docs/VILLAGE-LAB.md`](../docs/VILLAGE-LAB.md).
+The stress launcher writes complete server/client logs quietly by default; set
+`FISTWORLD_STREAM_LOGS=1` only when terminal mirroring is desired.
