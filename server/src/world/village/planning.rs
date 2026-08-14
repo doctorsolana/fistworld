@@ -274,19 +274,11 @@ pub fn consider_permits(
                 .iter()
                 .filter(|(road, road_of)| road_of.0 == *settlement_id && !road.is_complete())
                 .count();
-        if !development_pipeline_has_capacity(
+        let pipeline_has_capacity = development_pipeline_has_capacity(
             settlement.residents,
             active_worksites,
             active_connectors,
-        ) {
-            // A completed shell does not free its development slot until its
-            // connector reaches the public network. Otherwise a population
-            // burst can approve fresh plots around a door while its owner is
-            // still waiting to survey the road, eventually making that road
-            // geometrically impossible. Worksites and roads are one bounded
-            // development pipeline, not independent sources of concurrency.
-            continue;
-        }
+        );
 
         let count = |kind| have.get(&kind).copied().unwrap_or(0);
         let mut signals = DevelopmentMarketSignals {
@@ -594,9 +586,17 @@ pub fn consider_permits(
             civic_priority: true,
             requires_independent_owner: false,
         });
-        let board = replicated_opportunity_board(&opportunities, civic_opportunity);
+        let board =
+            replicated_opportunity_board(&opportunities, civic_opportunity, settlement.tier);
         if current_board != Some(&board) {
             commands.entity(settlement_entity).insert(board);
+        }
+        if !pipeline_has_capacity {
+            // Continue publishing every player permit and its current signal
+            // while municipal crews are saturated. Only automatic NPC/public
+            // approvals wait here; a player's private hero does not consume
+            // this development pipeline.
+            continue;
         }
         let mut selected_opportunity = selected.map(|(opportunity, _)| opportunity);
         // Tier infrastructure is a real public choice. It waits behind an

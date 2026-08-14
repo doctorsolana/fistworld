@@ -146,7 +146,7 @@ fn ray_vs_oriented_box(
     }
 }
 
-fn selectable_ray_distance(
+pub(super) fn selectable_ray_distance(
     selectable: &Selectable,
     base: Vec3,
     ray_origin: Vec3,
@@ -186,7 +186,7 @@ fn selectable_ray_distance(
     }
 }
 
-fn selectable_base(
+pub(super) fn selectable_base(
     selectable: &Selectable,
     position: &PlayerPosition,
     visual: Option<&Transform>,

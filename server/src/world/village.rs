@@ -75,12 +75,11 @@ pub use objectives::sync_character_objectives;
 #[cfg(test)]
 pub(crate) use planning::find_site;
 pub use planning::{consider_permits, find_fishing_site, PermitPlanningDiagnostics, FREEBOARD};
-pub(crate) use planning::{
-    development_pipeline_has_capacity, road_access_blockers_for_plot, validate_manual_plot,
-    ManualPlotApproval,
-};
 #[cfg(test)]
 use planning::{find_site_with_plan, planned_road_access_path, slope_at};
+pub(crate) use planning::{
+    road_access_blockers_for_plot, validate_manual_plot, ManualPlotApproval,
+};
 pub use population::{
     arrive_at_settlement, recount_residents, seek_settlement, tag_villager_intent,
 };
@@ -439,6 +438,19 @@ pub struct ConstructionMaterialRoutine {
     tree_retry_after: f64,
     store_retry_after: f64,
     phase: ConstructionMaterialPhase,
+}
+
+/// A directly controlled hero's current private construction command.
+///
+/// Villagers continue to express construction through [`VillagerIntent`]. A
+/// hero is not a settlement resident or municipal crew member, so forcing the
+/// same intent onto them would make household and employment systems adopt the
+/// player accidentally. Construction accepts either state at its narrow work
+/// boundary instead.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerConstructionAssignment {
+    pub site: Entity,
+    pub settlement: Entity,
 }
 
 impl ConstructionMaterialRoutine {

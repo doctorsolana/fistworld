@@ -10,11 +10,13 @@ use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageSender};
 
-use shared::components::CommandedBy;
-use shared::protocol::{ReliableChannel, UnitMoveOrder, MAX_UNITS_PER_ORDER};
+use shared::components::{CommandedBy, ConstructionSite, Hero, OwnedBy, PersonId, PlayerPosition};
+use shared::protocol::{
+    HeroConstructionOrder, ReliableChannel, UnitMoveOrder, MAX_UNITS_PER_ORDER,
+};
 
 use super::{can_command, formation_targets, is_click, RightDrag, Selection};
-use crate::camera_rts::CursorTerrainHit;
+use crate::camera_rts::{CursorRay, CursorTerrainHit};
 use crate::input::InputState;
 
 #[allow(clippy::too_many_arguments)]
@@ -25,13 +27,29 @@ pub(super) fn issue_order_on_right_click(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     input_state: Res<InputState>,
     hit: Res<CursorTerrainHit>,
+    ray: Res<CursorRay>,
     selection: Res<Selection>,
     ui_blockers: Query<&Interaction>,
     account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
     units: Query<&CommandedBy>,
+    heroes: Query<(&CommandedBy, &PersonId), With<Hero>>,
+    worksites: Query<
+        (
+            Entity,
+            &super::Selectable,
+            &PlayerPosition,
+            Option<&Transform>,
+            &OwnedBy,
+        ),
+        With<ConstructionSite>,
+    >,
     mut drag: ResMut<RightDrag>,
     mut move_sender: Query<
         &mut MessageSender<UnitMoveOrder>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+    mut construction_sender: Query<
+        &mut MessageSender<HeroConstructionOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
 ) {
@@ -112,6 +130,46 @@ pub(super) fn issue_order_on_right_click(
         .collect();
     if ours.is_empty() {
         return;
+    }
+
+    // A worksite click is an interaction order, not a request to walk to the
+    // plot centre. Use the same precise pick volume as left-click selection so
+    // roofs, long windmill footprints and non-1.0 render scales all agree.
+    let selected_hero = ours.iter().find_map(|entity| {
+        heroes
+            .get(*entity)
+            .ok()
+            .map(|(_, person_id)| (*entity, *person_id))
+    });
+    if let (Some((_, person_id)), Some(ray)) = (selected_hero, ray.0) {
+        let origin = ray.origin;
+        let direction = ray.direction.as_vec3();
+        let terrain_distance = hit
+            .0
+            .map(|point| (point - origin).dot(direction))
+            .filter(|distance| *distance > 0.0);
+        let target_site = worksites
+            .iter()
+            .filter(|(_, _, _, _, owner)| owner.0 == person_id)
+            .filter_map(|(entity, selectable, position, visual, _)| {
+                let base = super::pick::selectable_base(selectable, position, visual);
+                let distance =
+                    super::pick::selectable_ray_distance(selectable, base, origin, direction)?;
+                if terrain_distance
+                    .is_some_and(|ground| distance > ground + selectable.height.max(1.0))
+                {
+                    return None;
+                }
+                Some((entity, distance))
+            })
+            .min_by(|(_, left), (_, right)| left.total_cmp(right))
+            .map(|(entity, _)| entity);
+        if let Some(site) = target_site {
+            if let Ok(mut sender) = construction_sender.single_mut() {
+                sender.send::<ReliableChannel>(HeroConstructionOrder { site });
+            }
+            return;
+        }
     }
 
     let Ok(mut sender) = move_sender.single_mut() else {

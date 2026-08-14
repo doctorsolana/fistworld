@@ -653,8 +653,8 @@ impl BusinessWorkingCapital {
 ///
 /// NPC owners begin in automatic mode. Persistent vacancies push the offer up
 /// when the business can cover a full staffed day; persistent arrears push it
-/// down. A future player-business panel can turn `automatic` off and edit the
-/// same replicated `daily_wage` rather than introducing a second salary path.
+/// down. The player-business panel can turn `automatic` off and edits this same
+/// replicated `daily_wage`, so there is no second salary path.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BusinessWagePolicy {
     pub daily_wage: u64,
@@ -2174,7 +2174,7 @@ pub struct WorldHistoryArchive {
     pub days: Vec<WorldHistoryDay>,
 }
 
-/// Automatic permit price. Needed housing is civic approval and remains free;
+/// Automatic permit price. Housing is civic approval and remains free;
 /// every business permit has a positive floor.
 pub fn permit_price(
     kind: crate::components::SettlementBuildingKind,
@@ -2228,6 +2228,47 @@ pub fn permit_price_with_subsidy(
     };
     base.saturating_mul(holdings_multiplier_bps)
         .saturating_mul(need_multiplier_bps)
+        .div_ceil(BASIS_POINTS.saturating_mul(BASIS_POINTS))
+        .max(PENNIES_PER_COIN)
+}
+
+/// Player-facing permit price, including privately commissioned amenities.
+///
+/// Automatic civic projects still use [`permit_price_with_subsidy`] and cost
+/// their Reeve nothing. A player who chooses to own the same unlocked service
+/// building pays a real land-use fee; demand may discount it but can never
+/// decide whether the permit is legal.
+pub fn player_permit_price_with_subsidy(
+    kind: crate::components::SettlementBuildingKind,
+    applicant_holdings: usize,
+    requested_by_settlement: bool,
+    subsidy_bps: u16,
+) -> u64 {
+    use crate::components::SettlementBuildingKind;
+    let base: u64 = match kind {
+        SettlementBuildingKind::Market => 500,
+        SettlementBuildingKind::Tavern => 400,
+        SettlementBuildingKind::Church => 600,
+        _ => {
+            return permit_price_with_subsidy(
+                kind,
+                applicant_holdings,
+                requested_by_settlement,
+                subsidy_bps,
+            );
+        }
+    };
+    let holdings_multiplier_bps =
+        BASIS_POINTS.saturating_add((applicant_holdings as u64).saturating_mul(BASIS_POINTS / 2));
+    let demand_multiplier_bps = if requested_by_settlement {
+        BASIS_POINTS.saturating_sub(u64::from(
+            subsidy_bps.min(MAXIMUM_BUSINESS_PERMIT_SUBSIDY_BPS),
+        ))
+    } else {
+        BASIS_POINTS
+    };
+    base.saturating_mul(holdings_multiplier_bps)
+        .saturating_mul(demand_multiplier_bps)
         .div_ceil(BASIS_POINTS.saturating_mul(BASIS_POINTS))
         .max(PENNIES_PER_COIN)
 }
@@ -2778,6 +2819,38 @@ mod tests {
                 MAXIMUM_BUSINESS_PERMIT_SUBSIDY_BPS,
             ),
             "speculative businesses must not receive a demand subsidy"
+        );
+    }
+
+    #[test]
+    fn player_owned_amenity_permits_cost_real_money() {
+        use crate::components::SettlementBuildingKind;
+        assert_eq!(
+            player_permit_price_with_subsidy(
+                SettlementBuildingKind::Market,
+                0,
+                false,
+                DEFAULT_BUSINESS_PERMIT_SUBSIDY_BPS,
+            ),
+            500
+        );
+        assert_eq!(
+            player_permit_price_with_subsidy(
+                SettlementBuildingKind::Tavern,
+                0,
+                false,
+                DEFAULT_BUSINESS_PERMIT_SUBSIDY_BPS,
+            ),
+            400
+        );
+        assert_eq!(
+            player_permit_price_with_subsidy(
+                SettlementBuildingKind::Church,
+                0,
+                false,
+                DEFAULT_BUSINESS_PERMIT_SUBSIDY_BPS,
+            ),
+            600
         );
     }
 }

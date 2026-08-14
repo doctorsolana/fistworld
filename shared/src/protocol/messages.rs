@@ -124,6 +124,66 @@ pub struct UnitMoveOrder {
     pub units: Vec<(Entity, Vec3)>,
 }
 
+/// Client -> server: assign the sender's live hero to their own unfinished
+/// building. The worksite remains a real world entity so entity mapping and
+/// server-side ownership checks apply exactly as they do to unit movement.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
+pub struct HeroConstructionOrder {
+    pub site: Entity,
+}
+
+impl bevy::ecs::entity::MapEntities for HeroConstructionOrder {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        self.site = mapper.get_mapped(self.site);
+    }
+}
+
+/// Server -> client acknowledgement for a hero construction assignment.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroConstructionResult {
+    pub success: bool,
+    pub message: String,
+}
+
+/// One owner decision applied to the same business policies used by NPC
+/// autopilot. Absolute values make retries idempotent; the server clamps every
+/// amount and proves ownership before changing state.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
+pub enum HeroBusinessAction {
+    SetStrategy(crate::economy::BusinessStrategy),
+    SetAutopilot(bool),
+    SetAutomaticWithdrawals(bool),
+    WithdrawAvailableProfit,
+    SetDailyWage(u64),
+    SetAutomaticWage(bool),
+    SetAskingPrice(u64),
+    SetAutomaticPricing(bool),
+    SetCollectionEnabled(bool),
+    SetAutomaticProcurement(bool),
+    SetInputMaximumPrice {
+        good: crate::economy::Good,
+        unit_price: u64,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroBusinessOrder {
+    pub business: Entity,
+    pub action: HeroBusinessAction,
+}
+
+impl bevy::ecs::entity::MapEntities for HeroBusinessOrder {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        self.business = mapper.get_mapped(self.business);
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroBusinessResult {
+    pub success: bool,
+    pub message: String,
+}
+
 /// Hard cap on units per order, enforced SERVER-side.
 ///
 /// A hostile client can put anything in a Vec; a client-side cap is advisory
@@ -459,6 +519,31 @@ mod tests {
         assert_eq!(
             bincode::deserialize::<HeroMarketOrder>(&bytes).unwrap(),
             message
+        );
+    }
+
+    #[test]
+    fn hero_construction_and_business_orders_roundtrip() {
+        let construction = HeroConstructionOrder {
+            site: Entity::from_raw_u32(19).unwrap(),
+        };
+        let bytes = bincode::serialize(&construction).unwrap();
+        assert_eq!(
+            bincode::deserialize::<HeroConstructionOrder>(&bytes).unwrap(),
+            construction
+        );
+
+        let business = HeroBusinessOrder {
+            business: Entity::from_raw_u32(21).unwrap(),
+            action: HeroBusinessAction::SetInputMaximumPrice {
+                good: crate::economy::Good::Wheat,
+                unit_price: 325,
+            },
+        };
+        let bytes = bincode::serialize(&business).unwrap();
+        assert_eq!(
+            bincode::deserialize::<HeroBusinessOrder>(&bytes).unwrap(),
+            business
         );
     }
 

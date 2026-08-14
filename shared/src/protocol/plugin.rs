@@ -133,6 +133,12 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<UnitMoveOrder>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<HeroConstructionOrder>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<HeroBusinessOrder>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<HeroMarketOrder>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
@@ -155,6 +161,10 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<HeroMarketResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroPermitResult>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<HeroConstructionResult>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<HeroBusinessResult>()
             .add_direction(NetworkDirection::ServerToClient);
 
         // === CHANNELS ===

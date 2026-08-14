@@ -502,10 +502,12 @@ Clicking a Moot Hall exposes:
 - wage arrears and settlement progression.
 
 The Hall's **Permits & Property** action opens a dedicated, scrollable land ledger. Its permit
-column lists every ordinary private permit, with demand band, indicative first-owner price,
+column lists every tier-unlocked private permit, with demand band, indicative first-owner price,
 enacted discount, Wood requirement and housing/job capacity. A nearby hero can request the exact
-fee and processor operating escrow, purchase it, and immediately choose a plot; public projects
-remain visible notices rather than purchasable private permits. Its property column is driven by the compact
+fee and processor operating escrow, purchase it, and immediately choose a plot. Hamlet uses are
+open regardless of demand or upstream supply; Marketplace and Tavern unlock at Village, while
+Church unlocks at Town. Those amenities may still be commissioned as public progression works,
+but a player may pay a real permit fee to own one. Its property column is driven by the compact
 replicated `SettlementPropertyBoard`, so completed businesses and inherited unfinished worksites
 remain visible even beyond detailed building replication. Listings show asking price, reason,
 listing age and whether they are still inside the one-day public exposure window or open to

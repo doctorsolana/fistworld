@@ -24,6 +24,8 @@ pub struct InputState {
     pub encyclopedia_open: bool,
     /// True while an on-demand settlement/market history ledger is open.
     pub history_open: bool,
+    /// True while the owner is editing one business's operating policies.
+    pub business_management_open: bool,
 }
 
 impl InputState {
@@ -35,5 +37,6 @@ impl InputState {
             || self.hero_creator_open
             || self.encyclopedia_open
             || self.history_open
+            || self.business_management_open
     }
 }

@@ -119,14 +119,21 @@ pub fn review_business_management(
         Option<&mut BusinessLiquidation>,
         Option<&BusinessForSale>,
     )>,
-    mut villagers: Query<(
-        Entity,
-        &shared::components::PersonId,
-        Option<&shared::components::EmployedAt>,
-        &mut Wallet,
-        &mut Occupation,
-        &mut WorkStatus,
-    )>,
+    mut villagers: Query<
+        (
+            Entity,
+            &shared::components::PersonId,
+            Option<&shared::components::EmployedAt>,
+            &mut Wallet,
+            &mut Occupation,
+            &mut WorkStatus,
+        ),
+        With<Occupation>,
+    >,
+    mut hero_owners: Query<
+        (Entity, &shared::components::PersonId, &mut Wallet),
+        (With<shared::components::Hero>, Without<Occupation>),
+    >,
     collections: Query<&MarketCollectionRoutine>,
 ) {
     let Some(day) = world_time.iter().next().map(|clock| clock.day) else {
@@ -137,6 +144,10 @@ pub fn review_business_management(
     let people_by_id: HashMap<shared::components::PersonId, Entity> = villagers
         .iter()
         .map(|(entity, id, ..)| (*id, entity))
+        .collect();
+    let heroes_by_id: HashMap<shared::components::PersonId, Entity> = hero_owners
+        .iter()
+        .map(|(entity, id, _)| (*id, entity))
         .collect();
     let mut workers_by_business: HashMap<shared::components::BuildingId, Vec<Entity>> =
         HashMap::new();
@@ -440,9 +451,22 @@ pub fn review_business_management(
         market.reprice(seller, good, sale.asking_unit_price);
 
         let owner_entity = owner.and_then(|owner| people_by_id.get(&owner.0).copied());
+        let hero_owner_entity = owner.and_then(|owner| heroes_by_id.get(&owner.0).copied());
         if condition.state == BusinessState::Insolvent && management.rescue_with_personal_savings {
             if let Some(owner_entity) = owner_entity {
                 if let Ok((_, _, _, mut wallet, _, _)) = villagers.get_mut(owner_entity) {
+                    let rescue = wallet
+                        .balance()
+                        .saturating_sub(OWNER_PERSONAL_FLOOR)
+                        .min(OWNER_RESCUE_LIMIT);
+                    if rescue > 0 && wallet.debit(rescue) {
+                        account.contribute_capital(rescue);
+                        condition.state = BusinessState::Distressed;
+                        condition.insolvent_days = 0;
+                    }
+                }
+            } else if let Some(owner_entity) = hero_owner_entity {
+                if let Ok((_, _, mut wallet)) = hero_owners.get_mut(owner_entity) {
                     let rescue = wallet
                         .balance()
                         .saturating_sub(OWNER_PERSONAL_FLOOR)
@@ -462,7 +486,7 @@ pub fn review_business_management(
                 BusinessState::Operating | BusinessState::CashTight
             )
         {
-            if let Some(owner_entity) = owner_entity {
+            if owner_entity.is_some() || hero_owner_entity.is_some() {
                 let procurement = procurement.as_deref().copied().unwrap_or_default();
                 let reserve = business_working_capital(
                     building.kind.positions(),
@@ -474,8 +498,14 @@ pub fn review_business_management(
                 .total();
                 let draw = account.withdraw_owner(day, management.max_daily_withdrawal, reserve);
                 if draw > 0 {
-                    if let Ok((_, _, _, mut wallet, _, _)) = villagers.get_mut(owner_entity) {
-                        wallet.credit(draw);
+                    if let Some(owner_entity) = owner_entity {
+                        if let Ok((_, _, _, mut wallet, _, _)) = villagers.get_mut(owner_entity) {
+                            wallet.credit(draw);
+                        }
+                    } else if let Some(owner_entity) = hero_owner_entity {
+                        if let Ok((_, _, mut wallet)) = hero_owners.get_mut(owner_entity) {
+                            wallet.credit(draw);
+                        }
                     }
                 }
             }

@@ -12,7 +12,7 @@ use shared::components::{
     SettlementPolicies, SettlementPropertyBoard, WorldTime,
 };
 use shared::economy::{
-    format_money, permit_price_with_subsidy, Wallet, PROPERTY_MARKET_EXPOSURE_DAYS,
+    format_money, player_permit_price_with_subsidy, Wallet, PROPERTY_MARKET_EXPOSURE_DAYS,
 };
 
 use crate::camera_rts::LocalPeerId;
@@ -74,7 +74,7 @@ struct PermitListingViewport;
 struct PropertyListingViewport;
 
 fn offer_price(opportunity: PermitMarketOpportunity, policy: Option<&SettlementPolicies>) -> u64 {
-    permit_price_with_subsidy(
+    player_permit_price_with_subsidy(
         opportunity.kind,
         0,
         opportunity.subsidized,
@@ -419,7 +419,7 @@ fn spawn_permit_column(
         spawn_section_title(
             column,
             "PERMITS FOR SALE",
-            "Offers respond to housing, stock and proven business throughput.",
+            "Every tier-unlocked use is for sale; demand changes signals and discounts.",
         );
         column
             .spawn((
@@ -584,7 +584,7 @@ fn spawn_permit_card(
                     if kind == SettlementBuildingKind::House {
                         "RESIDENTIAL"
                     } else if opportunity.requires_independent_owner {
-                        "NEW ENTRANT"
+                        "NEW ENTRANT DISCOUNT"
                     } else if opportunity.subsidized {
                         "DISCOUNTED"
                     } else {
@@ -679,21 +679,13 @@ fn spawn_permit_action(
     hero_nearby: bool,
     hero_balance: u64,
 ) {
-    let privately_available = matches!(
-        kind,
-        SettlementBuildingKind::House
-            | SettlementBuildingKind::Farmstead
-            | SettlementBuildingKind::FishermansHut
-            | SettlementBuildingKind::LumberjackHut
-            | SettlementBuildingKind::Windmill
-            | SettlementBuildingKind::Bakery
-    );
+    let privately_available = kind.minimum_player_permit_tier().is_some();
     let quoted_total = quote.map(|quote| quote.fee.saturating_add(quote.startup_capital));
     let (label, hint, marker): (String, String, Option<PurchasePermitButton>) =
         if !privately_available {
             (
-                "PUBLIC WORKS NOTICE".into(),
-                "This project is commissioned by the settlement, not sold privately.".into(),
+                "NOT A PRIVATE PERMIT".into(),
+                "The settlement Hall itself cannot be privately commissioned.".into(),
                 None,
             )
         } else if !has_hero {

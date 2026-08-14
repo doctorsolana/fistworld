@@ -16,8 +16,8 @@ use shared::components::{
 };
 use shared::economy::{format_money, Wallet};
 use shared::protocol::{
-    HeroPermitAction, HeroPermitOrder, HeroPermitOutcome, HeroPermitQuote, HeroPermitResult,
-    ReliableChannel,
+    HeroConstructionResult, HeroPermitAction, HeroPermitOrder, HeroPermitOutcome, HeroPermitQuote,
+    HeroPermitResult, ReliableChannel,
 };
 
 use crate::camera_rts::{CommanderCamera, CursorTerrainHit, LocalPeerId};
@@ -42,6 +42,7 @@ impl Plugin for PlayerPermitsPlugin {
             Update,
             (
                 receive_permit_results,
+                receive_construction_results,
                 handle_property_permit_buttons,
                 handle_permit_tray_buttons,
                 update_permit_placement_controls,
@@ -58,6 +59,22 @@ impl Plugin for PlayerPermitsPlugin {
                 .run_if(in_state(GameState::Playing)),
         );
         app.add_systems(OnExit(GameState::Playing), cleanup_permit_ui);
+    }
+}
+
+fn receive_construction_results(
+    time: Res<Time>,
+    mut receivers: Query<&mut MessageReceiver<HeroConstructionResult>, With<crate::GameClient>>,
+    mut notice: ResMut<PermitNotice>,
+) {
+    for mut receiver in receivers.iter_mut() {
+        for result in receiver.receive() {
+            notice.show(
+                time.elapsed_secs_f64(),
+                result.success,
+                result.message.clone(),
+            );
+        }
     }
 }
 

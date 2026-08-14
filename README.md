@@ -77,9 +77,9 @@ design.
 
 - Versioned world-state persistence, migrations, backups and hosted durable storage.
 - Births, aging, non-starvation mortality, decline and persistent tree depletion/regrowth.
-- Player business management, custom listing-price controls, carts, caravans and
-  inter-settlement markets. Players can now commission and own an ordinary business, but its
-  manual operating strategy controls are still ahead.
+- Custom trade-order quantities, carts, caravans and inter-settlement markets. Players can now
+  commission and physically build an ordinary business, then manage strategy, wages, prices,
+  collection, input procurement and profit retention through the same policies as NPC owners.
 - Physical palisades, stone walls, gates, guards and patrols.
 - Strategic travelling parties and armies with lossless tactical promotion/demotion.
 - Retinues, formations, flow fields, combat, clans, political ownership and realm war.

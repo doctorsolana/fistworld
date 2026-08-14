@@ -185,7 +185,8 @@ pub fn run_construction_material_logistics(
             &shared::components::PersonId,
             &CharacterName,
             &PlayerPosition,
-            &VillagerIntent,
+            Option<&VillagerIntent>,
+            Option<&PlayerConstructionAssignment>,
             Option<&HomeRoutine>,
             &mut PlayerRotation,
             &mut CharacterActivity,
@@ -195,12 +196,15 @@ pub fn run_construction_material_logistics(
             Option<&mut Wallet>,
             Option<&ambient::AmbientRoutine>,
         ),
-        With<CharacterKind>,
+        (
+            With<CharacterKind>,
+            Without<crate::player::hero::OfflineHero>,
+        ),
     >,
-    // A player-owned site is normally supplied by an unemployed resident,
-    // but its material bill still belongs to the owner. The disjoint filter
-    // lets that owner's live/offline hero wallet fund market Wood without
-    // ever charging the resident who happens to carry it.
+    // NPC-owned private sites can be carried by a different resident while
+    // their material bill still belongs to the owner. Player heroes carry and
+    // pay directly, so their wallet is already in `builders`; this disjoint
+    // lookup covers only the NPC-owner/carrier case.
     mut non_builder_owner_wallets: Query<
         (&shared::components::PersonId, &mut Wallet),
         Without<ConstructionMaterialRoutine>,
@@ -269,6 +273,7 @@ pub fn run_construction_material_logistics(
         name,
         position,
         intent,
+        player_assignment,
         home_routine,
         mut facing,
         mut activity,
@@ -282,10 +287,21 @@ pub fn run_construction_material_logistics(
         if home_routine.is_some() {
             continue;
         }
-        if !matches!(intent, VillagerIntent::Building { site, .. } if *site == routine.site) {
+        let villager_assigned =
+            matches!(intent, Some(VillagerIntent::Building { site, .. }) if *site == routine.site);
+        let player_assigned = player_assignment.is_some_and(|assignment| {
+            assignment.site == routine.site
+                && assignment.settlement
+                    == sites
+                        .get(routine.site)
+                        .map(|(_, site, ..)| site.settlement)
+                        .unwrap_or(Entity::PLACEHOLDER)
+        });
+        if !villager_assigned && !player_assigned {
             commands
                 .entity(builder)
                 .remove::<ConstructionMaterialRoutine>()
+                .remove::<PlayerConstructionAssignment>()
                 .remove::<MoveTarget>();
             *activity = CharacterActivity::Idle;
             continue;
@@ -296,6 +312,7 @@ pub fn run_construction_material_logistics(
             commands
                 .entity(builder)
                 .remove::<ConstructionMaterialRoutine>()
+                .remove::<PlayerConstructionAssignment>()
                 .remove::<MoveTarget>();
             *activity = CharacterActivity::Idle;
             continue;
@@ -969,13 +986,16 @@ pub fn advance_construction(
         &GoodsInventory,
         Option<&PlannedRoadAccess>,
         Option<&InheritedBusinessCapital>,
+        Option<&crate::player::permits::PlayerConstructionProject>,
     )>,
     mut sites: Query<&mut shared::components::ConstructionSite>,
     mut facings: Query<&mut PlayerRotation>,
 ) {
     let world_dt = simulation_time.world_seconds();
     let daylight = world_time.iter().next().is_none_or(WorldTime::is_day);
-    for (site, mut under, materials, planned_access, inherited_capital) in pending.iter_mut() {
+    for (site, mut under, materials, planned_access, inherited_capital, player_project) in
+        pending.iter_mut()
+    {
         let Ok((settlement, settlement_id)) = settlements.get(under.settlement) else {
             // Its settlement vanished; drop the site rather than leaving a
             // building belonging to nowhere.
@@ -1216,20 +1236,38 @@ pub fn advance_construction(
                     under.quality * 100.0
                 );
                 if let Some(builder) = under.builder {
-                    // The person who raised the building owns the last piece of
-                    // work too: joining its authored door to the village path
-                    // network. `plan_requested_roads` adopts them next in the
-                    // chained schedule and releases them if no route is viable.
-                    commands.entity(building_entity).insert(RoadRequest {
-                        builder,
-                        settlement: under.settlement,
-                        completed_site: site,
-                        attempt: 0,
-                    });
-                    commands
-                        .entity(builder)
-                        .remove::<MoveTarget>()
-                        .remove::<ConstructionMaterialRoutine>();
+                    if player_project.is_some() {
+                        // The hero's explicit construction order ends with the
+                        // building. Road access remains a civic repair backlog;
+                        // completing a private windmill must not silently turn
+                        // the player into a municipal road worker.
+                        commands
+                            .entity(building_entity)
+                            .insert(crate::world::village_roads::RoadRepairBacklog);
+                        commands
+                            .entity(builder)
+                            .remove::<MoveTarget>()
+                            .remove::<ConstructionMaterialRoutine>()
+                            .remove::<PlayerConstructionAssignment>();
+                        if let Ok(mut activity) = activities.get_mut(builder) {
+                            *activity = CharacterActivity::Idle;
+                        }
+                    } else {
+                        // The person who raised the building owns the last piece of
+                        // work too: joining its authored door to the village path
+                        // network. `plan_requested_roads` adopts them next in the
+                        // chained schedule and releases them if no route is viable.
+                        commands.entity(building_entity).insert(RoadRequest {
+                            builder,
+                            settlement: under.settlement,
+                            completed_site: site,
+                            attempt: 0,
+                        });
+                        commands
+                            .entity(builder)
+                            .remove::<MoveTarget>()
+                            .remove::<ConstructionMaterialRoutine>();
+                    }
                 } else {
                     release_builder(&mut commands, &mut intents, None, Some(under.settlement));
                 }
@@ -1250,7 +1288,8 @@ fn release_builder(
     commands
         .entity(builder)
         .remove::<MoveTarget>()
-        .remove::<ConstructionMaterialRoutine>();
+        .remove::<ConstructionMaterialRoutine>()
+        .remove::<PlayerConstructionAssignment>();
     if let Ok(mut intent) = intents.get_mut(builder) {
         *intent = match settlement {
             Some(settlement) => VillagerIntent::Resident { settlement },

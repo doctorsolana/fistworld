@@ -617,9 +617,11 @@ with a player who does nothing but found the hall and put people on the map.
    closes the signal until the market has had time to respond.
 
    An embodied player may take the other side of this same permit market. Standing within
-   12 metres of the Hall makes every ordinary private permit visible: low demand means full
-   price, not a prohibition, while impossible processor prerequisites and unstable existing
-   holdings remain real eligibility rules. The Hall returns an exact hero-specific quote.
+   12 metres of the Hall makes every tier-unlocked private permit visible: low demand means full
+   price, not a prohibition. Hamlet uses include housing, extractors, Windmills and Bakeries;
+   Marketplace and Tavern unlock at Village, and Church unlocks at Town. Missing upstream goods,
+   an unprofitable idea, existing holdings or a distressed firm may make the purchase foolish,
+   but the Hall does not forbid it. The Hall returns an exact hero-specific quote.
    Purchasing creates a bounded, replicated stamped permit and escrows its fee plus any
    processor startup capital; it does not choose land or create a building. Escape closes
    placement without losing the permit, and the permanent permit tray can resume or surrender
@@ -635,9 +637,20 @@ with a player who does nothing but found the hall and put people on the map.
    access and a full-width route to the Hall component. It also reserves accepted same-tick
    plots before deferred ECS spawning, so simultaneous players cannot claim the same ground.
    Acceptance releases only the fee to the treasury, carries processor startup escrow into the
-   finished account, and creates the ordinary empty Wood worksite and road-access reservation.
-   A local unemployed resident can adopt the build; market Wood is billed to the player owner,
-   never the carrier, with direct gathering as the physical fallback.
+   finished account, and creates a private empty Wood worksite plus road-access reservation.
+   This plot does not consume one of the Hall's bounded NPC construction slots and cannot be
+   adopted by orphan-site recovery. Select the owning hero and right-click the worksite to assign
+   them: they use the ordinary physical supply loop, buying available market Wood or gathering it
+   directly, then hauling and raising the building. Any later move order interrupts the assignment
+   without losing delivered materials. Completion releases the hero while the civic road steward
+   adopts the reserved connector backlog.
+
+   A completed player-owned business exposes one scrollable owner panel. Strategy, whole-owner
+   autopilot, wage review and daily wage, automatic/manual asking price, Hall collection,
+   automatic/retained draws, immediate protected-profit withdrawal, processor procurement and
+   per-input bid ceilings all edit the same replicated
+   policies used by NPC owners. There is no separate player economy and every mutation is checked
+   against the live hero's stable PersonId on the server.
 7. Ordinary siting is deterministic and charter-led. A settlement's name and
    founding position choose organic lanes, radial commons, an ordered grid, a great
    avenue or neighbourhood clusters plus a civic-centre form. Those grammars bias

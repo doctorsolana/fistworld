@@ -7,7 +7,8 @@
 //! geography and the authoritative permit transaction remain in `planning`.
 
 use shared::components::{
-    PermitMarketOpportunity, SettlementBuildingKind, SettlementOpportunityBoard, SettlementPolicies,
+    PermitMarketOpportunity, SettlementBuildingKind, SettlementOpportunityBoard,
+    SettlementPolicies, SettlementTier,
 };
 use shared::economy::{
     sustainable_unit_price, BusinessStrategy, Good, MootMarket, SettlementEconomy, BASIS_POINTS,
@@ -63,7 +64,7 @@ pub struct DevelopmentOpportunity {
     pub requires_independent_owner: bool,
 }
 
-const PRIVATE_KINDS: [SettlementBuildingKind; 6] = [
+const FOUNDING_PRIVATE_KINDS: [SettlementBuildingKind; 6] = [
     SettlementBuildingKind::House,
     SettlementBuildingKind::Farmstead,
     SettlementBuildingKind::FishermansHut,
@@ -443,7 +444,7 @@ pub fn private_opportunities(
     market: Option<&MootMarket>,
     policies: &SettlementPolicies,
 ) -> Vec<DevelopmentOpportunity> {
-    let mut opportunities: Vec<_> = PRIVATE_KINDS
+    let mut opportunities: Vec<_> = FOUNDING_PRIVATE_KINDS
         .into_iter()
         .filter_map(|kind| {
             let score = clamp_score(opportunity_score(kind, signals, economy, market, policies));
@@ -467,6 +468,7 @@ pub fn private_opportunities(
 pub fn replicated_opportunity_board(
     opportunities: &[DevelopmentOpportunity],
     civic: Option<DevelopmentOpportunity>,
+    tier: SettlementTier,
 ) -> SettlementOpportunityBoard {
     let mut entries: Vec<_> = opportunities
         .iter()
@@ -479,11 +481,25 @@ pub fn replicated_opportunity_board(
             requires_independent_owner: opportunity.requires_independent_owner,
         })
         .collect();
+    entries.retain(|entry| entry.kind.is_player_permit_available_at(tier));
     // Demand controls the score and subsidy, not whether a private player may
-    // apply. Keep every ordinary private permit visible at full price even
-    // when the Hall is not encouraging it. The authoritative quote still
-    // enforces upstream prerequisites and owner/holding limits.
-    for kind in PRIVATE_KINDS {
+    // apply. Keep every tier-unlocked permit visible at full price even when
+    // the Hall is not encouraging it. Only the settlement rung, payment and
+    // the bounded unused-permit ledger constrain a valid quote.
+    for kind in [
+        SettlementBuildingKind::House,
+        SettlementBuildingKind::Farmstead,
+        SettlementBuildingKind::FishermansHut,
+        SettlementBuildingKind::Windmill,
+        SettlementBuildingKind::Bakery,
+        SettlementBuildingKind::LumberjackHut,
+        SettlementBuildingKind::Market,
+        SettlementBuildingKind::Tavern,
+        SettlementBuildingKind::Church,
+    ] {
+        if !kind.is_player_permit_available_at(tier) {
+            continue;
+        }
         if !entries.iter().any(|entry| entry.kind == kind) {
             entries.push(PermitMarketOpportunity {
                 kind,
@@ -499,10 +515,8 @@ pub fn replicated_opportunity_board(
             .then_with(|| kind_order(a.kind).cmp(&kind_order(b.kind)))
     });
     entries.dedup_by_key(|opportunity| opportunity.kind);
-    // Six private offers plus, at most, the settlement's current public-work
-    // notice. Never let an urgent civic project push a legal private permit
-    // off the player-facing board.
-    entries.truncate(PRIVATE_KINDS.len() + usize::from(civic.is_some()));
+    // Every tier-unlocked use remains visible. Civic demand can add a signal or
+    // discount, but it may not push a legal private permit off the board.
     SettlementOpportunityBoard {
         opportunities: entries,
     }
@@ -910,7 +924,7 @@ mod tests {
                 .unwrap();
         assert!(opportunity.score >= 60.0);
         assert!(opportunity.requires_independent_owner);
-        let board = replicated_opportunity_board(&[opportunity], None);
+        let board = replicated_opportunity_board(&[opportunity], None, SettlementTier::Hamlet);
         let advertised = board
             .opportunities
             .iter()
@@ -978,8 +992,9 @@ mod tests {
                 civic_priority: true,
                 requires_independent_owner: false,
             }),
+            SettlementTier::Village,
         );
-        for kind in PRIVATE_KINDS {
+        for kind in FOUNDING_PRIVATE_KINDS {
             let offer = board
                 .opportunities
                 .iter()
@@ -992,6 +1007,31 @@ mod tests {
             .opportunities
             .iter()
             .any(|offer| offer.kind == SettlementBuildingKind::Market));
+        assert!(board
+            .opportunities
+            .iter()
+            .any(|offer| offer.kind == SettlementBuildingKind::Tavern));
+        assert!(!board
+            .opportunities
+            .iter()
+            .any(|offer| offer.kind == SettlementBuildingKind::Church));
+
+        let hamlet = replicated_opportunity_board(
+            &[],
+            Some(DevelopmentOpportunity {
+                kind: SettlementBuildingKind::Market,
+                score: 95.0,
+                civic_priority: true,
+                requires_independent_owner: false,
+            }),
+            SettlementTier::Hamlet,
+        );
+        assert!(!hamlet.opportunities.iter().any(|offer| matches!(
+            offer.kind,
+            SettlementBuildingKind::Market
+                | SettlementBuildingKind::Tavern
+                | SettlementBuildingKind::Church
+        )));
     }
 
     #[test]

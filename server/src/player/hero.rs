@@ -24,6 +24,9 @@ use shared::terrain::WorldTerrain;
 
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 use crate::world::navgrid::VILLAGER_PROP_RADIUS;
+use crate::world::village::{
+    ConstructionMaterialRoutine, PlayerConstructionAssignment, UnderConstruction,
+};
 use crate::world::village_roads::{
     NavigationObstacleEscape, NavigationRouteFailed, NavigationRoutePending, TravelRoute,
     VillageRoadGraph, ROAD_SPEED_MULTIPLIER,
@@ -309,7 +312,11 @@ pub fn handle_unit_move_orders(
     mut commands: Commands,
     profiles: Res<crate::persistence::profiles::PlayerProfiles>,
     mut client_links: Query<(&RemoteId, &mut MessageReceiver<UnitMoveOrder>), With<ClientOf>>,
-    units: Query<&CommandedBy, (With<CharacterKind>, Without<OfflineHero>)>,
+    units: Query<
+        (&CommandedBy, Option<&PlayerConstructionAssignment>),
+        (With<CharacterKind>, Without<OfflineHero>),
+    >,
+    mut sites: Query<&mut UnderConstruction>,
 ) {
     for (remote_id, mut receiver) in client_links.iter_mut() {
         // Resolved ONCE per connection. Account name, not peer id: that is the
@@ -332,11 +339,26 @@ pub fn handle_unit_move_orders(
                 if *unit == Entity::PLACEHOLDER {
                     continue;
                 }
-                let Ok(commanded) = units.get(*unit) else {
+                let Ok((commanded, construction)) = units.get(*unit) else {
                     continue;
                 };
                 if commanded.0 != account {
                     continue;
+                }
+                if let Some(construction) = construction {
+                    if let Ok(mut site) = sites.get_mut(construction.site) {
+                        if site.builder == Some(*unit) {
+                            site.builder = None;
+                        }
+                    }
+                    commands
+                        .entity(*unit)
+                        .remove::<PlayerConstructionAssignment>()
+                        .remove::<ConstructionMaterialRoutine>()
+                        .remove::<TravelRoute>()
+                        .remove::<NavigationRoutePending>()
+                        .remove::<NavigationRouteFailed>()
+                        .insert(CharacterActivity::Idle);
                 }
                 commands.entity(*unit).insert(MoveTarget(*point));
             }

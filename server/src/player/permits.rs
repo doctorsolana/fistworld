@@ -15,24 +15,33 @@ use shared::components::{
     SettlementOpportunityBoard, SettlementPolicies, WorldTime,
 };
 use shared::economy::{
-    format_money, permit_price_with_subsidy, BusinessCondition, BusinessForSale, CivicAccount,
-    GoodsInventory, MootMarket, Wallet,
+    format_money, player_permit_price_with_subsidy, CivicAccount, GoodsInventory, MootMarket,
+    Wallet,
 };
 use shared::protocol::{
-    HeroPermitAction, HeroPermitOrder, HeroPermitOutcome, HeroPermitQuote, HeroPermitResult,
-    ReliableChannel,
+    HeroConstructionOrder, HeroConstructionResult, HeroPermitAction, HeroPermitOrder,
+    HeroPermitOutcome, HeroPermitQuote, HeroPermitResult, ReliableChannel,
 };
 
 use super::hero::OfflineHero;
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 use crate::world::village::{
-    business_output, development_pipeline_has_capacity, minimum_startup_capital,
-    road_access_blockers_for_plot, validate_manual_plot, BuildStage, InheritedBusinessCapital,
-    ManualPlotApproval, UnderConstruction,
+    minimum_startup_capital, road_access_blockers_for_plot, validate_manual_plot, BuildStage,
+    ConstructionMaterialRoutine, InheritedBusinessCapital, ManualPlotApproval,
+    PlayerConstructionAssignment, UnderConstruction,
 };
-use crate::world::village_roads::{PlannedRoadAccess, RoadRequest};
+use crate::world::village_roads::PlannedRoadAccess;
 
 pub const HERO_PERMIT_INTERACTION_RANGE: f32 = 12.0;
+
+/// Marks a worksite created from a player's permit. It remains outside the
+/// replicated protocol: clients use the site's replicated [`OwnedBy`] value,
+/// while this marker is the authoritative distinction that prevents ordinary
+/// village orphan-recovery from drafting an NPC onto private player work.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayerConstructionProject {
+    pub owner: shared::components::PersonId,
+}
 
 #[derive(Resource, Debug)]
 pub struct PermitIdAllocator {
@@ -67,8 +76,6 @@ pub struct PlayerPermitWorld<'w, 's> {
             &'static PlayerPosition,
             Option<&'static PlayerRotation>,
             Option<&'static shared::components::OwnedBy>,
-            Option<&'static BusinessCondition>,
-            Option<&'static BusinessForSale>,
         ),
     >,
     pending: Query<'w, 's, (Entity, &'static UnderConstruction)>,
@@ -81,7 +88,6 @@ pub struct PlayerPermitWorld<'w, 's> {
         ),
     >,
     planned_accesses: Query<'w, 's, &'static PlannedRoadAccess>,
-    road_requests: Query<'w, 's, &'static RoadRequest>,
     world_time: Query<'w, 's, &'static WorldTime>,
 }
 
@@ -92,58 +98,34 @@ struct PermitPrice {
 }
 
 fn private_permit_kind(kind: SettlementBuildingKind) -> bool {
-    matches!(
-        kind,
-        SettlementBuildingKind::House
-            | SettlementBuildingKind::Farmstead
-            | SettlementBuildingKind::FishermansHut
-            | SettlementBuildingKind::LumberjackHut
-            | SettlementBuildingKind::Windmill
-            | SettlementBuildingKind::Bakery
-    )
+    kind.minimum_player_permit_tier().is_some()
 }
 
-fn completed_upstream_exists(
+fn validate_player_permit_access(
     kind: SettlementBuildingKind,
-    settlement: SettlementId,
-    world: &PlayerPermitWorld,
-) -> bool {
-    let needed = match kind {
-        SettlementBuildingKind::Windmill => Some(SettlementBuildingKind::Farmstead),
-        SettlementBuildingKind::Bakery => Some(SettlementBuildingKind::Windmill),
-        _ => None,
-    };
-    needed.is_none_or(|needed| {
-        world
-            .buildings
-            .iter()
-            .any(|(building, building_of, _, _, _, condition, _)| {
-                building_of.0 == settlement
-                    && building.kind == needed
-                    && condition.is_none_or(|condition| condition.state.counts_as_active_capacity())
-            })
-    })
-}
-
-fn owner_has_blocking_business(
-    owner: shared::components::PersonId,
-    settlement: SettlementId,
-    world: &PlayerPermitWorld,
-) -> bool {
-    world
-        .buildings
-        .iter()
-        .any(|(_, building_of, _, _, owned_by, condition, for_sale)| {
-            building_of.0 == settlement
-                && owned_by.is_some_and(|owned_by| owned_by.0 == owner)
-                && (for_sale.is_some()
-                    || condition.is_some_and(|condition| condition.state.blocks_owner_expansion()))
-        })
-        || world.pending.iter().any(|(_, pending)| {
-            pending.settlement_id == settlement
-                && pending.owner_id == Some(owner)
-                && business_output(pending.kind).is_some()
-        })
+    tier: shared::components::SettlementTier,
+    active_stamps: usize,
+) -> Result<(), String> {
+    if !private_permit_kind(kind) {
+        return Err("The settlement Hall itself is not a private land-use permit.".into());
+    }
+    if !kind.is_player_permit_available_at(tier) {
+        let minimum = kind
+            .minimum_player_permit_tier()
+            .expect("private permit kind has a tier");
+        return Err(format!(
+            "{} permits unlock when this settlement reaches {}.",
+            kind.label(),
+            minimum.label()
+        ));
+    }
+    if active_stamps >= PlayerPermitLedger::MAX_ACTIVE {
+        return Err(format!(
+            "Use or surrender one of your {} active permits first.",
+            PlayerPermitLedger::MAX_ACTIVE
+        ));
+    }
+    Ok(())
 }
 
 fn holding_count(
@@ -155,7 +137,7 @@ fn holding_count(
     let completed = world
         .buildings
         .iter()
-        .filter(|(_, building_of, _, _, owned_by, _, _)| {
+        .filter(|(_, building_of, _, _, owned_by)| {
             building_of.0 == settlement && owned_by.is_some_and(|owned_by| owned_by.0 == owner)
         })
         .count();
@@ -174,27 +156,7 @@ fn holding_count(
     completed.saturating_add(pending).saturating_add(stamped)
 }
 
-fn already_owns_house(
-    owner: shared::components::PersonId,
-    settlement: SettlementId,
-    world: &PlayerPermitWorld,
-) -> bool {
-    world
-        .buildings
-        .iter()
-        .any(|(building, building_of, _, _, owned_by, _, _)| {
-            building.kind == SettlementBuildingKind::House
-                && building_of.0 == settlement
-                && owned_by.is_some_and(|owned_by| owned_by.0 == owner)
-        })
-        || world.pending.iter().any(|(_, pending)| {
-            pending.kind == SettlementBuildingKind::House
-                && pending.settlement_id == settlement
-                && pending.owner_id == Some(owner)
-        })
-}
-
-fn owner_has_kind(
+fn owns_or_is_building_kind(
     owner: shared::components::PersonId,
     settlement: SettlementId,
     kind: SettlementBuildingKind,
@@ -203,14 +165,14 @@ fn owner_has_kind(
     world
         .buildings
         .iter()
-        .any(|(building, building_of, _, _, owned_by, _, _)| {
-            building.kind == kind
-                && building_of.0 == settlement
+        .any(|(building, building_of, _, _, owned_by)| {
+            building_of.0 == settlement
+                && building.kind == kind
                 && owned_by.is_some_and(|owned_by| owned_by.0 == owner)
         })
         || world.pending.iter().any(|(_, pending)| {
-            pending.kind == kind
-                && pending.settlement_id == settlement
+            pending.settlement_id == settlement
+                && pending.kind == kind
                 && pending.owner_id == Some(owner)
         })
 }
@@ -220,66 +182,30 @@ fn permit_price_for_player(
     owner: shared::components::PersonId,
     kind: SettlementBuildingKind,
     settlement: SettlementId,
+    tier: shared::components::SettlementTier,
     ledger: &PlayerPermitLedger,
     policies: Option<&SettlementPolicies>,
     board: Option<&SettlementOpportunityBoard>,
     market: Option<&MootMarket>,
     world: &PlayerPermitWorld,
 ) -> Result<PermitPrice, String> {
-    if !private_permit_kind(kind) {
-        return Err("That building is a public project, not a private permit.".into());
-    }
-    if ledger.permits.len() >= PlayerPermitLedger::MAX_ACTIVE {
-        return Err(format!(
-            "Use or surrender one of your {} active permits first.",
-            PlayerPermitLedger::MAX_ACTIVE
-        ));
-    }
-    if ledger.contains_kind(settlement, kind) {
-        return Err(format!(
-            "You already hold an unused {} permit here.",
-            kind.label()
-        ));
-    }
-    if kind == SettlementBuildingKind::House && already_owns_house(owner, settlement, world) {
-        return Err("Your free residential claim has already been used in this settlement.".into());
-    }
-    if kind != SettlementBuildingKind::House
-        && owner_has_blocking_business(owner, settlement, world)
-    {
-        return Err(
-            "Finish or stabilize your existing business before opening another one.".into(),
-        );
-    }
-    if !completed_upstream_exists(kind, settlement, world) {
-        return Err(match kind {
-            SettlementBuildingKind::Windmill => {
-                "A Windmill needs an operating Farmstead supplying real Wheat."
-            }
-            SettlementBuildingKind::Bakery => {
-                "A Bakery needs an operating Windmill supplying real Flour."
-            }
-            _ => "This business is missing its upstream trade.",
-        }
-        .into());
-    }
+    validate_player_permit_access(kind, tier, ledger.permits.len())?;
     let advertised = board.and_then(|board| {
         board
             .opportunities
             .iter()
             .find(|opportunity| opportunity.kind == kind)
     });
-    if advertised.is_some_and(|opportunity| opportunity.requires_independent_owner)
-        && owner_has_kind(owner, settlement, kind, world)
-    {
-        return Err(format!(
-            "This {} incentive is reserved for a competing new owner.",
-            kind.label()
-        ));
-    }
-    let subsidized = advertised.is_some_and(|opportunity| opportunity.subsidized);
+    // A competition subsidy may be reserved for a new entrant, but the
+    // incumbent still receives an ordinary full-price quote. Incentives affect
+    // price; they are never a legal veto.
+    let subsidized = advertised.is_some_and(|opportunity| {
+        opportunity.subsidized
+            && !(opportunity.requires_independent_owner
+                && owns_or_is_building_kind(owner, settlement, kind, world))
+    });
     let holdings = holding_count(owner, settlement, ledger, world);
-    let fee = permit_price_with_subsidy(
+    let fee = player_permit_price_with_subsidy(
         kind,
         holdings,
         subsidized,
@@ -578,6 +504,7 @@ pub fn handle_hero_permit_orders(
                         *person_id,
                         kind,
                         *settlement_id,
+                        settlement.tier,
                         &ledger,
                         policies,
                         board,
@@ -711,38 +638,10 @@ pub fn handle_hero_permit_orders(
                         ));
                         continue;
                     };
-                    let active_worksites = world
-                        .pending
-                        .iter()
-                        .filter(|(_, pending)| pending.settlement == settlement_entity)
-                        .count()
-                        + accepted_plots
-                            .iter()
-                            .filter(|(settlement_id, ..)| *settlement_id == entry.settlement)
-                            .count();
-                    let active_connectors = world
-                        .road_requests
-                        .iter()
-                        .filter(|request| request.settlement == settlement_entity)
-                        .count()
-                        + world
-                            .roads
-                            .iter()
-                            .filter(|(road, road_of)| {
-                                road_of.0 == entry.settlement && !road.is_complete()
-                            })
-                            .count();
-                    if !development_pipeline_has_capacity(
-                        settlement.residents,
-                        active_worksites,
-                        active_connectors,
-                    ) {
-                        sender.send::<ReliableChannel>(reject(
-                            Some(permit),
-                            "Every local construction crew is committed; keep this permit and try again when a site finishes.",
-                        ));
-                        continue;
-                    }
+                    // A purchased permit reserves a private plot, not a slot
+                    // in the Hall's municipal construction pipeline. NPC
+                    // development remains bounded by crew capacity; the
+                    // player's own hero supplies and raises this site.
                     let approval = match player_plot_snapshot(
                         settlement_entity,
                         entry.settlement,
@@ -796,9 +695,6 @@ pub fn handle_hero_permit_orders(
                             rotation: approval.rotation,
                             owner: Some(hero_name.0.clone()),
                             owner_id: Some(*person_id),
-                            // The ordinary orphan-site recovery pass assigns a
-                            // free resident builder. It must never hijack the
-                            // directly controlled hero's movement.
                             builder: None,
                             settlement: settlement_entity,
                             settlement_id: entry.settlement,
@@ -816,6 +712,8 @@ pub fn handle_hero_permit_orders(
                         },
                         GoodsInventory::new(entry.kind.construction_storage_bulk()),
                         planned_access.clone(),
+                        shared::components::OwnedBy(*person_id),
+                        PlayerConstructionProject { owner: *person_id },
                         PlayerPosition(approval.position),
                         Replicate::to_clients(NetworkTarget::All),
                     ));
@@ -862,6 +760,140 @@ pub fn handle_hero_permit_orders(
     }
 }
 
+/// Assign the connection's live hero to its own private worksite.
+///
+/// The order contains only the target. Identity, ownership and the embodied
+/// worker all come from authoritative server state; a modified client cannot
+/// appoint itself to another person's plot or substitute a different unit.
+#[allow(clippy::type_complexity)]
+pub fn handle_hero_construction_orders(
+    mut commands: Commands,
+    mut links: Query<
+        (
+            &RemoteId,
+            &mut MessageReceiver<HeroConstructionOrder>,
+            &mut MessageSender<HeroConstructionResult>,
+        ),
+        With<ClientOf>,
+    >,
+    heroes: Query<
+        (
+            Entity,
+            &Hero,
+            &shared::components::PersonId,
+            Option<&PlayerConstructionAssignment>,
+        ),
+        Without<OfflineHero>,
+    >,
+    mut sites: Query<(
+        &PlayerConstructionProject,
+        &shared::components::OwnedBy,
+        &mut UnderConstruction,
+    )>,
+) {
+    for (remote, mut receiver, mut sender) in links.iter_mut() {
+        for order in receiver.receive() {
+            let reply = |sender: &mut MessageSender<HeroConstructionResult>, success, message| {
+                sender.send::<ReliableChannel>(HeroConstructionResult { success, message });
+            };
+            if order.site == Entity::PLACEHOLDER {
+                reply(&mut sender, false, "That worksite is unavailable.".into());
+                continue;
+            }
+            let Some((hero_entity, _, person_id, current)) =
+                heroes.iter().find(|(_, hero, ..)| hero.owner == remote.0)
+            else {
+                reply(
+                    &mut sender,
+                    false,
+                    "Create your hero before assigning work.".into(),
+                );
+                continue;
+            };
+
+            let Ok((project, owned_by, site)) = sites.get_mut(order.site) else {
+                reply(
+                    &mut sender,
+                    false,
+                    "That is not an unfinished player worksite.".into(),
+                );
+                continue;
+            };
+            if project.owner != *person_id
+                || owned_by.0 != *person_id
+                || site.owner_id != Some(*person_id)
+            {
+                reply(&mut sender, false, "You do not own that worksite.".into());
+                continue;
+            }
+            if current.is_some_and(|current| current.site == order.site)
+                && site.builder == Some(hero_entity)
+            {
+                reply(
+                    &mut sender,
+                    true,
+                    format!("Your hero is already working on the {}.", site.kind.label()),
+                );
+                continue;
+            }
+            if site.builder.is_some_and(|builder| builder != hero_entity) {
+                reply(
+                    &mut sender,
+                    false,
+                    "Someone else is already working at that site.".into(),
+                );
+                continue;
+            }
+
+            // Validate the requested target before releasing an earlier site.
+            // A stale or malicious packet must not silently cancel valid work.
+            let target_settlement = site.settlement;
+            let target_kind = site.kind;
+            drop(site);
+            if let Some(current) = current.filter(|current| current.site != order.site) {
+                if let Ok((_, _, mut previous)) = sites.get_mut(current.site) {
+                    if previous.builder == Some(hero_entity) {
+                        previous.builder = None;
+                    }
+                }
+            }
+
+            let Ok((_, _, mut site)) = sites.get_mut(order.site) else {
+                reply(
+                    &mut sender,
+                    false,
+                    "That worksite changed before the order could be assigned.".into(),
+                );
+                continue;
+            };
+
+            site.builder = Some(hero_entity);
+            commands
+                .entity(hero_entity)
+                .remove::<crate::player::hero::MoveTarget>()
+                .remove::<crate::world::village_roads::TravelRoute>()
+                .remove::<crate::world::village_roads::NavigationRoutePending>()
+                .remove::<crate::world::village_roads::NavigationRouteFailed>()
+                .insert((
+                    PlayerConstructionAssignment {
+                        site: order.site,
+                        settlement: target_settlement,
+                    },
+                    ConstructionMaterialRoutine::new(order.site),
+                    shared::components::CharacterActivity::Idle,
+                ));
+            reply(
+                &mut sender,
+                true,
+                format!(
+                    "Assigned your hero to the {}. They will supply Wood and build until it is finished or you give another order.",
+                    target_kind.label()
+                ),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -883,8 +915,59 @@ mod tests {
     fn only_private_buildings_are_player_permits() {
         assert!(private_permit_kind(SettlementBuildingKind::House));
         assert!(private_permit_kind(SettlementBuildingKind::Bakery));
+        assert!(private_permit_kind(SettlementBuildingKind::Market));
+        assert!(private_permit_kind(SettlementBuildingKind::Tavern));
+        assert!(private_permit_kind(SettlementBuildingKind::Church));
         assert!(!private_permit_kind(SettlementBuildingKind::Hall));
-        assert!(!private_permit_kind(SettlementBuildingKind::Market));
+    }
+
+    #[test]
+    fn player_permit_tiers_unlock_amenities_without_market_prerequisites() {
+        use shared::components::SettlementTier;
+        assert!(
+            SettlementBuildingKind::Windmill.is_player_permit_available_at(SettlementTier::Hamlet)
+        );
+        assert!(
+            SettlementBuildingKind::Bakery.is_player_permit_available_at(SettlementTier::Hamlet)
+        );
+        assert!(
+            !SettlementBuildingKind::Market.is_player_permit_available_at(SettlementTier::Hamlet)
+        );
+        assert!(
+            SettlementBuildingKind::Market.is_player_permit_available_at(SettlementTier::Village)
+        );
+        assert!(
+            SettlementBuildingKind::Tavern.is_player_permit_available_at(SettlementTier::Village)
+        );
+        assert!(
+            !SettlementBuildingKind::Church.is_player_permit_available_at(SettlementTier::Village)
+        );
+        assert!(SettlementBuildingKind::Church.is_player_permit_available_at(SettlementTier::Town));
+    }
+
+    #[test]
+    fn duplicate_and_speculative_stamps_remain_legal_below_the_tray_bound() {
+        use shared::components::SettlementTier;
+        // Access intentionally receives no upstream, demand, portfolio or
+        // same-kind input. Those are investment facts, never legal barriers.
+        assert!(validate_player_permit_access(
+            SettlementBuildingKind::Windmill,
+            SettlementTier::Hamlet,
+            2,
+        )
+        .is_ok());
+        assert!(validate_player_permit_access(
+            SettlementBuildingKind::Bakery,
+            SettlementTier::Hamlet,
+            PlayerPermitLedger::MAX_ACTIVE - 1,
+        )
+        .is_ok());
+        assert!(validate_player_permit_access(
+            SettlementBuildingKind::Bakery,
+            SettlementTier::Hamlet,
+            PlayerPermitLedger::MAX_ACTIVE,
+        )
+        .is_err());
     }
 
     #[test]

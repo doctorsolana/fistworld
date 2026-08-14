@@ -9,7 +9,7 @@ top-level modules and calls `app::run()`; runtime rules belong to their domain.
 |---|---|
 | `app` | Bootstrap, resources and ordered fixed-update wiring |
 | `net` | Connections, peer identity and client-message ingress |
-| `player` | Commander views, hero lifecycle, rosters, movement orders, nearby Hall trading, permit escrow/placement and player indexes |
+| `player` | Commander views, hero lifecycle, rosters, movement orders, nearby Hall trading, permit escrow/placement, physical hero construction, owned-business policy commands and player indexes |
 | `collision` | Baked/derived building colliders, spatial indexes, raycasts and streamed static collision |
 | `world` | Time, identity, regions, settlements, village simulation, roads, development and lab fixtures |
 | `persistence` | Session profile snapshots plus legacy profile migration/IO tooling; the live server deliberately starts fresh |

@@ -287,8 +287,12 @@ answer "can a village run itself?" before any of the economy above exists):
 - [ ] Founding costs something. Free is fine while only god mode can found and
       wrong the moment ordinary players can.
 - [x] Villager wallets and settlement treasury movement. Every new villager has
-      10.00 coin; needed housing permits remain free, business permits always
+      10.00 coin; residential permits remain free, business permits always
       cost coin, and the panel states both rules and current balances.
+- [x] Free-market player permits. Every Hamlet use is purchasable regardless of
+      demand, upstream supply or the owner's other holdings; those facts affect
+      price and wisdom rather than legality. Marketplace/Tavern unlock at Village
+      and Church at Town, with real private permit prices alongside public works.
 - [x] Explicit Poor Relief policy. `Off` settlements let insolvent residents
       go hungry; `Surplus Only` settlements buy their ration from public treasury coin
       only when recent production covers the population and the purchase leaves
@@ -478,9 +482,13 @@ sell it dear. The M&B opening hour.
       escrow, bounded unused-permit tray and refunds, magnetic Hall-connected road frontage,
       Shift free placement, Farmstead field previews, live farm/timber quality, and
       server-authoritative plot/access validation. Accepted plots enter the ordinary physical
-      Wood, builder, road and business pipeline; same-tick claims cannot overlap.
-- [ ] Player business controls for asking prices, wages, procurement, owner withdrawals and
-      autopilot/manual strategy selection.
+      Wood and business pipeline; player plots do not consume municipal crew capacity. Selecting
+      the hero and right-clicking their site starts interruptible physical supply/construction,
+      completion returns the hero to player control, and same-tick plot claims cannot overlap.
+- [x] Player business controls for strategy/autopilot, asking prices, adaptive or fixed wages,
+      Hall collection, processor procurement/bid ceilings, retained/automatic profits and an
+      immediate protected-profit withdrawal. The
+      server proves stable ownership and mutates the same policies consumed by NPC autopilot.
 
 **Does NOT need flow fields.** The old build order claimed the cart required them. A hand
 cart is one unit following one order, which the hero loop already does end to end.

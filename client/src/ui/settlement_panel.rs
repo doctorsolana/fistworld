@@ -5,14 +5,15 @@
 //! in the encyclopedia. Halls (and future market buildings carrying
 //! [`MootMarket`]) additionally expose a dedicated, read-only trade board.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
 use shared::components::{
     BuildingId, BuildingOf, CivicHallLevel, ConstructionSite, Household, MootAdministration,
-    PlayerPosition, Settlement, SettlementBuilding, SettlementDevelopment, SettlementId,
-    SettlementOpportunityBoard, SettlementPolicies,
+    OwnedBy, PersonId, PlayerPosition, Settlement, SettlementBuilding, SettlementDevelopment,
+    SettlementId, SettlementOpportunityBoard, SettlementPolicies,
 };
 use shared::economy::{
     business_working_capital, format_money, BusinessAccount, BusinessCondition, BusinessForSale,
@@ -46,6 +47,7 @@ impl Plugin for SettlementPanelPlugin {
             (
                 sync_compact_panel,
                 handle_compact_actions,
+                handle_manage_action,
                 open_nearby_market_on_interact,
                 ensure_trade_panel,
                 handle_market_trade_buttons,
@@ -80,6 +82,30 @@ struct InspectTradeButton;
 
 #[derive(Component)]
 struct InspectPropertyButton;
+
+#[derive(Component)]
+struct InspectManageButton;
+
+#[derive(SystemParam)]
+struct LocalBusinessOwnership<'w, 's> {
+    owners: Query<'w, 's, &'static OwnedBy>,
+    local: Option<Res<'w, crate::camera_rts::LocalPeerId>>,
+    heroes: Query<'w, 's, (&'static shared::components::Hero, &'static PersonId)>,
+}
+
+impl LocalBusinessOwnership<'_, '_> {
+    fn local_person(&self) -> Option<PersonId> {
+        let local = self.local.as_ref()?;
+        self.heroes
+            .iter()
+            .find(|(hero, _)| shared::player::peer_id_to_u64(hero.owner) == local.0)
+            .map(|(_, person)| *person)
+    }
+
+    fn owns(&self, entity: Entity, person: Option<PersonId>) -> bool {
+        person.is_some_and(|person| self.owners.get(entity).is_ok_and(|owner| owner.0 == person))
+    }
+}
 
 fn spawn_compact_panel(mut commands: Commands) {
     commands.spawn((
@@ -202,6 +228,7 @@ fn action_row(
     commands: &mut Commands,
     trade: bool,
     property: bool,
+    manage: bool,
     business_history: Option<crate::ui::history::BusinessHistoryButton>,
 ) -> Entity {
     let row = commands
@@ -223,6 +250,9 @@ fn action_row(
         }
         if property {
             spawn_card_button(row, InspectPropertyButton, "PERMITS & PROPERTY");
+        }
+        if manage {
+            spawn_card_button(row, InspectManageButton, "MANAGE");
         }
         if let Some(button) = business_history {
             spawn_card_button(row, button, "VIEW HISTORY");
@@ -339,10 +369,15 @@ fn sync_compact_panel(
         Option<&SettlementOpportunityBoard>,
     )>,
     buildings: Query<&SettlementBuilding>,
+    ownership: LocalBusinessOwnership,
     building_ids: Query<&BuildingId>,
     building_of: Query<&BuildingOf>,
     settlement_ids: Query<(Entity, &SettlementId), With<Settlement>>,
-    sites: Query<(&ConstructionSite, Option<&BusinessForSale>)>,
+    sites: Query<(
+        &ConstructionSite,
+        Option<&BusinessForSale>,
+        Option<&OwnedBy>,
+    )>,
     positions: Query<&PlayerPosition>,
     inventories: Query<&GoodsInventory>,
     households: Query<&Household>,
@@ -367,6 +402,7 @@ fn sync_compact_panel(
         return;
     };
     let selected = selection.primary();
+    let local_person = ownership.local_person();
     let fact = selected.and_then(|entity| {
         if let Ok((
             _,
@@ -521,6 +557,7 @@ fn sync_compact_panel(
                     ],
                     trade: markets.get(entity).is_ok(),
                     property: true,
+                    manage: false,
                     business_history: None,
                 },
             ));
@@ -780,11 +817,12 @@ fn sync_compact_panel(
                     rows,
                     trade: markets.get(entity).is_ok(),
                     property: false,
+                    manage: account.is_some() && ownership.owns(entity, local_person),
                     business_history,
                 },
             ));
         }
-        if let Ok((site, for_sale)) = sites.get(entity) {
+        if let Ok((site, for_sale, site_owner)) = sites.get(entity) {
             let delivered = inventories
                 .get(entity)
                 .map_or(0, |inventory| inventory.amount(Good::Wood));
@@ -813,14 +851,27 @@ fn sync_compact_panel(
                     ),
                 ));
             }
+            if site_owner
+                .zip(local_person)
+                .is_some_and(|(owner, person)| owner.0 == person)
+            {
+                rows.push((
+                    "YOUR ORDER".into(),
+                    "Select your hero, then right-click this worksite".into(),
+                ));
+            }
             return Some((
-                format!("site|{:?}|{delivered}|{:?}", site, for_sale),
+                format!(
+                    "site|{:?}|{delivered}|{:?}|{:?}",
+                    site, for_sale, site_owner
+                ),
                 CompactModel {
                     title: format!("{} WORKSITE", site.kind.label()),
                     subtitle: site.settlement.to_uppercase(),
                     rows,
                     trade: false,
                     property: false,
+                    manage: false,
                     business_history: None,
                 },
             ));
@@ -854,6 +905,7 @@ fn sync_compact_panel(
         &mut commands,
         model.trade,
         model.property,
+        model.manage,
         model.business_history,
     ));
     commands.entity(body).add_children(&children);
@@ -865,6 +917,7 @@ struct CompactModel {
     rows: Vec<(String, String)>,
     trade: bool,
     property: bool,
+    manage: bool,
     business_history: Option<crate::ui::history::BusinessHistoryButton>,
 }
 
@@ -873,7 +926,7 @@ fn handle_compact_actions(
     selection: Res<Selection>,
     settlements: Query<&Settlement>,
     buildings: Query<(&SettlementBuilding, &PlayerPosition)>,
-    sites: Query<&ConstructionSite>,
+    sites: Query<(&ConstructionSite, Option<&OwnedBy>)>,
     markets: Query<&MootMarket>,
     places: Res<crate::ui::encyclopedia::places::KnownPlaces>,
     mut encyclopedia_open: ResMut<crate::ui::encyclopedia::EncyclopediaOpen>,
@@ -889,6 +942,7 @@ fn handle_compact_actions(
             Changed<Interaction>,
             Without<InspectTradeButton>,
             Without<InspectPropertyButton>,
+            Without<InspectManageButton>,
         ),
     >,
     mut trade_buttons: Query<
@@ -898,6 +952,7 @@ fn handle_compact_actions(
             Changed<Interaction>,
             Without<InspectExpandButton>,
             Without<InspectPropertyButton>,
+            Without<InspectManageButton>,
         ),
     >,
     mut property_buttons: Query<
@@ -907,6 +962,7 @@ fn handle_compact_actions(
             Changed<Interaction>,
             Without<InspectExpandButton>,
             Without<InspectTradeButton>,
+            Without<InspectManageButton>,
         ),
     >,
 ) {
@@ -938,7 +994,7 @@ fn handle_compact_actions(
                 })
                 .unwrap_or_default();
             (building.settlement.clone(), entry)
-        } else if let Ok(site) = sites.get(entity) {
+        } else if let Ok((site, _)) = sites.get(entity) {
             (
                 site.settlement.clone(),
                 crate::ui::encyclopedia::places::SelectedPlaceEntry::Overview,
@@ -981,6 +1037,22 @@ fn handle_compact_actions(
             encyclopedia_open.0 = false;
             trade_target.0 = None;
             property_target.0 = Some(entity);
+        }
+    }
+}
+
+fn handle_manage_action(
+    selection: Res<Selection>,
+    mut target: ResMut<crate::ui::business_management::BusinessManagementTarget>,
+    mut buttons: Query<
+        (&Interaction, &mut BackgroundColor),
+        (With<InspectManageButton>, Changed<Interaction>),
+    >,
+) {
+    for (interaction, mut background) in buttons.iter_mut() {
+        *background = button_background(*interaction);
+        if *interaction == Interaction::Pressed {
+            target.0 = selection.primary();
         }
     }
 }
@@ -1760,6 +1832,7 @@ mod tests {
             &mut world.commands(),
             true,
             true,
+            true,
             Some(crate::ui::history::BusinessHistoryButton {
                 settlement: Entity::from_bits(1),
                 place: "Brackwater".into(),
@@ -1769,15 +1842,17 @@ mod tests {
         world.flush();
         assert!(world
             .get::<Children>(row)
-            .is_some_and(|children| children.len() == 4));
+            .is_some_and(|children| children.len() == 5));
         let mut expand = world.query_filtered::<Entity, With<InspectExpandButton>>();
         let mut trade = world.query_filtered::<Entity, With<InspectTradeButton>>();
         let mut property = world.query_filtered::<Entity, With<InspectPropertyButton>>();
+        let mut manage = world.query_filtered::<Entity, With<InspectManageButton>>();
         let mut history =
             world.query_filtered::<Entity, With<crate::ui::history::BusinessHistoryButton>>();
         assert_eq!(expand.iter(&world).count(), 1);
         assert_eq!(trade.iter(&world).count(), 1);
         assert_eq!(property.iter(&world).count(), 1);
+        assert_eq!(manage.iter(&world).count(), 1);
         assert_eq!(history.iter(&world).count(), 1);
     }
 

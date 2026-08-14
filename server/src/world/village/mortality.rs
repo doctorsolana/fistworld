@@ -813,6 +813,7 @@ pub fn acquire_businesses_for_sale(
 pub fn recover_orphaned_construction(
     mut commands: Commands,
     listings: Query<(), With<BusinessForSale>>,
+    player_projects: Query<(), With<crate::player::permits::PlayerConstructionProject>>,
     mut sites: Query<(Entity, &mut UnderConstruction)>,
     living: Query<(), (With<CharacterKind>, With<Health>)>,
     mut residents: Query<(
@@ -834,7 +835,7 @@ pub fn recover_orphaned_construction(
             continue;
         }
         site.builder = None;
-        if listings.get(site_entity).is_ok() {
+        if listings.get(site_entity).is_ok() || player_projects.get(site_entity).is_ok() {
             continue;
         }
         let replacement = residents

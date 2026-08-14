@@ -532,6 +532,31 @@ impl SettlementBuildingKind {
         )
     }
 
+    /// First settlement rung at which a private person may purchase this land
+    /// use. Economic demand affects the price and the notice-board signal, not
+    /// legality: a founder may speculate on any unlocked use and bear the
+    /// consequences. The Hall itself is never a private permit.
+    pub const fn minimum_player_permit_tier(self) -> Option<SettlementTier> {
+        match self {
+            SettlementBuildingKind::Hall => None,
+            SettlementBuildingKind::House
+            | SettlementBuildingKind::Farmstead
+            | SettlementBuildingKind::LumberjackHut
+            | SettlementBuildingKind::FishermansHut
+            | SettlementBuildingKind::Windmill
+            | SettlementBuildingKind::Bakery => Some(SettlementTier::Hamlet),
+            SettlementBuildingKind::Market | SettlementBuildingKind::Tavern => {
+                Some(SettlementTier::Village)
+            }
+            SettlementBuildingKind::Church => Some(SettlementTier::Town),
+        }
+    }
+
+    pub fn is_player_permit_available_at(self, tier: SettlementTier) -> bool {
+        self.minimum_player_permit_tier()
+            .is_some_and(|minimum| tier >= minimum)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             SettlementBuildingKind::Hall => "MOOT HALL",
@@ -1089,7 +1114,7 @@ pub struct PermitMarketOpportunity {
 
 #[derive(Component, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct SettlementOpportunityBoard {
-    /// Highest signal first; bounded by the server to the small founding set.
+    /// Highest signal first; bounded by the settlement's tier-unlocked uses.
     pub opportunities: Vec<PermitMarketOpportunity>,
 }
 
@@ -1127,17 +1152,10 @@ pub struct PlayerPermitLedger {
 }
 
 impl PlayerPermitLedger {
+    /// A replication/UI anti-spam bound on simultaneously *unused* stamps.
+    /// It never restricts permit kinds or lifetime ownership: placing or
+    /// surrendering any stamp immediately frees its slot.
     pub const MAX_ACTIVE: usize = 8;
-
-    pub fn contains_kind(
-        &self,
-        settlement: super::SettlementId,
-        kind: SettlementBuildingKind,
-    ) -> bool {
-        self.permits
-            .iter()
-            .any(|permit| permit.settlement == settlement && permit.kind == kind)
-    }
 
     pub fn get(&self, id: super::PermitId) -> Option<&PlayerPermit> {
         self.permits.iter().find(|permit| permit.id == id)

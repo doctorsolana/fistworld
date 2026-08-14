@@ -21,6 +21,249 @@ fn village_test_app() -> App {
 }
 
 #[test]
+fn player_worksite_is_not_adopted_by_the_village_crew() {
+    let mut app = village_test_app();
+    app.add_systems(Update, recover_orphaned_construction);
+    let settlement = app.world_mut().spawn_empty().id();
+    let resident = app
+        .world_mut()
+        .spawn((
+            CharacterKind::Villager,
+            shared::components::Health::new(100.0),
+            VillagerIntent::Resident { settlement },
+            Occupation::default(),
+            WorkStatus::LookingForWork,
+        ))
+        .id();
+    let owner = shared::components::PersonId(77);
+    let kind = SettlementBuildingKind::Windmill;
+    let site = app
+        .world_mut()
+        .spawn((
+            UnderConstruction {
+                kind,
+                position: Vec3::ZERO,
+                rotation: 0.0,
+                owner: Some("Player".into()),
+                owner_id: Some(owner),
+                builder: None,
+                settlement,
+                settlement_id: shared::components::SettlementId(4),
+                stand: Vec3::Z,
+                failed_stand_routes: 0,
+                stage: BuildStage::Supplying,
+                quality: 1.0,
+            },
+            crate::player::permits::PlayerConstructionProject { owner },
+        ))
+        .id();
+
+    app.update();
+
+    assert_eq!(
+        app.world().get::<UnderConstruction>(site).unwrap().builder,
+        None
+    );
+    assert!(app
+        .world()
+        .get::<ConstructionMaterialRoutine>(resident)
+        .is_none());
+    assert!(matches!(
+        app.world().get::<VillagerIntent>(resident),
+        Some(VillagerIntent::Resident { .. })
+    ));
+}
+
+#[test]
+fn player_assignment_enters_the_physical_supply_loop_without_villager_intent() {
+    let mut app = village_test_app();
+    app.init_resource::<Time>();
+    app.insert_resource(WorldTerrain::default());
+    app.add_systems(Update, run_construction_material_logistics);
+    app.world_mut().spawn(WorldTime::new_default());
+
+    let hall_position = Vec3::new(1720.0, 6.0, 0.0);
+    let settlement_id = shared::components::SettlementId(88);
+    let settlement = app
+        .world_mut()
+        .spawn((
+            settlement_id,
+            Settlement {
+                name: "Playerbuild".into(),
+                tier: shared::components::SettlementTier::Hamlet,
+                residents: 0,
+                treasury: 0,
+            },
+            PlayerPosition(hall_position),
+            PlayerRotation(0.0),
+            GoodsInventory::new(shared::economy::capacity::HALL),
+        ))
+        .id();
+    let owner = shared::components::PersonId(900);
+    let hero = app
+        .world_mut()
+        .spawn((
+            owner,
+            CharacterName("Player".into()),
+            CharacterKind::Hero,
+            PlayerPosition(hall_position),
+            PlayerRotation(0.0),
+            CharacterActivity::Idle,
+            GoodsInventory::new(shared::economy::capacity::VILLAGER),
+            Wallet::default(),
+        ))
+        .id();
+    let kind = SettlementBuildingKind::Windmill;
+    let position = hall_position + Vec3::X * 25.0;
+    let stand = shared::components::builder_stand_position(
+        position,
+        0.0,
+        kind.art().definition().footprint.y,
+    );
+    let site = app
+        .world_mut()
+        .spawn((
+            UnderConstruction {
+                kind,
+                position,
+                rotation: 0.0,
+                owner: Some("Player".into()),
+                owner_id: Some(owner),
+                builder: Some(hero),
+                settlement,
+                settlement_id,
+                stand,
+                failed_stand_routes: 0,
+                stage: BuildStage::Supplying,
+                quality: 1.0,
+            },
+            shared::components::ConstructionSite {
+                kind,
+                settlement: "Playerbuild".into(),
+                raising: false,
+                stand,
+                rotation: 0.0,
+            },
+            GoodsInventory::new(kind.construction_storage_bulk()),
+            PlayerPosition(position),
+            crate::player::permits::PlayerConstructionProject { owner },
+        ))
+        .id();
+    app.world_mut().entity_mut(hero).insert((
+        PlayerConstructionAssignment { site, settlement },
+        ConstructionMaterialRoutine::new(site),
+    ));
+
+    app.update();
+
+    assert!(app
+        .world()
+        .entity(hero)
+        .contains::<ConstructionMaterialRoutine>());
+    assert!(app
+        .world()
+        .entity(hero)
+        .contains::<PlayerConstructionAssignment>());
+    assert_eq!(
+        app.world().get::<UnderConstruction>(site).unwrap().builder,
+        Some(hero)
+    );
+    assert!(app.world().get::<VillagerIntent>(hero).is_none());
+}
+
+#[test]
+fn completed_player_building_releases_hero_and_queues_civic_road_work() {
+    let mut app = village_test_app();
+    app.init_resource::<Time>();
+    app.init_resource::<PublishedTerrainDeltas>();
+    app.insert_resource(WorldTerrain::default());
+    app.add_systems(Update, advance_construction);
+    app.world_mut().spawn(WorldTime::new_default());
+
+    let settlement_id = shared::components::SettlementId(89);
+    let settlement = app
+        .world_mut()
+        .spawn((
+            settlement_id,
+            Settlement {
+                name: "Playerbuild".into(),
+                tier: shared::components::SettlementTier::Hamlet,
+                residents: 0,
+                treasury: 0,
+            },
+        ))
+        .id();
+    let owner = shared::components::PersonId(901);
+    let position = Vec3::new(40.0, 5.0, 10.0);
+    let hero = app
+        .world_mut()
+        .spawn((
+            PlayerPosition(position),
+            PlayerRotation(0.0),
+            CharacterActivity::Building,
+        ))
+        .id();
+    let kind = SettlementBuildingKind::Windmill;
+    let site = app
+        .world_mut()
+        .spawn((
+            UnderConstruction {
+                kind,
+                position,
+                rotation: 0.0,
+                owner: Some("Player".into()),
+                owner_id: Some(owner),
+                builder: Some(hero),
+                settlement,
+                settlement_id,
+                stand: position,
+                failed_stand_routes: 0,
+                stage: BuildStage::Raising { seconds_left: 0.0 },
+                quality: 1.0,
+            },
+            shared::components::ConstructionSite {
+                kind,
+                settlement: "Playerbuild".into(),
+                raising: true,
+                stand: position,
+                rotation: 0.0,
+            },
+            GoodsInventory::new(kind.construction_storage_bulk()),
+            crate::player::permits::PlayerConstructionProject { owner },
+        ))
+        .id();
+    app.world_mut().entity_mut(hero).insert((
+        PlayerConstructionAssignment { site, settlement },
+        ConstructionMaterialRoutine::new(site),
+    ));
+
+    app.update();
+
+    assert!(app.world().get_entity(site).is_err());
+    assert!(app
+        .world()
+        .get::<PlayerConstructionAssignment>(hero)
+        .is_none());
+    assert_eq!(
+        app.world().get::<CharacterActivity>(hero),
+        Some(&CharacterActivity::Idle)
+    );
+    let completed = app
+        .world_mut()
+        .query_filtered::<Entity, With<SettlementBuilding>>()
+        .single(app.world())
+        .expect("player Windmill completed");
+    assert!(app
+        .world()
+        .entity(completed)
+        .contains::<crate::world::village_roads::RoadRepairBacklog>());
+    assert!(!app
+        .world()
+        .entity(completed)
+        .contains::<crate::world::village_roads::RoadRequest>());
+}
+
+#[test]
 fn field_quality_controls_continuous_wheat_rate() {
     assert!((farmer_seconds_per_wheat(1.0) - 170.0).abs() < 0.01);
     assert!((farmer_seconds_per_wheat(2.0 / 3.0) - 255.0).abs() < 0.01);
@@ -3872,6 +4115,79 @@ fn insolvent_business_liquidates_stock_then_becomes_for_sale_without_rehiring() 
     assert_eq!(account.tax_arrears, 0);
     assert_eq!(account.defaulted_wages, PENNIES_PER_COIN);
     assert_eq!(account.defaulted_taxes, PENNIES_PER_COIN / 2);
+}
+
+#[test]
+fn player_owner_receives_only_profit_above_protected_working_capital() {
+    let mut app = village_test_app();
+    app.add_systems(Update, review_business_management);
+    let mut clock = WorldTime::new_default();
+    clock.day = 4;
+    app.world_mut().spawn(clock);
+    let settlement_id = shared::components::SettlementId(825);
+    app.world_mut().spawn((
+        settlement_id,
+        Settlement {
+            name: "Ownerford".into(),
+            tier: shared::components::SettlementTier::Hamlet,
+            residents: 0,
+            treasury: 0,
+        },
+        MootMarket::founding(),
+    ));
+    let owner = shared::components::PersonId(826);
+    let hero = app
+        .world_mut()
+        .spawn((
+            owner,
+            shared::components::Hero {
+                owner: lightyear::prelude::PeerId::Netcode(826),
+            },
+            Wallet::default(),
+        ))
+        .id();
+    let building_id = shared::components::BuildingId(827);
+    let account = BusinessAccount {
+        cash: 10 * PENNIES_PER_COIN,
+        gross_revenue: 10 * PENNIES_PER_COIN,
+        ..default()
+    };
+    let management = BusinessManagementPolicy {
+        max_daily_withdrawal: 2 * PENNIES_PER_COIN,
+        ..default()
+    };
+    app.world_mut().spawn((
+        building_id,
+        shared::components::BuildingOf(settlement_id),
+        shared::components::OwnedBy(owner),
+        SettlementBuilding {
+            kind: SettlementBuildingKind::LumberjackHut,
+            settlement: "Ownerford".into(),
+            owner: Some("Player".into()),
+            quality: 1.0,
+            workers: Vec::new(),
+        },
+        GoodsInventory::new(shared::economy::capacity::LUMBERJACK_HUT),
+        account,
+        BusinessSalePolicy::for_good(Good::Wood),
+        BusinessWagePolicy::default(),
+        BusinessProcurementPolicy::default(),
+        management,
+        BusinessCondition {
+            state: BusinessState::Operating,
+            opened_day: 0,
+            last_review_day: 3,
+            ..default()
+        },
+    ));
+
+    app.update();
+
+    assert_eq!(
+        app.world().get::<Wallet>(hero).unwrap().balance(),
+        2 * PENNIES_PER_COIN,
+        "player owners must receive the same bounded daily draw as NPC owners"
+    );
 }
 
 #[test]

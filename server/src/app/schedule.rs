@@ -94,6 +94,8 @@ fn configure_server_fixed_schedule(app: &mut App) {
             net::input::handle_client_input_messages,
             player::commander::sync_commander_views,
             player::hero::handle_unit_move_orders,
+            player::permits::handle_hero_construction_orders,
+            player::business::handle_hero_business_orders,
             player::market::handle_hero_market_orders,
             player::hero::ensure_player_permit_ledgers,
             player::permits::handle_hero_permit_orders,
