@@ -62,6 +62,24 @@ part of the terrain-generation recipe.
 5. Add targeted regression tests for changed behavior.
 6. Run the validation commands below before committing.
 
+### Documentation ownership
+
+Treat documentation as part of an economy/gameplay change, not as a later cleanup:
+
+- update `docs/COMPANY-ECONOMY-IMPLEMENTATION.md` when company authority, shares,
+  site accounting, staffing, storage or private supply changes;
+- update `docs/CIVIC-ECONOMY.md` when Hall markets, permits, taxes, relief, public payroll
+  or civic policy changes;
+- update `docs/WORLD-DESIGN.md` and the root `README.md` when the player-visible living-world
+  loop changes;
+- update `docs/ROADMAP.md` whenever an implemented/future boundary moves;
+- update `docs/VILLAGE-LAB.md` when a scenario, diagnostic field or interpretation changes;
+- update `server/README.md` or `docs/ARCHITECTURE.md` when code ownership, scheduling,
+  persistence or scaling boundaries change.
+
+Do not describe a planned state as live. Use explicit future wording for incomplete work,
+and preserve dates on benchmark/reference results unless that exact measurement was rerun.
+
 ## Performance Guardrails
 
 - Hot paths must avoid per-frame/per-tick allocations and full scans.

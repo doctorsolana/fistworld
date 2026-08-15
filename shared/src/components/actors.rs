@@ -238,6 +238,8 @@ pub enum CharacterObjective {
     OffDuty,
     LookingForWork,
     WalkingToDestination,
+    CollectingCompanyInputs,
+    DeliveringCompanyInputs,
 }
 
 impl CharacterObjective {
@@ -288,6 +290,8 @@ impl CharacterObjective {
             Self::OffDuty => "Off duty",
             Self::LookingForWork => "Looking for work",
             Self::WalkingToDestination => "Walking to a destination",
+            Self::CollectingCompanyInputs => "Collecting an internal company shipment",
+            Self::DeliveringCompanyInputs => "Delivering goods between company workplaces",
         }
     }
 }
@@ -519,6 +523,9 @@ pub enum SettlementBuildingKind {
     Windmill,
     /// Buys Flour and bakes higher-efficiency Bread.
     Bakery,
+    /// Private local depot. Its workers move company goods; it does not pool
+    /// physical inventory with branches in other settlements.
+    StorageHall,
 }
 
 impl SettlementBuildingKind {
@@ -544,7 +551,8 @@ impl SettlementBuildingKind {
             | SettlementBuildingKind::LumberjackHut
             | SettlementBuildingKind::FishermansHut
             | SettlementBuildingKind::Windmill
-            | SettlementBuildingKind::Bakery => Some(SettlementTier::Hamlet),
+            | SettlementBuildingKind::Bakery
+            | SettlementBuildingKind::StorageHall => Some(SettlementTier::Hamlet),
             SettlementBuildingKind::Market | SettlementBuildingKind::Tavern => {
                 Some(SettlementTier::Village)
             }
@@ -569,6 +577,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Church => "CHURCH",
             SettlementBuildingKind::Windmill => "WINDMILL",
             SettlementBuildingKind::Bakery => "BAKERY",
+            SettlementBuildingKind::StorageHall => "STORAGE HALL",
         }
     }
 
@@ -587,6 +596,10 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Church => Art::PlaceholderChurch,
             SettlementBuildingKind::Windmill => Art::Windmill,
             SettlementBuildingKind::Bakery => Art::Bakery,
+            // Dedicated art can replace this semantic mapping without a save
+            // migration. The marketplace blockout already reads as a broad
+            // timber commercial store and has a valid collider/door contract.
+            SettlementBuildingKind::StorageHall => Art::PlaceholderMarket,
         }
     }
 
@@ -613,7 +626,8 @@ impl SettlementBuildingKind {
             | SettlementBuildingKind::Tavern
             | SettlementBuildingKind::Church
             | SettlementBuildingKind::Windmill
-            | SettlementBuildingKind::Bakery => 0.5,
+            | SettlementBuildingKind::Bakery
+            | SettlementBuildingKind::StorageHall => 0.5,
         }
     }
 
@@ -632,7 +646,8 @@ impl SettlementBuildingKind {
             | SettlementBuildingKind::Market
             | SettlementBuildingKind::Tavern
             | SettlementBuildingKind::Church
-            | SettlementBuildingKind::Bakery => 0.5,
+            | SettlementBuildingKind::Bakery
+            | SettlementBuildingKind::StorageHall => 0.5,
         }
     }
 
@@ -650,7 +665,8 @@ impl SettlementBuildingKind {
             | SettlementBuildingKind::Tavern
             | SettlementBuildingKind::Church
             | SettlementBuildingKind::Windmill
-            | SettlementBuildingKind::Bakery => None,
+            | SettlementBuildingKind::Bakery
+            | SettlementBuildingKind::StorageHall => None,
         }
     }
 
@@ -667,6 +683,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Church => Some("Cleric"),
             SettlementBuildingKind::Windmill => Some("Miller"),
             SettlementBuildingKind::Bakery => Some("Baker"),
+            SettlementBuildingKind::StorageHall => Some("Company Porter"),
         }
     }
 
@@ -689,6 +706,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Tavern => 2,
             SettlementBuildingKind::Church => 1,
             SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => 2,
+            SettlementBuildingKind::StorageHall => 4,
         }
     }
 
@@ -709,6 +727,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Church => crate::economy::capacity::CHURCH,
             SettlementBuildingKind::Windmill => crate::economy::capacity::WINDMILL,
             SettlementBuildingKind::Bakery => crate::economy::capacity::BAKERY,
+            SettlementBuildingKind::StorageHall => crate::economy::capacity::STORAGE_HALL,
         }
     }
 
@@ -727,7 +746,8 @@ impl SettlementBuildingKind {
             | SettlementBuildingKind::Tavern
             | SettlementBuildingKind::Church
             | SettlementBuildingKind::Windmill
-            | SettlementBuildingKind::Bakery => 0,
+            | SettlementBuildingKind::Bakery
+            | SettlementBuildingKind::StorageHall => 0,
         }
     }
 
@@ -750,6 +770,7 @@ impl SettlementBuildingKind {
             // Small enough to bootstrap from a founder's ten coins while
             // retaining some working capital for the first input purchase.
             SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => 8,
+            SettlementBuildingKind::StorageHall => 14,
         }
     }
 
@@ -776,6 +797,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => {
                 Vec2::new(0.0, -4.0)
             }
+            SettlementBuildingKind::StorageHall => Vec2::new(0.0, -4.0),
         }
     }
 
@@ -896,6 +918,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Church => (24.0, 78.0),
             SettlementBuildingKind::Windmill => (30.0, 96.0),
             SettlementBuildingKind::Bakery => (18.0, 60.0),
+            SettlementBuildingKind::StorageHall => (22.0, 78.0),
         }
     }
 
@@ -922,6 +945,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Church => 12.0,
             SettlementBuildingKind::Windmill => 11.0,
             SettlementBuildingKind::Bakery => 9.0,
+            SettlementBuildingKind::StorageHall => 12.0,
         }
     }
 }
@@ -946,6 +970,19 @@ mod settlement_building_kind_tests {
         );
         assert_eq!(SettlementBuildingKind::Windmill.site_quality_label(), None);
         assert_eq!(SettlementBuildingKind::Bakery.site_quality_label(), None);
+        assert_eq!(
+            SettlementBuildingKind::StorageHall.site_quality_label(),
+            None
+        );
+        assert_eq!(SettlementBuildingKind::StorageHall.positions(), 4);
+        assert_eq!(
+            SettlementBuildingKind::StorageHall.storage_bulk_capacity(),
+            crate::economy::capacity::STORAGE_HALL
+        );
+        assert!(
+            SettlementBuildingKind::StorageHall.storage_bulk_capacity()
+                > SettlementBuildingKind::Bakery.storage_bulk_capacity()
+        );
 
         let dense_forest = crate::worldgen::ResourceProfile {
             wood: 1.0,
@@ -1120,25 +1157,21 @@ pub struct SettlementOpportunityBoard {
 
 /// One unspent land-use right purchased by a player-controlled person.
 ///
-/// The permit fee and any processor startup capital are escrow rather than
-/// liquid money. Placing the plot releases the fee to the settlement and
-/// carries the startup money into the worksite; surrendering an unused permit
-/// returns both amounts. NPC permits select their plot in the approval tick,
-/// so the same escrow boundary is simply instantaneous for them.
+/// The paid permit fee is refundable until a plot is chosen. Business working
+/// capital is deliberately *not* escrowed here: it remains ordinary company
+/// cash and is spent on materials, inputs, wages or later expansion when those
+/// costs actually occur.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct PlayerPermit {
     pub id: super::PermitId,
     pub settlement: super::SettlementId,
     pub kind: SettlementBuildingKind,
     pub fee_escrow: u64,
-    pub startup_capital_escrow: u64,
     pub purchased_day: u32,
-}
-
-impl PlayerPermit {
-    pub const fn total_escrow(&self) -> u64 {
-        self.fee_escrow.saturating_add(self.startup_capital_escrow)
-    }
+    /// Productive and private-service permits must name their legal company.
+    /// Housing remains personal and therefore carries `None`.
+    #[serde(default)]
+    pub company: Option<super::CompanyId>,
 }
 
 /// Small replicated permit wallet on a player's live hero.

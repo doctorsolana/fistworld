@@ -264,7 +264,9 @@ pub fn run(config: CaptureConfig) {
             exercise_capture_door,
             select_capture_person,
             select_capture_place,
+            open_capture_business_management,
             open_capture_history,
+            position_capture_company_scroll,
             force_capture_drag_box,
             drive_capture,
         ),
@@ -579,7 +581,7 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                     let mut business = shared::economy::BusinessAccount::with_capital(2_000);
                     business.record_sale(11, 800 + index as u64 * 125, 40, 4);
                     business.incur_wages(11, 200);
-                    business.pay_wage_claim(200);
+                    business.settle_wage_claim(200);
                     business.roll_to_day(12);
                     let building_entity = world
                         .spawn((
@@ -753,8 +755,10 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                                 settlement_name: "Brackwater".into(),
                                 kind: shared::components::SettlementBuildingKind::Farmstead,
                                 fee: 165,
-                                startup_capital: 0,
+                                recommended_working_capital: 0,
                                 wallet_balance: 1_000,
+                                company: None,
+                                company_cash: 0,
                             });
                     }
                 }
@@ -884,53 +888,60 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                 )),
                 carried: Some(shared::economy::CarriedLoad::default()),
             };
+        let mut records = vec![
+            sample("Aldric", 7, 2, true, true, true, Affiliation::default()),
+            sample("Bryn", 4, 0, true, true, false, Affiliation::default()),
+            sample(
+                "Cassia",
+                11,
+                5,
+                false,
+                true,
+                false,
+                shared::components::CharacterAffiliation(Some(0)),
+            ),
+            sample("Dunstan", 2, 0, false, true, false, Affiliation::default()),
+            sample(
+                "Eirwen",
+                9,
+                3,
+                true,
+                true,
+                false,
+                shared::components::CharacterAffiliation(Some(0)),
+            ),
+            sample("Faelan", 1, 0, false, false, false, Affiliation::default()),
+            sample(
+                "Gwyneth",
+                14,
+                8,
+                false,
+                false,
+                false,
+                shared::components::CharacterAffiliation(Some(0)),
+            ),
+            sample("Hollis", 5, 1, false, true, false, Affiliation::default()),
+            sample("Ivo", 3, 0, false, false, false, Affiliation::default()),
+            sample(
+                "Jorunn",
+                8,
+                4,
+                true,
+                true,
+                false,
+                shared::components::CharacterAffiliation(Some(0)),
+            ),
+            sample("Kelda", 6, 2, false, true, false, Affiliation::default()),
+            sample("Lorcan", 12, 6, false, false, false, Affiliation::default()),
+        ];
+        for (index, record) in records.iter_mut().enumerate() {
+            record.id = shared::components::PersonId(index as u64 + 1);
+            if record.is_self {
+                record.wallet = Some(2_750);
+            }
+        }
         commands.insert_resource(KnownPeople {
-            records: vec![
-                sample("Aldric", 7, 2, true, true, true, Affiliation::default()),
-                sample("Bryn", 4, 0, true, true, false, Affiliation::default()),
-                sample(
-                    "Cassia",
-                    11,
-                    5,
-                    false,
-                    true,
-                    false,
-                    shared::components::CharacterAffiliation(Some(0)),
-                ),
-                sample("Dunstan", 2, 0, false, true, false, Affiliation::default()),
-                sample(
-                    "Eirwen",
-                    9,
-                    3,
-                    true,
-                    true,
-                    false,
-                    shared::components::CharacterAffiliation(Some(0)),
-                ),
-                sample("Faelan", 1, 0, false, false, false, Affiliation::default()),
-                sample(
-                    "Gwyneth",
-                    14,
-                    8,
-                    false,
-                    false,
-                    false,
-                    shared::components::CharacterAffiliation(Some(0)),
-                ),
-                sample("Hollis", 5, 1, false, true, false, Affiliation::default()),
-                sample("Ivo", 3, 0, false, false, false, Affiliation::default()),
-                sample(
-                    "Jorunn",
-                    8,
-                    4,
-                    true,
-                    true,
-                    false,
-                    shared::components::CharacterAffiliation(Some(0)),
-                ),
-                sample("Kelda", 6, 2, false, true, false, Affiliation::default()),
-                sample("Lorcan", 12, 6, false, false, false, Affiliation::default()),
-            ],
+            records,
             requested: true,
         });
         commands.insert_resource(SelectedPerson(Some("Cassia".to_string())));
@@ -939,15 +950,393 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         // grant capability so the unknown-people view can be verified.
         commands.insert_resource(match mode.as_str() {
             "retinue" => crate::ui::encyclopedia::EncyclopediaTab::Retinue,
-            "ledger" => crate::ui::encyclopedia::EncyclopediaTab::Ledger,
+            "ledger" | "companies" | "company-stock" | "business" => {
+                crate::ui::encyclopedia::EncyclopediaTab::Companies
+            }
             _ => crate::ui::encyclopedia::EncyclopediaTab::People,
         });
+        if matches!(
+            mode.as_str(),
+            "ledger" | "companies" | "company-stock" | "business"
+        ) {
+            stage_capture_companies(&mut commands);
+            commands.insert_resource(crate::ui::encyclopedia::companies::SelectedCompany(Some(
+                shared::components::CompanyId(501),
+            )));
+        }
         if mode == "god" {
             commands.insert_resource(crate::ui::hud::GodCapability(true));
         }
     }
 
     info!("capture: entering world offline (no server)");
+}
+
+/// Put the capture camera on the local branch controls without baking a
+/// special layout into the real encyclopedia. This keeps the scrollable
+/// directory itself under visual regression coverage.
+fn position_capture_company_scroll(
+    mut viewports: Query<
+        &mut ScrollPosition,
+        With<crate::ui::encyclopedia::companies::CompanyDetailViewport>,
+    >,
+) {
+    if std::env::var("FISTFORCE_CAPTURE_ENCYCLOPEDIA").as_deref() != Ok("company-stock") {
+        return;
+    }
+    for mut position in viewports.iter_mut() {
+        position.y = 410.0;
+    }
+}
+
+fn stage_capture_companies(commands: &mut Commands) {
+    use shared::components::{
+        BuildingId, BuildingOf, Company, CompanyId, CompanyLeadership, CompanyOwnership,
+        CompanyShare, CompanyShareMarket, OperatedBy, PersonId, SettlementBuilding,
+        SettlementBuildingKind, SettlementId,
+    };
+    use shared::economy::{
+        BusinessAccount, BusinessCondition, BusinessInputRule, BusinessManagementPolicy,
+        BusinessPrivateInputRule, BusinessProcurementPolicy, BusinessSalePolicy,
+        BusinessStaffingPolicy, BusinessSupplyPolicy, BusinessWagePolicy, CompanyAccount,
+        CompanyBranchPolicies, CompanyDayLedger, CompanyDecisionHistory, CompanyDecisionReason,
+        CompanyDecisionRecord, CompanyManagementPolicy, CompanyResourcePolicy, Good,
+        GoodsInventory,
+    };
+
+    let aldric =
+        if std::env::var("FISTFORCE_CAPTURE_ENCYCLOPEDIA").is_ok_and(|mode| mode == "business") {
+            // `spawn_capture_heroes` gives the first local stand-in this stable id.
+            // Making that person the Master exposes the real authoritative controls.
+            PersonId(10_000)
+        } else {
+            PersonId(1)
+        };
+    let bryn = PersonId(2);
+    let cassia = PersonId(3);
+    let first_ownership = CompanyOwnership::from_shares(vec![
+        CompanyShare {
+            shareholder: aldric,
+            shares: 720,
+        },
+        CompanyShare {
+            shareholder: bryn,
+            shares: 280,
+        },
+    ])
+    .expect("capture cap table totals 1,000");
+    let mut first_market = CompanyShareMarket::default();
+    assert!(first_market.list(&first_ownership, bryn, 80, 145, 11));
+    let mut decisions = CompanyDecisionHistory::default();
+    decisions.push(CompanyDecisionRecord {
+        day: 8,
+        master: aldric,
+        from: shared::economy::BusinessStrategy::Balanced,
+        to: shared::economy::BusinessStrategy::Growth,
+        reason: CompanyDecisionReason::ProfitableExpansion,
+    });
+    let brackwater = SettlementId(701);
+    let high_meadow = SettlementId(702);
+    let rivermeet = SettlementId(703);
+    let mut first_branches = CompanyBranchPolicies::default();
+    first_branches.set_resource(
+        brackwater,
+        Good::Wheat,
+        CompanyResourcePolicy {
+            retain_units: 24,
+            sell_excess: true,
+        },
+    );
+    first_branches.set_resource(
+        brackwater,
+        Good::Flour,
+        CompanyResourcePolicy {
+            retain_units: 18,
+            sell_excess: true,
+        },
+    );
+    first_branches.set_resource(
+        high_meadow,
+        Good::Bread,
+        CompanyResourcePolicy {
+            retain_units: 8,
+            sell_excess: false,
+        },
+    );
+    commands.spawn((
+        CompanyId(501),
+        Company {
+            name: "Aldric Grain & Bread".to_string(),
+            founded_day: 2,
+        },
+        first_ownership,
+        CompanyLeadership { master: aldric },
+        first_market,
+        CompanyAccount {
+            cash: 8_950,
+            contributed_capital: 4_000,
+            capital_expenditures: 2_700,
+            book_value: 2_700,
+            owner_withdrawals: 1_250,
+            current_day: CompanyDayLedger {
+                day: 12,
+                external_revenue: 2_480,
+                wage_expense: 700,
+                external_input_expense: 220,
+                market_fees: 124,
+                delivery_fees: 40,
+                profit_taxes: 140,
+                owner_withdrawals: 350,
+                capital_expenditures: 0,
+                internal_revenue: 1_100,
+                internal_input_expense: 1_100,
+            },
+            previous_day: CompanyDayLedger {
+                day: 11,
+                external_revenue: 2_150,
+                wage_expense: 700,
+                external_input_expense: 180,
+                market_fees: 108,
+                delivery_fees: 40,
+                profit_taxes: 112,
+                owner_withdrawals: 250,
+                capital_expenditures: 0,
+                internal_revenue: 900,
+                internal_input_expense: 900,
+            },
+            ..default()
+        },
+        CompanyManagementPolicy {
+            strategy: shared::economy::BusinessStrategy::Growth,
+            ..default()
+        },
+        first_branches,
+        decisions,
+    ));
+
+    let second_ownership = CompanyOwnership::from_shares(vec![
+        CompanyShare {
+            shareholder: cassia,
+            shares: 880,
+        },
+        CompanyShare {
+            shareholder: aldric,
+            shares: 120,
+        },
+    ])
+    .expect("capture cap table totals 1,000");
+    commands.spawn((
+        CompanyId(502),
+        Company {
+            name: "Cassia River Fish".to_string(),
+            founded_day: 5,
+        },
+        second_ownership,
+        CompanyLeadership { master: cassia },
+        CompanyShareMarket::default(),
+        CompanyAccount {
+            cash: 2_240,
+            book_value: 900,
+            wage_arrears: 125,
+            current_day: CompanyDayLedger {
+                day: 12,
+                external_revenue: 650,
+                wage_expense: 300,
+                market_fees: 32,
+                delivery_fees: 25,
+                ..CompanyDayLedger::empty(12)
+            },
+            ..default()
+        },
+        CompanyManagementPolicy::default(),
+        CompanyBranchPolicies::default(),
+        CompanyDecisionHistory::default(),
+    ));
+
+    let sites = [
+        (
+            BuildingId(601),
+            SettlementBuildingKind::Farmstead,
+            "Brackwater",
+            brackwater,
+            Good::Wheat,
+            18,
+            4_100,
+        ),
+        (
+            BuildingId(602),
+            SettlementBuildingKind::Windmill,
+            "Brackwater",
+            brackwater,
+            Good::Flour,
+            50,
+            2_450,
+        ),
+        (
+            BuildingId(603),
+            SettlementBuildingKind::Bakery,
+            "High Meadow",
+            high_meadow,
+            Good::Bread,
+            12,
+            2_400,
+        ),
+    ];
+    for (index, (id, kind, settlement, settlement_id, output, stock, cash)) in
+        sites.into_iter().enumerate()
+    {
+        let mut inventory = GoodsInventory::new(kind.storage_bulk_capacity());
+        inventory.add(output, stock);
+        let mut procurement = BusinessProcurementPolicy::none();
+        let mut supply = BusinessSupplyPolicy::none();
+        if let Some(recipe) = match kind {
+            SettlementBuildingKind::Windmill => Some((Good::Wheat, 9, 18, 250)),
+            SettlementBuildingKind::Bakery => Some((Good::Flour, 15, 30, 300)),
+            _ => None,
+        } {
+            procurement.set_rule(
+                recipe.0,
+                BusinessInputRule {
+                    enabled: true,
+                    coverage_days: 2,
+                    reorder_below: recipe.1,
+                    target_units: recipe.2,
+                    maximum_unit_price: recipe.3,
+                },
+            );
+            supply.set_rule(
+                recipe.0,
+                BusinessPrivateInputRule {
+                    enabled: true,
+                    ..default()
+                },
+            );
+            inventory.add(recipe.0, recipe.1);
+        }
+        let mut account = BusinessAccount::with_capital(cash);
+        account.current_day = shared::economy::BusinessDayLedger {
+            day: 12,
+            gross_revenue: 700 + index as u64 * 240,
+            internal_revenue: if index < 2 { 350 } else { 0 },
+            wage_expense: 200,
+            market_fees: 35,
+            profit_taxes: 45,
+            ..shared::economy::BusinessDayLedger::empty(12)
+        };
+        let sale = BusinessSalePolicy::for_good(output);
+        commands.spawn((
+            id,
+            BuildingOf(settlement_id),
+            OperatedBy(CompanyId(501)),
+            SettlementBuilding {
+                kind,
+                settlement: settlement.to_string(),
+                owner: Some("Aldric".to_string()),
+                quality: 0.8,
+                workers: vec!["Worker".to_string(); usize::from(kind.positions())],
+            },
+            inventory,
+            account,
+            BusinessCondition {
+                state: shared::economy::BusinessState::Operating,
+                ..default()
+            },
+            sale,
+            BusinessManagementPolicy::default(),
+            BusinessWagePolicy::default(),
+            BusinessStaffingPolicy::new(kind.positions()),
+            procurement,
+            supply,
+        ));
+    }
+
+    let mut depot_stock = GoodsInventory::new(shared::economy::capacity::STORAGE_HALL);
+    depot_stock.add(Good::Wheat, 70);
+    depot_stock.add(Good::Flour, 32);
+    commands.spawn((
+        BuildingId(605),
+        BuildingOf(brackwater),
+        OperatedBy(CompanyId(501)),
+        SettlementBuilding {
+            kind: SettlementBuildingKind::StorageHall,
+            settlement: "Brackwater".to_string(),
+            owner: Some("Aldric".to_string()),
+            quality: 0.5,
+            workers: vec!["Company Porter".to_string()],
+        },
+        depot_stock,
+        BusinessAccount::with_capital(0),
+        BusinessCondition::default(),
+        BusinessSalePolicy::default(),
+        BusinessManagementPolicy::default(),
+        BusinessWagePolicy::default(),
+        BusinessStaffingPolicy::new(1),
+        BusinessProcurementPolicy::none(),
+        BusinessSupplyPolicy::none(),
+    ));
+
+    let mut fish =
+        GoodsInventory::new(SettlementBuildingKind::FishermansHut.storage_bulk_capacity());
+    fish.add(Good::Food, 9);
+    commands.spawn((
+        BuildingId(604),
+        BuildingOf(rivermeet),
+        OperatedBy(CompanyId(502)),
+        SettlementBuilding {
+            kind: SettlementBuildingKind::FishermansHut,
+            settlement: "Rivermeet".to_string(),
+            owner: Some("Cassia".to_string()),
+            quality: 0.7,
+            workers: vec!["Fisher".to_string()],
+        },
+        fish,
+        BusinessAccount::with_capital(2_240),
+        BusinessCondition::default(),
+        BusinessSalePolicy::for_good(Good::Food),
+        BusinessManagementPolicy::default(),
+        BusinessWagePolicy::default(),
+        BusinessStaffingPolicy::new(1),
+        BusinessProcurementPolicy::none(),
+        BusinessSupplyPolicy::default(),
+    ));
+
+    commands.queue(|world: &mut World| {
+        world
+            .resource_mut::<crate::ui::history::SettlementHistoryCache>()
+            .companies
+            .insert(CompanyId(501), synthetic_company_history(CompanyId(501)));
+    });
+}
+
+/// Open the actual site-management modal over the staged company directory.
+/// This is a rendering fixture only; it does not invent a second UI model.
+fn open_capture_business_management(
+    heroes: Query<(&shared::components::Hero, &shared::components::PersonId)>,
+    sites: Query<(Entity, &shared::components::BuildingId)>,
+    mut target: ResMut<crate::ui::business_management::BusinessManagementTarget>,
+    mut return_to: ResMut<crate::ui::business_management::BusinessManagementReturn>,
+    mut encyclopedia: ResMut<crate::ui::encyclopedia::EncyclopediaOpen>,
+    mut opened: Local<bool>,
+    mut commands: Commands,
+) {
+    if *opened
+        || !std::env::var("FISTFORCE_CAPTURE_ENCYCLOPEDIA").is_ok_and(|mode| mode == "business")
+    {
+        return;
+    }
+    let Some((hero, _)) = heroes.iter().next() else {
+        return;
+    };
+    let Some((site, _)) = sites.iter().find(|(_, id)| id.0 == 602) else {
+        return;
+    };
+    commands.insert_resource(crate::camera_rts::LocalPeerId(
+        shared::player::peer_id_to_u64(hero.owner),
+    ));
+    target.0 = Some(site);
+    return_to.0 = Some(shared::components::CompanyId(501));
+    encyclopedia.0 = false;
+    *opened = true;
 }
 
 /// Open history after the commander camera has rendered ordinary world frames.
@@ -979,22 +1368,23 @@ fn open_capture_history(
             crate::ui::history::HistoryView::Business(shared::components::BuildingId(100))
         }
         "world" => crate::ui::history::HistoryView::World,
+        "company" => crate::ui::history::HistoryView::Company(shared::components::CompanyId(501)),
         _ => crate::ui::history::HistoryView::Village,
     };
-    let settlement = if view == crate::ui::history::HistoryView::World {
-        None
-    } else {
-        hall
-    };
-    if view != crate::ui::history::HistoryView::World && settlement.is_none() {
+    let global_view = matches!(
+        view,
+        crate::ui::history::HistoryView::World | crate::ui::history::HistoryView::Company(_)
+    );
+    let settlement = if global_view { None } else { hall };
+    if !global_view && settlement.is_none() {
         return;
     }
     target.0 = Some(crate::ui::history::HistoryTarget {
         settlement,
-        place: if view == crate::ui::history::HistoryView::World {
-            "World".to_string()
-        } else {
-            "Brackwater".to_string()
+        place: match view {
+            crate::ui::history::HistoryView::World => "World".to_string(),
+            crate::ui::history::HistoryView::Company(_) => "Aldric Grain & Bread".to_string(),
+            _ => "Brackwater".to_string(),
         },
         view,
         return_to_trade: false,
@@ -1312,8 +1702,8 @@ fn stage_capture_permit_placement(
         } else {
             165
         },
-        startup_capital_escrow: 0,
         purchased_day: 1,
+        company: None,
     };
     *placement = crate::hero::control::WorldPlacementMode::Permit {
         permit,
@@ -1723,11 +2113,24 @@ fn synthetic_business_history(
                 wage_arrears: if day % 61 == 0 { 100 } else { 0 },
                 tax_arrears: if day % 79 == 0 { 75 } else { 0 },
                 gross_revenue: revenue,
+                internal_revenue: if matches!(
+                    kind,
+                    shared::components::SettlementBuildingKind::Windmill
+                        | shared::components::SettlementBuildingKind::Bakery
+                ) {
+                    revenue / 6
+                } else {
+                    0
+                },
                 wage_expense: wages,
                 input_expense: 0,
+                internal_input_expense: 0,
                 market_fees: fees,
+                delivery_fees: 0,
                 profit_taxes: levy,
                 owner_withdrawals: if day % 4 == 0 { 125 } else { 0 },
+                capital_expenditures: if day == 1 { 450 } else { 0 },
+                book_value: 450,
                 profit: revenue as i64 - costs as i64,
                 produced_units: produced,
                 sold_units: sold,
@@ -1750,11 +2153,45 @@ fn synthetic_business_history(
     shared::economy::BusinessHistoryArchive {
         id,
         settlement: shared::components::SettlementId::UNASSIGNED,
+        company_id: Some(shared::components::CompanyId(100 + id.0)),
         kind,
         owner_id: None,
         owner_name: Some(owner),
         output_good: Some(output),
         days,
+    }
+}
+
+fn synthetic_company_history(
+    company: shared::components::CompanyId,
+) -> shared::economy::CompanyHistoryArchive {
+    let mut farm = synthetic_business_history(
+        shared::components::BuildingId(601),
+        shared::components::SettlementBuildingKind::Farmstead,
+        shared::economy::Good::Wheat,
+        "Aldric".to_string(),
+    );
+    farm.company_id = Some(company);
+    farm.settlement = shared::components::SettlementId(41);
+    let mut mill = synthetic_business_history(
+        shared::components::BuildingId(602),
+        shared::components::SettlementBuildingKind::Windmill,
+        shared::economy::Good::Flour,
+        "Aldric".to_string(),
+    );
+    mill.company_id = Some(company);
+    mill.settlement = shared::components::SettlementId(41);
+    let mut bakery = synthetic_business_history(
+        shared::components::BuildingId(603),
+        shared::components::SettlementBuildingKind::Bakery,
+        shared::economy::Good::Bread,
+        "Aldric".to_string(),
+    );
+    bakery.company_id = Some(company);
+    bakery.settlement = shared::components::SettlementId(52);
+    shared::economy::CompanyHistoryArchive {
+        company,
+        businesses: vec![farm, mill, bakery],
     }
 }
 

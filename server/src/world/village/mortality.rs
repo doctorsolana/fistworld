@@ -236,8 +236,37 @@ fn unused_permit_escrow(ledger: &shared::components::PlayerPermitLedger) -> u64 
     ledger
         .permits
         .iter()
-        .map(shared::components::PlayerPermit::total_escrow)
+        .filter(|permit| permit.company.is_none())
+        .map(|permit| permit.fee_escrow)
         .fold(0, u64::saturating_add)
+}
+
+fn company_permit_escrows(
+    ledger: &shared::components::PlayerPermitLedger,
+) -> Vec<(shared::components::CompanyId, u64)> {
+    let mut totals = HashMap::<shared::components::CompanyId, u64>::new();
+    for permit in &ledger.permits {
+        if let Some(company) = permit.company {
+            let total = totals.entry(company).or_default();
+            *total = total.saturating_add(permit.fee_escrow);
+        }
+    }
+    totals.into_iter().collect()
+}
+
+fn surviving_company_controller(
+    ownership: &shared::components::CompanyOwnership,
+    deceased: PersonId,
+    living_people: &HashMap<PersonId, String>,
+) -> Option<PersonId> {
+    ownership
+        .shares()
+        .iter()
+        .filter(|share| {
+            share.shareholder != deceased && living_people.contains_key(&share.shareholder)
+        })
+        .max_by_key(|share| (share.shares, std::cmp::Reverse(share.shareholder)))
+        .map(|share| share.shareholder)
 }
 
 #[derive(Debug)]
@@ -254,6 +283,7 @@ struct DyingCharacter {
     civic_job: Option<shared::components::CivicEmployment>,
     wallet: u64,
     permit_escrow: u64,
+    company_permit_escrows: Vec<(shared::components::CompanyId, u64)>,
     goods: [u32; Good::COUNT],
     cause: DeathCause,
 }
@@ -272,6 +302,7 @@ pub fn process_character_deaths(
     world_time: Query<&WorldTime>,
     mut ledger: ResMut<MortalityLedger>,
     mut business_events: ResMut<BusinessEventQueue>,
+    mut company_refunds: ResMut<CompanyEscrowRefundQueue>,
     characters: Query<
         (
             Entity,
@@ -292,6 +323,13 @@ pub fn process_character_deaths(
         ),
         Changed<Health>,
     >,
+    living_characters: Query<(&PersonId, &CharacterName, &Health), With<CharacterKind>>,
+    companies: Query<(
+        Entity,
+        &shared::components::CompanyId,
+        &shared::components::CompanyOwnership,
+        Option<&shared::components::CompanyShareMarket>,
+    )>,
     permit_ledgers: Query<&shared::components::PlayerPermitLedger>,
     mut houses: Query<
         (
@@ -322,12 +360,18 @@ pub fn process_character_deaths(
         &OwnedBy,
         Option<&BusinessAccount>,
         Option<&mut BusinessCondition>,
+        Option<&shared::components::OperatedBy>,
     )>,
     mut worksites: Query<(Entity, &mut UnderConstruction)>,
     mut profiles: Option<ResMut<crate::persistence::profiles::PlayerProfiles>>,
     mut hero_index: Option<ResMut<crate::player::hero::HeroIndex>>,
 ) {
     let day = world_time.iter().next().map_or(0, |clock| clock.day);
+    let living_people: HashMap<PersonId, String> = living_characters
+        .iter()
+        .filter(|(_, _, health)| !health.is_dead())
+        .map(|(id, name, _)| (*id, name.0.clone()))
+        .collect();
     let dying: Vec<DyingCharacter> = characters
         .iter()
         .filter(|(_, _, _, _, _, _, health, ..)| health.is_dead())
@@ -368,6 +412,9 @@ pub fn process_character_deaths(
                     civic_job: civic_job.copied(),
                     wallet: wallet.map_or(0, |wallet| wallet.balance()),
                     permit_escrow: permit_ledgers.get(entity).map_or(0, unused_permit_escrow),
+                    company_permit_escrows: permit_ledgers
+                        .get(entity)
+                        .map_or_else(|_| Vec::new(), company_permit_escrows),
                     goods,
                     cause: if nutrition.is_some_and(|nutrition| nutrition.is_hungry()) {
                         DeathCause::Starvation
@@ -381,6 +428,51 @@ pub fn process_character_deaths(
 
     for dead in dying {
         business_events.reroute_deceased_person_sales(dead.id, dead.settlement);
+        for (company, pennies) in dead.company_permit_escrows.iter().copied() {
+            company_refunds.request(company, pennies);
+        }
+        // A co-owned company survives a shareholder's death. Until formal
+        // wills/estate auctions exist, the deceased holding passes to the
+        // largest surviving shareholder (stable PersonId breaks ties). A sole
+        // proprietor has no such successor: their sites follow the established
+        // liquidation/property-market path below and the empty company record
+        // is retired after its last site changes hands.
+        let mut surviving_company_controllers =
+            HashMap::<shared::components::CompanyId, (PersonId, String)>::new();
+        for (company_entity, company_id, ownership, share_market) in companies.iter() {
+            let inherited_shares = ownership.share_count(dead.id);
+            if inherited_shares == 0 {
+                continue;
+            }
+            let successor = surviving_company_controller(ownership, dead.id, &living_people);
+            let Some(successor) = successor else {
+                continue;
+            };
+            let mut updated_ownership = ownership.clone();
+            if !updated_ownership.transfer(dead.id, successor, inherited_shares) {
+                continue;
+            }
+            let mut company_commands = commands.entity(company_entity);
+            company_commands.insert((
+                updated_ownership.clone(),
+                shared::components::CompanyLeadership { master: successor },
+            ));
+            if let Some(share_market) = share_market {
+                let mut updated_market = share_market.clone();
+                updated_market.reconcile(&updated_ownership);
+                company_commands.insert(updated_market);
+            }
+            surviving_company_controllers.insert(
+                *company_id,
+                (
+                    successor,
+                    living_people
+                        .get(&successor)
+                        .cloned()
+                        .unwrap_or_else(|| format!("Person#{}", successor.0)),
+                ),
+            );
+        }
         // An unused stamped permit is fully refundable. If its holder dies,
         // return that escrow to the same household/settlement estate path as
         // their wallet instead of silently destroying coin with the entity.
@@ -489,28 +581,41 @@ pub fn process_character_deaths(
         // Remove every durable ownership reference. Productive workplaces are
         // retained as real sale listings; houses simply become unowned while
         // their surviving household remains intact.
-        for (property, building, owner, _account, condition) in properties.iter_mut() {
+        for (property, building, owner, _account, condition, operated_by) in properties.iter_mut() {
             if owner.0 != dead.id {
                 continue;
             }
             let mut updated = building.clone();
+            if let Some((successor, successor_name)) =
+                operated_by.and_then(|company| surviving_company_controllers.get(&company.0))
+            {
+                updated.owner = Some(successor_name.clone());
+                commands
+                    .entity(property)
+                    .insert((updated, OwnedBy(*successor)));
+                continue;
+            }
             updated.owner = None;
             let mut property_commands = commands.entity(property);
             property_commands.insert(updated).remove::<OwnedBy>();
-            if business_output(building.kind).is_some() {
+            if is_private_business(building.kind) {
                 if let Some(mut condition) = condition {
-                    condition.state = BusinessState::Liquidating;
+                    condition.state = if building.kind == SettlementBuildingKind::StorageHall {
+                        BusinessState::ForSale
+                    } else {
+                        BusinessState::Liquidating
+                    };
                     condition.liquidation_days = 0;
                 }
-                property_commands.insert((
-                    BusinessForSale {
-                        previous_owner: dead.id,
-                        asking_price: takeover_price(building.kind),
-                        listed_day: day,
-                        reason: BusinessSaleReason::OwnerDied,
-                    },
-                    BusinessLiquidation::owner_died(day),
-                ));
+                property_commands.insert(BusinessForSale {
+                    previous_owner: dead.id,
+                    asking_price: takeover_price(building.kind),
+                    listed_day: day,
+                    reason: BusinessSaleReason::OwnerDied,
+                });
+                if building.kind != SettlementBuildingKind::StorageHall {
+                    property_commands.insert(BusinessLiquidation::owner_died(day));
+                }
             }
         }
 
@@ -527,7 +632,7 @@ pub fn process_character_deaths(
             site.owner_id = None;
             site.owner = None;
             site.builder = None;
-            if business_output(site.kind).is_some() {
+            if is_private_business(site.kind) {
                 commands.entity(site_entity).insert(BusinessForSale {
                     previous_owner: dead.id,
                     asking_price: takeover_price(site.kind),
@@ -875,28 +980,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn deceased_company_shares_choose_a_stable_living_coowner_not_a_dead_shell() {
+        let deceased = PersonId(1);
+        let smaller_holder = PersonId(2);
+        let larger_holder = PersonId(3);
+        let mut ownership = shared::components::CompanyOwnership::sole(deceased);
+        assert!(ownership.transfer(deceased, smaller_holder, 200));
+        assert!(ownership.transfer(deceased, larger_holder, 500));
+        let living = HashMap::from([
+            (smaller_holder, "Small".to_string()),
+            (larger_holder, "Large".to_string()),
+        ]);
+
+        let successor = surviving_company_controller(&ownership, deceased, &living).unwrap();
+        assert_eq!(successor, larger_holder);
+        let inherited = ownership.share_count(deceased);
+        assert!(ownership.transfer(deceased, successor, inherited));
+        assert_eq!(ownership.share_count(deceased), 0);
+        assert_eq!(ownership.share_count(larger_holder), 800);
+        assert_eq!(
+            ownership
+                .shares()
+                .iter()
+                .map(|share| u32::from(share.shares))
+                .sum::<u32>(),
+            u32::from(shared::components::COMPANY_TOTAL_SHARES)
+        );
+    }
+
+    #[test]
     fn unused_permit_money_remains_part_of_the_owners_estate() {
         let ledger = shared::components::PlayerPermitLedger {
             permits: vec![
                 shared::components::PlayerPermit {
                     id: shared::components::PermitId(1),
                     settlement: shared::components::SettlementId(2),
-                    kind: SettlementBuildingKind::Farmstead,
+                    kind: SettlementBuildingKind::House,
                     fee_escrow: 300,
-                    startup_capital_escrow: 0,
                     purchased_day: 4,
+                    company: None,
                 },
                 shared::components::PlayerPermit {
                     id: shared::components::PermitId(2),
                     settlement: shared::components::SettlementId(2),
                     kind: SettlementBuildingKind::Windmill,
                     fee_escrow: 250,
-                    startup_capital_escrow: 475,
                     purchased_day: 5,
+                    company: Some(shared::components::CompanyId(3)),
                 },
             ],
         };
-        assert_eq!(unused_permit_escrow(&ledger), 1_025);
+        assert_eq!(unused_permit_escrow(&ledger), 300);
+        assert_eq!(
+            company_permit_escrows(&ledger),
+            vec![(shared::components::CompanyId(3), 250)]
+        );
     }
 
     fn advance_world_seconds(app: &mut App, seconds: f32) {
@@ -1013,7 +1151,8 @@ mod tests {
     fn death_settles_the_estate_and_lists_then_transfers_a_business() {
         let mut app = App::new();
         app.init_resource::<MortalityLedger>()
-            .init_resource::<BusinessEventQueue>();
+            .init_resource::<BusinessEventQueue>()
+            .init_resource::<CompanyEscrowRefundQueue>();
         // This is the production order: deaths create listings after the day's
         // acquisition pass, and automatic investors wait through the public
         // exposure day. Keeping the test on that cadence catches both deferred
@@ -1222,7 +1361,10 @@ mod tests {
             buyer_starting_money - takeover_price
         );
         let account = app.world().get::<BusinessAccount>(business).unwrap();
-        assert_eq!(account.cash, 3 * PENNIES_PER_COIN + takeover_price);
+        assert_eq!(
+            account.unposted_company_capital,
+            3 * PENNIES_PER_COIN + takeover_price
+        );
         assert_eq!(
             app.world()
                 .get::<SettlementBuilding>(business)

@@ -10,12 +10,13 @@ use bevy::prelude::*;
 use shared::components::MootAdministration;
 use shared::components::{
     AttachedTo, BuildingDoorUse, BuildingId, BuildingOf, CharacterActivity, CharacterKind,
-    CharacterMotion, CivicEmployment, CivicRole, EmployedAt, FarmField, PlayerPosition,
+    CharacterMotion, CivicEmployment, CivicRole, EmployedAt, FarmField, OperatedBy, PlayerPosition,
     PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
     WorldTime,
 };
 use shared::economy::{
-    BusinessAccount, BusinessProcurementPolicy, BusinessSalePolicy, BusinessWagePolicy, Good,
+    BusinessAccount, BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy,
+    BusinessSourcingMode, BusinessSupplyPolicy, BusinessWagePolicy, CivicAccount, Good,
     GoodsInventory, MootMarket,
 };
 use shared::region::{RegionCoord, SimLevel};
@@ -27,13 +28,15 @@ use crate::world::village_roads::{
     ROAD_SPEED_MULTIPLIER,
 };
 
+use super::commerce::{internal_transfer_unit_value, MUNICIPAL_DELIVERY_PENNIES_PER_BULK};
 use super::{
     ambient, business_output, farmer_seconds_per_wheat, fisher_seconds_per_food,
     lumber_seconds_per_tree, lumber_tree_yield, process_available_cycles, processing_recipe,
-    viable_processing_input_purchase, BusinessEventQueue, ConstructionMaterialRoutine,
-    FarmerHarvestProgress, FarmerRoutine, FishingRoutine, FishingWorkProgress, HomeRoutine,
-    HouseholdShoppingRoutine, LumberjackRoutine, LumberjackWorkProgress, MarketCollectionRoutine,
-    MootMealRoutine, MootQueueTicket, PierTraversal, ProcessingRoutine, ProcessorWorkProgress,
+    viable_processing_input_purchase, BusinessEventQueue, CompanyPorter,
+    ConstructionMaterialRoutine, FarmerHarvestProgress, FarmerRoutine, FishingRoutine,
+    FishingWorkProgress, HomeRoutine, HouseholdShoppingRoutine, InternalDeliveryRoutine,
+    LumberjackRoutine, LumberjackWorkProgress, MarketCollectionRoutine, MootMealRoutine,
+    MootQueueTicket, PierTraversal, ProcessingRoutine, ProcessorWorkProgress,
     SettlementEconomyRuntime, WorkerOffDuty, WorkplaceDoorTransit, WORKDAY_END_DAY_T,
 };
 
@@ -129,6 +132,361 @@ fn absolute_world_seconds(clock: &WorldTime) -> f64 {
     f64::from(clock.day) * f64::from(clock.cycle_duration()) + f64::from(clock.seconds_in_cycle)
 }
 
+#[derive(Clone, Copy)]
+struct StrategicInternalTransfer {
+    supplier: Entity,
+    receiver: Entity,
+    settlement: SettlementId,
+    company: shared::components::CompanyId,
+    good: Good,
+    units: u32,
+    unit_value: u64,
+    preferred: bool,
+    receiver_id: BuildingId,
+    supplier_id: BuildingId,
+    municipal_fee: bool,
+    overflow: bool,
+}
+
+#[derive(Clone)]
+struct StrategicCompanySite {
+    entity: Entity,
+    id: BuildingId,
+    settlement: SettlementId,
+    company: shared::components::CompanyId,
+    kind: SettlementBuildingKind,
+    store: GoodsInventory,
+    procurement: BusinessProcurementPolicy,
+    supply: BusinessSupplyPolicy,
+    management: BusinessManagementPolicy,
+    account: BusinessAccount,
+    can_operate: bool,
+}
+
+/// Off-screen parity for the embodied company porter. One strategic civic
+/// worker completes at most one direct trip per bounded strategic step, so
+/// abstraction removes pathfinding and animation rather than creating
+/// infinite freight throughput.
+#[allow(clippy::type_complexity)]
+pub fn advance_strategic_company_deliveries(
+    step: Res<StrategicStep>,
+    world_time: Query<&WorldTime>,
+    mut last_serial: Local<u64>,
+    civic_workers: Query<(&CivicEmployment, Option<&StrategicPerson>)>,
+    private_porters: Query<(&CompanyPorter, Option<&StrategicPerson>)>,
+    hall_index: Query<(Entity, &SettlementId, &MootMarket), With<Settlement>>,
+    mut halls: Query<(&mut Settlement, &mut CivicAccount)>,
+    company_entities: Query<(Entity, &shared::components::CompanyId)>,
+    mut company_accounts: Query<&mut shared::economy::CompanyAccount>,
+    mut sites: ParamSet<(
+        Query<(
+            Entity,
+            &BuildingId,
+            &BuildingOf,
+            &OperatedBy,
+            &SettlementBuilding,
+            &GoodsInventory,
+            &BusinessSalePolicy,
+            &BusinessProcurementPolicy,
+            &BusinessSupplyPolicy,
+            &BusinessManagementPolicy,
+            &BusinessAccount,
+            Option<&shared::economy::BusinessCondition>,
+        )>,
+        Query<(&mut GoodsInventory, &mut BusinessAccount)>,
+    )>,
+) {
+    if step.serial == 0 || *last_serial == step.serial {
+        return;
+    }
+    *last_serial = step.serial;
+    let day = world_time.iter().next().map_or(0, |clock| clock.day);
+    let companies_by_id: HashMap<shared::components::CompanyId, Entity> = company_entities
+        .iter()
+        .map(|(entity, id)| (*id, entity))
+        .collect();
+    let strategic_porters: HashSet<SettlementId> = civic_workers
+        .iter()
+        .filter_map(|(employment, strategic)| {
+            (strategic.is_some()
+                && matches!(
+                    employment.role,
+                    CivicRole::MootSteward | CivicRole::MarketPorter
+                ))
+            .then_some(employment.settlement)
+        })
+        .collect();
+    let strategic_private_porters: HashSet<(SettlementId, shared::components::CompanyId)> =
+        private_porters
+            .iter()
+            .filter_map(|(porter, strategic)| {
+                strategic
+                    .is_some()
+                    .then_some((porter.settlement_id, porter.company))
+            })
+            .collect();
+    if strategic_porters.is_empty() && strategic_private_porters.is_empty() {
+        return;
+    }
+    let halls_by_settlement: HashMap<SettlementId, (Entity, [u64; Good::COUNT])> = hall_index
+        .iter()
+        .map(|(entity, id, market)| {
+            let mut prices = [0; Good::COUNT];
+            for good in Good::ALL {
+                prices[good.index()] = market.suggested_price(good);
+            }
+            (*id, (entity, prices))
+        })
+        .collect();
+
+    let site_snapshots: Vec<StrategicCompanySite> = {
+        let site_query = sites.p0();
+        site_query
+            .iter()
+            .map(
+                |(
+                    entity,
+                    id,
+                    building_of,
+                    operated_by,
+                    building,
+                    store,
+                    _sale,
+                    procurement,
+                    supply,
+                    management,
+                    account,
+                    condition,
+                )| StrategicCompanySite {
+                    entity,
+                    id: *id,
+                    settlement: building_of.0,
+                    company: operated_by.0,
+                    kind: building.kind,
+                    store: store.clone(),
+                    procurement: *procurement,
+                    supply: *supply,
+                    management: *management,
+                    account: *account,
+                    can_operate: condition.is_none_or(|condition| condition.state.can_operate()),
+                },
+            )
+            .collect()
+    };
+    let mut candidates = Vec::new();
+    for receiver in &site_snapshots {
+        let municipal_fee =
+            !strategic_private_porters.contains(&(receiver.settlement, receiver.company));
+        if (municipal_fee && !strategic_porters.contains(&receiver.settlement))
+            || !receiver.supply.automatic
+            || !receiver.can_operate
+        {
+            continue;
+        }
+        for good in Good::ALL {
+            let public_rule = receiver.procurement.rule(good);
+            let private_rule = receiver.supply.rule(good);
+            let held = receiver.store.amount(good);
+            if !public_rule.enabled || !private_rule.enabled || held >= public_rule.reorder_below {
+                continue;
+            }
+            let wanted = public_rule
+                .target_units
+                .saturating_sub(held)
+                .min(receiver.store.free_bulk() / good.bulk_per_unit());
+            for supplier in &site_snapshots {
+                if supplier.entity == receiver.entity
+                    || supplier.settlement != receiver.settlement
+                    || supplier.company != receiver.company
+                    || (super::business_output(supplier.kind) != Some(good)
+                        && !(supplier.kind == SettlementBuildingKind::StorageHall
+                            && supplier.store.amount(good) > 0))
+                    || !supplier.can_operate
+                {
+                    continue;
+                }
+                let units = wanted
+                    .min(supplier.store.amount(good))
+                    .min(shared::economy::capacity::PORTER / good.bulk_per_unit());
+                if units == 0 {
+                    continue;
+                }
+                let unit_value =
+                    internal_transfer_unit_value(good, &supplier.account, &supplier.management);
+                let landed = unit_value.saturating_add(if municipal_fee {
+                    u64::from(good.bulk_per_unit())
+                        .saturating_mul(MUNICIPAL_DELIVERY_PENNIES_PER_BULK)
+                } else {
+                    0
+                });
+                let market_price = halls_by_settlement
+                    .get(&receiver.settlement)
+                    .map_or(u64::MAX, |(_, prices)| prices[good.index()]);
+                if landed > public_rule.maximum_unit_price
+                    || (private_rule.sourcing == BusinessSourcingMode::CheapestAvailable
+                        && landed > market_price)
+                {
+                    continue;
+                }
+                let fee = if municipal_fee {
+                    u64::from(units)
+                        .saturating_mul(u64::from(good.bulk_per_unit()))
+                        .saturating_mul(MUNICIPAL_DELIVERY_PENNIES_PER_BULK)
+                } else {
+                    0
+                };
+                let company_free = companies_by_id
+                    .get(&receiver.company)
+                    .and_then(|entity| company_accounts.get(*entity).ok())
+                    .map_or(0, |company| {
+                        company
+                            .cash
+                            .saturating_sub(company.wage_arrears)
+                            .saturating_sub(company.tax_arrears)
+                    });
+                if company_free < fee {
+                    continue;
+                }
+                candidates.push(StrategicInternalTransfer {
+                    supplier: supplier.entity,
+                    receiver: receiver.entity,
+                    settlement: receiver.settlement,
+                    company: receiver.company,
+                    good,
+                    units,
+                    unit_value,
+                    preferred: private_rule.preferred_supplier == Some(supplier.id),
+                    receiver_id: receiver.id,
+                    supplier_id: supplier.id,
+                    municipal_fee,
+                    overflow: false,
+                });
+            }
+        }
+    }
+    for warehouse in site_snapshots
+        .iter()
+        .filter(|site| site.kind == SettlementBuildingKind::StorageHall && site.can_operate)
+    {
+        let municipal_fee =
+            !strategic_private_porters.contains(&(warehouse.settlement, warehouse.company));
+        if municipal_fee && !strategic_porters.contains(&warehouse.settlement) {
+            continue;
+        }
+        for supplier in site_snapshots.iter().filter(|site| {
+            site.settlement == warehouse.settlement
+                && site.company == warehouse.company
+                && site.entity != warehouse.entity
+                && site.can_operate
+                && super::business_output(site.kind).is_some()
+                && site.store.used_bulk().saturating_mul(100)
+                    >= site.store.bulk_capacity().saturating_mul(80)
+        }) {
+            let Some(good) = super::business_output(supplier.kind) else {
+                continue;
+            };
+            let floor = (supplier.store.bulk_capacity() / good.bulk_per_unit().max(1)) / 2;
+            let units = supplier
+                .store
+                .amount(good)
+                .saturating_sub(floor)
+                .min(warehouse.store.free_bulk() / good.bulk_per_unit())
+                .min(shared::economy::capacity::PORTER / good.bulk_per_unit());
+            if units == 0 {
+                continue;
+            }
+            candidates.push(StrategicInternalTransfer {
+                supplier: supplier.entity,
+                receiver: warehouse.entity,
+                settlement: warehouse.settlement,
+                company: warehouse.company,
+                good,
+                units,
+                unit_value: internal_transfer_unit_value(
+                    good,
+                    &supplier.account,
+                    &supplier.management,
+                ),
+                preferred: false,
+                receiver_id: warehouse.id,
+                supplier_id: supplier.id,
+                municipal_fee,
+                overflow: true,
+            });
+        }
+    }
+    candidates.sort_unstable_by_key(|candidate| {
+        (
+            candidate.settlement,
+            candidate.overflow,
+            std::cmp::Reverse(candidate.preferred),
+            candidate.receiver_id,
+            candidate.supplier_id,
+        )
+    });
+    let mut completed = HashSet::new();
+    for candidate in candidates {
+        let porter_key = (
+            candidate.settlement,
+            (!candidate.municipal_fee).then_some(candidate.company),
+        );
+        if !completed.insert(porter_key) {
+            continue;
+        }
+        let mut site_accounts = sites.p1();
+        let Ok([supplier, receiver]) =
+            site_accounts.get_many_mut([candidate.supplier, candidate.receiver])
+        else {
+            continue;
+        };
+        let (mut supplier_store, mut supplier_account) = supplier;
+        let (mut receiver_store, mut receiver_account) = receiver;
+        let transferable = candidate
+            .units
+            .min(supplier_store.amount(candidate.good))
+            .min(receiver_store.free_bulk() / candidate.good.bulk_per_unit());
+        if transferable == 0 {
+            continue;
+        }
+        let fee = if candidate.municipal_fee {
+            u64::from(transferable)
+                .saturating_mul(u64::from(candidate.good.bulk_per_unit()))
+                .saturating_mul(MUNICIPAL_DELIVERY_PENNIES_PER_BULK)
+        } else {
+            0
+        };
+        let Some(company_entity) = companies_by_id.get(&candidate.company).copied() else {
+            continue;
+        };
+        let Ok(mut company_account) = company_accounts.get_mut(company_entity) else {
+            continue;
+        };
+        let protected = company_account
+            .wage_arrears
+            .saturating_add(company_account.tax_arrears);
+        if company_account.cash.saturating_sub(protected) < fee || !company_account.debit(fee) {
+            continue;
+        }
+        if fee > 0 {
+            receiver_account.record_delivery_fee(day, fee);
+        }
+        let delivered =
+            supplier_store.transfer_to(&mut receiver_store, candidate.good, transferable);
+        debug_assert_eq!(delivered, transferable);
+        let value = candidate.unit_value.saturating_mul(u64::from(delivered));
+        supplier_account.record_internal_output(day, value, delivered);
+        receiver_account.record_internal_input(day, value, delivered);
+        if fee > 0 {
+            if let Some((hall, _)) = halls_by_settlement.get(&candidate.settlement) {
+                if let Ok((mut settlement, mut civic)) = halls.get_mut(*hall) {
+                    settlement.treasury = settlement.treasury.saturating_add(fee);
+                    civic.record_delivery_fee_income(day, fee);
+                }
+            }
+        }
+    }
+}
+
 /// A transaction or public work already in motion is allowed to reach a safe
 /// boundary before the person's expensive tactical state is stripped.
 #[derive(Component, Debug, Clone, Copy)]
@@ -137,6 +495,20 @@ pub(crate) struct PendingStrategicDemotion;
 #[derive(Resource, Default)]
 pub struct StrategicProductionProgress {
     seconds: HashMap<BuildingId, f64>,
+}
+
+fn has_loaded_trade_handoff(
+    inventories: &Query<&GoodsInventory, With<CharacterKind>>,
+    person: Entity,
+    farmer: bool,
+    fisher: bool,
+    lumberjack: bool,
+) -> bool {
+    inventories.get(person).is_ok_and(|inventory| {
+        (farmer && inventory.amount(Good::Wheat) > 0)
+            || (fisher && inventory.amount(Good::Food) > 0)
+            || (lumberjack && inventory.amount(Good::Wood) > 0)
+    })
 }
 
 /// Exact overlap between the elapsed strategic interval and ordinary shifts.
@@ -163,6 +535,7 @@ pub fn update_person_simulation_lod(
     mut commands: Commands,
     registry: Res<RegionRegistry>,
     world_time: Query<&WorldTime>,
+    inventories: Query<&GoodsInventory, With<CharacterKind>>,
     people: Query<
         (
             Entity,
@@ -173,12 +546,18 @@ pub fn update_person_simulation_lod(
             Option<&TravelRoute>,
             Option<&StrategicTravel>,
             Option<&StrategicPerson>,
-            Has<ConstructionMaterialRoutine>,
-            Has<RoadBuilderRoutine>,
-            Has<MarketCollectionRoutine>,
-            Has<HouseholdShoppingRoutine>,
-            Has<MootQueueTicket>,
-            Has<MootMealRoutine>,
+            (
+                Has<ConstructionMaterialRoutine>,
+                Has<RoadBuilderRoutine>,
+                Has<MarketCollectionRoutine>,
+                Has<InternalDeliveryRoutine>,
+                Has<HouseholdShoppingRoutine>,
+                Has<MootQueueTicket>,
+                Has<MootMealRoutine>,
+                Has<FarmerRoutine>,
+                Has<FishingRoutine>,
+                Has<LumberjackRoutine>,
+            ),
             &super::VillagerIntent,
         ),
         (With<CharacterKind>, Without<shared::components::Hero>),
@@ -193,12 +572,18 @@ pub fn update_person_simulation_lod(
             Option<&TravelRoute>,
             Option<&StrategicTravel>,
             Option<&StrategicPerson>,
-            Has<ConstructionMaterialRoutine>,
-            Has<RoadBuilderRoutine>,
-            Has<MarketCollectionRoutine>,
-            Has<HouseholdShoppingRoutine>,
-            Has<MootQueueTicket>,
-            Has<MootMealRoutine>,
+            (
+                Has<ConstructionMaterialRoutine>,
+                Has<RoadBuilderRoutine>,
+                Has<MarketCollectionRoutine>,
+                Has<InternalDeliveryRoutine>,
+                Has<HouseholdShoppingRoutine>,
+                Has<MootQueueTicket>,
+                Has<MootMealRoutine>,
+                Has<FarmerRoutine>,
+                Has<FishingRoutine>,
+                Has<LumberjackRoutine>,
+            ),
             &super::VillagerIntent,
         ),
         (
@@ -216,12 +601,18 @@ pub fn update_person_simulation_lod(
             Option<&MoveTarget>,
             Option<&TravelRoute>,
             Option<&StrategicTravel>,
-            Has<ConstructionMaterialRoutine>,
-            Has<RoadBuilderRoutine>,
-            Has<MarketCollectionRoutine>,
-            Has<HouseholdShoppingRoutine>,
-            Has<MootQueueTicket>,
-            Has<MootMealRoutine>,
+            (
+                Has<ConstructionMaterialRoutine>,
+                Has<RoadBuilderRoutine>,
+                Has<MarketCollectionRoutine>,
+                Has<InternalDeliveryRoutine>,
+                Has<HouseholdShoppingRoutine>,
+                Has<MootQueueTicket>,
+                Has<MootMealRoutine>,
+                Has<FarmerRoutine>,
+                Has<FishingRoutine>,
+                Has<LumberjackRoutine>,
+            ),
             &super::VillagerIntent,
         ),
         (
@@ -245,15 +636,23 @@ pub fn update_person_simulation_lod(
             route,
             strategic_travel,
             strategic,
-            construction,
-            road,
-            market,
-            shopping,
-            queue,
-            meal,
+            (
+                construction,
+                road,
+                market,
+                internal,
+                shopping,
+                queue,
+                meal,
+                farmer,
+                fisher,
+                lumberjack,
+            ),
             intent,
         ) in people.iter()
         {
+            let loaded_trade =
+                has_loaded_trade_handoff(&inventories, entity, farmer, fisher, lumberjack);
             apply_person_lod(
                 &mut commands,
                 &registry,
@@ -268,9 +667,11 @@ pub fn update_person_simulation_lod(
                 construction
                     || road
                     || market
+                    || internal
                     || shopping
                     || queue
                     || meal
+                    || loaded_trade
                     || matches!(intent, super::VillagerIntent::Travelling { .. }),
                 now,
             );
@@ -285,15 +686,23 @@ pub fn update_person_simulation_lod(
             route,
             strategic_travel,
             strategic,
-            construction,
-            road,
-            market,
-            shopping,
-            queue,
-            meal,
+            (
+                construction,
+                road,
+                market,
+                internal,
+                shopping,
+                queue,
+                meal,
+                farmer,
+                fisher,
+                lumberjack,
+            ),
             intent,
         ) in changed_people.iter()
         {
+            let loaded_trade =
+                has_loaded_trade_handoff(&inventories, entity, farmer, fisher, lumberjack);
             apply_person_lod(
                 &mut commands,
                 &registry,
@@ -308,9 +717,11 @@ pub fn update_person_simulation_lod(
                 construction
                     || road
                     || market
+                    || internal
                     || shopping
                     || queue
                     || meal
+                    || loaded_trade
                     || matches!(intent, super::VillagerIntent::Travelling { .. }),
                 now,
             );
@@ -325,21 +736,20 @@ pub fn update_person_simulation_lod(
         target,
         route,
         strategic_travel,
-        construction,
-        road,
-        market,
-        shopping,
-        queue,
-        meal,
+        (construction, road, market, internal, shopping, queue, meal, farmer, fisher, lumberjack),
         intent,
     ) in pending.iter()
     {
+        let loaded_trade =
+            has_loaded_trade_handoff(&inventories, entity, farmer, fisher, lumberjack);
         let critical = construction
             || road
             || market
+            || internal
             || shopping
             || queue
             || meal
+            || loaded_trade
             || matches!(intent, super::VillagerIntent::Travelling { .. });
         if !critical {
             apply_person_lod(
@@ -495,8 +905,15 @@ pub fn advance_strategic_villages(
     mut progress: ResMut<StrategicProductionProgress>,
     mut economy_runtime: ResMut<SettlementEconomyRuntime>,
     mut business_events: ResMut<BusinessEventQueue>,
+    company_entities: Query<(Entity, &shared::components::CompanyId)>,
+    company_branch_policies: Query<(
+        &shared::components::CompanyId,
+        &shared::economy::CompanyBranchPolicies,
+    )>,
+    mut company_accounts: Query<&mut shared::economy::CompanyAccount>,
     workers: Query<(&EmployedAt, Option<&StrategicPerson>)>,
     civic_workers: Query<(&CivicEmployment, Option<&StrategicPerson>)>,
+    private_porters: Query<(&CompanyPorter, Option<&StrategicPerson>)>,
     fields: Query<(&FarmField, &AttachedTo)>,
     hall_index: Query<(Entity, &SettlementId), With<Settlement>>,
     mut halls: Query<
@@ -514,6 +931,7 @@ pub fn advance_strategic_villages(
             Option<&BusinessProcurementPolicy>,
             Option<&mut BusinessAccount>,
             Option<&BusinessWagePolicy>,
+            &OperatedBy,
         ),
         (With<SettlementBuilding>, Without<Settlement>),
     >,
@@ -525,6 +943,10 @@ pub fn advance_strategic_villages(
     let Some(clock) = world_time.iter().next() else {
         return;
     };
+    let companies_by_id: HashMap<shared::components::CompanyId, Entity> = company_entities
+        .iter()
+        .map(|(entity, id)| (*id, entity))
+        .collect();
     let productive_seconds = productive_seconds_ending_at(clock, step.elapsed_world_seconds);
     if productive_seconds <= 0.0 {
         return;
@@ -550,14 +972,68 @@ pub fn advance_strategic_villages(
             .then_some(employment.settlement)
         })
         .collect();
+    let strategic_private_porters: HashSet<(SettlementId, shared::components::CompanyId)> =
+        private_porters
+            .iter()
+            .filter_map(|(porter, strategic)| {
+                strategic
+                    .is_some()
+                    .then_some((porter.settlement_id, porter.company))
+            })
+            .collect();
     let mut fields_by_building: HashMap<BuildingId, u32> = HashMap::new();
     for (_, attached) in fields.iter() {
         *fields_by_building.entry(attached.0).or_default() += 1;
     }
     let mut live_buildings = HashSet::new();
+    let branch_policies: HashMap<_, _> = company_branch_policies
+        .iter()
+        .flat_map(|(company, policies)| {
+            policies.branches().iter().flat_map(move |branch| {
+                Good::ALL
+                    .into_iter()
+                    .map(move |good| ((*company, branch.settlement, good), branch.resource(good)))
+            })
+        })
+        .collect();
+    let mut branch_public_remaining = HashMap::<_, u32>::new();
+    let mut branch_asks = HashMap::<_, u64>::new();
+    for (_, building_of, building, inventory, sale, condition, _, _, _, operated_by) in
+        businesses.iter()
+    {
+        if condition.is_some_and(|condition| !condition.state.can_operate()) {
+            continue;
+        }
+        for good in Good::ALL {
+            *branch_public_remaining
+                .entry((operated_by.0, building_of.0, good))
+                .or_default() += inventory.amount(good);
+        }
+        if let Some(good) = business_output(building.kind) {
+            let ask = sale.asking_unit_price.max(sale.minimum_unit_price).max(1);
+            branch_asks
+                .entry((operated_by.0, building_of.0, good))
+                .and_modify(|current| *current = (*current).min(ask))
+                .or_insert(ask);
+        }
+    }
+    for (key, total) in branch_public_remaining.iter_mut() {
+        let policy = branch_policies.get(key).copied().unwrap_or_default();
+        *total = policy.public_surplus(*total, 0);
+    }
 
-    for (id, building_of, building, mut store, policy, condition, procurement, mut account, wage) in
-        businesses.iter_mut()
+    for (
+        id,
+        building_of,
+        building,
+        mut store,
+        policy,
+        condition,
+        procurement,
+        mut account,
+        wage,
+        operated_by,
+    ) in businesses.iter_mut()
     {
         live_buildings.insert(*id);
         if condition.is_some_and(|condition| !condition.state.can_operate()) {
@@ -591,11 +1067,16 @@ pub fn advance_strategic_villages(
                         wage.map_or(0, |wage| wage.daily_wage)
                             .saturating_mul(u64::from(building.kind.positions()))
                     };
-                    let budget = account
-                        .cash
-                        .saturating_sub(account.wage_arrears)
-                        .saturating_sub(account.tax_arrears)
-                        .saturating_sub(payroll_reserve);
+                    let budget = companies_by_id
+                        .get(&operated_by.0)
+                        .and_then(|entity| company_accounts.get(*entity).ok())
+                        .map_or(0, |company| {
+                            company
+                                .cash
+                                .saturating_sub(company.wage_arrears)
+                                .saturating_sub(company.tax_arrears)
+                                .saturating_sub(payroll_reserve)
+                        });
                     if budget > 0 {
                         for input in Good::ALL {
                             let rule = procurement.rule(input);
@@ -631,11 +1112,28 @@ pub fn advance_strategic_villages(
                                 Some(rule.maximum_unit_price),
                                 Some(shared::economy::MarketSeller::Business(*id)),
                             );
-                            if preview.units != viable_units
-                                || !account.buy_inputs(clock.day, preview.pennies, preview.units)
+                            if preview.units != viable_units {
+                                continue;
+                            }
+                            let Some(company_entity) = companies_by_id.get(&operated_by.0).copied()
+                            else {
+                                continue;
+                            };
+                            let Ok(mut company) = company_accounts.get_mut(company_entity) else {
+                                continue;
+                            };
+                            let protected =
+                                company.wage_arrears.saturating_add(company.tax_arrears);
+                            if company.cash.saturating_sub(protected) < preview.pennies
+                                || !company.debit(preview.pennies)
                             {
                                 continue;
                             }
+                            account.record_input_purchase(
+                                clock.day,
+                                preview.pennies,
+                                preview.units,
+                            );
                             let purchase = market.purchase(
                                 input,
                                 preview.units,
@@ -728,16 +1226,29 @@ pub fn advance_strategic_villages(
         };
         // A porter finishing a real delivery is transition-critical and has
         // not demoted yet. Do not simultaneously execute its abstract haul.
-        if !strategic_porters.contains(&building_of.0) || !policy.collection_enabled {
+        if (!strategic_porters.contains(&building_of.0)
+            && !strategic_private_porters.contains(&(building_of.0, operated_by.0)))
+            || !policy.collection_enabled
+        {
             continue;
         }
+        let branch_key = (operated_by.0, building_of.0, good);
         let offered = store
             .amount(good)
-            .saturating_sub(policy.keep_units)
+            .min(
+                branch_public_remaining
+                    .get(&branch_key)
+                    .copied()
+                    .unwrap_or_default(),
+            )
             .min(policy.max_units_per_collection)
+            .min(shared::economy::capacity::PORTER / good.bulk_per_unit())
             .min(hall_store.free_bulk() / good.bulk_per_unit());
         let moved = store.transfer_to(&mut hall_store, good, offered);
         if moved > 0 {
+            if let Some(remaining) = branch_public_remaining.get_mut(&branch_key) {
+                *remaining = remaining.saturating_sub(moved);
+            }
             market.consign(
                 shared::economy::MarketSeller::Business(*id),
                 good,
@@ -749,6 +1260,55 @@ pub fn advance_strategic_villages(
             );
         }
     }
+    // Depots can also release branch surplus while off-screen. Their listing
+    // uses the lowest current ask from an owned local producer of that good;
+    // storage itself does not invent a second pricing strategy.
+    for (id, building_of, building, mut store, _, condition, _, _, _, operated_by) in
+        businesses.iter_mut()
+    {
+        if building.kind != SettlementBuildingKind::StorageHall
+            || condition.is_some_and(|condition| !condition.state.can_operate())
+            || (!strategic_porters.contains(&building_of.0)
+                && !strategic_private_porters.contains(&(building_of.0, operated_by.0)))
+        {
+            continue;
+        }
+        let Some(hall_entity) = halls_by_id.get(&building_of.0).copied() else {
+            continue;
+        };
+        let Ok((mut hall_store, mut market)) = halls.get_mut(hall_entity) else {
+            continue;
+        };
+        for good in Good::ALL {
+            let key = (operated_by.0, building_of.0, good);
+            let offered = store
+                .amount(good)
+                .min(
+                    branch_public_remaining
+                        .get(&key)
+                        .copied()
+                        .unwrap_or_default(),
+                )
+                .min(16)
+                .min(hall_store.free_bulk() / good.bulk_per_unit());
+            let moved = store.transfer_to(&mut hall_store, good, offered);
+            if moved == 0 {
+                continue;
+            }
+            if let Some(remaining) = branch_public_remaining.get_mut(&key) {
+                *remaining = remaining.saturating_sub(moved);
+            }
+            market.consign(
+                shared::economy::MarketSeller::Business(*id),
+                good,
+                moved,
+                branch_asks
+                    .get(&key)
+                    .copied()
+                    .unwrap_or_else(|| good.base_price()),
+            );
+        }
+    }
     progress
         .seconds
         .retain(|building, _| live_buildings.contains(building));
@@ -757,6 +1317,7 @@ pub fn advance_strategic_villages(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::village::FarmerPhase;
     use shared::components::{CharacterName, SettlementTier};
     use shared::economy::BusinessAccount;
 
@@ -768,6 +1329,157 @@ mod tests {
         // The 800 seconds ending 200 seconds into the new day contain 600
         // seconds of night and exactly 200 seconds of the new shift.
         assert!((productive_seconds_ending_at(&clock, 800.0) - 200.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn strategic_company_delivery_matches_tactical_goods_fee_and_ledgers() {
+        let mut app = App::new();
+        app.init_resource::<StrategicStep>();
+        app.add_systems(Update, advance_strategic_company_deliveries);
+        app.world_mut().spawn(WorldTime::new_default());
+
+        let settlement_id = SettlementId(90);
+        let company = shared::components::CompanyId(91);
+        app.world_mut().spawn((
+            company,
+            shared::economy::CompanyAccount {
+                cash: shared::economy::PENNIES_PER_COIN,
+                ..default()
+            },
+        ));
+        let hall = app
+            .world_mut()
+            .spawn((
+                settlement_id,
+                Settlement {
+                    name: "Strategic Chain".into(),
+                    tier: SettlementTier::Hamlet,
+                    residents: 3,
+                    treasury: 0,
+                },
+                CivicAccount::default(),
+                MootMarket::founding(),
+            ))
+            .id();
+        app.world_mut().spawn((
+            CivicEmployment {
+                settlement: settlement_id,
+                role: CivicRole::MootSteward,
+            },
+            StrategicPerson,
+        ));
+
+        let farm_id = BuildingId(92);
+        let mut farm_stock = GoodsInventory::new(100);
+        assert_eq!(farm_stock.add(Good::Wheat, 6), 6);
+        let farm = app
+            .world_mut()
+            .spawn((
+                farm_id,
+                BuildingOf(settlement_id),
+                OperatedBy(company),
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::Farmstead,
+                    settlement: "Strategic Chain".into(),
+                    owner: Some("Alda".into()),
+                    quality: 1.0,
+                    workers: vec!["Alda".into()],
+                },
+                farm_stock,
+                BusinessSalePolicy {
+                    company_reserve_units: 2,
+                    ..BusinessSalePolicy::for_good(Good::Wheat)
+                },
+                BusinessProcurementPolicy::none(),
+                BusinessSupplyPolicy::none(),
+                BusinessManagementPolicy::default(),
+                BusinessAccount {
+                    estimated_unit_cost: Good::Wheat.base_price(),
+                    ..BusinessAccount::default()
+                },
+            ))
+            .id();
+
+        let mut procurement = BusinessProcurementPolicy::none();
+        procurement.set_rule(
+            Good::Wheat,
+            shared::economy::BusinessInputRule {
+                enabled: true,
+                coverage_days: 2,
+                reorder_below: 2,
+                target_units: 4,
+                maximum_unit_price: 2 * shared::economy::PENNIES_PER_COIN,
+            },
+        );
+        let supply = BusinessSupplyPolicy::none().with_rule(
+            Good::Wheat,
+            shared::economy::BusinessPrivateInputRule {
+                enabled: true,
+                sourcing: BusinessSourcingMode::OwnedOnly,
+                preferred_supplier: Some(farm_id),
+            },
+        );
+        let mill = app
+            .world_mut()
+            .spawn((
+                BuildingId(93),
+                BuildingOf(settlement_id),
+                OperatedBy(company),
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::Windmill,
+                    settlement: "Strategic Chain".into(),
+                    owner: Some("Alda".into()),
+                    quality: 1.0,
+                    workers: vec!["Bera".into()],
+                },
+                GoodsInventory::new(100),
+                BusinessSalePolicy::for_good(Good::Flour),
+                procurement,
+                supply,
+                BusinessManagementPolicy::default(),
+                BusinessAccount::default(),
+            ))
+            .id();
+
+        app.world_mut().resource_mut::<StrategicStep>().serial = 1;
+        app.world_mut()
+            .resource_mut::<StrategicStep>()
+            .elapsed_world_seconds = 60.0;
+        app.update();
+
+        let expected_fee = 4 * u64::from(Good::Wheat.bulk_per_unit());
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(farm)
+                .unwrap()
+                .amount(Good::Wheat),
+            2
+        );
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(mill)
+                .unwrap()
+                .amount(Good::Wheat),
+            4
+        );
+        assert_eq!(
+            app.world().get::<Settlement>(hall).unwrap().treasury,
+            expected_fee
+        );
+        assert_eq!(
+            app.world()
+                .get::<MootMarket>(hall)
+                .unwrap()
+                .listed_units(Good::Wheat),
+            0
+        );
+        let supplier = app.world().get::<BusinessAccount>(farm).unwrap();
+        let receiver = app.world().get::<BusinessAccount>(mill).unwrap();
+        assert_eq!(
+            supplier.current_day.internal_revenue,
+            receiver.current_day.internal_input_expense
+        );
+        assert_eq!(receiver.current_day.delivery_fees, expected_fee);
     }
 
     #[test]
@@ -811,6 +1523,34 @@ mod tests {
                 MoveTarget(Vec3::X),
             ))
             .id();
+        let mut last_basket = GoodsInventory::new(shared::economy::capacity::VILLAGER);
+        assert_eq!(last_basket.add(Good::Wheat, 1), 1);
+        let loaded_farmer = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                CharacterName("Loaded farmer".into()),
+                RegionCoord::new(0, 0),
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.0),
+                super::super::VillagerIntent::Resident {
+                    settlement: Entity::PLACEHOLDER,
+                },
+                last_basket,
+                FarmerRoutine {
+                    farmstead: Entity::PLACEHOLDER,
+                    field: Entity::PLACEHOLDER,
+                    hall: Entity::PLACEHOLDER,
+                    work_stand: Vec3::X,
+                    harvest_seconds: 0.0,
+                    failed_workplace_routes: 0,
+                    production_day: 0,
+                    produced_today: 1,
+                    phase: FarmerPhase::ReturningToFarmstead,
+                },
+                MoveTarget(Vec3::X),
+            ))
+            .id();
 
         app.update();
 
@@ -819,6 +1559,31 @@ mod tests {
         assert!(app.world().get::<MoveTarget>(resident).is_none());
         assert!(app.world().get::<StrategicPerson>(migrant).is_none());
         assert!(app.world().get::<MoveTarget>(migrant).is_some());
+        assert!(app
+            .world()
+            .get::<PendingStrategicDemotion>(loaded_farmer)
+            .is_some());
+        assert!(app.world().get::<StrategicPerson>(loaded_farmer).is_none());
+        assert!(app.world().get::<FarmerRoutine>(loaded_farmer).is_some());
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(loaded_farmer)
+                .unwrap()
+                .amount(Good::Wheat),
+            1,
+            "LOD must preserve both the last load and its embodied return routine"
+        );
+
+        assert_eq!(
+            app.world_mut()
+                .get_mut::<GoodsInventory>(loaded_farmer)
+                .unwrap()
+                .remove(Good::Wheat, 1),
+            1
+        );
+        app.update();
+        assert!(app.world().get::<StrategicPerson>(loaded_farmer).is_some());
+        assert!(app.world().get::<FarmerRoutine>(loaded_farmer).is_none());
 
         app.world_mut()
             .resource_mut::<RegionRegistry>()
@@ -892,12 +1657,16 @@ mod tests {
             MootMarket::founding(),
         ));
         let building_id = BuildingId(7);
+        let company = shared::components::CompanyId(8);
+        app.world_mut()
+            .spawn((company, shared::economy::CompanyAccount::default()));
         let farm_position = Vec3::new(10.0, 0.0, 10.0);
         let farm = app
             .world_mut()
             .spawn((
                 building_id,
                 BuildingOf(settlement_id),
+                OperatedBy(company),
                 SettlementBuilding {
                     kind: SettlementBuildingKind::Farmstead,
                     settlement: "Test".into(),
@@ -1017,10 +1786,22 @@ mod tests {
 
         let mill_id = BuildingId(201);
         let bakery_id = BuildingId(202);
-        let processor = |kind, id, input, target| {
+        let mill_company = shared::components::CompanyId(203);
+        let bakery_company = shared::components::CompanyId(204);
+        for company in [mill_company, bakery_company] {
+            app.world_mut().spawn((
+                company,
+                shared::economy::CompanyAccount {
+                    cash: 100 * PENNIES_PER_COIN,
+                    ..default()
+                },
+            ));
+        }
+        let processor = |kind, id, company, input, target| {
             (
                 id,
                 BuildingOf(settlement_id),
+                OperatedBy(company),
                 SettlementBuilding {
                     kind,
                     settlement: "Strategic Bread".into(),
@@ -1030,31 +1811,34 @@ mod tests {
                 },
                 GoodsInventory::new(100),
                 BusinessSalePolicy {
-                    keep_units: 0,
+                    company_reserve_units: 0,
                     ..BusinessSalePolicy::for_good(business_output(kind).expect("processor output"))
                 },
                 BusinessProcurementPolicy::none().with_rule(
                     input,
                     BusinessInputRule {
                         enabled: true,
+                        coverage_days: 2,
                         reorder_below: 2,
                         target_units: target,
                         maximum_unit_price: 10 * PENNIES_PER_COIN,
                     },
                 ),
-                BusinessAccount::with_capital(100 * PENNIES_PER_COIN),
+                BusinessAccount::default(),
                 BusinessWagePolicy::default(),
             )
         };
         app.world_mut().spawn(processor(
             SettlementBuildingKind::Windmill,
             mill_id,
+            mill_company,
             Good::Wheat,
             4,
         ));
         app.world_mut().spawn(processor(
             SettlementBuildingKind::Bakery,
             bakery_id,
+            bakery_company,
             Good::Flour,
             4,
         ));
@@ -1128,6 +1912,9 @@ mod tests {
             ))
             .id();
         let building_id = BuildingId(11);
+        let company = shared::components::CompanyId(12);
+        app.world_mut()
+            .spawn((company, shared::economy::CompanyAccount::default()));
         let mut stock = GoodsInventory::new(100);
         stock.add(Good::Wood, 10);
         let business = app
@@ -1135,6 +1922,7 @@ mod tests {
             .spawn((
                 building_id,
                 BuildingOf(settlement_id),
+                OperatedBy(company),
                 SettlementBuilding {
                     kind: SettlementBuildingKind::LumberjackHut,
                     settlement: "Porter Test".into(),
@@ -1189,11 +1977,14 @@ mod tests {
                     shared::economy::MarketSeller::Business(building_id),
                     Good::Wood,
                 ),
-            8,
+            10,
             "the strategic porter must consign the saleable stock for its owner"
         );
         assert_eq!(
-            app.world().get::<BusinessAccount>(business).unwrap().cash,
+            app.world()
+                .get::<BusinessAccount>(business)
+                .unwrap()
+                .unposted_company_capital,
             0,
             "delivery is not a sale; only a real buyer creates revenue"
         );

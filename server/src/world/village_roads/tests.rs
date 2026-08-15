@@ -1962,7 +1962,7 @@ fn a_second_moot_steward_waits_for_a_real_collection_backlog() {
         },
         backlog,
         shared::economy::BusinessSalePolicy {
-            keep_units: 0,
+            company_reserve_units: 0,
             ..default()
         },
         shared::economy::BusinessCondition::default(),

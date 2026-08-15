@@ -2,7 +2,9 @@
 
 use super::{CHOP_SECONDS, PERFECT_FIELD_SECONDS_PER_WHEAT};
 use shared::components::{SettlementBuildingKind, WorldTime};
-use shared::economy::{Good, BASIS_POINTS};
+use shared::economy::{
+    BusinessProcurementPolicy, BusinessSalePolicy, Good, BASIS_POINTS, MAXIMUM_STOCK_COVERAGE_DAYS,
+};
 
 /// Rated output used by investors and development planning.
 ///
@@ -15,6 +17,25 @@ pub(crate) struct DailyProductionEstimate {
     pub output: Good,
     pub output_units: u32,
     pub input: Option<(Good, u32)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct InputStockTargets {
+    pub daily_units: u32,
+    pub reorder_below: u32,
+    pub target_units: u32,
+}
+
+/// Conservative autonomous opening roster. A new workshop proves that it can
+/// obtain inputs and sell output with one position before its Company Master
+/// exposes the rest of the building's vacancies. Manual operators may change
+/// the target immediately through the same staffing policy.
+pub(crate) fn automatic_opening_positions(kind: SettlementBuildingKind) -> u8 {
+    if kind.positions() == 0 {
+        0
+    } else {
+        1
+    }
 }
 
 impl DailyProductionEstimate {
@@ -106,6 +127,16 @@ pub(crate) fn rated_daily_production(
         });
     }
 
+    if kind == SettlementBuildingKind::LumberjackHut {
+        let worker_seconds = RATED_SHIFT_SECONDS * f32::from(kind.positions());
+        let cycles = (worker_seconds / lumber_seconds_per_tree(site_quality)).floor() as u32;
+        return Some(DailyProductionEstimate {
+            output: Good::Wood,
+            output_units: cycles.saturating_mul(lumber_tree_yield(site_quality)),
+            input: None,
+        });
+    }
+
     let seconds_per_unit = match kind {
         SettlementBuildingKind::Farmstead => farmer_seconds_per_wheat(site_quality),
         SettlementBuildingKind::FishermansHut => fisher_seconds_per_food(site_quality),
@@ -122,6 +153,96 @@ pub(crate) fn rated_daily_production(
         output_units,
         input: None,
     })
+}
+
+fn staffed_daily_units(full_staffed_units: u32, workers: usize, positions: u8) -> u32 {
+    let positions = u32::from(positions.max(1));
+    // A new processor stocks for its first hire instead of remaining empty
+    // until employment and procurement happen in exactly the right order.
+    let planned_workers = u32::try_from(workers)
+        .unwrap_or(u32::MAX)
+        .clamp(1, positions);
+    full_staffed_units
+        .saturating_mul(planned_workers)
+        .div_ceil(positions)
+}
+
+/// Translate the owner-facing days-of-supply setting into the unit targets
+/// consumed by both tactical and strategic logistics. Recipe capacity and the
+/// current roster are authoritative; the cached units are not a second owner
+/// policy.
+pub(crate) fn rated_input_stock_targets(
+    kind: SettlementBuildingKind,
+    good: Good,
+    workers: usize,
+    coverage_days: u8,
+) -> Option<InputStockTargets> {
+    let coverage_days = coverage_days.min(MAXIMUM_STOCK_COVERAGE_DAYS);
+    let capacity = rated_daily_production(kind, 1.0)?;
+    let (input, full_staffed_units) = capacity.input?;
+    if input != good {
+        return None;
+    }
+    if coverage_days == 0 {
+        return Some(InputStockTargets::default());
+    }
+    let daily_units = staffed_daily_units(full_staffed_units, workers, kind.positions()).max(1);
+    let storage_limit =
+        kind.storage_bulk_capacity().saturating_mul(2) / 3 / good.bulk_per_unit().max(1);
+    let target_units = daily_units
+        .saturating_mul(u32::from(coverage_days))
+        .min(storage_limit)
+        .max(1);
+    let recipe_batch = processing_recipe(kind)
+        .filter(|recipe| recipe.input == good)
+        .map_or(1, |recipe| recipe.input_units);
+    let reorder_below = target_units.div_ceil(2).max(recipe_batch).min(target_units);
+    Some(InputStockTargets {
+        daily_units,
+        reorder_below,
+        target_units,
+    })
+}
+
+/// Keep processor input previews aligned with recipe capacity and staffing.
+/// Output retention is no longer derived per-site from days: it is an
+/// absolute company-branch policy enforced once across all local sites.
+pub fn sync_business_stock_targets(
+    mut businesses: bevy::prelude::Query<(
+        &shared::components::SettlementBuilding,
+        &mut BusinessProcurementPolicy,
+        &mut BusinessSalePolicy,
+    )>,
+) {
+    for (building, mut procurement, mut sale) in businesses.iter_mut() {
+        for good in Good::ALL {
+            let mut rule = procurement.rule(good);
+            if !rule.enabled {
+                continue;
+            }
+            rule.set_coverage_days(rule.coverage_days);
+            let targets = rated_input_stock_targets(
+                building.kind,
+                good,
+                building.workers.len(),
+                rule.coverage_days,
+            )
+            .unwrap_or_default();
+            if rule.reorder_below != targets.reorder_below
+                || rule.target_units != targets.target_units
+            {
+                rule.reorder_below = targets.reorder_below;
+                rule.target_units = targets.target_units;
+                procurement.set_rule(good, rule);
+            } else if procurement.rule(good).coverage_days != rule.coverage_days {
+                procurement.set_rule(good, rule);
+            }
+        }
+        if sale.company_reserve_days != 0 || sale.company_reserve_units != 0 {
+            sale.company_reserve_days = 0;
+            sale.company_reserve_units = 0;
+        }
+    }
 }
 
 /// Highest input bid at which a fully staffed processor can still pay its
@@ -238,7 +359,7 @@ pub(crate) const SELF_SUPPLY_TREE_YIELD: u32 = 2;
 
 /// A professional woodcutter turns each completed real-tree interaction into
 /// three physical bundles. This is always greater than emergency self-supply,
-/// exactly fits a villager's carrying capacity, and has no daily ceiling.
+/// leaves some personal cargo room, and has no daily ceiling.
 pub(crate) const fn lumber_tree_yield(_quality: f32) -> u32 {
     3
 }
@@ -262,6 +383,7 @@ mod tests {
 
     #[test]
     fn professional_tree_work_always_beats_emergency_self_supply() {
+        assert_eq!(CHOP_SECONDS, 40.0);
         assert_eq!(SELF_SUPPLY_TREE_YIELD, 2);
         assert_eq!(lumber_tree_yield(0.0), 3);
         assert_eq!(lumber_tree_yield(0.49), 3);
@@ -270,7 +392,7 @@ mod tests {
         for quality in [f32::NEG_INFINITY, 0.0, 0.25, 0.5, 0.75, 1.0, f32::INFINITY] {
             assert!(lumber_tree_yield(quality) > SELF_SUPPLY_TREE_YIELD);
         }
-        assert!((lumber_seconds_per_tree(0.0) - 105.0).abs() < 0.01);
+        assert!((lumber_seconds_per_tree(0.0) - (140.0 / 3.0)).abs() < 0.01);
         assert!((lumber_seconds_per_tree(1.0) - CHOP_SECONDS).abs() < 0.01);
         assert!(3.0 / lumber_seconds_per_tree(0.0) > SELF_SUPPLY_TREE_YIELD as f32 / CHOP_SECONDS);
     }
@@ -295,12 +417,16 @@ mod tests {
     #[test]
     fn planning_capacity_is_derived_from_physical_work_rates() {
         let farm = rated_daily_production(SettlementBuildingKind::Farmstead, 1.0).unwrap();
+        let lumber = rated_daily_production(SettlementBuildingKind::LumberjackHut, 1.0).unwrap();
         let mill = rated_daily_production(SettlementBuildingKind::Windmill, 0.1).unwrap();
         let bakery = rated_daily_production(SettlementBuildingKind::Bakery, 0.9).unwrap();
 
         assert_eq!(farm.output, Good::Wheat);
         assert_eq!(farm.output_units, 12);
         assert_eq!(farm.input, None);
+        assert_eq!(lumber.output, Good::Wood);
+        assert!(lumber.output_units > 0);
+        assert_eq!(lumber.input, None);
         assert_eq!(mill.input, Some((Good::Wheat, 18)));
         assert_eq!(mill.output, Good::Flour);
         assert_eq!(mill.output_units, 18);
@@ -308,6 +434,24 @@ mod tests {
         assert_eq!(bakery.output, Good::Bread);
         assert_eq!(bakery.output_units, 60);
         assert_eq!(bakery.output_per_input(), 2);
+    }
+
+    #[test]
+    fn coverage_days_derive_staffing_aware_targets_and_hysteresis() {
+        let one_worker =
+            rated_input_stock_targets(SettlementBuildingKind::Windmill, Good::Wheat, 1, 2).unwrap();
+        let two_workers =
+            rated_input_stock_targets(SettlementBuildingKind::Windmill, Good::Wheat, 2, 2).unwrap();
+        assert_eq!(one_worker.daily_units, 9);
+        assert_eq!(one_worker.target_units, 18);
+        assert_eq!(one_worker.reorder_below, 9);
+        assert_eq!(two_workers.daily_units, 18);
+        assert_eq!(two_workers.target_units, 36);
+        assert_eq!(two_workers.reorder_below, 18);
+
+        let off =
+            rated_input_stock_targets(SettlementBuildingKind::Windmill, Good::Wheat, 2, 0).unwrap();
+        assert_eq!(off, InputStockTargets::default());
     }
 
     #[test]

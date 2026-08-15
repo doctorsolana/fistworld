@@ -6,12 +6,14 @@ sword and ends up running a realm. Companion to [ARCHITECTURE.md](ARCHITECTURE.m
 which says how the engine carries this; this document says what the world *is*.
 The build order for both lives in [ROADMAP.md](ROADMAP.md).
 
-> **Status, updated 2026-08-05.** The autonomous village slice in §1b is live:
+> **Status, updated 2026-08-15.** The autonomous village slice in §1b is live:
 > stable identities, named residents, seeded layouts, permits, physical construction,
 > builder-made roads, occupations, bounded inventories, farming/fishing/lumber work,
 > households, local prices, payroll, daily consumption and civic jobs. The positive tier
 > ladder reaches City with placeholder civic art. Ordinary off-screen residents now use
-> aggregate production and commerce. World-state persistence, caravans, travelling-party
+> aggregate production and commerce. Player Hall trading, physical permit construction,
+> company treasuries, 1,000-share ownership, vertical integration, Storage Halls and local
+> private porters are also live. World-state persistence, caravans, travelling-party
 > promotion, physical walls, clans and combat remain future work. Read §1b as the report of
 > current code and the rest as design unless it explicitly says otherwise.
 
@@ -621,9 +623,12 @@ with a player who does nothing but found the hall and put people on the map.
    price, not a prohibition. Hamlet uses include housing, extractors, Windmills and Bakeries;
    Marketplace and Tavern unlock at Village, and Church unlocks at Town. Missing upstream goods,
    an unprofitable idea, existing holdings or a distressed firm may make the purchase foolish,
-   but the Hall does not forbid it. The Hall returns an exact hero-specific quote.
-   Purchasing creates a bounded, replicated stamped permit and escrows its fee plus any
-   processor startup capital; it does not choose land or create a building. Escape closes
+   but the Hall does not forbid it. A hero must first found and capitalise a company at the
+   Hall; formation issues all 1,000 shares and appoints that hero Company Master. If the hero
+   masters several firms, an `ACTING AS` selector is repeated on the quote and purchase action.
+   The Hall returns an exact quote for that selected company. Purchasing creates a bounded,
+   replicated stamped permit and pays only its refundable fee; it does not choose land or
+   create a building. Escape closes
    placement without losing the permit, and the permanent permit tray can resume or surrender
    it for a full refund.
 
@@ -636,8 +641,9 @@ with a player who does nothing but found the hall and put people on the map.
    footprint and door, permanent props, every building/field/road reservation, extractive work
    access and a full-width route to the Hall component. It also reserves accepted same-tick
    plots before deferred ECS spawning, so simultaneous players cannot claim the same ground.
-   Acceptance releases only the fee to the treasury, carries processor startup escrow into the
-   finished account, and creates a private empty Wood worksite plus road-access reservation.
+   Acceptance releases the paid fee to the treasury and creates a company-bound private empty
+   Wood worksite plus road-access reservation. Recommended processor capital remains ordinary
+   company cash throughout construction and may pay any legitimate company cost.
    This plot does not consume one of the Hall's bounded NPC construction slots and cannot be
    adopted by orphan-site recovery. Select the owning hero and right-click the worksite to assign
    them: they use the ordinary physical supply loop, buying available market Wood or gathering it
@@ -645,12 +651,13 @@ with a player who does nothing but found the hall and put people on the map.
    without losing delivered materials. Completion releases the hero while the civic road steward
    adopts the reserved connector backlog.
 
-   A completed player-owned business exposes one scrollable owner panel. Strategy, whole-owner
-   autopilot, wage review and daily wage, automatic/manual asking price, Hall collection,
-   automatic/retained draws, immediate protected-profit withdrawal, processor procurement and
-   per-input bid ceilings all edit the same replicated
-   policies used by NPC owners. There is no separate player economy and every mutation is checked
-   against the live hero's stable PersonId on the server.
+   A completed player-owned business exposes one scrollable owner panel. The appointed Company
+   Master controls strategy/autopilot, wage review and daily wage, enabled positions,
+   automatic/manual asking price, Hall collection, company dividends, processor coverage/bids/
+   sourcing and settlement-local retain/sell policy through the same replicated rules used by
+   NPC owners. The Companies encyclopedia separates the Hero wallet, single company treasury,
+   cap table, sites and consolidated ledger. There is no separate player economy and every
+   mutation is checked against stable person/company/building identities on the server.
 7. Ordinary siting is deterministic and charter-led. A settlement's name and
    founding position choose organic lanes, radial commons, an ordered grid, a great
    avenue or neighbourhood clusters plus a civic-centre form. Those grammars bias
@@ -701,11 +708,17 @@ with a player who does nothing but found the hall and put people on the map.
 10. Completed workplaces expose bounded job slots. Residents fill vacancies through
    durable person/building IDs; Farmsteads hold two Farmers, Fisherman's Huts two
    Fishers, Windmills two Millers, Bakeries two Bakers, Lumberjack Huts one
-   Woodcutter, and Houses deliberately employ nobody. Equal-wage founding hiring
+   Woodcutter, Storage Halls up to four Company Porters, and Houses deliberately
+   employ nobody. Each private site exposes an enabled-position target from zero to
+   that architectural maximum. NPC firms open one position, add positions after
+   proving production or sales, and contract to one under cash stress. Equal-wage founding hiring
    staffs each essential production link once before filling a workplace's second
    position; an owner's higher wage still overrides that tie-break.
 11. Every villager and completed building has bounded bulk storage. Fish, Wheat,
     Flour, Bread, Wood, Stone and Iron share that capacity; coin is deliberately not cargo.
+    A private Storage Hall expands one company's capacity in that settlement by 2,400
+    bulk. Company cash is global, but physical goods, storage and retain/sell policy are
+    local to `(CompanyId, SettlementId)` and never teleport between settlements.
 12. Every completed Farmstead plants two authored wheat fields beside its plot.
     Its named Farmers enter through the authored door, rest out of sight, walk
     into their assigned fields, work them, carry bounded wheat loads back, and
@@ -759,21 +772,30 @@ with a player who does nothing but found the hall and put people on the map.
     builder or another business buys the stock. The Moot keeps no dealer fund or
     founding inventory; its fee is credited to the civic treasury. Business
     accounts separate contributed capital, gross revenue, wages, purchased inputs,
-    market fees, positive-profit levies, profit and owner withdrawals. Payroll pays real workers and old
-    arrears before profit can be withdrawn, while each strategy protects several
+    market fees, positive-profit levies, profit and attributed shareholder distributions.
+    Payroll pays real workers and old
+    arrears before profit can be distributed, while each strategy protects several
     payroll days plus working cash. Each owner exposes a daily wage offer. NPC owners raise it after two
     affordable vacancy days and lower it only after persistent payroll stress (or
-    a long fully-staffed but cash-tight spell); a future player owner edits the
+    a long fully-staffed but cash-tight spell); an authorised Company Master edits the
     same policy directly. Higher offers recruit first. Owners also choose Balanced,
     Growth, High-Margin, Cautious or Opportunistic autopilot; the same replicated
     policy can later be placed in manual player control. Asking prices move only by
     a bounded daily step using realised unit cost, sell-through, stale stock and
     solvency. Generic input rules now supply Windmills and Bakeries and are the same
-    seam future taverns, breweries and smithies use. Processor autopilot derives its
+    seam future taverns, breweries and smithies use. Their owner-facing quantity is a
+    simple 0–7 days of stock cover. The authoritative simulation converts that setting
+    into a staffing- and recipe-aware unit target with internal reorder hysteresis;
+    owners do not have to balance two raw thresholds. Same-company input requests take
+    first claim on compatible output. An absolute per-good branch retain amount comes
+    next, followed by one `Sell excess`/`Hold all` choice; only the remaining local stock
+    may reach the public market. The branch rule applies once across all owned sites in
+    that settlement, not once per building. Processor autopilot derives its
     maximum input bid from the current output ask, physical recipe, wage offer, market
     fee and target margin; it is not pinned forever to a multiple of an input's base
-    price. A processor permit escrows its first complete input batch and full-staffed
-    payroll. The Hall never sets the entrant's asking price: Growth owners may open
+    price. A processor's entry decision recommends cash for its first complete input batch at
+    the observed price—or a 2.6x-base unquoted-risk estimate—plus its one-position
+    opening payroll; that cash remains in the company treasury. The Hall never sets the entrant's asking price: Growth owners may open
     below the recent quote, Balanced or Cautious owners may match it, and High-Margin
     or scarcity-seeking Opportunistic owners may ask more. Persistent high prices and
     unmet demand can therefore attract another independent entrant after the bounded
@@ -786,11 +808,21 @@ with a player who does nothing but found the hall and put people on the map.
     positive-profit levies and public sales are separate income lines; wages,
     Poor Relief and construction purchases are separate spending lines. Public
     projects may buy private consignments only by paying their seller and cannot
-    consume protected payroll cash. Each foundation deterministically begins
-    Balanced, Frugal, Mercantile, Mutual-Aid or Growth, and an automatic Reeve
+    consume protected payroll cash. Every foundation begins with the agreed Balanced charter.
+    Its explicit civic strategy may later target Balanced, Frugal, Mercantile, Mutual-Aid or
+    Growth values, and an automatic Reeve
     reviews at most weekly and adjusts at most one rate or relief decision. The
     treasury, all flows, vacancies, rates and policy reasons are retained in the
     pull-based settlement history.
+
+    A company can replace civic freight with a Storage Hall and private porters. They
+    move only that company's goods inside their own settlement, receive ordinary wages
+    from the single company treasury and charge no civic delivery fee. Workshops near
+    capacity send bounded overflow to the depot; owned processors can pull inputs back
+    out, and saleable excess can still be consigned at the Moot. Cross-town transfer is
+    reserved for explicit physical caravans and trade routes. NPCs only found this
+    infrastructure after their company has at least two other local sites and never
+    autonomously duplicate a branch depot; players may still speculate on the permit.
 
     Construction temporarily pauses
     a worker's job and consumes their time. Public tier buildings are the
@@ -1038,7 +1070,7 @@ recipes beyond Flour and Bread, tree
 depletion/regrowth, decline, physical walls and guard patrol/combat behaviour.
 The implemented local Moot is a private consignment exchange with physical stock,
 seller-owned listings, last-sale/best-offer quotes and a civic transaction fee; it
-is not yet a player trade screen or a regional economy. Wheat must be milled,
+now has a nearby on-foot player exchange, but not carts, caravans or a regional economy. Wheat must be milled,
 households can finish Flour at home, Bakeries add efficient Bread, fishing lands
 ready-to-eat Fish, and the shortage response can repeat cabins, Farmsteads and their
 processors when individual owners accept the current signals, but this is not yet a complete regional economy. The seeded
@@ -1125,12 +1157,13 @@ not a global market: offers exist only where their goods were physically deliver
 The first player trading verb is live: an embodied hero within 12 metres of a Hall can buy
 real listed stock into bounded personal cargo or consign carried stock under their own
 `PersonId`. A sale does not make the Hall pay them; coin arrives only when a real later buyer
-clears that listing, minus the enacted fee. The first UI lists at the exchange's current ask;
-explicit player-chosen asks and quantity controls come with business/merchant management.
+clears that listing, minus the enacted fee. The personal-consignment UI currently lists at
+the exchange's current ask; custom personal asks and quantities remain future merchant
+controls. Company Masters already set their business sites' asking prices and collection policy.
 The first ownership verb is live too: the same Hall exposes exact permit quotes and lets the
-hero place a House, Farmstead, Fisherman's Hut, Lumberjack Hut, Windmill or Bakery through the
-authoritative construction pipeline. Manual price, wage, procurement and withdrawal controls
-for the completed firm remain the next business-management layer.
+hero place a House, Farmstead, Fisherman's Hut, Lumberjack Hut, Windmill, Bakery or Storage Hall through the
+authoritative construction pipeline. Completed firms already expose manual price, wage,
+staffing, procurement, private sourcing, branch stock and dividend controls to their Company Master.
 The next transport step is to buy where it is cheap and cart it somewhere it is not. The map
 IS the market screen — a highlands town starving next to a meadows village bursting with
 grain is a visible business opportunity.
@@ -1176,9 +1209,15 @@ owning buildings in places worth defending. No magic global bank.
 storage for villagers, workplaces, houses and halls. `CarriedLoad` exposes only
 the small visual summary needed for carry animation. `Wallet` and `MootMarket`
 are fixed-point server-owned ledgers: coin has no cargo bulk and every implemented
-transfer has two sides. `BusinessAccount` records capital, revenue, operating
-expenses, wage/tax liabilities, retained profit and withdrawals; it receives sales only
-when a buyer clears a consigned offer, pays daily wages and settles profit levies.
+transfer has two sides. `CompanyAccount` is the company's one authoritative
+treasury across every site: sales enter it and wages, inputs, delivery fees, taxes,
+permits and dividends leave it. Company-funded acquisition of an existing listed property
+remains future work. `BusinessAccount` is a site cost-centre
+ledger only. It attributes capital expenditure, revenue, operating expenses,
+wage/tax liabilities, profit and the company's distributions to that workplace without creating a
+second purse; its short-lived unposted-capital field exists only to move construction,
+acquisition and legacy-save funding into the company treasury on the next simulation
+pass.
 `CivicAccount` records permits, market fees, profit levies, public sales, civic
 wages, relief and construction materials without replacing the treasury's cash;
 `HouseholdEconomy` holds the shared necessities purse while the cabin inventory
@@ -1186,14 +1225,17 @@ is its pantry. `WorkStatus` is deliberately only `Employed`, `LookingForWork` or
 `Chilling`. At 30 personal coins, an owner with two secure payroll days and an
 available replacement leaves hands-on work, chills, and is preferred as investor
 when the settlement later requests another business. Every firm retains a bounded,
-pull-based 365-day history of P&L, cash, liabilities, prices, wages, physical flow,
-stock, owner decisions and solvency changes; it is sent only when its history view
-or settlement archive is requested rather than added to ordinary replication. Player inventories and
-remote ownership ledgers remain later work.
+pull-based 365-day history of site P&L, company treasury context, liabilities,
+prices, wages, physical flow, stock, owner decisions and solvency changes; it is
+sent only when its history view or settlement archive is requested rather than
+added to ordinary replication. Storage Halls and local Company Porters are live within the
+running world; restart persistence and remote logistics remain later work. Company
+identities, cap tables and share ownership are already
+authoritative.
 
 **Business lifecycle.** A private firm begins `New`, operates after three reviewed
 days, and can become cash-tight, distressed or insolvent as real liabilities exceed
-cash. Owner withdrawals protect strategy-defined payroll days, configured input targets,
+cash. Company distributions protect strategy-defined payroll days, configured input targets,
 tax/wage arrears and an operating buffer; opening capital is never distributable profit.
 Owners may expand only when every existing firm is completed, past probation and not in
 distress. The first Windmill or Bakery may anticipate an upstream trade, but later copies

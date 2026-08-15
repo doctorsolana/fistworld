@@ -10,9 +10,10 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, MessageSender, NetworkTarget, RemoteId, Replicate};
 
 use shared::components::{
-    CharacterName, Hero, PermitId, PlayerPermit, PlayerPermitLedger, PlayerPosition,
-    PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
-    SettlementOpportunityBoard, SettlementPolicies, WorldTime,
+    CharacterName, CompanyId, CompanyLeadership, Hero, OperatedBy, PermitId, PlayerPermit,
+    PlayerPermitLedger, PlayerPosition, PlayerRotation, Settlement, SettlementBuilding,
+    SettlementBuildingKind, SettlementId, SettlementOpportunityBoard, SettlementPolicies,
+    WorldTime,
 };
 use shared::economy::{
     format_money, player_permit_price_with_subsidy, CivicAccount, GoodsInventory, MootMarket,
@@ -27,7 +28,7 @@ use super::hero::OfflineHero;
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 use crate::world::village::{
     minimum_startup_capital, road_access_blockers_for_plot, validate_manual_plot, BuildStage,
-    ConstructionMaterialRoutine, InheritedBusinessCapital, ManualPlotApproval,
+    BusinessProjectAccounting, ConstructionMaterialRoutine, ManualPlotApproval,
     PlayerConstructionAssignment, UnderConstruction,
 };
 use crate::world::village_roads::PlannedRoadAccess;
@@ -76,9 +77,18 @@ pub struct PlayerPermitWorld<'w, 's> {
             &'static PlayerPosition,
             Option<&'static PlayerRotation>,
             Option<&'static shared::components::OwnedBy>,
+            Option<&'static OperatedBy>,
         ),
     >,
-    pending: Query<'w, 's, (Entity, &'static UnderConstruction)>,
+    pending: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static UnderConstruction,
+            Option<&'static BusinessProjectAccounting>,
+        ),
+    >,
     roads: Query<
         'w,
         's,
@@ -91,10 +101,73 @@ pub struct PlayerPermitWorld<'w, 's> {
     world_time: Query<'w, 's, &'static WorldTime>,
 }
 
+#[derive(SystemParam)]
+pub(crate) struct PlayerCompanyFinance<'w, 's> {
+    companies: ParamSet<
+        'w,
+        's,
+        (
+            Query<
+                'w,
+                's,
+                (
+                    &'static CompanyId,
+                    &'static CompanyLeadership,
+                    &'static shared::economy::CompanyAccount,
+                ),
+            >,
+            Query<
+                'w,
+                's,
+                (
+                    &'static CompanyId,
+                    &'static mut shared::economy::CompanyAccount,
+                ),
+            >,
+        ),
+    >,
+}
+
+impl PlayerCompanyFinance<'_, '_> {
+    fn can_manage(&mut self, company: CompanyId, person: shared::components::PersonId) -> bool {
+        self.companies
+            .p0()
+            .iter()
+            .any(|(id, leadership, _)| *id == company && leadership.master == person)
+    }
+
+    fn cash(&mut self, company: CompanyId) -> u64 {
+        self.companies
+            .p0()
+            .iter()
+            .find(|(id, ..)| **id == company)
+            .map_or(0, |(_, _, account)| account.cash)
+    }
+
+    fn debit(&mut self, company: CompanyId, amount: u64) -> bool {
+        self.companies
+            .p1()
+            .iter_mut()
+            .find(|(id, _)| **id == company)
+            .is_some_and(|(_, mut account)| account.debit(amount))
+    }
+
+    fn refund(&mut self, company: CompanyId, amount: u64) -> bool {
+        self.companies
+            .p1()
+            .iter_mut()
+            .find(|(id, _)| **id == company)
+            .is_some_and(|(_, mut account)| {
+                account.credit(amount);
+                true
+            })
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PermitPrice {
     fee: u64,
-    startup: u64,
+    recommended_working_capital: u64,
 }
 
 fn private_permit_kind(kind: SettlementBuildingKind) -> bool {
@@ -130,6 +203,7 @@ fn validate_player_permit_access(
 
 fn holding_count(
     owner: shared::components::PersonId,
+    company: Option<CompanyId>,
     settlement: SettlementId,
     ledger: &PlayerPermitLedger,
     world: &PlayerPermitWorld,
@@ -137,27 +211,41 @@ fn holding_count(
     let completed = world
         .buildings
         .iter()
-        .filter(|(_, building_of, _, _, owned_by)| {
-            building_of.0 == settlement && owned_by.is_some_and(|owned_by| owned_by.0 == owner)
+        .filter(|(_, building_of, _, _, owned_by, operated_by)| {
+            building_of.0 == settlement
+                && company.map_or_else(
+                    || owned_by.is_some_and(|owned_by| owned_by.0 == owner),
+                    |company| operated_by.is_some_and(|operator| operator.0 == company),
+                )
         })
         .count();
     let pending = world
         .pending
         .iter()
-        .filter(|(_, pending)| {
-            pending.settlement_id == settlement && pending.owner_id == Some(owner)
+        .filter(|(_, pending, accounting)| {
+            pending.settlement_id == settlement
+                && company.map_or_else(
+                    || pending.owner_id == Some(owner),
+                    |company| accounting.is_some_and(|project| project.company == Some(company)),
+                )
         })
         .count();
     let stamped = ledger
         .permits
         .iter()
-        .filter(|permit| permit.settlement == settlement)
+        .filter(|permit| {
+            permit.settlement == settlement
+                && company.map_or(permit.company.is_none(), |company| {
+                    permit.company == Some(company)
+                })
+        })
         .count();
     completed.saturating_add(pending).saturating_add(stamped)
 }
 
 fn owns_or_is_building_kind(
     owner: shared::components::PersonId,
+    company: Option<CompanyId>,
     settlement: SettlementId,
     kind: SettlementBuildingKind,
     world: &PlayerPermitWorld,
@@ -165,21 +253,28 @@ fn owns_or_is_building_kind(
     world
         .buildings
         .iter()
-        .any(|(building, building_of, _, _, owned_by)| {
+        .any(|(building, building_of, _, _, owned_by, operated_by)| {
             building_of.0 == settlement
                 && building.kind == kind
-                && owned_by.is_some_and(|owned_by| owned_by.0 == owner)
+                && company.map_or_else(
+                    || owned_by.is_some_and(|owned_by| owned_by.0 == owner),
+                    |company| operated_by.is_some_and(|operator| operator.0 == company),
+                )
         })
-        || world.pending.iter().any(|(_, pending)| {
+        || world.pending.iter().any(|(_, pending, accounting)| {
             pending.settlement_id == settlement
                 && pending.kind == kind
-                && pending.owner_id == Some(owner)
+                && company.map_or_else(
+                    || pending.owner_id == Some(owner),
+                    |company| accounting.is_some_and(|project| project.company == Some(company)),
+                )
         })
 }
 
 #[allow(clippy::too_many_arguments)]
 fn permit_price_for_player(
     owner: shared::components::PersonId,
+    company: Option<CompanyId>,
     kind: SettlementBuildingKind,
     settlement: SettlementId,
     tier: shared::components::SettlementTier,
@@ -202,9 +297,9 @@ fn permit_price_for_player(
     let subsidized = advertised.is_some_and(|opportunity| {
         opportunity.subsidized
             && !(opportunity.requires_independent_owner
-                && owns_or_is_building_kind(owner, settlement, kind, world))
+                && owns_or_is_building_kind(owner, company, settlement, kind, world))
     });
-    let holdings = holding_count(owner, settlement, ledger, world);
+    let holdings = holding_count(owner, company, settlement, ledger, world);
     let fee = player_permit_price_with_subsidy(
         kind,
         holdings,
@@ -213,7 +308,7 @@ fn permit_price_for_player(
     );
     Ok(PermitPrice {
         fee,
-        startup: minimum_startup_capital(kind, market),
+        recommended_working_capital: minimum_startup_capital(kind, market),
     })
 }
 
@@ -271,7 +366,7 @@ fn player_plot_snapshot(
             hall,
             SettlementBuildingKind::Hall.clearance(),
         )))
-        .chain(world.pending.iter().filter_map(|(_, pending)| {
+        .chain(world.pending.iter().filter_map(|(_, pending, _)| {
             (pending.settlement == settlement_entity)
                 .then_some((pending.position, pending.kind.clearance()))
         }))
@@ -302,7 +397,7 @@ fn player_plot_snapshot(
             }));
         }
     }
-    for (_, pending) in world.pending.iter() {
+    for (_, pending, _) in world.pending.iter() {
         if pending.settlement_id != settlement_id {
             continue;
         }
@@ -372,8 +467,8 @@ fn player_plot_snapshot(
         world
             .pending
             .iter()
-            .filter(|(_, pending)| pending.settlement_id == settlement_id)
-            .flat_map(|(_, pending)| {
+            .filter(|(_, pending, _)| pending.settlement_id == settlement_id)
+            .flat_map(|(_, pending, _)| {
                 road_access_blockers_for_plot(pending.kind, pending.position, pending.rotation)
             }),
     );
@@ -444,6 +539,7 @@ pub fn handle_hero_permit_orders(
         Option<&mut CivicAccount>,
     )>,
     world: PlayerPermitWorld,
+    mut company_finance: PlayerCompanyFinance,
 ) {
     let day = world.world_time.iter().next().map_or(0, |time| time.day);
     let mut accepted_accesses = Vec::<PlannedRoadAccess>::new();
@@ -464,12 +560,16 @@ pub fn handle_hero_permit_orders(
             };
 
             match order.action {
-                HeroPermitAction::RequestQuote { hall, kind }
+                HeroPermitAction::RequestQuote {
+                    hall,
+                    kind,
+                    company,
+                }
                 | HeroPermitAction::Purchase {
                     hall,
                     kind,
+                    company,
                     quoted_fee: _,
-                    quoted_startup_capital: _,
                 } => {
                     let Ok((
                         _,
@@ -500,8 +600,34 @@ pub fn handle_hero_permit_orders(
                         ));
                         continue;
                     }
+                    let business_permit = crate::world::village::is_private_business(kind);
+                    if business_permit && company.is_none() {
+                        sender.send::<ReliableChannel>(reject(
+                            None,
+                            "Found or select a company before buying a business permit.",
+                        ));
+                        continue;
+                    }
+                    if business_permit
+                        && !company
+                            .is_some_and(|company| company_finance.can_manage(company, *person_id))
+                    {
+                        sender.send::<ReliableChannel>(reject(
+                            None,
+                            "Only the Company Master may buy a permit for that company.",
+                        ));
+                        continue;
+                    }
+                    if !business_permit && company.is_some() {
+                        sender.send::<ReliableChannel>(reject(
+                            None,
+                            "Housing permits are personal, not company property.",
+                        ));
+                        continue;
+                    }
                     let price = match permit_price_for_player(
                         *person_id,
+                        company,
                         kind,
                         *settlement_id,
                         settlement.tier,
@@ -518,29 +644,35 @@ pub fn handle_hero_permit_orders(
                         }
                     };
 
-                    if let HeroPermitAction::Purchase {
-                        quoted_fee,
-                        quoted_startup_capital,
-                        ..
-                    } = order.action
-                    {
-                        if quoted_fee != price.fee || quoted_startup_capital != price.startup {
+                    if let HeroPermitAction::Purchase { quoted_fee, .. } = order.action {
+                        if quoted_fee != price.fee {
                             sender.send::<ReliableChannel>(reject(
                                 None,
                                 "The permit quote changed; review the current price again.",
                             ));
                             continue;
                         }
-                        let total = price.fee.saturating_add(price.startup);
-                        if !wallet.debit(total) {
-                            sender.send::<ReliableChannel>(reject(
-                                None,
+                        let paid = if let Some(company) = company {
+                            company_finance.debit(company, price.fee)
+                        } else {
+                            wallet.debit(price.fee)
+                        };
+                        if !paid {
+                            let reason = if let Some(company) = company {
                                 format!(
-                                    "You need {} coin but carry {}.",
-                                    format_money(total),
+                                    "Company #{} needs {} coin for this permit and holds {}. Add capital explicitly or let the company earn more.",
+                                    company.0,
+                                    format_money(price.fee),
+                                    format_money(company_finance.cash(company)),
+                                )
+                            } else {
+                                format!(
+                                    "You need {} coin and carry {}.",
+                                    format_money(price.fee),
                                     format_money(wallet.balance())
-                                ),
-                            ));
+                                )
+                            };
+                            sender.send::<ReliableChannel>(reject(None, reason));
                             continue;
                         }
                         let permit = PlayerPermit {
@@ -548,8 +680,8 @@ pub fn handle_hero_permit_orders(
                             settlement: *settlement_id,
                             kind,
                             fee_escrow: price.fee,
-                            startup_capital_escrow: price.startup,
                             purchased_day: day,
+                            company,
                         };
                         ledger.permits.push(permit.clone());
                         sender.send::<ReliableChannel>(HeroPermitResult {
@@ -564,11 +696,15 @@ pub fn handle_hero_permit_orders(
                             ),
                         });
                         info!(
-                            "Player {} escrowed {} coin for a {} permit in '{}'",
+                            "Player {} paid {} coin for a {} permit in '{}' ({})",
                             hero_name.0,
-                            format_money(total),
+                            format_money(price.fee),
                             kind.label(),
-                            settlement.name
+                            settlement.name,
+                            company.map_or("personal housing".to_string(), |company| format!(
+                                "company #{} treasury",
+                                company.0
+                            )),
                         );
                     } else {
                         sender.send::<ReliableChannel>(HeroPermitResult {
@@ -578,8 +714,11 @@ pub fn handle_hero_permit_orders(
                                 settlement_name: settlement.name.clone(),
                                 kind,
                                 fee: price.fee,
-                                startup_capital: price.startup,
+                                recommended_working_capital: price.recommended_working_capital,
                                 wallet_balance: wallet.balance(),
+                                company,
+                                company_cash: company
+                                    .map_or(0, |company| company_finance.cash(company)),
                             }),
                             message: "Exact current permit terms received from the Hall.".into(),
                         });
@@ -594,16 +733,33 @@ pub fn handle_hero_permit_orders(
                         ));
                         continue;
                     };
-                    let entry = ledger.permits.remove(index);
-                    let refunded = entry.total_escrow();
-                    wallet.credit(refunded);
+                    let entry = ledger.permits[index].clone();
+                    let refunded = entry.fee_escrow;
+                    if let Some(company) = entry.company {
+                        if !company_finance.refund(company, refunded) {
+                            sender.send::<ReliableChannel>(reject(
+                                Some(permit),
+                                "The funding company has no operating account to receive this refund; the permit remains safely escrowed.",
+                            ));
+                            continue;
+                        }
+                    } else {
+                        wallet.credit(refunded);
+                    }
+                    ledger.permits.remove(index);
                     sender.send::<ReliableChannel>(HeroPermitResult {
                         success: true,
                         outcome: HeroPermitOutcome::Surrendered { permit, refunded },
                         message: format!(
-                            "Surrendered the {} permit and returned {} coin from escrow.",
+                            "Surrendered the {} permit and returned {} coin to {}.",
                             entry.kind.label(),
-                            format_money(refunded)
+                            format_money(refunded),
+                            entry
+                                .company
+                                .map_or("your wallet".to_string(), |company| format!(
+                                    "company #{}",
+                                    company.0
+                                )),
                         ),
                     });
                 }
@@ -717,8 +873,15 @@ pub fn handle_hero_permit_orders(
                         PlayerPosition(approval.position),
                         Replicate::to_clients(NetworkTarget::All),
                     ));
-                    if entry.startup_capital_escrow > 0 {
-                        site.insert(InheritedBusinessCapital(entry.startup_capital_escrow));
+                    if crate::world::village::is_private_business(entry.kind) {
+                        if let Some(company) = entry.company {
+                            site.insert(OperatedBy(company));
+                        }
+                        site.insert(crate::world::village::BusinessProjectAccounting {
+                            company: entry.company,
+                            contributed_capital: 0,
+                            capital_expenditure: entry.fee_escrow,
+                        });
                     }
                     accepted_accesses.push(planned_access);
                     accepted_plots.push((
@@ -897,18 +1060,74 @@ pub fn handle_hero_construction_orders(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::SystemState;
 
     #[test]
-    fn surrender_refund_is_exact_escrow() {
+    fn surrender_refunds_only_the_paid_permit_fee() {
         let permit = PlayerPermit {
             id: PermitId(7),
             settlement: SettlementId(2),
             kind: SettlementBuildingKind::Windmill,
             fee_escrow: 175,
-            startup_capital_escrow: 325,
             purchased_day: 4,
+            company: Some(CompanyId(8)),
         };
-        assert_eq!(permit.total_escrow(), 500);
+        assert_eq!(permit.fee_escrow, 175);
+    }
+
+    #[test]
+    fn company_permit_funding_uses_and_refunds_the_named_treasury() {
+        let mut world = World::new();
+        let company = CompanyId(12);
+        let master = shared::components::PersonId(13);
+        let company_entity = world
+            .spawn((
+                company,
+                CompanyLeadership { master },
+                shared::economy::CompanyAccount {
+                    cash: 1_000,
+                    ..default()
+                },
+            ))
+            .id();
+        let mut state = SystemState::<PlayerCompanyFinance>::new(&mut world);
+        {
+            let mut finance = state
+                .get_mut(&mut world)
+                .expect("valid company finance system parameters");
+            assert!(finance.can_manage(company, master));
+            assert_eq!(finance.cash(company), 1_000);
+            assert!(finance.debit(company, 600));
+            assert_eq!(finance.cash(company), 400);
+            assert!(finance.refund(company, 600));
+        }
+        state.apply(&mut world);
+        assert_eq!(
+            world
+                .get::<shared::economy::CompanyAccount>(company_entity)
+                .unwrap()
+                .cash,
+            1_000
+        );
+    }
+
+    #[test]
+    fn permit_authority_is_bound_to_the_selected_company_master() {
+        let mut world = World::new();
+        let company = CompanyId(15);
+        let master = shared::components::PersonId(16);
+        world.spawn((
+            company,
+            CompanyLeadership { master },
+            shared::economy::CompanyAccount::default(),
+        ));
+
+        let mut state = SystemState::<PlayerCompanyFinance>::new(&mut world);
+        let mut finance = state
+            .get_mut(&mut world)
+            .expect("valid company finance system parameters");
+        assert!(finance.can_manage(company, master));
+        assert!(!finance.can_manage(company, shared::components::PersonId(17)));
     }
 
     #[test]

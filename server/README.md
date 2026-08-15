@@ -9,7 +9,7 @@ top-level modules and calls `app::run()`; runtime rules belong to their domain.
 |---|---|
 | `app` | Bootstrap, resources and ordered fixed-update wiring |
 | `net` | Connections, peer identity and client-message ingress |
-| `player` | Commander views, hero lifecycle, rosters, movement orders, nearby Hall trading, permit escrow/placement, physical hero construction, owned-business policy commands and player indexes |
+| `player` | Commander views, hero lifecycle, rosters, movement orders, nearby Hall trading, permit/company funding and placement, physical hero construction, Company Master policy commands, share trading and player indexes |
 | `collision` | Baked/derived building colliders, spatial indexes, raycasts and streamed static collision |
 | `world` | Time, identity, regions, settlements, village simulation, roads, development and lab fixtures |
 | `persistence` | Session profile snapshots plus legacy profile migration/IO tooling; the live server deliberately starts fresh |
@@ -24,8 +24,8 @@ rule more precisely.
 
 `world/mod.rs` is an orchestration surface. Its principal modules are:
 
-- `identity.rs`: allocates and indexes durable `PersonId`, `SettlementId` and
-  `BuildingId` values and migrates remaining readable legacy relationships.
+- `identity.rs`: allocates and indexes durable `PersonId`, `SettlementId`,
+  `BuildingId` and `CompanyId` values and migrates remaining readable legacy relationships.
 - `simulation_time.rs` and `time.rs`: the one real/world/warp clock and world-day state.
 - `regions.rs`: interest management, region visibility and tactical/strategic level.
 - `settlement_directory.rs`: tiny globally replicated settlement summaries.
@@ -38,8 +38,11 @@ rule more precisely.
   - `construction`: physical material supply and building work
   - `employment`: private vacancy matching
   - `commerce`: physical Moot Steward collection work and owner leisure
-  - `businesses`: sale settlement, accounts, pricing/strategy, protected profit draws,
+  - `businesses`: sale settlement, site accounts, pricing/strategy, protected company distributions,
     insolvency, physical stock liquidation and property takeover
+  - `companies`: existing-site migration, 1,000-share cap tables, appointed Company Masters,
+    one authoritative company treasury, current/completed-day site cost-centre consolidation,
+    dividends, executive review and company-permit fee recovery
   - `civic`: municipal hiring budgets, unified payroll/arrears, profit levies, staffing posture,
     growth subsidies and bounded policy review
   - `settlement_economy`: Moot transactions, food security and prosperity
@@ -67,6 +70,17 @@ Extend those ownership seams instead of moving implementation back into `village
 The exact civic money flows, policy ranges, staffing targets and weekly Reeve decision
 order are documented in [`docs/CIVIC-ECONOMY.md`](../docs/CIVIC-ECONOMY.md). Update that
 guide whenever a civic revenue source, expense, liability or policy effect changes.
+Company/share authority, retained-cash expansion and vertical-integration rules are in
+[`docs/COMPANY-ECONOMY-IMPLEMENTATION.md`](../docs/COMPANY-ECONOMY-IMPLEMENTATION.md).
+Processor input management exposes 0–7 days of physical coverage. Public output policy is
+instead an absolute per-good retain amount on the company's settlement-local branch, followed
+by one `Sell excess`/`Hold all` choice. Sites expose a separate bounded enabled-position target.
+Storage Halls and Company Porters extend only their local branch; do not transfer inventory
+between settlements without a future explicit caravan/trade-route order.
+Autonomous firms begin with one enabled position and scale only after proving production or
+sales. All expansion/dividend reserves must use enabled positions, not architectural maximums.
+NPC Storage Halls require an established branch with two other local sites; player permits stay
+available independently of that autopilot rule.
 
 ## Scheduling rules
 
@@ -90,6 +104,15 @@ inside the new system, and do not add lab-only ordering to make a test pass.
 
 - Names are display strings. Ownership, employment, housing, civic rosters and adjunct
   entities join through durable IDs.
+- Productive sites join their legal/economic firm through `CompanyId`. Sites have no cash
+  allocation: `BusinessAccount` is a cost-centre ledger and `CompanyAccount` is the sole
+  spendable treasury. Internal supply is
+  eliminated in consolidation and company/person transfers use explicit capital, wage,
+  dividend or share-sale paths.
+- Private payroll closes the completed shift at dawn. It must debit the company treasury,
+  credit the worker, and attribute the expense to the completed site ledger exactly once.
+  Company consolidation must publish both the open day and completed day; never infer a
+  zero wage from the still-open day's ledger.
 - `SettlementSummary` is global; physical/economic detail carries `RegionCoord` and is
   replicated only through interest management.
 - A `StrategicPerson` retains durable social/economic state but owns no tactical path,

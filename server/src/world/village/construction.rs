@@ -216,9 +216,7 @@ pub fn run_construction_material_logistics(
     let Some(clock) = world_time.iter().next() else {
         return;
     };
-    if !clock.is_day() {
-        return;
-    }
+    let daylight = clock.is_day();
     let day = clock.day;
     let dt = simulation_time.world_seconds();
     // Timber/store retries are world behaviour, so their cooldown must advance
@@ -304,6 +302,13 @@ pub fn run_construction_material_logistics(
                 .remove::<PlayerConstructionAssignment>()
                 .remove::<MoveTarget>();
             *activity = CharacterActivity::Idle;
+            continue;
+        }
+        // Ordinary builders stop for the night, but an explicit player order
+        // is not an employment shift. A commanded hero must keep gathering
+        // and delivering materials overnight instead of remaining frozen in
+        // the last visible activity until dawn.
+        if !daylight && !player_assigned {
             continue;
         }
         let Ok((_, mut site, mut site_view, _site_position, planned_access)) =
@@ -986,15 +991,24 @@ pub fn advance_construction(
         &GoodsInventory,
         Option<&PlannedRoadAccess>,
         Option<&InheritedBusinessCapital>,
+        Option<&BusinessProjectAccounting>,
         Option<&crate::player::permits::PlayerConstructionProject>,
     )>,
     mut sites: Query<&mut shared::components::ConstructionSite>,
     mut facings: Query<&mut PlayerRotation>,
+    player_assignments: Query<&PlayerConstructionAssignment>,
 ) {
     let world_dt = simulation_time.world_seconds();
     let daylight = world_time.iter().next().is_none_or(WorldTime::is_day);
-    for (site, mut under, materials, planned_access, inherited_capital, player_project) in
-        pending.iter_mut()
+    for (
+        site,
+        mut under,
+        materials,
+        planned_access,
+        inherited_capital,
+        project_accounting,
+        player_project,
+    ) in pending.iter_mut()
     {
         let Ok((settlement, settlement_id)) = settlements.get(under.settlement) else {
             // Its settlement vanished; drop the site rather than leaving a
@@ -1009,15 +1023,21 @@ pub fn advance_construction(
             continue;
         };
 
-        // People go home at night. An approved site remains exactly where it
-        // was, but no ground is cleared and no raising timer advances without
-        // daylight and its builder's time.
-        if !daylight {
+        // Settlement builders go home at night. Directly commanded heroes are
+        // outside that employment schedule, so their private work order keeps
+        // progressing until the player changes it or the building completes.
+        let player_commanded = under.builder.is_some_and(|builder| {
+            player_assignments.get(builder).is_ok_and(|assignment| {
+                assignment.site == site && assignment.settlement == under.settlement
+            })
+        });
+        if !daylight && !player_commanded {
             continue;
         }
-        if under
-            .builder
-            .is_some_and(|builder| home_routines.get(builder).is_ok())
+        if !player_commanded
+            && under
+                .builder
+                .is_some_and(|builder| home_routines.get(builder).is_ok())
         {
             continue;
         }
@@ -1216,13 +1236,21 @@ pub fn advance_construction(
                 if let Some(capital) = inherited_capital {
                     // Keep takeover money in an authoritative account on the
                     // completed entity immediately. The next economy pass
-                    // atomically converts this escrow to BusinessAccount cash.
+                    // atomically posts this escrow to the operating company.
                     // Deferring that conversion by one tick prevents a site
                     // despawn and a separately queued account insert from
                     // exposing a one-frame loss at schedule boundaries.
                     commands
                         .entity(building_entity)
                         .insert(InheritedBusinessCapital(capital.0));
+                }
+                if let Some(project_accounting) = project_accounting {
+                    commands.entity(building_entity).insert(*project_accounting);
+                    if let Some(company) = project_accounting.company {
+                        commands
+                            .entity(building_entity)
+                            .insert(shared::components::OperatedBy(company));
+                    }
                 }
                 if let Some(planned_access) = planned_access {
                     commands

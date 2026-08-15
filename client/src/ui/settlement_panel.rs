@@ -11,14 +11,16 @@ use bevy::ui::FocusPolicy;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
 use shared::components::{
-    BuildingId, BuildingOf, CivicHallLevel, ConstructionSite, Household, MootAdministration,
-    OwnedBy, PersonId, PlayerPosition, Settlement, SettlementBuilding, SettlementDevelopment,
-    SettlementId, SettlementOpportunityBoard, SettlementPolicies,
+    BuildingId, BuildingOf, CivicHallLevel, CompanyId, CompanyLeadership, ConstructionSite,
+    Household, MootAdministration, OperatedBy, OwnedBy, PersonId, PlayerPosition, Settlement,
+    SettlementBuilding, SettlementDevelopment, SettlementId, SettlementOpportunityBoard,
+    SettlementPolicies,
 };
 use shared::economy::{
     business_working_capital, format_money, BusinessAccount, BusinessCondition, BusinessForSale,
-    BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy, BusinessWagePolicy,
-    Good, GoodsInventory, MootMarket, SettlementEconomy, Wallet,
+    BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy,
+    BusinessStaffingPolicy, BusinessWagePolicy, CompanyAccount, Good, GoodsInventory, MootMarket,
+    SettlementEconomy, Wallet,
 };
 use shared::protocol::{HeroMarketAction, HeroMarketOrder, HeroMarketResult, ReliableChannel};
 
@@ -89,6 +91,16 @@ struct InspectManageButton;
 #[derive(SystemParam)]
 struct LocalBusinessOwnership<'w, 's> {
     owners: Query<'w, 's, &'static OwnedBy>,
+    operations: Query<'w, 's, &'static OperatedBy>,
+    companies: Query<
+        'w,
+        's,
+        (
+            &'static CompanyId,
+            &'static CompanyLeadership,
+            &'static CompanyAccount,
+        ),
+    >,
     local: Option<Res<'w, crate::camera_rts::LocalPeerId>>,
     heroes: Query<'w, 's, (&'static shared::components::Hero, &'static PersonId)>,
 }
@@ -102,7 +114,13 @@ impl LocalBusinessOwnership<'_, '_> {
             .map(|(_, person)| *person)
     }
 
-    fn owns(&self, entity: Entity, person: Option<PersonId>) -> bool {
+    fn can_open(&self, entity: Entity, person: Option<PersonId>) -> bool {
+        if let Ok(operation) = self.operations.get(entity) {
+            // Company books and public share offers are inspectable by every
+            // player. The server still reserves operating controls for the
+            // appointed Company Master.
+            return self.companies.iter().any(|(id, ..)| *id == operation.0);
+        }
         person.is_some_and(|person| self.owners.get(entity).is_ok_and(|owner| owner.0 == person))
     }
 }
@@ -252,7 +270,7 @@ fn action_row(
             spawn_card_button(row, InspectPropertyButton, "PERMITS & PROPERTY");
         }
         if manage {
-            spawn_card_button(row, InspectManageButton, "MANAGE");
+            spawn_card_button(row, InspectManageButton, "VIEW COMPANY");
         }
         if let Some(button) = business_history {
             spawn_card_button(row, button, "VIEW HISTORY");
@@ -388,10 +406,12 @@ fn sync_compact_panel(
             Option<&BusinessAccount>,
             Option<&BusinessSalePolicy>,
             Option<&BusinessWagePolicy>,
+            Option<&BusinessStaffingPolicy>,
             Option<&BusinessManagementPolicy>,
             Option<&BusinessProcurementPolicy>,
             Option<&BusinessCondition>,
             Option<&BusinessForSale>,
+            Option<&OperatedBy>,
         ),
         With<SettlementBuilding>,
     >,
@@ -403,6 +423,11 @@ fn sync_compact_panel(
     };
     let selected = selection.primary();
     let local_person = ownership.local_person();
+    let company_accounts: std::collections::HashMap<CompanyId, CompanyAccount> = ownership
+        .companies
+        .iter()
+        .map(|(id, _, account)| (*id, *account))
+        .collect();
     let fact = selected.and_then(|entity| {
         if let Ok((
             _,
@@ -418,24 +443,30 @@ fn sync_compact_panel(
             let inventory = inventories.get(entity).ok();
             let next = opportunity_summary(opportunities);
             let settlement_id = settlement_ids.get(entity).ok().map(|(_, id)| *id);
-            let (private_cash, private_wage_arrears, private_tax_arrears) =
-                business_economies.iter().fold(
-                    (0u64, 0u64, 0u64),
-                    |(cash, wages, taxes), (owner, account, ..)| {
-                        if settlement_id.is_none()
-                            || !owner.is_some_and(|owner| Some(owner.0) == settlement_id)
-                        {
-                            return (cash, wages, taxes);
-                        }
-                        account.map_or((cash, wages, taxes), |account| {
-                            (
-                                cash.saturating_add(account.cash),
-                                wages.saturating_add(account.wage_arrears),
-                                taxes.saturating_add(account.tax_arrears),
-                            )
-                        })
-                    },
-                );
+            let mut private_cash = 0u64;
+            let mut private_wage_arrears = 0u64;
+            let mut private_tax_arrears = 0u64;
+            let mut counted_companies = std::collections::HashSet::new();
+            for (owner, account, _, _, _, _, _, _, _, operated_by) in business_economies.iter() {
+                if settlement_id.is_none()
+                    || !owner.is_some_and(|owner| Some(owner.0) == settlement_id)
+                {
+                    continue;
+                }
+                if let Some(account) = account {
+                    private_wage_arrears =
+                        private_wage_arrears.saturating_add(account.wage_arrears);
+                    private_tax_arrears =
+                        private_tax_arrears.saturating_add(account.tax_arrears);
+                }
+                if let Some(company) = operated_by.map(|operation| operation.0) {
+                    if counted_companies.insert(company) {
+                        private_cash = private_cash.saturating_add(
+                            company_accounts.get(&company).map_or(0, |account| account.cash),
+                        );
+                    }
+                }
+            }
             let purchasable_food = markets.get(entity).map_or(0, MootMarket::listed_edible_units);
             let hall_level = hall_level
                 .copied()
@@ -542,7 +573,7 @@ fn sync_compact_panel(
                             ),
                         ),
                         (
-                            "PRIVATE CASH / ARREARS".into(),
+                            "COMPANY TREASURIES / ARREARS".into(),
                             format!(
                                 "{} / {} wage / {} tax coin",
                                 format_money(private_cash),
@@ -565,10 +596,24 @@ fn sync_compact_panel(
         if let Ok(building) = buildings.get(entity) {
             let inventory = inventories.get(entity).ok();
             let household = households.get(entity).ok();
-            let (_, account, sale_policy, wage_policy, management, procurement, condition, for_sale) =
+            let (
+                _,
+                account,
+                sale_policy,
+                wage_policy,
+                staffing,
+                management,
+                procurement,
+                condition,
+                for_sale,
+                operated_by,
+            ) =
                 business_economies
                     .get(entity)
-                    .unwrap_or((None, None, None, None, None, None, None, None));
+                    .unwrap_or((None, None, None, None, None, None, None, None, None, None));
+            let company_account = operated_by
+                .and_then(|operation| company_accounts.get(&operation.0))
+                .copied();
             let business_history = account.and_then(|_| {
                 let business = *building_ids.get(entity).ok()?;
                 let settlement = building_of
@@ -604,7 +649,17 @@ fn sync_compact_panel(
             } else {
                 (
                     "STAFF".to_string(),
-                    format!("{} / {}", building.workers.len(), building.kind.positions()),
+                    format!(
+                        "{} employed / {} open / {} max",
+                        building.workers.len(),
+                        staffing
+                            .copied()
+                            .unwrap_or_else(|| {
+                                BusinessStaffingPolicy::new(building.kind.positions())
+                            })
+                            .target_for(building.kind),
+                        building.kind.positions()
+                    ),
                 )
             };
             let local_market = building_of.get(entity).ok().and_then(|owner| {
@@ -615,7 +670,12 @@ fn sync_compact_panel(
             });
             let capital = match (wage_policy, management, procurement) {
                 (Some(wage), Some(management), Some(procurement)) => business_working_capital(
-                    building.kind.positions(),
+                    staffing
+                        .copied()
+                        .unwrap_or_else(|| {
+                            BusinessStaffingPolicy::new(building.kind.positions())
+                        })
+                        .target_for(building.kind),
                     wage,
                     management,
                     procurement,
@@ -677,13 +737,13 @@ fn sync_compact_panel(
                     ),
                 ),
                 (
-                    "CASH / WAGE / TAX DEBT".into(),
+                    "COMPANY CASH / SITE WAGE / TAX DEBT".into(),
                     account.map_or_else(
                         || "Not a business".into(),
                         |account| {
                             format!(
                                 "{} / {} / {} coin",
-                                format_money(account.cash),
+                                format_money(company_account.map_or(0, |company| company.cash)),
                                 format_money(account.wage_arrears),
                                 format_money(account.tax_arrears),
                             )
@@ -704,14 +764,20 @@ fn sync_compact_panel(
                     ),
                 ),
                 (
-                    "PROTECTED / DRAWABLE".into(),
+                    "SITE REQUIREMENT / COMPANY FREE".into(),
                     account.map_or_else(
                         || "Not a business".into(),
                         |account| {
                             format!(
                                 "{} / {} coin",
                                 format_money(capital.total_with_liabilities(account)),
-                                format_money(account.withdrawable_profit(capital.total())),
+                                format_money(company_account.map_or(0, |company| {
+                                    company
+                                        .cash
+                                        .saturating_sub(company.wage_arrears)
+                                        .saturating_sub(company.tax_arrears)
+                                        .saturating_sub(capital.total())
+                                })),
                             )
                         },
                     ),
@@ -738,9 +804,10 @@ fn sync_compact_panel(
                         || "None".into(),
                         |policy| {
                             format!(
-                                "{} coin each / keep {} / collect up to {}",
+                                "{} coin each / {} day company reserve ({} units) / collect up to {}",
                                 format_money(policy.asking_unit_price),
-                                policy.keep_units,
+                                policy.company_reserve_days,
+                                policy.company_reserve_units,
                                 policy.max_units_per_collection,
                             )
                         },
@@ -817,7 +884,7 @@ fn sync_compact_panel(
                     rows,
                     trade: markets.get(entity).is_ok(),
                     property: false,
-                    manage: account.is_some() && ownership.owns(entity, local_person),
+                    manage: account.is_some() && ownership.can_open(entity, local_person),
                     business_history,
                 },
             ));
@@ -1043,7 +1110,11 @@ fn handle_compact_actions(
 
 fn handle_manage_action(
     selection: Res<Selection>,
-    mut target: ResMut<crate::ui::business_management::BusinessManagementTarget>,
+    operations: Query<&OperatedBy>,
+    mut encyclopedia_open: ResMut<crate::ui::encyclopedia::EncyclopediaOpen>,
+    mut tab: ResMut<crate::ui::encyclopedia::EncyclopediaTab>,
+    mut selected_company: ResMut<crate::ui::encyclopedia::companies::SelectedCompany>,
+    mut return_to: ResMut<crate::ui::encyclopedia::companies::CompanyDrilldownReturn>,
     mut buttons: Query<
         (&Interaction, &mut BackgroundColor),
         (With<InspectManageButton>, Changed<Interaction>),
@@ -1052,7 +1123,16 @@ fn handle_manage_action(
     for (interaction, mut background) in buttons.iter_mut() {
         *background = button_background(*interaction);
         if *interaction == Interaction::Pressed {
-            target.0 = selection.primary();
+            let Some(entity) = selection.primary() else {
+                continue;
+            };
+            let Ok(company) = operations.get(entity) else {
+                continue;
+            };
+            selected_company.0 = Some(company.0);
+            return_to.0 = None;
+            *tab = crate::ui::encyclopedia::EncyclopediaTab::Companies;
+            encyclopedia_open.0 = true;
         }
     }
 }

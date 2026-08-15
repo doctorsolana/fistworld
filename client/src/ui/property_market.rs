@@ -4,16 +4,21 @@
 //! a live offer, while a building takeover and a land-use permit are durable
 //! development decisions. Both boards use the same visual ledger language.
 
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
 use shared::components::{
-    CivicHallLevel, Hero, PermitMarketOpportunity, PlayerPosition, PropertyMarketListing,
-    Settlement, SettlementBuildingKind, SettlementId, SettlementOpportunityBoard,
-    SettlementPolicies, SettlementPropertyBoard, WorldTime,
+    CharacterName, CivicHallLevel, Company, CompanyId, CompanyLeadership, Hero,
+    PermitMarketOpportunity, PersonId, PlayerPosition, PropertyMarketListing, Settlement,
+    SettlementBuildingKind, SettlementId, SettlementOpportunityBoard, SettlementPolicies,
+    SettlementPropertyBoard, WorldTime,
 };
 use shared::economy::{
-    format_money, player_permit_price_with_subsidy, Wallet, PROPERTY_MARKET_EXPOSURE_DAYS,
+    format_money, player_permit_price_with_subsidy, CompanyAccount, Wallet,
+    PROPERTY_MARKET_EXPOSURE_DAYS,
 };
+use shared::protocol::{HeroCompanyFoundingOrder, HeroCompanyFoundingResult, ReliableChannel};
 
 use crate::camera_rts::LocalPeerId;
 use crate::states::GameState;
@@ -25,7 +30,9 @@ use crate::ui::styles::{
     PLATE_RULE_SOFT, RADIUS,
 };
 
-use super::player_permits::{PendingPermitQuote, PurchasePermitButton, RequestPermitQuoteButton};
+use super::player_permits::{
+    ActiveCompany, PendingPermitQuote, PurchasePermitButton, RequestPermitQuoteButton,
+};
 
 pub struct PropertyMarketPlugin;
 
@@ -33,9 +40,14 @@ impl Plugin for PropertyMarketPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PropertyMarketTarget>();
         app.init_resource::<PropertyClickGuard>();
+        app.init_resource::<CompanyFoundingDraft>();
+        app.init_resource::<CompanyFoundingFeedback>();
         app.add_systems(
             Update,
             (
+                receive_company_founding_results,
+                handle_company_context_buttons,
+                handle_company_name_input,
                 ensure_property_panel,
                 update_property_guard,
                 handle_property_close,
@@ -73,6 +85,62 @@ struct PermitListingViewport;
 #[derive(Component)]
 struct PropertyListingViewport;
 
+#[derive(Resource, Debug, Clone)]
+struct CompanyFoundingDraft {
+    founder: Option<PersonId>,
+    name: String,
+    initial_capital: u64,
+    editing_name: bool,
+    visible: bool,
+    pending: bool,
+}
+
+impl Default for CompanyFoundingDraft {
+    fn default() -> Self {
+        Self {
+            founder: None,
+            name: String::new(),
+            initial_capital: 10 * shared::economy::PENNIES_PER_COIN,
+            editing_name: false,
+            visible: false,
+            pending: false,
+        }
+    }
+}
+
+#[derive(Resource, Default, Debug, Clone)]
+struct CompanyFoundingFeedback {
+    message: String,
+    success: bool,
+}
+
+#[derive(Component)]
+struct CompanyNameField;
+
+#[derive(Component)]
+struct FoundCompanyButton {
+    hall: Entity,
+}
+
+#[derive(Component)]
+struct AdjustFoundingCapital(i64);
+
+#[derive(Component)]
+struct CycleActingCompany(i8);
+
+#[derive(Component)]
+struct OpenCompanyFounding;
+
+#[derive(Component)]
+struct CancelCompanyFounding;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ActingCompanyView {
+    id: CompanyId,
+    name: String,
+    cash: u64,
+}
+
 fn offer_price(opportunity: PermitMarketOpportunity, policy: Option<&SettlementPolicies>) -> u64 {
     player_permit_price_with_subsidy(
         opportunity.kind,
@@ -99,6 +167,9 @@ fn permit_description(kind: SettlementBuildingKind) -> &'static str {
         SettlementBuildingKind::LumberjackHut => "Harvests Wood efficiently from nearby forest.",
         SettlementBuildingKind::Windmill => "Purchases Wheat and mills it into Flour.",
         SettlementBuildingKind::Bakery => "Purchases Flour and bakes filling Bread.",
+        SettlementBuildingKind::StorageHall => {
+            "Stores local company goods and employs private porters."
+        }
         SettlementBuildingKind::Market => "A permanent local exchange and warehouse.",
         SettlementBuildingKind::Tavern => "Food, drink and social services for the settlement.",
         SettlementBuildingKind::Church => "A civic service building for a mature settlement.",
@@ -106,10 +177,199 @@ fn permit_description(kind: SettlementBuildingKind) -> &'static str {
     }
 }
 
+fn suggested_company_name(hero: &str, existing: usize) -> String {
+    if existing == 0 {
+        format!("{hero} & Company")
+    } else {
+        format!("{hero} Company {}", existing.saturating_add(1))
+    }
+}
+
+fn receive_company_founding_results(
+    mut receivers: Query<&mut MessageReceiver<HeroCompanyFoundingResult>, With<crate::GameClient>>,
+    mut active: ResMut<ActiveCompany>,
+    mut draft: ResMut<CompanyFoundingDraft>,
+    mut feedback: ResMut<CompanyFoundingFeedback>,
+) {
+    for mut receiver in receivers.iter_mut() {
+        for result in receiver.receive() {
+            draft.pending = false;
+            feedback.message = result.message;
+            feedback.success = result.success;
+            if result.success {
+                active.0 = result.company;
+                draft.visible = false;
+                draft.editing_name = false;
+                draft.name.clear();
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn handle_company_context_buttons(
+    mouse: Res<ButtonInput<MouseButton>>,
+    guard: Res<PropertyClickGuard>,
+    mut buttons: Query<
+        (
+            &Interaction,
+            &mut BackgroundColor,
+            Option<&CompanyNameField>,
+            Option<&AdjustFoundingCapital>,
+            Option<&CycleActingCompany>,
+            Option<&OpenCompanyFounding>,
+            Option<&CancelCompanyFounding>,
+            Option<&FoundCompanyButton>,
+        ),
+        Changed<Interaction>,
+    >,
+    local: Option<Res<LocalPeerId>>,
+    heroes: Query<(&Hero, &PersonId, &CharacterName, &Wallet)>,
+    companies: Query<(&CompanyId, &CompanyLeadership)>,
+    mut draft: ResMut<CompanyFoundingDraft>,
+    mut active: ResMut<ActiveCompany>,
+    mut clients: Query<
+        &mut MessageSender<HeroCompanyFoundingOrder>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+    mut feedback: ResMut<CompanyFoundingFeedback>,
+) {
+    let local_hero = local.as_ref().and_then(|local| {
+        heroes
+            .iter()
+            .find(|(hero, ..)| shared::player::peer_id_to_u64(hero.owner) == local.0)
+    });
+    let clicked = guard.0 && mouse.just_pressed(MouseButton::Left);
+    let mut clicked_name = false;
+    for (interaction, mut background, name, adjust, cycle, open, cancel, found) in
+        buttons.iter_mut()
+    {
+        background.0 = match interaction {
+            Interaction::Pressed => crate::ui::styles::BUTTON_PRESSED,
+            Interaction::Hovered => crate::ui::styles::BUTTON_HOVERED,
+            Interaction::None => BUTTON_NORMAL,
+        };
+        if !clicked || *interaction != Interaction::Pressed {
+            continue;
+        }
+        if name.is_some() {
+            draft.editing_name = true;
+            clicked_name = true;
+            continue;
+        }
+        let Some((_, person, hero_name, wallet)) = local_hero else {
+            continue;
+        };
+        let mut mastered: Vec<_> = companies
+            .iter()
+            .filter_map(|(id, leadership)| (leadership.master == *person).then_some(*id))
+            .collect();
+        mastered.sort_unstable();
+        if open.is_some() {
+            draft.visible = true;
+            draft.editing_name = true;
+            draft.name = suggested_company_name(&hero_name.0, mastered.len());
+            draft.initial_capital = wallet
+                .balance()
+                .min(10 * shared::economy::PENNIES_PER_COIN)
+                .max(shared::economy::PENNIES_PER_COIN);
+            feedback.message.clear();
+            continue;
+        }
+        if cancel.is_some() {
+            if !mastered.is_empty() {
+                draft.visible = false;
+                draft.editing_name = false;
+                feedback.message.clear();
+            }
+            continue;
+        }
+        if let Some(adjust) = adjust {
+            let current = i128::from(draft.initial_capital);
+            let next = (current + i128::from(adjust.0)).clamp(
+                i128::from(shared::economy::PENNIES_PER_COIN),
+                i128::from(wallet.balance().max(shared::economy::PENNIES_PER_COIN)),
+            );
+            draft.initial_capital = next as u64;
+            continue;
+        }
+        if let Some(cycle) = cycle {
+            if mastered.is_empty() {
+                active.0 = None;
+                continue;
+            }
+            let current = active
+                .0
+                .and_then(|selected| mastered.iter().position(|id| *id == selected))
+                .unwrap_or(0);
+            let next = (current as isize + isize::from(cycle.0)).rem_euclid(mastered.len() as isize)
+                as usize;
+            active.0 = Some(mastered[next]);
+            continue;
+        }
+        if let Some(found) = found {
+            if draft.pending {
+                continue;
+            }
+            let Ok(mut sender) = clients.single_mut() else {
+                feedback.success = false;
+                feedback.message = "Company registry is not connected yet.".into();
+                continue;
+            };
+            sender.send::<ReliableChannel>(HeroCompanyFoundingOrder {
+                hall: found.hall,
+                name: draft.name.clone(),
+                initial_capital: draft.initial_capital,
+            });
+            draft.pending = true;
+            draft.editing_name = false;
+            feedback.message = "Registering the company with the Hall...".into();
+            feedback.success = true;
+        }
+    }
+    if clicked && !clicked_name {
+        draft.editing_name = false;
+    }
+}
+
+fn handle_company_name_input(
+    target: Res<PropertyMarketTarget>,
+    mut events: MessageReader<KeyboardInput>,
+    mut draft: ResMut<CompanyFoundingDraft>,
+) {
+    if target.0.is_none() || !draft.visible || !draft.editing_name || draft.pending {
+        return;
+    }
+    for event in events.read() {
+        if !event.state.is_pressed() {
+            continue;
+        }
+        match &event.logical_key {
+            Key::Backspace => {
+                draft.name.pop();
+            }
+            Key::Enter => draft.editing_name = false,
+            Key::Character(text) => {
+                for character in text.chars() {
+                    let allowed =
+                        character.is_alphanumeric() || matches!(character, ' ' | '&' | '-' | '\'');
+                    if allowed && draft.name.chars().count() < 40 {
+                        draft.name.push(character);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn ensure_property_panel(
     mut commands: Commands,
     mut target: ResMut<PropertyMarketTarget>,
     quote: Res<PendingPermitQuote>,
+    mut active_company: ResMut<ActiveCompany>,
+    mut founding: ResMut<CompanyFoundingDraft>,
+    founding_feedback: Res<CompanyFoundingFeedback>,
     local: Option<Res<LocalPeerId>>,
     settlements: Query<(
         &SettlementId,
@@ -120,7 +380,14 @@ fn ensure_property_panel(
         Option<&SettlementPropertyBoard>,
         Option<&SettlementPolicies>,
     )>,
-    heroes: Query<(&Hero, &PlayerPosition, Option<&Wallet>)>,
+    heroes: Query<(
+        &Hero,
+        &PersonId,
+        &CharacterName,
+        &PlayerPosition,
+        Option<&Wallet>,
+    )>,
+    companies: Query<(&CompanyId, &Company, &CompanyLeadership, &CompanyAccount)>,
     world_time: Query<&WorldTime>,
     roots: Query<(Entity, &PropertyPanelRoot)>,
 ) {
@@ -158,16 +425,63 @@ fn ensure_property_panel(
             .find(|(hero, ..)| shared::player::peer_id_to_u64(hero.owner) == local.0)
     });
     let hero_balance = local_hero
-        .and_then(|(_, _, wallet)| wallet)
+        .and_then(|(_, _, _, _, wallet)| wallet)
         .map_or(0, |wallet| wallet.balance());
-    let hero_nearby = local_hero.is_some_and(|(_, position, _)| {
+    let hero_nearby = local_hero.is_some_and(|(_, _, _, position, _)| {
         Vec2::new(position.0.x, position.0.z)
             .distance(Vec2::new(hall_position.0.x, hall_position.0.z))
             <= 12.0
     });
     let has_hero = local_hero.is_some();
+    let local_person = local_hero.map(|(_, person, ..)| *person);
+    let mut mastered_companies: Vec<_> = local_person.map_or_else(Vec::new, |person| {
+        companies
+            .iter()
+            .filter_map(|(id, company, leadership, account)| {
+                (leadership.master == person).then(|| ActingCompanyView {
+                    id: *id,
+                    name: company.name.clone(),
+                    cash: account.cash,
+                })
+            })
+            .collect()
+    });
+    mastered_companies.sort_by_key(|company| company.id);
+    if !mastered_companies.is_empty()
+        && active_company.0.is_none_or(|selected| {
+            !mastered_companies
+                .iter()
+                .any(|company| company.id == selected)
+        })
+    {
+        active_company.0 = mastered_companies.first().map(|company| company.id);
+    } else if mastered_companies.is_empty() && !founding_feedback.success {
+        active_company.0 = None;
+    }
+    if founding.founder != local_person {
+        founding.founder = local_person;
+        founding.name = local_hero.map_or_else(String::new, |(_, _, name, ..)| {
+            suggested_company_name(&name.0, mastered_companies.len())
+        });
+        founding.initial_capital = hero_balance
+            .min(10 * shared::economy::PENNIES_PER_COIN)
+            .max(shared::economy::PENNIES_PER_COIN);
+        founding.editing_name = false;
+        founding.pending = false;
+    }
+    if mastered_companies.is_empty() && has_hero && active_company.0.is_none() {
+        founding.visible = true;
+    }
+    let acting_company = active_company.0.and_then(|selected| {
+        mastered_companies
+            .iter()
+            .find(|company| company.id == selected)
+    });
     let signature = format!(
-        "{entity:?}|{settlement_id:?}|{settlement:?}|{hall_level:?}|{permit_offers:?}|{property_listings:?}|{policy:?}|{day}|{has_hero}|{hero_nearby}|{hero_balance}|{:?}",
+        "{entity:?}|{settlement_id:?}|{settlement:?}|{hall_level:?}|{permit_offers:?}|{property_listings:?}|{policy:?}|{day}|{has_hero}|{hero_nearby}|{hero_balance}|{mastered_companies:?}|{:?}|{:?}|{:?}|{:?}",
+        active_company.0,
+        &*founding,
+        &*founding_feedback,
         quote.0,
     );
     if roots.iter().any(|(_, root)| root.signature == signature) {
@@ -219,6 +533,17 @@ fn ensure_property_panel(
             property_listings.len(),
             policy,
         );
+        spawn_company_context(
+            panel,
+            entity,
+            &mastered_companies,
+            acting_company,
+            hero_balance,
+            &founding,
+            &founding_feedback,
+            has_hero,
+            hero_nearby,
+        );
         panel
             .spawn(Node {
                 flex_grow: 1.0,
@@ -239,12 +564,13 @@ fn ensure_property_panel(
                     has_hero,
                     hero_nearby,
                     hero_balance,
+                    acting_company,
                 );
                 spawn_property_column(body, property_listings, day);
             });
         panel.spawn((
             Text::new(
-                "The Hall issues the stamped permit first; you then choose its plot in the world. Paid permits stay refundable until placement. Construction Wood is a separate physical expense: your builder buys it from the market or gathers it locally.",
+                "Business permits are bought and owned by the company shown under ACTING AS. The paid permit fee stays refundable until placement; all other money remains ordinary company cash for materials, wages, inputs or expansion.",
             ),
             TextFont {
                 font_size: FontSize::Px(10.0),
@@ -396,6 +722,249 @@ fn spawn_stat(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String)
         });
 }
 
+#[allow(clippy::too_many_arguments)]
+fn spawn_company_context(
+    panel: &mut ChildSpawnerCommands<'_>,
+    hall: Entity,
+    mastered: &[ActingCompanyView],
+    acting: Option<&ActingCompanyView>,
+    wallet: u64,
+    founding: &CompanyFoundingDraft,
+    feedback: &CompanyFoundingFeedback,
+    has_hero: bool,
+    hero_nearby: bool,
+) {
+    panel
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                flex_shrink: 0.0,
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(7.0),
+                padding: UiRect::axes(Val::Px(22.0), Val::Px(10.0)),
+                border: UiRect::bottom(Val::Px(1.0)),
+                ..default()
+            },
+            BackgroundColor(LIMEWASH_WELL),
+            BorderColor::all(PLATE_RULE_SOFT),
+        ))
+        .with_children(|context| {
+            if !has_hero {
+                context.spawn((
+                    Text::new("ACTING AS  /  Create a Hero to found or represent a company."),
+                    TextFont {
+                        font_size: FontSize::Px(10.0),
+                        ..default()
+                    },
+                    TextColor(INK_MUTED),
+                ));
+                return;
+            }
+            if founding.visible {
+                context.spawn((
+                    Text::new(if mastered.is_empty() {
+                        "COMPANY REQUIRED  /  Found and fund a company before buying a business permit."
+                    } else {
+                        "FOUND ANOTHER COMPANY  /  It receives its own treasury, Master and 1,000 shares."
+                    }),
+                    TextFont {
+                        font_size: FontSize::Px(9.0),
+                        ..default()
+                    },
+                    TextColor(INK),
+                ));
+                context
+                    .spawn(Node {
+                        width: Val::Percent(100.0),
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(7.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        let mut field = row.spawn((
+                            CompanyNameField,
+                            Button,
+                            Node {
+                                flex_grow: 1.0,
+                                min_height: Val::Px(31.0),
+                                padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                                ..default()
+                            },
+                            BackgroundColor(LIMEWASH),
+                            BorderColor::all(if founding.editing_name {
+                                INK
+                            } else {
+                                PLATE_RULE_SOFT
+                            }),
+                        ));
+                        field.with_child((
+                            Text::new(format!(
+                                "NAME  {}{}",
+                                if founding.name.is_empty() {
+                                    "Type a company name"
+                                } else {
+                                    &founding.name
+                                },
+                                if founding.editing_name { " |" } else { "" }
+                            )),
+                            TextFont {
+                                font_size: FontSize::Px(9.0),
+                                ..default()
+                            },
+                            TextColor(INK),
+                            Pickable::IGNORE,
+                        ));
+                        context_button(row, AdjustFoundingCapital(-500), "−5");
+                        context_button(row, AdjustFoundingCapital(-100), "−1");
+                        row.spawn((
+                            Text::new(format!(
+                                "CAPITAL\n{} coin",
+                                format_money(founding.initial_capital)
+                            )),
+                            TextFont {
+                                font_size: FontSize::Px(8.5),
+                                ..default()
+                            },
+                            TextColor(INK),
+                            Node {
+                                width: Val::Px(72.0),
+                                ..default()
+                            },
+                        ));
+                        context_button(row, AdjustFoundingCapital(100), "+1");
+                        context_button(row, AdjustFoundingCapital(500), "+5");
+                        if hero_nearby && !founding.pending {
+                            context_button(row, FoundCompanyButton { hall }, "FOUND COMPANY");
+                        } else {
+                            row.spawn((
+                                Text::new(if founding.pending {
+                                    "REGISTERING..."
+                                } else {
+                                    "VISIT THE HALL"
+                                }),
+                                TextFont {
+                                    font_size: FontSize::Px(8.5),
+                                    ..default()
+                                },
+                                TextColor(INK_MUTED),
+                            ));
+                        }
+                        if !mastered.is_empty() && !founding.pending {
+                            context_button(row, CancelCompanyFounding, "CANCEL");
+                        }
+                    });
+                context.spawn((
+                    Text::new(format!(
+                        "Personal wallet: {} coin  /  the contribution becomes ordinary company cash.",
+                        format_money(wallet)
+                    )),
+                    TextFont {
+                        font_size: FontSize::Px(8.5),
+                        ..default()
+                    },
+                    TextColor(INK_MUTED),
+                ));
+            } else if let Some(acting) = acting {
+                context
+                    .spawn(Node {
+                        width: Val::Percent(100.0),
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(8.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        row.spawn((
+                            Text::new("ACTING AS"),
+                            TextFont {
+                                font_size: FontSize::Px(8.0),
+                                ..default()
+                            },
+                            TextColor(INK_MUTED),
+                        ));
+                        if mastered.len() > 1 {
+                            context_button(row, CycleActingCompany(-1), "‹");
+                        }
+                        row.spawn((
+                            Text::new(format!(
+                                "{}  /  treasury {} coin",
+                                acting.name,
+                                format_money(acting.cash)
+                            )),
+                            TextFont {
+                                font_size: FontSize::Px(11.0),
+                                ..default()
+                            },
+                            TextColor(INK),
+                            Node {
+                                flex_grow: 1.0,
+                                ..default()
+                            },
+                        ));
+                        if mastered.len() > 1 {
+                            context_button(row, CycleActingCompany(1), "›");
+                            row.spawn((
+                                Text::new(format!("{} companies", mastered.len())),
+                                TextFont {
+                                    font_size: FontSize::Px(8.0),
+                                    ..default()
+                                },
+                                TextColor(INK_MUTED),
+                            ));
+                        }
+                        context_button(row, OpenCompanyFounding, "NEW COMPANY");
+                    });
+            }
+            if !feedback.message.is_empty() {
+                context.spawn((
+                    Text::new(feedback.message.clone()),
+                    TextFont {
+                        font_size: FontSize::Px(8.5),
+                        ..default()
+                    },
+                    TextColor(if feedback.success {
+                        Color::srgb(0.20, 0.48, 0.27)
+                    } else {
+                        Color::srgb(0.70, 0.20, 0.16)
+                    }),
+                ));
+            }
+        });
+}
+
+fn context_button(
+    parent: &mut ChildSpawnerCommands<'_>,
+    marker: impl Component,
+    label: impl Into<String>,
+) {
+    parent
+        .spawn((
+            marker,
+            Button,
+            Node {
+                min_height: Val::Px(30.0),
+                padding: UiRect::axes(Val::Px(9.0), Val::Px(6.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                ..default()
+            },
+            BackgroundColor(BUTTON_NORMAL),
+            BorderColor::all(PLATE_RULE_SOFT),
+        ))
+        .with_child((
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(8.5),
+                ..default()
+            },
+            TextColor(INK),
+            Pickable::IGNORE,
+        ));
+}
+
 fn spawn_permit_column(
     body: &mut ChildSpawnerCommands<'_>,
     hall: Entity,
@@ -406,6 +975,7 @@ fn spawn_permit_column(
     has_hero: bool,
     hero_nearby: bool,
     hero_balance: u64,
+    acting_company: Option<&ActingCompanyView>,
 ) {
     body.spawn(Node {
         width: Val::Percent(50.0),
@@ -450,6 +1020,7 @@ fn spawn_permit_column(
                             has_hero,
                             hero_nearby,
                             hero_balance,
+                            acting_company,
                         );
                     }
                 }
@@ -545,6 +1116,7 @@ fn spawn_permit_card(
     has_hero: bool,
     hero_nearby: bool,
     hero_balance: u64,
+    acting_company: Option<&ActingCompanyView>,
 ) {
     let price = offer_price(opportunity, policy);
     let kind = opportunity.kind;
@@ -632,8 +1204,14 @@ fn spawn_permit_card(
                 };
                 spawn_inline_fact(facts, "CAPACITY", capacity);
             });
-            let exact = quote
-                .filter(|quote| quote.settlement == settlement && quote.kind == opportunity.kind);
+            let permit_company = (kind != SettlementBuildingKind::House)
+                .then(|| acting_company.map(|company| company.id))
+                .flatten();
+            let exact = quote.filter(|quote| {
+                quote.settlement == settlement
+                    && quote.kind == opportunity.kind
+                    && quote.company == permit_company
+            });
             if let Some(exact) = exact {
                 card.spawn(Node {
                     width: Val::Percent(100.0),
@@ -653,20 +1231,47 @@ fn spawn_permit_card(
                     );
                     spawn_inline_fact(
                         facts,
-                        "OPERATING ESCROW",
-                        format!("{} coin", format_money(exact.startup_capital)),
+                        "RECOMMENDED CASH",
+                        format!("{} coin", format_money(exact.recommended_working_capital)),
                     );
                     spawn_inline_fact(
                         facts,
-                        "TOTAL HELD",
+                        "CASH AFTER FEE",
                         format!(
                             "{} coin",
-                            format_money(exact.fee.saturating_add(exact.startup_capital))
+                            format_money(
+                                exact
+                                    .company
+                                    .map_or(exact.wallet_balance, |_| exact.company_cash)
+                                    .saturating_sub(exact.fee)
+                            )
+                        ),
+                    );
+                    spawn_inline_fact(
+                        facts,
+                        "PURCHASER",
+                        exact.company.map_or_else(
+                            || format!("Personal wallet {}", format_money(exact.wallet_balance)),
+                            |company| {
+                                acting_company.map_or_else(
+                                    || format!("Company #{}", company.0),
+                                    |company| company.name.clone(),
+                                )
+                            },
                         ),
                     );
                 });
             }
-            spawn_permit_action(card, hall, kind, exact, has_hero, hero_nearby, hero_balance);
+            spawn_permit_action(
+                card,
+                hall,
+                kind,
+                exact,
+                has_hero,
+                hero_nearby,
+                hero_balance,
+                acting_company,
+            );
         });
 }
 
@@ -678,9 +1283,13 @@ fn spawn_permit_action(
     has_hero: bool,
     hero_nearby: bool,
     hero_balance: u64,
+    acting_company: Option<&ActingCompanyView>,
 ) {
     let privately_available = kind.minimum_player_permit_tier().is_some();
-    let quoted_total = quote.map(|quote| quote.fee.saturating_add(quote.startup_capital));
+    let business_permit = kind != SettlementBuildingKind::House;
+    let selected_company = business_permit
+        .then(|| acting_company.map(|company| company.id))
+        .flatten();
     let (label, hint, marker): (String, String, Option<PurchasePermitButton>) =
         if !privately_available {
             (
@@ -700,12 +1309,26 @@ fn spawn_permit_action(
                 "Move your hero within 12 m of the permit desk.".into(),
                 None,
             )
+        } else if business_permit && acting_company.is_none() {
+            (
+                "FOUND A COMPANY ABOVE".into(),
+                "Business permits cannot be bought personally.".into(),
+                None,
+            )
         } else if let Some(quote) = quote {
-            let total = quoted_total.unwrap_or(0);
-            if hero_balance < total {
+            let available = if business_permit {
+                quote.company_cash
+            } else {
+                hero_balance
+            };
+            if available < quote.fee {
                 (
-                    format!("NEED {} COIN", format_money(total - hero_balance)),
-                    format!("Wallet: {} coin", format_money(hero_balance)),
+                    format!("NEED {} COIN", format_money(quote.fee - available)),
+                    format!(
+                        "{} treasury: {} coin. Add capital explicitly in the Companies ledger.",
+                        acting_company.map_or("Personal", |company| company.name.as_str()),
+                        format_money(available),
+                    ),
                     None,
                 )
             } else {
@@ -713,14 +1336,23 @@ fn spawn_permit_action(
                     if kind == SettlementBuildingKind::House {
                         "CLAIM & CHOOSE PLOT".into()
                     } else {
-                        format!("BUY FOR {} COIN", format_money(total))
+                        format!(
+                            "BUY FOR {}  /  {} COIN",
+                            acting_company.map_or("COMPANY", |company| company.name.as_str()),
+                            format_money(quote.fee),
+                        )
                     },
-                    "The full amount stays refundable until you place it.".into(),
+                    if business_permit {
+                        "Only the permit fee leaves the treasury; all working cash stays available."
+                            .to_string()
+                    } else {
+                        "The paid fee stays refundable until you place it.".into()
+                    },
                     Some(PurchasePermitButton {
                         hall,
                         kind,
+                        company: selected_company,
                         fee: quote.fee,
-                        startup_capital: quote.startup_capital,
                     }),
                 )
             }
@@ -731,14 +1363,14 @@ fn spawn_permit_action(
                 Some(PurchasePermitButton {
                     hall,
                     kind,
+                    company: None,
                     fee: 0,
-                    startup_capital: 0,
                 }),
             )
         } else {
             (
                 "REVIEW EXACT PERMIT".into(),
-                "The Hall will calculate your fee and required working capital.".into(),
+                "The Hall will calculate the exact fee; recommended cash remains advisory.".into(),
                 None,
             )
         };
@@ -768,7 +1400,11 @@ fn spawn_permit_action(
     if let Some(marker) = marker {
         button.insert(marker);
     } else if enabled {
-        button.insert(RequestPermitQuoteButton { hall, kind });
+        button.insert(RequestPermitQuoteButton {
+            hall,
+            kind,
+            company: selected_company,
+        });
     }
     button.with_children(|button| {
         button
@@ -978,11 +1614,17 @@ fn despawn_property_panel(
     mut commands: Commands,
     roots: Query<Entity, With<PropertyPanelRoot>>,
     mut target: ResMut<PropertyMarketTarget>,
+    mut active: ResMut<ActiveCompany>,
+    mut founding: ResMut<CompanyFoundingDraft>,
+    mut feedback: ResMut<CompanyFoundingFeedback>,
 ) {
     for root in roots.iter() {
         commands.entity(root).despawn();
     }
     target.0 = None;
+    active.0 = None;
+    *founding = default();
+    *feedback = default();
 }
 
 #[cfg(test)]
@@ -1029,6 +1671,7 @@ mod tests {
                 false,
                 false,
                 0,
+                None,
             );
             spawn_property_column(body, &[], 0);
         });
@@ -1055,8 +1698,15 @@ mod tests {
             settlement_name: "Oakfell".into(),
             kind: SettlementBuildingKind::Farmstead,
             fee: 300,
-            startup_capital: 0,
+            recommended_working_capital: 500,
             wallet_balance: 1_000,
+            company: Some(CompanyId(9)),
+            company_cash: 1_000,
+        };
+        let acting = ActingCompanyView {
+            id: CompanyId(9),
+            name: "Oakfell Farms".into(),
+            cash: 1_000,
         };
         world.commands().entity(root).with_children(|body| {
             spawn_permit_card(
@@ -1074,6 +1724,7 @@ mod tests {
                 true,
                 true,
                 1_000,
+                Some(&acting),
             );
         });
         world.flush();
@@ -1082,7 +1733,7 @@ mod tests {
         let purchase = buttons.single(&world).unwrap();
         assert_eq!(purchase.hall, hall);
         assert_eq!(purchase.kind, SettlementBuildingKind::Farmstead);
+        assert_eq!(purchase.company, Some(CompanyId(9)));
         assert_eq!(purchase.fee, 300);
-        assert_eq!(purchase.startup_capital, 0);
     }
 }

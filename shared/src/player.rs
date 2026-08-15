@@ -6,7 +6,7 @@ pub const PLAYER_SPEED: f32 = 8.0;
 /// Hero walk speed (m/s). Tuned to the voxel character's 1.04s walk cycle so
 /// the feet don't skate; the client scales animation speed from actual
 /// velocity, so small changes here stay in sync automatically.
-pub const HERO_MOVE_SPEED: f32 = 3.2;
+pub const HERO_MOVE_SPEED: f32 = 3.52;
 /// Distance at which a hero move order counts as arrived.
 pub const HERO_ARRIVE_EPSILON: f32 = 0.15;
 

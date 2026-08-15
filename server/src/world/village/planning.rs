@@ -29,6 +29,85 @@ pub struct PermitPlanningDiagnostics {
     pub final_access_milliseconds: Vec<f64>,
 }
 
+#[derive(Debug, Default)]
+struct CompanyExpansionFunds {
+    available: u64,
+    entity: Option<Entity>,
+}
+
+fn debit_company_expansion(
+    funds: &mut CompanyExpansionFunds,
+    accounts: &mut Query<(
+        Entity,
+        &shared::components::CompanyId,
+        &mut shared::economy::CompanyAccount,
+    )>,
+    amount: u64,
+) -> bool {
+    if funds.available < amount {
+        return false;
+    }
+    let Some(entity) = funds.entity else {
+        return false;
+    };
+    let Ok((_, _, mut account)) = accounts.get_mut(entity) else {
+        return false;
+    };
+    if !account.debit(amount) {
+        return false;
+    }
+    funds.available -= amount;
+    true
+}
+
+#[cfg(test)]
+mod company_funding_tests {
+    use super::*;
+    use bevy::ecs::system::SystemState;
+
+    #[test]
+    fn company_expansion_debit_conserves_cash_and_never_touches_reserves() {
+        let mut world = World::new();
+        let company = shared::components::CompanyId(8);
+        let company_entity = world
+            .spawn((
+                company,
+                shared::economy::CompanyAccount {
+                    cash: 1_500,
+                    ..default()
+                },
+            ))
+            .id();
+        let mut funds = CompanyExpansionFunds {
+            available: 800,
+            entity: Some(company_entity),
+        };
+        let mut state = SystemState::<
+            Query<(
+                Entity,
+                &shared::components::CompanyId,
+                &mut shared::economy::CompanyAccount,
+            )>,
+        >::new(&mut world);
+        {
+            let mut accounts = state
+                .get_mut(&mut world)
+                .expect("valid company account query");
+            assert!(debit_company_expansion(&mut funds, &mut accounts, 650));
+        }
+        state.apply(&mut world);
+
+        assert_eq!(funds.available, 150);
+        assert_eq!(
+            world
+                .get::<shared::economy::CompanyAccount>(company_entity)
+                .unwrap()
+                .cash,
+            850
+        );
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct SiteSearchRejections {
     sampled: u32,
@@ -154,9 +233,9 @@ pub(super) fn should_try_complementary_fishing(
 /// Distinct decisions may be in flight together. Planned kinds count as already
 /// had, each applicant can hold only one active build, and pending plots reserve
 /// their ground, so concurrency cannot duplicate or overlap construction.
-/// Needed housing approval is free. A business permit always moves personal
-/// coin into the settlement treasury, discounted when the settlement requested
-/// that trade and progressively dearer for residents with several holdings.
+/// Needed housing approval is free. A business permit belongs to a company:
+/// retained company cash pays the actual civic fee, while a first-time sole
+/// founder explicitly capitalises a company before its site is approved.
 #[allow(clippy::too_many_arguments)]
 pub fn consider_permits(
     simulation_time: crate::world::simulation_time::SimulationTime,
@@ -177,13 +256,25 @@ pub fn consider_permits(
     )>,
     economies: Query<&SettlementEconomy>,
     developments: Query<&shared::components::SettlementDevelopment>,
-    buildings: Query<(
-        &SettlementBuilding,
-        &shared::components::BuildingOf,
-        Option<&shared::components::OwnedBy>,
-        Option<&BusinessCondition>,
-        Option<&GoodsInventory>,
-        Option<&BusinessAccount>,
+    mut buildings: ParamSet<(
+        Query<(
+            Entity,
+            &SettlementBuilding,
+            &shared::components::BuildingOf,
+            Option<&shared::components::OwnedBy>,
+            Option<&BusinessCondition>,
+            Option<&GoodsInventory>,
+            Option<&BusinessAccount>,
+            Option<&shared::components::BuildingId>,
+            Option<&shared::components::OperatedBy>,
+            Option<&BusinessWagePolicy>,
+            Option<&BusinessStaffingPolicy>,
+        )>,
+        Query<(
+            Entity,
+            &shared::components::CompanyId,
+            &mut shared::economy::CompanyAccount,
+        )>,
     )>,
     pending: Query<(&UnderConstruction, &GoodsInventory)>,
     road_requests: Query<&RoadRequest>,
@@ -226,6 +317,85 @@ pub fn consider_permits(
         return;
     };
 
+    let company_by_master: HashMap<shared::components::PersonId, shared::components::CompanyId> =
+        planning
+            .companies
+            .iter()
+            .map(|(id, leadership, _, _)| (leadership.master, *id))
+            .collect();
+    let company_reserve_days: HashMap<shared::components::CompanyId, u8> = planning
+        .companies
+        .iter()
+        .map(|(id, _, policy, _)| (*id, policy.payroll_reserve_days))
+        .collect();
+    // A sole proprietor can inject more of their own money without changing
+    // anybody else's economic interest. Once shares are split, an automatic
+    // personal top-up would enrich the other shareholders for free; co-owned
+    // firms therefore expand only from retained cash until explicit company
+    // loans or primary share issuance are introduced.
+    let personal_capital_companies: HashSet<shared::components::CompanyId> = planning
+        .companies
+        .iter()
+        .filter_map(|(id, leadership, _, ownership)| {
+            ownership
+                .is_none_or(|ownership| {
+                    ownership.share_count(leadership.master)
+                        == shared::components::COMPANY_TOTAL_SHARES
+                })
+                .then_some(*id)
+        })
+        .collect();
+    let mut company_funds = HashMap::<shared::components::CompanyId, CompanyExpansionFunds>::new();
+    let mut protected_payroll = HashMap::<shared::components::CompanyId, u64>::new();
+    {
+        let business_read = buildings.p0();
+        for (_, building, _, _, _, _, account, _, operated_by, wage, staffing) in
+            business_read.iter()
+        {
+            let (Some(_account), Some(operated_by)) = (account, operated_by) else {
+                continue;
+            };
+            let reserve_days = u64::from(
+                company_reserve_days
+                    .get(&operated_by.0)
+                    .copied()
+                    .unwrap_or(1),
+            );
+            let fallback_wage = BusinessWagePolicy {
+                daily_wage: FOUNDING_DAILY_WAGE,
+                automatic: true,
+                ..default()
+            };
+            let enabled_positions = staffing
+                .copied()
+                .unwrap_or_else(|| BusinessStaffingPolicy::new(building.kind.positions()))
+                .target_for(building.kind);
+            let payroll = u64::from(enabled_positions)
+                .saturating_mul(wage.unwrap_or(&fallback_wage).daily_wage)
+                .saturating_mul(reserve_days);
+            let protected = protected_payroll.entry(operated_by.0).or_default();
+            *protected = protected.saturating_add(payroll);
+        }
+    }
+    {
+        let mut accounts = buildings.p1();
+        for (entity, company_id, account) in accounts.iter_mut() {
+            company_funds.insert(
+                *company_id,
+                CompanyExpansionFunds {
+                    available: shared::economy::company_expansion_cash(
+                        &account,
+                        protected_payroll
+                            .get(company_id)
+                            .copied()
+                            .unwrap_or_default(),
+                    ),
+                    entity: Some(entity),
+                },
+            );
+        }
+    }
+
     for (
         settlement_entity,
         mut settlement,
@@ -242,10 +412,11 @@ pub fn consider_permits(
         // deciding on successive permit ticks all build the same thing.
         let mut have: HashMap<SettlementBuildingKind, usize> = HashMap::new();
         let mut completed: HashMap<SettlementBuildingKind, usize> = HashMap::new();
-        for (building, _, _, _, _, _) in
-            buildings
+        let business_read = buildings.p0();
+        for (_, building, _, _, _, _, _, _, _, _, _) in
+            business_read
                 .iter()
-                .filter(|(_, building_of, _, condition, _, _)| {
+                .filter(|(_, _, building_of, _, condition, _, _, _, _, _, _)| {
                     building_of.0 == *settlement_id
                         && !condition
                             .is_some_and(|condition| !condition.state.counts_as_active_capacity())
@@ -287,6 +458,7 @@ pub fn consider_permits(
             fishers: count(SettlementBuildingKind::FishermansHut),
             windmills: count(SettlementBuildingKind::Windmill),
             bakeries: count(SettlementBuildingKind::Bakery),
+            storage_halls: count(SettlementBuildingKind::StorageHall),
             completed_windmills: completed
                 .get(&SettlementBuildingKind::Windmill)
                 .copied()
@@ -299,7 +471,9 @@ pub fn consider_permits(
             houses: count(SettlementBuildingKind::House),
             ..Default::default()
         };
-        for (building, building_of, _, condition, inventory, account) in buildings.iter() {
+        for (_, building, building_of, _, condition, inventory, account, _, _, _, _) in
+            business_read.iter()
+        {
             if building_of.0 != *settlement_id
                 || condition.is_some_and(|condition| !condition.state.counts_as_active_capacity())
             {
@@ -408,13 +582,20 @@ pub fn consider_permits(
         // and every opportunity makes permit review O(people × opportunities
         // × buildings), which is exactly the wrong curve for a mature town.
         let mut holding_counts = HashMap::<shared::components::PersonId, usize>::new();
+        let mut private_site_counts = HashMap::<shared::components::PersonId, usize>::new();
+        let mut storage_holders = HashSet::<shared::components::PersonId>::new();
         let mut holdings_by_kind =
             HashSet::<(shared::components::PersonId, SettlementBuildingKind)>::new();
-        for (building, building_of, owner, _, _, _) in buildings.iter() {
+        for (_, building, building_of, owner, _, _, _, _, _, _, _) in business_read.iter() {
             if building_of.0 == *settlement_id {
                 if let Some(owner) = owner {
                     *holding_counts.entry(owner.0).or_default() += 1;
                     holdings_by_kind.insert((owner.0, building.kind));
+                    if building.kind == SettlementBuildingKind::StorageHall {
+                        storage_holders.insert(owner.0);
+                    } else if is_private_business(building.kind) {
+                        *private_site_counts.entry(owner.0).or_default() += 1;
+                    }
                 }
             }
         }
@@ -423,11 +604,25 @@ pub fn consider_permits(
                 if let Some(owner) = under.owner_id {
                     *holding_counts.entry(owner).or_default() += 1;
                     holdings_by_kind.insert((owner, under.kind));
+                    if under.kind == SettlementBuildingKind::StorageHall {
+                        storage_holders.insert(owner);
+                    } else if is_private_business(under.kind) {
+                        *private_site_counts.entry(owner).or_default() += 1;
+                    }
                 }
             }
         }
         let holdings = |who: shared::components::PersonId| -> usize {
             holding_counts.get(&who).copied().unwrap_or(0)
+        };
+        // NPC depots must belong to an established local branch. A player is
+        // still free to buy the tier-unlocked permit from the public board,
+        // but autonomous founders do not create a 2,400-bulk warehouse as
+        // their first or only business.
+        let may_found_storage = |who: shared::components::PersonId| -> bool {
+            company_by_master.contains_key(&who)
+                && private_site_counts.get(&who).copied().unwrap_or(0) >= 2
+                && !storage_holders.contains(&who)
         };
         let mut blocked_portfolios = HashSet::<shared::components::PersonId>::new();
         for (owner, condition, for_sale) in planning.portfolios.iter() {
@@ -438,7 +633,7 @@ pub fn consider_permits(
             }
         }
         for (under, _) in pending.iter() {
-            if under.settlement_id == *settlement_id && business_output(under.kind).is_some() {
+            if under.settlement_id == *settlement_id && is_private_business(under.kind) {
                 if let Some(owner) = under.owner_id {
                     blocked_portfolios.insert(owner);
                 }
@@ -476,6 +671,29 @@ pub fn consider_permits(
                 },
             )
             .collect();
+        let investment_balance = |entity: Entity,
+                                  person: shared::components::PersonId,
+                                  kind: SettlementBuildingKind|
+         -> u64 {
+            let personal = wallets
+                .get(entity)
+                .map(|wallet| wallet.balance())
+                .unwrap_or(shared::economy::STARTING_VILLAGER_MONEY);
+            if !is_private_business(kind) {
+                return personal;
+            }
+            let Some(company) = company_by_master.get(&person) else {
+                return personal;
+            };
+            let retained = company_funds
+                .get(company)
+                .map_or(0, |funds| funds.available);
+            if personal_capital_companies.contains(company) {
+                personal.saturating_add(retained)
+            } else {
+                retained
+            }
+        };
 
         let mut opportunities = private_opportunities(
             signals,
@@ -529,6 +747,8 @@ pub fn consider_permits(
                                 && blocked_portfolios.contains(person_id))
                             || (opportunity.requires_independent_owner
                                 && holdings_by_kind.contains(&(*person_id, opportunity.kind)))
+                            || (opportunity.kind == SettlementBuildingKind::StorageHall
+                                && !may_found_storage(*person_id))
                         {
                             return None;
                         }
@@ -539,10 +759,7 @@ pub fn consider_permits(
                             opportunity.civic_priority,
                             policies.business_permit_subsidy_bps,
                         );
-                        let balance = wallets
-                            .get(*entity)
-                            .map(|wallet| wallet.balance())
-                            .unwrap_or(shared::economy::STARTING_VILLAGER_MONEY);
+                        let balance = investment_balance(*entity, *person_id, opportunity.kind);
                         let startup_capital = minimum_startup_capital(opportunity.kind, market);
                         if balance < fee.saturating_add(startup_capital) {
                             return None;
@@ -645,6 +862,10 @@ pub fn consider_permits(
                 {
                     return false;
                 }
+                if missing == SettlementBuildingKind::StorageHall && !may_found_storage(*person_id)
+                {
+                    return false;
+                }
                 if missing.is_civic() {
                     if !civic_job.is_some_and(|job| {
                         job.settlement == *settlement_id
@@ -661,11 +882,7 @@ pub fn consider_permits(
                     selected_opportunity.civic_priority,
                     policies.business_permit_subsidy_bps,
                 );
-                wallets
-                    .get(*entity)
-                    .map(|wallet| wallet.balance())
-                    .unwrap_or(shared::economy::STARTING_VILLAGER_MONEY)
-                    >= fee
+                investment_balance(*entity, *person_id, missing) >= fee
             },
         );
         if !has_eligible_applicant {
@@ -1115,6 +1332,11 @@ pub fn consider_permits(
                 {
                     return None;
                 }
+                if kind == SettlementBuildingKind::StorageHall
+                    && !may_found_storage(*person_id)
+                {
+                    return None;
+                }
                 if kind.is_civic() {
                     if !civic_job.is_some_and(|job| {
                         job.settlement == *settlement_id
@@ -1163,10 +1385,7 @@ pub fn consider_permits(
                     actual_opportunity.civic_priority,
                     policies.business_permit_subsidy_bps,
                 );
-                let balance = wallets
-                    .get(entity)
-                    .map(|wallet| wallet.balance())
-                    .unwrap_or(shared::economy::STARTING_VILLAGER_MONEY);
+                let balance = investment_balance(entity, *person_id, kind);
                 let startup_capital = minimum_startup_capital(kind, market);
                 if balance < fee.saturating_add(startup_capital) {
                     return None;
@@ -1240,17 +1459,97 @@ pub fn consider_permits(
             demand_subsidized,
             policies.business_permit_subsidy_bps,
         );
-        let applicant_debit = fee.saturating_add(startup_capital);
-        if let Ok(mut wallet) = wallets.get_mut(builder) {
-            if !wallet.debit(applicant_debit) {
-                continue;
+        let prudent_company_cash = fee.saturating_add(startup_capital);
+        let mut operating_company = is_private_business(kind)
+            .then(|| company_by_master.get(&applicant_id).copied())
+            .flatten();
+        let company_paid = if let Some(company) = operating_company {
+            if company_funds
+                .get(&company)
+                .is_some_and(|funds| funds.available >= prudent_company_cash)
+            {
+                let mut accounts = buildings.p1();
+                debit_company_expansion(
+                    company_funds
+                        .get_mut(&company)
+                        .expect("checked company expansion funds"),
+                    &mut accounts,
+                    fee,
+                )
+            } else {
+                false
             }
         } else {
-            // Old/test villagers without a wallet migrate into the live rule
-            // with the same founding endowment, minus this real fee.
-            commands.entity(builder).insert(Wallet::new(
-                shared::economy::STARTING_VILLAGER_MONEY.saturating_sub(applicant_debit),
-            ));
+            false
+        };
+        let mut contributed_capital = 0;
+        if !company_paid {
+            if operating_company
+                .is_some_and(|company| !personal_capital_companies.contains(&company))
+            {
+                // Defensive recheck: the applicant scoring already excludes
+                // this case, but another approved permit may have reduced the
+                // pooled expansion balance earlier in the same update.
+                continue;
+            }
+            if let Some(company) = operating_company {
+                let Some(funds) = company_funds.get_mut(&company) else {
+                    continue;
+                };
+                let shortfall = prudent_company_cash.saturating_sub(funds.available);
+                if let Ok(mut wallet) = wallets.get_mut(builder) {
+                    if !wallet.debit(shortfall) {
+                        continue;
+                    }
+                } else {
+                    commands.entity(builder).insert(Wallet::new(
+                        shared::economy::STARTING_VILLAGER_MONEY.saturating_sub(shortfall),
+                    ));
+                }
+                let Some(company_entity) = funds.entity else {
+                    continue;
+                };
+                let mut accounts = buildings.p1();
+                let Ok((_, _, mut account)) = accounts.get_mut(company_entity) else {
+                    continue;
+                };
+                account.credit(shortfall);
+                if !account.debit(fee) {
+                    continue;
+                }
+                account.contributed_capital = account.contributed_capital.saturating_add(shortfall);
+                funds.available = funds
+                    .available
+                    .saturating_add(shortfall)
+                    .saturating_sub(fee);
+                contributed_capital = shortfall;
+            } else {
+                if let Ok(mut wallet) = wallets.get_mut(builder) {
+                    if !wallet.debit(prudent_company_cash) {
+                        continue;
+                    }
+                } else {
+                    // Old/test villagers without a wallet migrate into the live
+                    // rule with the same founding endowment, minus this capital.
+                    commands.entity(builder).insert(Wallet::new(
+                        shared::economy::STARTING_VILLAGER_MONEY
+                            .saturating_sub(prudent_company_cash),
+                    ));
+                }
+                if is_private_business(kind) {
+                    let company = planning.ids.company();
+                    commands.spawn(super::new_company_bundle(
+                        company,
+                        format!("{} & Company", applicant),
+                        civic_day.saturating_sub(1),
+                        applicant_id,
+                        startup_capital,
+                        prudent_company_cash,
+                    ));
+                    operating_company = Some(company);
+                    contributed_capital = prudent_company_cash;
+                }
+            }
         }
         settlement.treasury = settlement.treasury.saturating_add(fee);
         if let Some(account) = civic_account.as_deref_mut() {
@@ -1309,13 +1608,17 @@ pub fn consider_permits(
                 Replicate::to_clients(NetworkTarget::All),
             ))
             .id();
-        if startup_capital > 0 {
-            // The permit and the firm are separate accounts. Hold the input
-            // money on the worksite until completion so household shopping or
-            // construction cannot spend it before the processor opens.
-            commands
-                .entity(site)
-                .insert(InheritedBusinessCapital(startup_capital));
+        if is_private_business(kind) {
+            commands.entity(site).insert((
+                BusinessProjectAccounting {
+                    company: operating_company,
+                    contributed_capital,
+                    capital_expenditure: fee,
+                },
+                shared::components::OperatedBy(
+                    operating_company.expect("private permit formed or selected a company"),
+                ),
+            ));
         }
 
         // Approval reserves the plot and money immediately, but a tactical
@@ -3058,7 +3361,8 @@ fn find_site_with_plan_diagnostics(
         | SettlementBuildingKind::Market
         | SettlementBuildingKind::Tavern
         | SettlementBuildingKind::Church
-        | SettlementBuildingKind::Bakery => 18.0,
+        | SettlementBuildingKind::Bakery
+        | SettlementBuildingKind::StorageHall => 18.0,
         SettlementBuildingKind::Farmstead
         | SettlementBuildingKind::LumberjackHut
         | SettlementBuildingKind::FishermansHut

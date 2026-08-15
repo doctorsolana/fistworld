@@ -13,19 +13,21 @@
 use bevy::prelude::*;
 
 use shared::components::{
-    CivicHallLevel, ConstructionSite, FarmField, FishingPier, Household, MootAdministration,
-    PlayerPosition, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementDevelopment,
-    SettlementOpportunityBoard, SettlementPolicies, SettlementTier,
+    CivicHallLevel, CompanyId, ConstructionSite, FarmField, FishingPier, Household,
+    MootAdministration, OperatedBy, PlayerPosition, Settlement, SettlementBuilding,
+    SettlementBuildingKind, SettlementDevelopment, SettlementOpportunityBoard, SettlementPolicies,
+    SettlementTier,
 };
 use shared::economy::{
     business_working_capital, format_money, BusinessAccount, BusinessCondition, BusinessForSale,
-    BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy, BusinessWagePolicy,
-    Good, GoodsInventory, MootMarket, SettlementEconomy,
+    BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy,
+    BusinessStaffingPolicy, BusinessWagePolicy, Good, GoodsInventory, MootMarket,
+    SettlementEconomy,
 };
 
 use super::*;
 use crate::ui::hud::GodCapability;
-use crate::ui::styles::{TEXT_COLOR, TEXT_MUTED};
+use crate::ui::styles::{BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, TEXT_COLOR, TEXT_MUTED};
 
 /// One settlement the player knows about.
 #[derive(Clone, Debug)]
@@ -82,8 +84,11 @@ pub struct PlaceBuildingRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlaceBusinessRecord {
     pub account: BusinessAccount,
+    pub company: Option<shared::economy::CompanyAccount>,
+    pub company_id: Option<CompanyId>,
     pub sale: Option<BusinessSalePolicy>,
     pub wage: Option<BusinessWagePolicy>,
+    pub staffing: Option<BusinessStaffingPolicy>,
     pub management: Option<BusinessManagementPolicy>,
     pub procurement: Option<BusinessProcurementPolicy>,
     pub condition: Option<BusinessCondition>,
@@ -252,6 +257,8 @@ pub struct PlaceDetailValue(pub usize);
 /// `BusinessHistoryButton` only while a stable private business is selected.
 #[derive(Component)]
 pub struct PlaceBusinessHistoryAction;
+#[derive(Component)]
+pub struct PlaceBackToCompanyAction;
 
 // --- systems ---------------------------------------------------------------
 
@@ -286,11 +293,14 @@ pub(super) fn learn_settlements(
         Option<&BusinessAccount>,
         Option<&BusinessSalePolicy>,
         Option<&BusinessWagePolicy>,
+        Option<&BusinessStaffingPolicy>,
         Option<&BusinessManagementPolicy>,
         Option<&BusinessProcurementPolicy>,
         Option<&BusinessCondition>,
         Option<&BusinessForSale>,
+        Option<&OperatedBy>,
     )>,
+    companies: Query<(&CompanyId, &shared::economy::CompanyAccount)>,
     fields: Query<&FarmField>,
     piers: Query<&FishingPier>,
     sites: Query<(
@@ -301,6 +311,11 @@ pub(super) fn learn_settlements(
     )>,
     mut places: ResMut<KnownPlaces>,
 ) {
+    let company_accounts: std::collections::HashMap<CompanyId, shared::economy::CompanyAccount> =
+        companies
+            .iter()
+            .map(|(id, account)| (*id, *account))
+            .collect();
     // Decide FIRST whether anything changed, using read-only access, and only
     // then take the mutable borrow. Touching `ResMut` marks the resource changed
     // even when every write is diff-gated, because merely calling
@@ -331,10 +346,12 @@ pub(super) fn learn_settlements(
                     account,
                     sale,
                     wage,
+                    staffing,
                     management,
                     procurement,
                     condition,
                     for_sale,
+                    operated_by,
                 )| PlaceBuildingRecord {
                     id: building_id.copied(),
                     kind: building.kind,
@@ -351,8 +368,13 @@ pub(super) fn learn_settlements(
                     inventory_capacity: inventory_bulk(inventory).1,
                     business: account.map(|account| PlaceBusinessRecord {
                         account: *account,
+                        company: operated_by
+                            .and_then(|company| company_accounts.get(&company.0))
+                            .copied(),
+                        company_id: operated_by.map(|company| company.0),
                         sale: sale.copied(),
                         wage: wage.copied(),
+                        staffing: staffing.copied(),
                         management: management.copied(),
                         procurement: procurement.copied(),
                         condition: condition.copied(),
@@ -887,6 +909,7 @@ pub(super) fn handle_place_rows(
     mut selected_entry: ResMut<SelectedPlaceEntry>,
     rows: Query<(&Interaction, &PlaceRow), Changed<Interaction>>,
     buildings: Query<(&Interaction, &PlaceBuildingRow), Changed<Interaction>>,
+    mut return_to: ResMut<companies::CompanyDrilldownReturn>,
 ) {
     if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
         return;
@@ -894,15 +917,61 @@ pub(super) fn handle_place_rows(
     for (interaction, PlaceRow(name)) in rows.iter() {
         // The empty-state row names nowhere; clicking it must not select it.
         if *interaction == Interaction::Pressed && !name.is_empty() {
+            return_to.0 = None;
             selected.0 = Some(name.clone());
             *selected_entry = SelectedPlaceEntry::Overview;
         }
     }
     for (interaction, row) in buildings.iter() {
         if *interaction == Interaction::Pressed {
+            return_to.0 = None;
             selected.0 = Some(row.place.clone());
             *selected_entry = row.entry;
         }
+    }
+}
+
+pub(super) fn handle_back_to_company(
+    guard: Res<ClickGuard>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut buttons: Query<
+        (&Interaction, &mut BackgroundColor),
+        (With<PlaceBackToCompanyAction>, Changed<Interaction>),
+    >,
+    mut return_to: ResMut<companies::CompanyDrilldownReturn>,
+    mut selected: ResMut<companies::SelectedCompany>,
+    mut tab: ResMut<EncyclopediaTab>,
+) {
+    for (interaction, mut background) in buttons.iter_mut() {
+        background.0 = match *interaction {
+            Interaction::Pressed => BUTTON_PRESSED,
+            Interaction::Hovered => BUTTON_HOVERED,
+            Interaction::None => BUTTON_NORMAL,
+        };
+        if !guard.0
+            || !mouse.just_pressed(MouseButton::Left)
+            || *interaction != Interaction::Pressed
+        {
+            continue;
+        }
+        let Some(company) = return_to.0.take() else {
+            continue;
+        };
+        selected.0 = Some(company);
+        *tab = EncyclopediaTab::Companies;
+    }
+}
+
+pub(super) fn sync_back_to_company(
+    return_to: Res<companies::CompanyDrilldownReturn>,
+    mut buttons: Query<&mut Node, With<PlaceBackToCompanyAction>>,
+) {
+    for mut node in buttons.iter_mut() {
+        node.display = if return_to.0.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
     }
 }
 
@@ -1349,10 +1418,17 @@ fn place_detail_model(
                 .market
                 .as_ref()
                 .map_or(0, MootMarket::listed_edible_units);
+            let mut counted_companies = std::collections::HashSet::new();
             let business_cash = place
                 .buildings
                 .iter()
-                .filter_map(|building| building.business.map(|business| business.account.cash))
+                .filter_map(|building| building.business)
+                .filter_map(|business| {
+                    let company = business.company_id?;
+                    counted_companies
+                        .insert(company)
+                        .then_some(business.company.map_or(0, |account| account.cash))
+                })
                 .fold(0u64, u64::saturating_add);
             let business_arrears = place
                 .buildings
@@ -1443,7 +1519,7 @@ fn place_detail_model(
                         format!("{purchasable_food} / {unlisted_business_food} food units"),
                     ),
                     (
-                        "PRIVATE BUSINESS CASH".into(),
+                        "LOCAL COMPANY TREASURIES".into(),
                         format!("{} coin", format_money(business_cash)),
                     ),
                     (
@@ -1518,6 +1594,9 @@ fn place_detail_model(
                         SettlementBuildingKind::Bakery => {
                             "Buys 2 Flour, produces 4 Bread / 2 work positions".into()
                         }
+                        SettlementBuildingKind::StorageHall => {
+                            "Private company depot / 4 porter positions / 2,400 bulk storage".into()
+                        }
                     },
                 ),
             ];
@@ -1542,8 +1621,15 @@ fn place_detail_model(
                 rows.push((
                     "STAFFING".into(),
                     format!(
-                        "{} / {} workers",
+                        "{} employed / {} open / {} max",
                         building.workers.len(),
+                        building
+                            .business
+                            .and_then(|business| business.staffing)
+                            .unwrap_or_else(|| {
+                                BusinessStaffingPolicy::new(building.kind.positions())
+                            })
+                            .target_for(building.kind),
                         building.kind.positions()
                     ),
                 ));
@@ -1565,7 +1651,12 @@ fn place_detail_model(
                 let previous_profit = previous.profit();
                 let protected = match (business.wage, business.management, business.procurement) {
                     (Some(wage), Some(management), Some(procurement)) => business_working_capital(
-                        building.kind.positions(),
+                        business
+                            .staffing
+                            .unwrap_or_else(|| {
+                                BusinessStaffingPolicy::new(building.kind.positions())
+                            })
+                            .target_for(building.kind),
                         &wage,
                         &management,
                         &procurement,
@@ -1610,15 +1701,24 @@ fn place_detail_model(
                         ),
                     ),
                     (
-                        "BUSINESS CASH".into(),
-                        format!("{} coin", format_money(account.cash)),
+                        "COMPANY TREASURY".into(),
+                        business.company.map_or_else(
+                            || "Company account loading".into(),
+                            |company| format!("{} coin", format_money(company.cash)),
+                        ),
                     ),
                     (
-                        "PROTECTED / DRAWABLE".into(),
+                        "SITE REQUIREMENT / COMPANY FREE".into(),
                         format!(
                             "{} / {} coin",
                             format_money(protected.total_with_liabilities(&account)),
-                            format_money(account.withdrawable_profit(protected.total())),
+                            format_money(business.company.map_or(0, |company| {
+                                company
+                                    .cash
+                                    .saturating_sub(company.wage_arrears)
+                                    .saturating_sub(company.tax_arrears)
+                                    .saturating_sub(protected.total())
+                            })),
                         ),
                     ),
                     (
@@ -1660,9 +1760,10 @@ fn place_detail_model(
                             || "No offer configured".into(),
                             |policy| {
                                 format!(
-                                    "{} each / keep {} / collect {} / {} pricing",
+                                    "{} each / {} day company reserve ({} units) / collect {} / {} pricing",
                                     format_money(policy.asking_unit_price),
-                                    policy.keep_units,
+                                    policy.company_reserve_days,
+                                    policy.company_reserve_units,
                                     policy.max_units_per_collection,
                                     if policy.automatic_pricing {
                                         "automatic"
@@ -1705,9 +1806,10 @@ fn place_detail_model(
                                         let rule = policy.rule(good);
                                         rule.enabled.then(|| {
                                             format!(
-                                                "{} below {} → {} (max {})",
+                                                "{}: {} day{} cover → {}-unit target (max {})",
                                                 good.label(),
-                                                rule.reorder_below,
+                                                rule.coverage_days,
+                                                if rule.coverage_days == 1 { "" } else { "s" },
                                                 rule.target_units,
                                                 format_money(rule.maximum_unit_price),
                                             )
@@ -1951,8 +2053,14 @@ mod tests {
         account.roll_to_day(2);
         place.buildings[0].business = Some(PlaceBusinessRecord {
             account,
+            company: Some(shared::economy::CompanyAccount {
+                cash: 2_000,
+                ..default()
+            }),
+            company_id: Some(CompanyId(1)),
             sale: Some(BusinessSalePolicy::for_good(Good::Wheat)),
             wage: Some(BusinessWagePolicy::default()),
+            staffing: Some(BusinessStaffingPolicy::new(1)),
             management: Some(BusinessManagementPolicy::default()),
             procurement: Some(BusinessProcurementPolicy::default()),
             condition: Some(BusinessCondition::default()),
@@ -1962,7 +2070,7 @@ mod tests {
         for label in [
             "BUSINESS STATUS",
             "MANAGEMENT",
-            "BUSINESS CASH",
+            "COMPANY TREASURY",
             "LIABILITIES",
             "YESTERDAY P&L",
             "SALE POLICY",
@@ -1982,8 +2090,11 @@ mod tests {
         let mut place = explorer_place();
         place.buildings[0].business = Some(PlaceBusinessRecord {
             account: BusinessAccount::default(),
+            company: Some(shared::economy::CompanyAccount::default()),
+            company_id: Some(CompanyId(1)),
             sale: Some(BusinessSalePolicy::for_good(Good::Wheat)),
             wage: Some(BusinessWagePolicy::default()),
+            staffing: Some(BusinessStaffingPolicy::new(1)),
             management: Some(BusinessManagementPolicy::default()),
             procurement: Some(BusinessProcurementPolicy::default()),
             condition: Some(BusinessCondition::default()),

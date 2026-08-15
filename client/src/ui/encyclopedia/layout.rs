@@ -228,13 +228,7 @@ fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
                 "The people who answer to you appear here: the ones you hire, \
                  marry into, or inherit. You start alone.",
             );
-            spawn_placeholder_tab(
-                body,
-                EncyclopediaTab::Ledger,
-                "NO HOLDINGS YET",
-                "Coin, stock, and what your caravans owe you. Nothing to count \
-                 until you own something.",
-            );
+            super::companies::spawn_companies_tab(body);
         });
 }
 
@@ -245,9 +239,9 @@ fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
 /// second layout to read the other.
 fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
     use super::places::{
-        PlaceBusinessHistoryAction, PlaceCountText, PlaceDetailCard, PlaceDetailEmptyState,
-        PlaceDetailLabel, PlaceDetailLine, PlaceDetailName, PlaceDetailSubtitle, PlaceDetailValue,
-        PlacesListContent, PlacesListViewport,
+        PlaceBackToCompanyAction, PlaceBusinessHistoryAction, PlaceCountText, PlaceDetailCard,
+        PlaceDetailEmptyState, PlaceDetailLabel, PlaceDetailLine, PlaceDetailName,
+        PlaceDetailSubtitle, PlaceDetailValue, PlacesListContent, PlacesListViewport,
     };
 
     body.spawn((
@@ -435,6 +429,32 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                 ..default()
                             })
                             .with_children(|actions| {
+                                actions
+                                    .spawn((
+                                        PlaceBackToCompanyAction,
+                                        Button,
+                                        Node {
+                                            display: Display::None,
+                                            height: Val::Px(30.0),
+                                            padding: UiRect::horizontal(Val::Px(10.0)),
+                                            justify_content: JustifyContent::Center,
+                                            align_items: AlignItems::Center,
+                                            border: UiRect::all(Val::Px(1.0)),
+                                            border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                                            ..default()
+                                        },
+                                        BackgroundColor(BUTTON_NORMAL),
+                                        BorderColor::all(PLATE_RULE_SOFT),
+                                    ))
+                                    .with_child((
+                                        Text::new("BACK TO COMPANY"),
+                                        TextFont {
+                                            font_size: FontSize::Px(8.5),
+                                            ..default()
+                                        },
+                                        TextColor(INK),
+                                        Pickable::IGNORE,
+                                    ));
                                 actions
                                     .spawn((
                                         PlaceBusinessHistoryAction,
@@ -931,6 +951,7 @@ mod tests {
     use bevy::ui::FocusPolicy;
 
     use super::*;
+    use crate::ui::encyclopedia::companies::{CompanyListViewport, CompanyPortfolioContent};
     use crate::ui::encyclopedia::places::{PlaceBusinessHistoryAction, PlaceDetailLine};
 
     #[test]
@@ -951,6 +972,13 @@ mod tests {
         let viewport = viewports.single(&world).unwrap();
         assert_eq!(viewport.min_height, Val::Px(0.0));
         assert_eq!(viewport.overflow.y, OverflowAxis::Scroll);
+
+        let mut company_viewports = world.query_filtered::<&Node, With<CompanyListViewport>>();
+        let company_viewport = company_viewports.single(&world).unwrap();
+        assert_eq!(company_viewport.min_height, Val::Px(0.0));
+        assert_eq!(company_viewport.overflow.y, OverflowAxis::Scroll);
+        let mut portfolio = world.query_filtered::<Entity, With<CompanyPortfolioContent>>();
+        assert_eq!(portfolio.iter(&world).count(), 1);
 
         let mut business_history =
             world.query_filtered::<&Node, With<PlaceBusinessHistoryAction>>();

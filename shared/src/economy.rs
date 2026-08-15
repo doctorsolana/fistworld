@@ -193,6 +193,8 @@ pub struct CivicDayLedger {
     pub day: u32,
     pub permit_income: u64,
     pub market_fee_income: u64,
+    #[serde(default)]
+    pub delivery_fee_income: u64,
     pub profit_tax_income: u64,
     pub public_sale_income: u64,
     pub wage_expense: u64,
@@ -206,6 +208,7 @@ impl CivicDayLedger {
             day,
             permit_income: 0,
             market_fee_income: 0,
+            delivery_fee_income: 0,
             profit_tax_income: 0,
             public_sale_income: 0,
             wage_expense: 0,
@@ -217,6 +220,7 @@ impl CivicDayLedger {
     pub const fn income(self) -> u64 {
         self.permit_income
             .saturating_add(self.market_fee_income)
+            .saturating_add(self.delivery_fee_income)
             .saturating_add(self.profit_tax_income)
             .saturating_add(self.public_sale_income)
     }
@@ -300,6 +304,13 @@ impl CivicAccount {
         self.record_income(pennies);
     }
 
+    pub fn record_delivery_fee_income(&mut self, day: u32, pennies: u64) {
+        self.roll_to_day(day);
+        self.current_day.delivery_fee_income =
+            self.current_day.delivery_fee_income.saturating_add(pennies);
+        self.record_income(pennies);
+    }
+
     pub fn record_profit_tax_income(&mut self, day: u32, pennies: u64) {
         self.roll_to_day(day);
         self.current_day.profit_tax_income =
@@ -361,13 +372,29 @@ impl CivicAccount {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BusinessDayLedger {
     pub day: u32,
+    /// Revenue settled through the public market or another external buyer.
     pub gross_revenue: u64,
+    /// Bookkeeping credit for output delivered to another site in the same
+    /// company. No coin moves and consolidation eliminates this value.
+    #[serde(default)]
+    pub internal_revenue: u64,
     pub wage_expense: u64,
+    /// Inputs purchased from an external seller for real coin.
     pub input_expense: u64,
+    /// Matching bookkeeping charge for inputs received from another site in
+    /// the same company.
+    #[serde(default)]
+    pub internal_input_expense: u64,
     pub market_fees: u64,
+    #[serde(default)]
+    pub delivery_fees: u64,
     #[serde(default)]
     pub profit_taxes: u64,
     pub owner_withdrawals: u64,
+    /// Permit, acquisition and other long-lived asset spending. It changes
+    /// cash and book value but is deliberately excluded from operating profit.
+    #[serde(default)]
+    pub capital_expenditures: u64,
     pub produced_units: u32,
     pub sold_units: u32,
     pub purchased_input_units: u32,
@@ -378,11 +405,15 @@ impl BusinessDayLedger {
         Self {
             day,
             gross_revenue: 0,
+            internal_revenue: 0,
             wage_expense: 0,
             input_expense: 0,
+            internal_input_expense: 0,
             market_fees: 0,
+            delivery_fees: 0,
             profit_taxes: 0,
             owner_withdrawals: 0,
+            capital_expenditures: 0,
             produced_units: 0,
             sold_units: 0,
             purchased_input_units: 0,
@@ -392,22 +423,44 @@ impl BusinessDayLedger {
     pub const fn operating_expenses(self) -> u64 {
         self.wage_expense
             .saturating_add(self.input_expense)
+            .saturating_add(self.internal_input_expense)
             .saturating_add(self.market_fees)
+            .saturating_add(self.delivery_fees)
             .saturating_add(self.profit_taxes)
     }
 
     pub const fn pre_tax_expenses(self) -> u64 {
         self.wage_expense
             .saturating_add(self.input_expense)
+            .saturating_add(self.internal_input_expense)
             .saturating_add(self.market_fees)
+            .saturating_add(self.delivery_fees)
     }
 
     pub fn pre_tax_profit(self) -> u64 {
-        self.gross_revenue.saturating_sub(self.pre_tax_expenses())
+        self.gross_revenue
+            .saturating_add(self.internal_revenue)
+            .saturating_sub(self.pre_tax_expenses())
     }
 
     pub fn profit(self) -> i64 {
-        signed_difference(self.gross_revenue, self.operating_expenses())
+        signed_difference(
+            self.gross_revenue.saturating_add(self.internal_revenue),
+            self.operating_expenses(),
+        )
+    }
+
+    /// Company-consolidated cash-basis contribution. Internal charges and
+    /// credits are deliberately absent because they cancel across owned sites.
+    pub fn consolidated_profit(self) -> i64 {
+        signed_difference(
+            self.gross_revenue,
+            self.wage_expense
+                .saturating_add(self.input_expense)
+                .saturating_add(self.market_fees)
+                .saturating_add(self.delivery_fees)
+                .saturating_add(self.profit_taxes),
+        )
     }
 }
 
@@ -425,26 +478,43 @@ fn signed_difference(income: u64, expense: u64) -> i64 {
     }
 }
 
-/// Cash, liabilities and accounts belonging to a business rather than its
-/// owner personally.
+/// The cost-centre ledger for one operating site.
 ///
-/// `cash` answers whether a payment can happen. Profit is instead revenue less
-/// operating expenses, and opening capital is recorded separately. An owner
-/// may withdraw retained profit, but can never withdraw contributed capital or
-/// money owed as wages merely because it happens to be in this account.
+/// A site records the revenue, costs and liabilities it creates so its own
+/// performance remains inspectable. Spendable money belongs exclusively to
+/// the operating [`CompanyAccount`], not to this building.
+/// `unposted_company_capital` is a transient construction, acquisition and
+/// save-migration posting field; the server sweeps it into the company
+/// treasury before economic activity.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BusinessAccount {
-    pub cash: u64,
+    #[serde(default, alias = "cash")]
+    pub unposted_company_capital: u64,
     pub wage_arrears: u64,
     #[serde(default)]
     pub tax_arrears: u64,
     pub last_payroll_day: u32,
     #[serde(default)]
     pub contributed_capital: u64,
+    /// Cumulative cash invested in permits/acquisitions rather than consumed
+    /// as a current operating cost.
+    #[serde(default)]
+    pub capital_expenditures: u64,
+    /// First-pass historical cost of the site's capital assets. Depreciation,
+    /// land revaluation and construction-material capitalisation can extend
+    /// this seam later without corrupting operating profit.
+    #[serde(default)]
+    pub book_value: u64,
     #[serde(default)]
     pub gross_revenue: u64,
     #[serde(default)]
+    pub internal_revenue: u64,
+    #[serde(default)]
     pub operating_expenses: u64,
+    #[serde(default)]
+    pub internal_input_expenses: u64,
+    #[serde(default)]
+    pub delivery_expenses: u64,
     #[serde(default)]
     pub owner_withdrawals: u64,
     #[serde(default)]
@@ -464,13 +534,18 @@ pub struct BusinessAccount {
 impl Default for BusinessAccount {
     fn default() -> Self {
         Self {
-            cash: 0,
+            unposted_company_capital: 0,
             wage_arrears: 0,
             tax_arrears: 0,
             last_payroll_day: u32::MAX,
             contributed_capital: 0,
+            capital_expenditures: 0,
+            book_value: 0,
             gross_revenue: 0,
+            internal_revenue: 0,
             operating_expenses: 0,
+            internal_input_expenses: 0,
+            delivery_expenses: 0,
             owner_withdrawals: 0,
             defaulted_wages: 0,
             estimated_unit_cost: 0,
@@ -484,10 +559,30 @@ impl Default for BusinessAccount {
 impl BusinessAccount {
     pub fn with_capital(pennies: u64) -> Self {
         Self {
-            cash: pennies,
+            unposted_company_capital: pennies,
             contributed_capital: pennies,
             ..Self::default()
         }
+    }
+
+    pub fn with_project_funding(
+        opening_cash: u64,
+        contributed_capital: u64,
+        capital_expenditure: u64,
+        funded_day: u32,
+    ) -> Self {
+        let mut account = Self {
+            unposted_company_capital: opening_cash,
+            contributed_capital,
+            capital_expenditures: capital_expenditure,
+            book_value: capital_expenditure,
+            ..Self::default()
+        };
+        if capital_expenditure > 0 {
+            account.roll_to_day(funded_day);
+            account.current_day.capital_expenditures = capital_expenditure;
+        }
+        account
     }
 
     pub fn roll_to_day(&mut self, day: u32) {
@@ -501,7 +596,7 @@ impl BusinessAccount {
     }
 
     pub fn contribute_capital(&mut self, pennies: u64) {
-        self.cash = self.cash.saturating_add(pennies);
+        self.unposted_company_capital = self.unposted_company_capital.saturating_add(pennies);
         self.contributed_capital = self.contributed_capital.saturating_add(pennies);
     }
 
@@ -510,12 +605,11 @@ impl BusinessAccount {
         self.current_day.produced_units = self.current_day.produced_units.saturating_add(units);
     }
 
-    /// Credit one consignment sale. `gross` is what the buyer paid and `fee`
-    /// is the marketplace's included share, so business cash receives net.
+    /// Attribute one external consignment sale to this site. The caller moves
+    /// the net proceeds into the company's single treasury.
     pub fn record_sale(&mut self, day: u32, gross: u64, fee: u64, units: u32) {
         self.roll_to_day(day);
         let fee = fee.min(gross);
-        self.cash = self.cash.saturating_add(gross.saturating_sub(fee));
         self.gross_revenue = self.gross_revenue.saturating_add(gross);
         self.operating_expenses = self.operating_expenses.saturating_add(fee);
         self.current_day.gross_revenue = self.current_day.gross_revenue.saturating_add(gross);
@@ -523,23 +617,42 @@ impl BusinessAccount {
         self.current_day.sold_units = self.current_day.sold_units.saturating_add(units);
     }
 
-    /// Buy physical inputs without ever spending payroll liabilities.
-    pub fn buy_inputs(&mut self, day: u32, pennies: u64, units: u32) -> bool {
-        if self
-            .cash
-            .saturating_sub(self.wage_arrears)
-            .saturating_sub(self.tax_arrears)
-            < pennies
-        {
-            return false;
-        }
+    /// Attribute a company-funded external input purchase to this site.
+    pub fn record_input_purchase(&mut self, day: u32, pennies: u64, units: u32) {
         self.roll_to_day(day);
-        self.cash -= pennies;
         self.operating_expenses = self.operating_expenses.saturating_add(pennies);
         self.current_day.input_expense = self.current_day.input_expense.saturating_add(pennies);
         self.current_day.purchased_input_units =
             self.current_day.purchased_input_units.saturating_add(units);
-        true
+    }
+
+    /// Record a same-company output transfer without changing cash. This is a
+    /// site-performance credit only; the company ledger eliminates it.
+    pub fn record_internal_output(&mut self, day: u32, value: u64, units: u32) {
+        self.roll_to_day(day);
+        self.internal_revenue = self.internal_revenue.saturating_add(value);
+        self.current_day.internal_revenue = self.current_day.internal_revenue.saturating_add(value);
+        self.current_day.sold_units = self.current_day.sold_units.saturating_add(units);
+    }
+
+    /// Record the receiving half of an internal goods transfer. No cash moves.
+    pub fn record_internal_input(&mut self, day: u32, value: u64, units: u32) {
+        self.roll_to_day(day);
+        self.internal_input_expenses = self.internal_input_expenses.saturating_add(value);
+        self.current_day.internal_input_expense = self
+            .current_day
+            .internal_input_expense
+            .saturating_add(value);
+        self.current_day.purchased_input_units =
+            self.current_day.purchased_input_units.saturating_add(units);
+    }
+
+    /// Attribute a company-funded municipal freight charge to this site.
+    pub fn record_delivery_fee(&mut self, day: u32, pennies: u64) {
+        self.roll_to_day(day);
+        self.operating_expenses = self.operating_expenses.saturating_add(pennies);
+        self.delivery_expenses = self.delivery_expenses.saturating_add(pennies);
+        self.current_day.delivery_fees = self.current_day.delivery_fees.saturating_add(pennies);
     }
 
     /// Wages are expenses when earned, not only if enough cash exists to pay
@@ -552,16 +665,40 @@ impl BusinessAccount {
         self.current_day.wage_expense = self.current_day.wage_expense.saturating_add(pennies);
     }
 
-    pub fn pay_wage_claim(&mut self, pennies: u64) -> u64 {
-        let paid = pennies.min(self.cash).min(self.wage_arrears);
-        self.cash -= paid;
+    /// Attribute payroll to a completed shift without ever rolling an account
+    /// backwards. At dawn, another system may already have opened the new
+    /// trading day; in that case the earned wage belongs in `previous_day`.
+    pub fn incur_completed_day_wages(&mut self, day: u32, pennies: u64) {
+        if pennies == 0 {
+            return;
+        }
+        self.wage_arrears = self.wage_arrears.saturating_add(pennies);
+        self.operating_expenses = self.operating_expenses.saturating_add(pennies);
+        if self.current_day.day == day {
+            self.current_day.wage_expense = self.current_day.wage_expense.saturating_add(pennies);
+        } else if self.previous_day.day == day {
+            self.previous_day.wage_expense = self.previous_day.wage_expense.saturating_add(pennies);
+        } else if self.current_day.day == u32::MAX || self.current_day.day < day {
+            self.roll_to_day(day);
+            self.current_day.wage_expense = self.current_day.wage_expense.saturating_add(pennies);
+        } else {
+            // Only two daily ledgers are retained. If simulation resumed after
+            // a gap, keep today's ledger intact and use the bounded completed-
+            // day slot for the catch-up payroll.
+            self.previous_day = BusinessDayLedger::empty(day);
+            self.previous_day.wage_expense = pennies;
+        }
+    }
+
+    pub fn settle_wage_claim(&mut self, pennies: u64) -> u64 {
+        let paid = pennies.min(self.wage_arrears);
         self.wage_arrears -= paid;
         paid
     }
 
     /// Close an unpayable wage claim without pretending cash changed hands.
     /// Defaults remove the liability and remain visible in business history;
-    /// only [`Self::pay_wage_claim`] may reduce firm cash.
+    /// only a real company-treasury payment may settle the claim.
     pub fn write_off_wage_claim(&mut self, pennies: u64) -> u64 {
         let written_off = pennies.min(self.wage_arrears);
         self.wage_arrears -= written_off;
@@ -582,11 +719,34 @@ impl BusinessAccount {
         self.current_day.profit_taxes = self.current_day.profit_taxes.saturating_add(pennies);
     }
 
-    pub fn pay_tax_claim(&mut self, pennies: u64) -> u64 {
-        let paid = pennies
-            .min(self.cash.saturating_sub(self.wage_arrears))
-            .min(self.tax_arrears);
-        self.cash -= paid;
+    /// Assess a levy against a day which has already rolled into the bounded
+    /// previous-day slot. This avoids rolling an account backwards when dawn
+    /// payroll has already opened the new business day.
+    pub fn incur_completed_day_profit_tax(&mut self, completed_day: u32, pennies: u64) {
+        if pennies == 0 {
+            return;
+        }
+        self.tax_arrears = self.tax_arrears.saturating_add(pennies);
+        self.operating_expenses = self.operating_expenses.saturating_add(pennies);
+        if self.current_day.day == completed_day {
+            self.current_day.profit_taxes = self.current_day.profit_taxes.saturating_add(pennies);
+        } else if self.previous_day.day == completed_day {
+            self.previous_day.profit_taxes = self.previous_day.profit_taxes.saturating_add(pennies);
+        }
+    }
+
+    pub const fn ledger_for_day(self, day: u32) -> Option<BusinessDayLedger> {
+        if self.current_day.day == day {
+            Some(self.current_day)
+        } else if self.previous_day.day == day {
+            Some(self.previous_day)
+        } else {
+            None
+        }
+    }
+
+    pub fn settle_tax_claim(&mut self, pennies: u64) -> u64 {
+        let paid = pennies.min(self.tax_arrears);
         self.tax_arrears -= paid;
         paid
     }
@@ -595,39 +755,363 @@ impl BusinessAccount {
         signed_difference(self.gross_revenue, self.operating_expenses)
     }
 
+    pub fn lifetime_site_profit(self) -> i64 {
+        signed_difference(
+            self.gross_revenue.saturating_add(self.internal_revenue),
+            self.operating_expenses
+                .saturating_add(self.internal_input_expenses),
+        )
+    }
+
     pub fn retained_profit(self) -> u64 {
         self.gross_revenue
             .saturating_sub(self.operating_expenses)
             .saturating_sub(self.owner_withdrawals)
     }
 
-    pub fn withdrawable_profit(self, protected_working_cash: u64) -> u64 {
-        self.retained_profit().min(
-            self.cash
-                .saturating_sub(self.wage_arrears)
-                .saturating_sub(self.tax_arrears)
-                .saturating_sub(protected_working_cash),
-        )
-    }
-
-    pub fn withdraw_owner(&mut self, day: u32, wanted: u64, protected_working_cash: u64) -> u64 {
-        let withdrawn = wanted.min(self.withdrawable_profit(protected_working_cash));
-        if withdrawn == 0 {
-            return 0;
+    /// Attribute a dividend to the company's books without pretending a
+    /// particular building paid it. Cash is debited on [`CompanyAccount`].
+    pub fn record_company_dividend(&mut self, day: u32, pennies: u64) {
+        if pennies == 0 {
+            return;
         }
         self.roll_to_day(day);
-        self.cash -= withdrawn;
-        self.owner_withdrawals = self.owner_withdrawals.saturating_add(withdrawn);
+        self.owner_withdrawals = self.owner_withdrawals.saturating_add(pennies);
         self.current_day.owner_withdrawals =
-            self.current_day.owner_withdrawals.saturating_add(withdrawn);
-        withdrawn
+            self.current_day.owner_withdrawals.saturating_add(pennies);
     }
 }
 
-/// Cash which automatic management must leave inside a firm before an owner
-/// may draw profit. Liabilities are reported separately because
-/// [`BusinessAccount::withdrawable_profit`] already subtracts them before this
-/// reserve is considered.
+/// Consolidated cash-basis activity for one company day. Site-internal credits
+/// and charges are retained as an auditable memorandum but excluded from
+/// operating profit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanyDayLedger {
+    pub day: u32,
+    pub external_revenue: u64,
+    pub wage_expense: u64,
+    pub external_input_expense: u64,
+    pub market_fees: u64,
+    pub delivery_fees: u64,
+    pub profit_taxes: u64,
+    pub owner_withdrawals: u64,
+    pub capital_expenditures: u64,
+    pub internal_revenue: u64,
+    pub internal_input_expense: u64,
+}
+
+impl CompanyDayLedger {
+    pub const fn empty(day: u32) -> Self {
+        Self {
+            day,
+            external_revenue: 0,
+            wage_expense: 0,
+            external_input_expense: 0,
+            market_fees: 0,
+            delivery_fees: 0,
+            profit_taxes: 0,
+            owner_withdrawals: 0,
+            capital_expenditures: 0,
+            internal_revenue: 0,
+            internal_input_expense: 0,
+        }
+    }
+
+    pub const fn operating_costs(self) -> u64 {
+        self.wage_expense
+            .saturating_add(self.external_input_expense)
+            .saturating_add(self.market_fees)
+            .saturating_add(self.delivery_fees)
+            .saturating_add(self.profit_taxes)
+    }
+
+    pub fn profit(self) -> i64 {
+        signed_difference(self.external_revenue, self.operating_costs())
+    }
+
+    pub fn pre_tax_profit(self) -> u64 {
+        self.external_revenue.saturating_sub(
+            self.wage_expense
+                .saturating_add(self.external_input_expense)
+                .saturating_add(self.market_fees)
+                .saturating_add(self.delivery_fees),
+        )
+    }
+}
+
+impl Default for CompanyDayLedger {
+    fn default() -> Self {
+        Self::empty(u32::MAX)
+    }
+}
+
+/// Consolidated company finance and liabilities. `cash` is the one spendable
+/// treasury used by every site. Buildings retain only cost-centre ledgers.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CompanyAccount {
+    pub cash: u64,
+    pub wage_arrears: u64,
+    pub tax_arrears: u64,
+    pub contributed_capital: u64,
+    pub capital_expenditures: u64,
+    pub book_value: u64,
+    pub owner_withdrawals: u64,
+    pub current_day: CompanyDayLedger,
+    pub previous_day: CompanyDayLedger,
+}
+
+impl CompanyAccount {
+    pub fn credit(&mut self, pennies: u64) {
+        self.cash = self.cash.saturating_add(pennies);
+    }
+
+    pub fn debit(&mut self, pennies: u64) -> bool {
+        if self.cash < pennies {
+            return false;
+        }
+        self.cash -= pennies;
+        true
+    }
+
+    pub fn roll_to_day(&mut self, day: u32) {
+        if self.current_day.day == day {
+            return;
+        }
+        if self.current_day.day != u32::MAX {
+            self.previous_day = self.current_day;
+        }
+        self.current_day = CompanyDayLedger::empty(day);
+    }
+
+    pub fn refresh_from_sites(
+        &mut self,
+        day: u32,
+        wage_arrears: u64,
+        tax_arrears: u64,
+        contributed_capital: u64,
+        capital_expenditures: u64,
+        book_value: u64,
+        owner_withdrawals: u64,
+        current_ledger: CompanyDayLedger,
+        completed_ledger: Option<CompanyDayLedger>,
+    ) {
+        self.roll_to_day(day);
+        self.wage_arrears = wage_arrears;
+        self.tax_arrears = tax_arrears;
+        // Company formation and later shareholder contributions are posted
+        // directly to the legal treasury before a site may exist. Site books
+        // still carry legacy/project attribution, so consolidation may raise
+        // this lifetime total but must never erase already-recorded capital.
+        self.contributed_capital = self.contributed_capital.max(contributed_capital);
+        self.capital_expenditures = capital_expenditures;
+        self.book_value = book_value;
+        self.owner_withdrawals = owner_withdrawals;
+        self.current_day = current_ledger;
+        if let Some(completed_ledger) = completed_ledger {
+            self.previous_day = completed_ledger;
+        }
+    }
+}
+
+/// Decisions applying to the whole legal company rather than one operating
+/// site. Individual sites still control their own product, price, wage offer,
+/// stock retention and input route.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanyManagementPolicy {
+    pub strategy: BusinessStrategy,
+    pub autopilot: bool,
+    pub automatic_dividends: bool,
+    pub max_daily_dividend: u64,
+    pub payroll_reserve_days: u8,
+    pub last_review_day: u32,
+    pub last_dividend_day: u32,
+}
+
+/// One resource decision for one company's operations in one settlement.
+///
+/// The quantity is intentionally an absolute physical unit count. A company
+/// may own sites in many settlements, but goods never teleport between them:
+/// each local branch protects its own stock before making any of that stock
+/// available to the local public market.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanyResourcePolicy {
+    pub retain_units: u32,
+    pub sell_excess: bool,
+}
+
+impl Default for CompanyResourcePolicy {
+    fn default() -> Self {
+        Self {
+            retain_units: 0,
+            sell_excess: true,
+        }
+    }
+}
+
+impl CompanyResourcePolicy {
+    /// Units that may enter the public market after protecting the branch's
+    /// absolute reserve and shipments already promised to a porter.
+    pub const fn public_surplus(self, physically_held: u32, reserved: u32) -> u32 {
+        if self.sell_excess {
+            physically_held
+                .saturating_sub(self.retain_units)
+                .saturating_sub(reserved)
+        } else {
+            0
+        }
+    }
+}
+
+/// The local operating policy of a company in one settlement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanyBranchPolicy {
+    pub settlement: crate::components::SettlementId,
+    resources: [CompanyResourcePolicy; Good::COUNT],
+}
+
+impl CompanyBranchPolicy {
+    pub const fn new(settlement: crate::components::SettlementId) -> Self {
+        Self {
+            settlement,
+            resources: [CompanyResourcePolicy {
+                retain_units: 0,
+                sell_excess: true,
+            }; Good::COUNT],
+        }
+    }
+
+    pub fn resource(&self, good: Good) -> CompanyResourcePolicy {
+        self.resources[good.index()]
+    }
+
+    pub fn set_resource(&mut self, good: Good, policy: CompanyResourcePolicy) {
+        self.resources[good.index()] = policy;
+    }
+}
+
+/// Sparse company-wide directory of local branches. Cash and accounting live
+/// on [`CompanyAccount`]; this component governs only physical stock located
+/// in a particular settlement.
+#[derive(Component, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CompanyBranchPolicies {
+    branches: Vec<CompanyBranchPolicy>,
+}
+
+impl CompanyBranchPolicies {
+    pub fn branches(&self) -> &[CompanyBranchPolicy] {
+        &self.branches
+    }
+
+    pub fn branch(
+        &self,
+        settlement: crate::components::SettlementId,
+    ) -> Option<&CompanyBranchPolicy> {
+        self.branches
+            .iter()
+            .find(|branch| branch.settlement == settlement)
+    }
+
+    pub fn resource(
+        &self,
+        settlement: crate::components::SettlementId,
+        good: Good,
+    ) -> CompanyResourcePolicy {
+        self.branch(settlement)
+            .map_or_else(CompanyResourcePolicy::default, |branch| {
+                branch.resource(good)
+            })
+    }
+
+    pub fn set_resource(
+        &mut self,
+        settlement: crate::components::SettlementId,
+        good: Good,
+        policy: CompanyResourcePolicy,
+    ) {
+        let index = self
+            .branches
+            .iter()
+            .position(|branch| branch.settlement == settlement)
+            .unwrap_or_else(|| {
+                self.branches.push(CompanyBranchPolicy::new(settlement));
+                self.branches.len() - 1
+            });
+        self.branches[index].set_resource(good, policy);
+        self.branches
+            .sort_unstable_by_key(|branch| branch.settlement);
+    }
+}
+
+impl Default for CompanyManagementPolicy {
+    fn default() -> Self {
+        let strategy = BusinessStrategy::Balanced;
+        Self {
+            strategy,
+            autopilot: true,
+            automatic_dividends: true,
+            max_daily_dividend: 2 * PENNIES_PER_COIN,
+            payroll_reserve_days: strategy.payroll_reserve_days(),
+            last_review_day: u32::MAX,
+            last_dividend_day: u32::MAX,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CompanyDecisionReason {
+    FinancialStress,
+    ProfitableExpansion,
+    StrongMarketPosition,
+    NormalisedOperations,
+}
+
+impl CompanyDecisionReason {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::FinancialStress => "liabilities or distressed sites required larger reserves",
+            Self::ProfitableExpansion => "strong consolidated profit supported lower-margin growth",
+            Self::StrongMarketPosition => {
+                "strong sales and the Master's aptitude supported firmer margins"
+            }
+            Self::NormalisedOperations => "ordinary trading conditions favoured a balanced posture",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanyDecisionRecord {
+    pub day: u32,
+    pub master: crate::components::PersonId,
+    pub from: BusinessStrategy,
+    pub to: BusinessStrategy,
+    pub reason: CompanyDecisionReason,
+}
+
+/// Bounded executive audit trail. It records infrequent daily decisions, not
+/// per-tick thought state, so thousands of companies remain cheap.
+#[derive(Component, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CompanyDecisionHistory {
+    entries: Vec<CompanyDecisionRecord>,
+}
+
+impl CompanyDecisionHistory {
+    pub const CAPACITY: usize = 32;
+
+    pub fn entries(&self) -> &[CompanyDecisionRecord] {
+        &self.entries
+    }
+
+    pub fn push(&mut self, record: CompanyDecisionRecord) {
+        if self.entries.len() == Self::CAPACITY {
+            self.entries.remove(0);
+        }
+        self.entries.push(record);
+    }
+}
+
+/// Operating reserves contributed by one site to its company's consolidated
+/// dividend and expansion protection. Site liabilities remain itemised so the
+/// company can sum them exactly once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct BusinessWorkingCapital {
     pub payroll: u64,
@@ -699,7 +1183,16 @@ impl WorkforceRequirements {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BusinessSalePolicy {
     pub collection_enabled: bool,
-    pub keep_units: u32,
+    /// Owner-facing safety stock, expressed as days of this site's rated
+    /// output. Company input requests always take priority over this reserve;
+    /// only public market collection is held back by it.
+    #[serde(default)]
+    pub company_reserve_days: u8,
+    /// Server-derived unit equivalent of `company_reserve_days`. Kept on the
+    /// replicated policy so the client can explain the physical allocation
+    /// without duplicating production-rate formulas.
+    #[serde(default, alias = "keep_units")]
+    pub company_reserve_units: u32,
     pub max_units_per_collection: u32,
     /// Absolute owner floor. Automatic management normally stays above its
     /// estimated sustainable price, but distress may liquidate down to this.
@@ -716,6 +1209,38 @@ pub struct BusinessSalePolicy {
     pub days_without_sales: u16,
     #[serde(default = "default_unreviewed_day")]
     pub last_review_day: u32,
+}
+
+/// How many of a building's physical work positions the operator currently
+/// advertises. The building kind remains the hard architectural maximum.
+/// Keeping the target separate from the readable worker roster makes hiring
+/// idempotent and lets a struggling site close positions without pretending
+/// the building itself became smaller.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BusinessStaffingPolicy {
+    pub enabled_positions: u8,
+}
+
+impl BusinessStaffingPolicy {
+    pub const fn new(enabled_positions: u8) -> Self {
+        Self { enabled_positions }
+    }
+
+    pub fn target_for(self, kind: crate::components::SettlementBuildingKind) -> u8 {
+        if self.enabled_positions < kind.positions() {
+            self.enabled_positions
+        } else {
+            kind.positions()
+        }
+    }
+}
+
+impl Default for BusinessStaffingPolicy {
+    fn default() -> Self {
+        Self {
+            enabled_positions: u8::MAX,
+        }
+    }
 }
 
 const fn default_true() -> bool {
@@ -738,8 +1263,12 @@ impl Default for BusinessSalePolicy {
     fn default() -> Self {
         Self {
             collection_enabled: true,
-            keep_units: 2,
-            max_units_per_collection: 8,
+            company_reserve_days: 0,
+            company_reserve_units: 0,
+            // A cart is primarily bounded by physical bulk: this upper limit
+            // lets light goods use most of it while Wood and Stone naturally
+            // stop earlier. Owners can still choose a smaller dispatch.
+            max_units_per_collection: 64,
             minimum_unit_price: 1,
             asking_unit_price: default_asking_unit_price(),
             automatic_pricing: true,
@@ -764,12 +1293,127 @@ impl BusinessSalePolicy {
 /// One input which automatic management may purchase from the local market.
 /// The rule is deliberately about stock and price rather than a named building
 /// kind: a tavern, bakery, brewery or smithy can all use the same decision path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BusinessInputRule {
     pub enabled: bool,
+    /// Desired physical input coverage. This is the only owner-authored stock
+    /// quantity; the server derives the unit target and reorder threshold from
+    /// real recipe capacity and current staffing.
+    #[serde(default = "default_input_coverage_days")]
+    pub coverage_days: u8,
+    /// Derived hysteresis threshold. It is replicated for explanation and
+    /// compatibility but is never directly edited by an owner.
     pub reorder_below: u32,
+    /// Derived unit equivalent of `coverage_days`.
     pub target_units: u32,
     pub maximum_unit_price: u64,
+}
+
+pub const DEFAULT_INPUT_COVERAGE_DAYS: u8 = 2;
+pub const MAXIMUM_STOCK_COVERAGE_DAYS: u8 = 7;
+
+const fn default_input_coverage_days() -> u8 {
+    DEFAULT_INPUT_COVERAGE_DAYS
+}
+
+impl BusinessInputRule {
+    pub fn set_coverage_days(&mut self, days: u8) {
+        self.coverage_days = days.min(MAXIMUM_STOCK_COVERAGE_DAYS);
+    }
+}
+
+impl Default for BusinessInputRule {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            coverage_days: DEFAULT_INPUT_COVERAGE_DAYS,
+            reorder_below: 0,
+            target_units: 0,
+            maximum_unit_price: 0,
+        }
+    }
+}
+
+/// Where an input-consuming site looks first. Private supply is a sourcing
+/// preference, never a compulsory market intervention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum BusinessSourcingMode {
+    /// Use an owned supplier when its landed value is acceptable, otherwise
+    /// fall back to the public Moot market.
+    #[default]
+    PreferOwned,
+    /// Compare owned supply and the public market before dispatching.
+    CheapestAvailable,
+    /// Never buy this input from an outside seller.
+    OwnedOnly,
+}
+
+impl BusinessSourcingMode {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::PreferOwned => "Company first",
+            Self::CheapestAvailable => "Best value",
+            Self::OwnedOnly => "Company only",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BusinessPrivateInputRule {
+    pub enabled: bool,
+    pub sourcing: BusinessSourcingMode,
+    pub preferred_supplier: Option<crate::components::BuildingId>,
+}
+
+impl Default for BusinessPrivateInputRule {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sourcing: BusinessSourcingMode::PreferOwned,
+            preferred_supplier: None,
+        }
+    }
+}
+
+/// Private-company complement to public procurement. Keeping it separate from
+/// `BusinessProcurementPolicy` preserves old saves and makes it impossible for
+/// a private commitment to become a public listing accidentally.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BusinessSupplyPolicy {
+    pub automatic: bool,
+    rules: [BusinessPrivateInputRule; Good::COUNT],
+}
+
+impl BusinessSupplyPolicy {
+    pub const fn none() -> Self {
+        Self {
+            automatic: true,
+            rules: [BusinessPrivateInputRule {
+                enabled: false,
+                sourcing: BusinessSourcingMode::PreferOwned,
+                preferred_supplier: None,
+            }; Good::COUNT],
+        }
+    }
+
+    pub fn rule(&self, good: Good) -> BusinessPrivateInputRule {
+        self.rules[good.index()]
+    }
+
+    pub fn set_rule(&mut self, good: Good, rule: BusinessPrivateInputRule) {
+        self.rules[good.index()] = rule;
+    }
+
+    pub fn with_rule(mut self, good: Good, rule: BusinessPrivateInputRule) -> Self {
+        self.set_rule(good, rule);
+        self
+    }
+}
+
+impl Default for BusinessSupplyPolicy {
+    fn default() -> Self {
+        Self::none()
+    }
 }
 
 /// Owner policy for purchasing production inputs. No founding extractor has
@@ -787,6 +1431,7 @@ impl BusinessProcurementPolicy {
             automatic: true,
             rules: [BusinessInputRule {
                 enabled: false,
+                coverage_days: DEFAULT_INPUT_COVERAGE_DAYS,
                 reorder_below: 0,
                 target_units: 0,
                 maximum_unit_price: 0,
@@ -860,6 +1505,17 @@ impl BusinessStrategy {
             Self::Growth => 2,
             Self::Balanced | Self::HighMargin | Self::Opportunistic => 3,
             Self::Cautious => 5,
+        }
+    }
+
+    /// Normal input coverage selected by an NPC Company Master. The value is
+    /// deliberately small: physical deliveries and company-first reservation
+    /// prevent stockouts without turning every processor into a warehouse.
+    pub const fn input_coverage_days(self) -> u8 {
+        match self {
+            Self::Balanced | Self::Growth | Self::HighMargin => 2,
+            Self::Cautious => 4,
+            Self::Opportunistic => 1,
         }
     }
 
@@ -1953,6 +2609,16 @@ pub fn business_working_capital(
     }
 }
 
+/// Cash an established company may commit to expansion without spending its
+/// employee/tax liabilities or enacted company-wide payroll runway.
+pub fn company_expansion_cash(company: &CompanyAccount, protected_payroll: u64) -> u64 {
+    company
+        .cash
+        .saturating_sub(company.wage_arrears)
+        .saturating_sub(company.tax_arrears)
+        .saturating_sub(protected_payroll)
+}
+
 impl Default for MootMarket {
     fn default() -> Self {
         Self::founding()
@@ -2004,9 +2670,11 @@ impl MarketGoodHistoryDay {
 
 /// One completed daily reading of a settlement's money, goods and welfare.
 ///
-/// `total_local_coin` is the conservation-oriented measure: treasury + personal
-/// wallets + household purses + business accounts. Produced goods are tracked
-/// separately and valued at that day's last completed sale price.
+/// `total_local_coin` is the conservation-oriented measure: civic treasury +
+/// personal wallets + household purses + each locally active company's treasury
+/// counted once. Produced goods are tracked separately and valued at that day's
+/// last completed sale price. `business_cash` retains its historical wire name but
+/// contains company treasury cash, never per-building wallets.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SettlementHistoryDay {
     pub day: u32,
@@ -2053,6 +2721,8 @@ pub struct CivicHistoryDay {
     pub observed: bool,
     pub permit_income: u64,
     pub market_fee_income: u64,
+    #[serde(default)]
+    pub delivery_fee_income: u64,
     pub profit_tax_income: u64,
     pub public_sale_income: u64,
     pub wage_expense: u64,
@@ -2103,11 +2773,21 @@ pub struct BusinessHistoryDay {
     pub wage_arrears: u64,
     pub tax_arrears: u64,
     pub gross_revenue: u64,
+    #[serde(default)]
+    pub internal_revenue: u64,
     pub wage_expense: u64,
     pub input_expense: u64,
+    #[serde(default)]
+    pub internal_input_expense: u64,
     pub market_fees: u64,
+    #[serde(default)]
+    pub delivery_fees: u64,
     pub profit_taxes: u64,
     pub owner_withdrawals: u64,
+    #[serde(default)]
+    pub capital_expenditures: u64,
+    #[serde(default)]
+    pub book_value: u64,
     pub profit: i64,
     pub produced_units: u32,
     pub sold_units: u32,
@@ -2126,12 +2806,27 @@ pub struct BusinessHistoryDay {
 pub struct BusinessHistoryArchive {
     pub id: crate::components::BuildingId,
     pub settlement: crate::components::SettlementId,
+    #[serde(default)]
+    pub company_id: Option<crate::components::CompanyId>,
     pub kind: crate::components::SettlementBuildingKind,
     pub owner_id: Option<crate::components::PersonId>,
     pub owner_name: Option<String>,
     pub output_good: Option<Good>,
     /// Oldest to newest, never longer than [`SETTLEMENT_HISTORY_DAYS`].
     pub days: Vec<BusinessHistoryDay>,
+}
+
+/// Pull-based, cross-settlement history for one legal company.
+///
+/// The archive intentionally carries the underlying site ledgers instead of a
+/// second persisted accounting format. The client can therefore show both a
+/// consolidated company result (with internal transfers eliminated) and the
+/// exact sites which produced it. It is requested only while a player opens a
+/// company ledger; ordinary replication remains current-state only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompanyHistoryArchive {
+    pub company: crate::components::CompanyId,
+    pub businesses: Vec<BusinessHistoryArchive>,
 }
 
 /// One completed world-wide daily rollup across every settlement.
@@ -2145,6 +2840,8 @@ pub struct WorldHistoryDay {
     pub civic_treasury: u64,
     pub resident_wallet_money: u64,
     pub household_cash: u64,
+    /// Sum of authoritative company treasuries. The field keeps its legacy wire
+    /// name so existing replicated history remains compatible.
     pub business_cash: u64,
     #[serde(default)]
     pub business_wage_arrears: u64,
@@ -2209,6 +2906,7 @@ pub fn permit_price_with_subsidy(
         SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut => 300,
         SettlementBuildingKind::LumberjackHut => 250,
         SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => 250,
+        SettlementBuildingKind::StorageHall => 400,
         // Civic blockouts are settlement-requested progression infrastructure.
         // Their physical wood still has to be supplied; pricing can be revisited
         // with the wider ownership model without creating a progression lock.
@@ -2295,6 +2993,13 @@ impl GoodsInventory {
 
     pub const fn bulk_capacity(&self) -> u32 {
         self.bulk_capacity
+    }
+
+    /// Resize physical storage without ever deleting goods. A requested
+    /// shrink stops at the currently occupied bulk; callers can retry after
+    /// the inventory is unloaded.
+    pub fn resize_bulk_capacity(&mut self, requested: u32) {
+        self.bulk_capacity = requested.max(self.used_bulk());
     }
 
     pub fn amount(&self, good: Good) -> u32 {
@@ -2441,7 +3146,13 @@ pub const CITY_REQUIRED_DAYS: u16 = 5;
 /// present before somebody must haul it elsewhere; they say nothing about who
 /// owns the contents or what they are worth.
 pub mod capacity {
-    pub const VILLAGER: u32 = 12;
+    /// Personal cargo carried by both villagers and player heroes. Sixteen
+    /// bulk fits four Wood bundles (up from three) while remaining far below
+    /// even the smallest workplace store.
+    pub const VILLAGER: u32 = 16;
+    /// Temporary work capacity for Moot Stewards and private company porters.
+    /// This is the future hand-cart allowance, not a larger personal backpack.
+    pub const PORTER: u32 = 96;
     pub const HOUSE: u32 = 80;
     pub const FARMSTEAD: u32 = 240;
     pub const LUMBERJACK_HUT: u32 = 240;
@@ -2451,6 +3162,9 @@ pub mod capacity {
     pub const CHURCH: u32 = 120;
     pub const WINDMILL: u32 = 240;
     pub const BAKERY: u32 = 240;
+    /// A dedicated private store is deliberately much larger than a workshop,
+    /// but remains finite so logistics and additional buildings still matter.
+    pub const STORAGE_HALL: u32 = 2_400;
     pub const HALL: u32 = 1_200;
 }
 
@@ -2465,6 +3179,57 @@ mod tests {
     }
 
     #[test]
+    fn site_consolidation_never_erases_direct_company_capital() {
+        let mut account = CompanyAccount {
+            cash: 1_000,
+            contributed_capital: 1_000,
+            ..default()
+        };
+        account.refresh_from_sites(
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            CompanyDayLedger::empty(2),
+            Some(CompanyDayLedger::empty(1)),
+        );
+        assert_eq!(account.contributed_capital, 1_000);
+        account.refresh_from_sites(
+            2,
+            0,
+            0,
+            1_500,
+            0,
+            0,
+            0,
+            CompanyDayLedger::empty(2),
+            Some(CompanyDayLedger::empty(1)),
+        );
+        assert_eq!(account.contributed_capital, 1_500);
+    }
+
+    #[test]
+    fn personal_inventory_holds_four_wood_bundles() {
+        assert_eq!(capacity::VILLAGER, Good::Wood.bulk_per_unit() * 4);
+    }
+
+    #[test]
+    fn porter_cart_capacity_is_large_and_inventory_resizing_is_lossless() {
+        assert_eq!(capacity::PORTER, capacity::VILLAGER * 6);
+        assert_eq!(BusinessSalePolicy::default().max_units_per_collection, 64);
+
+        let mut inventory = GoodsInventory::new(capacity::VILLAGER);
+        inventory.resize_bulk_capacity(capacity::PORTER);
+        assert_eq!(inventory.add(Good::Wood, 24), 24);
+        inventory.resize_bulk_capacity(capacity::VILLAGER);
+        assert_eq!(inventory.amount(Good::Wood), 24);
+        assert_eq!(inventory.bulk_capacity(), capacity::PORTER);
+    }
+
+    #[test]
     fn unlike_goods_compete_for_the_same_physical_space() {
         let mut inventory = GoodsInventory::new(12);
 
@@ -2474,6 +3239,49 @@ mod tests {
         assert_eq!(inventory.amount(Good::Wood), 2);
         assert_eq!(inventory.used_bulk(), 12);
         assert_eq!(inventory.free_bulk(), 0);
+    }
+
+    #[test]
+    fn company_resource_rules_are_independent_between_settlements() {
+        let north = crate::components::SettlementId(7);
+        let south = crate::components::SettlementId(8);
+        let mut policies = CompanyBranchPolicies::default();
+        policies.set_resource(
+            north,
+            Good::Wheat,
+            CompanyResourcePolicy {
+                retain_units: 40,
+                sell_excess: false,
+            },
+        );
+        policies.set_resource(
+            south,
+            Good::Wheat,
+            CompanyResourcePolicy {
+                retain_units: 5,
+                sell_excess: true,
+            },
+        );
+
+        assert_eq!(policies.resource(north, Good::Wheat).retain_units, 40);
+        assert!(!policies.resource(north, Good::Wheat).sell_excess);
+        assert_eq!(policies.resource(south, Good::Wheat).retain_units, 5);
+        assert!(policies.resource(south, Good::Wheat).sell_excess);
+        assert_eq!(
+            policies.resource(north, Good::Bread),
+            CompanyResourcePolicy::default()
+        );
+        assert_eq!(policies.branches().len(), 2);
+        let public = CompanyResourcePolicy {
+            retain_units: 20,
+            sell_excess: true,
+        };
+        assert_eq!(public.public_surplus(100, 10), 70);
+        assert_eq!(public.public_surplus(15, 10), 0);
+        assert_eq!(
+            policies.resource(north, Good::Wheat).public_surplus(100, 0),
+            0
+        );
     }
 
     #[test]
@@ -2645,14 +3453,12 @@ mod tests {
         let mut account = BusinessAccount::with_capital(1_000);
         account.record_sale(1, 500, 25, 5);
         account.incur_wages(1, 200);
-        assert!(account.buy_inputs(1, 100, 2));
+        account.record_input_purchase(1, 100, 2);
 
         assert_eq!(account.lifetime_profit(), 175);
         assert_eq!(account.retained_profit(), 175);
         assert_eq!(account.current_day.profit(), 175);
-        assert_eq!(account.withdrawable_profit(100), 175);
-        assert_eq!(account.withdraw_owner(1, u64::MAX, 100), 175);
-        assert_eq!(account.retained_profit(), 0);
+        assert_eq!(account.unposted_company_capital, 1_000);
         assert_eq!(account.contributed_capital, 1_000);
         assert_eq!(account.wage_arrears, 200);
     }
@@ -2663,13 +3469,31 @@ mod tests {
         account.incur_wages(1, 100);
 
         assert_eq!(account.write_off_wage_claim(100), 100);
-        assert_eq!(account.cash, 58);
+        assert_eq!(account.unposted_company_capital, 58);
         assert_eq!(account.wage_arrears, 0);
         assert_eq!(account.defaulted_wages, 100);
     }
 
     #[test]
-    fn owner_draws_cannot_spend_payroll_inputs_or_liabilities() {
+    fn completed_shift_wages_do_not_roll_an_open_ledger_backwards() {
+        let mut account = BusinessAccount::default();
+        account.record_sale(4, 500, 0, 5);
+        account.roll_to_day(5);
+        account.record_sale(5, 200, 0, 2);
+
+        account.incur_completed_day_wages(4, 100);
+
+        assert_eq!(account.current_day.day, 5);
+        assert_eq!(account.current_day.gross_revenue, 200);
+        assert_eq!(account.current_day.wage_expense, 0);
+        assert_eq!(account.previous_day.day, 4);
+        assert_eq!(account.previous_day.gross_revenue, 500);
+        assert_eq!(account.previous_day.wage_expense, 100);
+        assert_eq!(account.wage_arrears, 100);
+    }
+
+    #[test]
+    fn company_dividend_capacity_protects_payroll_inputs_and_liabilities() {
         let mut market = MootMarket::founding();
         market.consign(
             MarketSeller::Business(crate::components::BuildingId(91)),
@@ -2689,6 +3513,7 @@ mod tests {
             Good::Wheat,
             BusinessInputRule {
                 enabled: true,
+                coverage_days: 2,
                 reorder_below: 2,
                 target_units: 10,
                 maximum_unit_price: 100,
@@ -2703,12 +3528,21 @@ mod tests {
         account.record_sale(1, 3_000, 0, 30);
         account.incur_wages(1, 300);
         account.incur_profit_tax(1, 100);
-        let before = account.cash;
-        let draw = account.withdraw_owner(1, u64::MAX, reserve.total());
+        let mut company = CompanyAccount {
+            cash: 5_000,
+            wage_arrears: account.wage_arrears,
+            tax_arrears: account.tax_arrears,
+            ..default()
+        };
+        let protected = reserve.total_with_liabilities(&account);
+        let draw = account
+            .retained_profit()
+            .min(company.cash.saturating_sub(protected));
         assert_eq!(draw, 2_600, "opening capital is not distributable profit");
-        assert!(account.cash >= reserve.total_with_liabilities(&account));
-        assert_eq!(before - account.cash, draw);
-        assert_eq!(account.withdraw_owner(1, u64::MAX, reserve.total()), 0);
+        assert!(company.debit(draw));
+        account.record_company_dividend(1, draw);
+        assert!(company.cash >= reserve.total_with_liabilities(&account));
+        assert_eq!(account.retained_profit(), 0);
     }
 
     #[test]
@@ -2852,5 +3686,16 @@ mod tests {
             ),
             600
         );
+    }
+
+    #[test]
+    fn capital_spending_changes_book_value_without_reducing_operating_profit() {
+        let mut account = BusinessAccount::with_project_funding(500, 0, 300, 2);
+        account.record_sale(2, 200, 10, 1);
+        account.incur_wages(2, 50);
+        assert_eq!(account.book_value, 300);
+        assert_eq!(account.capital_expenditures, 300);
+        assert_eq!(account.current_day.capital_expenditures, 300);
+        assert_eq!(account.current_day.profit(), 140);
     }
 }

@@ -13,6 +13,7 @@
 //! starts sending them — see docs/WORLD-DESIGN.md §1/§4.
 
 pub mod actions;
+pub mod companies;
 pub mod layout;
 pub mod places;
 pub mod state_sync;
@@ -33,6 +34,11 @@ impl Plugin for EncyclopediaPlugin {
         app.init_resource::<places::KnownPlaces>();
         app.init_resource::<places::SelectedPlace>();
         app.init_resource::<places::SelectedPlaceEntry>();
+        app.init_resource::<companies::CompanyDirectory>();
+        app.init_resource::<companies::CompanyFilter>();
+        app.init_resource::<companies::SelectedCompany>();
+        app.init_resource::<companies::CompanyDrilldownReturn>();
+        app.init_resource::<companies::CompanyPolicyFeedback>();
         app.init_resource::<ClickGuard>();
         app.add_systems(
             Update,
@@ -64,6 +70,13 @@ impl Plugin for EncyclopediaPlugin {
         );
         app.add_systems(
             Update,
+            companies::refresh_company_directory
+                .run_if(encyclopedia_open)
+                .run_if(companies::company_tab_active)
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.add_systems(
+            Update,
             (
                 layout::spawn_encyclopedia,
                 actions::request_roster_on_open,
@@ -81,9 +94,9 @@ impl Plugin for EncyclopediaPlugin {
                 // Click FIRST, then rebuild, then draw: handling the click
                 // last meant a selection did not reach the detail pane until
                 // the following frame.
-                places::handle_place_rows,
+                (places::handle_place_rows, places::handle_back_to_company).chain(),
                 places::rebuild_place_list,
-                places::sync_place_detail,
+                (places::sync_place_detail, places::sync_back_to_company).chain(),
                 places::sync_place_business_history_action,
                 places::style_place_rows,
                 state_sync::sync_retinue_button,
@@ -91,6 +104,26 @@ impl Plugin for EncyclopediaPlugin {
             )
                 .chain()
                 .run_if(encyclopedia_open)
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.add_systems(
+            Update,
+            (
+                companies::handle_company_filter_buttons,
+                companies::handle_company_rows,
+                companies::handle_company_site_buttons,
+                companies::handle_company_person_buttons,
+                companies::handle_company_management_buttons,
+                companies::handle_company_branch_policy_buttons,
+                companies::receive_company_policy_results,
+                companies::rebuild_company_view,
+                companies::style_company_controls,
+            )
+                .chain()
+                .after(companies::refresh_company_directory)
+                .after(layout::spawn_encyclopedia)
+                .run_if(encyclopedia_open)
+                .run_if(companies::company_tab_active)
                 .run_if(in_state(GameState::Playing)),
         );
         app.add_systems(
@@ -135,8 +168,8 @@ pub enum EncyclopediaTab {
     /// with neither, and this page stays correct at 0 followers and at 50 —
     /// a clan view grows inside it later instead of forcing a rename.
     Retinue,
-    /// Money and holdings.
-    Ledger,
+    /// Companies, shareholdings and consolidated ledgers.
+    Companies,
 }
 
 impl EncyclopediaTab {
@@ -144,7 +177,7 @@ impl EncyclopediaTab {
         EncyclopediaTab::People,
         EncyclopediaTab::Places,
         EncyclopediaTab::Retinue,
-        EncyclopediaTab::Ledger,
+        EncyclopediaTab::Companies,
     ];
 
     pub fn label(self) -> &'static str {
@@ -152,7 +185,7 @@ impl EncyclopediaTab {
             EncyclopediaTab::People => "PEOPLE",
             EncyclopediaTab::Places => "PLACES",
             EncyclopediaTab::Retinue => "RETINUE",
-            EncyclopediaTab::Ledger => "LEDGER",
+            EncyclopediaTab::Companies => "COMPANIES",
         }
     }
 }

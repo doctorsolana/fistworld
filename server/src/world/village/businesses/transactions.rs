@@ -111,8 +111,11 @@ pub fn apply_business_events(
     mut businesses: Query<(
         Entity,
         &shared::components::BuildingId,
+        &shared::components::OperatedBy,
         &mut BusinessAccount,
     )>,
+    company_entities: Query<(Entity, &shared::components::CompanyId)>,
+    mut company_accounts: Query<&mut shared::economy::CompanyAccount>,
     mut people: Query<(Entity, &shared::components::PersonId, &mut Wallet)>,
     mut settlements: Query<(
         Entity,
@@ -129,9 +132,16 @@ pub fn apply_business_events(
         .next()
         .map_or(1, |clock| clock.day.saturating_add(1));
 
-    let business_entities: HashMap<shared::components::BuildingId, Entity> = businesses
+    let business_entities: HashMap<
+        shared::components::BuildingId,
+        (Entity, shared::components::CompanyId),
+    > = businesses
         .iter()
-        .map(|(entity, id, ..)| (*id, entity))
+        .map(|(entity, id, operated_by, ..)| (*id, (entity, operated_by.0)))
+        .collect();
+    let companies: HashMap<shared::components::CompanyId, Entity> = company_entities
+        .iter()
+        .map(|(entity, id)| (*id, entity))
         .collect();
     let people_entities: HashMap<shared::components::PersonId, Entity> =
         people.iter().map(|(entity, id, _)| (*id, entity)).collect();
@@ -167,7 +177,7 @@ pub fn apply_business_events(
     }
 
     for ((day, business), units) in production {
-        let Some(entity) = business_entities.get(&business).copied() else {
+        let Some((entity, _)) = business_entities.get(&business).copied() else {
             queue.events.push(BusinessEvent::Production {
                 day,
                 business,
@@ -175,7 +185,7 @@ pub fn apply_business_events(
             });
             continue;
         };
-        if let Ok((_, _, mut account)) = businesses.get_mut(entity) {
+        if let Ok((_, _, _, mut account)) = businesses.get_mut(entity) {
             account.record_production(day, units);
         }
     }
@@ -183,7 +193,7 @@ pub fn apply_business_events(
     for ((day, market_id, seller, good), sale) in sales {
         let seller_net = sale.gross.saturating_sub(sale.fee);
         let seller_entity = match seller {
-            MarketSeller::Business(id) => business_entities.get(&id).copied(),
+            MarketSeller::Business(id) => business_entities.get(&id).map(|(entity, _)| *entity),
             MarketSeller::Person(id) => people_entities.get(&id).copied(),
             MarketSeller::Treasury(id) => settlement_entities.get(&id).copied(),
         };
@@ -206,8 +216,31 @@ pub fn apply_business_events(
 
         match (seller, seller_entity) {
             (MarketSeller::Business(_), Some(entity)) => {
-                if let Ok((_, _, mut account)) = businesses.get_mut(entity) {
+                let company = businesses
+                    .get(entity)
+                    .ok()
+                    .map(|(_, _, operated_by, _)| operated_by.0);
+                let Some(company_entity) = company.and_then(|id| companies.get(&id)).copied()
+                else {
+                    queue.events.push(BusinessEvent::Sale {
+                        day,
+                        market: market_id,
+                        fill: MarketFill {
+                            seller,
+                            good,
+                            units: sale.units,
+                            unit_price: sale.gross.checked_div(u64::from(sale.units)).unwrap_or(0),
+                            gross: sale.gross,
+                            market_fee: sale.fee,
+                        },
+                    });
+                    continue;
+                };
+                if let Ok((_, _, _, mut account)) = businesses.get_mut(entity) {
                     account.record_sale(day, sale.gross, sale.fee, sale.units);
+                }
+                if let Ok(mut account) = company_accounts.get_mut(company_entity) {
+                    account.credit(seller_net);
                 }
             }
             (MarketSeller::Person(_), Some(entity)) => {

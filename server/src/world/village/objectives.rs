@@ -25,6 +25,7 @@ pub fn sync_character_objectives(
             Option<&HomeRoutine>,
             Option<&HouseholdShoppingRoutine>,
             Option<&MarketCollectionRoutine>,
+            Option<&InternalDeliveryRoutine>,
         ),
         (
             Option<&FarmerRoutine>,
@@ -57,6 +58,7 @@ pub fn sync_character_objectives(
             home,
             shopping,
             market_collection,
+            internal_delivery,
         ),
         (
             farmer,
@@ -90,6 +92,7 @@ pub fn sync_character_objectives(
             home,
             shopping,
             market_collection,
+            internal_delivery,
             farmer,
             fisher,
             lumberjack,
@@ -129,6 +132,7 @@ fn objective_for(
     home: Option<&HomeRoutine>,
     shopping: Option<&HouseholdShoppingRoutine>,
     market_collection: Option<&MarketCollectionRoutine>,
+    internal_delivery: Option<&InternalDeliveryRoutine>,
     farmer: Option<&FarmerRoutine>,
     fisher: Option<&FishingRoutine>,
     lumberjack: Option<&LumberjackRoutine>,
@@ -213,6 +217,12 @@ fn objective_for(
             MarketCollectionPhase::ReturningToHall | MarketCollectionPhase::DeliveringInput => {
                 CharacterObjective::DeliveringMarketGoods
             }
+        };
+    }
+    if let Some(delivery) = internal_delivery {
+        return match delivery.phase {
+            InternalDeliveryPhase::GoingToSupplier => CharacterObjective::CollectingCompanyInputs,
+            InternalDeliveryPhase::Delivering => CharacterObjective::DeliveringCompanyInputs,
         };
     }
     if let Some(farmer) = farmer {

@@ -8,8 +8,9 @@
 use super::*;
 
 use shared::components::{
-    CivicEmployment, CivicPayrollEntry, CivicPolicyAdjustment, CivicPolicyReason, CivicRole,
-    CivicStaffingPosture, CivicStrategy, PersonId, PoorReliefMode, SettlementId,
+    BuildingId, CivicEmployment, CivicPayrollEntry, CivicPolicyAdjustment, CivicPolicyReason,
+    CivicRole, CivicStaffingPosture, CivicStrategy, CompanyId, OperatedBy, PersonId,
+    PoorReliefMode, SettlementId,
 };
 use shared::economy::{
     CivicAccount, BASIS_POINTS, CIVIC_POLICY_REVIEW_DAYS, DEFAULT_BUSINESS_PERMIT_SUBSIDY_BPS,
@@ -258,20 +259,37 @@ pub fn run_civic_payroll(
     }
 }
 
-/// Collect the enacted levy from positive completed-day business profit. Wage
-/// claims remain senior, tax debt remains explicit, and contributed capital is
-/// never part of the tax base.
+#[derive(Default)]
+struct CompanyTaxGroup {
+    sites: Vec<(BuildingId, Entity)>,
+    external_revenue: u64,
+    real_pre_tax_costs: u64,
+}
+
+/// Collect one enacted levy from each company's consolidated positive result
+/// in a settlement. Same-company transfer credits and charges are eliminated,
+/// so vertically integrated goods are not taxed once at every processing site.
+/// Wage claims remain senior and any unpaid levy stays explicit on the site to
+/// which the consolidated assessment was allocated.
 pub fn collect_business_profit_taxes(
     world_time: Query<&WorldTime>,
     mut processed_day: Local<Option<u32>>,
-    mut halls: Query<(
-        Entity,
-        &SettlementId,
-        &mut Settlement,
-        &SettlementPolicies,
-        &mut CivicAccount,
+    mut halls: ParamSet<(
+        Query<(Entity, &SettlementId, &SettlementPolicies), With<Settlement>>,
+        Query<(&mut Settlement, &mut CivicAccount)>,
     )>,
-    mut businesses: Query<(&shared::components::BuildingOf, &mut BusinessAccount)>,
+    mut businesses: ParamSet<(
+        Query<(
+            Entity,
+            &BuildingId,
+            &shared::components::BuildingOf,
+            &OperatedBy,
+            &BusinessAccount,
+        )>,
+        Query<&mut BusinessAccount>,
+    )>,
+    company_entities: Query<(Entity, &CompanyId)>,
+    mut company_accounts: Query<&mut shared::economy::CompanyAccount>,
 ) {
     let Some(day) = world_time.iter().next().map(|clock| clock.day) else {
         return;
@@ -283,29 +301,90 @@ pub fn collect_business_profit_taxes(
     if day == 0 {
         return;
     }
-    let hall_by_settlement: HashMap<SettlementId, Entity> =
-        halls.iter().map(|(entity, id, ..)| (*id, entity)).collect();
     let completed_day = day - 1;
-    for (building_of, mut account) in businesses.iter_mut() {
-        let Some(hall) = hall_by_settlement.get(&building_of.0).copied() else {
+    let hall_by_settlement: HashMap<SettlementId, (Entity, u16)> = halls
+        .p0()
+        .iter()
+        .map(|(entity, id, policy)| (id.to_owned(), (entity, policy.business_profit_tax_bps)))
+        .collect();
+    let mut groups: HashMap<(SettlementId, CompanyId), CompanyTaxGroup> = HashMap::new();
+    let mut company_wage_arrears = HashMap::<CompanyId, u64>::new();
+    for (entity, building_id, building_of, operated_by, account) in businesses.p0().iter() {
+        let arrears = company_wage_arrears.entry(operated_by.0).or_default();
+        *arrears = arrears.saturating_add(account.wage_arrears);
+        let group = groups.entry((building_of.0, operated_by.0)).or_default();
+        group.sites.push((*building_id, entity));
+        let Some(ledger) = account.ledger_for_day(completed_day) else {
             continue;
         };
-        let Ok((_, _, mut settlement, policies, mut civic)) = halls.get_mut(hall) else {
+        group.external_revenue = group.external_revenue.saturating_add(ledger.gross_revenue);
+        group.real_pre_tax_costs = group.real_pre_tax_costs.saturating_add(
+            ledger
+                .wage_expense
+                .saturating_add(ledger.input_expense)
+                .saturating_add(ledger.market_fees)
+                .saturating_add(ledger.delivery_fees),
+        );
+    }
+
+    let companies_by_id: HashMap<CompanyId, Entity> = company_entities
+        .iter()
+        .map(|(entity, id)| (*id, entity))
+        .collect();
+    for ((settlement_id, company_id), mut group) in groups {
+        let Some((hall, tax_bps)) = hall_by_settlement.get(&settlement_id).copied() else {
             continue;
         };
-        if account.current_day.day == completed_day && account.current_day.profit_taxes == 0 {
-            let due = account
-                .current_day
-                .pre_tax_profit()
-                .saturating_mul(u64::from(policies.business_profit_tax_bps))
-                .div_ceil(BASIS_POINTS);
-            account.incur_profit_tax(completed_day, due);
+        group
+            .sites
+            .sort_unstable_by_key(|(building_id, _)| *building_id);
+        let due = group
+            .external_revenue
+            .saturating_sub(group.real_pre_tax_costs)
+            .saturating_mul(u64::from(tax_bps))
+            .div_ceil(BASIS_POINTS);
+        if let Some((_, assessed_site)) = group.sites.first().copied() {
+            if let Ok(mut account) = businesses.p1().get_mut(assessed_site) {
+                account.incur_completed_day_profit_tax(completed_day, due);
+            }
         }
-        let tax_arrears = account.tax_arrears;
-        let paid = account.pay_tax_claim(tax_arrears);
+
+        // A company is one payer. The site owns the local tax liability for
+        // reporting, while payment comes directly from the single treasury
+        // and never outranks employee wage claims anywhere in the company.
+        let Some((_, claimant)) = group.sites.first().copied() else {
+            continue;
+        };
+        let claim = businesses
+            .p1()
+            .get_mut(claimant)
+            .map_or(0, |account| account.tax_arrears);
+        let paid = companies_by_id
+            .get(&company_id)
+            .and_then(|entity| company_accounts.get_mut(*entity).ok())
+            .map_or(0, |mut company| {
+                let wage_reserve = company_wage_arrears
+                    .get(&company_id)
+                    .copied()
+                    .unwrap_or_default();
+                let payable = claim.min(company.cash.saturating_sub(wage_reserve));
+                if company.debit(payable) {
+                    payable
+                } else {
+                    0
+                }
+            });
         if paid > 0 {
-            settlement.treasury = settlement.treasury.saturating_add(paid);
-            civic.record_profit_tax_income(day, paid);
+            if let Ok(mut account) = businesses.p1().get_mut(claimant) {
+                let settled = account.settle_tax_claim(paid);
+                debug_assert_eq!(settled, paid);
+            }
+        }
+        if paid > 0 {
+            if let Ok((mut settlement, mut civic)) = halls.p1().get_mut(hall) {
+                settlement.treasury = settlement.treasury.saturating_add(paid);
+                civic.record_profit_tax_income(day, paid);
+            }
         }
     }
 }
@@ -517,6 +596,7 @@ pub fn review_civic_policies(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shared::economy::CompanyAccount;
 
     fn civic_worker(
         app: &mut App,
@@ -611,17 +691,44 @@ mod tests {
         let mut profitable = BusinessAccount::with_capital(200);
         profitable.record_sale(0, 1_000, 0, 10);
         profitable.incur_wages(0, 400);
-        assert_eq!(profitable.pay_wage_claim(400), 400);
+        assert_eq!(profitable.settle_wage_claim(400), 400);
+        let profitable_company = app
+            .world_mut()
+            .spawn((
+                CompanyId(30),
+                CompanyAccount {
+                    cash: 800,
+                    ..default()
+                },
+            ))
+            .id();
         let business = app
             .world_mut()
-            .spawn((shared::components::BuildingOf(settlement_id), profitable))
+            .spawn((
+                BuildingId(20),
+                shared::components::BuildingOf(settlement_id),
+                OperatedBy(CompanyId(30)),
+                profitable,
+            ))
             .id();
         let mut loss = BusinessAccount::with_capital(100);
         loss.record_sale(0, 100, 0, 1);
         loss.incur_wages(0, 200);
+        app.world_mut().spawn((
+            CompanyId(31),
+            CompanyAccount {
+                cash: 100,
+                ..default()
+            },
+        ));
         let loss_business = app
             .world_mut()
-            .spawn((shared::components::BuildingOf(settlement_id), loss))
+            .spawn((
+                BuildingId(21),
+                shared::components::BuildingOf(settlement_id),
+                OperatedBy(CompanyId(31)),
+                loss,
+            ))
             .id();
 
         app.update();
@@ -629,7 +736,13 @@ mod tests {
         let account = app.world().get::<BusinessAccount>(business).unwrap();
         assert_eq!(account.current_day.profit_taxes, 60);
         assert_eq!(account.tax_arrears, 0);
-        assert_eq!(account.cash, 740);
+        assert_eq!(
+            app.world()
+                .get::<CompanyAccount>(profitable_company)
+                .unwrap()
+                .cash,
+            740
+        );
         assert_eq!(
             app.world()
                 .get::<BusinessAccount>(loss_business)
@@ -646,6 +759,75 @@ mod tests {
                 .current_day
                 .profit_tax_income,
             60
+        );
+    }
+
+    #[test]
+    fn company_profit_levy_eliminates_internal_site_turnover() {
+        let mut app = App::new();
+        app.add_systems(Update, collect_business_profit_taxes);
+        let mut clock = WorldTime::new_default();
+        clock.day = 1;
+        app.world_mut().spawn(clock);
+        let settlement_id = SettlementId(42);
+        let company = CompanyId(77);
+        let hall = app
+            .world_mut()
+            .spawn((
+                settlement_id,
+                Settlement {
+                    name: "Consolidated Ford".into(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 4,
+                    treasury: 0,
+                },
+                SettlementPolicies::default(),
+                CivicAccount::default(),
+            ))
+            .id();
+        let mut farm = BusinessAccount::with_capital(200);
+        farm.record_internal_output(0, 1_000, 10);
+        let farm = app
+            .world_mut()
+            .spawn((
+                BuildingId(501),
+                shared::components::BuildingOf(settlement_id),
+                OperatedBy(company),
+                farm,
+            ))
+            .id();
+        let mut mill = BusinessAccount::with_capital(200);
+        mill.record_internal_input(0, 1_000, 10);
+        let mill = app
+            .world_mut()
+            .spawn((
+                BuildingId(502),
+                shared::components::BuildingOf(settlement_id),
+                OperatedBy(company),
+                mill,
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Settlement>(hall).unwrap().treasury,
+            0,
+            "moving the company's own goods between sites is not taxable revenue"
+        );
+        assert_eq!(
+            app.world()
+                .get::<BusinessAccount>(farm)
+                .unwrap()
+                .tax_arrears,
+            0
+        );
+        assert_eq!(
+            app.world()
+                .get::<BusinessAccount>(mill)
+                .unwrap()
+                .tax_arrears,
+            0
         );
     }
 

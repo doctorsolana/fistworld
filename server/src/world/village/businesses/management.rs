@@ -1,6 +1,6 @@
 use super::super::*;
 
-use shared::economy::{business_working_capital, sustainable_unit_price, BusinessManagementPolicy};
+use shared::economy::{sustainable_unit_price, BusinessManagementPolicy};
 
 const INSOLVENT_DAYS_BEFORE_CLOSURE: u16 = 5;
 const NEW_BUSINESS_DAYS: u32 = 3;
@@ -65,8 +65,8 @@ pub(crate) fn review_automatic_price(
 
     let scarce_and_selling = previous.sold_units > 0
         && previous.sold_units >= previous.produced_units.max(1)
-        && total_stock <= sale.keep_units.saturating_add(2);
-    let stale_surplus = sale.days_without_sales >= 2 && total_stock > sale.keep_units;
+        && total_stock <= sale.company_reserve_units.saturating_add(2);
+    let stale_surplus = sale.days_without_sales >= 2 && total_stock > sale.company_reserve_units;
     let mut desired = if scarce_and_selling {
         price_step(current, sale.max_daily_price_change_bps, true)
     } else if stale_surplus {
@@ -103,6 +103,14 @@ pub fn review_business_management(
     world_time: Query<&WorldTime>,
     halls: Query<(Entity, &shared::components::SettlementId), With<Settlement>>,
     mut markets: Query<&mut MootMarket, With<Settlement>>,
+    mut companies: ParamSet<(
+        Query<(
+            Entity,
+            &shared::components::CompanyId,
+            &shared::economy::CompanyAccount,
+        )>,
+        Query<&mut shared::economy::CompanyAccount>,
+    )>,
     mut businesses: Query<(
         Entity,
         &shared::components::BuildingId,
@@ -116,6 +124,7 @@ pub fn review_business_management(
         &BusinessManagementPolicy,
         &mut BusinessCondition,
         Option<&shared::components::OwnedBy>,
+        Option<&shared::components::OperatedBy>,
         Option<&mut BusinessLiquidation>,
         Option<&BusinessForSale>,
     )>,
@@ -149,6 +158,14 @@ pub fn review_business_management(
         .iter()
         .map(|(entity, id, _)| (*id, entity))
         .collect();
+    let companies_by_id: HashMap<
+        shared::components::CompanyId,
+        (Entity, shared::economy::CompanyAccount),
+    > = companies
+        .p0()
+        .iter()
+        .map(|(entity, id, account)| (*id, (entity, *account)))
+        .collect();
     let mut workers_by_business: HashMap<shared::components::BuildingId, Vec<Entity>> =
         HashMap::new();
     for (entity, _, employed, ..) in villagers.iter() {
@@ -173,13 +190,11 @@ pub fn review_business_management(
         management,
         mut condition,
         owner,
+        operated_by,
         liquidation,
         for_sale,
     ) in businesses.iter_mut()
     {
-        if super::super::business_output(building.kind).is_none() {
-            continue;
-        }
         account.roll_to_day(day);
         if condition.opened_day == u32::MAX {
             condition.opened_day = day;
@@ -207,6 +222,13 @@ pub fn review_business_management(
         }
 
         let Some(good) = super::super::business_output(building.kind) else {
+            if building.kind == SettlementBuildingKind::StorageHall {
+                // A depot is company infrastructure: its wages are visible in
+                // the site ledger and consolidated company profit, but the
+                // absence of direct product revenue does not independently
+                // declare the building insolvent.
+                condition.state = BusinessState::Operating;
+            }
             continue;
         };
         let Some(hall) = hall_by_settlement.get(&building_of.0).copied() else {
@@ -272,7 +294,8 @@ pub fn review_business_management(
             }
             condition.liquidation_days = condition.liquidation_days.saturating_add(elapsed);
             sale.collection_enabled = true;
-            sale.keep_units = 0;
+            sale.company_reserve_days = 0;
+            sale.company_reserve_units = 0;
             sale.max_units_per_collection = sale.max_units_per_collection.max(32);
             sale.minimum_unit_price = good.base_price().saturating_mul(25) / 100;
             sale.asking_unit_price = price_step(
@@ -295,7 +318,7 @@ pub fn review_business_management(
                 liquidation.wage_claims.rotate_left(rotation);
             }
             for claim in &mut liquidation.wage_claims {
-                if claim.pennies == 0 || account.cash == 0 {
+                if claim.pennies == 0 {
                     continue;
                 }
                 let Some(worker) = people_by_id.get(&claim.worker).copied() else {
@@ -303,13 +326,35 @@ pub fn review_business_management(
                     claim.pennies = claim.pennies.saturating_sub(written_off);
                     continue;
                 };
-                let payment = claim.pennies.min(account.cash).min(account.wage_arrears);
+                let company_entity = operated_by
+                    .and_then(|operation| companies_by_id.get(&operation.0))
+                    .map(|(entity, _)| *entity);
+                let payment = if let Some(entity) = company_entity {
+                    let company_cash = {
+                        let company_accounts = companies.p1();
+                        company_accounts
+                            .get(entity)
+                            .map_or(0, |company| company.cash)
+                    };
+                    claim.pennies.min(company_cash).min(account.wage_arrears)
+                } else {
+                    0
+                };
                 if payment == 0 {
                     continue;
                 }
+                if let Some(company_entity) = company_entity {
+                    if let Ok(mut company) = companies.p1().get_mut(company_entity) {
+                        if !company.debit(payment) {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                }
                 if let Ok((_, _, _, mut wallet, _, _)) = villagers.get_mut(worker) {
                     wallet.credit(payment);
-                    let settled = account.pay_wage_claim(payment);
+                    let settled = account.settle_wage_claim(payment);
                     claim.pennies = claim.pennies.saturating_sub(settled);
                 }
             }
@@ -344,16 +389,6 @@ pub fn review_business_management(
                         account.defaulted_taxes.saturating_add(account.tax_arrears);
                     account.tax_arrears = 0;
                 }
-                if let Some(owner_entity) =
-                    owner.and_then(|owner| people_by_id.get(&owner.0).copied())
-                {
-                    if account.cash > 0 {
-                        if let Ok((_, _, _, mut wallet, _, _)) = villagers.get_mut(owner_entity) {
-                            wallet.credit(account.cash);
-                            account.cash = 0;
-                        }
-                    }
-                }
                 condition.state = BusinessState::ForSale;
                 sale.collection_enabled = false;
                 commands
@@ -377,15 +412,27 @@ pub fn review_business_management(
 
         let worker_count = workers_by_business.get(building_id).map_or(0, Vec::len) as u64;
         let daily_payroll = wage.daily_wage.saturating_mul(worker_count);
-        let free_cash = account
-            .cash
-            .saturating_sub(account.wage_arrears)
-            .saturating_sub(account.tax_arrears);
+        let company_reading = operated_by
+            .and_then(|operation| companies_by_id.get(&operation.0))
+            .map(|(_, account)| *account);
+        let free_cash = company_reading.map_or(0, |company| {
+            company
+                .cash
+                .saturating_sub(company.wage_arrears)
+                .saturating_sub(company.tax_arrears)
+        });
+        let company_supports_site = free_cash > 0;
         let old_state = condition.state;
-        if (account.wage_arrears > 0 || account.tax_arrears > 0) && account.cash == 0 {
-            condition.insolvent_days = condition.insolvent_days.saturating_add(elapsed);
+        if (account.wage_arrears > 0 || account.tax_arrears > 0) && free_cash == 0 {
+            condition.insolvent_days = if company_supports_site {
+                0
+            } else {
+                condition.insolvent_days.saturating_add(elapsed)
+            };
             condition.cash_tight_days = condition.cash_tight_days.saturating_add(elapsed);
-            condition.state = if condition.insolvent_days >= INSOLVENT_DAYS_BEFORE_CLOSURE {
+            condition.state = if company_supports_site {
+                BusinessState::Distressed
+            } else if condition.insolvent_days >= INSOLVENT_DAYS_BEFORE_CLOSURE {
                 BusinessState::Liquidating
             } else {
                 BusinessState::Insolvent
@@ -418,6 +465,10 @@ pub fn review_business_management(
         if management.autopilot {
             sale.target_margin_bps = management.strategy.target_margin_bps();
             sale.max_daily_price_change_bps = management.strategy.daily_price_step_bps();
+            // Active downstream requests are reserved before public collection,
+            // so an automatic owner does not need a second speculative output
+            // hoard. Manual owners may still select one explicitly.
+            sale.company_reserve_days = 0;
             review_automatic_price(
                 &mut account,
                 &mut sale,
@@ -432,6 +483,18 @@ pub fn review_business_management(
                     if let Some(recipe) = processing_recipe(building.kind) {
                         let mut rule = procurement.rule(recipe.input);
                         if rule.enabled {
+                            rule.set_coverage_days(
+                                if matches!(
+                                    condition.state,
+                                    BusinessState::CashTight
+                                        | BusinessState::Distressed
+                                        | BusinessState::Insolvent
+                                ) {
+                                    1
+                                } else {
+                                    management.strategy.input_coverage_days()
+                                },
+                            );
                             if let Some(maximum) = maximum_viable_input_unit_price(
                                 building.kind,
                                 sale.asking_unit_price,
@@ -440,8 +503,8 @@ pub fn review_business_management(
                                 sale.target_margin_bps,
                             ) {
                                 rule.maximum_unit_price = maximum;
-                                procurement.set_rule(recipe.input, rule);
                             }
+                            procurement.set_rule(recipe.input, rule);
                         }
                     }
                 }
@@ -460,7 +523,16 @@ pub fn review_business_management(
                         .saturating_sub(OWNER_PERSONAL_FLOOR)
                         .min(OWNER_RESCUE_LIMIT);
                     if rescue > 0 && wallet.debit(rescue) {
-                        account.contribute_capital(rescue);
+                        account.contributed_capital =
+                            account.contributed_capital.saturating_add(rescue);
+                        if let Some(company_entity) = operated_by
+                            .and_then(|operation| companies_by_id.get(&operation.0))
+                            .map(|(entity, _)| *entity)
+                        {
+                            if let Ok(mut company) = companies.p1().get_mut(company_entity) {
+                                company.credit(rescue);
+                            }
+                        }
                         condition.state = BusinessState::Distressed;
                         condition.insolvent_days = 0;
                     }
@@ -472,7 +544,16 @@ pub fn review_business_management(
                         .saturating_sub(OWNER_PERSONAL_FLOOR)
                         .min(OWNER_RESCUE_LIMIT);
                     if rescue > 0 && wallet.debit(rescue) {
-                        account.contribute_capital(rescue);
+                        account.contributed_capital =
+                            account.contributed_capital.saturating_add(rescue);
+                        if let Some(company_entity) = operated_by
+                            .and_then(|operation| companies_by_id.get(&operation.0))
+                            .map(|(entity, _)| *entity)
+                        {
+                            if let Ok(mut company) = companies.p1().get_mut(company_entity) {
+                                company.credit(rescue);
+                            }
+                        }
                         condition.state = BusinessState::Distressed;
                         condition.insolvent_days = 0;
                     }
@@ -480,40 +561,10 @@ pub fn review_business_management(
             }
         }
 
-        if management.automatic_withdrawals
-            && matches!(
-                condition.state,
-                BusinessState::Operating | BusinessState::CashTight
-            )
-        {
-            if owner_entity.is_some() || hero_owner_entity.is_some() {
-                let procurement = procurement.as_deref().copied().unwrap_or_default();
-                let reserve = business_working_capital(
-                    building.kind.positions(),
-                    wage,
-                    management,
-                    &procurement,
-                    Some(&market),
-                )
-                .total();
-                let draw = account.withdraw_owner(day, management.max_daily_withdrawal, reserve);
-                if draw > 0 {
-                    if let Some(owner_entity) = owner_entity {
-                        if let Ok((_, _, _, mut wallet, _, _)) = villagers.get_mut(owner_entity) {
-                            wallet.credit(draw);
-                        }
-                    } else if let Some(owner_entity) = hero_owner_entity {
-                        if let Ok((_, _, mut wallet)) = hero_owners.get_mut(owner_entity) {
-                            wallet.credit(draw);
-                        }
-                    }
-                }
-            }
-        }
-
         if condition.state == BusinessState::Liquidating {
             sale.collection_enabled = true;
-            sale.keep_units = 0;
+            sale.company_reserve_days = 0;
+            sale.company_reserve_units = 0;
             sale.max_units_per_collection = sale.max_units_per_collection.max(32);
             market.reprice(seller, good, sale.asking_unit_price.max(1));
             let workers = workers_by_business

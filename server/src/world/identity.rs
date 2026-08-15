@@ -9,10 +9,10 @@ use bevy::prelude::*;
 #[cfg(test)]
 use shared::components::CharacterKind;
 use shared::components::{
-    AttachedTo, BuildingId, BuildingOf, CharacterName, CivicEmployment, CivicRole, EmployedAt,
-    FarmField, FishingPier, LivesAt, MootAdministration, OwnedBy, PersonId, PlayerPosition,
-    ResidentOf, RoadOf, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
-    VillageRoad,
+    AttachedTo, BuildingId, BuildingOf, CharacterName, CivicEmployment, CivicRole, Company,
+    CompanyId, EmployedAt, FarmField, FishingPier, LivesAt, MootAdministration, OwnedBy, PersonId,
+    PlayerPosition, ResidentOf, RoadOf, Settlement, SettlementBuilding, SettlementBuildingKind,
+    SettlementId, VillageRoad,
 };
 
 use super::village::{HomeAssignment, VillagerIntent};
@@ -22,6 +22,7 @@ pub struct WorldIdAllocator {
     next_person: u64,
     next_settlement: u64,
     next_building: u64,
+    next_company: u64,
 }
 
 /// Migrate field and pier parent links from their old position join. New
@@ -177,6 +178,7 @@ impl Default for WorldIdAllocator {
             next_person: 1,
             next_settlement: 1,
             next_building: 1,
+            next_company: 1,
         }
     }
 }
@@ -192,6 +194,10 @@ impl WorldIdAllocator {
 
     fn observe_building(&mut self, id: BuildingId) {
         self.next_building = self.next_building.max(id.0.saturating_add(1));
+    }
+
+    fn observe_company(&mut self, id: CompanyId) {
+        self.next_company = self.next_company.max(id.0.saturating_add(1));
     }
 
     fn person(&mut self) -> PersonId {
@@ -211,6 +217,12 @@ impl WorldIdAllocator {
         self.next_building = self.next_building.saturating_add(1);
         id
     }
+
+    pub(crate) fn company(&mut self) -> CompanyId {
+        let id = CompanyId(self.next_company);
+        self.next_company = self.next_company.saturating_add(1);
+        id
+    }
 }
 
 #[derive(Resource, Default, Debug)]
@@ -218,6 +230,7 @@ pub struct WorldIdentityIndex {
     pub people: bevy::platform::collections::HashMap<PersonId, Entity>,
     pub settlements: bevy::platform::collections::HashMap<SettlementId, Entity>,
     pub buildings: bevy::platform::collections::HashMap<BuildingId, Entity>,
+    pub companies: bevy::platform::collections::HashMap<CompanyId, Entity>,
     initialized: bool,
 }
 
@@ -229,9 +242,11 @@ pub fn assign_stable_world_ids(
     existing_people: Query<&PersonId, Added<PersonId>>,
     existing_settlements: Query<&SettlementId, Added<SettlementId>>,
     existing_buildings: Query<&BuildingId, Added<BuildingId>>,
+    existing_companies: Query<&CompanyId, Added<CompanyId>>,
     new_people: Query<Entity, (With<CharacterName>, Without<PersonId>)>,
     new_settlements: Query<Entity, (With<Settlement>, Without<SettlementId>)>,
     new_buildings: Query<Entity, (With<SettlementBuilding>, Without<BuildingId>)>,
+    new_companies: Query<Entity, (With<Company>, Without<CompanyId>)>,
 ) {
     for id in existing_people.iter() {
         allocator.observe_person(*id);
@@ -241,6 +256,9 @@ pub fn assign_stable_world_ids(
     }
     for id in existing_buildings.iter() {
         allocator.observe_building(*id);
+    }
+    for id in existing_companies.iter() {
+        allocator.observe_company(*id);
     }
 
     for entity in new_people.iter() {
@@ -252,6 +270,9 @@ pub fn assign_stable_world_ids(
     for entity in new_buildings.iter() {
         commands.entity(entity).insert(allocator.building());
     }
+    for entity in new_companies.iter() {
+        commands.entity(entity).insert(allocator.company());
+    }
 }
 
 /// Rebuild the cheap Entity lookup tables only when identity components change.
@@ -260,20 +281,25 @@ pub fn rebuild_world_identity_index(
     people: Query<(Entity, &PersonId), With<CharacterName>>,
     settlements: Query<(Entity, &SettlementId), With<Settlement>>,
     buildings: Query<(Entity, &BuildingId), With<SettlementBuilding>>,
+    companies: Query<(Entity, &CompanyId), With<Company>>,
     changed_people: Query<(), Changed<PersonId>>,
     changed_settlements: Query<(), Changed<SettlementId>>,
     changed_buildings: Query<(), Changed<BuildingId>>,
+    changed_companies: Query<(), Changed<CompanyId>>,
     removed_people: RemovedComponents<PersonId>,
     removed_settlements: RemovedComponents<SettlementId>,
     removed_buildings: RemovedComponents<BuildingId>,
+    removed_companies: RemovedComponents<CompanyId>,
 ) {
     let dirty = !index.initialized
         || !changed_people.is_empty()
         || !changed_settlements.is_empty()
         || !changed_buildings.is_empty()
+        || !changed_companies.is_empty()
         || !removed_people.is_empty()
         || !removed_settlements.is_empty()
-        || !removed_buildings.is_empty();
+        || !removed_buildings.is_empty()
+        || !removed_companies.is_empty();
     if !dirty {
         return;
     }
@@ -281,6 +307,7 @@ pub fn rebuild_world_identity_index(
     index.people.clear();
     index.settlements.clear();
     index.buildings.clear();
+    index.companies.clear();
     for (entity, id) in people.iter() {
         assert!(
             index.people.insert(*id, entity).is_none(),
@@ -299,6 +326,13 @@ pub fn rebuild_world_identity_index(
         assert!(
             index.buildings.insert(*id, entity).is_none(),
             "duplicate durable BuildingId {}",
+            id.0
+        );
+    }
+    for (entity, id) in companies.iter() {
+        assert!(
+            index.companies.insert(*id, entity).is_none(),
+            "duplicate durable CompanyId {}",
             id.0
         );
     }

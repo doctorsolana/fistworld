@@ -5,8 +5,9 @@ use crate::components::{
     ActiveMapState, AttachedTo, BuildingDoorDemand, BuildingId, BuildingOf, CharacterActivity,
     CharacterAffiliation, CharacterAttributes, CharacterKind, CharacterMotion, CharacterName,
     CharacterNavigationStatus, CharacterObjective, CivicEmployment, CivicHallLevel, CloudSeed,
-    CommandedBy, ConstructionSite, EmployedAt, FarmField, FishingPier, Health, Hero, HeroOutfit,
-    Household, LivesAt, MootAdministration, Nutrition, Occupation, OwnedBy, PersonId, Player,
+    CommandedBy, Company, CompanyId, CompanyLeadership, CompanyOwnership, CompanyShareMarket,
+    ConstructionSite, EmployedAt, FarmField, FishingPier, Health, Hero, HeroOutfit, Household,
+    LivesAt, MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId, Player,
     PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation, Residence, ResidentOf,
     Settlement, SettlementBuilding, SettlementDevelopment, SettlementId,
     SettlementOpportunityBoard, SettlementPolicies, SettlementPropertyBoard, SettlementSummary,
@@ -14,9 +15,10 @@ use crate::components::{
 };
 use crate::economy::{
     BusinessAccount, BusinessCondition, BusinessForSale, BusinessLiquidation,
-    BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy, BusinessWagePolicy,
-    CarriedLoad, CivicAccount, GoodsInventory, HouseholdEconomy, MootMarket, SettlementEconomy,
-    Wallet, WorkforceRequirements,
+    BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy,
+    BusinessStaffingPolicy, BusinessSupplyPolicy, BusinessWagePolicy, CarriedLoad, CivicAccount,
+    CompanyAccount, CompanyBranchPolicies, CompanyDecisionHistory, CompanyManagementPolicy,
+    GoodsInventory, HouseholdEconomy, MootMarket, SettlementEconomy, Wallet, WorkforceRequirements,
 };
 use crate::terrain::TerrainDeltaChunk;
 
@@ -46,10 +48,16 @@ impl Plugin for ProtocolPlugin {
         app.component::<SettlementId>().replicate();
         app.component::<SettlementSummary>().replicate();
         app.component::<BuildingId>().replicate();
+        app.component::<CompanyId>().replicate();
+        app.component::<Company>().replicate();
+        app.component::<CompanyLeadership>().replicate();
+        app.component::<CompanyOwnership>().replicate();
+        app.component::<CompanyShareMarket>().replicate();
         app.component::<ResidentOf>().replicate();
         app.component::<BuildingOf>().replicate();
         app.component::<AttachedTo>().replicate();
         app.component::<OwnedBy>().replicate();
+        app.component::<OperatedBy>().replicate();
         app.component::<EmployedAt>().replicate();
         app.component::<CivicEmployment>().replicate();
         app.component::<LivesAt>().replicate();
@@ -90,8 +98,14 @@ impl Plugin for ProtocolPlugin {
         app.component::<BusinessLiquidation>().replicate();
         app.component::<BusinessManagementPolicy>().replicate();
         app.component::<BusinessProcurementPolicy>().replicate();
+        app.component::<BusinessSupplyPolicy>().replicate();
         app.component::<BusinessSalePolicy>().replicate();
+        app.component::<BusinessStaffingPolicy>().replicate();
         app.component::<BusinessWagePolicy>().replicate();
+        app.component::<CompanyAccount>().replicate();
+        app.component::<CompanyManagementPolicy>().replicate();
+        app.component::<CompanyBranchPolicies>().replicate();
+        app.component::<CompanyDecisionHistory>().replicate();
         app.component::<WorkforceRequirements>().replicate();
         app.component::<BuildingDoorDemand>().replicate();
         app.component::<VillageRoad>().replicate();
@@ -124,6 +138,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<RequestWorldHistory>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<RequestCompanyHistory>()
+            .add_direction(NetworkDirection::ClientToServer);
         // `.add_map_entities()` must live HERE, in the shared plugin: it swaps
         // both the serialize and deserialize functions for the type, so if only
         // one peer registered it the two would disagree on the wire format.
@@ -137,6 +153,11 @@ impl Plugin for ProtocolPlugin {
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<HeroBusinessOrder>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<HeroCompanyOrder>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<HeroCompanyFoundingOrder>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<HeroMarketOrder>()
@@ -156,6 +177,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<WorldHistoryResponse>()
             .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<CompanyHistoryResponse>()
+            .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<DevStatus>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroMarketResult>()
@@ -165,6 +188,10 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<HeroConstructionResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroBusinessResult>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<HeroCompanyResult>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<HeroCompanyFoundingResult>()
             .add_direction(NetworkDirection::ServerToClient);
 
         // === CHANNELS ===

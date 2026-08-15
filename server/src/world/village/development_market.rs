@@ -23,6 +23,7 @@ pub struct DevelopmentMarketSignals {
     pub fishers: usize,
     pub windmills: usize,
     pub bakeries: usize,
+    pub storage_halls: usize,
     pub completed_windmills: usize,
     pub completed_bakeries: usize,
     pub unproven_windmill: bool,
@@ -64,13 +65,14 @@ pub struct DevelopmentOpportunity {
     pub requires_independent_owner: bool,
 }
 
-const FOUNDING_PRIVATE_KINDS: [SettlementBuildingKind; 6] = [
+const FOUNDING_PRIVATE_KINDS: [SettlementBuildingKind; 7] = [
     SettlementBuildingKind::House,
     SettlementBuildingKind::Farmstead,
     SettlementBuildingKind::FishermansHut,
     SettlementBuildingKind::Windmill,
     SettlementBuildingKind::Bakery,
     SettlementBuildingKind::LumberjackHut,
+    SettlementBuildingKind::StorageHall,
 ];
 
 /// A processor may reasonably invest against an existing stockpile, but that
@@ -408,6 +410,38 @@ fn opportunity_score(
             let missing_capacity = desired.saturating_sub(signals.lumber_huts) as f32;
             48.0 + missing_capacity * 13.0 + (shortage as f32 * 0.08).min(18.0)
         }
+        SettlementBuildingKind::StorageHall => {
+            let operating_sites = signals
+                .farms
+                .saturating_add(signals.fishers)
+                .saturating_add(signals.windmills)
+                .saturating_add(signals.bakeries)
+                .saturating_add(signals.lumber_huts);
+            // A depot is branch infrastructure, not a sensible founding
+            // trade. Do not advertise one against the first workshop merely
+            // because integer ceiling division would otherwise say "one".
+            // Three operating sites establish a real local logistics need;
+            // after that, roughly one depot per six sites is enough.
+            let desired = if operating_sites < 3 {
+                0
+            } else {
+                operating_sites.div_ceil(6)
+            };
+            if desired == 0 || signals.storage_halls >= desired {
+                return 4.0;
+            }
+            let local_stock = signals
+                .wheat_stock
+                .saturating_add(signals.flour_stock)
+                .saturating_add(signals.bread_stock)
+                .saturating_add(signals.wood_stock);
+            // Storage becomes an attractive investment when several sites
+            // share a branch or when physical stock is already crowding the
+            // ordinary workshop stores. It is useful infrastructure, not a
+            // mandatory civic project.
+            24.0 + operating_sites.saturating_sub(2) as f32 * 7.0
+                + (local_stock as f32 / 20.0).min(45.0)
+        }
         SettlementBuildingKind::Hall
         | SettlementBuildingKind::Market
         | SettlementBuildingKind::Tavern
@@ -492,6 +526,7 @@ pub fn replicated_opportunity_board(
         SettlementBuildingKind::FishermansHut,
         SettlementBuildingKind::Windmill,
         SettlementBuildingKind::Bakery,
+        SettlementBuildingKind::StorageHall,
         SettlementBuildingKind::LumberjackHut,
         SettlementBuildingKind::Market,
         SettlementBuildingKind::Tavern,
@@ -530,10 +565,11 @@ fn kind_order(kind: SettlementBuildingKind) -> u8 {
         SettlementBuildingKind::Windmill => 3,
         SettlementBuildingKind::Bakery => 4,
         SettlementBuildingKind::LumberjackHut => 5,
-        SettlementBuildingKind::Market => 6,
-        SettlementBuildingKind::Tavern => 7,
-        SettlementBuildingKind::Church => 8,
-        SettlementBuildingKind::Hall => 9,
+        SettlementBuildingKind::StorageHall => 6,
+        SettlementBuildingKind::Market => 7,
+        SettlementBuildingKind::Tavern => 8,
+        SettlementBuildingKind::Church => 9,
+        SettlementBuildingKind::Hall => 10,
     }
 }
 
@@ -554,18 +590,24 @@ fn expected_daily_business(
 }
 
 /// Cash escrowed with a processing permit so the finished firm can buy at
-/// least one complete physical recipe batch and meet its first full-staffed
-/// payroll. Extractors can begin with labour; processors cannot create their
-/// first sale without a real purchased input.
+/// least one complete physical recipe batch and meet its prudent one-person
+/// opening payroll. Extractors can begin with labour; processors cannot create
+/// their first sale without a real purchased input. When no input is listed
+/// yet, the owner budgets for a 2.6x supply shock rather than assuming base
+/// price is guaranteed; this is entry risk assessment, not a market price cap.
 pub fn minimum_startup_capital(kind: SettlementBuildingKind, market: Option<&MootMarket>) -> u64 {
     let Some(recipe) = super::processing_recipe(kind) else {
         return 0;
     };
-    let input_price = market.map_or(recipe.input.base_price(), |market| {
-        market.suggested_price(recipe.input)
-    });
+    let prudent_unquoted_price = recipe.input.base_price().saturating_mul(260) / 100;
+    let input_price = market
+        .map_or(recipe.input.base_price(), |market| {
+            market.suggested_price(recipe.input)
+        })
+        .max(prudent_unquoted_price);
     let first_batch = u64::from(recipe.input_units).saturating_mul(input_price);
-    let first_payroll = u64::from(kind.positions()).saturating_mul(FOUNDING_DAILY_WAGE);
+    let first_payroll =
+        u64::from(super::automatic_opening_positions(kind)).saturating_mul(FOUNDING_DAILY_WAGE);
     first_batch
         .saturating_add(first_payroll)
         .max(shared::economy::PENNIES_PER_COIN)
@@ -940,9 +982,8 @@ mod tests {
         );
         assert_eq!(
             minimum_startup_capital(SettlementBuildingKind::Windmill, Some(&market)),
-            Good::Wheat.base_price()
-                + u64::from(SettlementBuildingKind::Windmill.positions()) * FOUNDING_DAILY_WAGE,
-            "the approved challenger must open with its first input and payroll funded"
+            Good::Wheat.base_price().saturating_mul(260) / 100 + FOUNDING_DAILY_WAGE,
+            "the approved challenger must fund one input batch and a prudent opening payroll even when the market is briefly unquoted"
         );
 
         let pending_challenger = DevelopmentMarketSignals {
@@ -1032,6 +1073,45 @@ mod tests {
                 | SettlementBuildingKind::Tavern
                 | SettlementBuildingKind::Church
         )));
+    }
+
+    #[test]
+    fn storage_is_branch_infrastructure_not_a_founding_trade() {
+        let policies = SettlementPolicies::default();
+        let tiny = DevelopmentMarketSignals {
+            residents: 8,
+            farms: 1,
+            windmills: 1,
+            houses: 2,
+            wheat_stock: 30,
+            ..Default::default()
+        };
+        let premature = private_opportunities(tiny, None, None, &policies)
+            .into_iter()
+            .find(|opportunity| opportunity.kind == SettlementBuildingKind::StorageHall)
+            .unwrap();
+        assert_eq!(premature.score, 4.0);
+
+        let established = DevelopmentMarketSignals {
+            farms: 2,
+            windmills: 1,
+            ..tiny
+        };
+        let useful = private_opportunities(established, None, None, &policies)
+            .into_iter()
+            .find(|opportunity| opportunity.kind == SettlementBuildingKind::StorageHall)
+            .unwrap();
+        assert!(useful.score > premature.score);
+
+        let already_supplied = DevelopmentMarketSignals {
+            storage_halls: 1,
+            ..established
+        };
+        let duplicate = private_opportunities(already_supplied, None, None, &policies)
+            .into_iter()
+            .find(|opportunity| opportunity.kind == SettlementBuildingKind::StorageHall)
+            .unwrap();
+        assert_eq!(duplicate.score, 4.0);
     }
 
     #[test]

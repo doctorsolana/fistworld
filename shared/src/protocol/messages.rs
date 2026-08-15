@@ -150,20 +150,98 @@ pub struct HeroConstructionResult {
 /// amount and proves ownership before changing state.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
 pub enum HeroBusinessAction {
+    AppointCompanyMaster(crate::components::PersonId),
+    ListCompanyShares {
+        shares: u16,
+        unit_price: u64,
+    },
+    CancelCompanyShareListing,
+    BuyCompanyShares {
+        seller: crate::components::PersonId,
+        shares: u16,
+    },
     SetStrategy(crate::economy::BusinessStrategy),
     SetAutopilot(bool),
     SetAutomaticWithdrawals(bool),
     WithdrawAvailableProfit,
     SetDailyWage(u64),
+    SetEnabledPositions(u8),
     SetAutomaticWage(bool),
     SetAskingPrice(u64),
     SetAutomaticPricing(bool),
     SetCollectionEnabled(bool),
+    SetOutputReserveDays(u8),
     SetAutomaticProcurement(bool),
+    SetInputCoverageDays {
+        good: crate::economy::Good,
+        days: u8,
+    },
     SetInputMaximumPrice {
         good: crate::economy::Good,
         unit_price: u64,
     },
+    SetInputSourcingMode {
+        good: crate::economy::Good,
+        mode: crate::economy::BusinessSourcingMode,
+    },
+    SetPreferredSupplier {
+        good: crate::economy::Good,
+        supplier: Option<crate::components::BuildingId>,
+    },
+}
+
+/// A decision applying to one local `(company, settlement)` branch rather
+/// than to one building. Company cash remains global; these controls govern
+/// only goods physically present in the selected settlement.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
+pub enum HeroCompanyAction {
+    /// Move personal money into a sole-owned company. This is an explicit
+    /// capital contribution, never revenue and never an implicit permit top-up.
+    ContributeCapital { amount: u64 },
+    SetRetainUnits {
+        settlement: crate::components::SettlementId,
+        good: crate::economy::Good,
+        units: u32,
+    },
+    SetSellExcess {
+        settlement: crate::components::SettlementId,
+        good: crate::economy::Good,
+        enabled: bool,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
+pub struct HeroCompanyOrder {
+    pub company: crate::components::CompanyId,
+    pub action: HeroCompanyAction,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroCompanyResult {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Establish a legal company at a settlement Hall before it owns a site.
+/// The founder receives all 1,000 shares and becomes Company Master.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroCompanyFoundingOrder {
+    pub hall: Entity,
+    pub name: String,
+    pub initial_capital: u64,
+}
+
+impl bevy::ecs::entity::MapEntities for HeroCompanyFoundingOrder {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        self.hall = mapper.get_mapped(self.hall);
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroCompanyFoundingResult {
+    pub success: bool,
+    pub company: Option<crate::components::CompanyId>,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -244,12 +322,15 @@ pub enum HeroPermitAction {
     RequestQuote {
         hall: Entity,
         kind: crate::components::SettlementBuildingKind,
+        /// Required for a business permit; absent for personal housing.
+        company: Option<crate::components::CompanyId>,
     },
     Purchase {
         hall: Entity,
         kind: crate::components::SettlementBuildingKind,
+        /// The company buying and permanently owning this business permit.
+        company: Option<crate::components::CompanyId>,
         quoted_fee: u64,
-        quoted_startup_capital: u64,
     },
     Place {
         permit: crate::components::PermitId,
@@ -290,8 +371,11 @@ pub struct HeroPermitQuote {
     pub settlement_name: String,
     pub kind: crate::components::SettlementBuildingKind,
     pub fee: u64,
-    pub startup_capital: u64,
+    /// Advisory only. This money remains in the company treasury.
+    pub recommended_working_capital: u64,
     pub wallet_balance: u64,
+    pub company: Option<crate::components::CompanyId>,
+    pub company_cash: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -439,6 +523,19 @@ pub struct WorldHistoryResponse {
     pub archive: crate::economy::WorldHistoryArchive,
 }
 
+/// Client -> server: fetch the bounded ledgers for every site currently
+/// belonging to one company, including sites in other settlements.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct RequestCompanyHistory {
+    pub company: crate::components::CompanyId,
+}
+
+/// Server -> client response to [`RequestCompanyHistory`].
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct CompanyHistoryResponse {
+    pub archive: crate::economy::CompanyHistoryArchive,
+}
+
 /// Reliable channel for important messages.
 pub struct ReliableChannel;
 
@@ -535,15 +632,50 @@ mod tests {
 
         let business = HeroBusinessOrder {
             business: Entity::from_raw_u32(21).unwrap(),
-            action: HeroBusinessAction::SetInputMaximumPrice {
+            action: HeroBusinessAction::SetInputCoverageDays {
                 good: crate::economy::Good::Wheat,
-                unit_price: 325,
+                days: 3,
             },
         };
         let bytes = bincode::serialize(&business).unwrap();
         assert_eq!(
             bincode::deserialize::<HeroBusinessOrder>(&bytes).unwrap(),
             business
+        );
+
+        let reserve = HeroBusinessOrder {
+            business: Entity::from_raw_u32(22).unwrap(),
+            action: HeroBusinessAction::SetOutputReserveDays(5),
+        };
+        let bytes = bincode::serialize(&reserve).unwrap();
+        assert_eq!(
+            bincode::deserialize::<HeroBusinessOrder>(&bytes).unwrap(),
+            reserve
+        );
+
+        let company = HeroCompanyOrder {
+            company: crate::components::CompanyId(42),
+            action: HeroCompanyAction::SetRetainUnits {
+                settlement: crate::components::SettlementId(7),
+                good: crate::economy::Good::Flour,
+                units: 12,
+            },
+        };
+        let bytes = bincode::serialize(&company).unwrap();
+        assert_eq!(
+            bincode::deserialize::<HeroCompanyOrder>(&bytes).unwrap(),
+            company
+        );
+
+        let founding = HeroCompanyFoundingOrder {
+            hall: Entity::from_raw_u32(25).unwrap(),
+            name: "North Mill Company".into(),
+            initial_capital: 1_000,
+        };
+        let bytes = bincode::serialize(&founding).unwrap();
+        assert_eq!(
+            bincode::deserialize::<HeroCompanyFoundingOrder>(&bytes).unwrap(),
+            founding
         );
     }
 
@@ -553,8 +685,8 @@ mod tests {
             action: HeroPermitAction::Purchase {
                 hall: Entity::from_raw_u32(23).unwrap(),
                 kind: crate::components::SettlementBuildingKind::Windmill,
+                company: Some(crate::components::CompanyId(42)),
                 quoted_fee: 450,
-                quoted_startup_capital: 625,
             },
         };
         let bytes = bincode::serialize(&order).unwrap();
@@ -570,8 +702,10 @@ mod tests {
                 settlement_name: "Oakfell".into(),
                 kind: crate::components::SettlementBuildingKind::Windmill,
                 fee: 450,
-                startup_capital: 625,
+                recommended_working_capital: 625,
                 wallet_balance: 2_000,
+                company: Some(crate::components::CompanyId(42)),
+                company_cash: 1_000,
             }),
             message: "Exact terms".into(),
         };

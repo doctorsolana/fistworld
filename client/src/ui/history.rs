@@ -8,14 +8,15 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
-use shared::components::{BuildingId, Settlement};
+use shared::components::{BuildingId, CompanyId, Settlement};
 use shared::economy::{
-    format_money, BusinessHistoryArchive, BusinessHistoryDay, Good, SettlementHistoryArchive,
-    SettlementHistoryDay, WorldHistoryArchive, WorldHistoryDay, SETTLEMENT_HISTORY_DAYS,
+    format_money, BusinessHistoryArchive, BusinessHistoryDay, CompanyHistoryArchive, Good,
+    SettlementHistoryArchive, SettlementHistoryDay, WorldHistoryArchive, WorldHistoryDay,
+    SETTLEMENT_HISTORY_DAYS,
 };
 use shared::protocol::{
-    ReliableChannel, RequestSettlementHistory, RequestWorldHistory, SettlementHistoryResponse,
-    WorldHistoryResponse,
+    CompanyHistoryResponse, ReliableChannel, RequestCompanyHistory, RequestSettlementHistory,
+    RequestWorldHistory, SettlementHistoryResponse, WorldHistoryResponse,
 };
 
 use crate::states::GameState;
@@ -60,6 +61,7 @@ pub(crate) enum HistoryView {
     Village,
     Market(Good),
     Business(BuildingId),
+    Company(CompanyId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,10 +107,13 @@ impl HistoryRange {
 pub(crate) struct SettlementHistoryCache {
     pub(crate) archives: HashMap<String, SettlementHistoryArchive>,
     pub(crate) world: Option<WorldHistoryArchive>,
+    pub(crate) companies: HashMap<CompanyId, CompanyHistoryArchive>,
     in_flight: HashSet<Entity>,
     requested: HashSet<Entity>,
     world_in_flight: bool,
     world_requested: bool,
+    company_in_flight: HashSet<CompanyId>,
+    company_requested: HashSet<CompanyId>,
 }
 
 /// Button carried by each good row in the live Trade board.
@@ -125,6 +130,13 @@ pub(crate) struct BusinessHistoryButton {
     pub settlement: Entity,
     pub place: String,
     pub business: BuildingId,
+}
+
+/// Opens a cross-settlement consolidated ledger from the company directory.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CompanyHistoryButton {
+    pub company: CompanyId,
+    pub name: String,
 }
 
 /// Button in a selected village's encyclopedia record.
@@ -168,6 +180,10 @@ const SAGE: Color = Color::srgb(0.35, 0.40, 0.29);
 fn receive_history(
     mut receivers: Query<&mut MessageReceiver<SettlementHistoryResponse>, With<crate::GameClient>>,
     mut world_receivers: Query<&mut MessageReceiver<WorldHistoryResponse>, With<crate::GameClient>>,
+    mut company_receivers: Query<
+        &mut MessageReceiver<CompanyHistoryResponse>,
+        With<crate::GameClient>,
+    >,
     mut cache: ResMut<SettlementHistoryCache>,
 ) {
     for mut receiver in receivers.iter_mut() {
@@ -182,6 +198,14 @@ fn receive_history(
         for response in receiver.receive() {
             cache.world_in_flight = false;
             cache.world = Some(response.archive);
+        }
+    }
+    for mut receiver in company_receivers.iter_mut() {
+        for response in receiver.receive() {
+            cache.company_in_flight.remove(&response.archive.company);
+            cache
+                .companies
+                .insert(response.archive.company, response.archive);
         }
     }
 }
@@ -210,6 +234,7 @@ fn handle_open_buttons(
                 Without<VillageHistoryButton>,
                 Without<WorldHistoryButton>,
                 Without<BusinessHistoryButton>,
+                Without<CompanyHistoryButton>,
             ),
         >,
         Query<
@@ -220,6 +245,7 @@ fn handle_open_buttons(
                 Without<MarketHistoryButton>,
                 Without<WorldHistoryButton>,
                 Without<BusinessHistoryButton>,
+                Without<CompanyHistoryButton>,
             ),
         >,
         Query<
@@ -230,6 +256,7 @@ fn handle_open_buttons(
                 Without<MarketHistoryButton>,
                 Without<VillageHistoryButton>,
                 Without<BusinessHistoryButton>,
+                Without<CompanyHistoryButton>,
             ),
         >,
         Query<
@@ -239,6 +266,17 @@ fn handle_open_buttons(
                 Without<MarketHistoryButton>,
                 Without<VillageHistoryButton>,
                 Without<WorldHistoryButton>,
+                Without<CompanyHistoryButton>,
+            ),
+        >,
+        Query<
+            (&Interaction, &CompanyHistoryButton, &mut BackgroundColor),
+            (
+                Changed<Interaction>,
+                Without<MarketHistoryButton>,
+                Without<VillageHistoryButton>,
+                Without<WorldHistoryButton>,
+                Without<BusinessHistoryButton>,
             ),
         >,
     )>,
@@ -309,6 +347,20 @@ fn handle_open_buttons(
             trade_target.0 = None;
         }
     }
+    for (interaction, button, mut background) in buttons.p4().iter_mut() {
+        *background = button_background(*interaction);
+        if clicked && *interaction == Interaction::Pressed {
+            cache.company_in_flight.remove(&button.company);
+            cache.company_requested.remove(&button.company);
+            target.0 = Some(HistoryTarget {
+                settlement: None,
+                place: button.name.clone(),
+                view: HistoryView::Company(button.company),
+                return_to_trade: false,
+            });
+            trade_target.0 = None;
+        }
+    }
 }
 
 fn request_open_history(
@@ -320,6 +372,10 @@ fn request_open_history(
     >,
     mut world_senders: Query<
         &mut MessageSender<RequestWorldHistory>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+    mut company_senders: Query<
+        &mut MessageSender<RequestCompanyHistory>,
         (With<crate::GameClient>, With<Connected>),
     >,
 ) {
@@ -336,6 +392,17 @@ fn request_open_history(
         sender.send::<ReliableChannel>(RequestWorldHistory);
         cache.world_in_flight = true;
         cache.world_requested = true;
+    } else if let HistoryView::Company(company) = target.view {
+        if cache.company_in_flight.contains(&company) || cache.company_requested.contains(&company)
+        {
+            return;
+        }
+        let Ok(mut sender) = company_senders.single_mut() else {
+            return;
+        };
+        sender.send::<ReliableChannel>(RequestCompanyHistory { company });
+        cache.company_in_flight.insert(company);
+        cache.company_requested.insert(company);
     } else if let Some(settlement) = target.settlement {
         if cache.in_flight.contains(&settlement) || cache.requested.contains(&settlement) {
             return;
@@ -421,6 +488,11 @@ fn ensure_history_panel(
             .and_then(|archive| archive.businesses.iter().find(|business| business.id == id)),
         _ => None,
     };
+    let company_archive = match target.view {
+        HistoryView::Company(id) => cache.companies.get(&id),
+        _ => None,
+    };
+    let company_days = company_archive.map(consolidated_company_days);
     let (count, first_day, last_day) = match target.view {
         HistoryView::World => world_archive.map_or((0, None, None), |archive| {
             (
@@ -443,6 +515,13 @@ fn ensure_history_panel(
                 archive.days.len(),
                 archive.days.first().map(|day| day.day),
                 archive.days.last().map(|day| day.day),
+            )
+        }),
+        HistoryView::Company(_) => company_days.as_ref().map_or((0, None, None), |days| {
+            (
+                days.len(),
+                days.first().map(|day| day.day),
+                days.last().map(|day| day.day),
             )
         }),
     };
@@ -533,6 +612,7 @@ fn ensure_history_panel(
                             }
                             HistoryView::World => unreachable!(),
                             HistoryView::Business(_) => unreachable!(),
+                            HistoryView::Company(_) => unreachable!(),
                         }
                     }
                     HistoryView::Business(_) => {
@@ -554,7 +634,27 @@ fn ensure_history_panel(
                             );
                             return;
                         }
-                        spawn_business_history(content, visible_business_days(business, *range));
+                        spawn_business_history(
+                            content,
+                            business,
+                            &settlement_archive.expect("archive checked").businesses,
+                            *range,
+                        );
+                    }
+                    HistoryView::Company(_) => {
+                        let Some(archive) = company_archive else {
+                            spawn_empty_history(content, "Requesting the company ledger...");
+                            return;
+                        };
+                        let days = company_days.as_deref().unwrap_or_default();
+                        if days.is_empty() {
+                            spawn_empty_history(
+                                content,
+                                "No completed company day yet. The first record closes at the next dawn.",
+                            );
+                            return;
+                        }
+                        spawn_company_history(content, archive, days, *range);
                     }
                 }
             });
@@ -606,6 +706,14 @@ fn spawn_header(
                         business.owner_name.as_deref().unwrap_or("UNRESOLVED")
                     )
                 },
+            ),
+            "X",
+        ),
+        HistoryView::Company(id) => (
+            format!("{} LEDGER", target.place.to_uppercase()),
+            format!(
+                "COMPANY #{} / ALL SETTLEMENTS / INTERNAL TRANSFERS ELIMINATED",
+                id.0
             ),
             "X",
         ),
@@ -801,7 +909,467 @@ fn business_output_stock(day: &BusinessHistoryDay) -> u32 {
         .fold(0u32, u32::saturating_add)
 }
 
-fn spawn_business_history(parent: &mut ChildSpawnerCommands<'_>, days: &[BusinessHistoryDay]) {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ConsolidatedCompanyDay {
+    day: u32,
+    observed_sites: u16,
+    skipped_sites: u16,
+    cash: u64,
+    wage_arrears: u64,
+    tax_arrears: u64,
+    external_revenue: u64,
+    wage_expense: u64,
+    external_input_expense: u64,
+    market_fees: u64,
+    delivery_fees: u64,
+    profit_taxes: u64,
+    owner_withdrawals: u64,
+    capital_expenditures: u64,
+    book_value: u64,
+    internal_revenue: u64,
+    internal_input_expense: u64,
+}
+
+impl ConsolidatedCompanyDay {
+    fn costs(self) -> u64 {
+        self.wage_expense
+            .saturating_add(self.external_input_expense)
+            .saturating_add(self.market_fees)
+            .saturating_add(self.delivery_fees)
+            .saturating_add(self.profit_taxes)
+    }
+
+    fn profit(self) -> i64 {
+        if self.external_revenue >= self.costs() {
+            self.external_revenue
+                .saturating_sub(self.costs())
+                .min(i64::MAX as u64) as i64
+        } else {
+            -(self
+                .costs()
+                .saturating_sub(self.external_revenue)
+                .min(i64::MAX as u64) as i64)
+        }
+    }
+}
+
+fn consolidated_company_days(archive: &CompanyHistoryArchive) -> Vec<ConsolidatedCompanyDay> {
+    use std::collections::BTreeMap;
+
+    let mut days = BTreeMap::<u32, ConsolidatedCompanyDay>::new();
+    for business in &archive.businesses {
+        for site_day in &business.days {
+            let day = days.entry(site_day.day).or_insert(ConsolidatedCompanyDay {
+                day: site_day.day,
+                ..default()
+            });
+            if site_day.observed {
+                day.observed_sites = day.observed_sites.saturating_add(1);
+                day.external_revenue = day.external_revenue.saturating_add(site_day.gross_revenue);
+                day.wage_expense = day.wage_expense.saturating_add(site_day.wage_expense);
+                day.external_input_expense = day
+                    .external_input_expense
+                    .saturating_add(site_day.input_expense);
+                day.market_fees = day.market_fees.saturating_add(site_day.market_fees);
+                day.delivery_fees = day.delivery_fees.saturating_add(site_day.delivery_fees);
+                day.profit_taxes = day.profit_taxes.saturating_add(site_day.profit_taxes);
+                day.owner_withdrawals = day
+                    .owner_withdrawals
+                    .saturating_add(site_day.owner_withdrawals);
+                day.capital_expenditures = day
+                    .capital_expenditures
+                    .saturating_add(site_day.capital_expenditures);
+                day.internal_revenue = day
+                    .internal_revenue
+                    .saturating_add(site_day.internal_revenue);
+                day.internal_input_expense = day
+                    .internal_input_expense
+                    .saturating_add(site_day.internal_input_expense);
+            } else {
+                day.skipped_sites = day.skipped_sites.saturating_add(1);
+            }
+            // Balance-sheet readings are valid even for a synthetic skipped
+            // boundary, so the company graph remains continuous at high warp.
+            day.cash = day.cash.saturating_add(site_day.cash);
+            day.wage_arrears = day.wage_arrears.saturating_add(site_day.wage_arrears);
+            day.tax_arrears = day.tax_arrears.saturating_add(site_day.tax_arrears);
+            day.book_value = day.book_value.saturating_add(site_day.book_value);
+        }
+    }
+    days.into_values().collect()
+}
+
+fn visible_company_days(
+    days: &[ConsolidatedCompanyDay],
+    range: HistoryRange,
+) -> &[ConsolidatedCompanyDay] {
+    let start = days.len().saturating_sub(range.days());
+    &days[start..]
+}
+
+fn spawn_company_history(
+    parent: &mut ChildSpawnerCommands<'_>,
+    archive: &CompanyHistoryArchive,
+    all_days: &[ConsolidatedCompanyDay],
+    range: HistoryRange,
+) {
+    let days = visible_company_days(all_days, range);
+    let latest = days.last().expect("non-empty company history");
+    spawn_stat_strip(
+        parent,
+        &[
+            ("OPERATING SITES", archive.businesses.len().to_string()),
+            (
+                "COMPANY CASH",
+                format!("{} coin", format_money(latest.cash)),
+            ),
+            (
+                "WAGE / TAX DEBT",
+                format!(
+                    "{} / {} coin",
+                    format_money(latest.wage_arrears),
+                    format_money(latest.tax_arrears)
+                ),
+            ),
+            ("LATEST PROFIT", signed_history_money(latest.profit())),
+            (
+                "CAPITAL ASSETS",
+                format!("{} coin", format_money(latest.book_value)),
+            ),
+            (
+                "LATEST COVERAGE",
+                format!(
+                    "{} observed{}",
+                    latest.observed_sites,
+                    if latest.skipped_sites > 0 {
+                        format!(" / {} skipped", latest.skipped_sites)
+                    } else {
+                        String::new()
+                    }
+                ),
+            ),
+        ],
+    );
+
+    let period_revenue = days
+        .iter()
+        .map(|day| day.external_revenue)
+        .fold(0u64, u64::saturating_add);
+    let period_costs = days
+        .iter()
+        .map(|day| day.costs())
+        .fold(0u64, u64::saturating_add);
+    let period_dividends = days
+        .iter()
+        .map(|day| day.owner_withdrawals)
+        .fold(0u64, u64::saturating_add);
+    let period_capex = days
+        .iter()
+        .map(|day| day.capital_expenditures)
+        .fold(0u64, u64::saturating_add);
+    let internal_credits = days
+        .iter()
+        .map(|day| day.internal_revenue)
+        .fold(0u64, u64::saturating_add);
+    let internal_charges = days
+        .iter()
+        .map(|day| day.internal_input_expense)
+        .fold(0u64, u64::saturating_add);
+    let period_profit = if period_revenue >= period_costs {
+        period_revenue
+            .saturating_sub(period_costs)
+            .min(i64::MAX as u64) as i64
+    } else {
+        -(period_costs
+            .saturating_sub(period_revenue)
+            .min(i64::MAX as u64) as i64)
+    };
+    spawn_stat_strip(
+        parent,
+        &[
+            (
+                "PERIOD REVENUE",
+                format!("{} coin", format_money(period_revenue)),
+            ),
+            (
+                "PERIOD COSTS",
+                format!("{} coin", format_money(period_costs)),
+            ),
+            ("PERIOD PROFIT", signed_history_money(period_profit)),
+            (
+                "DISTRIBUTED",
+                format!("{} coin", format_money(period_dividends)),
+            ),
+            (
+                "CAPITAL SPENDING",
+                format!("{} coin", format_money(period_capex)),
+            ),
+            (
+                "ELIMINATED INTERNAL FLOW",
+                format!(
+                    "{} credit / {} charge",
+                    format_money(internal_credits),
+                    format_money(internal_charges)
+                ),
+            ),
+        ],
+    );
+
+    spawn_chart_grid(parent, |grid| {
+        spawn_chart(
+            grid,
+            "CONSOLIDATED DAILY P&L",
+            "coin",
+            &[
+                Series::new(
+                    "external revenue",
+                    SAGE,
+                    days.iter()
+                        .map(|day| Some(day.external_revenue as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "real costs",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| Some(day.costs() as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "profit",
+                    INK,
+                    days.iter()
+                        .map(|day| Some(day.profit().max(0) as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "loss",
+                    BLUE_GREY,
+                    days.iter()
+                        .map(|day| Some(day.profit().min(0).unsigned_abs() as f64 / 100.0))
+                        .collect(),
+                ),
+            ],
+        );
+        spawn_chart(
+            grid,
+            "COMPANY CASH & LIABILITIES",
+            "coin",
+            &[
+                Series::new(
+                    "company cash",
+                    INK,
+                    days.iter()
+                        .map(|day| Some(day.cash as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "wage arrears",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| Some(day.wage_arrears as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "tax arrears",
+                    BLUE_GREY,
+                    days.iter()
+                        .map(|day| Some(day.tax_arrears as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "book assets",
+                    SAGE,
+                    days.iter()
+                        .map(|day| Some(day.book_value as f64 / 100.0))
+                        .collect(),
+                ),
+            ],
+        );
+        spawn_chart(
+            grid,
+            "CAPITAL ALLOCATION",
+            "coin / day",
+            &[
+                Series::new(
+                    "dividends",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| Some(day.owner_withdrawals as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "capital spending",
+                    SAGE,
+                    days.iter()
+                        .map(|day| Some(day.capital_expenditures as f64 / 100.0))
+                        .collect(),
+                ),
+            ],
+        );
+        spawn_chart(
+            grid,
+            "INTERNAL SUPPLY MEMO",
+            "coin / day",
+            &[
+                Series::new(
+                    "supplier credits",
+                    SAGE,
+                    days.iter()
+                        .map(|day| Some(day.internal_revenue as f64 / 100.0))
+                        .collect(),
+                ),
+                Series::new(
+                    "buyer charges",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| Some(day.internal_input_expense as f64 / 100.0))
+                        .collect(),
+                ),
+            ],
+        );
+    });
+
+    spawn_company_site_breakdown(parent, archive, range);
+    spawn_company_daily_table(parent, days);
+}
+
+fn spawn_company_site_breakdown(
+    parent: &mut ChildSpawnerCommands<'_>,
+    archive: &CompanyHistoryArchive,
+    range: HistoryRange,
+) {
+    spawn_table_title(
+        parent,
+        "SITE CONTRIBUTION",
+        "external P&L in selected period",
+    );
+    spawn_table_header(
+        parent,
+        &[
+            "SITE",
+            "OWNER",
+            "REVENUE",
+            "REAL COSTS",
+            "PROFIT",
+            "INTERNAL MEMO",
+        ],
+    );
+    for business in &archive.businesses {
+        let days = visible_business_days(business, range);
+        let revenue = days
+            .iter()
+            .filter(|day| day.observed)
+            .map(|day| day.gross_revenue)
+            .fold(0u64, u64::saturating_add);
+        let costs = days
+            .iter()
+            .filter(|day| day.observed)
+            .map(|day| {
+                day.wage_expense
+                    .saturating_add(day.input_expense)
+                    .saturating_add(day.market_fees)
+                    .saturating_add(day.delivery_fees)
+                    .saturating_add(day.profit_taxes)
+            })
+            .fold(0u64, u64::saturating_add);
+        let profit = if revenue >= costs {
+            revenue.saturating_sub(costs).min(i64::MAX as u64) as i64
+        } else {
+            -(costs.saturating_sub(revenue).min(i64::MAX as u64) as i64)
+        };
+        let internal_credit = days
+            .iter()
+            .map(|day| day.internal_revenue)
+            .fold(0u64, u64::saturating_add);
+        let internal_charge = days
+            .iter()
+            .map(|day| day.internal_input_expense)
+            .fold(0u64, u64::saturating_add);
+        spawn_table_row(
+            parent,
+            &[
+                format!("{} #{}", business.kind.label(), business.id.0),
+                business
+                    .owner_name
+                    .clone()
+                    .unwrap_or_else(|| "--".to_string()),
+                format_money(revenue),
+                format_money(costs),
+                signed_history_money(profit),
+                format!(
+                    "{} / {}",
+                    format_money(internal_credit),
+                    format_money(internal_charge)
+                ),
+            ],
+        );
+    }
+}
+
+fn spawn_company_daily_table(
+    parent: &mut ChildSpawnerCommands<'_>,
+    days: &[ConsolidatedCompanyDay],
+) {
+    spawn_table_title(parent, "RECENT COMPANY RECORDS", "latest 30 days");
+    spawn_table_header(
+        parent,
+        &[
+            "DAY",
+            "SITES",
+            "REVENUE / COST / PROFIT",
+            "CASH / DEBT",
+            "DIVIDEND / CAPEX",
+            "INTERNAL MEMO",
+        ],
+    );
+    for day in days.iter().rev().take(30) {
+        spawn_table_row(
+            parent,
+            &[
+                day.day.to_string(),
+                format!("{} obs / {} skip", day.observed_sites, day.skipped_sites),
+                format!(
+                    "{} / {} / {}",
+                    format_money(day.external_revenue),
+                    format_money(day.costs()),
+                    signed_history_money(day.profit()),
+                ),
+                format!(
+                    "{} / {}",
+                    format_money(day.cash),
+                    format_money(day.wage_arrears.saturating_add(day.tax_arrears)),
+                ),
+                format!(
+                    "{} / {}",
+                    format_money(day.owner_withdrawals),
+                    format_money(day.capital_expenditures),
+                ),
+                format!(
+                    "{} / {}",
+                    format_money(day.internal_revenue),
+                    format_money(day.internal_input_expense),
+                ),
+            ],
+        );
+    }
+}
+
+fn signed_history_money(value: i64) -> String {
+    format!(
+        "{}{} coin",
+        if value < 0 { "-" } else { "+" },
+        format_money(value.unsigned_abs())
+    )
+}
+
+fn spawn_business_history(
+    parent: &mut ChildSpawnerCommands<'_>,
+    business: &BusinessHistoryArchive,
+    local_businesses: &[BusinessHistoryArchive],
+    range: HistoryRange,
+) {
+    let days = visible_business_days(business, range);
     let latest = days.last().expect("non-empty business history");
     spawn_stat_strip(
         parent,
@@ -816,7 +1384,7 @@ fn spawn_business_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Busines
                 ),
             ),
             (
-                "CASH / PROTECTED / DRAWABLE",
+                "COMPANY CASH / SITE PROTECTED / DRAWABLE",
                 format!(
                     "{} / {} / {} coin",
                     format_money(latest.cash),
@@ -851,6 +1419,124 @@ fn spawn_business_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Busines
         ],
     );
 
+    let observed_site: Vec<_> = days.iter().filter(|day| day.observed).collect();
+    let site_external = observed_site
+        .iter()
+        .map(|day| day.gross_revenue)
+        .fold(0u64, u64::saturating_add);
+    let site_internal = observed_site
+        .iter()
+        .map(|day| day.internal_revenue)
+        .fold(0u64, u64::saturating_add);
+    let site_real_costs = observed_site
+        .iter()
+        .map(|day| {
+            day.wage_expense
+                .saturating_add(day.input_expense)
+                .saturating_add(day.market_fees)
+                .saturating_add(day.delivery_fees)
+                .saturating_add(day.profit_taxes)
+        })
+        .fold(0u64, u64::saturating_add);
+    let site_internal_inputs = observed_site
+        .iter()
+        .map(|day| day.internal_input_expense)
+        .fold(0u64, u64::saturating_add);
+    let site_capex = observed_site
+        .iter()
+        .map(|day| day.capital_expenditures)
+        .fold(0u64, u64::saturating_add);
+    let site_book_value = observed_site.last().map_or(0, |day| day.book_value);
+    let site_profit = site_external.saturating_add(site_internal) as i128
+        - site_real_costs.saturating_add(site_internal_inputs) as i128;
+    let company_archives: Vec<_> = business.company_id.map_or_else(Vec::new, |company_id| {
+        local_businesses
+            .iter()
+            .filter(|candidate| candidate.company_id == Some(company_id))
+            .collect()
+    });
+    let mut company_external = 0u64;
+    let mut company_costs = 0u64;
+    let mut company_internal_credits = 0u64;
+    let mut company_internal_charges = 0u64;
+    for candidate in &company_archives {
+        for day in visible_business_days(candidate, range)
+            .iter()
+            .filter(|day| day.observed)
+        {
+            company_external = company_external.saturating_add(day.gross_revenue);
+            company_costs = company_costs
+                .saturating_add(day.wage_expense)
+                .saturating_add(day.input_expense)
+                .saturating_add(day.market_fees)
+                .saturating_add(day.delivery_fees)
+                .saturating_add(day.profit_taxes);
+            company_internal_credits =
+                company_internal_credits.saturating_add(day.internal_revenue);
+            company_internal_charges =
+                company_internal_charges.saturating_add(day.internal_input_expense);
+        }
+    }
+    let company_profit = company_external as i128 - company_costs as i128;
+    spawn_stat_strip(
+        parent,
+        &[
+            (
+                "SITE PERIOD P&L",
+                format!(
+                    "{}{} coin",
+                    if site_profit < 0 { "-" } else { "+" },
+                    format_money(site_profit.unsigned_abs().min(u128::from(u64::MAX)) as u64),
+                ),
+            ),
+            (
+                "SITE EXTERNAL / INTERNAL SALES",
+                format!(
+                    "{} / {} coin",
+                    format_money(site_external),
+                    format_money(site_internal),
+                ),
+            ),
+            (
+                "SITE REAL / INTERNAL COSTS",
+                format!(
+                    "{} / {} coin",
+                    format_money(site_real_costs),
+                    format_money(site_internal_inputs),
+                ),
+            ),
+            (
+                "SITE CAPITAL ASSETS",
+                format!(
+                    "{} coin book value / {} coin capital spending in period (excluded from operating P&L)",
+                    format_money(site_book_value),
+                    format_money(site_capex),
+                ),
+            ),
+            (
+                "SAME-SETTLEMENT COMPANY P&L",
+                if business.company_id.is_some() {
+                    format!(
+                        "{}{} coin across {} nearby site(s); use Full Ledger for every settlement",
+                        if company_profit < 0 { "-" } else { "+" },
+                        format_money(company_profit.unsigned_abs().min(u128::from(u64::MAX)) as u64),
+                        company_archives.len(),
+                    )
+                } else {
+                    "Independent site".to_string()
+                },
+            ),
+            (
+                "ELIMINATED INTERNAL FLOW",
+                format!(
+                    "{} credit / {} charge coin",
+                    format_money(company_internal_credits),
+                    format_money(company_internal_charges),
+                ),
+            ),
+        ],
+    );
+
     spawn_chart_grid(parent, |grid| {
         spawn_chart(
             grid,
@@ -861,7 +1547,12 @@ fn spawn_business_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Busines
                     "revenue",
                     SAGE,
                     days.iter()
-                        .map(|day| day.observed.then_some(day.gross_revenue as f64 / 100.0))
+                        .map(|day| {
+                            day.observed.then_some(
+                                day.gross_revenue.saturating_add(day.internal_revenue) as f64
+                                    / 100.0,
+                            )
+                        })
                         .collect(),
                 ),
                 Series::new(
@@ -872,7 +1563,9 @@ fn spawn_business_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Busines
                             day.observed.then_some(
                                 day.wage_expense
                                     .saturating_add(day.input_expense)
+                                    .saturating_add(day.internal_input_expense)
                                     .saturating_add(day.market_fees)
+                                    .saturating_add(day.delivery_fees)
                                     .saturating_add(day.profit_taxes)
                                     as f64
                                     / 100.0,
@@ -901,11 +1594,11 @@ fn spawn_business_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Busines
         );
         spawn_chart(
             grid,
-            "CASH & LIABILITIES",
+            "COMPANY CASH & SITE LIABILITIES",
             "coin",
             &[
                 Series::new(
-                    "cash",
+                    "company cash",
                     INK,
                     days.iter()
                         .map(|day| Some(day.cash as f64 / 100.0))
@@ -1193,7 +1886,7 @@ fn spawn_village_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Settleme
                 ),
             ),
             (
-                "BUSINESS CASH / ARREARS",
+                "COMPANY CASH / BUSINESS ARREARS",
                 format!(
                     "{} / {} coin",
                     format_money(latest.business_cash),
@@ -1260,7 +1953,7 @@ fn spawn_village_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Settleme
                         .collect(),
                 ),
                 Series::new(
-                    "business accounts",
+                    "company treasuries",
                     BLUE_GREY,
                     days.iter()
                         .map(|day| Some(day.business_cash as f64 / 100.0))
@@ -1405,6 +2098,17 @@ fn spawn_village_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Settleme
                             day.civic
                                 .observed
                                 .then_some(day.civic.market_fee_income as f64 / 100.0)
+                        })
+                        .collect(),
+                ),
+                Series::new(
+                    "delivery fees",
+                    BRONZE,
+                    days.iter()
+                        .map(|day| {
+                            day.civic
+                                .observed
+                                .then_some(day.civic.delivery_fee_income as f64 / 100.0)
                         })
                         .collect(),
                 ),
@@ -1595,7 +2299,7 @@ fn spawn_world_history(parent: &mut ChildSpawnerCommands<'_>, days: &[WorldHisto
                         .collect(),
                 ),
                 Series::new(
-                    "business accounts",
+                    "company treasuries",
                     BLUE_GREY,
                     days.iter()
                         .map(|day| Some(day.business_cash as f64 / 100.0))
@@ -1924,21 +2628,21 @@ fn business_adjustments(days: &[BusinessHistoryDay], index: usize) -> String {
     let mut changes = Vec::new();
     if current.asking_unit_price != previous.asking_unit_price {
         changes.push(format!(
-            "ask {}→{}",
+            "ask {} -> {}",
             format_money(previous.asking_unit_price),
             format_money(current.asking_unit_price)
         ));
     }
     if current.daily_wage != previous.daily_wage {
         changes.push(format!(
-            "wage {}→{}",
+            "wage {} -> {}",
             format_money(previous.daily_wage),
             format_money(current.daily_wage)
         ));
     }
     if current.strategy != previous.strategy {
         changes.push(format!(
-            "{}→{}",
+            "{} -> {}",
             previous.strategy.label(),
             current.strategy.label()
         ));
@@ -1952,7 +2656,7 @@ fn business_adjustments(days: &[BusinessHistoryDay], index: usize) -> String {
     }
     if current.state != previous.state {
         changes.push(format!(
-            "{}→{}",
+            "{} -> {}",
             previous.state.label(),
             current.state.label()
         ));
@@ -1971,7 +2675,7 @@ fn spawn_business_daily_table(parent: &mut ChildSpawnerCommands<'_>, days: &[Bus
         &[
             "DAY",
             "REVENUE / COST / PROFIT",
-            "CASH / WAGE / TAX DEBT",
+            "COMPANY CASH / SITE WAGE / TAX DEBT",
             "MADE / SOLD",
             "STORE / LISTED",
             "ADJUSTMENTS",
@@ -2005,18 +2709,25 @@ fn spawn_business_daily_table(parent: &mut ChildSpawnerCommands<'_>, days: &[Bus
         let costs = day
             .wage_expense
             .saturating_add(day.input_expense)
+            .saturating_add(day.internal_input_expense)
             .saturating_add(day.market_fees)
+            .saturating_add(day.delivery_fees)
             .saturating_add(day.profit_taxes);
         spawn_table_row(
             parent,
             &[
                 day.day.to_string(),
                 format!(
-                    "{} / {} / {}{}",
-                    format_money(day.gross_revenue),
+                    "{} / {} / {}{}{}",
+                    format_money(day.gross_revenue.saturating_add(day.internal_revenue)),
                     format_money(costs),
                     if day.profit < 0 { "-" } else { "+" },
-                    format_money(day.profit.unsigned_abs())
+                    format_money(day.profit.unsigned_abs()),
+                    if day.capital_expenditures > 0 {
+                        format!(" / capex {}", format_money(day.capital_expenditures))
+                    } else {
+                        String::new()
+                    },
                 ),
                 format!(
                     "{} / {} / {}",
@@ -2082,6 +2793,7 @@ fn spawn_civic_daily_table(parent: &mut ChildSpawnerCommands<'_>, days: &[Settle
             .civic
             .permit_income
             .saturating_add(day.civic.market_fee_income)
+            .saturating_add(day.civic.delivery_fee_income)
             .saturating_add(day.civic.profit_tax_income)
             .saturating_add(day.civic.public_sale_income);
         let spending = day
@@ -2293,8 +3005,53 @@ mod tests {
             ..first
         };
         let changes = business_adjustments(&[first, second], 1);
-        assert!(changes.contains("ask 0.80→0.76"));
-        assert!(changes.contains("wage 1.00→1.10"));
-        assert!(changes.contains("Operating→Cash tight"));
+        assert!(changes.contains("ask 0.80 -> 0.76"));
+        assert!(changes.contains("wage 1.00 -> 1.10"));
+        assert!(changes.contains("Operating -> Cash tight"));
+    }
+
+    #[test]
+    fn company_consolidation_spans_sites_and_eliminates_internal_transfers() {
+        let company = CompanyId(77);
+        let site = |id, settlement, day: BusinessHistoryDay| BusinessHistoryArchive {
+            id: BuildingId(id),
+            settlement: shared::components::SettlementId(settlement),
+            company_id: Some(company),
+            kind: shared::components::SettlementBuildingKind::Windmill,
+            owner_id: Some(shared::components::PersonId(1)),
+            owner_name: Some("Owner".to_string()),
+            output_good: Some(Good::Flour),
+            days: vec![day],
+        };
+        let supplier = BusinessHistoryDay {
+            day: 9,
+            observed: true,
+            cash: 600,
+            gross_revenue: 500,
+            internal_revenue: 300,
+            wage_expense: 100,
+            ..default()
+        };
+        let buyer = BusinessHistoryDay {
+            day: 9,
+            observed: true,
+            cash: 400,
+            gross_revenue: 700,
+            internal_input_expense: 300,
+            wage_expense: 200,
+            ..default()
+        };
+        let archive = CompanyHistoryArchive {
+            company,
+            businesses: vec![site(1, 10, supplier), site(2, 20, buyer)],
+        };
+
+        let days = consolidated_company_days(&archive);
+        assert_eq!(days.len(), 1);
+        assert_eq!(days[0].cash, 1_000);
+        assert_eq!(days[0].external_revenue, 1_200);
+        assert_eq!(days[0].internal_revenue, 300);
+        assert_eq!(days[0].internal_input_expense, 300);
+        assert_eq!(days[0].profit(), 900);
     }
 }

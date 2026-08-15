@@ -5,12 +5,14 @@
 
 use super::*;
 
-/// A second cart is worthwhile once one steward would need roughly twenty
-/// full carrying trips to clear the currently saleable workplace stock.
-const SECOND_STEWARD_HIRE_BACKLOG_BULK: u32 = shared::economy::capacity::VILLAGER * 20;
+/// A second cart is worthwhile at 240 bulk of saleable workplace stock. Keep
+/// this economic threshold independent of personal cargo tuning: increasing
+/// everyone's carrying capacity should improve clearance time, not silently
+/// postpone municipal hiring during the same production backlog.
+const SECOND_STEWARD_HIRE_BACKLOG_BULK: u32 = 240;
 /// Once hired for a temporary surge, retain the second steward until the
-/// backlog is below six trips so staffing does not oscillate every collection.
-const SECOND_STEWARD_RELEASE_BACKLOG_BULK: u32 = shared::economy::capacity::VILLAGER * 6;
+/// backlog is below 72 bulk so staffing does not oscillate every collection.
+const SECOND_STEWARD_RELEASE_BACKLOG_BULK: u32 = 72;
 /// A Hamlet this large benefits from two permanent carts even during a brief
 /// quiet market interval.
 const SECOND_STEWARD_RESIDENTS: u32 = 24;
@@ -231,7 +233,7 @@ pub fn staff_public_positions(
         };
         let backlog = inventory
             .amount(good)
-            .saturating_sub(policy.keep_units)
+            .saturating_sub(policy.company_reserve_units)
             .saturating_mul(good.bulk_per_unit());
         let total = uncollected_bulk_by_settlement
             .entry(building_of.0)

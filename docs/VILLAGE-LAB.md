@@ -171,7 +171,7 @@ one person to each settlement. The result is exactly thirty residents in each
 place, followed by twenty days without migration. End-of-run wealth details
 rank both liquid wallets and controlled wealth (wallet plus cash retained in
 owned firms), name every owned business, and show cumulative personal inflow,
-spending, business profit and owner withdrawals. Shared household purses are
+spending, business profit and attributed company distributions. Shared household purses are
 reported by the household economy and are not assigned to one individual.
 The terminal invariant counts living residents plus retained death records,
 so starvation can kill residents without turning successful immigration into
@@ -254,9 +254,9 @@ requires all of the following:
 - farmers and fishers carry production only from the field or pier into their
   own workplace store; the Moot Steward alone collects policy-approved surplus and
   deposits it as a private consignment at the Moot Hall;
-- business accounts receive customer sale proceeds, pay daily wages, buy configured
-  inputs and retain working
-  capital; cabin households fund a shared purse, stock a bounded pantry and
+- each company's one treasury receives customer sale proceeds, pays daily wages,
+  buys configured inputs and retains working capital; individual business accounts
+  remain site P&L and policy ledgers only; cabin households fund a shared purse, stock a bounded pantry and
   consume one ration per resident per day; and
   Poor Relief spends treasury coin only when a wallet cannot pay, recent
   production covers the population and a three-day reserve remains; hunger remains
@@ -268,8 +268,8 @@ requires all of the following:
 - business permits, market fees and a levy on positive business profit fund the treasury;
   the enacted growth subsidy discounts only settlement-requested private business permits;
   public construction buys private consignments instead of taking them, both sides are
-  observed, and total coin is exactly conserved across wallets, treasuries,
-  household purses and business accounts;
+  observed, and total coin is exactly conserved across wallets, civic treasuries,
+  household purses and company treasuries;
 - reserve days, recent production/consumption, prosperity and secure-day progress update from physical state;
 - Coldbarrow alone records hunger, lacks fishing, adds food capacity and remains
   a Hamlet without a secure reserve; the fertile Meadow advances to Village;
@@ -325,12 +325,26 @@ fills that event window.
 the biography report through their stable `PersonId`, but their ECS bodies do
 not remain in the simulation merely for history.
 
-It also prints one `LAB business` ledger per firm—lifecycle state, owner strategy, cash,
-revenue, expenses, lifetime profit, withdrawals, wage and tax arrears, and listed stock—followed
-by a `LAB mogul` line for the owner with the most combined personal and controlled
-business cash. Each firm is followed by its seven most recent `LAB business history`
-days, including P&L, protected working capital, drawable profit, price, wage, physical flow, input purchases, draws, taxes,
-arrears and solvency. Company cash remains visibly separate from the owner's wallet.
+It also prints one `LAB business` ledger per operating site—lifecycle state, owner strategy, its company's treasury,
+revenue, expenses, lifetime profit, attributed distributions, wage and tax arrears, and listed stock—followed
+by a `LAB mogul` compatibility line. Each site is followed by its seven most recent
+`LAB business history` days, including P&L, protected working capital, drawable profit,
+capital expenditure/book value, price, wage, physical flow, input purchases, dividends,
+taxes, arrears and solvency.
+
+`LAB company` then groups those sites by stable `CompanyId` and prints its Master,
+whether the Master also works there, the 1,000-share cap table, the single company treasury and
+liabilities, contributed capital, capital spending, book value, consolidated profit,
+dividends, executive decisions and whether it formed an input chain. The summary counts
+ordinary one-site owner/Master/workers, multi-site firms and vertically integrated firms.
+The rich/poor net-worth ranking assigns company equity pro rata by shares; company cash
+remains visibly separate from a shareholder's spendable wallet.
+
+Payroll is a dawn transaction for the shift which just ended. In live replicated company
+UI, `TODAY` can therefore show zero wages until that shift closes, while `PREVIOUS DAY`
+must retain the expense. The lab's completed `LAB business history` rows are the accounting
+authority for wage-inclusive daily P&L; worker wallet history and company treasury changes
+prove whether the claim was actually paid or remains in arrears.
 
 Settlement history distinguishes total physical food from food currently purchasable on
 the order book and edible stock still at businesses. A healthy circulation run should not
@@ -790,7 +804,7 @@ It must run in `--release`; debug timings are not performance evidence.
 
 The scale fixture also runs the same daily business and civic systems used in the world:
 owner wage offers, catch-up arrears, profit levies, strategy/solvency review, civic
-payroll, policy review and owner draws remain once-per-world-day work. Production
+payroll, policy review and company dividends remain once-per-world-day work. Production
 receipts are drained through the same aggregated stable-ID event queue as gameplay.
 Character attributes are three bounded bytes of simulation state; skill
 checks happen when a vacancy is filled and farm training happens only when a

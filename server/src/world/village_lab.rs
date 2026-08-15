@@ -13,17 +13,18 @@ use std::time::Instant;
 use bevy::prelude::*;
 use shared::components::{
     BuildingDoorDemand, BuildingDoorUse, BuildingId, CharacterActivity, CharacterAffiliation,
-    CharacterAttributes, CharacterKind, CharacterName, FarmField, FishingPier, Health, Household,
-    MootAdministration, Nutrition, Occupation, OwnedBy, PersonId, PlayerPosition, PlayerRotation,
+    CharacterAttributes, CharacterKind, CharacterName, Company, CompanyId, CompanyLeadership,
+    CompanyOwnership, EmployedAt, FarmField, FishingPier, Health, Household, MootAdministration,
+    Nutrition, Occupation, OperatedBy, OwnedBy, PersonId, PlayerPosition, PlayerRotation,
     Residence, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
     SettlementOpportunityBoard, SettlementPolicies, SettlementTier, TimeWarp, VillageRoad,
-    WorkStatus, WorldTime,
+    WorkStatus, WorldTime, COMPANY_TOTAL_SHARES,
 };
 use shared::economy::{
     BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessWagePolicy, CarriedLoad,
-    CivicAccount, Good, GoodsInventory, HouseholdEconomy, MarketSeller, MootMarket,
-    SettlementEconomy, Wallet, FOOD_SECURITY_TARGET_DAYS, VILLAGE_MIN_PROSPERITY,
-    VILLAGE_REQUIRED_SECURE_DAYS,
+    CivicAccount, CompanyAccount, CompanyDecisionHistory, CompanyManagementPolicy, Good,
+    GoodsInventory, HouseholdEconomy, MarketSeller, MootMarket, SettlementEconomy, Wallet,
+    FOOD_SECURITY_TARGET_DAYS, VILLAGE_MIN_PROSPERITY, VILLAGE_REQUIRED_SECURE_DAYS,
 };
 use shared::region::RegionCoord;
 use shared::spatial::SpatialObstacleGrid;
@@ -260,7 +261,7 @@ struct StructureMilestone {
     residents: u32,
     settlements: Vec<(String, SettlementTier, u32)>,
     sites: Vec<(SettlementBuildingKind, &'static str, u32, u32)>,
-    buildings: [usize; 10],
+    buildings: [usize; 11],
     roads: Vec<(u16, usize)>,
     fields: usize,
     piers: usize,
@@ -831,52 +832,73 @@ impl LabLifeLedger {
             top.join(", ")
         );
 
-        // Personal wallets alone make a cash-poor company owner look destitute
-        // even when they control a valuable firm. Keep the original liquid
-        // ranking above, then add the more useful controlled-wealth ranking.
+        // Personal wallets alone make a cash-poor shareholder look destitute
+        // even when they own a valuable firm. Keep the original liquid ranking
+        // above, then add share-weighted company equity. Company cash remains
+        // company property; this is a net-worth estimate, not spendable money.
         // Household purses remain shared and are deliberately not assigned to
         // one member.
-        let mut businesses_by_owner = HashMap::<PersonId, (Vec<String>, u64, i64, u64)>::new();
-        for (id, building, owner, account) in world
-            .query::<(
-                &BuildingId,
-                &SettlementBuilding,
-                Option<&OwnedBy>,
-                &BusinessAccount,
-            )>()
+        let mut operating_by_company = HashMap::<CompanyId, (i64, u64)>::new();
+        for (company, account) in world.query::<(&OperatedBy, &BusinessAccount)>().iter(world) {
+            let entry = operating_by_company.entry(company.0).or_default();
+            entry.0 = entry.0.saturating_add(account.lifetime_profit());
+            entry.1 = entry.1.saturating_add(account.owner_withdrawals);
+        }
+        let companies: Vec<_> = world
+            .query::<(&CompanyId, &Company, &CompanyOwnership, &CompanyAccount)>()
             .iter(world)
-        {
-            let Some(owner) = owner else {
-                continue;
-            };
-            let entry = businesses_by_owner.entry(owner.0).or_default();
-            entry.0.push(format!(
-                "{}#{}@{}",
-                building.kind.label(),
-                id.0,
-                building.settlement
-            ));
-            entry.1 = entry.1.saturating_add(account.cash);
-            entry.2 = entry.2.saturating_add(account.lifetime_profit());
-            entry.3 = entry.3.saturating_add(account.owner_withdrawals);
+            .map(|(id, company, ownership, account)| {
+                (*id, company.clone(), ownership.clone(), *account)
+            })
+            .collect();
+        let mut equity_by_person = HashMap::<PersonId, (Vec<String>, u64, i64, u64)>::new();
+        for (company_id, company, ownership, account) in companies {
+            let equity_value = account
+                .cash
+                .saturating_add(account.book_value)
+                .saturating_sub(account.wage_arrears)
+                .saturating_sub(account.tax_arrears);
+            let (profit, withdrawals) = operating_by_company
+                .get(&company_id)
+                .copied()
+                .unwrap_or_default();
+            for share in ownership.shares() {
+                let pro_rata = |value: u64| {
+                    ((u128::from(value) * u128::from(share.shares))
+                        / u128::from(COMPANY_TOTAL_SHARES)) as u64
+                };
+                let profit_share = if profit < 0 {
+                    -(pro_rata(profit.unsigned_abs()) as i64)
+                } else {
+                    pro_rata(profit as u64) as i64
+                };
+                let entry = equity_by_person.entry(share.shareholder).or_default();
+                entry.0.push(format!(
+                    "{}#{}:{}sh",
+                    company.name, company_id.0, share.shares
+                ));
+                entry.1 = entry.1.saturating_add(pro_rata(equity_value));
+                entry.2 = entry.2.saturating_add(profit_share);
+                entry.3 = entry.3.saturating_add(pro_rata(withdrawals));
+            }
         }
         let mut controlled: Vec<_> = self
             .people
             .values()
             .map(|person| {
-                let (firms, business_cash, profit, withdrawals) = person
+                let (firms, company_equity, profit, withdrawals) = person
                     .person_id
-                    .and_then(|id| businesses_by_owner.get(&id))
+                    .and_then(|id| equity_by_person.get(&id))
                     .map_or_else(
                         || (String::new(), 0, 0, 0),
-                        |(firms, cash, profit, withdrawals)| {
-                            (firms.join("|"), *cash, *profit, *withdrawals)
+                        |(firms, equity, profit, withdrawals)| {
+                            (firms.join("|"), *equity, *profit, *withdrawals)
                         },
                     );
                 (
-                    person.current_money.saturating_add(business_cash),
+                    person.current_money.saturating_add(company_equity),
                     person,
-                    business_cash,
+                    company_equity,
                     profit,
                     withdrawals,
                     firms,
@@ -891,17 +913,17 @@ impl LabLifeLedger {
                 controlled.iter().rev().take(3).collect::<Vec<_>>(),
             ),
         ] {
-            for (index, (net_worth, person, business_cash, profit, withdrawals, firms)) in
+            for (index, (net_worth, person, company_equity, profit, withdrawals, firms)) in
                 ranked.into_iter().enumerate()
             {
                 println!(
-                    "LAB wealth detail side={} rank={} name='{}' controlled={} wallet={} business_cash={} initial={} in={} out={} business_profit={}{} withdrawals={} job='{}' status='{}' residence='{}' home='{}' hungry={} firms=[{}]",
+                    "LAB wealth detail side={} rank={} name='{}' net_worth={} wallet={} company_equity={} initial={} in={} out={} company_profit_share={}{} dividends={} job='{}' status='{}' residence='{}' home='{}' hungry={} holdings=[{}]",
                     side,
                     index + 1,
                     person.name,
                     shared::economy::format_money(*net_worth),
                     shared::economy::format_money(person.current_money),
-                    shared::economy::format_money(*business_cash),
+                    shared::economy::format_money(*company_equity),
                     shared::economy::format_money(person.initial_money),
                     shared::economy::format_money(person.money_in),
                     shared::economy::format_money(person.money_out),
@@ -1358,6 +1380,7 @@ fn building_index(kind: SettlementBuildingKind) -> usize {
         SettlementBuildingKind::Church => 7,
         SettlementBuildingKind::Windmill => 8,
         SettlementBuildingKind::Bakery => 9,
+        SettlementBuildingKind::StorageHall => 10,
     }
 }
 
@@ -1394,7 +1417,7 @@ fn milestone(world: &mut World) -> StructureMilestone {
         .collect();
     sites.sort_by_key(|(kind, _, _, _)| building_index(*kind));
 
-    let mut buildings = [0usize; 10];
+    let mut buildings = [0usize; 11];
     for building in world.query::<&SettlementBuilding>().iter(world) {
         buildings[building_index(building.kind)] += 1;
     }
@@ -1771,7 +1794,7 @@ fn update_evidence(world: &mut World, evidence: &mut Evidence) {
 struct MoneyBreakdown {
     wallets: u64,
     treasuries: u64,
-    businesses: u64,
+    companies: u64,
     households: u64,
     construction_escrow: u64,
     clearing: u64,
@@ -1781,7 +1804,7 @@ impl MoneyBreakdown {
     fn total(self) -> u64 {
         self.wallets
             .saturating_add(self.treasuries)
-            .saturating_add(self.businesses)
+            .saturating_add(self.companies)
             .saturating_add(self.households)
             .saturating_add(self.construction_escrow)
             .saturating_add(self.clearing)
@@ -1789,8 +1812,9 @@ impl MoneyBreakdown {
 }
 
 /// Every penny must be in exactly one authoritative wallet, household purse,
-/// business account, civic treasury or unfinished-business escrow after the
-/// tick's event queue settles.
+/// company treasury, civic treasury or unfinished-business escrow after the
+/// tick's event queue settles. `unposted_company_capital` is included only for the
+/// brief construction/upgrade seam before it is posted to a company.
 fn money_breakdown(world: &mut World) -> MoneyBreakdown {
     let wallets = world
         .query::<&Wallet>()
@@ -1802,10 +1826,15 @@ fn money_breakdown(world: &mut World) -> MoneyBreakdown {
         .iter(world)
         .map(|settlement| settlement.treasury)
         .sum::<u64>();
-    let business_cash = world
-        .query::<&BusinessAccount>()
+    let company_cash = world
+        .query::<&CompanyAccount>()
         .iter(world)
         .map(|account| account.cash)
+        .sum::<u64>();
+    let unposted_site_cash = world
+        .query::<&BusinessAccount>()
+        .iter(world)
+        .map(|account| account.unposted_company_capital)
         .sum::<u64>();
     let household_cash = world
         .query::<&HouseholdEconomy>()
@@ -1823,7 +1852,7 @@ fn money_breakdown(world: &mut World) -> MoneyBreakdown {
     MoneyBreakdown {
         wallets,
         treasuries,
-        businesses: business_cash,
+        companies: company_cash.saturating_add(unposted_site_cash),
         households: household_cash,
         construction_escrow,
         clearing,
@@ -1863,18 +1892,23 @@ fn money_trace(world: &mut World) -> HashMap<String, u64> {
             settlement.treasury,
         );
     }
-    for (building_id, building, account) in world
-        .query::<(&BuildingId, &SettlementBuilding, &BusinessAccount)>()
+    for (company_id, company, account) in world
+        .query::<(&CompanyId, &Company, &CompanyAccount)>()
         .iter(world)
     {
         trace.insert(
-            format!(
-                "business:{}:{}:{}",
-                building_id.0,
-                building.settlement,
-                building.kind.label()
-            ),
+            format!("company:{}:{}", company_id.0, company.name),
             account.cash,
+        );
+    }
+    for (building_id, account) in world
+        .query::<(&BuildingId, &BusinessAccount)>()
+        .iter(world)
+        .filter(|(_, account)| account.unposted_company_capital > 0)
+    {
+        trace.insert(
+            format!("unposted-site-capital:{}", building_id.0),
+            account.unposted_company_capital,
         );
     }
     for (building_id, household) in world
@@ -1934,6 +1968,11 @@ fn print_business_report(world: &mut World) {
         .iter(world)
         .map(|(id, name, wallet)| (*id, (name.0.clone(), wallet.balance())))
         .collect();
+    let company_cash: HashMap<CompanyId, u64> = world
+        .query::<(&CompanyId, &CompanyAccount)>()
+        .iter(world)
+        .map(|(id, account)| (*id, account.cash))
+        .collect();
     let mut listed: HashMap<BuildingId, u32> = HashMap::new();
     for market in world.query::<&MootMarket>().iter(world) {
         for listing in market.listings() {
@@ -1949,46 +1988,54 @@ fn print_business_report(world: &mut World) {
             &BuildingId,
             &SettlementBuilding,
             Option<&OwnedBy>,
+            &OperatedBy,
             &BusinessAccount,
             Option<&BusinessManagementPolicy>,
             Option<&BusinessCondition>,
         )>()
         .iter(world)
-        .map(|(id, building, owner, account, management, condition)| {
-            (
-                *id,
-                building.kind,
-                building.settlement.clone(),
-                owner.copied(),
-                *account,
-                management.copied(),
-                condition.copied(),
-            )
-        })
+        .map(
+            |(id, building, owner, operated_by, account, management, condition)| {
+                (
+                    *id,
+                    building.kind,
+                    building.settlement.clone(),
+                    owner.copied(),
+                    operated_by.0,
+                    *account,
+                    management.copied(),
+                    condition.copied(),
+                )
+            },
+        )
         .collect();
     if businesses.is_empty() {
         println!("LAB businesses none");
         return;
     }
 
-    let mut owners: HashMap<PersonId, (u32, u64, i64, u64)> = HashMap::new();
-    for (id, kind, settlement, owner, account, management, condition) in businesses {
+    let mut owners: HashMap<PersonId, (u32, HashSet<CompanyId>, i64, u64)> = HashMap::new();
+    for (id, kind, settlement, owner, company, account, management, condition) in businesses {
         let owner_name = owner
             .and_then(|owner| people.get(&owner.0).map(|person| person.0.as_str()))
             .unwrap_or("public/unresolved");
         println!(
-            "LAB business {}#{} '{}' owner='{}' state={} strategy={} cash={} revenue={} expenses={} lifetime_profit={}{} withdrawals={} wage_arrears={} tax_arrears={} wage_defaults={} tax_defaults={} listed={}",
+            "LAB business {}#{} '{}' owner='{}' state={} strategy={} company=#{} company_treasury={} revenue={} expenses={} lifetime_profit={}{} contributed={} capex={} book_value={} withdrawals={} wage_arrears={} tax_arrears={} wage_defaults={} tax_defaults={} listed={}",
             kind.label(),
             id.0,
             settlement,
             owner_name,
             condition.map_or("Unreviewed", |condition| condition.state.label()),
             management.map_or("Unmanaged", |management| management.strategy.label()),
-            shared::economy::format_money(account.cash),
+            company.0,
+            shared::economy::format_money(company_cash.get(&company).copied().unwrap_or(0)),
             shared::economy::format_money(account.gross_revenue),
             shared::economy::format_money(account.operating_expenses),
             if account.lifetime_profit() < 0 { "-" } else { "+" },
             shared::economy::format_money(account.lifetime_profit().unsigned_abs()),
+            shared::economy::format_money(account.contributed_capital),
+            shared::economy::format_money(account.capital_expenditures),
+            shared::economy::format_money(account.book_value),
             shared::economy::format_money(account.owner_withdrawals),
             shared::economy::format_money(account.wage_arrears),
             shared::economy::format_money(account.tax_arrears),
@@ -2000,7 +2047,7 @@ fn print_business_report(world: &mut World) {
             let recent = history.days.iter().rev().take(7).collect::<Vec<_>>();
             for day in recent.into_iter().rev() {
                 println!(
-                    "  LAB business history #{} day={} observed={} state={} strategy={} cash={} protected={} drawable={} revenue={} costs={} profit={}{} ask={} wage={} made={} sold={} inputs={} draws={} wage_arrears={} tax_arrears={} listed={}",
+                    "  LAB business history #{} day={} observed={} state={} strategy={} company_treasury={} protected={} drawable={} revenue={} costs={} profit={}{} capex={} book_value={} ask={} wage={} made={} sold={} inputs={} draws={} wage_arrears={} tax_arrears={} listed={}",
                     id.0,
                     day.day,
                     day.observed,
@@ -2014,10 +2061,13 @@ fn print_business_report(world: &mut World) {
                         day.wage_expense
                             .saturating_add(day.input_expense)
                             .saturating_add(day.market_fees)
+                            .saturating_add(day.delivery_fees)
                             .saturating_add(day.profit_taxes)
                     ),
                     if day.profit < 0 { "-" } else { "+" },
                     shared::economy::format_money(day.profit.unsigned_abs()),
+                    shared::economy::format_money(day.capital_expenditures),
+                    shared::economy::format_money(day.book_value),
                     shared::economy::format_money(day.asking_unit_price),
                     shared::economy::format_money(day.daily_wage),
                     day.produced_units,
@@ -2033,47 +2083,235 @@ fn print_business_report(world: &mut World) {
         if let Some(owner) = owner {
             let total = owners.entry(owner.0).or_default();
             total.0 = total.0.saturating_add(1);
-            total.1 = total.1.saturating_add(account.cash);
+            total.1.insert(company);
             total.2 = total.2.saturating_add(account.lifetime_profit());
             total.3 = total.3.saturating_add(account.owner_withdrawals);
         }
     }
     let mut moguls: Vec<_> = owners
         .into_iter()
-        .map(
-            |(owner, (firm_count, business_cash, profit, withdrawals))| {
-                let (name, wallet) = people
-                    .get(&owner)
-                    .cloned()
-                    .unwrap_or_else(|| (format!("Person#{}", owner.0), 0));
-                (
-                    wallet.saturating_add(business_cash),
-                    name,
-                    wallet,
-                    firm_count,
-                    business_cash,
-                    profit,
-                    withdrawals,
-                )
-            },
-        )
+        .map(|(owner, (firm_count, companies, profit, withdrawals))| {
+            let (name, wallet) = people
+                .get(&owner)
+                .cloned()
+                .unwrap_or_else(|| (format!("Person#{}", owner.0), 0));
+            let company_cash = companies
+                .iter()
+                .map(|company| company_cash.get(company).copied().unwrap_or(0))
+                .fold(0u64, u64::saturating_add);
+            (
+                wallet.saturating_add(company_cash),
+                name,
+                wallet,
+                firm_count,
+                company_cash,
+                profit,
+                withdrawals,
+            )
+        })
         .collect();
     moguls.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    if let Some((controlled_wealth, name, wallet, firm_count, business_cash, profit, withdrawals)) =
+    if let Some((controlled_wealth, name, wallet, firm_count, company_cash, profit, withdrawals)) =
         moguls.first()
     {
         println!(
-            "LAB mogul leader='{}' firms={} controlled_wealth={} wallet={} business_cash={} lifetime_profit={}{} withdrawals={}",
+            "LAB mogul leader='{}' firms={} controlled_wealth={} wallet={} company_cash={} lifetime_profit={}{} withdrawals={}",
             name,
             firm_count,
             shared::economy::format_money(*controlled_wealth),
             shared::economy::format_money(*wallet),
-            shared::economy::format_money(*business_cash),
+            shared::economy::format_money(*company_cash),
             if *profit < 0 { "-" } else { "+" },
             shared::economy::format_money(profit.unsigned_abs()),
             shared::economy::format_money(*withdrawals),
         );
     }
+}
+
+/// Print the legal company above its individual operating sites. This makes
+/// the common one-shop craft firm visible while also exposing genuine pooled
+/// expansion, vertical integration, share ownership and executive decisions.
+fn print_company_report(world: &mut World) {
+    let people: HashMap<PersonId, (String, Option<BuildingId>)> = world
+        .query::<(&PersonId, &CharacterName, Option<&EmployedAt>)>()
+        .iter(world)
+        .map(|(id, name, workplace)| (*id, (name.0.clone(), workplace.map(|work| work.0))))
+        .collect();
+    let sites: Vec<_> = world
+        .query::<(
+            &BuildingId,
+            &SettlementBuilding,
+            &OperatedBy,
+            &BusinessAccount,
+            Option<&BusinessCondition>,
+        )>()
+        .iter(world)
+        .map(|(id, building, company, account, condition)| {
+            (
+                company.0,
+                *id,
+                building.kind,
+                building.settlement.clone(),
+                *account,
+                condition.copied(),
+            )
+        })
+        .collect();
+    let mut companies: Vec<_> = world
+        .query::<(
+            &CompanyId,
+            &Company,
+            &CompanyLeadership,
+            &CompanyOwnership,
+            &CompanyAccount,
+            &CompanyManagementPolicy,
+            &CompanyDecisionHistory,
+        )>()
+        .iter(world)
+        .map(
+            |(id, company, leadership, ownership, account, management, decisions)| {
+                (
+                    *id,
+                    company.clone(),
+                    *leadership,
+                    ownership.clone(),
+                    *account,
+                    *management,
+                    decisions.clone(),
+                )
+            },
+        )
+        .collect();
+    companies.sort_by_key(|company| company.0);
+
+    if companies.is_empty() {
+        println!("LAB companies none");
+        return;
+    }
+
+    let mut one_site_craft_firms = 0usize;
+    let mut multi_site_firms = 0usize;
+    let mut integrated_firms = 0usize;
+    for (id, company, leadership, ownership, account, management, decisions) in &companies {
+        let mut company_sites: Vec<_> = sites.iter().filter(|site| site.0 == *id).collect();
+        company_sites.sort_by_key(|site| site.1);
+        let site_ids: HashSet<BuildingId> = company_sites.iter().map(|site| site.1).collect();
+        let kinds: HashSet<SettlementBuildingKind> =
+            company_sites.iter().map(|site| site.2).collect();
+        let vertically_integrated = (kinds.contains(&SettlementBuildingKind::Farmstead)
+            && kinds.contains(&SettlementBuildingKind::Windmill))
+            || (kinds.contains(&SettlementBuildingKind::Windmill)
+                && kinds.contains(&SettlementBuildingKind::Bakery));
+        if company_sites.len() > 1 {
+            multi_site_firms += 1;
+        }
+        if vertically_integrated {
+            integrated_firms += 1;
+        }
+        let sole_owner = ownership
+            .shares()
+            .first()
+            .filter(|_| ownership.shares().len() == 1)
+            .map(|share| share.shareholder);
+        let master_is_worker = people
+            .get(&leadership.master)
+            .and_then(|person| person.1)
+            .is_some_and(|workplace| site_ids.contains(&workplace));
+        let ordinary_craft_firm =
+            company_sites.len() == 1 && sole_owner == Some(leadership.master) && master_is_worker;
+        if ordinary_craft_firm {
+            one_site_craft_firms += 1;
+        }
+        let master_name = people.get(&leadership.master).map_or_else(
+            || format!("Person#{}", leadership.master.0),
+            |person| person.0.clone(),
+        );
+        let shareholders = ownership
+            .shares()
+            .iter()
+            .map(|share| {
+                let name = people.get(&share.shareholder).map_or_else(
+                    || format!("Person#{}", share.shareholder.0),
+                    |person| person.0.clone(),
+                );
+                format!("{name}={}sh", share.shares)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let site_rows = company_sites
+            .iter()
+            .map(
+                |(_, building_id, kind, settlement, site_account, condition)| {
+                    format!(
+                        "{}#{}@{}:{} profit={}{} liabilities={}",
+                        kind.label(),
+                        building_id.0,
+                        settlement,
+                        condition.map_or("Unreviewed", |condition| condition.state.label()),
+                        if site_account.lifetime_profit() < 0 {
+                            "-"
+                        } else {
+                            "+"
+                        },
+                        shared::economy::format_money(
+                            site_account.lifetime_profit().unsigned_abs()
+                        ),
+                        shared::economy::format_money(
+                            site_account
+                                .wage_arrears
+                                .saturating_add(site_account.tax_arrears)
+                        ),
+                    )
+                },
+            )
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let lifetime_profit = company_sites.iter().fold(0_i64, |total, site| {
+            total.saturating_add(site.4.lifetime_profit())
+        });
+        println!(
+            "LAB company #{} '{}' founded={} master='{}' master_is_worker={} ordinary_craft_firm={} integrated={} strategy={} autopilot={} sites={} shareholders=[{}] cash={} liabilities={} contributed={} capex={} book_value={} lifetime_profit={}{} dividends={} today_profit={}{} sites=[{}]",
+            id.0,
+            company.name,
+            company.founded_day,
+            master_name,
+            master_is_worker,
+            ordinary_craft_firm,
+            vertically_integrated,
+            management.strategy.label(),
+            management.autopilot,
+            company_sites.len(),
+            shareholders,
+            shared::economy::format_money(account.cash),
+            shared::economy::format_money(
+                account.wage_arrears.saturating_add(account.tax_arrears)
+            ),
+            shared::economy::format_money(account.contributed_capital),
+            shared::economy::format_money(account.capital_expenditures),
+            shared::economy::format_money(account.book_value),
+            if lifetime_profit < 0 { "-" } else { "+" },
+            shared::economy::format_money(lifetime_profit.unsigned_abs()),
+            shared::economy::format_money(account.owner_withdrawals),
+            if account.current_day.profit() < 0 { "-" } else { "+" },
+            shared::economy::format_money(account.current_day.profit().unsigned_abs()),
+            site_rows,
+        );
+        for decision in decisions.entries() {
+            println!(
+                "  LAB company decision #{} day={} master={} {} -> {} reason='{}'",
+                id.0,
+                decision.day,
+                decision.master.0,
+                decision.from.label(),
+                decision.to.label(),
+                decision.reason.label(),
+            );
+        }
+    }
+    println!(
+        "LAB companies summary total={} ordinary_one_site_owner_master_workers={} multi_site={} vertically_integrated={}",
+        companies.len(), one_site_craft_firms, multi_site_firms, integrated_firms,
+    );
 }
 
 /// Print municipal cash flow and policy beside firm accounts. This keeps a
@@ -2365,12 +2603,18 @@ fn goods_totals(world: &mut World) -> (u32, u32, u32, u32, u32) {
 fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
     let snapshot = milestone(world);
     let (wood, wheat, flour, bread, fish) = goods_totals(world);
-    let mut circulation = HashMap::<String, (u32, u64, u64)>::new();
-    for (building, inventory, account) in world
+    let company_cash: HashMap<CompanyId, u64> = world
+        .query::<(&CompanyId, &CompanyAccount)>()
+        .iter(world)
+        .map(|(id, account)| (*id, account.cash))
+        .collect();
+    let mut circulation = HashMap::<String, (u32, u64, HashSet<CompanyId>)>::new();
+    for (building, inventory, account, operated_by) in world
         .query::<(
             &SettlementBuilding,
             &GoodsInventory,
             Option<&BusinessAccount>,
+            Option<&OperatedBy>,
         )>()
         .iter(world)
     {
@@ -2379,11 +2623,13 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
         };
         let entry = circulation.entry(building.settlement.clone()).or_default();
         entry.0 = entry.0.saturating_add(inventory.edible_amount());
-        entry.1 = entry.1.saturating_add(account.cash);
-        entry.2 = entry
-            .2
+        entry.1 = entry
+            .1
             .saturating_add(account.wage_arrears)
             .saturating_add(account.tax_arrears);
+        if let Some(operated_by) = operated_by {
+            entry.2.insert(operated_by.0);
+        }
     }
     let purchasable: HashMap<String, u32> = world
         .query::<(&Settlement, &MootMarket)>()
@@ -2398,9 +2644,15 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
         )>()
         .iter(world)
         .map(|(settlement, economy, opportunities)| {
-            let (business_food, business_cash, business_arrears) = circulation
+            let (business_food, business_arrears, company_cash) = circulation
                 .get(&settlement.name)
-                .copied()
+                .map(|(food, arrears, companies)| {
+                    let cash = companies
+                        .iter()
+                        .map(|company| company_cash.get(company).copied().unwrap_or(0))
+                        .fold(0u64, u64::saturating_add);
+                    (*food, *arrears, cash)
+                })
                 .unwrap_or_default();
             let permits = opportunities.map_or_else(
                 || "none".to_string(),
@@ -2422,7 +2674,7 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
                 },
             );
             format!(
-                "{}:{} pop={} stock={} purchasable={} at_businesses={} reserve={:.1}d prod={:.1}/d eaten={:.1}/d hungry={} prosperity={:.0} secure={}d business_cash={} business_arrears={} permits=[{}]",
+                "{}:{} pop={} stock={} purchasable={} at_businesses={} reserve={:.1}d prod={:.1}/d eaten={:.1}/d hungry={} prosperity={:.0} secure={}d company_cash={} business_arrears={} permits=[{}]",
                 settlement.name,
                 settlement.tier.label(),
                 settlement.residents,
@@ -2435,7 +2687,7 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
                 economy.unmet_food,
                 economy.prosperity,
                 economy.food_secure_days,
-                shared::economy::format_money(business_cash),
+                shared::economy::format_money(company_cash),
                 shared::economy::format_money(business_arrears),
                 permits,
             )
@@ -2449,7 +2701,7 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
         .count();
     let money = money_breakdown(world);
     println!(
-        "LAB t={:>5.1}m residents={} sites={:?} buildings=[farm:{} mill:{} bakery:{} lumber:{} fisher:{} house:{}] roads={}/{} fields={} piers={} housed={} goods=[wood:{} wheat:{} flour:{} bread:{} fish:{}] money={} [wallets={} households={} businesses={} treasury={} escrow={} clearing={}]",
+        "LAB t={:>5.1}m residents={} sites={:?} buildings=[farm:{} mill:{} bakery:{} lumber:{} fisher:{} house:{}] roads={}/{} fields={} piers={} housed={} goods=[wood:{} wheat:{} flour:{} bread:{} fish:{}] money={} [wallets={} households={} companies={} treasury={} escrow={} clearing={}]",
         sim_seconds / 60.0,
         snapshot.residents,
         snapshot.sites,
@@ -2472,7 +2724,7 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
         shared::economy::format_money(money.total()),
         shared::economy::format_money(money.wallets),
         shared::economy::format_money(money.households),
-        shared::economy::format_money(money.businesses),
+        shared::economy::format_money(money.companies),
         shared::economy::format_money(money.treasuries),
         shared::economy::format_money(money.construction_escrow),
         shared::economy::format_money(money.clearing),
@@ -3618,9 +3870,16 @@ fn village_simulation_lab() {
         }
         let structure = milestone(world);
         if last_structure.as_ref() != Some(&structure) {
-            if !scenario.is_crowd_stress() || sim_seconds >= next_stress_structure_log {
+            let structure_log_interval = if scenario.is_economy_soak() {
+                REPORT_SECONDS
+            } else if scenario.is_crowd_stress() {
+                60.0
+            } else {
+                0.0
+            };
+            if structure_log_interval == 0.0 || sim_seconds >= next_stress_structure_log {
                 println!("LAB event t={:.1}m {structure:?}", sim_seconds / 60.0);
-                next_stress_structure_log = sim_seconds + 60.0;
+                next_stress_structure_log = sim_seconds + structure_log_interval;
             }
             last_structure = Some(structure);
         }
@@ -3816,6 +4075,7 @@ fn village_simulation_lab() {
     print_structure_report(app.world_mut());
     print_civic_report(app.world_mut());
     print_business_report(app.world_mut());
+    print_company_report(app.world_mut());
     if scenario.is_crowd_stress() {
         stress_task_ledger.print_report(app.world_mut());
         stress_task_ledger.assert_no_currently_stuck_workers();

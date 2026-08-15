@@ -9,7 +9,9 @@ territory and war.
 The old first-person game is preserved at git tag `citysim-final`; the live workspace is
 the RTS/living-world codebase. Start with [WORLD-DESIGN.md](docs/WORLD-DESIGN.md) for the
 game, [CIVIC-ECONOMY.md](docs/CIVIC-ECONOMY.md) for the executable market and policy
-rules, [ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical boundaries, and
+rules, [COMPANY-ECONOMY-IMPLEMENTATION.md](docs/COMPANY-ECONOMY-IMPLEMENTATION.md)
+for shares, pooled finance and vertical integration,
+[ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical boundaries, and
 [ROADMAP.md](docs/ROADMAP.md) for implemented and future work.
 
 ## Current playable foundation
@@ -17,7 +19,7 @@ rules, [ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical boundaries, and
 - A chunk-streamed generated world with biomes, rivers, coastlines, water, foliage,
   atmospheric day/night lighting and a seamless commander camera.
 - Server-authoritative multiplayer, region interest management, session accounts and
-  stable `PersonId`, `SettlementId` and `BuildingId` relationships. A disconnected player
+  stable `PersonId`, `SettlementId`, `BuildingId` and `CompanyId` relationships. A disconnected player
   can rejoin the same running server and re-adopt their live hero, cargo, coin and retinue;
   restarting the server intentionally begins a fresh world.
 - God-mode settlement founding and villager spawning. Unaffiliated people choose a
@@ -31,10 +33,31 @@ rules, [ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical boundaries, and
 - Continuous visible work loops for farming, fishing, chopping, milling and baking;
   non-edible Wheat becomes household Flour, while Bakeries convert two Flour to four
   ready-to-eat Bread. Bounded personal and
-  building inventories, one combined early Moot Steward, seller-owned Moot consignments,
+  building inventories, up to two combined early Moot Stewards, seller-owned Moot consignments,
   adaptive wages, real business profit/loss, protected working capital, NPC owner strategies,
   input procurement, stock liquidation/property auctions, household food purchases, Poor
   Relief and durable business lifecycle states.
+- Stable companies above productive sites: every firm has exactly 1,000 ordinary
+  shares, a separately appointed Company Master, one authoritative treasury, consolidated liabilities,
+  tax and pro-rata dividends. A sole proprietor is normally owner, Master and worker of
+  one site; successful firms can retain profit, fund another permit and grow into a
+  multi-site company without moving money through the founder's wallet.
+  Buildings retain site P&L and policy ledgers but never receive separate cash allocations.
+  A hero explicitly founds and capitalises a company at a Hall before it can buy a
+  business permit. When the hero masters several firms, the Hall always shows and transmits
+  the selected `ACTING AS` company; personal and company money are never silently mixed.
+  Daily payroll is charged to the completed shift at dawn, paid from the company treasury
+  and attributed to the worker's site; unpaid amounts remain explicit arrears.
+- Same-company Farmstead → Windmill → Bakery chains give active company input needs first
+  claim on owned Wheat or Flour, then release only genuine surplus. Players manage this with
+  readable days-of-stock coverage, `Company first`/`Best value`/`Company only` sourcing and
+  `Sell surplus`/`Hold all`, while the server derives bounded unit targets from real staffing
+  and recipes. Tactical stewards carry the real
+  goods door to door; strategic simulation performs the same bounded transaction. Site
+  ledgers retain attributed internal flow while company P&L eliminates both memorandum
+  sides. The encyclopedia's Companies tab exposes a global firm directory, each Hero's
+  multi-company share portfolio, cap tables, public offers, linked sites, capital assets,
+  decisions and a pull-based cross-settlement company ledger.
 - Door traversal, designated homes, night routines, occupied-window lighting, ambient
   walking/sitting, character attributes and bounded life histories.
 - Shared 100-point Health for heroes and villagers, staged hunger ceilings, gradual fed recovery, safe offline-Hero dormancy, bounded
@@ -48,8 +71,8 @@ rules, [ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical boundaries, and
 - Inspectable residents, households, buildings, worksites, markets, settlement progress,
   inventories and prosperity in the selection UI and encyclopedia. Every Hall also has a
   scrollable Permits & Property board with live permit prices/demand and inherited or insolvent
-  business listings, alongside pull-based settlement, civic, market and individual-business
-  history ledgers.
+  business listings, alongside pull-based settlement, civic, market, individual-business
+  and consolidated company history ledgers.
 - Left click inspects any visible person, building or worksite; left-drag selects the local
   hero and future player-commanded units inside the marquee. Picking follows current rendered
   character positions, respects exact rotated building footprints and remains aligned when the
@@ -60,11 +83,12 @@ rules, [ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical boundaries, and
   real buyer clears it. A newly created hero begins with 20 coin; reconnecting to that same
   live hero preserves the existing wallet instead of granting the endowment again.
 - The Hall's property ledger is actionable for an embodied hero. It returns an exact
-  person-specific permit quote, escrows the fee and processor working capital, and opens a
+  company-specific business-permit quote, charges only its refundable permit fee, and opens a
   world placement ghost. Road frontage snaps magnetically while free placement remains
   available; footprints, fields, water, charter bounds and access are server-authoritative.
   Farmstead and Lumberjack Hut placement exposes live farmland/timber quality, and unused
-  permits remain in a bounded tray where they can be resumed or surrendered for a full refund.
+  permits remain in a bounded tray where they can be resumed or surrendered for a fee refund.
+  Recommended processor capital is advisory and remains ordinary spendable company cash.
 - One authoritative simulation clock, the same ordered village schedule in the live game
   and lab, aggregate off-screen village production, and summary/detail replication.
 
@@ -79,7 +103,9 @@ design.
 - Births, aging, non-starvation mortality, decline and persistent tree depletion/regrowth.
 - Custom trade-order quantities, carts, caravans and inter-settlement markets. Players can now
   commission and physically build an ordinary business, then manage strategy, wages, prices,
-  collection, input procurement and profit retention through the same policies as NPC owners.
+  collection, input procurement, company shares, private supply and profit retention through
+  the same policies as NPC owners. Company-funded purchases of existing listed firms and
+  durable restart persistence remain future work.
 - Physical palisades, stone walls, gates, guards and patrols.
 - Strategic travelling parties and armies with lossless tactical promotion/demotion.
 - Retinues, formations, flow fields, combat, clans, political ownership and realm war.

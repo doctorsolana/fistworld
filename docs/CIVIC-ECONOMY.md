@@ -2,20 +2,22 @@
 
 This document is the authoritative guide to the settlement treasury, enacted policy,
 public employment and their interaction with the private market. It describes the live
-implementation as of 2026-08-13. Broader economic direction remains in
-[WORLD-DESIGN.md](WORLD-DESIGN.md); business pricing and production are mentioned here
-only where money crosses the civic boundary.
+implementation as of 2026-08-15. Broader economic direction remains in
+[WORLD-DESIGN.md](WORLD-DESIGN.md). Company ownership, shares, pooled finance and
+vertical integration are specified in [COMPANY-ECONOMY-IMPLEMENTATION.md](COMPANY-ECONOMY-IMPLEMENTATION.md);
+business pricing and production are mentioned here only where money crosses the civic boundary.
 
 ## The model in one minute
 
-- Residents, households, businesses and the settlement treasury are separate owners.
+- Residents, households, companies and the settlement treasury are separate owners.
+  Productive buildings are operating sites of a company, not extra personal purses.
 - The Moot Hall is a physical consignment market. It does not buy all local output and it
   begins with no goods.
 - A buyer pays only when a real listed good is purchased. The seller receives the price
   minus the enacted market fee; the fee enters the treasury.
-- Private businesses pay an enacted levy only on a completed day's positive operating
-  profit after wages, purchased inputs and market charges. Losses and owner-contributed
-  capital are not taxed.
+- Private companies pay an enacted levy only on a completed day's positive consolidated
+  operating profit after wages, external inputs, delivery and market charges. Internal
+  site transfers, losses and shareholder-contributed capital are not taxed.
 - Needed housing permits are free. Private business permits cost money. A growth subsidy
   discounts only businesses the settlement has actually requested.
 - Public salaries, relief and construction materials spend real treasury coin. Wage and
@@ -55,9 +57,10 @@ the settlement treasury. They bootstrap circulation; they are not recurring inco
 
 | Actor | Cash | Physical goods | Durable economic state |
 |---|---|---|---|
-| Person | `Wallet` | Personal `GoodsInventory` | Employment, home, nutrition and business ownership |
+| Person | `Wallet` | Personal `GoodsInventory` | Employment, home, nutrition and company shares |
 | Household | `HouseholdEconomy` | Cabin pantry | Shared necessities purse and household members |
-| Business | `BusinessAccount` | Workplace inventory plus seller-owned Moot listings | Revenue, expenses, wages, tax, withdrawals and solvency |
+| Company | One authoritative `CompanyAccount` treasury | Goods remain at settlement-local sites/listings | 1,000-share cap table, Company Master, consolidated obligations, profit, capital and dividends |
+| Business site | No wallet | Workplace inventory plus seller-owned Moot listings | `BusinessAccount` cost-centre ledger: attributed revenue, expenses, labour, policy, production, liabilities and solvency |
 | Settlement | `Settlement::treasury` | Treasury-owned hall stock only | `CivicAccount`, enacted policy and public payroll |
 | Moot market | No independent wallet | Hall inventory with seller-aware listings | Offers, completed trades and market quotes |
 
@@ -71,6 +74,15 @@ cart, audits local roads and can build or adopt missing connectors. Producers th
 keep farming, fishing or chopping instead of spending their shifts carrying every batch to
 the hall.
 
+Companies may instead build a private Storage Hall. It adds 2,400 local bulk and up to four
+Company Porter jobs. Those workers move only their employer's stock inside the same settlement;
+they do not maintain public roads and their trips pay no municipal delivery fee. A company still
+has one global treasury, but each settlement keeps independent physical goods, storage capacity
+and retain/sell rules. Cross-town movement waits for the later physical caravan system.
+An NPC only founds a depot for a company that already controls at least two other local sites,
+and it will not autonomously duplicate one in the same branch. Players remain free to buy the
+tier-unlocked permit as a speculative infrastructure investment.
+
 ## Money flows
 
 ```mermaid
@@ -80,6 +92,8 @@ flowchart LR
     Moot -->|"market fee"| Treasury["Settlement treasury"]
     Business["Profitable business"] -->|"positive-profit levy"| Treasury
     Applicant["Business applicant"] -->|"permit price"| Treasury
+    Shareholder["Shareholder"] -->|"capital contribution"| Business
+    Business -->|"pro-rata dividend"| Shareholder
     Treasury -->|"daily wages"| CivicWorker["Civic workers"]
     Treasury -->|"surplus-only ration"| Moot
     Treasury -->|"public material purchase"| Moot
@@ -90,11 +104,10 @@ All arrows move existing coin. Neither the market nor policy review creates mone
 ### Private sale
 
 1. A business produces a physical good into its workplace inventory.
-2. Its sale policy decides how many units to retain and offer.
-3. An available Moot Steward moves a bounded load to the hall and creates a listing owned by that
-   business.
+2. Its company's local branch protects an absolute retain amount and decides whether excess may be sold; the rule is applied once across all of that company's sites in the settlement.
+3. An available Moot Steward or local Company Porter moves a bounded load to the hall and creates a listing owned by that business. Private porters work only for their own company.
 4. A real buyer purchases the cheapest acceptable listed units.
-5. The buyer loses the gross price. The business receives gross minus the market fee. The
+5. The buyer loses the gross price. The operating company treasury receives gross minus the market fee. The
    treasury receives the fee.
 6. The business records units sold, gross revenue and the fee as an operating expense.
 
@@ -110,17 +123,19 @@ prevents the hall from becoming an infinite public buyer.
 
 ### Positive-profit levy
 
-At the next day boundary, the completed business day is assessed as:
+At the next day boundary, each company's completed day is consolidated and assessed as:
 
 ```text
-pre-tax profit = max(0, gross revenue - wages - purchased inputs - market fees)
+pre-tax profit = max(0, external revenue - wages - external inputs
+                        - market fees - delivery fees)
 levy due       = ceil(pre-tax profit × enacted levy rate)
 ```
 
-The levy becomes a real `tax_arrears` claim. Payment may use business cash only after wage
-arrears are protected. Unpaid tax remains on the business; contributed capital and a
-loss-making day never form part of the tax base. Owner withdrawals happen only from
-retained, withdrawable profit after liabilities and protected working cash.
+Equal internal supply credits and charges are memoranda for site-level diagnosis and cancel
+before this calculation. The levy becomes a real `tax_arrears` claim. Payment may use
+company cash only after wage arrears are protected. Unpaid tax remains on the company/sites;
+contributed capital and a loss-making day never form part of the tax base. Dividends happen
+only from retained, withdrawable company profit after liabilities and protected working cash.
 
 Protected working cash is a visible calculation, not a flat magic balance:
 
@@ -151,16 +166,17 @@ processor inputs such as Flour, not merely its normal output—and consigns it u
 firm's stable `BuildingId`. Existing and new offers fall by 15% per day to a 25%-of-base
 floor. No treasury purchase or invented liquidity is involved.
 
-Liquidation receipts settle wage claims first, then ordinary tax collection. After the
-workplace, porter and order book are empty for two reviews, any residual cash returns to a
-living owner and the physical building becomes a separately priced takeover listing.
+Liquidation receipts enter the company treasury and settle wage claims first, then ordinary
+tax collection. After the workplace, porter and order book are empty for two reviews, the
+physical building becomes a separately priced takeover listing. Remaining company money
+can leave only through explicit shareholder distributions; there is no hidden site balance.
 Unfunded wages and taxes are recorded as separate cumulative defaults rather than silently
 erased. A buyer recapitalises the same stable business and history; stock liquidation and
 property sale are distinct.
 
 A default is accounting, not a payment. Writing off an unpayable wage reduces the wage
-liability and increases cumulative wage defaults, but it does **not** reduce business cash.
-Firm cash falls only when a living worker, supplier, tax authority or owner actually receives
+liability and increases cumulative wage defaults, but it does **not** reduce company cash.
+Company cash falls only when a living worker, supplier, tax authority or shareholder actually receives
 the corresponding money. This distinction is covered by both a focused ledger test and the
 Village Lab's per-update conservation audit.
 
@@ -187,7 +203,7 @@ empty.
 ### Permits and growth subsidy
 
 Needed houses are free for residents. Civic progression buildings are currently public
-projects. Private Farmstead, Fisherman's Hut, Windmill, Bakery and Lumberjack Hut permits
+projects. Private Farmstead, Fisherman's Hut, Windmill, Bakery, Lumberjack Hut and Storage Hall permits
 have a positive base price that rises by 50% for each building the applicant already owns.
 
 The Moot does not choose a mandatory next business. Every permit review publishes a ranked
@@ -222,15 +238,15 @@ the stamped permit. This visible administration is compressed away in strategic 
 it never changes the fee, ownership or material requirement.
 
 An embodied player uses the same market without pretending that the Hall chooses their
-plot. Within 12 metres of the Hall, **Permits & Property** requests an authoritative quote
-for that hero. A newly created hero begins with 20 coin, granted once when its body is created;
+plot. Within 12 metres of the Hall, **Permits & Property** first lets the hero found and
+capitalise a company, receiving all 1,000 shares and the Company Master office. It then requests
+an authoritative quote for the explicitly selected `ACTING AS` company. A newly created hero begins with 20 coin, granted once when its body is created;
 re-adopting the live body after a disconnect preserves its current wallet. The first residential
-claim in a settlement is free; private business quotes
-include the applicant-specific permit fee and, for processors, the minimum operating capital
-described below. Up to eight unused permits may be held, with at most one of each kind per
-settlement. Paid terms are removed from the hero's wallet into permit escrow—not treasury
-income—until a plot is accepted. The owned-permit tray can resume placement at any time or
-surrender the unused permit for an exact refund.
+claim in a settlement is free; private business quotes include the company-specific permit fee
+and an advisory processor cash recommendation described below. Up to eight unused permits may
+be held. The company pays only the actual fee; all other treasury cash remains freely usable.
+The owned-permit tray can resume placement at any time or surrender the unused permit for an
+exact fee refund to its purchasing company.
 
 Player placement is responsive but not trusted. The client draws the real model footprint,
 both future wheat fields, doorway, proposed access lane and 320-metre charter boundary, and
@@ -244,9 +260,9 @@ field, forest/shore viability and full-width access proof before consuming the p
 players confirming in one simulation tick are checked against earlier accepted plots and lanes
 from that same tick. A rejection preserves the permit and escrow.
 
-Once accepted, only the permit fee enters the treasury; startup escrow remains attached to the
-worksite and becomes the finished firm's working capital. Construction Wood remains physical
-and separate. The owning hero pays when the assigned local builder purchases market Wood (the
+Once accepted, the permit fee enters the treasury. The exact CompanyId remains on the permit,
+worksite and completed firm, while recommended working capital remains ordinary company cash.
+Construction Wood remains physical and separate. The owning company pays when the assigned local builder purchases market Wood (the
 carrier is never charged for someone else's site), or the builder gathers timber when stock or
 owner cash is unavailable. The worksite then follows the ordinary construction, road and
 business-initialisation pipeline rather than a player-only shortcut.
@@ -272,9 +288,10 @@ its three-day probation before another review, and an owner who already owns tha
 is ineligible for the competitive permit. The competition score begins at 68, above the Hall's
 60-point incentive threshold, so this route is explicitly advertised as a subsidized permit.
 
-A processor permit escrows enough applicant cash for at least one complete recipe batch plus its
-first full-staffed payroll. That cash follows the worksite into the finished firm's account rather
-than becoming treasury income or being spent by the household during construction. The Hall does
+A processor permit decision recommends enough company cash for at least one complete recipe batch
+plus its one-position opening payroll. An unquoted input is budgeted at 2.6x base value so an empty
+young firm can survive the first real offer; that is an entry estimate, never a price cap or a
+separate escrow. The cash remains in the single company treasury. The Hall does
 not set the entrant's price. The owner observes the current and preceding day's local quote and
 chooses an opening position through their private strategy: Growth seeks volume below the market,
 Balanced and Cautious broadly match it, High Margin asks more, and Opportunistic owners charge
@@ -309,6 +326,12 @@ or not the treasury can immediately pay them. Available treasury cash settles cl
 deterministic, daily rotated order so one stable identity cannot always capture the last
 coin. A person leaving public employment keeps an inactive payroll entry until their debt
 is paid.
+
+Private-company payroll follows the same completed-shift convention: at dawn the company
+treasury pays each workplace roster and the expense is attributed to the world day which
+just ended. Consequently an open `TODAY` ledger can show zero wages before its shift closes;
+`PREVIOUS DAY` must preserve the posted expense. Site history and consolidated company
+history use that same day boundary.
 
 A proposed hire is allowed only when the treasury can cover all existing arrears plus the
 projected full roster for the enacted number of payroll-reserve days:
@@ -504,24 +527,36 @@ Clicking a Moot Hall exposes:
 The Hall's **Permits & Property** action opens a dedicated, scrollable land ledger. Its permit
 column lists every tier-unlocked private permit, with demand band, indicative first-owner price,
 enacted discount, Wood requirement and housing/job capacity. A nearby hero can request the exact
-fee and processor operating escrow, purchase it, and immediately choose a plot. Hamlet uses are
+fee and processor cash recommendation, purchase it for the visible acting company, and immediately choose a plot. Hamlet uses are
 open regardless of demand or upstream supply; Marketplace and Tavern unlock at Village, while
 Church unlocks at Town. Those amenities may still be commissioned as public progression works,
 but a player may pay a real permit fee to own one. Its property column is driven by the compact
 replicated `SettlementPropertyBoard`, so completed businesses and inherited unfinished worksites
 remain visible even beyond detailed building replication. Listings show asking price, reason,
 listing age and whether they are still inside the one-day public exposure window or open to
-automatic investors. Quotes, escrow and placement are authoritative server transactions; the
+automatic investors. Company formation, quotes, paid fees and placement are authoritative server transactions; the
 client ghost is deliberately only a prediction of the shared plot rules.
 
 The encyclopedia repeats the enacted charter. The pull-based settlement history stores up
 to 365 days and includes separate permit, market-fee, profit-levy and public-sale income;
 wage, relief and material spending; staffing; every enacted rate; and the latest policy
-adjustment/reason. Business history separately records P&L, cash, liabilities, prices,
-wages, stock, flow, management choices and solvency.
+adjustment/reason. Business history separately records site P&L, contextual company cash, liabilities, prices,
+wages, stock, internal/external flow, capital expenditure, asset book value,
+management choices and solvency.
+
+The encyclopedia's **Companies** tab is separate from the civic ledger. It is a
+global company directory and personal share portfolio, with filters for all
+firms, the Hero's holdings and public share offers. Its company sheet separates
+Hero-wallet money, the single company treasury and estimated pro-rata book interest;
+lists the exact cap table, Company Master and sites; and exposes current and
+previous consolidated P&L. **Full Ledger** requests the selected stable
+`CompanyId` only when opened and consolidates all of its site archives across
+settlement boundaries. Internal supply credits and charges remain visible as an
+audit memo but cancel from company profit. Wages shown on a completed day are the
+expense of that day's finished shifts, whether fully paid or retained as arrears.
 
 Expanding a private workplace in the Places encyclopedia shows its current operating
-record: lifecycle state, owner strategy, cash, protected working capital, drawable profit,
+record: lifecycle state, owner strategy, company treasury, site-attributed protected working capital and drawable profit,
 wage/tax arrears, latest and lifetime results, sale
 policy, wage offer, procurement rules, local levy, staff, stock and relevant extractive
 site quality. Windmills and Bakeries omit land quality because it does not alter their
@@ -530,6 +565,30 @@ business-only **Business History** action opens that building's stable-`Building
 **Settlement History** remains a separate action. Houses and civic buildings never show a
 dead business-history button. Long detail sheets, history charts/tables, trade tables and
 the compact world card all use the same pointer-wheel nested scrolling behavior.
+
+The workplace's **Company** action opens the legal firm above that site. It shows
+the Company Master, exact 1,000-share cap table, every operated site, one company treasury
+and liabilities, contributed capital, asset book value, consolidated P&L,
+dividends and bounded executive decisions. Only the appointed Master may change
+ordinary operating policy. A holder with more than 500 shares may appoint the
+Master. Any shareholder may post one bounded whole-share offer; a buyer pays the
+selling shareholder atomically, and neither company cash nor issued-share count
+changes. Player Masters purchasing a new business permit automatically use
+company retained cash only when the complete project remains affordable after
+wage/tax liabilities and the configured payroll runway. Otherwise personal
+payment becomes an explicit capital contribution. Company site cards provide separate
+**View Details** and **Manage Site** actions. Place drill-down and site management both
+provide **Back to Company**, and changing repeated management controls preserves the
+current scroll position instead of jumping to the top.
+
+The site-management goods-flow section uses two stock bars and stepped
+0/1/2/3/5/7-day controls rather than exposing raw `reorder below` and `target units`
+settings. Input cover is derived from the site's real recipe and staffed capacity.
+`Company first`, `Best value` and `Company only` explain sourcing without accounting
+jargon. Downstream company requests reserve physical goods before public collection;
+the supplier's optional output-reserve days are then protected and only the remainder
+is market-ready. A manual coverage change pauses owner autopilot so it cannot silently
+replace the player's choice.
 
 The Village Lab prints the final charter and its civic ledger. Use:
 
@@ -548,6 +607,10 @@ settlements and must remain green as policy decisions grow more sophisticated.
 |---|---|
 | Replicated policy, strategy and staffing types | `shared/src/components/actors.rs` |
 | Money units, accounts, market, permit and planning formulas | `shared/src/economy.rs` |
+| Company identity, 1,000-share cap table and share offers | `shared/src/components/identity.rs` |
+| Company migration, pooled finance, dividends and executive review | `server/src/world/village/companies.rs` |
+| Direct same-company tactical supply | `server/src/world/village/commerce.rs` |
+| Direct same-company strategic supply | `server/src/world/village/strategic.rs` |
 | Civic payroll, levy, protected budget and policy review | `server/src/world/village/civic.rs` |
 | Permit selection and fee collection | `server/src/world/village/planning.rs` |
 | Meals, relief, reserves and prosperity | `server/src/world/village/settlement_economy.rs` |
@@ -555,6 +618,7 @@ settlements and must remain green as policy decisions grow more sophisticated.
 | Public construction procurement | `server/src/world/village/construction.rs` |
 | Private sale settlement and market-fee transfer | `server/src/world/village/businesses/transactions.rs` |
 | Bounded civic/business archives | `server/src/world/village/history.rs` |
+| Company/site management and share market | `client/src/ui/business_management.rs` |
 | Hall and history presentation | `client/src/ui/settlement_panel.rs`, `client/src/ui/history.rs` |
 
 All live and headless-lab systems are registered through
@@ -587,7 +651,7 @@ must never invent goods, erase liabilities or create money to rescue a tuning pr
 - Debt issuance, banks, credit and treasury borrowing.
 - Guard patrols, crime, courts and military budgets.
 - Processed-food policy, imports, caravans and cross-settlement price arbitration.
-- Player-authored wills, inheritance shares and auctions. The first automatic
+- Player-authored wills, inheritance of company shares and estate share auctions. The first automatic
   succession path is live: a dead resident's cash and carried goods enter their
   household (then the hall if unclaimed), owned productive firms become takeover
   listings, and a buyer's payment becomes company working capital rather than

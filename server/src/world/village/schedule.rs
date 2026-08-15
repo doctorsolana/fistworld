@@ -51,6 +51,8 @@ pub enum VillageConstructionSet {
 pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut App, schedule: M) {
     app.init_resource::<world::simulation_time::SimulationDelta>();
     app.init_resource::<super::BusinessEventQueue>();
+    app.init_resource::<super::CompanyDividendQueue>();
+    app.init_resource::<super::CompanyEscrowRefundQueue>();
     app.init_resource::<super::MootQueueClock>();
     app.init_resource::<super::MortalityLedger>();
     app.configure_sets(
@@ -125,7 +127,10 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 super::ensure_village_finances,
                 super::ensure_civic_accounts,
                 super::ensure_settlement_economies,
+                super::ensure_companies,
                 super::ensure_business_economies,
+                super::post_site_capital_to_company,
+                super::cleanup_empty_companies,
             )
                 .chain()
                 .in_set(VillageCoreSet::IdentityPopulation),
@@ -148,9 +153,12 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 (
                     super::sync_civic_market_policy,
                     super::update_moot_market_targets,
+                    super::refund_company_escrows,
                     super::run_business_payroll_and_owner_leisure,
                     super::collect_business_profit_taxes,
+                    super::review_company_strategies,
                     super::review_business_management,
+                    super::review_company_finance,
                     super::acquire_businesses_for_sale,
                 )
                     .chain()
@@ -164,6 +172,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                     .in_set(VillageEconomySet::Households),
                 (
                     super::apply_business_events,
+                    super::refresh_company_accounts,
                     super::update_settlement_economies,
                     super::apply_nutrition_condition,
                     super::advance_nutrition_health,
@@ -196,10 +205,18 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 super::ensure_farm_fields.in_set(VillageConstructionSet::Fields),
                 world::village_roads::plan_requested_roads
                     .in_set(VillageConstructionSet::RoadPlanning),
-                super::fill_vacancies.in_set(VillageConstructionSet::Employment),
+                (
+                    super::review_automatic_staffing,
+                    super::enforce_staffing_targets,
+                    super::fill_vacancies,
+                    super::sync_company_porters,
+                )
+                    .chain()
+                    .in_set(VillageConstructionSet::Employment),
             )
                 .in_set(VillageCoreSet::Construction),
             (
+                super::sync_porter_cargo_capacity,
                 super::run_household_schedules,
                 super::run_workplace_door_transits,
                 world::village_roads::build_village_roads,
@@ -218,6 +235,8 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                     super::run_lumberjack_routines,
                     super::run_processing_routines,
                     super::sync_workplace_operations,
+                    super::sync_business_stock_targets,
+                    super::run_internal_deliveries,
                     super::run_market_collections,
                     super::ambient::run_ambient_routines,
                     super::apply_business_events,

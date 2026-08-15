@@ -19,6 +19,7 @@ pub mod ambient;
 mod businesses;
 pub(crate) mod civic;
 mod commerce;
+mod companies;
 mod construction;
 mod development_market;
 mod economy;
@@ -46,15 +47,24 @@ pub use civic::{
     collect_business_profit_taxes, ensure_civic_accounts, review_civic_policies, run_civic_payroll,
     sync_civic_market_policy,
 };
-pub(crate) use commerce::{automatic_owner_strategy, business_output};
+pub(crate) use commerce::{automatic_owner_strategy, business_output, is_private_business};
 pub use commerce::{
     ensure_business_economies, reconcile_work_statuses, run_business_payroll_and_owner_leisure,
-    run_market_collections, staff_moot_hall_roles,
+    run_internal_deliveries, run_market_collections, staff_moot_hall_roles,
+    sync_porter_cargo_capacity,
+};
+pub(crate) use companies::new_company_bundle;
+pub use companies::{
+    cleanup_empty_companies, ensure_companies, post_site_capital_to_company,
+    refresh_company_accounts, refund_company_escrows, review_company_finance,
+    review_company_strategies, CompanyDividendQueue, CompanyEscrowRefundQueue,
 };
 pub use construction::{advance_construction, run_construction_material_logistics};
 pub(crate) use development_market::minimum_startup_capital;
 pub(crate) use economy::review_automatic_wage_offer;
-pub use employment::fill_vacancies;
+pub use employment::{
+    enforce_staffing_targets, fill_vacancies, review_automatic_staffing, sync_company_porters,
+};
 pub use households::{
     assign_households, ensure_households, run_household_schedules, run_household_shopping,
     update_household_budgets_and_pantries,
@@ -88,11 +98,12 @@ pub use processing::{
     assign_processing_routines, run_processing_routines, sync_workplace_operations,
     ProcessingRoutine,
 };
+pub use production::sync_business_stock_targets;
 pub(crate) use production::{
-    farmer_seconds_per_wheat, fisher_seconds_per_food, lumber_seconds_per_tree, lumber_tree_yield,
-    maximum_viable_input_unit_price, process_available_cycles, processing_recipe,
-    rated_daily_production, viable_processing_input_purchase, ProcessingRecipe,
-    SELF_SUPPLY_TREE_YIELD,
+    automatic_opening_positions, farmer_seconds_per_wheat, fisher_seconds_per_food,
+    lumber_seconds_per_tree, lumber_tree_yield, maximum_viable_input_unit_price,
+    process_available_cycles, processing_recipe, rated_daily_production,
+    viable_processing_input_purchase, ProcessingRecipe, SELF_SUPPLY_TREE_YIELD,
 };
 pub use property_market::publish_property_boards;
 use settlement_economy::{buy_from_moot, sell_carried_to_moot};
@@ -130,8 +141,9 @@ use shared::components::{
 };
 use shared::economy::{
     permit_price_with_subsidy, BusinessAccount, BusinessCondition, BusinessForSale,
-    BusinessInputRule, BusinessLiquidation, BusinessManagementPolicy, BusinessProcurementPolicy,
-    BusinessSalePolicy, BusinessState, BusinessWageClaim, BusinessWagePolicy, CarriedLoad, Good,
+    BusinessInputRule, BusinessLiquidation, BusinessManagementPolicy, BusinessPrivateInputRule,
+    BusinessProcurementPolicy, BusinessSalePolicy, BusinessSourcingMode, BusinessStaffingPolicy,
+    BusinessState, BusinessSupplyPolicy, BusinessWageClaim, BusinessWagePolicy, CarriedLoad, Good,
     GoodsInventory, HouseholdEconomy, MarketSeller, MootMarket, SettlementEconomy, Wallet,
     WorkforceRequirements, BASIS_POINTS, FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE,
     MAXIMUM_BUSINESS_DAILY_WAGE, MINIMUM_BUSINESS_DAILY_WAGE, PENNIES_PER_COIN,
@@ -156,6 +168,7 @@ use crate::world::village_roads::{
 /// permit system's settlement queries within Bevy's system-parameter limit.
 #[derive(SystemParam)]
 pub struct PermitPlanningResources<'w, 's> {
+    ids: ResMut<'w, crate::world::identity::WorldIdAllocator>,
     terrain: Option<Res<'w, WorldTerrain>>,
     colliders: Option<Res<'w, StaticColliders>>,
     derived: Option<Res<'w, DerivedColliderLibrary>>,
@@ -171,6 +184,7 @@ pub struct PermitPlanningResources<'w, 's> {
             With<LumberjackRoutine>,
             With<ProcessingRoutine>,
             With<MarketCollectionRoutine>,
+            With<InternalDeliveryRoutine>,
             With<HouseholdShoppingRoutine>,
             With<MootQueueTicket>,
             With<MootMealRoutine>,
@@ -185,6 +199,16 @@ pub struct PermitPlanningResources<'w, 's> {
             &'static shared::components::OwnedBy,
             Option<&'static BusinessCondition>,
             Option<&'static BusinessForSale>,
+        ),
+    >,
+    companies: Query<
+        'w,
+        's,
+        (
+            &'static shared::components::CompanyId,
+            &'static shared::components::CompanyLeadership,
+            &'static shared::economy::CompanyManagementPolicy,
+            Option<&'static shared::components::CompanyOwnership>,
         ),
     >,
 }
@@ -262,7 +286,7 @@ const INDOOR_REST_SECONDS: f32 = 4.0;
 // physical: field quality controls how much labour makes one Wheat, and a
 // farmer works continuously until the shift ends instead of receiving a daily
 // production allowance.
-pub(crate) const CHOP_SECONDS: f32 = 90.0;
+pub(crate) const CHOP_SECONDS: f32 = 40.0;
 /// A worker preserves their job and carried cargo across transient commute
 /// failures, but one unreachable hut must not pin them outside a cabin for an
 /// entire day. A later shift can retry after roads or obstacles change.
@@ -478,6 +502,17 @@ impl ConstructionMaterialRoutine {
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct InheritedBusinessCapital(pub u64);
 
+/// Accounting provenance carried by an unfinished private business. Opening
+/// cash may be an owner's new contribution or a transfer from an existing
+/// company's retained cash; the permit itself is a capitalised company asset,
+/// never an operating expense.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct BusinessProjectAccounting {
+    pub company: Option<shared::components::CompanyId>,
+    pub contributed_capital: u64,
+    pub capital_expenditure: u64,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum ConstructionMaterialPhase {
     Seeking,
@@ -606,6 +641,23 @@ pub struct MarketPorter {
     pub(crate) settlement: Entity,
 }
 
+/// A private porter employed by a Storage Hall. It may move only its own
+/// company's goods inside this settlement; unlike a Moot Steward it does not
+/// maintain roads or collect freight for unrelated firms.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompanyPorter {
+    pub(crate) settlement: Entity,
+    pub(crate) settlement_id: shared::components::SettlementId,
+    pub(crate) company: shared::components::CompanyId,
+    pub(crate) storage_hall: shared::components::BuildingId,
+}
+
+/// Server-side marker for a character currently carrying a porter's cart
+/// allowance. It remains briefly after an abnormal job removal if necessary
+/// so reducing capacity can never destroy an in-flight load.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub(crate) struct PorterCargoCapacity;
+
 #[derive(Component, Debug, Clone)]
 pub struct MarketCollectionRoutine {
     business: Entity,
@@ -615,6 +667,30 @@ pub struct MarketCollectionRoutine {
     reserved_units: u32,
     unit_price: u64,
     phase: MarketCollectionPhase,
+}
+
+/// One private same-company shipment performed by a municipal Moot Steward.
+/// Goods travel directly between workplaces and never become Hall inventory or
+/// a public listing.
+#[derive(Component, Debug, Clone)]
+pub struct InternalDeliveryRoutine {
+    supplier: Entity,
+    supplier_id: shared::components::BuildingId,
+    receiver: Entity,
+    receiver_id: shared::components::BuildingId,
+    company: shared::components::CompanyId,
+    hall: Entity,
+    good: Good,
+    reserved_units: u32,
+    unit_value: u64,
+    municipal_fee: bool,
+    phase: InternalDeliveryPhase,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InternalDeliveryPhase {
+    GoingToSupplier,
+    Delivering,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

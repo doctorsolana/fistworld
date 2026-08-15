@@ -11,17 +11,18 @@ use bevy::ecs::schedule::ScheduleLabel;
 use bevy::prelude::*;
 use shared::components::{
     AttachedTo, BuildingId, BuildingOf, CharacterActivity, CharacterAffiliation,
-    CharacterAttributes, CharacterKind, CharacterName, CivicEmployment, CivicRole, EmployedAt,
-    FarmField, Health, Household, LivesAt, MootAdministration, Nutrition, Occupation, OwnedBy,
-    PersonId, PlayerPosition, PlayerRotation, Residence, ResidentOf, Settlement,
-    SettlementBuilding, SettlementBuildingKind, SettlementId, SettlementPolicies, SettlementTier,
-    TimeWarp, WorkStatus, WorldTime,
+    CharacterAttributes, CharacterKind, CharacterName, CivicEmployment, CivicRole, Company,
+    CompanyId, CompanyLeadership, CompanyOwnership, EmployedAt, FarmField, Health, Household,
+    LivesAt, MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId,
+    PlayerPosition, PlayerRotation, Residence, ResidentOf, Settlement, SettlementBuilding,
+    SettlementBuildingKind, SettlementId, SettlementPolicies, SettlementTier, TimeWarp, WorkStatus,
+    WorldTime,
 };
 use shared::economy::{
     BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessProcurementPolicy,
-    BusinessSalePolicy, BusinessWagePolicy, CarriedLoad, CivicAccount, Good, GoodsInventory,
-    HouseholdEconomy, MootMarket, SettlementEconomy, Wallet, PENNIES_PER_COIN,
-    STARTING_TREASURY_MONEY,
+    BusinessSalePolicy, BusinessWagePolicy, CarriedLoad, CivicAccount, CompanyAccount,
+    CompanyDecisionHistory, CompanyManagementPolicy, Good, GoodsInventory, HouseholdEconomy,
+    MootMarket, SettlementEconomy, Wallet, PENNIES_PER_COIN, STARTING_TREASURY_MONEY,
 };
 use shared::region::RegionCoord;
 use shared::spatial::SpatialObstacleGrid;
@@ -32,14 +33,15 @@ use super::collect_business_profit_taxes;
 use super::history::{capture_settlement_history, SettlementHistoryRuntime};
 use super::{
     advance_nutrition_health, apply_nutrition_condition, assign_farmer_routines, assign_households,
-    ensure_farm_fields, fill_vacancies, reconcile_work_statuses, recount_residents,
-    review_business_management, review_civic_policies, run_business_payroll_and_owner_leisure,
+    ensure_farm_fields, fill_vacancies, post_site_capital_to_company, reconcile_work_statuses,
+    recount_residents, refresh_company_accounts, review_business_management, review_civic_policies,
+    review_company_finance, review_company_strategies, run_business_payroll_and_owner_leisure,
     run_civic_payroll, run_farmer_routines, run_household_schedules, run_workplace_door_transits,
     sync_building_door_demands, sync_carried_load, sync_civic_market_policy,
     update_household_budgets_and_pantries, update_moot_market_targets, update_settlement_economies,
     FarmerPhase, FarmerRoutine, HomeAssignment, SettlementEconomyRuntime, VillagerIntent,
 };
-use super::{apply_business_events, BusinessEventQueue};
+use super::{apply_business_events, BusinessEventQueue, CompanyDividendQueue};
 use crate::collision::library::StaticColliders;
 use crate::player::hero::{step_units, MoveTarget};
 use crate::world::pathfinding::PathfindingBudgetSettings;
@@ -190,11 +192,25 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
             let building_id = BuildingId(next_building_id);
             next_building_id += 1;
             let owner_id = PersonId(next_person_id + 2 + (farm_index * 2) as u64);
+            let company_id = CompanyId(1_000_000 + building_id.0);
+            world.spawn((
+                company_id,
+                Company {
+                    name: format!("Scale Company {}", company_id.0),
+                    founded_day: 0,
+                },
+                CompanyOwnership::sole(owner_id),
+                CompanyLeadership { master: owner_id },
+                CompanyAccount::default(),
+                CompanyManagementPolicy::default(),
+                CompanyDecisionHistory::default(),
+            ));
             let farm = world
                 .spawn((
                     building_id,
                     BuildingOf(SettlementId(town_index as u64 + 1)),
                     OwnedBy(owner_id),
+                    OperatedBy(company_id),
                     SettlementBuilding {
                         kind: SettlementBuildingKind::Farmstead,
                         settlement: place.clone(),
@@ -204,7 +220,7 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                     },
                     GoodsInventory::new(shared::economy::capacity::FARMSTEAD),
                     BusinessAccount {
-                        cash: 100 * PENNIES_PER_COIN,
+                        unposted_company_capital: 100 * PENNIES_PER_COIN,
                         ..default()
                     },
                     BusinessSalePolicy::default(),
@@ -319,6 +335,7 @@ fn configure_app(towns: usize, npcs: usize) -> App {
     app.init_resource::<SettlementEconomyRuntime>();
     app.init_resource::<SettlementHistoryRuntime>();
     app.init_resource::<BusinessEventQueue>();
+    app.init_resource::<CompanyDividendQueue>();
     app.init_resource::<crate::world::identity::WorldIdAllocator>();
     app.init_resource::<crate::world::identity::WorldIdentityIndex>();
     app.init_resource::<StrategicStep>();
@@ -351,14 +368,18 @@ fn configure_app(towns: usize, npcs: usize) -> App {
             run_civic_payroll,
             sync_civic_market_policy,
             update_moot_market_targets,
+            post_site_capital_to_company,
             update_household_budgets_and_pantries,
             update_settlement_economies,
             apply_nutrition_condition,
             advance_nutrition_health,
             run_business_payroll_and_owner_leisure,
             collect_business_profit_taxes,
+            review_company_strategies,
             review_business_management,
+            review_company_finance,
             apply_business_events,
+            refresh_company_accounts,
             review_civic_policies,
             capture_settlement_history,
         )
@@ -371,14 +392,18 @@ fn configure_app(towns: usize, npcs: usize) -> App {
             run_civic_payroll,
             sync_civic_market_policy,
             update_moot_market_targets,
+            post_site_capital_to_company,
             update_household_budgets_and_pantries,
             update_settlement_economies,
             apply_nutrition_condition,
             advance_nutrition_health,
             run_business_payroll_and_owner_leisure,
             collect_business_profit_taxes,
+            review_company_strategies,
             review_business_management,
+            review_company_finance,
             apply_business_events,
+            refresh_company_accounts,
             review_civic_policies,
             capture_settlement_history,
         )
@@ -410,18 +435,24 @@ fn configure_app(towns: usize, npcs: usize) -> App {
     app.add_systems(
         VillageSteadyBench,
         (
-            recount_residents,
-            reconcile_work_statuses,
-            run_civic_payroll,
-            sync_civic_market_policy,
-            update_moot_market_targets,
-            update_household_budgets_and_pantries,
-            update_settlement_economies,
-            apply_nutrition_condition,
-            advance_nutrition_health,
-            run_business_payroll_and_owner_leisure,
-            collect_business_profit_taxes,
-            review_business_management,
+            (
+                recount_residents,
+                reconcile_work_statuses,
+                run_civic_payroll,
+                sync_civic_market_policy,
+                update_moot_market_targets,
+                post_site_capital_to_company,
+                update_household_budgets_and_pantries,
+                update_settlement_economies,
+                apply_nutrition_condition,
+                advance_nutrition_health,
+                run_business_payroll_and_owner_leisure,
+                collect_business_profit_taxes,
+                review_company_strategies,
+                review_business_management,
+                review_company_finance,
+            )
+                .chain(),
             fill_vacancies,
             ensure_farm_fields,
             assign_households,
@@ -431,6 +462,7 @@ fn configure_app(towns: usize, npcs: usize) -> App {
                 assign_farmer_routines,
                 run_farmer_routines,
                 apply_business_events,
+                refresh_company_accounts,
                 ambient::run_ambient_routines,
                 (sync_carried_load, sync_building_door_demands).chain(),
             )

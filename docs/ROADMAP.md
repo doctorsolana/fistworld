@@ -4,7 +4,7 @@ The single build order. [ARCHITECTURE.md](ARCHITECTURE.md) says how the engine c
 game; [WORLD-DESIGN.md](WORLD-DESIGN.md) says what the world *is*. Both used to carry their
 own phase list, and the two disagreed — this file replaces both.
 
-Written 2026-07-30 and re-audited against the code on 2026-08-05. Where a doc claim and
+Written 2026-07-30 and re-audited against the code on 2026-08-15. Where a doc claim and
 the code disagree, the executable state wins and the doc is corrected.
 
 **Ordering principle: risk first.** Phases are ordered by which unknown, discovered late,
@@ -25,10 +25,10 @@ infrastructure is a phase that cannot be tested.
 | 1 | The world remembers | L | in progress — stable identity, settlement directory, founding, picking and panels are live; world-state persistence is not |
 | 2 | The seam | L | in progress — ordinary villagers now demote to aggregate strategic work; the traveller/army promotion contract is not built |
 | 3 | They eat | M | in progress — physical food, daily consumption, prosperity and Hamlet → Village → Town → City are live; births and decline are not |
-| 4 | Prices and the hand cart | M | in progress — NPC wallets and local Moot prices are live; player trading and carts are not |
+| 4 | Prices and the hand cart | M | in progress — local Moot trading, on-foot player exchange and the company economy are live; hand carts and inter-town trade are not |
 | 5 | Caravans | L | not started |
 | 6 | Command | XL | not started |
-| 7 | Retinue and businesses | L | not started |
+| 7 | Retinue and businesses | L | in progress — ownership, company controls and shares are live; retinues, combat and offline persistence are not |
 | 8 | Clans and territory | L | not started |
 | 9 | War for the realm | XL | not started |
 
@@ -131,6 +131,10 @@ join keys or on-disk contracts that are ruinous to change later.
       prices. Contains no controls, because the village decides for itself.
 - [x] PLACES tab in the encyclopedia: every known settlement, with bearing and
       distance from the player.
+- [x] COMPANIES tab in the encyclopedia: scalable global firm directory,
+      multi-company player portfolio, exact 1,000-share ownership, public
+      offers, linked sites/shareholders and pull-based cross-settlement company
+      ledgers with internal transfers eliminated from consolidated profit.
 
 **The autonomous village slice** (WORLD-DESIGN §1b — a whole experiment, run to
 answer "can a village run itself?" before any of the economy above exists):
@@ -193,7 +197,7 @@ answer "can a village run itself?" before any of the economy above exists):
 - [x] First observed production loop: hut door → indoors → real tree → chop
       animation → bounded carried load → hut deposit → Moot consignment. Revenue
       reaches the business only when a real customer buys it; workers receive wages
-      and the owner may withdraw only retained profit above protected working cash.
+      and the company may distribute only retained profit above protected working cash.
 - [x] Farmstead → two authored nearby wheat fields → visible field work → bounded
       wheat carry → Farmstead deposit → hall haul under storage pressure.
 - [x] Fisherman's Hut → authored paired pier → safe over-water deck traversal →
@@ -453,19 +457,20 @@ sell it dear. The M&B opening hour.
 - [x] Local private consignment offers. The Moot begins empty, retains each seller's
       stable identity, pays only on customer purchase and sends its fee to the treasury.
 - [x] Real business accounting: contributed capital, gross revenue, wage/input/fee
-      expenses, liabilities, retained profit and bounded owner withdrawals.
+      expenses, liabilities, retained profit and bounded shareholder distributions.
 - [x] NPC owner autopilot with Balanced, Growth, High-Margin, Cautious and Opportunistic
       strategies, bounded daily repricing, adaptive wages, personal rescue capital and
       durable new/cash-tight/distressed/insolvent/liquidating/for-sale states.
 - [x] Business working-capital protection covers strategy-defined payroll, planned inputs,
-      liabilities and an operating buffer before an owner can withdraw retained profit.
+      liabilities and an operating buffer before the Company Master can distribute retained profit.
 - [x] Insolvent firms liquidate every physical input/output through discounted private
       listings, pay stable worker claims before tax, and only then auction the property.
 - [x] Portfolio and processor expansion gates: owners cannot compound unfinished/new or
       distressed firms; second and later processors require realised utilisation, sales,
       positive profit and uncovered upstream throughput.
-- [x] Pull-based 365-day business histories with daily P&L, cash, protected/drawable cash, arrears, prices,
-      wages, production, sales, inputs, stock, owner draws and policy/state adjustments.
+- [x] Pull-based 365-day business histories with daily site P&L, contextual company treasury,
+      protected/drawable company cash, arrears, prices, wages, production, sales, inputs,
+      stock, dividends/capital and policy/state adjustments.
 - [x] Civic accounts and policy: up to two combined Moot Stewards, budget-gated hiring,
       explicit arrears for every public role, market-fee and positive-profit revenue,
       paid private procurement, weekly one-lever Reeve review, and pull-based daily
@@ -478,17 +483,40 @@ sell it dear. The M&B opening hour.
       posts one carried unit under their stable identity; custom quantities and asks remain
       part of merchant/business management.
 - [x] Coin as server-owned hero state, retained across reconnects for the running server.
-- [x] First player land/business ownership loop: exact Hall quotes, fee/processor-capital
-      escrow, bounded unused-permit tray and refunds, magnetic Hall-connected road frontage,
+- [x] First player land/business ownership loop: explicit Hall incorporation and capital
+      contribution, a visible multi-company `ACTING AS` selector, company-only business permits,
+      refundable permit fees, advisory working-capital recommendations, bounded unused-permit tray,
+      magnetic Hall-connected road frontage,
       Shift free placement, Farmstead field previews, live farm/timber quality, and
       server-authoritative plot/access validation. Accepted plots enter the ordinary physical
       Wood and business pipeline; player plots do not consume municipal crew capacity. Selecting
       the hero and right-clicking their site starts interruptible physical supply/construction,
       completion returns the hero to player control, and same-tick plot claims cannot overlap.
 - [x] Player business controls for strategy/autopilot, asking prices, adaptive or fixed wages,
-      Hall collection, processor procurement/bid ceilings, retained/automatic profits and an
-      immediate protected-profit withdrawal. The
-      server proves stable ownership and mutates the same policies consumed by NPC autopilot.
+      enabled positions, Hall collection, processor coverage/bid/sourcing rules, branch-level
+      retained/sale stock and retained/automatic company dividends. The server proves Company
+      Master authority and mutates the same policies consumed by NPC autopilot.
+- [x] Company layer above operating sites: stable `CompanyId`, exactly 1,000 whole ordinary
+      shares, a separately appointed Company Master, one authoritative treasury and consolidated liabilities,
+      tax and pro-rata dividends. Shareholders can post and fill bounded public offers without
+      changing issued shares or company cash; majority holders can appoint the Master.
+- [x] Same-company vertical integration: per-input `PreferOwned`, `CheapestAvailable` and
+      `OwnedOnly` sourcing, public-surplus reservation, tactical door-to-door Moot Steward
+      carriage, strategic parity, one-penny-per-bulk civic delivery fees and elimination of
+      equal internal site memoranda from company profit.
+- [x] Settlement-local company logistics: one global treasury but independent physical branch
+      inventory, absolute per-good retain/sell rules, finite 2,400-bulk Storage Halls and up to
+      four private Company Porters. Private trips remain in-town and replace the civic fee with
+      ordinary company wages; cross-town stock still requires the future caravan phase.
+- [x] Operator staffing targets: every private site exposes zero through its physical position
+      maximum, vacancy matching obeys the target, and a porter finishes an active shipment before
+      the closing position releases them.
+- [x] Company-funded expansion: an established Company's retained cash buys its business
+      permit only after its decision tree considers wage/tax liabilities, payroll runway and
+      recommended operating cash. Working capital remains ordinary treasury cash. Explicit
+      personal funding is a capital contribution; permit/building value is capital
+      expenditure and book value rather than an operating expense. Site and consolidated
+      histories/UI expose the complete boundary.
 
 **Does NOT need flow fields.** The old build order claimed the cart required them. A hand
 cart is one unit following one order, which the hero loop already does end to end.
@@ -558,10 +586,12 @@ you are logged off.
       Shared 100-point Health, replication, inspection and the zero-Health death/estate
       pipeline now exist, but weapons, attacks, armour, healing and combat damage do not.
       Those combat systems remain the largest hidden cost in the roadmap.
-- [ ] Hiring, wages, upkeep
-- [ ] Player-facing business acquisition/control and offline income. The autonomous NPC
-      firm engine, accounting, strategy policies, procurement and bankruptcy states exist;
-      player commands and persistence do not.
+- [ ] Retinue hiring, military wages, equipment and campaign upkeep. Civilian business and
+      civic hiring/payroll are already live in Phases 3–4.
+- [ ] Complete player business acquisition and offline income. Live-server permits,
+      construction, site/company controls, share trading and company-funded expansion exist;
+      purchasing an existing listed firm with pooled company cash and durable restart
+      persistence remain open.
 - [ ] Combat-specific loss/respawn policy for hero and retinue. Zero-Health despawn and
       hero-slot cleanup already exist; the open decision is what a defeated player may
       create or recover afterward.

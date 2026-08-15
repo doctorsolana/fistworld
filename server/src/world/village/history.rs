@@ -12,21 +12,21 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, MessageSender};
 
 use shared::components::{
-    BuildingId, BuildingOf, CivicEmployment, EmployedAt, MootAdministration, Nutrition, OwnedBy,
-    PersonId, ResidentOf, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
-    SettlementPolicies, WorldTime,
+    BuildingId, BuildingOf, CivicEmployment, CompanyId, EmployedAt, MootAdministration, Nutrition,
+    OperatedBy, OwnedBy, PersonId, ResidentOf, Settlement, SettlementBuilding,
+    SettlementBuildingKind, SettlementId, SettlementPolicies, WorldTime,
 };
 use shared::economy::{
     business_working_capital, BusinessAccount, BusinessCondition, BusinessDayLedger,
     BusinessHistoryArchive, BusinessHistoryDay, BusinessManagementPolicy,
-    BusinessProcurementPolicy, BusinessSalePolicy, BusinessWagePolicy, CivicAccount,
-    CivicHistoryDay, Good, GoodsInventory, HouseholdEconomy, MarketGoodHistoryDay, MarketSeller,
-    MootMarket, SettlementEconomy, SettlementHistoryArchive, SettlementHistoryDay, Wallet,
-    WorldHistoryArchive, WorldHistoryDay, SETTLEMENT_HISTORY_DAYS,
+    BusinessProcurementPolicy, BusinessSalePolicy, BusinessStaffingPolicy, BusinessWagePolicy,
+    CivicAccount, CivicHistoryDay, CompanyHistoryArchive, Good, GoodsInventory, HouseholdEconomy,
+    MarketGoodHistoryDay, MarketSeller, MootMarket, SettlementEconomy, SettlementHistoryArchive,
+    SettlementHistoryDay, Wallet, WorldHistoryArchive, WorldHistoryDay, SETTLEMENT_HISTORY_DAYS,
 };
 use shared::protocol::{
-    ReliableChannel, RequestSettlementHistory, RequestWorldHistory, SettlementHistoryResponse,
-    WorldHistoryResponse,
+    CompanyHistoryResponse, ReliableChannel, RequestCompanyHistory, RequestSettlementHistory,
+    RequestWorldHistory, SettlementHistoryResponse, WorldHistoryResponse,
 };
 
 use super::SettlementEconomyRuntime;
@@ -52,13 +52,16 @@ struct SettlementAggregate {
 struct BusinessSnapshot {
     id: BuildingId,
     settlement: SettlementId,
+    company_id: Option<CompanyId>,
     kind: SettlementBuildingKind,
     owner_id: Option<PersonId>,
     owner_name: Option<String>,
     output_good: Option<Good>,
     account: BusinessAccount,
+    company_account: Option<shared::economy::CompanyAccount>,
     sale: BusinessSalePolicy,
     wage: BusinessWagePolicy,
+    staffing: BusinessStaffingPolicy,
     management: BusinessManagementPolicy,
     procurement: BusinessProcurementPolicy,
     condition: BusinessCondition,
@@ -67,6 +70,7 @@ struct BusinessSnapshot {
 
 struct BusinessHistoryRecord {
     settlement: SettlementId,
+    company_id: Option<CompanyId>,
     kind: SettlementBuildingKind,
     owner_id: Option<PersonId>,
     owner_name: Option<String>,
@@ -101,6 +105,7 @@ impl SettlementHistoryRuntime {
                 .entry(snapshot.id)
                 .or_insert_with(|| BusinessHistoryRecord {
                     settlement: snapshot.settlement,
+                    company_id: snapshot.company_id,
                     kind: snapshot.kind,
                     owner_id: snapshot.owner_id,
                     owner_name: snapshot.owner_name.clone(),
@@ -111,6 +116,7 @@ impl SettlementHistoryRuntime {
         // A takeover keeps the firm's stable history but updates its current
         // owner metadata for future UI and lab reports.
         record.settlement = snapshot.settlement;
+        record.company_id = snapshot.company_id;
         record.kind = snapshot.kind;
         record.owner_id = snapshot.owner_id;
         record.owner_name.clone_from(&snapshot.owner_name);
@@ -135,6 +141,7 @@ impl SettlementHistoryRuntime {
             .map(|(id, record)| BusinessHistoryArchive {
                 id: *id,
                 settlement: record.settlement,
+                company_id: record.company_id,
                 kind: record.kind,
                 owner_id: record.owner_id,
                 owner_name: record.owner_name.clone(),
@@ -162,6 +169,7 @@ impl SettlementHistoryRuntime {
             .map(|(id, record)| BusinessHistoryArchive {
                 id: *id,
                 settlement: record.settlement,
+                company_id: record.company_id,
                 kind: record.kind,
                 owner_id: record.owner_id,
                 owner_name: record.owner_name.clone(),
@@ -176,6 +184,29 @@ impl SettlementHistoryRuntime {
     pub fn world_archive(&self) -> WorldHistoryArchive {
         WorldHistoryArchive {
             days: self.world_days.iter().cloned().collect(),
+        }
+    }
+
+    pub fn company_archive(&self, company: CompanyId) -> CompanyHistoryArchive {
+        let mut businesses: Vec<_> = self
+            .business_days
+            .iter()
+            .filter(|(_, record)| record.company_id == Some(company))
+            .map(|(id, record)| BusinessHistoryArchive {
+                id: *id,
+                settlement: record.settlement,
+                company_id: record.company_id,
+                kind: record.kind,
+                owner_id: record.owner_id,
+                owner_name: record.owner_name.clone(),
+                output_good: record.output_good,
+                days: record.days.iter().copied().collect(),
+            })
+            .collect();
+        businesses.sort_unstable_by_key(|business| business.id);
+        CompanyHistoryArchive {
+            company,
+            businesses,
         }
     }
 
@@ -323,10 +354,12 @@ pub fn capture_settlement_history(
         Option<&HouseholdEconomy>,
         Option<&BusinessSalePolicy>,
         Option<&BusinessWagePolicy>,
+        Option<&BusinessStaffingPolicy>,
         Option<&BusinessManagementPolicy>,
         Option<&BusinessProcurementPolicy>,
         Option<&BusinessCondition>,
         Option<&OwnedBy>,
+        Option<&OperatedBy>,
     )>,
     residents: Query<(
         &ResidentOf,
@@ -337,6 +370,7 @@ pub fn capture_settlement_history(
         Option<&GoodsInventory>,
     )>,
     employment: Query<&EmployedAt>,
+    companies: Query<(&CompanyId, &shared::economy::CompanyAccount)>,
 ) {
     let Some(day) = world_time.iter().next().map(|time| time.day) else {
         return;
@@ -355,6 +389,11 @@ pub fn capture_settlement_history(
     }
     let mut aggregates: HashMap<SettlementId, SettlementAggregate> = HashMap::new();
     let mut business_snapshots: HashMap<SettlementId, Vec<BusinessSnapshot>> = HashMap::new();
+    let company_accounts: HashMap<CompanyId, shared::economy::CompanyAccount> = companies
+        .iter()
+        .map(|(id, account)| (*id, *account))
+        .collect();
+    let mut counted_company_cash = HashSet::<(SettlementId, CompanyId)>::new();
     for (
         building_id,
         building_of,
@@ -364,10 +403,12 @@ pub fn capture_settlement_history(
         household_economy,
         sale,
         wage,
+        staffing,
         management,
         procurement,
         condition,
         owner,
+        operated_by,
     ) in buildings.iter()
     {
         let aggregate = aggregates.entry(building_of.0).or_default();
@@ -379,19 +420,29 @@ pub fn capture_settlement_history(
                 | SettlementBuildingKind::FishermansHut
                 | SettlementBuildingKind::Windmill
                 | SettlementBuildingKind::Bakery
+                | SettlementBuildingKind::StorageHall
         ) {
             aggregate.productive_buildings = aggregate.productive_buildings.saturating_add(1);
         }
-        aggregate.work_positions = aggregate
-            .work_positions
-            .saturating_add(u16::from(building.kind.positions()));
+        aggregate.work_positions = aggregate.work_positions.saturating_add(u16::from(
+            staffing
+                .copied()
+                .unwrap_or_else(|| BusinessStaffingPolicy::new(building.kind.positions()))
+                .target_for(building.kind),
+        ));
         aggregate.filled_jobs = aggregate
             .filled_jobs
             .saturating_add(filled_jobs.get(building_id).copied().unwrap_or(0));
         add_inventory(&mut aggregate.stock, inventory);
-        aggregate.business_cash = aggregate
-            .business_cash
-            .saturating_add(business_account.map_or(0, |account| account.cash));
+        if let Some(company) = operated_by.map(|company| company.0) {
+            if counted_company_cash.insert((building_of.0, company)) {
+                aggregate.business_cash = aggregate.business_cash.saturating_add(
+                    company_accounts
+                        .get(&company)
+                        .map_or(0, |account| account.cash),
+                );
+            }
+        }
         aggregate.business_wage_arrears = aggregate
             .business_wage_arrears
             .saturating_add(business_account.map_or(0, |account| account.wage_arrears));
@@ -416,16 +467,23 @@ pub fn capture_settlement_history(
                 .push(BusinessSnapshot {
                     id: *building_id,
                     settlement: building_of.0,
+                    company_id: operated_by.map(|company| company.0),
                     kind: building.kind,
                     owner_id: owner.map(|owner| owner.0),
                     owner_name: building.owner.clone(),
                     output_good,
                     account,
+                    company_account: operated_by
+                        .and_then(|company| company_accounts.get(&company.0))
+                        .copied(),
                     sale: sale.copied().unwrap_or_else(|| {
                         output_good
                             .map_or_else(BusinessSalePolicy::default, BusinessSalePolicy::for_good)
                     }),
                     wage: wage.copied().unwrap_or_default(),
+                    staffing: staffing
+                        .copied()
+                        .unwrap_or_else(|| BusinessStaffingPolicy::new(building.kind.positions())),
                     management: management.copied().unwrap_or_default(),
                     procurement: procurement.copied().unwrap_or_default(),
                     condition: condition.copied().unwrap_or_default(),
@@ -559,6 +617,7 @@ pub fn capture_settlement_history(
                         observed: civic_observed,
                         permit_income: civic_ledger.permit_income,
                         market_fee_income: civic_ledger.market_fee_income,
+                        delivery_fee_income: civic_ledger.delivery_fee_income,
                         profit_tax_income: civic_ledger.profit_tax_income,
                         public_sale_income: civic_ledger.public_sale_income,
                         wage_expense: civic_ledger.wage_expense,
@@ -620,37 +679,58 @@ pub fn capture_settlement_history(
                     BusinessHistoryDay {
                         day: completed_day,
                         observed,
-                        cash: snapshot.account.cash,
+                        cash: snapshot.company_account.map_or(0, |account| account.cash),
                         protected_working_capital: business_working_capital(
-                            snapshot.kind.positions(),
+                            snapshot.staffing.target_for(snapshot.kind),
                             &snapshot.wage,
                             &snapshot.management,
                             &snapshot.procurement,
                             Some(&market),
                         )
                         .total_with_liabilities(&snapshot.account),
-                        withdrawable_profit: snapshot.account.withdrawable_profit(
-                            business_working_capital(
-                                snapshot.kind.positions(),
-                                &snapshot.wage,
-                                &snapshot.management,
-                                &snapshot.procurement,
-                                Some(&market),
-                            )
-                            .total(),
+                        withdrawable_profit: snapshot.account.retained_profit().min(
+                            snapshot.company_account.map_or(0, |company| {
+                                company
+                                    .cash
+                                    .saturating_sub(company.wage_arrears)
+                                    .saturating_sub(company.tax_arrears)
+                                    .saturating_sub(
+                                        business_working_capital(
+                                            snapshot.staffing.target_for(snapshot.kind),
+                                            &snapshot.wage,
+                                            &snapshot.management,
+                                            &snapshot.procurement,
+                                            Some(&market),
+                                        )
+                                        .total(),
+                                    )
+                            }),
                         ),
                         wage_arrears: snapshot.account.wage_arrears,
                         tax_arrears: snapshot.account.tax_arrears,
                         gross_revenue: if observed { ledger.gross_revenue } else { 0 },
+                        internal_revenue: if observed { ledger.internal_revenue } else { 0 },
                         wage_expense: if observed { ledger.wage_expense } else { 0 },
                         input_expense: if observed { ledger.input_expense } else { 0 },
+                        internal_input_expense: if observed {
+                            ledger.internal_input_expense
+                        } else {
+                            0
+                        },
                         market_fees: if observed { ledger.market_fees } else { 0 },
+                        delivery_fees: if observed { ledger.delivery_fees } else { 0 },
                         profit_taxes: if observed { ledger.profit_taxes } else { 0 },
                         owner_withdrawals: if observed {
                             ledger.owner_withdrawals
                         } else {
                             0
                         },
+                        capital_expenditures: if observed {
+                            ledger.capital_expenditures
+                        } else {
+                            0
+                        },
+                        book_value: snapshot.account.book_value,
                         profit: if observed { ledger.profit() } else { 0 },
                         produced_units: if observed { ledger.produced_units } else { 0 },
                         sold_units: if observed { ledger.sold_units } else { 0 },
@@ -738,6 +818,31 @@ pub fn handle_world_history_requests(
     }
 }
 
+pub fn handle_company_history_requests(
+    history: Res<SettlementHistoryRuntime>,
+    companies: Query<&CompanyId>,
+    mut clients: Query<
+        (
+            &mut MessageReceiver<RequestCompanyHistory>,
+            &mut MessageSender<CompanyHistoryResponse>,
+        ),
+        With<ClientOf>,
+    >,
+) {
+    for (mut receiver, mut sender) in clients.iter_mut() {
+        for request in receiver.receive() {
+            // Do not turn arbitrary ids into an archive oracle. The requested
+            // stable identity must still be a live replicated company.
+            if !companies.iter().any(|company| *company == request.company) {
+                continue;
+            }
+            sender.send::<ReliableChannel>(CompanyHistoryResponse {
+                archive: history.company_archive(request.company),
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -820,13 +925,16 @@ mod tests {
         let snapshot = BusinessSnapshot {
             id: BuildingId(42),
             settlement: settlement_id,
+            company_id: Some(CompanyId(8)),
             kind: SettlementBuildingKind::Farmstead,
             owner_id: Some(PersonId(3)),
             owner_name: Some("Edric".to_string()),
             output_good: Some(Good::Wheat),
             account: BusinessAccount::default(),
+            company_account: None,
             sale: BusinessSalePolicy::for_good(Good::Wheat),
             wage: BusinessWagePolicy::default(),
+            staffing: BusinessStaffingPolicy::new(1),
             management: BusinessManagementPolicy::default(),
             procurement: BusinessProcurementPolicy::default(),
             condition: BusinessCondition::default(),
@@ -845,11 +953,16 @@ mod tests {
                     wage_arrears: 0,
                     tax_arrears: 0,
                     gross_revenue: 10,
+                    internal_revenue: 0,
                     wage_expense: 4,
                     input_expense: 0,
+                    internal_input_expense: 0,
                     market_fees: 1,
+                    delivery_fees: 0,
                     profit_taxes: 0,
                     owner_withdrawals: 0,
+                    capital_expenditures: 0,
+                    book_value: 0,
                     profit: 5,
                     produced_units: 2,
                     sold_units: 1,
@@ -886,5 +999,48 @@ mod tests {
             history.business_days.is_empty(),
             "a firm remains inspectable for one year after closure, not forever"
         );
+    }
+
+    #[test]
+    fn company_archive_spans_settlements_and_excludes_other_companies() {
+        let make_snapshot = |id, settlement, company| BusinessSnapshot {
+            id: BuildingId(id),
+            settlement: SettlementId(settlement),
+            company_id: Some(CompanyId(company)),
+            kind: SettlementBuildingKind::Farmstead,
+            owner_id: Some(PersonId(3)),
+            owner_name: Some("Edric".to_string()),
+            output_good: Some(Good::Wheat),
+            account: BusinessAccount::default(),
+            company_account: None,
+            sale: BusinessSalePolicy::for_good(Good::Wheat),
+            wage: BusinessWagePolicy::default(),
+            staffing: BusinessStaffingPolicy::new(1),
+            management: BusinessManagementPolicy::default(),
+            procurement: BusinessProcurementPolicy::default(),
+            condition: BusinessCondition::default(),
+            stock: [0; Good::COUNT],
+        };
+        let first = make_snapshot(41, 10, 7);
+        let second = make_snapshot(42, 20, 7);
+        let outsider = make_snapshot(43, 10, 8);
+        let day = BusinessHistoryDay {
+            day: 12,
+            observed: true,
+            gross_revenue: 500,
+            ..default()
+        };
+        let mut history = SettlementHistoryRuntime::default();
+        history.push_business(&first, day);
+        history.push_business(&second, day);
+        history.push_business(&outsider, day);
+
+        let archive = history.company_archive(CompanyId(7));
+        assert_eq!(archive.company, CompanyId(7));
+        assert_eq!(archive.businesses.len(), 2);
+        assert_eq!(archive.businesses[0].id, BuildingId(41));
+        assert_eq!(archive.businesses[1].id, BuildingId(42));
+        assert_eq!(archive.businesses[0].settlement, SettlementId(10));
+        assert_eq!(archive.businesses[1].settlement, SettlementId(20));
     }
 }

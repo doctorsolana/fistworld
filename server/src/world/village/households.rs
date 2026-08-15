@@ -81,6 +81,7 @@ pub fn update_household_budgets_and_pantries(
             With<HomeRoutine>,
             With<WorkplaceDoorTransit>,
             With<MarketCollectionRoutine>,
+            With<InternalDeliveryRoutine>,
             With<MootQueueTicket>,
             With<MootMealRoutine>,
         )>,
@@ -664,6 +665,7 @@ pub fn run_household_schedules(
             With<HouseholdShoppingRoutine>,
         )>,
     >,
+    carried_inventories: Query<&GoodsInventory, With<CharacterKind>>,
     mut villagers: Query<
         (
             Entity,
@@ -716,6 +718,20 @@ pub fn run_household_schedules(
 
         let Some(mut routine) = routine else {
             if is_day {
+                continue;
+            }
+            // Production owns the worker until its last physical load reaches
+            // the workplace store. Sending a loaded farmer, fisher or
+            // woodcutter home here used to reset the trade phase first; their
+            // goods then remained in personal inventory overnight and were
+            // often not unloaded until part-way through the next shift.
+            let returning_workplace_goods =
+                carried_inventories.get(villager).is_ok_and(|inventory| {
+                    (farmer.is_some() && inventory.amount(Good::Wheat) > 0)
+                        || (fisher.is_some() && inventory.amount(Good::Food) > 0)
+                        || (lumberjack.is_some() && inventory.amount(Good::Wood) > 0)
+                });
+            if returning_workplace_goods {
                 continue;
             }
             let Some((home, _, home_position, home_rotation, _)) = assigned_home else {

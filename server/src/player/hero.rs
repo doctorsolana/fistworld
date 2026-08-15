@@ -685,14 +685,14 @@ mod tests {
 
     #[test]
     fn replicated_motion_ignores_tiny_step_noise_but_reports_stops_and_turns() {
-        let east = CharacterMotion::new(Vec3::new(3.2, 0.0, 0.0));
+        let east = CharacterMotion::new(Vec3::new(HERO_MOVE_SPEED, 0.0, 0.0));
         assert!(!motion_materially_changed(
             east,
-            CharacterMotion::new(Vec3::new(3.21, 0.0, 0.0))
+            CharacterMotion::new(Vec3::new(HERO_MOVE_SPEED + 0.01, 0.0, 0.0))
         ));
         assert!(motion_materially_changed(
             east,
-            CharacterMotion::new(Vec3::new(0.0, 0.0, 3.2))
+            CharacterMotion::new(Vec3::new(0.0, 0.0, HERO_MOVE_SPEED))
         ));
         assert!(motion_materially_changed(east, CharacterMotion::STATIONARY));
     }

@@ -1,7 +1,7 @@
 # Game architecture
 
 Decisions first recorded 2026-07-27 and reconciled with the live simulation on
-2026-08-05. Retrofitting these boundaries is expensive, so read this before extending
+2026-08-15. Retrofitting these boundaries is expensive, so read this before extending
 simulation code.
 
 The companion document [WORLD-DESIGN.md](WORLD-DESIGN.md) describes what runs ON this
@@ -10,11 +10,13 @@ to a realm. [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md) is the executable reference for
 ownership, municipal finance and settlement policy. The build order lives in
 [ROADMAP.md](ROADMAP.md).
 
-> **Status, audited 2026-08-05.** This remains a design record, with implementation state
+> **Status, audited 2026-08-15.** This remains a design record, with implementation state
 > marked **[not built]**, **[partial]** or **[done]**. The living-village foundation now
 > has stable world identities, one authoritative simulation clock, shared live/lab
 > scheduling, region-scoped settlement detail, a global settlement directory and an
-> aggregate off-screen economy. Politics, armies, combat and world-state persistence are
+> aggregate off-screen economy. Stable companies now add 1,000-share cap tables, one
+> treasury, site cost centres and settlement-local physical branches. Politics, armies,
+> combat and world-state persistence are
 > still unbuilt. Do not read an unmarked future rule as working code.
 
 ## The game
@@ -293,7 +295,7 @@ time any strategic entity exists**, before the machinery it constrains.
 
 The current village simulation uses these rules as hard boundaries:
 
-- **Identity is data, names are labels.** `PersonId`, `SettlementId` and `BuildingId` are
+- **Identity is data, names are labels.** `PersonId`, `SettlementId`, `BuildingId` and `CompanyId` are
   authoritative across regions, payroll, ownership, employment, housing, UI commands and
   serialized relationships. Legacy name rosters remain for readable panels and old-state
   migration only; the versioned world-state file itself is still a roadmap item.
@@ -320,7 +322,8 @@ The current village simulation uses these rules as hard boundaries:
   relief/reserve/staffing/subsidy policy model in
   `village/civic.rs`, business transaction settlement and
   owner strategy/solvency in `village/businesses/`, bounded firm/market/settlement
-  archives in `village/history.rs`, aggregate food/prosperity in
+  archives in `village/history.rs`, legal firms, pooled treasuries, shares and consolidated
+  ledgers in `village/companies.rs`, aggregate food/prosperity in
   `village/settlement_economy.rs`, household provisioning in `village/households.rs`,
   physical trades in `village/trades.rs`, production rates in `village/production.rs`,
   strategic LOD in `village/strategic.rs`, and shared ordering in `village/schedule.rs`.

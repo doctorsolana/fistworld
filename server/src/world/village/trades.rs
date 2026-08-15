@@ -469,6 +469,37 @@ pub fn run_farmer_routines(
             .kind
             .interior_door_position(farm_position.0, farm_rotation.0);
 
+        // A repeatedly impossible certified route must not become an
+        // unbounded A* loop. Preserve the same finite-inventory handoff, but
+        // collapse only this failed last leg after the retry budget is spent.
+        if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES
+            && inventories
+                .get_mut(worker)
+                .is_ok_and(|inventory| inventory.amount(Good::Wheat) > 0)
+        {
+            commands
+                .entity(worker)
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>();
+            *activity = CharacterActivity::Idle;
+            if unload_worker_output(&mut inventories, worker, routine.farmstead, Good::Wheat) {
+                warn!(
+                    "Farmer {} completed a loaded workplace handoff abstractly after {} failed routes",
+                    name.0, routine.failed_workplace_routes,
+                );
+                finish_farmer_shift(
+                    &mut commands,
+                    worker,
+                    production_day,
+                    &routine,
+                    &mut activity,
+                );
+            }
+            continue;
+        }
+
         if let Some(failed) = route_failed {
             let retry_target = match routine.phase {
                 FarmerPhase::WalkingToField { stand } => Some(stand),
@@ -485,9 +516,26 @@ pub fn run_farmer_routines(
                 .remove::<NavigationRouteFailed>()
                 .remove::<NavigationRoutePending>()
                 .remove::<TravelRoute>();
+            let carrying_wheat = inventories
+                .get_mut(worker)
+                .is_ok_and(|inventory| inventory.amount(Good::Wheat) > 0);
+            if carrying_wheat {
+                if routine.failed_workplace_routes == MAX_WORKPLACE_ROUTE_FAILURES {
+                    warn!(
+                        "Farmer {} still carries Wheat after {} failed workplace routes; retaining the load for a bounded last-leg handoff before going off duty",
+                        name.0, routine.failed_workplace_routes,
+                    );
+                }
+                if routine.failed_workplace_routes < MAX_WORKPLACE_ROUTE_FAILURES {
+                    commands.entity(worker).insert(MoveTarget(farm_entrance));
+                }
+                routine.phase = FarmerPhase::ReturningToFarmstead;
+                *activity = CharacterActivity::Idle;
+                continue;
+            }
             if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
                 warn!(
-                    "Farmer {} could not reach the workplace at {:.1},{:.1} after {} routes; ending this shift without discarding carried Wheat",
+                    "Farmer {} could not reach the workplace at {:.1},{:.1} after {} routes; ending the empty-handed shift",
                     name.0,
                     failed.goal.x,
                     failed.goal.z,
@@ -542,6 +590,13 @@ pub fn run_farmer_routines(
                 FarmerPhase::GoingToFarmstead
                     if ground_distance(position.0, farm_entrance) <= DOOR_REACH =>
                 {
+                    if inventories
+                        .get_mut(worker)
+                        .is_ok_and(|inventory| inventory.amount(Good::Wheat) > 0)
+                    {
+                        routine.phase = FarmerPhase::ReturningToFarmstead;
+                        continue;
+                    }
                     finish_farmer_shift(
                         &mut commands,
                         worker,
@@ -552,6 +607,14 @@ pub fn run_farmer_routines(
                     continue;
                 }
                 FarmerPhase::EndingShift => {
+                    if inventories
+                        .get_mut(worker)
+                        .is_ok_and(|inventory| inventory.amount(Good::Wheat) > 0)
+                    {
+                        ensure_move_target(&mut commands, worker, move_target, farm_entrance);
+                        routine.phase = FarmerPhase::ReturningToFarmstead;
+                        continue;
+                    }
                     finish_farmer_shift(
                         &mut commands,
                         worker,
@@ -570,6 +633,13 @@ pub fn run_farmer_routines(
                 if ground_distance(position.0, farm_entrance) <= DOOR_REACH {
                     routine.failed_workplace_routes = 0;
                     if !workday_active {
+                        if inventories
+                            .get_mut(worker)
+                            .is_ok_and(|inventory| inventory.amount(Good::Wheat) > 0)
+                        {
+                            routine.phase = FarmerPhase::ReturningToFarmstead;
+                            continue;
+                        }
                         finish_farmer_shift(
                             &mut commands,
                             worker,
@@ -677,10 +747,15 @@ pub fn run_farmer_routines(
                 }
                 routine.failed_workplace_routes = 0;
                 commands.entity(worker).remove::<MoveTarget>();
-                if let Ok([mut carrier, mut farm_store]) =
-                    inventories.get_many_mut([worker, routine.farmstead])
-                {
-                    carrier.transfer_to(&mut farm_store, Good::Wheat, u32::MAX);
+                let unloaded =
+                    unload_worker_output(&mut inventories, worker, routine.farmstead, Good::Wheat);
+                if !unloaded {
+                    // A full store is backpressure, not a licence to take
+                    // company stock home. Wait at the Farmstead until a porter
+                    // frees space, preserving every unit in personal cargo.
+                    *activity = CharacterActivity::Idle;
+                    routine.phase = FarmerPhase::ReturningToFarmstead;
+                    continue;
                 }
                 if !workday_active {
                     finish_farmer_shift(
@@ -705,6 +780,14 @@ pub fn run_farmer_routines(
                 };
             }
             FarmerPhase::EndingShift => {
+                if inventories
+                    .get_mut(worker)
+                    .is_ok_and(|inventory| inventory.amount(Good::Wheat) > 0)
+                {
+                    ensure_move_target(&mut commands, worker, move_target, farm_entrance);
+                    routine.phase = FarmerPhase::ReturningToFarmstead;
+                    continue;
+                }
                 finish_farmer_shift(
                     &mut commands,
                     worker,
@@ -1060,6 +1143,35 @@ pub fn run_fishing_routines(
             deck_end: fish_spot,
         };
 
+        if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES
+            && inventories
+                .get_mut(worker)
+                .is_ok_and(|inventory| inventory.amount(Good::Food) > 0)
+        {
+            commands
+                .entity(worker)
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>()
+                .remove::<PierTraversal>();
+            *activity = CharacterActivity::Idle;
+            if unload_worker_output(&mut inventories, worker, routine.hut, Good::Food) {
+                warn!(
+                    "Fisher completed a loaded workplace handoff abstractly after {} failed routes",
+                    routine.failed_workplace_routes,
+                );
+                finish_fishing_shift(
+                    &mut commands,
+                    worker,
+                    production_day,
+                    &routine,
+                    &mut activity,
+                );
+            }
+            continue;
+        }
+
         if let Some(failed) = route_failed {
             routine.failed_workplace_routes = routine.failed_workplace_routes.saturating_add(1);
             commands
@@ -1067,9 +1179,26 @@ pub fn run_fishing_routines(
                 .remove::<NavigationRouteFailed>()
                 .remove::<NavigationRoutePending>()
                 .remove::<TravelRoute>();
-            if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
+            let carrying_catch = inventories
+                .get_mut(worker)
+                .is_ok_and(|inventory| inventory.amount(Good::Food) > 0);
+            if carrying_catch {
+                if routine.failed_workplace_routes == MAX_WORKPLACE_ROUTE_FAILURES {
+                    warn!(
+                        "Fisher still carries a catch after {} failed workplace routes; retaining it for a bounded last-leg handoff before going off duty",
+                        routine.failed_workplace_routes,
+                    );
+                }
+                if routine.failed_workplace_routes < MAX_WORKPLACE_ROUTE_FAILURES {
+                    commands.entity(worker).insert(MoveTarget(entrance));
+                }
+                routine.phase = FishingPhase::ReturningToHut;
+                *activity = CharacterActivity::Idle;
+            } else if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES
+                || !workday_active
+            {
                 warn!(
-                    "Fisher could not reach the hut at {:.1},{:.1} after {} routes; ending this shift without discarding carried Food",
+                    "Fisher could not reach the hut at {:.1},{:.1} after {} routes; ending the empty-handed shift",
                     failed.goal.x,
                     failed.goal.z,
                     routine.failed_workplace_routes,
@@ -1127,6 +1256,13 @@ pub fn run_fishing_routines(
                     continue;
                 }
                 FishingPhase::GoingToHut if ground_distance(position.0, entrance) <= DOOR_REACH => {
+                    if inventories
+                        .get_mut(worker)
+                        .is_ok_and(|inventory| inventory.amount(Good::Food) > 0)
+                    {
+                        routine.phase = FishingPhase::ReturningToHut;
+                        continue;
+                    }
                     finish_fishing_shift(
                         &mut commands,
                         worker,
@@ -1137,6 +1273,14 @@ pub fn run_fishing_routines(
                     continue;
                 }
                 FishingPhase::EndingShift => {
+                    if inventories
+                        .get_mut(worker)
+                        .is_ok_and(|inventory| inventory.amount(Good::Food) > 0)
+                    {
+                        ensure_move_target(&mut commands, worker, move_target, entrance);
+                        routine.phase = FishingPhase::ReturningToHut;
+                        continue;
+                    }
                     finish_fishing_shift(
                         &mut commands,
                         worker,
@@ -1157,6 +1301,13 @@ pub fn run_fishing_routines(
                 if ground_distance(position.0, entrance) <= DOOR_REACH {
                     routine.failed_workplace_routes = 0;
                     if !workday_active {
+                        if inventories
+                            .get_mut(worker)
+                            .is_ok_and(|inventory| inventory.amount(Good::Food) > 0)
+                        {
+                            routine.phase = FishingPhase::ReturningToHut;
+                            continue;
+                        }
                         finish_fishing_shift(
                             &mut commands,
                             worker,
@@ -1278,10 +1429,12 @@ pub fn run_fishing_routines(
                 }
                 routine.failed_workplace_routes = 0;
                 commands.entity(worker).remove::<MoveTarget>();
-                if let Ok([mut carrier, mut hut_store]) =
-                    inventories.get_many_mut([worker, routine.hut])
-                {
-                    carrier.transfer_to(&mut hut_store, Good::Food, u32::MAX);
+                let unloaded =
+                    unload_worker_output(&mut inventories, worker, routine.hut, Good::Food);
+                if !unloaded {
+                    *activity = CharacterActivity::Idle;
+                    routine.phase = FishingPhase::ReturningToHut;
+                    continue;
                 }
                 if !workday_active {
                     finish_fishing_shift(
@@ -1299,6 +1452,14 @@ pub fn run_fishing_routines(
                 };
             }
             FishingPhase::EndingShift => {
+                if inventories
+                    .get_mut(worker)
+                    .is_ok_and(|inventory| inventory.amount(Good::Food) > 0)
+                {
+                    ensure_move_target(&mut commands, worker, move_target, entrance);
+                    routine.phase = FishingPhase::ReturningToHut;
+                    continue;
+                }
                 finish_fishing_shift(
                     &mut commands,
                     worker,
@@ -1590,6 +1751,34 @@ pub fn run_lumberjack_routines(
             .kind
             .interior_door_position(hut_position.0, hut_rotation.0);
 
+        if routine.failed_hut_routes >= MAX_WORKPLACE_ROUTE_FAILURES
+            && inventories
+                .get_mut(worker)
+                .is_ok_and(|inventory| inventory.amount(Good::Wood) > 0)
+        {
+            commands
+                .entity(worker)
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>();
+            *activity = CharacterActivity::Idle;
+            if unload_worker_output(&mut inventories, worker, routine.hut, Good::Wood) {
+                warn!(
+                    "Woodcutter {} completed a loaded workplace handoff abstractly after {} failed routes",
+                    name.0, routine.failed_hut_routes,
+                );
+                finish_lumberjack_shift(
+                    &mut commands,
+                    worker,
+                    production_day,
+                    &routine,
+                    &mut activity,
+                );
+            }
+            continue;
+        }
+
         if route_failed.is_some()
             && matches!(
                 routine.phase,
@@ -1604,9 +1793,29 @@ pub fn run_lumberjack_routines(
             // again; the planner can then use updated obstacle geometry or a
             // different A* corridor without losing the carried goods.
             routine.failed_hut_routes = routine.failed_hut_routes.saturating_add(1);
-            if routine.failed_hut_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
+            let carrying_wood = inventories
+                .get_mut(worker)
+                .is_ok_and(|inventory| inventory.amount(Good::Wood) > 0);
+            if carrying_wood {
+                if routine.failed_hut_routes == MAX_WORKPLACE_ROUTE_FAILURES {
+                    warn!(
+                        "Woodcutter {} still carries Wood after {} failed hut routes; retaining the load for a bounded last-leg handoff before going off duty",
+                        name.0, routine.failed_hut_routes,
+                    );
+                }
+                commands
+                    .entity(worker)
+                    .remove::<NavigationRouteFailed>()
+                    .remove::<NavigationRoutePending>()
+                    .remove::<TravelRoute>();
+                if routine.failed_hut_routes < MAX_WORKPLACE_ROUTE_FAILURES {
+                    commands.entity(worker).insert(MoveTarget(hut_entrance));
+                }
+                routine.phase = LumberjackPhase::ReturningToHut;
+                *activity = CharacterActivity::Idle;
+            } else if routine.failed_hut_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
                 warn!(
-                    "Woodcutter {} could not reach the hut at {:.1},{:.1} after {} routes; ending this shift without discarding carried Wood",
+                    "Woodcutter {} could not reach the hut at {:.1},{:.1} after {} routes; ending the empty-handed shift",
                     name.0,
                     failed.goal.x,
                     failed.goal.z,
@@ -1660,6 +1869,13 @@ pub fn run_lumberjack_routines(
                 LumberjackPhase::GoingToHut
                     if ground_distance(position.0, hut_entrance) <= DOOR_REACH =>
                 {
+                    if inventories
+                        .get_mut(worker)
+                        .is_ok_and(|inventory| inventory.amount(Good::Wood) > 0)
+                    {
+                        routine.phase = LumberjackPhase::ReturningToHut;
+                        continue;
+                    }
                     finish_lumberjack_shift(
                         &mut commands,
                         worker,
@@ -1670,6 +1886,14 @@ pub fn run_lumberjack_routines(
                     continue;
                 }
                 LumberjackPhase::EndingShift => {
+                    if inventories
+                        .get_mut(worker)
+                        .is_ok_and(|inventory| inventory.amount(Good::Wood) > 0)
+                    {
+                        ensure_move_target(&mut commands, worker, move_target, hut_entrance);
+                        routine.phase = LumberjackPhase::ReturningToHut;
+                        continue;
+                    }
                     finish_lumberjack_shift(
                         &mut commands,
                         worker,
@@ -1688,6 +1912,13 @@ pub fn run_lumberjack_routines(
                 if ground_distance(position.0, hut_entrance) <= DOOR_REACH {
                     routine.failed_hut_routes = 0;
                     if !workday_active {
+                        if inventories
+                            .get_mut(worker)
+                            .is_ok_and(|inventory| inventory.amount(Good::Wood) > 0)
+                        {
+                            routine.phase = LumberjackPhase::ReturningToHut;
+                            continue;
+                        }
                         finish_lumberjack_shift(
                             &mut commands,
                             worker,
@@ -1843,10 +2074,12 @@ pub fn run_lumberjack_routines(
                 }
                 routine.failed_hut_routes = 0;
                 commands.entity(worker).remove::<MoveTarget>();
-                if let Ok([mut carrier, mut hut_store]) =
-                    inventories.get_many_mut([worker, routine.hut])
-                {
-                    carrier.transfer_to(&mut hut_store, Good::Wood, u32::MAX);
+                let unloaded =
+                    unload_worker_output(&mut inventories, worker, routine.hut, Good::Wood);
+                if !unloaded {
+                    *activity = CharacterActivity::Idle;
+                    routine.phase = LumberjackPhase::ReturningToHut;
+                    continue;
                 }
                 if !workday_active {
                     finish_lumberjack_shift(
@@ -1871,6 +2104,14 @@ pub fn run_lumberjack_routines(
                 };
             }
             LumberjackPhase::EndingShift => {
+                if inventories
+                    .get_mut(worker)
+                    .is_ok_and(|inventory| inventory.amount(Good::Wood) > 0)
+                {
+                    ensure_move_target(&mut commands, worker, move_target, hut_entrance);
+                    routine.phase = LumberjackPhase::ReturningToHut;
+                    continue;
+                }
                 finish_lumberjack_shift(
                     &mut commands,
                     worker,
@@ -2299,6 +2540,22 @@ pub(super) fn exterior_door_clearance_position(building: Vec3, door: Vec3) -> Ve
 
 pub(super) fn ordinary_workday(clock: &WorldTime) -> bool {
     clock.is_ordinary_work_time()
+}
+
+/// Move one trade's physical output from its worker into the owning workplace.
+/// `false` means cargo remains (normally because finite workplace storage is
+/// full), so callers must retain the work routine rather than clocking off.
+fn unload_worker_output(
+    inventories: &mut Query<&mut GoodsInventory>,
+    worker: Entity,
+    workplace: Entity,
+    good: Good,
+) -> bool {
+    let Ok([mut carrier, mut store]) = inventories.get_many_mut([worker, workplace]) else {
+        return false;
+    };
+    carrier.transfer_to(&mut store, good, u32::MAX);
+    carrier.amount(good) == 0
 }
 
 /// A completed workplace can advertise positions one schedule pass before its

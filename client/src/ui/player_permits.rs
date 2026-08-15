@@ -10,9 +10,9 @@ use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
 use shared::components::{
-    ConstructionSite, Hero, PermitId, PlayerPermit, PlayerPermitLedger, PlayerPosition,
-    PlayerRotation, RoadOf, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
-    VillageRoad,
+    Company, CompanyId, ConstructionSite, Hero, PermitId, PlayerPermit, PlayerPermitLedger,
+    PlayerPosition, PlayerRotation, RoadOf, Settlement, SettlementBuilding, SettlementBuildingKind,
+    SettlementId, VillageRoad,
 };
 use shared::economy::{format_money, Wallet};
 use shared::protocol::{
@@ -33,6 +33,7 @@ pub struct PlayerPermitsPlugin;
 impl Plugin for PlayerPermitsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PendingPermitQuote>();
+        app.init_resource::<ActiveCompany>();
         app.init_resource::<PermitTrayOpen>();
         app.init_resource::<PermitPlacementPreview>();
         app.init_resource::<PermitPlacementControls>();
@@ -80,6 +81,12 @@ fn receive_construction_results(
 
 #[derive(Resource, Default, Debug, Clone)]
 pub(crate) struct PendingPermitQuote(pub Option<HeroPermitQuote>);
+
+/// The company identity used for the next company action. It is client-side
+/// presentation state only; every authoritative order still carries and
+/// revalidates the exact CompanyId.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ActiveCompany(pub Option<CompanyId>);
 
 #[derive(Resource, Default)]
 pub(crate) struct PermitTrayOpen(pub bool);
@@ -138,14 +145,15 @@ struct PlacementPreview {
 pub(crate) struct RequestPermitQuoteButton {
     pub hall: Entity,
     pub kind: SettlementBuildingKind,
+    pub company: Option<CompanyId>,
 }
 
 #[derive(Component)]
 pub(crate) struct PurchasePermitButton {
     pub hall: Entity,
     pub kind: SettlementBuildingKind,
+    pub company: Option<CompanyId>,
     pub fee: u64,
-    pub startup_capital: u64,
 }
 
 #[derive(Component)]
@@ -346,6 +354,7 @@ fn handle_property_permit_buttons(
             HeroPermitAction::RequestQuote {
                 hall: request.hall,
                 kind: request.kind,
+                company: request.company,
             },
             &mut clients,
         ) {
@@ -360,8 +369,8 @@ fn handle_property_permit_buttons(
             HeroPermitAction::Purchase {
                 hall: purchase.hall,
                 kind: purchase.kind,
+                company: purchase.company,
                 quoted_fee: purchase.fee,
-                quoted_startup_capital: purchase.startup_capital,
             },
             &mut clients,
         ) {
@@ -497,6 +506,7 @@ fn ensure_permit_tray(
         Option<&Wallet>,
     )>,
     settlements: Query<(&SettlementId, &Settlement, &PlayerPosition)>,
+    companies: Query<(&CompanyId, &Company)>,
     tray: Res<PermitTrayOpen>,
     placement: Res<WorldPlacementMode>,
     roots: Query<(Entity, &PermitTrayRoot)>,
@@ -510,7 +520,17 @@ fn ensure_permit_tray(
         }
         return;
     }
-    let signature = format!("{:?}|{}|{}", permits, tray.0, placement.is_armed());
+    let company_names: Vec<_> = companies
+        .iter()
+        .map(|(id, company)| (*id, company.name.clone()))
+        .collect();
+    let signature = format!(
+        "{:?}|{:?}|{}|{}",
+        permits,
+        company_names,
+        tray.0,
+        placement.is_armed()
+    );
     if roots.iter().any(|(_, root)| root.signature == signature) {
         return;
     }
@@ -570,6 +590,18 @@ fn ensure_permit_tray(
                     ));
                     for permit in permits {
                         let place = settlement_name(permit.settlement, &settlements);
+                        let owner = permit.company.map_or_else(
+                            || "Personal housing".to_string(),
+                            |id| {
+                                companies
+                                    .iter()
+                                    .find(|(candidate, _)| **candidate == id)
+                                    .map_or_else(
+                                        || format!("Company #{}", id.0),
+                                        |(_, company)| company.name.clone(),
+                                    )
+                            },
+                        );
                         panel
                             .spawn((
                                 Node {
@@ -599,8 +631,9 @@ fn ensure_permit_tray(
                                 ));
                                 card.spawn((
                                     Text::new(format!(
-                                        "Escrow {} coin | {} Wood required",
-                                        format_money(permit.total_escrow()),
+                                        "Owned by {} | paid fee {} coin | {} Wood required",
+                                        owner,
+                                        format_money(permit.fee_escrow),
                                         permit.kind.construction_wood_required()
                                     )),
                                     TextFont {
@@ -1134,6 +1167,7 @@ fn ensure_placement_status(
     placement: Res<WorldPlacementMode>,
     preview: Res<PermitPlacementPreview>,
     controls: Res<PermitPlacementControls>,
+    companies: Query<(&CompanyId, &Company)>,
     roots: Query<Entity, With<PlacementStatusRoot>>,
     mut headings: Query<
         &mut Text,
@@ -1276,10 +1310,23 @@ fn ensure_placement_status(
         return;
     }
     let status = preview.value.as_ref();
+    let owner = permit.company.map_or_else(
+        || "PERSONAL HOUSING".to_string(),
+        |id| {
+            companies
+                .iter()
+                .find(|(candidate, _)| **candidate == id)
+                .map_or_else(
+                    || format!("COMPANY #{}", id.0),
+                    |(_, company)| company.name.to_uppercase(),
+                )
+        },
+    );
     let heading = format!(
-        "PLACE {}  |  {}",
+        "PLACE {}  |  {}  |  OWNED BY {}",
         permit.kind.label(),
-        settlement_name.to_uppercase()
+        settlement_name.to_uppercase(),
+        owner,
     );
     let body = if controls.submission_pending {
         "Registering this plot with the Hall...".to_string()
