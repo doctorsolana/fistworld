@@ -534,7 +534,7 @@ mod tests {
                 Settlement {
                     name: "Tradeford".into(),
                     tier: SettlementTier::Village,
-                    residents: TOWN_MIN_RESIDENTS,
+                    residents: TOWN_MIN_RESIDENTS - 1,
                     treasury: 0,
                 },
                 economy,
@@ -556,6 +556,23 @@ mod tests {
         }
 
         for day in 1..=TOWN_REQUIRED_DAYS {
+            app.world_mut()
+                .entity_mut(clock)
+                .get_mut::<WorldTime>()
+                .unwrap()
+                .day = u32::from(day);
+            app.update();
+        }
+        assert_eq!(
+            app.world().get::<Settlement>(settlement).unwrap().tier,
+            SettlementTier::Village,
+            "prosperity and trade cannot bypass the 30-resident Town gate"
+        );
+        app.world_mut()
+            .get_mut::<Settlement>(settlement)
+            .unwrap()
+            .residents = TOWN_MIN_RESIDENTS;
+        for day in (TOWN_REQUIRED_DAYS + 1)..=(TOWN_REQUIRED_DAYS * 2) {
             app.world_mut()
                 .entity_mut(clock)
                 .get_mut::<WorldTime>()

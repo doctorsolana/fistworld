@@ -541,13 +541,27 @@ pub fn process_character_deaths(
                 if economy.shopper == Some(dead.id) {
                     economy.shopper = None;
                 }
-                economy.pennies = economy.pennies.saturating_add(estate_cash);
-                estate_cash = 0;
-                for good in Good::ALL {
-                    let accepted = pantry.add(good, remaining_goods[good.index()]);
-                    remaining_goods[good.index()] -= accepted;
+                if household.resident_ids.is_empty() {
+                    // An empty cabin is not a legal person. Keeping its shared
+                    // purse and pantry indefinitely trapped most circulating
+                    // coin and food after a starvation cascade. Fold the final
+                    // household estate into the same local treasury/hall path
+                    // used for an unhoused resident instead.
+                    estate_cash = estate_cash.saturating_add(std::mem::take(&mut economy.pennies));
+                    economy.shopper = None;
+                    for good in Good::ALL {
+                        remaining_goods[good.index()] = remaining_goods[good.index()]
+                            .saturating_add(pantry.remove(good, u32::MAX));
+                    }
+                } else {
+                    economy.pennies = economy.pennies.saturating_add(estate_cash);
+                    estate_cash = 0;
+                    for good in Good::ALL {
+                        let accepted = pantry.add(good, remaining_goods[good.index()]);
+                        remaining_goods[good.index()] -= accepted;
+                    }
+                    inherited_at_home = true;
                 }
-                inherited_at_home = true;
             }
         }
 
@@ -1145,6 +1159,108 @@ mod tests {
 
         advance_world_seconds(&mut app, 145.0);
         assert_eq!(app.world().get::<Health>(person).unwrap().current, 100.0);
+    }
+
+    #[test]
+    fn final_household_death_returns_the_shared_estate_to_the_settlement() {
+        let mut app = App::new();
+        app.init_resource::<MortalityLedger>()
+            .init_resource::<BusinessEventQueue>()
+            .init_resource::<CompanyEscrowRefundQueue>()
+            .add_systems(Update, process_character_deaths);
+        app.world_mut().spawn(WorldTime::new_default());
+        let settlement_id = shared::components::SettlementId(8);
+        let house_id = shared::components::BuildingId(9);
+        let dead_id = PersonId(10);
+        let hall = app
+            .world_mut()
+            .spawn((
+                settlement_id,
+                Settlement {
+                    name: "Estateford".into(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 1,
+                    treasury: 100,
+                },
+                GoodsInventory::new(100),
+                MootAdministration::default(),
+                MootMarket::founding(),
+            ))
+            .id();
+        let mut pantry = GoodsInventory::new(100);
+        pantry.add(Good::Bread, 2);
+        let house = app
+            .world_mut()
+            .spawn((
+                house_id,
+                shared::components::BuildingOf(settlement_id),
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::House,
+                    settlement: "Estateford".into(),
+                    owner: None,
+                    quality: 1.0,
+                    workers: Vec::new(),
+                },
+                Household {
+                    resident_ids: vec![dead_id],
+                    residents: vec!["Last Ada".into()],
+                },
+                HouseholdEconomy {
+                    pennies: 5 * PENNIES_PER_COIN,
+                    ..default()
+                },
+                pantry,
+            ))
+            .id();
+        let mut carried = GoodsInventory::new(100);
+        carried.add(Good::Flour, 1);
+        app.world_mut().spawn((
+            dead_id,
+            CharacterName("Last Ada".into()),
+            CharacterKind::Villager,
+            CharacterAffiliation::default(),
+            CharacterAttributes::default(),
+            Health {
+                current: 0.0,
+                ..default()
+            },
+            Nutrition {
+                consecutive_missed_meals: 11,
+                total_missed_meals: 11,
+                ..default()
+            },
+            LivesAt(house_id),
+            ResidentOf(settlement_id),
+            Wallet::new(3 * PENNIES_PER_COIN),
+            carried,
+        ));
+
+        app.update();
+
+        assert!(app
+            .world()
+            .get::<Household>(house)
+            .unwrap()
+            .resident_ids
+            .is_empty());
+        assert_eq!(
+            app.world().get::<HouseholdEconomy>(house).unwrap().pennies,
+            0,
+        );
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(house)
+                .unwrap()
+                .edible_amount(),
+            0,
+        );
+        assert_eq!(
+            app.world().get::<Settlement>(hall).unwrap().treasury,
+            9 * PENNIES_PER_COIN,
+        );
+        let hall_store = app.world().get::<GoodsInventory>(hall).unwrap();
+        assert_eq!(hall_store.amount(Good::Bread), 2);
+        assert_eq!(hall_store.amount(Good::Flour), 1);
     }
 
     #[test]

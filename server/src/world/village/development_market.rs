@@ -589,12 +589,13 @@ fn expected_daily_business(
     }
 }
 
-/// Cash escrowed with a processing permit so the finished firm can buy at
-/// least one complete physical recipe batch and meet its prudent one-person
-/// opening payroll. Extractors can begin with labour; processors cannot create
-/// their first sale without a real purchased input. When no input is listed
-/// yet, the owner budgets for a 2.6x supply shock rather than assuming base
-/// price is guaranteed; this is entry risk assessment, not a market price cap.
+/// Recommended processor working cash: enough for one complete physical recipe
+/// batch and prudent one-person opening payroll. It remains ordinary spendable
+/// company treasury cash; it is neither a second permit charge nor escrow.
+/// Extractors can begin with labour, while processors cannot make their first
+/// sale without real purchased input. With no quote, the owner budgets for a
+/// 2.6x supply shock rather than assuming base price; this is risk assessment,
+/// not a market price cap.
 pub fn minimum_startup_capital(kind: SettlementBuildingKind, market: Option<&MootMarket>) -> u64 {
     let Some(recipe) = super::processing_recipe(kind) else {
         return 0;

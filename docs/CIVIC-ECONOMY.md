@@ -118,8 +118,33 @@ separate daily history series. Substitute foods do not each claim the same wholl
 request: a household records product-specific rejection only for a good actually offered to it,
 while settlement food pressure records a market with no food at all.
 
+Household preference is not permission to ignore price. The shopper orders the
+currently listed foods by price per ration and uses Bread → Fish → Flour only to
+break equal-price ties. Bread can command a premium, but a household will buy
+affordable Fish or Flour before exhausting its necessities purse on luxury loaves.
+
+A household normally protects two personal discretionary coins per member while funding
+its three-day pantry target. That floor disappears when the pantry holds fewer than one
+ration per resident: preventing today's hunger outranks discretionary saving. Likewise,
+an autonomous founder protects three personal coins before contributing to a company;
+player contributions remain explicit. When a cabin loses its final member, it cannot
+remain a ghost owner: the empty household purse and pantry enter the local unclaimed
+estate and return to the treasury/hall.
+
+Company dividend protection values only missing processor inputs: inventory already at a
+site is working stock, not another future cash purchase. A multi-site company protects one
+shared two-coin operating buffer plus each site's real payroll, input shortfall and arrears.
+Profitable cash above that boundary can return to shareholders under the dividend policy,
+keeping household demand and company sales connected without inventing money.
+
 Delivery does not trigger payment. Unsold consignments remain the seller's goods, which
 prevents the hall from becoming an infinite public buyer.
+
+The Moot is also a bounded public shelf, not a warehouse. Each good may be consigned
+only up to its current population-derived target (with a four-unit bootstrap minimum),
+including loads already being carried there. Further surplus remains physically at the
+business or its Storage Hall until sales create shelf room. This prevents one glut such
+as Wheat from filling the hall and blocking Bread, Fish or Flour circulation.
 
 ### Positive-profit levy
 
@@ -150,6 +175,15 @@ drawable profit  = min(retained profit,
 The five owner strategies vary their payroll horizon, but never protect fewer than two
 days. Owner-contributed capital is not profit. Automatic owners therefore cannot empty a
 firm one evening and cause its next payroll or input order to fail the following morning.
+
+Automatic sale prices separate accounting cost from pricing cost. The ledger records the
+full coin actually spent when an input order arrives, even if that order covers several
+future days. The next price review estimates one output unit from observed wage cost per
+unit plus the current replacement-market cost of its recipe input; it does not load the
+entire bulk purchase onto that day's Flour or Bread. Selling out can raise the ask, while
+no sales or inventory growing at least twice as fast as sales triggers a bounded voluntary
+markdown. The sustainable-cost floor and each owner's strategy remain authoritative—there
+is no Hall price cap.
 
 ### Business lifecycle and liquidation
 
@@ -349,7 +383,8 @@ arrears honestly accumulate.
 Solvent households and unhoused residents shop first. `Surplus Only` then considers the
 residents who could not afford a ration. For each candidate, all of these must remain true:
 
-- recent food production covers the current resident count;
+- recent food production is active; it may temporarily trail a sudden population
+  increase because the protected stock floor below is the actual surplus test;
 - a physical ready-to-eat Bread or Fish listing exists at the Moot (raw Wheat and
   household-only Flour are never relief rations);
 - the treasury can pay its actual listed price;

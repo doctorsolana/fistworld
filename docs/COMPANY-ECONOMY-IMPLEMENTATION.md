@@ -83,11 +83,34 @@ completed business retains that exact identity; the server never guesses the
 oldest company and never silently falls back to a personal wallet.
 
 An established NPC company considers its prudent cash position before opening a
-site. Before the planner calls retained money "available", every site protects:
+site. Its most recently reviewed company strategy—not the founder's original
+temperament—is authoritative for subsequent investment. This lets a profitable
+firm deliberately enter Growth while a company with arrears or distressed sites
+moves to Cautious and stops compounding its problems. If one NPC happens to master
+several firms, autonomous planning selects the oldest stable `CompanyId`
+deterministically; player-issued permits still require the explicit `ACTING AS`
+selection described above. Before the planner calls retained money "available",
+every site protects:
 
+- a first-time or sole-owner NPC contributor's final three personal coins, so
+  founding a company cannot knowingly spend all immediate food liquidity;
 - unpaid wage claims;
 - unpaid tax claims;
 - the company's configured number of enabled-position payroll days.
+
+Processor input protection is a cash reserve for the shortfall between its
+configured target and the input already physically held at that site; owned
+stock is not repeatedly budgeted as though it still had to be purchased. The
+company also protects one ordinary two-coin operating buffer across its pooled
+treasury, not one duplicate buffer per cost centre. This distinction is
+load-bearing for circulation: a vertically integrated firm may retain prudent
+working capital without swallowing nearly every coin in a small settlement.
+
+The shared Moot inventory is a sales floor rather than free warehousing. A branch
+may consign each good only until that good's public target is full, counting stock
+already in a porter's cart. Excess stays at its producing site or Storage Hall and
+becomes eligible as households clear earlier listings. This keeps a Wheat glut from
+using every hall slot while food buyers wait for Bread, Fish or Flour.
 
 The company pays only the actual permit fee. Suggested opening capital for a
 processor—one input batch plus prudent opening payroll—is a decision/UI
@@ -136,10 +159,14 @@ rule, not the final inheritance design.
 
 A sole proprietor has no surviving shareholder. Their sites retain the old
 CompanyId while stock, company-funded permit refunds and creditor claims settle,
-then enter the ordinary property market. Once the last site is acquired into a
-new owner's company, an empty legal record is despawned only after its treasury
-and liabilities are both zero. `CompanyAccount` is authoritative money; a
-funded shell must never be retired merely because it has no current site.
+then enter the ordinary property market. Every completed site and active project
+records a sparse, stable branch settlement even while it uses default stock rules.
+Once the last site and permit leave an ownerless company, any unclaimed residual
+treasury escheats to that last known settlement before the legal shell is retired;
+coin can no longer remain trapped in a dead, site-less firm. A living shareholder
+may deliberately retain a funded empty company for a later investment. If an
+ownerless disconnected record has no known branch, the server preserves it rather
+than destroying money or guessing a recipient.
 
 ## Runtime design
 
@@ -176,12 +203,23 @@ funded shell must never be retired merely because it has no current site.
 - Survival order: obligations, payroll reserve, viable supply, turnaround, closure,
   investment, then shareholder distributions.
 - A small founder normally works at their own first site. Company leadership is not itself a second paid job, and successful Masters can step back only after an available replacement and protected payroll make that choice credible.
+- A person still holds exactly one active job. An off-shift employee who accepts a
+  private construction permit resigns first and relinquishes every old workplace
+  routine; someone in the middle of a shift is ineligible until that work is clear.
+  Civic construction remains part of the Reeve's single civic appointment.
 - New sites receive a probation period. The executable lifecycle is `New`, `Operating`,
   `Cash tight`, `Distressed`, `Insolvent`, `Liquidating`, `For sale` and `Closed`.
   Formal reduced-activity and mothball states remain future branch-lifecycle work.
 - Investment uses expected throughput, contribution margin, labour, inputs, logistics, permit/capital cost and remaining payroll runway.
-- Company Master attributes currently influence automatic strategic posture, while the
-  applicant's attributes, strategy and deterministic bias influence permit investment.
+- Daily automatic pricing uses the previous day's observed wage cost per output unit
+  plus the current replacement quote for exactly one unit's recipe inputs. Actual bulk
+  procurement remains a real ledger expense, but is not mistaken for every unit's cost
+  on the purchase day. Owners raise prices while scarce and selling through, and make
+  strategy-bounded markdowns when stock grows much faster than sales. These are private
+  decisions rather than municipal price controls.
+- Company Master attributes influence automatic strategic posture. Once a company exists,
+  its reviewed posture controls permit investment; founder attributes and deterministic
+  bias still distinguish first-time entrepreneurs and otherwise comparable opportunities.
   Richer forecast-error, patience and management-capacity modelling remains future work;
   no controller may see private competitor books.
 - Bounded executive history records Company Master, old/new strategy and a concrete reason.

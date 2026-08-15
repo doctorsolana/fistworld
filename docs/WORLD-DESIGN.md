@@ -594,7 +594,13 @@ with a player who does nothing but found the hall and put people on the map.
    speculative firms pay full price. Approval reserves its plot and
    transfers any fee immediately, but an observed applicant then takes a stable
    FIFO place in the Moot forecourt and collects the stamped permit before material
-   work begins. Strategic regions compress this short administrative trip.
+   work begins. Accepting a private construction project is itself a full-time
+   commitment: an off-shift employee resigns their existing workplace before the
+   permit is issued, clears that job's movement/routine authority, and becomes the
+   builder. An employee already performing their shift is not interrupted, and a
+   Reeve may still carry an explicitly civic project as part of that one civic job.
+   This prevents porter, farm or processor orders from competing with the worksite
+   for the same villager. Strategic regions compress this short administrative trip.
    The current physical search envelope is capped at 320 metres from the Moot
    Hall. That is a hard implementation boundary, not the final land-market model:
    continued immigration can still fill the envelope with free housing. The
@@ -864,16 +870,19 @@ with a player who does nothing but found the hall and put people on the map.
     unhoused residents gather outside the Moot after dark.
 18. Each cabin has a shared necessities purse and bounded pantry. Once per world
     day its residents contribute only enough to refill a three-day target while
-    retaining personal discretionary coin; an available household member is named
-    as shopper. In a tactical region that shopper joins the Moot's shared FIFO
+    retaining two personal discretionary coins whenever today's ration is already
+    covered. An empty same-day pantry removes that floor: households spend discretionary
+    coin before accepting hunger. An available household member is named as shopper.
+    In a tactical region that shopper joins the Moot's shared FIFO
     service line, buys physical stock at the counter and carries it home; strategic
     households settle the same bounded purchase directly. Each housed resident consumes
     exactly one physical pantry portion per day. Unhoused residents still buy one
     ration personally. If neither can afford food they go hungry unless the
     settlement has Poor Relief enabled. Solvent residents buy first; relief then
     spends general treasury coin at the same market ask only when recent production
-    covers the population and the subsidised ration leaves a full three-day
-    emergency reserve. Public money, sustainable production and surplus stock can
+    is active and the subsidised ration leaves a full three-day emergency reserve.
+    Production may temporarily trail a sudden population increase while that protected
+    stock exists. Public money, sustainable production and surplus stock can
     all run out. Housed households prefer Bread, then Fish, then Flour; Flour represents
     bread made in the cabin and raw Wheat is never edible. Unhoused personal buyers and
     Poor Relief require ready-to-eat Bread or Fish and also queue
@@ -909,7 +918,7 @@ with a player who does nothing but found the hall and put people on the map.
 19. Prosperity is a visible 0–100 breakdown, not an unexplained counter: food
     reserve contributes 40, recent production 30, housing coverage 20 and
     employment coverage 10, while hunger can subtract 30. A Hamlet with at
-    least four residents advances to Village after three consecutive days with
+    least 12 residents advances to Village after three consecutive days with
     at least three reserve days, recent production covering its population, no
     hunger, and prosperity of at least 65. The following rules extend that live
     ladder; decline remains design-only.
@@ -925,13 +934,14 @@ with a player who does nothing but found the hall and put people on the map.
     planning metadata in this slice, not yet physical fortifications.
 21. Village and Town progression is authoritative and inspectable. A Village
     requests a placeholder Marketplace and Tavern after survival shortages are
-    met, then becomes a Town with at least 12 residents, 50 coin of lifetime
+    met, then becomes a Town with at least 30 residents, 50 coin of lifetime
     Moot trade, prosperity 70 and all requirements sustained for three days. A
-    Town requests a placeholder Church and becomes a City with at least 24
+    Town requests a placeholder Church and becomes a City with at least 75
     residents, prosperity 75 and all requirements sustained for five days.
     These generated blockout boxes are semantic buildings with real plots,
     wood supply, staffing, storage, collision and door-connected roads; authored
-    art can replace them without changing progression.
+    art can replace them without changing progression. The City population
+    gate is provisional; 12/30 are the enacted Village and Town balance.
     The settlement entity itself also carries a replicated physical hall rung:
     Hamlet/Ruins use the Moot Hall, Village uses the Village Hall, and Town/City
     use the Town Hall until City Hall art exists. Promotion swaps only the visual,
@@ -1279,7 +1289,9 @@ The later player inventory/eating interaction will record outcomes on the same
 At zero Health the server resolves relationships before despawning the body. The
 stable `PersonId` leaves every private or civic job available; household membership
 is removed; personal money and carried goods enter the home purse/pantry, then the
-settlement hall if there is no home or capacity. Owned houses become unowned without
+settlement hall if there is no home or capacity. If the deceased was the cabin's final
+member, the now-ownerless shared purse and pantry also return to the local treasury/hall
+instead of remaining trapped in an empty building. Owned houses become unowned without
 evicting survivors. Productive businesses and unfinished private firms receive a
 replicated takeover listing. A local buyer pays the listed price into the firm's
 working capital—never into a ghost seller—and becomes its stable owner. Supplied

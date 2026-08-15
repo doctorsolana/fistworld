@@ -782,6 +782,18 @@ impl LabLifeLedger {
             starvation_deaths,
             deaths.len(),
         );
+        let mut deaths_by_day = std::collections::BTreeMap::<u32, usize>::new();
+        for (day, _) in deaths.values() {
+            *deaths_by_day.entry(*day).or_default() += 1;
+        }
+        println!(
+            "LAB mortality days=[{}]",
+            deaths_by_day
+                .into_iter()
+                .map(|(day, count)| format!("{day}:{count}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
         if self.people.is_empty() {
             println!("LAB wealth no residents recorded");
             return;
@@ -1448,6 +1460,11 @@ fn milestone(world: &mut World) -> StructureMilestone {
 
 #[allow(clippy::type_complexity)]
 fn people(world: &mut World) -> Vec<PersonView> {
+    let daylight = world
+        .query::<&WorldTime>()
+        .iter(world)
+        .next()
+        .is_none_or(WorldTime::is_day);
     let failed_routes: HashMap<_, _> = world
         .query::<(Entity, &NavigationRouteFailed)>()
         .iter(world)
@@ -1520,6 +1537,10 @@ fn people(world: &mut World) -> Vec<PersonView> {
             )
         })
         .collect();
+    let strategic_people: HashSet<_> = world
+        .query_filtered::<Entity, With<village::strategic::StrategicPerson>>()
+        .iter(world)
+        .collect();
     world
         .query::<(
             Entity,
@@ -1566,13 +1587,14 @@ fn people(world: &mut World) -> Vec<PersonView> {
                 let market_collection = market_collections.get(&entity);
                 let processor = processing_states.get(&entity);
                 let off_duty = off_duty_workers.get(&entity);
+                let strategic = strategic_people.contains(&entity);
                 let (work_status, occupation) = work_states
                     .get(&entity)
                     .map_or((None, None), |(status, occupation)| {
                         (*status, occupation.as_deref())
                     });
                 let state = format!(
-                    "{} {:?} {:?} pos={:.1},{:.1} target={} pending={} travel={} failed={} road={} farm={} wood={} fish={} process={} market={} home={} door={} off_duty={} work={:?}/{:?} bypass=[door:{door_collision_bypass},pier:{pier_collision_bypass},moot:{moot_transit}/{moot_ticket}] supply={} carry={:?}:{}",
+                    "{} {:?} {:?} pos={:.1},{:.1} target={} pending={} travel={} failed={} road={} farm={} wood={} fish={} process={} market={} home={} door={} off_duty={} strategic={} work={:?}/{:?} bypass=[door:{door_collision_bypass},pier:{pier_collision_bypass},moot:{moot_transit}/{moot_ticket}] supply={} carry={:?}:{}",
                     name.0,
                     intent,
                     activity,
@@ -1591,6 +1613,7 @@ fn people(world: &mut World) -> Vec<PersonView> {
                     home.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
                     door.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
                     off_duty.map_or("-", String::as_str),
+                    strategic,
                     work_status,
                     occupation,
                     construction.map_or_else(|| "-".to_string(), |value| format!("{value:?}")),
@@ -1601,7 +1624,15 @@ fn people(world: &mut World) -> Vec<PersonView> {
                     || pending.is_some()
                     || failed.is_some()
                     || door.is_some()
-                    || construction.is_some_and(|routine| !routine.is_waiting_for_materials())
+                    // Ordinary construction is deliberately suspended after
+                    // dark. A supplier may retain its delivery phase while
+                    // the queue handoff has already cleared MoveTarget; dawn
+                    // will issue the worksite target again. Keep detecting
+                    // that exact state as a stall in daylight, but do not
+                    // mistake a legitimate night pause for a deadlock.
+                    || (daylight
+                        && construction
+                            .is_some_and(|routine| !routine.is_waiting_for_materials()))
                     || (road.is_some() && home.is_none());
                 // Retry counters and route objects are diagnostics, not
                 // embodied progress. Using the full state string here let a
@@ -2192,6 +2223,9 @@ fn print_company_report(world: &mut World) {
     let mut one_site_craft_firms = 0usize;
     let mut multi_site_firms = 0usize;
     let mut integrated_firms = 0usize;
+    let mut empty_firms = 0usize;
+    let mut strategy_counts = [0usize; 5];
+    let mut decision_count = 0usize;
     for (id, company, leadership, ownership, account, management, decisions) in &companies {
         let mut company_sites: Vec<_> = sites.iter().filter(|site| site.0 == *id).collect();
         company_sites.sort_by_key(|site| site.1);
@@ -2205,9 +2239,21 @@ fn print_company_report(world: &mut World) {
         if company_sites.len() > 1 {
             multi_site_firms += 1;
         }
+        if company_sites.is_empty() {
+            empty_firms += 1;
+        }
         if vertically_integrated {
             integrated_firms += 1;
         }
+        let strategy_index = match management.strategy {
+            shared::economy::BusinessStrategy::Balanced => 0,
+            shared::economy::BusinessStrategy::Cautious => 1,
+            shared::economy::BusinessStrategy::Growth => 2,
+            shared::economy::BusinessStrategy::HighMargin => 3,
+            shared::economy::BusinessStrategy::Opportunistic => 4,
+        };
+        strategy_counts[strategy_index] += 1;
+        decision_count += decisions.entries().len();
         let sole_owner = ownership
             .shares()
             .first()
@@ -2309,8 +2355,18 @@ fn print_company_report(world: &mut World) {
         }
     }
     println!(
-        "LAB companies summary total={} ordinary_one_site_owner_master_workers={} multi_site={} vertically_integrated={}",
-        companies.len(), one_site_craft_firms, multi_site_firms, integrated_firms,
+        "LAB companies summary total={} ordinary_one_site_owner_master_workers={} multi_site={} vertically_integrated={} empty_living_holding={} strategies=[balanced:{}, cautious:{}, growth:{}, high_margin:{}, opportunistic:{}] decisions={}",
+        companies.len(),
+        one_site_craft_firms,
+        multi_site_firms,
+        integrated_firms,
+        empty_firms,
+        strategy_counts[0],
+        strategy_counts[1],
+        strategy_counts[2],
+        strategy_counts[3],
+        strategy_counts[4],
+        decision_count,
     );
 }
 
@@ -2631,10 +2687,22 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
             entry.2.insert(operated_by.0);
         }
     }
-    let purchasable: HashMap<String, u32> = world
+    let market_food: HashMap<String, (u32, [u64; 3])> = world
         .query::<(&Settlement, &MootMarket)>()
         .iter(world)
-        .map(|(settlement, market)| (settlement.name.clone(), market.listed_edible_units()))
+        .map(|(settlement, market)| {
+            (
+                settlement.name.clone(),
+                (
+                    market.listed_edible_units(),
+                    [
+                        market.pool(Good::Food).ask,
+                        market.pool(Good::Flour).ask,
+                        market.pool(Good::Bread).ask,
+                    ],
+                ),
+            )
+        })
         .collect();
     let mut economy_rows: Vec<_> = world
         .query::<(
@@ -2673,13 +2741,20 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
                         .join(",")
                 },
             );
+            let (purchasable, asks) = market_food
+                .get(&settlement.name)
+                .copied()
+                .unwrap_or((0, [0; 3]));
             format!(
-                "{}:{} pop={} stock={} purchasable={} at_businesses={} reserve={:.1}d prod={:.1}/d eaten={:.1}/d hungry={} prosperity={:.0} secure={}d company_cash={} business_arrears={} permits=[{}]",
+                "{}:{} pop={} stock={} purchasable={} asks=[fish:{} flour:{} bread:{}] at_businesses={} reserve={:.1}d prod={:.1}/d eaten={:.1}/d hungry={} prosperity={:.0} secure={}d company_cash={} business_arrears={} permits=[{}]",
                 settlement.name,
                 settlement.tier.label(),
                 settlement.residents,
                 economy.edible_stock,
-                purchasable.get(&settlement.name).copied().unwrap_or(0),
+                purchasable,
+                shared::economy::format_money(asks[0]),
+                shared::economy::format_money(asks[1]),
+                shared::economy::format_money(asks[2]),
                 business_food,
                 economy.reserve_days,
                 economy.recent_food_production,
@@ -3735,6 +3810,91 @@ fn assert_economy_soak_outcome(world: &mut World, evidence: &Evidence) {
         .query::<&GoodsInventory>()
         .iter(world)
         .all(|inventory| inventory.used_bulk() <= inventory.bulk_capacity()));
+    for (household, economy, pantry) in world
+        .query::<(&Household, &HouseholdEconomy, &GoodsInventory)>()
+        .iter(world)
+    {
+        if household.resident_ids.is_empty() {
+            assert_eq!(
+                economy.pennies, 0,
+                "an empty household retained a ghost necessities purse",
+            );
+            assert!(
+                pantry.is_empty(),
+                "an empty household retained food or goods outside the estate flow",
+            );
+        }
+    }
+
+    let living_people: HashSet<PersonId> = world
+        .query::<(&PersonId, &Health)>()
+        .iter(world)
+        .filter_map(|(person, health)| (!health.is_dead()).then_some(*person))
+        .collect();
+    let companies: HashMap<CompanyId, CompanyOwnership> = world
+        .query::<(&CompanyId, &CompanyOwnership)>()
+        .iter(world)
+        .map(|(company, ownership)| (*company, ownership.clone()))
+        .collect();
+    let active_companies: HashSet<CompanyId> = world
+        .query::<&OperatedBy>()
+        .iter(world)
+        .map(|company| company.0)
+        .collect();
+    for (company, ownership) in &companies {
+        assert_eq!(
+            ownership
+                .shares()
+                .iter()
+                .map(|holding| u32::from(holding.shares))
+                .sum::<u32>(),
+            u32::from(COMPANY_TOTAL_SHARES),
+            "company #{} lost part of its 1,000-share cap table",
+            company.0,
+        );
+        assert!(
+            active_companies.contains(company)
+                || ownership
+                    .shares()
+                    .iter()
+                    .any(|holding| living_people.contains(&holding.shareholder)),
+            "ownerless company #{} survived without a site or living shareholder",
+            company.0,
+        );
+    }
+    for (building, owner, operated_by) in world
+        .query::<(&SettlementBuilding, Option<&OwnedBy>, Option<&OperatedBy>)>()
+        .iter(world)
+        .filter(|(building, _, _)| village::is_private_business(building.kind))
+    {
+        let company = operated_by.unwrap_or_else(|| {
+            panic!(
+                "private {} in '{}' has no legal operating company",
+                building.kind.label(),
+                building.settlement,
+            )
+        });
+        let company_id = company.0;
+        assert!(
+            companies.contains_key(&company_id),
+            "private {} in '{}' refers to missing company #{}",
+            building.kind.label(),
+            building.settlement,
+            company_id.0,
+        );
+        if let Some(owner) = owner {
+            assert!(
+                companies
+                    .get(&company_id)
+                    .is_some_and(|ownership| ownership.share_count(owner.0) > 0),
+                "owner #{} holds no shares in company #{} operating their {} in '{}'",
+                owner.0 .0,
+                company_id.0,
+                building.kind.label(),
+                building.settlement,
+            );
+        }
+    }
 }
 
 /// Long-running diagnostic entrypoint. Ignored in ordinary `cargo test`; use
@@ -3870,12 +4030,14 @@ fn village_simulation_lab() {
         }
         let structure = milestone(world);
         if last_structure.as_ref() != Some(&structure) {
-            let structure_log_interval = if scenario.is_economy_soak() {
+            let structure_log_interval = if verbose {
+                0.0
+            } else if scenario.is_economy_soak() {
                 REPORT_SECONDS
             } else if scenario.is_crowd_stress() {
                 60.0
             } else {
-                0.0
+                REPORT_SECONDS
             };
             if structure_log_interval == 0.0 || sim_seconds >= next_stress_structure_log {
                 println!("LAB event t={:.1}m {structure:?}", sim_seconds / 60.0);
@@ -3891,7 +4053,13 @@ fn village_simulation_lab() {
                 let progress = person_progress
                     .entry(person.entity)
                     .or_insert_with(|| (person.progress_key.clone(), sim_seconds));
-                if progress.0 != person.progress_key {
+                // Only consecutive time spent in an actively progress-owned
+                // state counts as a stall. A completed route can briefly
+                // leave its diagnostic TravelRoute behind after MoveTarget is
+                // gone; if that same actor later begins a door crossing from
+                // the same rounded position, carrying the old inactive age
+                // forward produces an immediate false stall.
+                if progress.0 != person.progress_key || !person.active_progress_expected {
                     *progress = (person.progress_key.clone(), sim_seconds);
                 } else if person.active_progress_expected
                     && sim_seconds - progress.1 > STALL_SECONDS

@@ -1022,23 +1022,32 @@ impl CompanyBranchPolicies {
             })
     }
 
+    /// Record that the company operates in this settlement even when every
+    /// resource still uses its default policy. The legal/economic simulation
+    /// also uses this sparse directory as the company's last known local seat
+    /// when winding up an ownerless empty shell.
+    pub fn ensure_branch(&mut self, settlement: crate::components::SettlementId) {
+        if self.branch(settlement).is_some() {
+            return;
+        }
+        self.branches.push(CompanyBranchPolicy::new(settlement));
+        self.branches
+            .sort_unstable_by_key(|branch| branch.settlement);
+    }
+
     pub fn set_resource(
         &mut self,
         settlement: crate::components::SettlementId,
         good: Good,
         policy: CompanyResourcePolicy,
     ) {
+        self.ensure_branch(settlement);
         let index = self
             .branches
             .iter()
             .position(|branch| branch.settlement == settlement)
-            .unwrap_or_else(|| {
-                self.branches.push(CompanyBranchPolicy::new(settlement));
-                self.branches.len() - 1
-            });
+            .expect("branch was ensured above");
         self.branches[index].set_resource(good, policy);
-        self.branches
-            .sort_unstable_by_key(|branch| branch.settlement);
     }
 }
 
@@ -2191,6 +2200,18 @@ impl MootMarket {
             .fold(0u32, u32::saturating_add)
     }
 
+    /// Remaining public shelf space for this good. Porters use the enacted
+    /// market target as a bounded consignment level instead of filling the
+    /// entire Moot Hall with one unsold commodity. A four-unit minimum keeps
+    /// newly introduced goods tradable before settlement policy assigns a
+    /// population-derived target.
+    pub fn collection_room(&self, good: Good) -> u32 {
+        self.pool(good)
+            .target_stock
+            .max(4)
+            .saturating_sub(self.listed_units(good))
+    }
+
     pub fn seller_listed_units(&self, seller: MarketSeller, good: Good) -> u32 {
         self.listings
             .iter()
@@ -2586,6 +2607,7 @@ pub fn business_working_capital(
     wage: &BusinessWagePolicy,
     management: &BusinessManagementPolicy,
     procurement: &BusinessProcurementPolicy,
+    held_stock: Option<&[u32; Good::COUNT]>,
     market: Option<&MootMarket>,
 ) -> BusinessWorkingCapital {
     let payroll = wage
@@ -2598,7 +2620,8 @@ pub fn business_working_capital(
             let rule = procurement.rule(good);
             rule.enabled.then(|| {
                 let price = market.map_or(good.base_price(), |market| market.suggested_price(good));
-                u64::from(rule.target_units).saturating_mul(price)
+                let held = held_stock.map_or(0, |stock| stock[good.index()]);
+                u64::from(rule.target_units.saturating_sub(held)).saturating_mul(price)
             })
         })
         .fold(0u64, u64::saturating_add);
@@ -3129,14 +3152,17 @@ impl Default for SettlementEconomy {
 /// A settlement is secure once it can survive this many days without another
 /// harvest. Production reliability remains a separate promotion requirement.
 pub const FOOD_SECURITY_TARGET_DAYS: f32 = 3.0;
-pub const VILLAGE_MIN_RESIDENTS: u32 = 4;
+pub const VILLAGE_MIN_RESIDENTS: u32 = 12;
 pub const VILLAGE_REQUIRED_SECURE_DAYS: u16 = 3;
 pub const VILLAGE_MIN_PROSPERITY: f32 = 65.0;
-pub const TOWN_MIN_RESIDENTS: u32 = 12;
+pub const TOWN_MIN_RESIDENTS: u32 = 30;
 pub const TOWN_MIN_PROSPERITY: f32 = 70.0;
 pub const TOWN_MIN_MARKET_VOLUME: u64 = 5_000;
 pub const TOWN_REQUIRED_DAYS: u16 = 3;
-pub const CITY_MIN_RESIDENTS: u32 = 24;
+/// Provisional monotonic gate while City population balance remains open.
+/// Keeping it above the agreed 30-person Town gate prevents a prosperous
+/// small Village from skipping through two civic identities.
+pub const CITY_MIN_RESIDENTS: u32 = 75;
 pub const CITY_MIN_PROSPERITY: f32 = 75.0;
 pub const CITY_REQUIRED_DAYS: u16 = 5;
 
@@ -3519,10 +3545,26 @@ mod tests {
                 maximum_unit_price: 100,
             },
         );
-        let reserve = business_working_capital(2, &wage, &management, &procurement, Some(&market));
+        let reserve =
+            business_working_capital(2, &wage, &management, &procurement, None, Some(&market));
         assert_eq!(reserve.payroll, 400);
         assert_eq!(reserve.inputs, 800);
         assert_eq!(reserve.operating_buffer, 200);
+
+        let mut held_stock = [0; Good::COUNT];
+        held_stock[Good::Wheat.index()] = 6;
+        let partially_stocked = business_working_capital(
+            2,
+            &wage,
+            &management,
+            &procurement,
+            Some(&held_stock),
+            Some(&market),
+        );
+        assert_eq!(
+            partially_stocked.inputs, 320,
+            "cash protection covers only the missing input target"
+        );
 
         let mut account = BusinessAccount::with_capital(2_000);
         account.record_sale(1, 3_000, 0, 30);
@@ -3556,6 +3598,19 @@ mod tests {
         assert_eq!(market.seller_listed_units(seller, Good::Bread), 5);
         assert_eq!(market.listed_edible_units(), 5);
         assert!(market.suggested_price(Good::Bread) >= Good::Bread.base_price() / 4);
+    }
+
+    #[test]
+    fn public_collection_room_stops_one_good_from_filling_the_market() {
+        let mut market = MootMarket::founding();
+        let seller = MarketSeller::Business(crate::components::BuildingId(190));
+        assert_eq!(market.collection_room(Good::Wheat), 4);
+        market.consign(seller, Good::Wheat, 3, Good::Wheat.base_price());
+        assert_eq!(market.collection_room(Good::Wheat), 1);
+
+        market.set_targets(12, 0);
+        assert_eq!(market.collection_room(Good::Wheat), 9);
+        assert_eq!(market.collection_room(Good::Stone), 4);
     }
 
     #[test]

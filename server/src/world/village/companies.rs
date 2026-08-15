@@ -180,14 +180,53 @@ pub fn ensure_companies(
     }
 }
 
-/// Retire a truly empty legal shell only after its last site has moved and its
-/// treasury and liabilities have both been settled. Company cash is
-/// authoritative, so despawning a funded shell would destroy real coin.
+/// Keep a sparse, stable directory of every settlement in which a company has
+/// a completed site or active project. Default branch policies still need a
+/// branch row: without it an ownerless company that finishes liquidation has
+/// no principled settlement to receive its unclaimed residual treasury.
+pub fn ensure_company_branches(
+    sites: Query<(&OperatedBy, &shared::components::BuildingOf)>,
+    projects: Query<(&OperatedBy, &UnderConstruction)>,
+    mut companies: Query<(&CompanyId, &mut CompanyBranchPolicies)>,
+) {
+    let mut required = HashMap::<CompanyId, HashSet<shared::components::SettlementId>>::new();
+    for (company, building_of) in sites.iter() {
+        required.entry(company.0).or_default().insert(building_of.0);
+    }
+    for (company, project) in projects.iter() {
+        required
+            .entry(company.0)
+            .or_default()
+            .insert(project.settlement_id);
+    }
+    for (company, mut branches) in companies.iter_mut() {
+        let Some(settlements) = required.get(company) else {
+            continue;
+        };
+        for settlement in settlements {
+            branches.ensure_branch(*settlement);
+        }
+    }
+}
+
+/// Wind up an ownerless legal shell after its last site and unused permit have
+/// moved. A living shareholder may deliberately keep an empty company ready
+/// for a later investment, so only a cap table with no living person is an
+/// estate. Residual cash then falls to the company's last known settlement,
+/// preventing dead companies from trapping circulating money forever.
 pub fn cleanup_empty_companies(
     mut commands: Commands,
-    companies: Query<(Entity, &CompanyId, &CompanyAccount)>,
+    mut companies: Query<(
+        Entity,
+        &CompanyId,
+        &CompanyOwnership,
+        &CompanyBranchPolicies,
+        &mut CompanyAccount,
+    )>,
     sites: Query<&OperatedBy>,
     permit_ledgers: Query<&PlayerPermitLedger>,
+    living_people: Query<&PersonId, With<CharacterKind>>,
+    mut settlements: Query<(&shared::components::SettlementId, &mut Settlement)>,
 ) {
     if companies.is_empty() {
         return;
@@ -198,14 +237,39 @@ pub fn cleanup_empty_companies(
             .iter()
             .flat_map(|ledger| ledger.permits.iter().filter_map(|permit| permit.company)),
     );
-    for (entity, company, account) in companies.iter() {
-        if !active.contains(company)
-            && account.cash == 0
-            && account.wage_arrears == 0
-            && account.tax_arrears == 0
-        {
-            commands.entity(entity).despawn();
+    let living_people: HashSet<PersonId> = living_people.iter().copied().collect();
+    for (entity, company, ownership, branches, mut account) in companies.iter_mut() {
+        if active.contains(company) || account.wage_arrears > 0 || account.tax_arrears > 0 {
+            continue;
         }
+        if ownership
+            .shares()
+            .iter()
+            .any(|holding| living_people.contains(&holding.shareholder))
+        {
+            continue;
+        }
+        if account.cash > 0 {
+            let mut settled = false;
+            for branch in branches.branches() {
+                if let Some((_, mut settlement)) = settlements
+                    .iter_mut()
+                    .find(|(id, _)| **id == branch.settlement)
+                {
+                    settlement.treasury = settlement.treasury.saturating_add(account.cash);
+                    settled = true;
+                    break;
+                }
+            }
+            if !settled {
+                // A freshly incorporated company with no branch can still be
+                // referenced by a disconnected save. Keep it funded and
+                // visible rather than guessing which settlement owns it.
+                continue;
+            }
+            account.cash = 0;
+        }
+        commands.entity(entity).despawn();
     }
 }
 
@@ -425,6 +489,7 @@ pub fn review_company_finance(
             &shared::components::BuildingId,
             &OperatedBy,
             &SettlementBuilding,
+            &GoodsInventory,
             &BusinessAccount,
             &BusinessWagePolicy,
             Option<&BusinessProcurementPolicy>,
@@ -452,6 +517,7 @@ pub fn review_company_finance(
         building_id,
         operated_by,
         building,
+        inventory,
         account,
         wage,
         procurement,
@@ -464,13 +530,23 @@ pub fn review_company_finance(
             .copied()
             .unwrap_or_else(|| BusinessStaffingPolicy::new(building.kind.positions()))
             .target_for(building.kind);
+        let mut stock = [0; Good::COUNT];
+        for good in Good::ALL {
+            stock[good.index()] = inventory.amount(good);
+        }
+        let working = business_working_capital(
+            enabled_positions,
+            wage,
+            management,
+            &procurement,
+            Some(&stock),
+            None,
+        );
         let protected = account
             .wage_arrears
             .saturating_add(account.tax_arrears)
-            .saturating_add(
-                business_working_capital(enabled_positions, wage, management, &procurement, None)
-                    .total(),
-            );
+            .saturating_add(working.payroll)
+            .saturating_add(working.inputs);
         sites_by_company
             .entry(operated_by.0)
             .or_default()
@@ -506,7 +582,10 @@ pub fn review_company_finance(
         let protected = company_sites
             .iter()
             .map(|site| site.protected)
-            .fold(0u64, u64::saturating_add);
+            .fold(0u64, u64::saturating_add)
+            // A company treasury needs one ordinary operating buffer, not a
+            // duplicate two-coin reserve for every cost centre it operates.
+            .saturating_add(2 * PENNIES_PER_COIN);
         let revenue = company_sites
             .iter()
             .map(|site| site.gross_revenue)
@@ -753,6 +832,116 @@ mod tests {
         assert_eq!(account.contributed_capital, 1_250);
     }
 
+    #[test]
+    fn living_shareholder_may_keep_an_empty_funded_company() {
+        let mut app = App::new();
+        app.add_systems(Update, cleanup_empty_companies);
+        let founder = PersonId(77);
+        app.world_mut().spawn((founder, CharacterKind::Villager));
+        let company = app
+            .world_mut()
+            .spawn(new_company_bundle(
+                CompanyId(9),
+                "Finished Company".into(),
+                4,
+                founder,
+                1_250,
+                1_250,
+            ))
+            .id();
+
+        app.update();
+
+        assert!(app.world().get_entity(company).is_ok());
+        assert_eq!(
+            app.world().get::<CompanyAccount>(company).unwrap().cash,
+            1_250
+        );
+    }
+
+    #[test]
+    fn dead_empty_company_escheats_residual_cash_to_its_last_branch() {
+        let mut app = App::new();
+        app.add_systems(Update, cleanup_empty_companies);
+        let settlement_id = shared::components::SettlementId(12);
+        let hall = app
+            .world_mut()
+            .spawn((
+                settlement_id,
+                Settlement {
+                    name: "Estateford".into(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 0,
+                    treasury: 75,
+                },
+            ))
+            .id();
+        let mut branches = CompanyBranchPolicies::default();
+        branches.set_resource(
+            settlement_id,
+            shared::economy::Good::Wood,
+            shared::economy::CompanyResourcePolicy::default(),
+        );
+        let company = app
+            .world_mut()
+            .spawn(new_company_bundle(
+                CompanyId(9),
+                "Late Company".into(),
+                4,
+                PersonId(404),
+                1_250,
+                1_250,
+            ))
+            .insert(branches)
+            .id();
+
+        app.update();
+
+        assert!(app.world().get_entity(company).is_err());
+        assert_eq!(app.world().get::<Settlement>(hall).unwrap().treasury, 1_325);
+    }
+
+    #[test]
+    fn completed_sites_and_projects_register_company_branches() {
+        let mut app = App::new();
+        app.add_systems(Update, ensure_company_branches);
+        let company = CompanyId(21);
+        let company_entity = app
+            .world_mut()
+            .spawn((company, CompanyBranchPolicies::default()))
+            .id();
+        let first = shared::components::SettlementId(7);
+        let second = shared::components::SettlementId(9);
+        app.world_mut()
+            .spawn((OperatedBy(company), shared::components::BuildingOf(first)));
+        app.world_mut().spawn((
+            OperatedBy(company),
+            UnderConstruction {
+                kind: SettlementBuildingKind::Windmill,
+                position: Vec3::ZERO,
+                rotation: 0.0,
+                owner: Some("Founder".into()),
+                owner_id: Some(PersonId(1)),
+                builder: None,
+                settlement: Entity::PLACEHOLDER,
+                settlement_id: second,
+                stand: Vec3::ZERO,
+                failed_stand_routes: 0,
+                stage: BuildStage::Supplying,
+                quality: 1.0,
+            },
+        ));
+
+        app.update();
+
+        let branches = app
+            .world()
+            .get::<CompanyBranchPolicies>(company_entity)
+            .unwrap();
+        assert!(branches.branch(first).is_some());
+        assert!(branches.branch(second).is_some());
+    }
+
     fn farm_site(company: CompanyId, id: u64, account: BusinessAccount) -> impl Bundle {
         (
             shared::components::BuildingId(id),
@@ -772,6 +961,7 @@ mod tests {
                 state: BusinessState::Operating,
                 ..default()
             },
+            GoodsInventory::new(shared::economy::capacity::FARMSTEAD),
         )
     }
 
@@ -894,13 +1084,24 @@ mod tests {
     fn empty_company_shells_are_retired_but_active_companies_survive() {
         let mut app = App::new();
         app.add_systems(Update, cleanup_empty_companies);
+        let former_owner = PersonId(30);
         let empty = app
             .world_mut()
-            .spawn((CompanyId(30), CompanyAccount::default()))
+            .spawn((
+                CompanyId(30),
+                CompanyOwnership::sole(former_owner),
+                CompanyBranchPolicies::default(),
+                CompanyAccount::default(),
+            ))
             .id();
         let active = app
             .world_mut()
-            .spawn((CompanyId(31), CompanyAccount::default()))
+            .spawn((
+                CompanyId(31),
+                CompanyOwnership::sole(former_owner),
+                CompanyBranchPolicies::default(),
+                CompanyAccount::default(),
+            ))
             .id();
         app.world_mut().spawn(OperatedBy(CompanyId(31)));
 

@@ -3146,6 +3146,90 @@ fn a_daily_market_ration_moves_food_and_exactly_conserves_coin() {
 }
 
 #[test]
+fn an_empty_pantry_spends_discretionary_coin_before_accepting_hunger() {
+    let mut app = village_test_app();
+    app.init_resource::<BusinessEventQueue>();
+    app.add_systems(Update, update_household_budgets_and_pantries);
+    app.world_mut().spawn(WorldTime::new_default());
+    let settlement_id = shared::components::SettlementId(706);
+    let mut hall_stock = GoodsInventory::new(shared::economy::capacity::HALL);
+    hall_stock.add(Good::Bread, 3);
+    let mut market = MootMarket::founding();
+    market.consign(
+        shared::economy::MarketSeller::Treasury(settlement_id),
+        Good::Bread,
+        3,
+        Good::Bread.base_price(),
+    );
+    let hall = app
+        .world_mut()
+        .spawn((
+            settlement_id,
+            Settlement {
+                name: "Needford".to_string(),
+                tier: shared::components::SettlementTier::Hamlet,
+                residents: 1,
+                treasury: 0,
+            },
+            PlayerPosition(Vec3::ZERO),
+            hall_stock,
+            market,
+        ))
+        .id();
+    let home = app
+        .world_mut()
+        .spawn((
+            SettlementBuilding {
+                kind: SettlementBuildingKind::House,
+                settlement: "Needford".to_string(),
+                owner: None,
+                quality: 1.0,
+                workers: Vec::new(),
+            },
+            shared::components::BuildingOf(settlement_id),
+            Household {
+                resident_ids: vec![shared::components::PersonId(707)],
+                residents: vec!["Ada".to_string()],
+            },
+            HouseholdEconomy::default(),
+            GoodsInventory::new(shared::economy::capacity::HOUSE),
+        ))
+        .id();
+    let resident = app
+        .world_mut()
+        .spawn((
+            shared::components::PersonId(707),
+            CharacterName("Ada".to_string()),
+            Wallet::new(2 * PENNIES_PER_COIN),
+            WorkStatus::LookingForWork,
+            HomeAssignment { home },
+        ))
+        .id();
+
+    app.update();
+
+    assert_eq!(app.world().get::<Wallet>(resident).unwrap().balance(), 0);
+    assert_eq!(
+        app.world().get::<HouseholdEconomy>(home).unwrap().pennies,
+        20,
+    );
+    assert_eq!(
+        app.world()
+            .get::<GoodsInventory>(home)
+            .unwrap()
+            .amount(Good::Bread),
+        1,
+    );
+    assert_eq!(
+        app.world()
+            .get::<GoodsInventory>(hall)
+            .unwrap()
+            .amount(Good::Bread),
+        2,
+    );
+}
+
+#[test]
 fn poor_relief_buys_a_ration_from_public_money() {
     let mut app = village_test_app();
     app.init_resource::<SettlementEconomyRuntime>();
@@ -3396,6 +3480,13 @@ fn poor_relief_protects_an_unsustainable_or_thin_reserve() {
         (1, 3, STARTING_TREASURY_MONEY),
         "relief must not spend the last three reserve days"
     );
+    let funded_surplus = run_case(8, 1);
+    assert_eq!(funded_surplus.0, 0);
+    assert_eq!(funded_surplus.1, 7);
+    assert!(
+        funded_surplus.2 < STARTING_TREASURY_MONEY,
+        "active production plus stock above the protected floor should fund one relief ration"
+    );
 }
 
 #[test]
@@ -3545,14 +3636,17 @@ fn three_secure_days_advance_a_hamlet_to_village() {
     );
     let clock = app.world_mut().spawn(WorldTime::new_default()).id();
     let mut stock = GoodsInventory::new(shared::economy::capacity::HALL);
-    assert_eq!(stock.add(Good::Flour, 40), 40);
+    // Three days are consumed during the observation window and the final
+    // state must still retain the advertised three-day reserve.
+    let starting_food = VILLAGE_MIN_RESIDENTS * 6;
+    assert_eq!(stock.add(Good::Flour, starting_food), starting_food);
     let hall = app
         .world_mut()
         .spawn((
             Settlement {
                 name: "Plenty".to_string(),
                 tier: shared::components::SettlementTier::Hamlet,
-                residents: 4,
+                residents: VILLAGE_MIN_RESIDENTS,
                 treasury: 0,
             },
             stock,
@@ -3563,7 +3657,7 @@ fn three_secure_days_advance_a_hamlet_to_village() {
     for day in 1..=3 {
         app.world_mut()
             .resource_mut::<SettlementEconomyRuntime>()
-            .record_food_production(hall, 4);
+            .record_food_production(hall, VILLAGE_MIN_RESIDENTS);
         app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = day;
         app.update();
     }
@@ -3753,6 +3847,81 @@ fn a_permit_does_not_interrupt_an_active_fisher_mid_shift() {
 }
 
 #[test]
+fn an_off_shift_employee_resigns_before_starting_private_construction() {
+    let mut app = village_test_app();
+    app.init_resource::<Time>();
+    app.init_resource::<VillageClock>();
+    app.insert_resource(WorldTerrain::default());
+    app.add_systems(Update, consider_permits);
+
+    let hall_position = {
+        let terrain = app.world().resource::<WorldTerrain>();
+        Vec3::new(1720.0, terrain.get_height(1720.0, 0.0), 0.0)
+    };
+    let settlement = app
+        .world_mut()
+        .spawn((
+            Settlement {
+                name: "Newstart".to_string(),
+                tier: shared::components::SettlementTier::Hamlet,
+                residents: 1,
+                treasury: 0,
+            },
+            PlayerPosition(hall_position),
+        ))
+        .id();
+    let terrain_version = app
+        .world()
+        .resource::<WorldTerrain>()
+        .modification_version();
+    app.world_mut()
+        .resource_mut::<VillageClock>()
+        .failed_fishing_terrain_versions
+        .insert(settlement, terrain_version);
+
+    let worker = app
+        .world_mut()
+        .spawn((
+            CharacterKind::Villager,
+            CharacterName("Ada".to_string()),
+            VillagerIntent::Resident { settlement },
+            PlayerPosition(hall_position + Vec3::X * 2.0),
+            Occupation(Some("Company Porter".to_string())),
+            WorkStatus::Employed,
+            Wallet::founding_villager(),
+            GoodsInventory::new(shared::economy::capacity::PORTER),
+            shared::components::EmployedAt(shared::components::BuildingId(9_901)),
+            CompanyPorter {
+                settlement,
+                settlement_id: shared::components::SettlementId(9_902),
+                company: shared::components::CompanyId(9_903),
+                storage_hall: shared::components::BuildingId(9_901),
+            },
+        ))
+        .id();
+
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(std::time::Duration::from_secs_f32(PERMIT_INTERVAL + 0.1));
+    app.update();
+
+    let world = app.world_mut();
+    let site = world
+        .query::<&UnderConstruction>()
+        .single(world)
+        .expect("the off-shift worker should be free to choose a private permit");
+    assert_eq!(site.builder, Some(worker));
+    let worker = world.entity(worker);
+    assert!(worker.get::<shared::components::EmployedAt>().is_none());
+    assert!(worker.get::<CompanyPorter>().is_none());
+    assert_eq!(worker.get::<Occupation>(), Some(&Occupation(None)));
+    assert_eq!(
+        worker.get::<WorkStatus>(),
+        Some(&WorkStatus::LookingForWork)
+    );
+}
+
+#[test]
 fn the_reeve_builds_public_progression_without_stopping_essential_trades() {
     let mut app = village_test_app();
     app.init_resource::<Time>();
@@ -3912,6 +4081,8 @@ fn a_market_porter_collects_a_bounded_load_while_the_woodcutter_keeps_working() 
 
     let hall_position = Vec3::new(0.0, 5.0, 0.0);
     let settlement_id = shared::components::SettlementId(6_900);
+    let mut market = MootMarket::founding();
+    market.set_targets(1, 14);
     let hall = app
         .world_mut()
         .spawn((
@@ -3925,7 +4096,7 @@ fn a_market_porter_collects_a_bounded_load_while_the_woodcutter_keeps_working() 
             PlayerPosition(hall_position),
             PlayerRotation(0.0),
             GoodsInventory::new(shared::economy::capacity::HALL),
-            MootMarket::founding(),
+            market,
         ))
         .id();
 
@@ -4321,6 +4492,8 @@ fn a_liquidating_business_consigns_inputs_instead_of_trapping_food() {
     app.add_systems(Update, run_market_collections);
     let settlement_id = shared::components::SettlementId(8_800);
     let hall_position = Vec3::ZERO;
+    let mut market = MootMarket::founding();
+    market.set_targets(2, 0);
     let hall = app
         .world_mut()
         .spawn((
@@ -4334,7 +4507,7 @@ fn a_liquidating_business_consigns_inputs_instead_of_trapping_food() {
             PlayerPosition(hall_position),
             PlayerRotation(0.0),
             GoodsInventory::new(shared::economy::capacity::HALL),
-            MootMarket::founding(),
+            market,
         ))
         .id();
     let business_id = shared::components::BuildingId(8_801);
@@ -6302,8 +6475,14 @@ fn three_villagers_settle_and_build_a_village_unaided() {
         "construction timber should travel in a bounded carried load"
     );
     let field_count = world.query::<&FarmField>().iter(&world).count();
+    let farmstead_count = world
+        .query::<&SettlementBuilding>()
+        .iter(&world)
+        .filter(|building| building.kind == SettlementBuildingKind::Farmstead)
+        .count();
     assert_eq!(
-        field_count, 2,
+        field_count,
+        farmstead_count * 2,
         "each farmstead should create two wheat fields"
     );
     let overfilled: Vec<_> = world

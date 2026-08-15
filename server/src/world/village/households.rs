@@ -5,6 +5,20 @@
 
 use super::*;
 
+/// Choose real food offers by price per ration, retaining the authored food
+/// preference only as a tie-breaker. A household may prefer Bread, but it
+/// should not spend its entire purse on one luxury loaf while affordable Fish
+/// or Flour is sitting on the next market table.
+fn household_food_purchase_order(hall_store: &GoodsInventory, market: &MootMarket) -> Vec<Good> {
+    let mut foods: Vec<(usize, Good)> = Good::HOUSEHOLD_FOOD_PRIORITY
+        .into_iter()
+        .enumerate()
+        .filter(|(_, good)| hall_store.amount(*good) > 0)
+        .collect();
+    foods.sort_by_key(|(preference, good)| (market.pool(*good).ask.max(1), *preference));
+    foods.into_iter().map(|(_, good)| good).collect()
+}
+
 /// Give every completed cabin a bounded, inspectable household roster.
 pub fn ensure_households(
     mut commands: Commands,
@@ -153,17 +167,22 @@ pub fn update_household_budgets_and_pantries(
         else {
             continue;
         };
-        let estimated_unit_price = Good::HOUSEHOLD_FOOD_PRIORITY
-            .into_iter()
-            .filter(|good| hall_store.amount(*good) > 0)
-            .map(|good| market.pool(good).ask)
-            .min()
-            .unwrap_or(0);
+        let food_order = household_food_purchase_order(&hall_store, &market);
+        let estimated_unit_price = food_order
+            .first()
+            .map_or(0, |good| market.pool(*good).ask.max(1));
         let wanted_budget = u64::from(deficit).saturating_mul(estimated_unit_price);
         let mut needed = wanted_budget.saturating_sub(economy.pennies);
         if needed > 0 {
-            // All earners contribute toward the same concrete pantry target,
-            // while retaining two coins as personal discretionary money.
+            // All earners contribute toward the same concrete pantry target.
+            // Two discretionary coins are protected only when the pantry can
+            // already cover today's household. A family with fewer than one
+            // ration per member spends those coins before accepting hunger.
+            let personal_floor = if pantry.edible_amount() < members.len() as u32 {
+                0
+            } else {
+                2 * PENNIES_PER_COIN
+            };
             let mut contribution_order = members.clone();
             contribution_order.sort_by_key(|(person_id, ..)| *person_id);
             for (person_id, _, _) in contribution_order {
@@ -173,7 +192,7 @@ pub fn update_household_budgets_and_pantries(
                 let Ok((_, _, _, mut wallet, _, _, _, _)) = residents.get_mut(member_entity) else {
                     continue;
                 };
-                let available = wallet.balance().saturating_sub(2 * PENNIES_PER_COIN);
+                let available = wallet.balance().saturating_sub(personal_floor);
                 let contribution = available.min(needed);
                 if contribution > 0 && wallet.debit(contribution) {
                     economy.pennies = economy.pennies.saturating_add(contribution);
@@ -225,7 +244,7 @@ pub fn update_household_budgets_and_pantries(
         }
 
         let mut remaining = deficit;
-        for good in Good::HOUSEHOLD_FOOD_PRIORITY {
+        for good in food_order {
             if remaining == 0 {
                 break;
             }
@@ -394,7 +413,8 @@ pub fn run_household_shopping(
                 let target = (household.resident_ids.len() as u32)
                     .saturating_mul(u32::from(economy.pantry_target_days));
                 let mut remaining = target.saturating_sub(pantry.edible_amount());
-                for good in Good::HOUSEHOLD_FOOD_PRIORITY {
+                let food_order = household_food_purchase_order(&hall_store, &market);
+                for good in food_order {
                     if remaining == 0 {
                         break;
                     }
@@ -1081,5 +1101,35 @@ pub fn run_household_schedules(
                 routine.phase = HomePhase::Entering;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn households_choose_an_affordable_ration_before_luxury_bread() {
+        let mut hall = GoodsInventory::new(shared::economy::capacity::HALL);
+        assert_eq!(hall.add(Good::Bread, 4), 4);
+        assert_eq!(hall.add(Good::Flour, 4), 4);
+        let mut market = MootMarket::founding();
+        market.consign(
+            MarketSeller::Business(shared::components::BuildingId(1)),
+            Good::Bread,
+            4,
+            1_000,
+        );
+        market.consign(
+            MarketSeller::Business(shared::components::BuildingId(2)),
+            Good::Flour,
+            4,
+            120,
+        );
+
+        assert_eq!(
+            household_food_purchase_order(&hall, &market),
+            vec![Good::Flour, Good::Bread]
+        );
     }
 }

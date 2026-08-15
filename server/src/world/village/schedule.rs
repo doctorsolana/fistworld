@@ -130,6 +130,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 super::ensure_companies,
                 super::ensure_business_economies,
                 super::post_site_capital_to_company,
+                super::ensure_company_branches,
                 super::cleanup_empty_companies,
             )
                 .chain()

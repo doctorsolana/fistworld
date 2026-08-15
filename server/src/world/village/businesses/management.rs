@@ -28,6 +28,7 @@ pub(crate) fn review_automatic_price(
     total_stock: u32,
     good: Good,
     market_reference: u64,
+    replacement_input_cost: u64,
     market_fee_bps: u16,
 ) {
     if !sale.automatic_pricing {
@@ -37,9 +38,9 @@ pub(crate) fn review_automatic_price(
     let output_basis = previous.produced_units.max(previous.sold_units).max(1);
     let observed_cost = previous
         .wage_expense
-        .saturating_add(previous.input_expense)
         .checked_div(u64::from(output_basis))
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .saturating_add(replacement_input_cost);
     if observed_cost > 0 {
         account.estimated_unit_cost = if account.estimated_unit_cost == 0 {
             observed_cost
@@ -66,11 +67,32 @@ pub(crate) fn review_automatic_price(
     let scarce_and_selling = previous.sold_units > 0
         && previous.sold_units >= previous.produced_units.max(1)
         && total_stock <= sale.company_reserve_units.saturating_add(2);
+    let production_basis = previous.produced_units.max(1);
+    let accumulating_surplus = previous.produced_units > 0
+        && previous.sold_units.saturating_mul(2) <= previous.produced_units
+        && total_stock
+            > sale
+                .company_reserve_units
+                .saturating_add(production_basis.saturating_mul(2));
+    let extreme_surplus = accumulating_surplus
+        && total_stock
+            > sale
+                .company_reserve_units
+                .saturating_add(production_basis.saturating_mul(5));
     let stale_surplus = sale.days_without_sales >= 2 && total_stock > sale.company_reserve_units;
     let mut desired = if scarce_and_selling {
         price_step(current, sale.max_daily_price_change_bps, true)
-    } else if stale_surplus {
-        price_step(current, sale.max_daily_price_change_bps, false)
+    } else if stale_surplus || accumulating_surplus {
+        // Some sales do not prove a price is clearing the market. When output
+        // is piling up much faster than it sells, an automatic owner responds
+        // to that inventory carrying cost; an extreme glut provokes a larger
+        // voluntary markdown. The sustainable-cost floor remains authoritative.
+        let markdown = if extreme_surplus {
+            sale.max_daily_price_change_bps.saturating_mul(2)
+        } else {
+            sale.max_daily_price_change_bps
+        };
+        price_step(current, markdown, false)
     } else {
         current
     };
@@ -462,6 +484,11 @@ pub fn review_business_management(
         }
         let listed = market.seller_listed_units(seller, good);
         let market_reference = market.suggested_price(good);
+        let replacement_input_cost = processing_recipe(building.kind).map_or(0, |recipe| {
+            u64::from(recipe.input_units)
+                .saturating_mul(market.suggested_price(recipe.input))
+                .div_ceil(u64::from(recipe.output_units.max(1)))
+        });
         if management.autopilot {
             sale.target_margin_bps = management.strategy.target_margin_bps();
             sale.max_daily_price_change_bps = management.strategy.daily_price_step_bps();
@@ -476,6 +503,7 @@ pub fn review_business_management(
                 inventory.amount(good).saturating_add(listed),
                 good,
                 market_reference,
+                replacement_input_cost,
                 market.market_fee_bps(),
             );
             if let Some(procurement) = procurement.as_deref_mut() {
@@ -657,6 +685,7 @@ mod tests {
             1,
             Good::Wheat,
             opening,
+            0,
             500,
         );
         assert!(sale.asking_unit_price > opening);
@@ -675,8 +704,71 @@ mod tests {
             20,
             Good::Wheat,
             high,
+            0,
             500,
         );
         assert!(sale.asking_unit_price < high);
+    }
+
+    #[test]
+    fn partial_sales_do_not_hide_a_growing_inventory_glut() {
+        let mut account = BusinessAccount {
+            estimated_unit_cost: 20,
+            previous_day: shared::economy::BusinessDayLedger {
+                day: 4,
+                gross_revenue: 600,
+                produced_units: 12,
+                sold_units: 2,
+                ..default()
+            },
+            ..default()
+        };
+        let mut sale = BusinessSalePolicy::for_good(Good::Bread);
+        sale.asking_unit_price = 600;
+        sale.max_daily_price_change_bps = 500;
+
+        review_automatic_price(
+            &mut account,
+            &mut sale,
+            BusinessState::Operating,
+            80,
+            Good::Bread,
+            600,
+            0,
+            500,
+        );
+
+        assert_eq!(sale.days_without_sales, 0);
+        assert_eq!(sale.asking_unit_price, 540);
+    }
+
+    #[test]
+    fn bulk_procurement_is_not_mistaken_for_one_days_unit_cost() {
+        let mut account = BusinessAccount {
+            previous_day: shared::economy::BusinessDayLedger {
+                day: 5,
+                input_expense: 10_000,
+                wage_expense: 100,
+                produced_units: 10,
+                sold_units: 10,
+                ..default()
+            },
+            ..default()
+        };
+        let mut sale = BusinessSalePolicy::for_good(Good::Flour);
+
+        review_automatic_price(
+            &mut account,
+            &mut sale,
+            BusinessState::Operating,
+            1,
+            Good::Flour,
+            Good::Flour.base_price(),
+            80,
+            500,
+        );
+
+        assert_eq!(account.estimated_unit_cost, 90);
+        assert!(sale.asking_unit_price < 200);
     }
 }

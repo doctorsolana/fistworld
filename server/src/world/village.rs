@@ -55,9 +55,10 @@ pub use commerce::{
 };
 pub(crate) use companies::new_company_bundle;
 pub use companies::{
-    cleanup_empty_companies, ensure_companies, post_site_capital_to_company,
-    refresh_company_accounts, refund_company_escrows, review_company_finance,
-    review_company_strategies, CompanyDividendQueue, CompanyEscrowRefundQueue,
+    cleanup_empty_companies, ensure_companies, ensure_company_branches,
+    post_site_capital_to_company, refresh_company_accounts, refund_company_escrows,
+    review_company_finance, review_company_strategies, CompanyDividendQueue,
+    CompanyEscrowRefundQueue,
 };
 pub use construction::{advance_construction, run_construction_material_logistics};
 pub(crate) use development_market::minimum_startup_capital;

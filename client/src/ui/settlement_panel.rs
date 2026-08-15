@@ -668,6 +668,9 @@ fn sync_compact_panel(
                     .find(|(_, id)| **id == owner.0)
                     .and_then(|(hall, _)| markets.get(hall).ok())
             });
+            let held_stock = inventory.map(|inventory| {
+                Good::ALL.map(|good| inventory.amount(good))
+            });
             let capital = match (wage_policy, management, procurement) {
                 (Some(wage), Some(management), Some(procurement)) => business_working_capital(
                     staffing
@@ -679,6 +682,7 @@ fn sync_compact_panel(
                     wage,
                     management,
                     procurement,
+                    held_stock.as_ref(),
                     local_market,
                 ),
                 _ => Default::default(),

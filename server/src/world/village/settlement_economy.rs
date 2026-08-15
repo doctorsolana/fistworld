@@ -407,8 +407,12 @@ pub fn update_settlement_economies(
                     {
                         let reserve_floor = demand
                             .saturating_mul(u32::from(policy.food_reserve_target_days.max(1)));
-                        let production_is_sustainable =
-                            day_state.recent_production_including_today() >= demand as f32;
+                        // Require a real replenishment stream, but not one
+                        // which already covers every resident after a sudden
+                        // population increase. The protected stock floor below
+                        // is the actual surplus/solvency test.
+                        let production_is_active =
+                            day_state.recent_production_including_today() > 0.0;
 
                         unaffordable.sort_unstable_by_key(|resident| resident.to_bits());
                         for resident in unaffordable.iter().copied() {
@@ -416,7 +420,7 @@ pub fn update_settlement_economies(
                             // sustainable surplus is eligible: production must
                             // cover the roster and the purchase must leave the
                             // configured number of full resident-days intact.
-                            if !production_is_sustainable
+                            if !production_is_active
                                 || hall.ready_to_eat_amount() == 0
                                 || hall.edible_amount().saturating_sub(1) < reserve_floor
                             {

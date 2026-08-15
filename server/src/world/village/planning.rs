@@ -6,6 +6,11 @@ use super::development_market::{
 };
 use super::*;
 
+/// Autonomous founders preserve a few days of personal purchasing power.
+/// Company formation is an investment decision, not permission to commit the
+/// resident's last meal money. Player-directed contributions remain explicit.
+const NPC_PERSONAL_INVESTMENT_RESERVE: u64 = 3 * PENNIES_PER_COIN;
+
 /// A settlement can approve distinct permits concurrently, but it cannot turn
 /// every newly arrived resident into an independent construction crew on the
 /// same morning. Capacity grows with population and stays bounded while this
@@ -317,12 +322,24 @@ pub fn consider_permits(
         return;
     };
 
-    let company_by_master: HashMap<shared::components::PersonId, shared::components::CompanyId> =
-        planning
-            .companies
-            .iter()
-            .map(|(id, leadership, _, _)| (leadership.master, *id))
-            .collect();
+    // A Master normally controls one craft company. If inheritance or player
+    // activity leaves an NPC in charge of several, choose the oldest stable
+    // CompanyId deterministically instead of depending on ECS iteration order.
+    let mut company_by_master =
+        HashMap::<shared::components::PersonId, shared::components::CompanyId>::new();
+    let mut company_strategies =
+        HashMap::<shared::components::CompanyId, shared::economy::BusinessStrategy>::new();
+    for (id, leadership, policy, _) in planning.companies.iter() {
+        company_strategies.insert(*id, policy.strategy);
+        company_by_master
+            .entry(leadership.master)
+            .and_modify(|current| {
+                if *id < *current {
+                    *current = *id;
+                }
+            })
+            .or_insert(*id);
+    }
     let company_reserve_days: HashMap<shared::components::CompanyId, u8> = planning
         .companies
         .iter()
@@ -682,6 +699,7 @@ pub fn consider_permits(
             if !is_private_business(kind) {
                 return personal;
             }
+            let personal = personal.saturating_sub(NPC_PERSONAL_INVESTMENT_RESERVE);
             let Some(company) = company_by_master.get(&person) else {
                 return personal;
             };
@@ -694,6 +712,14 @@ pub fn consider_permits(
                 retained
             }
         };
+        let investment_strategy =
+            |person: shared::components::PersonId, attributes: Option<&CharacterAttributes>| {
+                company_by_master
+                    .get(&person)
+                    .and_then(|company| company_strategies.get(company))
+                    .copied()
+                    .unwrap_or_else(|| super::automatic_owner_strategy(Some(person), attributes))
+            };
 
         let mut opportunities = private_opportunities(
             signals,
@@ -768,8 +794,7 @@ pub fn consider_permits(
                             let personal = ((*person_id).0.wrapping_mul(31) % 11) as f32 - 5.0;
                             return Some(opportunity.score + personal - holding_count as f32 * 4.0);
                         }
-                        let strategy =
-                            super::automatic_owner_strategy(Some(*person_id), attributes.as_ref());
+                        let strategy = investment_strategy(*person_id, attributes.as_ref());
                         let mut score = investor_score(
                             opportunity,
                             strategy,
@@ -1392,8 +1417,7 @@ pub fn consider_permits(
                 }
                 let mut decision_score = actual_opportunity.score;
                 if !kind.is_civic() && kind != SettlementBuildingKind::House {
-                    let strategy =
-                        super::automatic_owner_strategy(Some(*person_id), attributes);
+                    let strategy = investment_strategy(*person_id, attributes);
                     decision_score = investor_score(
                         actual_opportunity,
                         strategy,
@@ -1498,7 +1522,12 @@ pub fn consider_permits(
                 };
                 let shortfall = prudent_company_cash.saturating_sub(funds.available);
                 if let Ok(mut wallet) = wallets.get_mut(builder) {
-                    if !wallet.debit(shortfall) {
+                    if wallet
+                        .balance()
+                        .saturating_sub(NPC_PERSONAL_INVESTMENT_RESERVE)
+                        < shortfall
+                        || !wallet.debit(shortfall)
+                    {
                         continue;
                     }
                 } else {
@@ -1525,7 +1554,12 @@ pub fn consider_permits(
                 contributed_capital = shortfall;
             } else {
                 if let Ok(mut wallet) = wallets.get_mut(builder) {
-                    if !wallet.debit(prudent_company_cash) {
+                    if wallet
+                        .balance()
+                        .saturating_sub(NPC_PERSONAL_INVESTMENT_RESERVE)
+                        < prudent_company_cash
+                        || !wallet.debit(prudent_company_cash)
+                    {
                         continue;
                     }
                 } else {
@@ -1619,6 +1653,35 @@ pub fn consider_permits(
                     operating_company.expect("private permit formed or selected a company"),
                 ),
             ));
+        }
+
+        if !kind.is_civic() {
+            // Constructing an approved private plot is the applicant's one
+            // daytime occupation until the shell is finished. An off-shift
+            // employee may choose entrepreneurship, but they must resign the
+            // old position instead of becoming a farmer/porter and builder at
+            // once. Otherwise the two routines repeatedly replace each
+            // other's MoveTarget and can strand the worksite forever.
+            commands
+                .entity(builder)
+                .insert((Occupation(None), WorkStatus::LookingForWork))
+                .remove::<shared::components::EmployedAt>()
+                .remove::<CompanyPorter>()
+                .remove::<FarmerRoutine>()
+                .remove::<FishingRoutine>()
+                .remove::<LumberjackRoutine>()
+                .remove::<ProcessingRoutine>()
+                .remove::<InternalDeliveryRoutine>()
+                .remove::<MarketCollectionRoutine>()
+                .remove::<WorkplaceDoorTransit>()
+                .remove::<BuildingDoorUse>()
+                .remove::<PierTraversal>()
+                .remove::<WorkerOffDuty>()
+                .remove::<HomeRoutine>()
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>();
         }
 
         // Approval reserves the plot and money immediately, but a tactical

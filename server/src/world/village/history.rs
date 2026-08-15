@@ -685,6 +685,7 @@ pub fn capture_settlement_history(
                             &snapshot.wage,
                             &snapshot.management,
                             &snapshot.procurement,
+                            Some(&snapshot.stock),
                             Some(&market),
                         )
                         .total_with_liabilities(&snapshot.account),
@@ -700,6 +701,7 @@ pub fn capture_settlement_history(
                                             &snapshot.wage,
                                             &snapshot.management,
                                             &snapshot.procurement,
+                                            Some(&snapshot.stock),
                                             Some(&market),
                                         )
                                         .total(),

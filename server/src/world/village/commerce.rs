@@ -1350,6 +1350,7 @@ pub fn run_market_collections(
     let mut reserved_output: HashMap<(Entity, Good), u32> = HashMap::new();
     let mut reserved_input: HashMap<(Entity, Good), u32> = HashMap::new();
     let mut reserved_hall_bulk: HashMap<Entity, u32> = HashMap::new();
+    let mut reserved_market_units: HashMap<(Entity, Good), u32> = HashMap::new();
     for routine in active_collections {
         match routine.phase {
             MarketCollectionPhase::GoingToBusiness => {
@@ -1359,11 +1360,17 @@ pub fn run_market_collections(
                 *reserved_hall_bulk.entry(routine.hall).or_default() += routine
                     .reserved_units
                     .saturating_mul(routine.good.bulk_per_unit());
+                *reserved_market_units
+                    .entry((routine.hall, routine.good))
+                    .or_default() += routine.reserved_units;
             }
             MarketCollectionPhase::ReturningToHall => {
                 *reserved_hall_bulk.entry(routine.hall).or_default() += routine
                     .reserved_units
                     .saturating_mul(routine.good.bulk_per_unit());
+                *reserved_market_units
+                    .entry((routine.hall, routine.good))
+                    .or_default() += routine.reserved_units;
             }
             MarketCollectionPhase::DeliveringInput => {
                 *reserved_input
@@ -1921,6 +1928,12 @@ pub fn run_market_collections(
                             .copied()
                             .unwrap_or_default(),
                     ) / good.bulk_per_unit();
+                    let shelf_room = market.collection_room(good).saturating_sub(
+                        reserved_market_units
+                            .get(&(porter_hall, good))
+                            .copied()
+                            .unwrap_or_default(),
+                    );
                     let units = surplus
                         .min(if liquidating {
                             policy.max_units_per_collection.max(32)
@@ -1928,7 +1941,8 @@ pub fn run_market_collections(
                             policy.max_units_per_collection
                         })
                         .min(carrier_room)
-                        .min(hall_room);
+                        .min(hall_room)
+                        .min(shelf_room);
                     if units == 0 {
                         continue;
                     }
@@ -1984,6 +1998,9 @@ pub fn run_market_collections(
                 MoveTarget(entrance),
             ));
             *reserved_output.entry((business, good)).or_default() += offered;
+            *reserved_market_units
+                .entry((porter_hall, good))
+                .or_default() += offered;
             if let Some(remaining) = branch_public_remaining.get_mut(&branch_key) {
                 *remaining = remaining.saturating_sub(offered);
             }

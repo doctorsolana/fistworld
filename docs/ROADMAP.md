@@ -309,12 +309,12 @@ answer "can a village run itself?" before any of the economy above exists):
       manual control freezes policy, and weekly autopilot changes at most one lever.
       The implemented formulas, money flows and review order are maintained in
       [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
-- [x] First tier advancement: a Hamlet with at least four residents becomes a
+- [x] First tier advancement: a Hamlet with at least 12 residents becomes a
       Village after three consecutive days with three reserve days, recent food
       production covering population, no hunger and prosperity at least 65.
-- [x] Later tier advancement: a Village with at least 12 residents, a Marketplace,
+- [x] Later tier advancement: a Village with at least 30 residents, a Marketplace,
       Tavern, sufficient Moot trade and prosperity 70 becomes a Town after three
-      sustained days. A Town with at least 24 residents, a Church and prosperity 75
+      sustained days. A Town with at least a provisional 75 residents, a Church and prosperity 75
       becomes a City after five sustained days. Civic buildings use placeholder art
       but real plots, material supply, staffing, storage and road connections.
 - [x] Physical civic-hall ladder. The authoritative settlement entity retains its
@@ -399,12 +399,9 @@ ordinary residents shed paths, door choreography and work-animation phases.
 - [x] Prosperity scalar with a panel breakdown: reserve 40, production 30,
       housing 20, employment 10, and hunger penalty down to -30.
 - [x] Hamlet → Village → Town → City advancement with inspectable population,
-      food, prosperity, trade and civic-building gates. Current 4/12/24 population
-      values are prototype balance constants.
-- [ ] Rebalance the population gates before treating them as content targets. The
-      latest design direction is 12 residents for Village and roughly 30 for Town;
-      City remains to be tuned. Change the shared constants, panels and lab contracts
-      together rather than documenting those values as live before the code moves.
+      food, prosperity, trade and civic-building gates. The enacted gates are 12
+      residents for Village and 30 for Town; City uses a provisional monotonic
+      gate of 75 until its content target is tuned.
 - [x] Reconcile observed per-trip production with the distant strategic tick. Both use the
       same quality-scaled rates, worker counts, one-field/two-field Farmstead capacity,
       storage limits, sale policy and market transaction code.

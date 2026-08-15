@@ -1243,7 +1243,8 @@ pub fn advance_strategic_villages(
             )
             .min(policy.max_units_per_collection)
             .min(shared::economy::capacity::PORTER / good.bulk_per_unit())
-            .min(hall_store.free_bulk() / good.bulk_per_unit());
+            .min(hall_store.free_bulk() / good.bulk_per_unit())
+            .min(market.collection_room(good));
         let moved = store.transfer_to(&mut hall_store, good, offered);
         if moved > 0 {
             if let Some(remaining) = branch_public_remaining.get_mut(&branch_key) {
@@ -1290,7 +1291,8 @@ pub fn advance_strategic_villages(
                         .unwrap_or_default(),
                 )
                 .min(16)
-                .min(hall_store.free_bulk() / good.bulk_per_unit());
+                .min(hall_store.free_bulk() / good.bulk_per_unit())
+                .min(market.collection_room(good));
             let moved = store.transfer_to(&mut hall_store, good, offered);
             if moved == 0 {
                 continue;

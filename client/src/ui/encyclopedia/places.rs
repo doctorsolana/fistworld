@@ -1649,6 +1649,10 @@ fn place_detail_model(
                 let account = business.account;
                 let previous = account.previous_day;
                 let previous_profit = previous.profit();
+                let mut held_stock = [0; Good::COUNT];
+                for (good, units) in &building.inventory {
+                    held_stock[good.index()] = *units;
+                }
                 let protected = match (business.wage, business.management, business.procurement) {
                     (Some(wage), Some(management), Some(procurement)) => business_working_capital(
                         business
@@ -1660,6 +1664,7 @@ fn place_detail_model(
                         &wage,
                         &management,
                         &procurement,
+                        Some(&held_stock),
                         place.market.as_ref(),
                     ),
                     _ => Default::default(),

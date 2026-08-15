@@ -22,9 +22,9 @@ cargo village-lab
 
 The default is the `secure` scenario: 190 simulated minutes at 100x, with eight
 founders and eight uncommitted arrivals at the start of day 2. This exercises the
-current four-resident Hamlet → Village population gate well above its minimum and tests
-late immigration, repeated housing and workforce recovery on every run. The 4/12/24
-Village/Town/City population constants are prototype balance and may be raised later.
+current 12-resident Hamlet → Village population gate and tests late immigration,
+repeated housing and workforce recovery on every run. The live population gates are
+12 for Village, 30 for Town, and a provisional 75 for City.
 The test is ignored by ordinary `cargo test` runs.
 
 Useful overrides:
@@ -176,7 +176,13 @@ reported by the household economy and are not assigned to one individual.
 The terminal invariant counts living residents plus retained death records,
 so starvation can kill residents without turning successful immigration into
 a false failure. Every survivor must still be housed, and the lifetime admitted
-population must remain exactly thirty people per settlement.
+population must remain exactly thirty people per settlement. It also audits the
+company boundary permanently: every cap table totals exactly 1,000 shares, every
+private completed site names a live `CompanyId`, its displayed owner holds shares
+in that company, and an inactive company may survive only while it has a living
+shareholder. This catches orphaned sites, ownership drift and dead companies that
+would otherwise trap circulating coin. Empty cabins must likewise hold neither a
+ghost household purse nor pantry stock after their final estate is settled.
 
 `dense-stress` places 1,000 founders around the same deterministic `Lab Meadow`
 hall. It is deliberately one town rather than several so the test pays the
@@ -353,6 +359,12 @@ through `Liquidating` to `For sale`, with falling offers rather than permanently
 inventory. Processor counts should remain tied to actual two-day utilisation, sales and
 profit—not merely to one large Wheat or Flour stockpile.
 
+Economy reports include the current Fish/Flour/Bread asks so a starvation event can be
+distinguished from an affordability failure. Public consignment is capped per good at the
+Moot's target, including in-flight porter loads; surplus intentionally remaining `at
+businesses` is healthy when the public shelf is already stocked and becomes suspicious
+only when purchasable food is empty or households are hungry.
+
 The `economy-soak` scenario also audits money before and after every real server update.
 Wallets, household purses, firm accounts, treasuries, unfinished-business escrow and queued
 market clearing are all authoritative accounts. Any one-frame mint or loss stops on the
@@ -457,7 +469,9 @@ counts and exact live obstacle entries. Leave it unset for ordinary soaks.
 
 Use a short run to iterate on early construction, but keep 190 minutes for tier
 work because physical startup plus three secure day boundaries are required. Add
-`FISTWORLD_LAB_VERBOSE=1` when the five-minute population snapshots are useful.
+Ordinary runs print bounded five-minute summaries without flooding the terminal on every
+building change. Use `FISTWORLD_LAB_VERBOSE=1` when every structural transition and every
+villager's detailed state are useful.
 
 ## Watch it in the client
 
