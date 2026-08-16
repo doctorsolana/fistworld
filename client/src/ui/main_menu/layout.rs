@@ -88,7 +88,7 @@ pub(super) fn spawn_main_menu(
                             font_size: FontSize::Px(14.0),
                             ..default()
                         },
-                        TextColor(TEXT_MUTED),
+                        TextColor(INK_INVERSE_MUTED),
                         Node {
                             margin: UiRect::bottom(Val::Px(8.0)),
                             ..default()
@@ -110,19 +110,19 @@ pub(super) fn spawn_main_menu(
                                 border_radius: BorderRadius::all(Val::Px(4.0)),
                                 ..default()
                             },
-                            BackgroundColor(Color::srgb(0.08, 0.07, 0.06)),
-                            BorderColor::from(BUTTON_BORDER),
+                            button_chrome(UiButtonVariant::Inverse),
                         ))
                         .with_children(|input_box| {
                             // IP text
                             input_box.spawn((
                                 IpTextDisplay,
+                                UiButtonLabel,
                                 Text::new(format!("{}:{}", server_address.ip, server_address.port)),
                                 TextFont {
                                     font_size: FontSize::Px(20.0),
                                     ..default()
                                 },
-                                TextColor(TEXT_COLOR),
+                                TextColor(INK_INVERSE),
                             ));
                         });
 
@@ -138,7 +138,7 @@ pub(super) fn spawn_main_menu(
                             font_size: FontSize::Px(12.0),
                             ..default()
                         },
-                        TextColor(TEXT_MUTED),
+                        TextColor(INK_INVERSE_MUTED),
                         Node {
                             margin: UiRect::top(Val::Px(6.0)),
                             ..default()
@@ -169,7 +169,7 @@ pub(super) fn spawn_main_menu(
                     font_size: FontSize::Px(14.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_INVERSE_MUTED),
                 Node {
                     position_type: PositionType::Absolute,
                     bottom: Val::Px(20.0),
@@ -180,6 +180,10 @@ pub(super) fn spawn_main_menu(
 }
 
 pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, action: MenuButton) {
+    let variant = match action {
+        MenuButton::Connect => UiButtonVariant::Primary,
+        MenuButton::Exit => UiButtonVariant::Danger,
+    };
     parent
         .spawn((
             Button,
@@ -194,17 +198,17 @@ pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, ac
                 border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::from(BUTTON_BORDER),
+            button_chrome(variant),
         ))
         .with_children(|btn| {
             btn.spawn((
                 Text::new(text),
+                UiButtonLabel,
                 TextFont {
                     font_size: FontSize::Px(22.0),
                     ..default()
                 },
-                TextColor(TEXT_COLOR),
+                TextColor(INK_INVERSE),
             ));
         });
 }

@@ -381,7 +381,7 @@ pub fn handle_dev_commands(
                             // At hamlet tier the moot hall is also the common
                             // store. This is physical stock, not a claim that
                             // the hall bought the goods or minted the payment.
-                            shared::economy::GoodsInventory::new(
+                            shared::economy::GoodsInventory::new_partitioned(
                                 shared::components::SettlementBuildingKind::Hall
                                     .storage_bulk_capacity(),
                             ),

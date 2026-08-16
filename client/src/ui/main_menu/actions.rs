@@ -2,36 +2,6 @@
 
 use super::*;
 
-pub(super) fn button_interactions(
-    mut buttons: Query<
-        (&Interaction, &mut BackgroundColor, &mut BorderColor),
-        (
-            Changed<Interaction>,
-            With<Button>,
-            Without<IpInputField>,
-            Without<DropdownToggle>,
-            Without<DropdownOption>,
-        ),
-    >,
-) {
-    for (interaction, mut bg_color, mut border_color) in buttons.iter_mut() {
-        match interaction {
-            Interaction::Pressed => {
-                *bg_color = BackgroundColor(BUTTON_PRESSED);
-                *border_color = BorderColor::from(ACCENT_COLOR);
-            }
-            Interaction::Hovered => {
-                *bg_color = BackgroundColor(BUTTON_HOVERED);
-                *border_color = BorderColor::from(ACCENT_COLOR);
-            }
-            Interaction::None => {
-                *bg_color = BackgroundColor(BUTTON_NORMAL);
-                *border_color = BorderColor::from(BUTTON_BORDER);
-            }
-        };
-    }
-}
-
 pub(super) fn handle_menu_actions(
     buttons: Query<(&Interaction, &MenuButton), Changed<Interaction>>,
     mut next_state: ResMut<NextState<GameState>>,

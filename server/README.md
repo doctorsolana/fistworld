@@ -77,8 +77,11 @@ instead an absolute per-good retain amount on the company's settlement-local bra
 by one `Sell excess`/`Hold all` choice. Sites expose a separate bounded enabled-position target.
 Storage Halls and Company Porters extend only their local branch; do not transfer inventory
 between settlements without a future explicit caravan/trade-route order.
-Autonomous firms begin with one enabled position and scale only after proving production or
-sales. All expansion/dividend reserves must use enabled positions, not architectural maximums.
+Autonomous firms begin with one enabled position, then change by one position per day toward
+the marginally profitable roster supported by recent sales, unmet demand and existing stock.
+Their cached output budget is shared by tactical and strategic production. Solvent unwanted
+sites mothball and reopen before the permit planner considers duplicate capacity. All
+expansion/dividend reserves must use enabled positions, not architectural maximums.
 NPC Storage Halls require an established branch with two other local sites; player permits stay
 available independently of that autopilot rule.
 

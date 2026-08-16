@@ -24,6 +24,15 @@ pub struct DevelopmentMarketSignals {
     pub windmills: usize,
     pub bakeries: usize,
     pub storage_halls: usize,
+    /// Completed capacity which is temporarily idle, liquidating or offered
+    /// for takeover. It suppresses duplicate construction while remaining
+    /// distinct from currently productive capacity.
+    pub recoverable_farms: usize,
+    pub recoverable_fishers: usize,
+    pub recoverable_windmills: usize,
+    pub recoverable_bakeries: usize,
+    pub recoverable_lumber_huts: usize,
+    pub recoverable_storage_halls: usize,
     pub completed_windmills: usize,
     pub completed_bakeries: usize,
     pub unproven_windmill: bool,
@@ -35,6 +44,23 @@ pub struct DevelopmentMarketSignals {
     pub bread_stock: u32,
     pub wood_stock: u32,
     pub recent_wheat_output: u32,
+    pub recent_fish_output: u32,
+    /// Rated daily output from active and already-approved farms. Unlike
+    /// `recent_wheat_output`, this closes the permit signal during startup,
+    /// before the first field has completed a physical harvest.
+    pub anticipated_wheat_output: u32,
+    /// Rated daily output from active and already-approved fishing huts.
+    pub anticipated_fish_output: u32,
+    /// Rated output from not-yet-completed extractors. Pending capacity is
+    /// counted conservatively so one permit has time to become embodied, but
+    /// it cannot masquerade as a proven full shift.
+    pub pending_wheat_output: u32,
+    pub pending_fish_output: u32,
+    /// Demonstrated daily Wheat demand committed outside this settlement.
+    /// This remains zero until physical caravan contracts are introduced; it
+    /// is deliberately separate from local mill purchases so a future grain-
+    /// exporting town can expand without weakening local oversupply control.
+    pub recent_wheat_export_demand: u32,
     pub recent_flour_output: u32,
     pub recent_bread_output: u32,
     pub recent_windmill_input: u32,
@@ -43,6 +69,22 @@ pub struct DevelopmentMarketSignals {
     pub recent_bakery_input: u32,
     pub recent_bakery_sales: u32,
     pub recent_bakery_profit: i64,
+    /// Rated output exposed by current staffing, plus already-built capacity
+    /// which could be exposed by hiring before another plant is justified.
+    pub active_windmill_output_capacity: u32,
+    pub active_bakery_output_capacity: u32,
+    pub idle_windmill_output_capacity: u32,
+    pub idle_bakery_output_capacity: u32,
+    pub lossmaking_windmills: usize,
+    pub lossmaking_bakeries: usize,
+    /// Physical logistics evidence. Stock waiting at productive sites is work
+    /// for carts; recent dispatched bulk and free depot space are capacity
+    /// already available to clear it.
+    pub stranded_output_bulk: u32,
+    pub stranded_output_value: u64,
+    pub recent_logistics_bulk: u32,
+    pub active_storage_free_bulk: u32,
+    pub recent_storage_cost: u64,
     pub construction_wood_demand: u32,
 }
 
@@ -50,6 +92,18 @@ impl DevelopmentMarketSignals {
     pub fn beds(self) -> usize {
         self.houses
             .saturating_mul(SettlementBuildingKind::House.housing_capacity() as usize)
+    }
+
+    pub const fn recoverable(self, kind: SettlementBuildingKind) -> usize {
+        match kind {
+            SettlementBuildingKind::Farmstead => self.recoverable_farms,
+            SettlementBuildingKind::FishermansHut => self.recoverable_fishers,
+            SettlementBuildingKind::Windmill => self.recoverable_windmills,
+            SettlementBuildingKind::Bakery => self.recoverable_bakeries,
+            SettlementBuildingKind::LumberjackHut => self.recoverable_lumber_huts,
+            SettlementBuildingKind::StorageHall => self.recoverable_storage_halls,
+            _ => 0,
+        }
     }
 }
 
@@ -85,8 +139,6 @@ const PROCESSOR_BACKLOG_CLEAR_DAYS: u32 = 7;
 /// back into a conservative daily flow before comparing it with daily plant
 /// capacity.
 const RECENT_OUTPUT_WINDOW_DAYS: u32 = 2;
-const PROCESSOR_MIN_UTILISATION_PERCENT: u32 = 60;
-const PROCESSOR_MIN_SALES_PERCENT: u32 = 30;
 
 fn clamp_score(score: f32) -> f32 {
     if score.is_finite() {
@@ -105,27 +157,22 @@ fn sustainable_daily_input(recent_output: u32, stock: u32) -> u32 {
 fn processor_expansion_proven(
     kind: SettlementBuildingKind,
     existing: usize,
-    recent_input: u32,
-    recent_sales: u32,
+    active_output_capacity: u32,
+    idle_output_capacity: u32,
+    recoverable_sites: usize,
+    lossmaking_sites: usize,
+    supported_output: u32,
     recent_profit: i64,
 ) -> bool {
     if existing == 0 {
         return true;
     }
-    let Some(capacity) = super::rated_daily_production(kind, 1.0) else {
-        return false;
-    };
-    let window_input_capacity = (existing as u32)
-        .saturating_mul(capacity.input_units())
-        .saturating_mul(RECENT_OUTPUT_WINDOW_DAYS);
-    let required_input = window_input_capacity
-        .saturating_mul(PROCESSOR_MIN_UTILISATION_PERCENT)
-        .div_ceil(100);
-    let required_sales = window_input_capacity
-        .saturating_mul(capacity.output_per_input())
-        .saturating_mul(PROCESSOR_MIN_SALES_PERCENT)
-        .div_ceil(100);
-    recent_input >= required_input && recent_sales >= required_sales && recent_profit > 0
+    let _ = kind;
+    recoverable_sites == 0
+        && idle_output_capacity == 0
+        && lossmaking_sites == 0
+        && recent_profit > 0
+        && supported_output > active_output_capacity
 }
 
 fn processor_market_facts(
@@ -258,6 +305,58 @@ fn food_pressure(
     production_gap.max(reserve_gap)
 }
 
+/// Capacity pressure for one kind of food extractor.
+///
+/// The other extractor may satisfy local residents, while committed exports
+/// belong only to the good actually ordered. Fertile land therefore closes a
+/// local Farmstead shortage faster, but real caravan demand can reopen it.
+fn extractor_capacity_pressure(
+    kind: SettlementBuildingKind,
+    signals: DevelopmentMarketSignals,
+) -> f32 {
+    let conservative_output = |rated: u32, pending: u32, recent: u32| {
+        let active_rated = rated.saturating_sub(pending);
+        let recent_daily = recent.div_ceil(RECENT_OUTPUT_WINDOW_DAYS);
+        // Commutes, carrying and market hand-offs are physical work too. A
+        // third of nameplate output is the safe promise until the settlement
+        // has observed this extractor doing better; pending sites receive the
+        // same discount so a construction queue cannot suppress all entry.
+        recent_daily
+            .max(active_rated.div_ceil(3))
+            .saturating_add(pending.div_ceil(3))
+    };
+    let wheat = conservative_output(
+        signals.anticipated_wheat_output,
+        signals.pending_wheat_output,
+        signals.recent_wheat_output,
+    );
+    let fish = conservative_output(
+        signals.anticipated_fish_output,
+        signals.pending_fish_output,
+        signals.recent_fish_output,
+    );
+    // Raw Wheat is not a ration. For fishing investment, only the grain which
+    // the local chain recently turned into Flour/Bread can displace Fish.
+    // Bakery output contributes only its net gain over the Flour it consumed.
+    let grain_food = signals
+        .recent_flour_output
+        .saturating_add(signals.recent_bread_output / 2)
+        .div_ceil(RECENT_OUTPUT_WINDOW_DAYS);
+    let (anticipated, competing_local, export_demand) = match kind {
+        SettlementBuildingKind::Farmstead => (wheat, fish, signals.recent_wheat_export_demand),
+        SettlementBuildingKind::FishermansHut => (fish, grain_food, 0),
+        _ => return 0.0,
+    };
+    let target = signals
+        .residents
+        .saturating_sub(competing_local)
+        .saturating_add(export_demand);
+    if target == 0 {
+        return 0.0;
+    }
+    (1.0 - anticipated as f32 / target as f32).clamp(0.0, 1.0)
+}
+
 fn opportunity_score(
     kind: SettlementBuildingKind,
     signals: DevelopmentMarketSignals,
@@ -268,6 +367,11 @@ fn opportunity_score(
     let residents = signals.residents.max(1) as usize;
     let pressure = food_pressure(signals, economy, policies);
     let shelter_pressure = housing_pressure(signals);
+    if kind != SettlementBuildingKind::House && signals.recoverable(kind) > 0 {
+        // Reopen or buy the existing structure before consuming land, Wood
+        // and builder time on an economically identical duplicate.
+        return 4.0;
+    }
     let raw = match kind {
         SettlementBuildingKind::House => {
             let missing_beds = residents.saturating_sub(signals.beds());
@@ -280,30 +384,49 @@ fn opportunity_score(
             82.0 + 38.0 * shelter_pressure
         }
         SettlementBuildingKind::Farmstead => {
-            if signals.farms + signals.fishers == 0 {
+            if signals.farms + signals.fishers == 0
+                && pressure >= 0.5
+                && signals
+                    .wheat_stock
+                    .saturating_add(signals.flour_stock)
+                    .saturating_add(signals.bread_stock)
+                    == 0
+            {
                 return 130.0;
             }
+            let capacity_pressure =
+                extractor_capacity_pressure(SettlementBuildingKind::Farmstead, signals);
             let mill_capacity = signals.windmills.max(1) as u32
                 * super::rated_daily_production(SettlementBuildingKind::Windmill, 1.0)
                     .map_or(1, |capacity| capacity.input_units());
             let raw_supply = signals
                 .wheat_stock
-                .saturating_add(signals.recent_wheat_output);
+                .saturating_add(signals.recent_wheat_output)
+                .saturating_sub(
+                    signals
+                        .recent_wheat_export_demand
+                        .saturating_mul(RECENT_OUTPUT_WINDOW_DAYS),
+                );
             let backlog = (raw_supply as f32 / mill_capacity as f32).clamp(0.0, 3.0);
             // Food pressure advertises extraction, but a growing pile of raw
             // Wheat tells investors that processing—not another field—is the
             // current bottleneck.
-            (12.0 + pressure * 70.0 - backlog * 30.0 - signals.farms as f32 * 5.0).max(5.0)
+            (12.0 + pressure.min(capacity_pressure) * 70.0
+                - backlog * 30.0
+                - signals.farms as f32 * 5.0)
+                .max(5.0)
         }
         SettlementBuildingKind::FishermansHut => {
-            if signals.farms + signals.fishers == 0 {
+            if signals.farms + signals.fishers == 0 && pressure >= 0.5 {
                 return 128.0;
             }
+            let capacity_pressure =
+                extractor_capacity_pressure(SettlementBuildingKind::FishermansHut, signals);
             // Fishing competes with farming as its own investment. It has no
             // Wheat-processing bottleneck, while repeated huts steadily make
             // the next shoreline claim less compelling. Geography makes the
             // final decision: inland applicants simply cannot secure a plot.
-            (14.0 + pressure * 70.0 - signals.fishers as f32 * 8.0).max(5.0)
+            (14.0 + pressure.min(capacity_pressure) * 70.0 - signals.fishers as f32 * 8.0).max(5.0)
         }
         SettlementBuildingKind::Windmill => {
             let upstream_exists = signals.farms > 0 || signals.wheat_stock > 0;
@@ -322,19 +445,38 @@ fn opportunity_score(
             if competitive {
                 return competition_score(kind, market.expect("competition has market"));
             }
+            if signals.completed_windmills < signals.windmills || signals.unproven_windmill {
+                return 5.0;
+            }
+            let capacity = super::rated_daily_production(kind, 1.0)
+                .expect("windmill opportunity requires rated capacity");
+            let output_demand = market.map_or(0, |market| {
+                let pool = market.pool(capacity.output);
+                pool.day
+                    .requested_units()
+                    .max(pool.previous_day.requested_units())
+                    .min(u64::from(u32::MAX)) as u32
+            });
+            let sales_demand = signals
+                .recent_windmill_sales
+                .div_ceil(RECENT_OUTPUT_WINDOW_DAYS);
+            let supported_output = daily_input
+                .saturating_mul(capacity.output_per_input())
+                .min(output_demand.max(sales_demand));
             if !processor_expansion_proven(
                 SettlementBuildingKind::Windmill,
                 signals.windmills,
-                signals.recent_windmill_input,
-                signals.recent_windmill_sales,
+                signals.active_windmill_output_capacity,
+                signals.idle_windmill_output_capacity,
+                signals.recoverable_windmills,
+                signals.lossmaking_windmills,
+                supported_output,
                 signals.recent_windmill_profit,
             ) {
                 return 5.0;
             }
-            let capacity = signals.windmills as u32
-                * super::rated_daily_production(SettlementBuildingKind::Windmill, 1.0)
-                    .map_or(1, |capacity| capacity.input_units());
-            let uncovered = daily_input.saturating_sub(capacity);
+            let uncovered =
+                supported_output.saturating_sub(signals.active_windmill_output_capacity);
             if signals.windmills > 0 && uncovered == 0 {
                 return 5.0;
             }
@@ -359,11 +501,29 @@ fn opportunity_score(
             if competitive {
                 return competition_score(kind, market.expect("competition has market"));
             }
+            if signals.completed_bakeries < signals.bakeries || signals.unproven_bakery {
+                return 5.0;
+            }
+            let capacity = super::rated_daily_production(kind, 1.0)
+                .expect("bakery opportunity requires rated capacity");
+            let output_demand = market.map_or(u64::from(signals.residents), |market| {
+                let pool = market.pool(capacity.output);
+                pool.day
+                    .requested_units()
+                    .max(pool.previous_day.requested_units())
+                    .max(u64::from(signals.residents))
+            });
+            let supported_output = daily_flour
+                .saturating_mul(capacity.output_per_input())
+                .min(output_demand.min(u64::from(u32::MAX)) as u32);
             if !processor_expansion_proven(
                 SettlementBuildingKind::Bakery,
                 signals.bakeries,
-                signals.recent_bakery_input,
-                signals.recent_bakery_sales,
+                signals.active_bakery_output_capacity,
+                signals.idle_bakery_output_capacity,
+                signals.recoverable_bakeries,
+                signals.lossmaking_bakeries,
+                supported_output,
                 signals.recent_bakery_profit,
             ) {
                 return 5.0;
@@ -411,36 +571,26 @@ fn opportunity_score(
             48.0 + missing_capacity * 13.0 + (shortage as f32 * 0.08).min(18.0)
         }
         SettlementBuildingKind::StorageHall => {
-            let operating_sites = signals
-                .farms
-                .saturating_add(signals.fishers)
-                .saturating_add(signals.windmills)
-                .saturating_add(signals.bakeries)
-                .saturating_add(signals.lumber_huts);
-            // A depot is branch infrastructure, not a sensible founding
-            // trade. Do not advertise one against the first workshop merely
-            // because integer ceiling division would otherwise say "one".
-            // Three operating sites establish a real local logistics need;
-            // after that, roughly one depot per six sites is enough.
-            let desired = if operating_sites < 3 {
-                0
-            } else {
-                operating_sites.div_ceil(6)
-            };
-            if desired == 0 || signals.storage_halls >= desired {
+            let unhandled_bulk = signals
+                .stranded_output_bulk
+                .saturating_sub(signals.recent_logistics_bulk)
+                .saturating_sub(signals.active_storage_free_bulk);
+            if unhandled_bulk == 0 || signals.stranded_output_bulk == 0 {
                 return 4.0;
             }
-            let local_stock = signals
-                .wheat_stock
-                .saturating_add(signals.flour_stock)
-                .saturating_add(signals.bread_stock)
-                .saturating_add(signals.wood_stock);
-            // Storage becomes an attractive investment when several sites
-            // share a branch or when physical stock is already crowding the
-            // ordinary workshop stores. It is useful infrastructure, not a
-            // mandatory civic project.
-            24.0 + operating_sites.saturating_sub(2) as f32 * 7.0
-                + (local_stock as f32 / 20.0).min(45.0)
+            let value_at_risk = signals
+                .stranded_output_value
+                .saturating_mul(u64::from(unhandled_bulk))
+                / u64::from(signals.stranded_output_bulk.max(1));
+            let expected_cost = signals
+                .recent_storage_cost
+                .div_ceil(RECENT_OUTPUT_WINDOW_DAYS as u64)
+                .max(FOUNDING_DAILY_WAGE);
+            if value_at_risk <= expected_cost {
+                return 4.0;
+            }
+            let return_multiple = value_at_risk as f32 / expected_cost.max(1) as f32;
+            48.0 + (return_multiple.ln_1p() * 18.0).min(50.0)
         }
         SettlementBuildingKind::Hall
         | SettlementBuildingKind::Market
@@ -660,6 +810,18 @@ pub fn investor_score(
     holdings: usize,
     person_seed: u64,
 ) -> f32 {
+    if opportunity.score <= 15.0
+        && matches!(
+            opportunity.kind,
+            SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut
+        )
+    {
+        // Good terrain is valuable only when somebody can use the output.
+        // Keep the permit legal on the public board, but do not let an NPC's
+        // quality/profit estimate override a town whose active and pending
+        // extractor capacity already covers demonstrated local/export demand.
+        return f32::NEG_INFINITY;
+    }
     let profit = expected_daily_profit(opportunity.kind, site_quality, market).unwrap_or(0);
     let mut profit_signal =
         (profit as f32 / FOUNDING_DAILY_WAGE.max(1) as f32 * 12.0).clamp(-32.0, 32.0);
@@ -795,6 +957,47 @@ mod tests {
     }
 
     #[test]
+    fn anticipated_extractors_close_startup_hunger_but_exports_reopen_farms() {
+        let policies = SettlementPolicies::default();
+        let economy = SettlementEconomy {
+            observed_days: 2,
+            reserve_days: 0.0,
+            recent_food_production: 0.0,
+            ..Default::default()
+        };
+        let covered = DevelopmentMarketSignals {
+            residents: 15,
+            farms: 2,
+            anticipated_wheat_output: 16,
+            recent_wheat_output: 32,
+            houses: 4,
+            ..Default::default()
+        };
+        let local = private_opportunities(covered, Some(&economy), None, &policies)
+            .into_iter()
+            .find(|opportunity| opportunity.kind == SettlementBuildingKind::Farmstead)
+            .unwrap();
+        assert!(local.score <= 15.0);
+        assert!((0..100).all(|seed| {
+            investor_score(local, BusinessStrategy::Opportunistic, 1.0, None, 0, seed)
+                < investor_threshold(BusinessStrategy::Opportunistic)
+        }));
+
+        let exporting = DevelopmentMarketSignals {
+            recent_wheat_export_demand: 12,
+            ..covered
+        };
+        let export = private_opportunities(exporting, Some(&economy), None, &policies)
+            .into_iter()
+            .find(|opportunity| opportunity.kind == SettlementBuildingKind::Farmstead)
+            .unwrap();
+        assert!(
+            export.score > local.score,
+            "real external demand must reopen a fertile town's farm opportunity"
+        );
+    }
+
+    #[test]
     fn bread_scarcity_cannot_queue_repeated_empty_bakeries() {
         let policies = SettlementPolicies::default();
         let prospective = DevelopmentMarketSignals {
@@ -900,16 +1103,21 @@ mod tests {
         assert_eq!(covered_mill.score, 5.0);
 
         let backlog = DevelopmentMarketSignals {
-            // Sustained output, rather than a one-off stockpile, proves that
-            // the existing mill's rated eighteen-input daily capacity is
-            // insufficient and that the current firm is genuinely utilised.
-            recent_wheat_output: 48,
-            recent_windmill_input: 24,
-            recent_windmill_sales: 12,
+            // Sustained upstream flow alone is not enough: requested Flour
+            // must exceed the current mill's exposed output capacity too.
+            recent_wheat_output: 50,
+            recent_windmill_input: 36,
+            recent_windmill_sales: 18,
             recent_windmill_profit: 100,
+            completed_windmills: 1,
+            active_windmill_output_capacity: 18,
             ..covered
         };
-        let extra_mill = private_opportunities(backlog, None, None, &policies)
+        let mut market = MootMarket::founding();
+        market.purchase_recording_demand(Good::Flour, 25, u64::MAX, None, None);
+        market.begin_new_day();
+        market.purchase_recording_demand(Good::Flour, 25, u64::MAX, None, None);
+        let extra_mill = private_opportunities(backlog, None, Some(&market), &policies)
             .into_iter()
             .find(|opportunity| opportunity.kind == SettlementBuildingKind::Windmill)
             .unwrap();
@@ -1096,6 +1304,8 @@ mod tests {
         let established = DevelopmentMarketSignals {
             farms: 2,
             windmills: 1,
+            stranded_output_bulk: 300,
+            stranded_output_value: 30 * shared::economy::PENNIES_PER_COIN,
             ..tiny
         };
         let useful = private_opportunities(established, None, None, &policies)
@@ -1106,6 +1316,7 @@ mod tests {
 
         let already_supplied = DevelopmentMarketSignals {
             storage_halls: 1,
+            active_storage_free_bulk: established.stranded_output_bulk,
             ..established
         };
         let duplicate = private_opportunities(already_supplied, None, None, &policies)

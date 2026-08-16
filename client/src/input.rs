@@ -10,8 +10,8 @@ use bevy::prelude::*;
 /// Which UI surfaces are currently capturing input.
 #[derive(Resource, Default)]
 pub struct InputState {
-    /// True when the inventory UI is open.
-    pub inventory_open: bool,
+    /// True while any surface created by the shared modal foundation exists.
+    pub modal_open: bool,
     /// True when pause menu is open.
     pub pause_menu_open: bool,
     /// True when world map is open.
@@ -26,11 +26,14 @@ pub struct InputState {
     pub history_open: bool,
     /// True while the owner is editing one business's operating policies.
     pub business_management_open: bool,
+    /// True while the compact permit tray is open. It is not a full-screen
+    /// modal, but it still owns pointer and keyboard input.
+    pub permit_tray_open: bool,
 }
 
 impl InputState {
     pub(crate) fn ui_blocking(&self) -> bool {
-        self.inventory_open
+        self.modal_open
             || self.pause_menu_open
             || self.map_open
             || self.debug_menu_open
@@ -38,5 +41,6 @@ impl InputState {
             || self.encyclopedia_open
             || self.history_open
             || self.business_management_open
+            || self.permit_tray_open
     }
 }

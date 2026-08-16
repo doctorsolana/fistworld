@@ -24,9 +24,10 @@ use shared::protocol::{DevCommand, DevStatus, ReliableChannel};
 
 use crate::input::InputState;
 use crate::states::GameState;
+use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant};
 use crate::ui::styles::{
-    plate_shadow, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, EMBER, EMBER_RULE, INK,
-    INK_INVERSE, INK_MUTED, LIMEWASH, LIMEWASH_LIT, PLATE_RULE, PLATE_RULE_SOFT, RADIUS, SLATE,
+    plate_shadow, EMBER, EMBER_RULE, INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, PLATE_RULE,
+    PLATE_RULE_SOFT, RADIUS,
 };
 
 pub struct HudPlugin;
@@ -136,10 +137,6 @@ impl HudMode {
 }
 
 /// Every HUD plate.
-pub const PANEL_BACKGROUND: Color = LIMEWASH;
-/// Text ON the filled active speed button. Must be the light inverse: ink on a
-/// dark slate fill is unreadable, and this is the one place the value flips.
-pub(super) const WARP_ACTIVE_TEXT: Color = INK_INVERSE;
 
 #[derive(Component)]
 struct HudRoot;

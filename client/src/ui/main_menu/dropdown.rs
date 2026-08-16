@@ -33,29 +33,30 @@ pub(super) fn spawn_dropdown(parent: &mut ChildSpawnerCommands<'_>, presets: &Se
                         border_radius: BorderRadius::all(Val::Px(4.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.10, 0.09, 0.07)),
-                    BorderColor::from(BUTTON_BORDER),
+                    button_chrome(UiButtonVariant::Inverse),
                 ))
                 .with_children(|toggle| {
                     // Selected name
                     toggle.spawn((
                         DropdownText,
+                        UiButtonLabel,
                         Text::new(selected_name),
                         TextFont {
                             font_size: FontSize::Px(16.0),
                             ..default()
                         },
-                        TextColor(TEXT_COLOR),
+                        TextColor(INK_INVERSE),
                     ));
 
                     // Arrow indicator
                     toggle.spawn((
                         Text::new("▼"),
+                        UiButtonLabel,
                         TextFont {
                             font_size: FontSize::Px(12.0),
                             ..default()
                         },
-                        TextColor(TEXT_MUTED),
+                        TextColor(INK_INVERSE_MUTED),
                     ));
                 });
 
@@ -72,7 +73,7 @@ pub(super) fn spawn_dropdown(parent: &mut ChildSpawnerCommands<'_>, presets: &Se
                         ..default()
                     },
                     BackgroundColor(Color::srgb(0.10, 0.09, 0.07)),
-                    BorderColor::from(BUTTON_BORDER),
+                    BorderColor::from(PLATE_RULE),
                     ZIndex(10), // On top of other elements
                 ))
                 .with_children(|options| {
@@ -91,24 +92,17 @@ pub(super) fn spawn_dropdown(parent: &mut ChildSpawnerCommands<'_>, presets: &Se
                                     padding: UiRect::horizontal(Val::Px(12.0)),
                                     ..default()
                                 },
-                                BackgroundColor(if is_selected {
-                                    Color::srgb(0.18, 0.14, 0.10)
-                                } else {
-                                    Color::srgb(0.10, 0.09, 0.07)
-                                }),
+                                selected_button_chrome(UiButtonVariant::Inverse, is_selected),
                             ))
                             .with_children(|option| {
                                 option.spawn((
                                     Text::new(&entry.name),
+                                    UiButtonLabel,
                                     TextFont {
                                         font_size: FontSize::Px(15.0),
                                         ..default()
                                     },
-                                    TextColor(if is_selected {
-                                        ACCENT_COLOR
-                                    } else {
-                                        TEXT_COLOR
-                                    }),
+                                    TextColor(if is_selected { EMBER } else { INK_INVERSE }),
                                 ));
                             });
                     }
@@ -184,8 +178,7 @@ pub(super) fn handle_dropdown_selection(
 pub(super) fn update_dropdown_display(
     presets: Res<ServerPresets>,
     mut text_query: Query<&mut Text, With<DropdownText>>,
-    mut options_query: Query<(&DropdownOption, &mut BackgroundColor, &Children)>,
-    mut text_colors: Query<&mut TextColor>,
+    mut options_query: Query<(&DropdownOption, &mut UiButtonStyle)>,
 ) {
     // Update toggle text
     let selected_name = presets
@@ -201,24 +194,8 @@ pub(super) fn update_dropdown_display(
     }
 
     // Update option highlighting
-    for (option, mut bg, children) in options_query.iter_mut() {
+    for (option, mut style) in options_query.iter_mut() {
         let is_selected = presets.selected_index == Some(option.index);
-
-        *bg = BackgroundColor(if is_selected {
-            Color::srgb(0.18, 0.14, 0.10)
-        } else {
-            Color::srgb(0.10, 0.09, 0.07)
-        });
-
-        // Update text color
-        for child in children.iter() {
-            if let Ok(mut color) = text_colors.get_mut(child) {
-                *color = TextColor(if is_selected {
-                    ACCENT_COLOR
-                } else {
-                    TEXT_COLOR
-                });
-            }
-        }
+        style.selected = is_selected;
     }
 }

@@ -28,77 +28,6 @@ pub(super) fn reset_menu_state(mut state: ResMut<PauseMenuState>) {
     state.transition = 0.0;
 }
 
-pub(super) fn button_interactions(
-    mut buttons: Query<
-        (
-            &Interaction,
-            &mut BackgroundColor,
-            Option<&GraphicsToggle>,
-            Option<&SliderStep>,
-            Option<&InputSliderStep>,
-            Option<&DisplayConfirmationAction>,
-        ),
-        (Changed<Interaction>, With<Button>),
-    >,
-    settings: Res<GraphicsSettings>,
-) {
-    for (interaction, mut bg_color, toggle_opt, slider_opt, input_slider_opt, confirmation_opt) in
-        buttons.iter_mut()
-    {
-        // For toggle buttons, use green/red based on state
-        if let Some(toggle) = toggle_opt {
-            let enabled = match toggle {
-                GraphicsToggle::Bloom => settings.bloom_enabled,
-                GraphicsToggle::Ssao => settings.ssao_enabled,
-                GraphicsToggle::Shadows => settings.shadows_enabled,
-                GraphicsToggle::Atmosphere => settings.atmosphere_enabled,
-                GraphicsToggle::Clouds => settings.clouds_enabled,
-                GraphicsToggle::FarTerrain => settings.far_terrain_enabled,
-                GraphicsToggle::Props => settings.props_enabled,
-                GraphicsToggle::Vsync => settings.vsync_enabled,
-                GraphicsToggle::FoliageCutout => settings.foliage_cutout_enabled,
-            };
-
-            let base_color = if enabled {
-                Color::srgb(0.2, 0.55, 0.3)
-            } else {
-                Color::srgb(0.55, 0.2, 0.2)
-            };
-
-            *bg_color = match interaction {
-                Interaction::Pressed => BackgroundColor(base_color.lighter(0.15)),
-                Interaction::Hovered => BackgroundColor(base_color.lighter(0.08)),
-                Interaction::None => BackgroundColor(base_color),
-            };
-        } else if let Some(action) = confirmation_opt {
-            let base_color = match action {
-                DisplayConfirmationAction::Keep => Color::srgb(0.2, 0.55, 0.3),
-                DisplayConfirmationAction::Revert => Color::srgb(0.55, 0.2, 0.2),
-            };
-            *bg_color = match interaction {
-                Interaction::Pressed => BackgroundColor(base_color.lighter(0.15)),
-                Interaction::Hovered => BackgroundColor(base_color.lighter(0.08)),
-                Interaction::None => BackgroundColor(base_color),
-            };
-        } else if slider_opt.is_some() || input_slider_opt.is_some() {
-            // Slider step buttons ([-] [+]) for both graphics and input settings
-            let base_color = Color::srgb(0.3, 0.3, 0.35);
-            *bg_color = match interaction {
-                Interaction::Pressed => BackgroundColor(base_color.lighter(0.2)),
-                Interaction::Hovered => BackgroundColor(base_color.lighter(0.1)),
-                Interaction::None => BackgroundColor(base_color),
-            };
-        } else {
-            // Regular menu buttons
-            *bg_color = match interaction {
-                Interaction::Pressed => BackgroundColor(BUTTON_PRESSED),
-                Interaction::Hovered => BackgroundColor(BUTTON_HOVERED),
-                Interaction::None => BackgroundColor(BUTTON_NORMAL),
-            };
-        }
-    }
-}
-
 pub(super) fn handle_pause_actions(
     buttons: Query<(&Interaction, &PauseButton), Changed<Interaction>>,
     mut pause_open: ResMut<PauseMenuOpen>,
@@ -163,7 +92,7 @@ pub(super) fn handle_graphics_toggles(
     buttons: Query<(&Interaction, &GraphicsToggle), Changed<Interaction>>,
     mut settings: ResMut<GraphicsSettings>,
     mut toggle_texts: Query<(&ToggleText, &mut Text)>,
-    mut toggle_buttons: Query<(&GraphicsToggle, &mut BackgroundColor), With<Button>>,
+    mut toggle_buttons: Query<(&GraphicsToggle, &mut UiButtonStyle), With<Button>>,
 ) {
     for (interaction, toggle) in buttons.iter() {
         if *interaction == Interaction::Pressed {
@@ -220,16 +149,9 @@ pub(super) fn handle_graphics_toggles(
                 }
             }
 
-            // Update the button color
-            let new_color = if new_value {
-                Color::srgb(0.2, 0.55, 0.3)
-            } else {
-                Color::srgb(0.55, 0.2, 0.2)
-            };
-
-            for (btn_toggle, mut bg_color) in toggle_buttons.iter_mut() {
+            for (btn_toggle, mut style) in toggle_buttons.iter_mut() {
                 if std::mem::discriminant(btn_toggle) == std::mem::discriminant(toggle) {
-                    *bg_color = BackgroundColor(new_color);
+                    style.selected = new_value;
                 }
             }
         }
@@ -643,7 +565,7 @@ pub(super) fn handle_escape_key(
     mut cursor_opts: Query<&mut CursorOptions>,
 ) {
     if keyboard.just_pressed(KeyCode::Escape) {
-        if input_state.inventory_open || input_state.map_open || input_state.debug_menu_open {
+        if !pause_open.0 && input_state.ui_blocking() {
             return;
         }
         pause_open.0 = !pause_open.0;

@@ -660,6 +660,58 @@ check_loop("carry", K + 1)
 
 
 # ==================================================================================================
+# BODY: pull -- hauling a two-handled cart.
+#
+# THE CLIP DEFINES WHERE THE CART MUST BE, not the other way round. There is no attach joint for a
+# cart and there cannot usefully be one: the rig has `attach.tool.R` and `attach.carry` and no left
+# hand equivalent, and a cart on the ground must not inherit the chest's bob anyway. So the cart is a
+# world prop, the hands grip its handles, and the ONLY way the two meet is if the handles are built
+# to the positions this clip puts the hands in. Author the pose, measure the hands, build to the
+# measurement -- never the reverse.
+#
+# Arms go BACK and slightly OUT: back because the handles trail behind, out because hands swinging
+# through the hips is the failure this pose invites. They do not swing -- like `carry`, both hands are
+# committed, and an arm swing with a cart attached would either detach the hands or saw the cart
+# back and forth. They take the bob only, so the grip rides.
+#
+# The torso leans FORWARD, which is the opposite of `carry`. Someone carrying a box counterweights it
+# by leaning back; someone pulling a load leans into the pull. Same rig, opposite sign, and getting it
+# backwards makes a porter look like they are being dragged.
+#
+# Cadence is WALK_LOOP, as `carry` is, so a porter picking up or dropping the cart keeps its stride.
+# ==================================================================================================
+PULL_LOOP = WALK_LOOP
+begin("pull")
+Q = PULL_LOOP
+for f in range(1, Q + 2):
+    t = 2 * math.pi * (f - 1) / Q
+    stride = math.sin(t)
+    bob = math.cos(2 * t)
+    # A shorter stride than the free walk: a loaded haul is a shorter, heavier step.
+    key("leg.L",  f, rot=(D(30) * stride, 0, 0))
+    key("leg.R",  f, rot=(D(-30) * stride, 0, 0))
+    key("foot.L", f, rot=(D(-12) * stride + D(3) * bob, 0, 0))
+    key("foot.R", f, rot=(D(12) * stride + D(3) * bob, 0, 0))
+    key("torso",  f, rot=(D(13), D(-3) * stride, 0))     # into the pull
+    key("head",   f, rot=(D(-9), D(4) * stride, 0))      # and the head comes back up to see
+    key("hips",   f, rot=(0, D(5) * stride, 0))
+    # Both arms trail back onto the handles. 1.4 deg of bob, no swing.
+    key("arm.L",  f, rot=(D(31 + 1.4 * bob), 0, D(11)))
+    key("arm.R",  f, rot=(D(31 + 1.4 * bob), 0, D(-11)))
+    key("hand.L", f, rot=(D(-16), 0, 0))                 # wrist rolls onto the grip
+    key("hand.R", f, rot=(D(-16), 0, 0))
+    key("root",   f, loc=(0, 0, 0))
+fill_rest({"leg.L", "leg.R", "foot.L", "foot.R", "torso", "head", "hips",
+           "arm.L", "hand.L", "arm.R", "hand.R", "root"}, list(range(1, Q + 2)))
+pull = finish("pull", BODY_BONES)
+scene.frame_start, scene.frame_end = 1, Q + 1
+lo = ground(pull, range(1, Q + 2))
+log(f"  pull floor: {min(lo):+.6f}..{max(lo):+.6f}")
+assert min(lo) > -0.0009, f"pull sinks {min(lo):.5f}"
+check_loop("pull", Q + 1)
+
+
+# ==================================================================================================
 # FACE: eyes only. Mood is three numbers -- openness, tilt, gaze -- on two rectangles.
 # ==================================================================================================
 BLINKS = (18, 61, 95)      # uneven gaps so it does not read as a metronome

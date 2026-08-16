@@ -25,6 +25,10 @@ impl ProcessingRoutine {
         self.workplace
     }
 
+    pub(crate) const fn hall(&self) -> Entity {
+        self.hall
+    }
+
     pub(crate) const fn is_working_inside(&self) -> bool {
         matches!(self.phase, ProcessingPhase::Working)
     }
@@ -74,6 +78,7 @@ pub fn assign_processing_routines(
         &shared::components::BuildingId,
         &shared::components::BuildingOf,
         Option<&BusinessCondition>,
+        Option<&BusinessOperatingPlan>,
     )>,
     settlements: Query<(
         Entity,
@@ -120,13 +125,16 @@ pub fn assign_processing_routines(
         roster.sort_unstable_by_key(|entity| entity.to_bits());
     }
 
-    for (workplace, building, at, rotation, building_id, building_of, condition) in
+    for (workplace, building, at, rotation, building_id, building_of, condition, plan) in
         workplaces.iter()
     {
         let Some(recipe) = processing_recipe(building.kind) else {
             continue;
         };
         if condition.is_some_and(|condition| !condition.state.can_operate()) {
+            continue;
+        }
+        if plan.is_some_and(|plan| plan.remaining(clock.day) < recipe.output_units) {
             continue;
         }
         let Some((hall, _, hall_at, hall_rotation)) = settlements
@@ -240,6 +248,7 @@ pub fn run_processing_routines(
             &shared::components::BuildingId,
             &mut GoodsInventory,
             Option<&BusinessCondition>,
+            Option<&mut BusinessOperatingPlan>,
         ),
         Without<CharacterKind>,
     >,
@@ -287,7 +296,7 @@ pub fn run_processing_routines(
         if home.is_some() || shopping.is_some() || road_work.is_some() || door_transit.is_some() {
             continue;
         }
-        let Ok((building, at, rotation, building_id, mut inventory, condition)) =
+        let Ok((building, at, rotation, building_id, mut inventory, condition, mut plan)) =
             workplaces.get_mut(routine.workplace)
         else {
             commands.entity(worker).remove::<ProcessingRoutine>();
@@ -352,6 +361,13 @@ pub fn run_processing_routines(
             ProcessingPhase::Working => {
                 *activity = CharacterActivity::Indoors;
                 let recipe = routine.recipe;
+                let remaining = plan
+                    .as_deref()
+                    .map_or(u32::MAX, |plan| plan.remaining(clock.day));
+                if remaining < recipe.output_units {
+                    routine.work_seconds = 0.0;
+                    continue;
+                }
                 let has_input = inventory.amount(recipe.input) >= recipe.input_units;
                 let reclaimed = recipe
                     .input_units
@@ -364,7 +380,8 @@ pub fn run_processing_routines(
                     continue;
                 }
                 routine.work_seconds += dt;
-                let requested = (routine.work_seconds / recipe.work_seconds).floor() as u32;
+                let requested = ((routine.work_seconds / recipe.work_seconds).floor() as u32)
+                    .min(remaining / recipe.output_units);
                 if requested == 0 {
                     continue;
                 }
@@ -383,6 +400,9 @@ pub fn run_processing_routines(
                 }
                 let first_output_today = routine.produced_today == 0;
                 routine.produced_today = routine.produced_today.saturating_add(produced);
+                if let Some(plan) = plan.as_deref_mut() {
+                    plan.record(clock.day, produced);
+                }
                 business_events.record_production(clock.day, *building_id, produced);
                 economy_runtime.record_food_production(
                     routine.hall,
@@ -408,20 +428,23 @@ pub fn run_processing_routines(
 /// honest while avoiding replicated writes on every simulation tick.
 pub fn sync_workplace_operations(
     mut commands: Commands,
+    world_time: Query<&WorldTime>,
     workers: Query<(&ProcessingRoutine, &CharacterActivity)>,
     workplaces: Query<(
         Entity,
         &SettlementBuilding,
         &GoodsInventory,
         Option<&WorkplaceOperation>,
+        Option<&BusinessOperatingPlan>,
     )>,
 ) {
+    let day = world_time.iter().next().map_or(0, |clock| clock.day);
     let mut active_workers: HashMap<Entity, u8> = HashMap::new();
     for (routine, activity) in workers.iter() {
         if !routine.is_working_inside() || *activity != CharacterActivity::Indoors {
             continue;
         }
-        let Ok((_, building, inventory, _)) = workplaces.get(routine.workplace) else {
+        let Ok((_, building, inventory, _, plan)) = workplaces.get(routine.workplace) else {
             continue;
         };
         let Some(recipe) = processing_recipe(building.kind) else {
@@ -433,7 +456,8 @@ pub fn sync_workplace_operations(
         let output_bulk = recipe
             .output_units
             .saturating_mul(recipe.output.bulk_per_unit());
-        if inventory.amount(recipe.input) < recipe.input_units
+        if plan.is_some_and(|plan| plan.remaining(day) < recipe.output_units)
+            || inventory.amount(recipe.input) < recipe.input_units
             || inventory.free_bulk().saturating_add(reclaimed_bulk) < output_bulk
         {
             continue;
@@ -444,7 +468,7 @@ pub fn sync_workplace_operations(
             .or_insert(1);
     }
 
-    for (entity, building, _, current) in workplaces.iter() {
+    for (entity, building, _, current, _) in workplaces.iter() {
         if processing_recipe(building.kind).is_none() {
             continue;
         }

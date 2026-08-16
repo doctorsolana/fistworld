@@ -4,10 +4,43 @@ use shared::economy::{sustainable_unit_price, BusinessManagementPolicy};
 
 const INSOLVENT_DAYS_BEFORE_CLOSURE: u16 = 5;
 const NEW_BUSINESS_DAYS: u32 = 3;
+const AUTOPILOT_UNSOLD_EXIT_DAYS: u16 = 7;
 const LIQUIDATION_EMPTY_DAYS: u16 = 2;
 const LIQUIDATION_DAILY_MARKDOWN_BPS: u16 = 1_500;
 const OWNER_PERSONAL_FLOOR: u64 = 4 * PENNIES_PER_COIN;
 const OWNER_RESCUE_LIMIT: u64 = 2 * PENNIES_PER_COIN;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct MarketPriceSignals {
+    pub best_competitor: Option<u64>,
+    pub last_clearing_price: u64,
+    pub sold_units: u64,
+    pub unavailable_units: u64,
+    pub unaffordable_units: u64,
+}
+
+fn automatic_owner_should_close(
+    day: u32,
+    account: &BusinessAccount,
+    sale: &BusinessSalePolicy,
+    condition: &BusinessCondition,
+    total_stock: u32,
+    market: MarketPriceSignals,
+) -> bool {
+    let old_enough = day.saturating_sub(condition.opened_day)
+        >= NEW_BUSINESS_DAYS.saturating_add(u32::from(AUTOPILOT_UNSOLD_EXIT_DAYS));
+    old_enough
+        && matches!(
+            condition.state,
+            BusinessState::Operating | BusinessState::CashTight | BusinessState::Distressed
+        )
+        && sale.days_without_sales >= AUTOPILOT_UNSOLD_EXIT_DAYS
+        // Buyers who reached a real listing but could not afford it are
+        // evidence for a price change, not evidence that demand vanished.
+        && market.unaffordable_units == 0
+        && total_stock > sale.company_reserve_units
+        && account.previous_day.profit() < 0
+}
 
 fn price_step(value: u64, basis_points: u16, increase: bool) -> u64 {
     let movement = value
@@ -27,7 +60,7 @@ pub(crate) fn review_automatic_price(
     condition: BusinessState,
     total_stock: u32,
     good: Good,
-    market_reference: u64,
+    market: MarketPriceSignals,
     replacement_input_cost: u64,
     market_fee_bps: u16,
 ) {
@@ -54,7 +87,10 @@ pub(crate) fn review_automatic_price(
     }
 
     let current = if sale.asking_unit_price <= 1 {
-        market_reference.max(good.base_price())
+        market
+            .best_competitor
+            .unwrap_or(market.last_clearing_price)
+            .max(good.base_price())
     } else {
         sale.asking_unit_price
     };
@@ -64,9 +100,16 @@ pub(crate) fn review_automatic_price(
         sale.days_without_sales = 0;
     }
 
-    let scarce_and_selling = previous.sold_units > 0
+    let affordability_pressure =
+        market.unaffordable_units > 0 && total_stock > sale.company_reserve_units;
+    let scarce_and_selling = !affordability_pressure
+        && previous.sold_units > 0
         && previous.sold_units >= previous.produced_units.max(1)
-        && total_stock <= sale.company_reserve_units.saturating_add(2);
+        && total_stock <= sale.company_reserve_units.saturating_add(2)
+        && market.unavailable_units >= market.unaffordable_units;
+    let empty_shortage = !affordability_pressure
+        && market.unavailable_units > 0
+        && total_stock <= sale.company_reserve_units;
     let production_basis = previous.produced_units.max(1);
     let accumulating_surplus = previous.produced_units > 0
         && previous.sold_units.saturating_mul(2) <= previous.produced_units
@@ -80,7 +123,7 @@ pub(crate) fn review_automatic_price(
                 .company_reserve_units
                 .saturating_add(production_basis.saturating_mul(5));
     let stale_surplus = sale.days_without_sales >= 2 && total_stock > sale.company_reserve_units;
-    let mut desired = if scarce_and_selling {
+    let mut desired = if scarce_and_selling || empty_shortage {
         price_step(current, sale.max_daily_price_change_bps, true)
     } else if stale_surplus || accumulating_surplus {
         // Some sales do not prove a price is clearing the market. When output
@@ -97,14 +140,59 @@ pub(crate) fn review_automatic_price(
         current
     };
 
+    // A seller with stock should react to real rejected buyers much faster
+    // than the ordinary inventory-smoothing cadence. This is still a bounded
+    // daily decision, but a Cautious owner cannot preserve a high margin for
+    // weeks while residents stand at the counter unable to pay it.
+    if affordability_pressure {
+        let affordability_step = sale
+            .max_daily_price_change_bps
+            .saturating_mul(3)
+            .max(1_500)
+            .min(3_000);
+        desired = desired.min(price_step(current, affordability_step, false));
+    }
+
+    // Continuously inspect the order book. Weak-selling owners move toward a
+    // rival's cheaper live offer and seek a one-penny undercut where their
+    // replacement cost permits it. The bounded move prevents one odd listing
+    // from causing a discontinuous town-wide price crash.
+    let rival_sales = market.sold_units > u64::from(previous.sold_units);
+    let weak_sales = previous.sold_units == 0
+        || previous.sold_units < previous.produced_units
+        || rival_sales
+        || total_stock > sale.company_reserve_units.saturating_add(2);
+    let competitive_reference = market
+        .best_competitor
+        .or((market.last_clearing_price > 0).then_some(market.last_clearing_price));
+    if weak_sales {
+        if let Some(reference) = competitive_reference.filter(|price| *price < current) {
+            let target = reference.saturating_sub(1).max(1);
+            let competitive_step = sale
+                .max_daily_price_change_bps
+                .saturating_mul(4)
+                .max(1_500)
+                .min(3_000);
+            let bounded = price_step(current, competitive_step, false).max(target);
+            desired = desired.min(bounded);
+        }
+    }
+
     let sustainable = sustainable_unit_price(
         account.estimated_unit_cost,
         market_fee_bps,
-        sale.target_margin_bps,
+        if affordability_pressure {
+            0
+        } else {
+            sale.target_margin_bps
+        },
     );
     if matches!(
         condition,
-        BusinessState::New | BusinessState::Operating | BusinessState::CashTight
+        BusinessState::New
+            | BusinessState::Operating
+            | BusinessState::CashTight
+            | BusinessState::Mothballed
     ) {
         desired = desired.max(sustainable);
     }
@@ -319,7 +407,10 @@ pub fn review_business_management(
             sale.company_reserve_days = 0;
             sale.company_reserve_units = 0;
             sale.max_units_per_collection = sale.max_units_per_collection.max(32);
-            sale.minimum_unit_price = good.base_price().saturating_mul(25) / 100;
+            // Once costs are sunk, liquidation follows the real order book.
+            // One penny is the only universal bound; an authored base value is
+            // not a reason to leave food stranded above buyers' means.
+            sale.minimum_unit_price = 1;
             sale.asking_unit_price = price_step(
                 sale.asking_unit_price.max(good.base_price()),
                 LIQUIDATION_DAILY_MARKDOWN_BPS,
@@ -467,6 +558,10 @@ pub fn review_business_management(
             condition.insolvent_days = 0;
             condition.cash_tight_days = condition.cash_tight_days.saturating_add(elapsed);
             condition.state = BusinessState::CashTight;
+        } else if old_state == BusinessState::Mothballed {
+            condition.insolvent_days = 0;
+            condition.cash_tight_days = 0;
+            condition.state = BusinessState::Mothballed;
         } else {
             condition.insolvent_days = 0;
             condition.cash_tight_days = 0;
@@ -483,12 +578,30 @@ pub fn review_business_management(
             condition.operating_days = condition.operating_days.saturating_add(elapsed);
         }
         let listed = market.seller_listed_units(seller, good);
-        let market_reference = market.suggested_price(good);
+        let pool = *market.pool(good);
+        let market_signals = MarketPriceSignals {
+            best_competitor: market.best_competing_price(seller, good),
+            last_clearing_price: pool.bid,
+            sold_units: pool
+                .day
+                .consumer_units
+                .saturating_add(pool.previous_day.consumer_units),
+            unavailable_units: pool
+                .day
+                .unavailable_units
+                .saturating_add(pool.previous_day.unavailable_units),
+            unaffordable_units: pool
+                .day
+                .unaffordable_units
+                .saturating_add(pool.previous_day.unaffordable_units),
+        };
         let replacement_input_cost = processing_recipe(building.kind).map_or(0, |recipe| {
             u64::from(recipe.input_units)
                 .saturating_mul(market.suggested_price(recipe.input))
                 .div_ceil(u64::from(recipe.output_units.max(1)))
         });
+        let total_output_stock = inventory.amount(good).saturating_add(listed);
+        let mut voluntary_closure = false;
         if management.autopilot {
             sale.target_margin_bps = management.strategy.target_margin_bps();
             sale.max_daily_price_change_bps = management.strategy.daily_price_step_bps();
@@ -500,12 +613,24 @@ pub fn review_business_management(
                 &mut account,
                 &mut sale,
                 condition.state,
-                inventory.amount(good).saturating_add(listed),
+                total_output_stock,
                 good,
-                market_reference,
+                market_signals,
                 replacement_input_cost,
                 market.market_fee_bps(),
             );
+            voluntary_closure = condition.state != BusinessState::Mothballed
+                && automatic_owner_should_close(
+                    day,
+                    &account,
+                    &sale,
+                    &condition,
+                    total_output_stock,
+                    market_signals,
+                );
+            if voluntary_closure {
+                condition.state = BusinessState::Liquidating;
+            }
             if let Some(procurement) = procurement.as_deref_mut() {
                 if procurement.automatic {
                     if let Some(recipe) = processing_recipe(building.kind) {
@@ -533,6 +658,27 @@ pub fn review_business_management(
                                 rule.maximum_unit_price = maximum;
                             }
                             procurement.set_rule(recipe.input, rule);
+                        }
+
+                        // A processor's empty input shelf is still an order.
+                        // Record it once in this daily review so downstream
+                        // scarcity can travel upstream through ordinary market
+                        // prices (bread -> flour -> wheat). The physical
+                        // porter/strategic purchase paths remain the only code
+                        // which actually moves or pays for goods.
+                        let wanted = rule.target_units.saturating_sub(
+                            inventory
+                                .amount(recipe.input)
+                                .saturating_add(market.seller_listed_units(seller, recipe.input)),
+                        );
+                        if wanted > 0 && market.listed_units(recipe.input) == 0 {
+                            let _ = market.purchase_recording_demand(
+                                recipe.input,
+                                wanted,
+                                free_cash,
+                                Some(rule.maximum_unit_price),
+                                Some(seller),
+                            );
                         }
                     }
                 }
@@ -622,7 +768,11 @@ pub fn review_business_management(
             }
             commands
                 .entity(business_entity)
-                .insert(BusinessLiquidation::insolvency(day, claims));
+                .insert(if voluntary_closure {
+                    BusinessLiquidation::voluntary_closure(day, claims)
+                } else {
+                    BusinessLiquidation::insolvency(day, claims)
+                });
             for worker in workers_by_business.get(building_id).into_iter().flatten() {
                 if let Ok((_, _, _, _, mut occupation, mut status)) = villagers.get_mut(*worker) {
                     occupation.0 = None;
@@ -684,7 +834,10 @@ mod tests {
             BusinessState::Operating,
             1,
             Good::Wheat,
-            opening,
+            MarketPriceSignals {
+                last_clearing_price: opening,
+                ..default()
+            },
             0,
             500,
         );
@@ -703,7 +856,10 @@ mod tests {
             BusinessState::Distressed,
             20,
             Good::Wheat,
-            high,
+            MarketPriceSignals {
+                last_clearing_price: high,
+                ..default()
+            },
             0,
             500,
         );
@@ -733,7 +889,10 @@ mod tests {
             BusinessState::Operating,
             80,
             Good::Bread,
-            600,
+            MarketPriceSignals {
+                last_clearing_price: 600,
+                ..default()
+            },
             0,
             500,
         );
@@ -763,12 +922,202 @@ mod tests {
             BusinessState::Operating,
             1,
             Good::Flour,
-            Good::Flour.base_price(),
+            MarketPriceSignals {
+                last_clearing_price: Good::Flour.base_price(),
+                ..default()
+            },
             80,
             500,
         );
 
         assert_eq!(account.estimated_unit_cost, 90);
         assert!(sale.asking_unit_price < 200);
+    }
+
+    #[test]
+    fn empty_mothballed_processor_restores_a_viable_ask_when_buyers_are_waiting() {
+        let mut account = BusinessAccount {
+            estimated_unit_cost: 100,
+            previous_day: shared::economy::BusinessDayLedger {
+                day: 8,
+                ..default()
+            },
+            ..default()
+        };
+        let mut sale = BusinessSalePolicy::for_good(Good::Flour);
+        sale.asking_unit_price = 30;
+
+        review_automatic_price(
+            &mut account,
+            &mut sale,
+            BusinessState::Mothballed,
+            0,
+            Good::Flour,
+            MarketPriceSignals {
+                unavailable_units: 12,
+                ..default()
+            },
+            80,
+            500,
+        );
+
+        assert!(sale.asking_unit_price > 30);
+        assert!(
+            sale.asking_unit_price
+                >= sustainable_unit_price(account.estimated_unit_cost, 500, sale.target_margin_bps)
+        );
+    }
+
+    #[test]
+    fn automatic_owner_exits_a_stocked_branch_after_a_week_without_sales() {
+        let account = BusinessAccount {
+            previous_day: shared::economy::BusinessDayLedger {
+                day: 12,
+                wage_expense: 100,
+                produced_units: 2,
+                ..default()
+            },
+            ..default()
+        };
+        let mut sale = BusinessSalePolicy::for_good(Good::Flour);
+        sale.days_without_sales = AUTOPILOT_UNSOLD_EXIT_DAYS;
+        let condition = BusinessCondition {
+            state: BusinessState::Operating,
+            opened_day: 2,
+            ..default()
+        };
+
+        assert!(automatic_owner_should_close(
+            12,
+            &account,
+            &sale,
+            &condition,
+            8,
+            MarketPriceSignals::default(),
+        ));
+        assert!(!automatic_owner_should_close(
+            11,
+            &account,
+            &sale,
+            &condition,
+            8,
+            MarketPriceSignals::default(),
+        ));
+
+        let profitable = BusinessAccount {
+            previous_day: shared::economy::BusinessDayLedger {
+                day: 12,
+                internal_revenue: 200,
+                wage_expense: 100,
+                produced_units: 2,
+                ..default()
+            },
+            ..default()
+        };
+        assert!(!automatic_owner_should_close(
+            12,
+            &profitable,
+            &sale,
+            &condition,
+            8,
+            MarketPriceSignals::default(),
+        ));
+    }
+
+    #[test]
+    fn rejected_buyers_accelerate_a_cautious_owners_markdown() {
+        let mut account = BusinessAccount {
+            estimated_unit_cost: 40,
+            previous_day: shared::economy::BusinessDayLedger {
+                produced_units: 4,
+                ..default()
+            },
+            ..default()
+        };
+        let mut sale = BusinessSalePolicy::for_good(Good::Bread);
+        sale.asking_unit_price = 180;
+        sale.max_daily_price_change_bps =
+            shared::economy::BusinessStrategy::Cautious.daily_price_step_bps();
+        sale.target_margin_bps = shared::economy::BusinessStrategy::Cautious.target_margin_bps();
+
+        review_automatic_price(
+            &mut account,
+            &mut sale,
+            BusinessState::Operating,
+            20,
+            Good::Bread,
+            MarketPriceSignals {
+                unaffordable_units: 8,
+                ..default()
+            },
+            0,
+            500,
+        );
+
+        assert_eq!(sale.asking_unit_price, 153);
+    }
+
+    #[test]
+    fn weak_seller_moves_below_a_cheaper_competitor_without_crossing_cost() {
+        let mut account = BusinessAccount {
+            estimated_unit_cost: 50,
+            previous_day: shared::economy::BusinessDayLedger {
+                produced_units: 6,
+                ..default()
+            },
+            ..default()
+        };
+        let mut sale = BusinessSalePolicy::for_good(Good::Bread);
+        sale.asking_unit_price = 180;
+
+        for _ in 0..4 {
+            review_automatic_price(
+                &mut account,
+                &mut sale,
+                BusinessState::Operating,
+                20,
+                Good::Bread,
+                MarketPriceSignals {
+                    best_competitor: Some(120),
+                    sold_units: 3,
+                    ..default()
+                },
+                0,
+                500,
+            );
+        }
+
+        assert!(sale.asking_unit_price < 120);
+        assert!(sale.asking_unit_price >= sustainable_unit_price(50, 500, 1_500));
+    }
+
+    #[test]
+    fn unaffordable_demand_prevents_a_no_demand_exit() {
+        let account = BusinessAccount {
+            previous_day: shared::economy::BusinessDayLedger {
+                wage_expense: 100,
+                ..default()
+            },
+            ..default()
+        };
+        let mut sale = BusinessSalePolicy::for_good(Good::Bread);
+        sale.days_without_sales = AUTOPILOT_UNSOLD_EXIT_DAYS;
+        let condition = BusinessCondition {
+            state: BusinessState::Operating,
+            opened_day: 1,
+            ..default()
+        };
+
+        assert!(!automatic_owner_should_close(
+            20,
+            &account,
+            &sale,
+            &condition,
+            20,
+            MarketPriceSignals {
+                unaffordable_units: 10,
+                ..default()
+            },
+        ));
     }
 }

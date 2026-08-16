@@ -368,6 +368,7 @@ pub fn run_farmer_routines(
     fields: Query<(&FarmField, &shared::components::AttachedTo), Without<CharacterKind>>,
     halls: Query<&shared::components::SettlementId, Without<CharacterKind>>,
     mut inventories: Query<&mut GoodsInventory>,
+    mut operating_plans: Query<&mut BusinessOperatingPlan, Without<CharacterKind>>,
     moot_service_busy: Query<(), Or<(With<MootQueueTicket>, With<MootMealRoutine>)>>,
     mut workers: Query<
         (
@@ -706,7 +707,18 @@ pub fn run_farmer_routines(
                     // labour internally, then materialise the full batch and
                     // leave the field on the same tick.
                     let carried = carrier.amount(Good::Wheat);
-                    let needed = FARM_CARRY_BATCH_UNITS.saturating_sub(carried);
+                    let remaining = operating_plans
+                        .get(routine.farmstead)
+                        .map_or(u32::MAX, |plan| plan.remaining(production_day));
+                    let needed = FARM_CARRY_BATCH_UNITS
+                        .saturating_sub(carried)
+                        .min(remaining);
+                    if needed == 0 {
+                        *activity = CharacterActivity::Idle;
+                        commands.entity(worker).insert(MoveTarget(farm_entrance));
+                        routine.phase = FarmerPhase::ReturningToFarmstead;
+                        continue;
+                    }
                     let batch_seconds = seconds_per_wheat * needed as f32;
                     if needed > 0 && routine.harvest_seconds < batch_seconds {
                         continue;
@@ -719,6 +731,9 @@ pub fn run_farmer_routines(
                             .max(0.0);
                     }
                     routine.produced_today = routine.produced_today.saturating_add(produced);
+                    if let Ok(mut plan) = operating_plans.get_mut(routine.farmstead) {
+                        plan.record(production_day, produced);
+                    }
                     business_events.record_production(production_day, *building_id, produced);
                     // Wheat is agricultural output, not a ration. The mill
                     // records food production only when this becomes Flour.
@@ -1018,6 +1033,7 @@ pub fn run_fishing_routines(
     >,
     halls: Query<&shared::components::SettlementId, Without<CharacterKind>>,
     mut inventories: Query<&mut GoodsInventory>,
+    mut operating_plans: Query<&mut BusinessOperatingPlan, Without<CharacterKind>>,
     moot_service_busy: Query<(), Or<(With<MootQueueTicket>, With<MootMealRoutine>)>>,
     mut workers: Query<
         (
@@ -1381,7 +1397,24 @@ pub fn run_fishing_routines(
                 let seconds_per_food = fisher_seconds_per_food(pier.quality);
                 if let Ok(mut carrier) = inventories.get_mut(worker) {
                     let carried = carrier.amount(Good::Food);
-                    let needed = FISH_CARRY_BATCH_UNITS.saturating_sub(carried);
+                    let remaining = operating_plans
+                        .get(routine.hut)
+                        .map_or(u32::MAX, |plan| plan.remaining(production_day));
+                    let needed = FISH_CARRY_BATCH_UNITS
+                        .saturating_sub(carried)
+                        .min(remaining);
+                    if needed == 0 {
+                        *activity = CharacterActivity::Idle;
+                        install_fishing_route(
+                            &mut commands,
+                            worker,
+                            staging,
+                            [deck_start, rear, nets, staging],
+                            traversal,
+                        );
+                        routine.phase = FishingPhase::ReturningToHut;
+                        continue;
+                    }
                     let batch_seconds = seconds_per_food * needed as f32;
                     if needed > 0 && routine.catch_seconds < batch_seconds {
                         continue;
@@ -1392,6 +1425,9 @@ pub fn run_fishing_routines(
                             (routine.catch_seconds - seconds_per_food * produced as f32).max(0.0);
                     }
                     routine.produced_today = routine.produced_today.saturating_add(produced);
+                    if let Ok(mut plan) = operating_plans.get_mut(routine.hut) {
+                        plan.record(production_day, produced);
+                    }
                     business_events.record_production(production_day, *building_id, produced);
                     economy_runtime.record_food_production(routine.hall, produced);
                     if carrier.amount(Good::Food) < FISH_CARRY_BATCH_UNITS
@@ -1642,6 +1678,7 @@ pub fn run_lumberjack_routines(
     >,
     halls: Query<&shared::components::SettlementId, Without<CharacterKind>>,
     mut inventories: Query<&mut GoodsInventory>,
+    mut operating_plans: Query<&mut BusinessOperatingPlan, Without<CharacterKind>>,
     mut tree_candidates: Local<TreeWorkCandidateCache>,
     moot_service_busy: Query<(), Or<(With<MootQueueTicket>, With<MootMealRoutine>)>>,
     mut workers: Query<
@@ -2055,11 +2092,17 @@ pub fn run_lumberjack_routines(
                 }
                 let yield_units = lumber_tree_yield(hut.quality);
                 if let Ok(mut carrier) = inventories.get_mut(worker) {
-                    let produced = carrier.add(Good::Wood, yield_units);
+                    let remaining = operating_plans
+                        .get(routine.hut)
+                        .map_or(u32::MAX, |plan| plan.remaining(production_day));
+                    let produced = carrier.add(Good::Wood, yield_units.min(remaining));
                     if produced > 0 {
                         routine.chop_seconds = (routine.chop_seconds - required_seconds).max(0.0);
                     }
                     routine.produced_today = routine.produced_today.saturating_add(produced);
+                    if let Ok(mut plan) = operating_plans.get_mut(routine.hut) {
+                        plan.record(production_day, produced);
+                    }
                     business_events.record_production(production_day, *building_id, produced);
                 }
                 routine.cycle = routine.cycle.wrapping_add(1);
@@ -2132,6 +2175,53 @@ pub fn sync_carried_load(
         let next = CarriedLoad::from_inventory(inventory);
         if *carried != next {
             *carried = next;
+        }
+    }
+}
+
+/// Publish the physical handcart only while a porter is performing a freight
+/// trip. The empty outbound leg still needs the cart; outside a trip the
+/// Moot's dual-role steward must remain free to build roads without dragging
+/// freight equipment behind them.
+pub fn sync_porter_cart_state(
+    mut commands: Commands,
+    porters: Query<
+        (
+            Entity,
+            &GoodsInventory,
+            Has<MarketCollectionRoutine>,
+            Has<InternalDeliveryRoutine>,
+            Has<PorterCargoCapacity>,
+            Option<&shared::economy::PorterCartState>,
+        ),
+        (
+            With<CharacterKind>,
+            Or<(
+                With<MarketCollectionRoutine>,
+                With<InternalDeliveryRoutine>,
+                With<PorterCargoCapacity>,
+                With<shared::economy::PorterCartState>,
+            )>,
+        ),
+    >,
+) {
+    for (entity, inventory, collecting, delivering, porter_capacity, current) in porters.iter() {
+        // Keep an abnormal in-flight load visible even if its routine was
+        // cancelled. `sync_porter_cargo_capacity` preserves the matching
+        // allowance until the goods have safely left the character inventory.
+        let active = collecting || delivering || (porter_capacity && !inventory.is_empty());
+        if !active {
+            if current.is_some() {
+                commands
+                    .entity(entity)
+                    .remove::<shared::economy::PorterCartState>();
+            }
+            continue;
+        }
+
+        let desired = shared::economy::PorterCartState::for_used_bulk(inventory.used_bulk());
+        if current.is_none_or(|current| *current != desired) {
+            commands.entity(entity).insert(desired);
         }
     }
 }

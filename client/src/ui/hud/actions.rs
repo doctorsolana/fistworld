@@ -11,17 +11,9 @@ pub(super) fn handle_selection_expand_button(
     mut open: ResMut<crate::ui::encyclopedia::EncyclopediaOpen>,
     mut tab: ResMut<crate::ui::encyclopedia::EncyclopediaTab>,
     mut selected: ResMut<crate::ui::encyclopedia::SelectedPerson>,
-    mut buttons: Query<
-        (&Interaction, &mut BackgroundColor),
-        (With<SelectionExpandButton>, Changed<Interaction>),
-    >,
+    buttons: Query<&Interaction, (With<SelectionExpandButton>, Changed<Interaction>)>,
 ) {
-    for (interaction, mut background) in buttons.iter_mut() {
-        *background = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED.into(),
-            Interaction::Hovered => BUTTON_HOVERED.into(),
-            Interaction::None => BUTTON_NORMAL.into(),
-        };
+    for interaction in buttons.iter() {
         if *interaction != Interaction::Pressed || selection.len() != 1 {
             continue;
         }
@@ -54,25 +46,11 @@ pub(super) fn handle_mode_toggle_key(
 pub(super) fn handle_mode_chip_button(
     capability: Res<GodCapability>,
     mut mode: ResMut<HudMode>,
-    mut buttons: Query<
-        (&Interaction, &mut BackgroundColor),
-        (With<ModeChipButton>, Changed<Interaction>),
-    >,
+    buttons: Query<&Interaction, (With<ModeChipButton>, Changed<Interaction>)>,
 ) {
-    for (interaction, mut bg) in buttons.iter_mut() {
-        match *interaction {
-            Interaction::Pressed => {
-                *bg = BUTTON_PRESSED.into();
-                if capability.0 {
-                    *mode = mode.toggled();
-                }
-            }
-            Interaction::Hovered => {
-                *bg = BUTTON_HOVERED.into();
-            }
-            Interaction::None => {
-                *bg = BUTTON_NORMAL.into();
-            }
+    for interaction in buttons.iter() {
+        if *interaction == Interaction::Pressed && capability.0 {
+            *mode = mode.toggled();
         }
     }
 }

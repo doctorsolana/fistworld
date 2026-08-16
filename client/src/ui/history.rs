@@ -20,13 +20,16 @@ use shared::protocol::{
 };
 
 use crate::states::GameState;
+use crate::ui::foundation::{
+    selected_button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant,
+};
 use crate::ui::good_icon_path;
 use crate::ui::modal::{
     handle_backdrop_pressed, spawn_modal, update_modal_click_guard, ModalLayout,
 };
 use crate::ui::styles::{
-    plate_shadow, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, INK, INK_MUTED, LIMEWASH,
-    LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE, PLATE_RULE_SOFT, RADIUS,
+    plate_shadow, INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE,
+    PLATE_RULE_SOFT, RADIUS,
 };
 
 pub struct HistoryPlugin;
@@ -153,6 +156,7 @@ struct HistoryClickGuard(bool);
 #[derive(Component)]
 struct HistoryPanelRoot {
     signature: String,
+    target: HistoryTarget,
 }
 
 #[derive(Component)]
@@ -160,6 +164,9 @@ struct HistoryBackdrop;
 
 #[derive(Component)]
 struct HistoryPanel;
+
+#[derive(Component)]
+struct HistoryViewport;
 
 #[derive(Component)]
 struct HistoryCloseButton;
@@ -228,7 +235,7 @@ fn handle_open_buttons(
     mut trade_target: ResMut<crate::ui::settlement_panel::TradePanelTarget>,
     mut buttons: ParamSet<(
         Query<
-            (&Interaction, &MarketHistoryButton, &mut BackgroundColor),
+            (&Interaction, &MarketHistoryButton),
             (
                 Changed<Interaction>,
                 Without<VillageHistoryButton>,
@@ -238,7 +245,7 @@ fn handle_open_buttons(
             ),
         >,
         Query<
-            (&Interaction, &mut BackgroundColor),
+            &Interaction,
             (
                 With<VillageHistoryButton>,
                 Changed<Interaction>,
@@ -249,7 +256,7 @@ fn handle_open_buttons(
             ),
         >,
         Query<
-            (&Interaction, &mut BackgroundColor),
+            &Interaction,
             (
                 With<WorldHistoryButton>,
                 Changed<Interaction>,
@@ -260,7 +267,7 @@ fn handle_open_buttons(
             ),
         >,
         Query<
-            (&Interaction, &BusinessHistoryButton, &mut BackgroundColor),
+            (&Interaction, &BusinessHistoryButton),
             (
                 Changed<Interaction>,
                 Without<MarketHistoryButton>,
@@ -270,7 +277,7 @@ fn handle_open_buttons(
             ),
         >,
         Query<
-            (&Interaction, &CompanyHistoryButton, &mut BackgroundColor),
+            (&Interaction, &CompanyHistoryButton),
             (
                 Changed<Interaction>,
                 Without<MarketHistoryButton>,
@@ -282,8 +289,7 @@ fn handle_open_buttons(
     )>,
 ) {
     let clicked = mouse.just_pressed(MouseButton::Left);
-    for (interaction, button, mut background) in buttons.p0().iter_mut() {
-        *background = button_background(*interaction);
+    for (interaction, button) in buttons.p0().iter() {
         if clicked && *interaction == Interaction::Pressed {
             cache.in_flight.remove(&button.settlement);
             cache.requested.remove(&button.settlement);
@@ -297,8 +303,7 @@ fn handle_open_buttons(
         }
     }
 
-    for (interaction, mut background) in buttons.p1().iter_mut() {
-        *background = button_background(*interaction);
+    for interaction in buttons.p1().iter() {
         if !clicked || *interaction != Interaction::Pressed {
             continue;
         }
@@ -320,8 +325,7 @@ fn handle_open_buttons(
             return_to_trade: false,
         });
     }
-    for (interaction, mut background) in buttons.p2().iter_mut() {
-        *background = button_background(*interaction);
+    for interaction in buttons.p2().iter() {
         if clicked && *interaction == Interaction::Pressed {
             cache.world_in_flight = false;
             cache.world_requested = false;
@@ -333,8 +337,7 @@ fn handle_open_buttons(
             });
         }
     }
-    for (interaction, button, mut background) in buttons.p3().iter_mut() {
-        *background = button_background(*interaction);
+    for (interaction, button) in buttons.p3().iter() {
         if clicked && *interaction == Interaction::Pressed {
             cache.in_flight.remove(&button.settlement);
             cache.requested.remove(&button.settlement);
@@ -347,8 +350,7 @@ fn handle_open_buttons(
             trade_target.0 = None;
         }
     }
-    for (interaction, button, mut background) in buttons.p4().iter_mut() {
-        *background = button_background(*interaction);
+    for (interaction, button) in buttons.p4().iter() {
         if clicked && *interaction == Interaction::Pressed {
             cache.company_in_flight.remove(&button.company);
             cache.company_requested.remove(&button.company);
@@ -427,20 +429,20 @@ fn handle_history_controls(
     backdrop: Query<&Interaction, (With<HistoryBackdrop>, Changed<Interaction>)>,
     close: Query<&Interaction, (With<HistoryCloseButton>, Changed<Interaction>)>,
     mut range_buttons: Query<
-        (&Interaction, &HistoryRangeButton, &mut BackgroundColor),
-        (Changed<Interaction>, Without<HistoryCloseButton>),
+        (&Interaction, &HistoryRangeButton, &mut UiButtonStyle),
+        Without<HistoryCloseButton>,
     >,
 ) {
     let clicked = guard.0 && mouse.just_pressed(MouseButton::Left);
-    for (interaction, HistoryRangeButton(next), mut background) in range_buttons.iter_mut() {
-        *background = if *range == *next && *interaction == Interaction::None {
-            BUTTON_PRESSED.into()
-        } else {
-            button_background(*interaction)
-        };
-        if clicked && *interaction == Interaction::Pressed {
-            *range = *next;
-        }
+    let requested = range_buttons
+        .iter()
+        .find(|(interaction, _, _)| clicked && **interaction == Interaction::Pressed)
+        .map(|(_, HistoryRangeButton(next), _)| *next);
+    if let Some(next) = requested {
+        *range = next;
+    }
+    for (_, HistoryRangeButton(next), mut style) in range_buttons.iter_mut() {
+        style.selected = *range == *next;
     }
 
     let close_requested = keyboard.just_pressed(KeyCode::Escape)
@@ -459,24 +461,24 @@ fn handle_history_controls(
     }
 }
 
-fn button_background(interaction: Interaction) -> BackgroundColor {
-    match interaction {
-        Interaction::Pressed => BUTTON_PRESSED.into(),
-        Interaction::Hovered => BUTTON_HOVERED.into(),
-        Interaction::None => BUTTON_NORMAL.into(),
-    }
-}
-
 fn ensure_history_panel(
     mut commands: Commands,
+    time: Res<Time<Real>>,
     target: Res<HistoryPanelTarget>,
     range: Res<HistoryRange>,
     cache: Res<SettlementHistoryCache>,
-    roots: Query<(Entity, &HistoryPanelRoot)>,
+    roots: Query<(
+        Entity,
+        &HistoryPanelRoot,
+        Option<&crate::ui::foundation::UiRefreshStamp>,
+    )>,
     asset_server: Res<AssetServer>,
+    children: Query<&Children>,
+    interactions: Query<(&Interaction, Has<crate::ui::foundation::UiRefreshExempt>)>,
+    scrolls: Query<&ScrollPosition, With<HistoryViewport>>,
 ) {
     let Some(target) = target.0.as_ref() else {
-        for (root, _) in roots.iter() {
+        for (root, ..) in roots.iter() {
             commands.entity(root).despawn();
         }
         return;
@@ -529,10 +531,20 @@ fn ensure_history_panel(
         "{:?}|{:?}|{:?}|{}|{:?}",
         target.settlement, target.view, *range, count, last_day,
     );
-    if roots.iter().any(|(_, root)| root.signature == signature) {
+    if roots.iter().any(|(_, root, _)| root.signature == signature) {
         return;
     }
-    for (root, _) in roots.iter() {
+    if roots.iter().any(|(entity, _, stamp)| {
+        crate::ui::foundation::subtree_is_interacting(entity, &children, &interactions)
+            || stamp.is_some_and(|stamp| !stamp.is_ready(&time))
+    }) {
+        return;
+    }
+    let retained_scroll = crate::ui::foundation::retained_scroll(
+        roots.iter().any(|(_, root, _)| root.target == *target),
+        scrolls.iter().next().map(|position| position.0),
+    );
+    for (root, ..) in roots.iter() {
         commands.entity(root).despawn();
     }
 
@@ -540,6 +552,7 @@ fn ensure_history_panel(
         &mut commands,
         HistoryPanelRoot {
             signature: signature.clone(),
+            target: target.clone(),
         },
         HistoryBackdrop,
         HistoryPanel,
@@ -548,6 +561,9 @@ fn ensure_history_panel(
             panel_padding: 0.0,
         },
     );
+    commands
+        .entity(nodes.root)
+        .insert(crate::ui::foundation::UiRefreshStamp::now(&time));
     commands.entity(nodes.panel).insert((
         Node {
             width: Val::Px(960.0),
@@ -568,17 +584,21 @@ fn ensure_history_panel(
         spawn_header(panel, target, business_archive);
         spawn_range_bar(panel, *range, count, first_day, last_day);
         panel
-            .spawn(Node {
-                flex_grow: 1.0,
-                min_height: Val::Px(0.0),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Stretch,
-                padding: UiRect::all(Val::Px(20.0)),
-                row_gap: Val::Px(16.0),
-                overflow: Overflow::scroll_y(),
-                scrollbar_width: 8.0,
-                ..default()
-            })
+            .spawn((
+                HistoryViewport,
+                ScrollPosition(retained_scroll),
+                Node {
+                    flex_grow: 1.0,
+                    min_height: Val::Px(0.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Stretch,
+                    padding: UiRect::all(Val::Px(20.0)),
+                    row_gap: Val::Px(16.0),
+                    overflow: Overflow::scroll_y(),
+                    scrollbar_width: 8.0,
+                    ..default()
+                },
+            ))
             .with_children(|content| {
                 match target.view {
                     HistoryView::World => {
@@ -770,11 +790,11 @@ fn spawn_header(
                         border_radius: BorderRadius::all(Val::Px(RADIUS)),
                         ..default()
                     },
-                    BackgroundColor(BUTTON_NORMAL),
-                    BorderColor::all(PLATE_RULE_SOFT),
+                    selected_button_chrome(UiButtonVariant::Ghost, false),
                 ))
                 .with_child((
                     Text::new(close_label),
+                    UiButtonLabel,
                     TextFont {
                         font_size: FontSize::Px(10.0),
                         ..default()
@@ -827,15 +847,11 @@ fn spawn_range_bar(
                                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                                 ..default()
                             },
-                            BackgroundColor(if range == selected {
-                                BUTTON_PRESSED
-                            } else {
-                                BUTTON_NORMAL
-                            }),
-                            BorderColor::all(PLATE_RULE_SOFT),
+                            selected_button_chrome(UiButtonVariant::Secondary, range == selected),
                         ))
                         .with_child((
                             Text::new(range.label()),
+                            UiButtonLabel,
                             TextFont {
                                 font_size: FontSize::Px(9.0),
                                 ..default()

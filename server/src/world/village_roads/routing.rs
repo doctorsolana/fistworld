@@ -747,8 +747,21 @@ const ROUTE_PRIORITY_AMBIENT: usize = 1;
 /// not queue behind cosmetic roadside wandering during a population burst.
 /// AmbientRoutine is the authoritative marker for the latter; every other
 /// destination was selected by a committed simulation state machine.
-fn route_request_priority(intent: Option<&VillagerIntent>, ambient: bool) -> usize {
-    if ambient
+fn route_request_priority(
+    intent: Option<&VillagerIntent>,
+    ambient: bool,
+    objective: Option<&CharacterObjective>,
+) -> usize {
+    // AmbientRoutine can survive a handoff into a real work routine until the
+    // ambient system next owns the actor. CharacterObjective is synchronized
+    // after every activity system and therefore tells us why this particular
+    // MoveTarget exists. Without it, a woodcutter carrying the stale marker
+    // can sit forever behind a continuously replenished committed queue.
+    let genuinely_ambient = matches!(
+        objective,
+        Some(CharacterObjective::WalkingAroundTown | CharacterObjective::Resting)
+    ) || (objective.is_none() && ambient);
+    if genuinely_ambient
         && !matches!(
             intent,
             Some(VillagerIntent::Building { .. } | VillagerIntent::RoadBuilding { .. })
@@ -1178,6 +1191,7 @@ pub fn plan_villager_travel_routes(
             Option<&NavigationRouteBackoff>,
             Option<&VillagerIntent>,
             Has<AmbientRoutine>,
+            Option<&CharacterObjective>,
         ),
         (
             With<CharacterKind>,
@@ -1276,8 +1290,8 @@ pub fn plan_villager_travel_routes(
     // simulation journeys before ambient animation.
     let mut request_buckets: [Vec<Entity>; ROUTE_PRIORITY_COUNT] =
         std::array::from_fn(|_| Vec::new());
-    for (entity, _, _, _, _, intent, ambient) in movers.iter_mut() {
-        request_buckets[route_request_priority(intent, ambient)].push(entity);
+    for (entity, _, _, _, _, intent, ambient, objective) in movers.iter_mut() {
+        request_buckets[route_request_priority(intent, ambient, objective)].push(entity);
     }
     let active_requests: HashSet<_> = request_buckets
         .iter()
@@ -1305,7 +1319,7 @@ pub fn plan_villager_travel_routes(
     let mut visited_by_priority = [0usize; ROUTE_PRIORITY_COUNT];
     'requests: for (priority, entity) in request_order {
         visited_by_priority[priority] += 1;
-        let Ok((entity, position, target, mut pending, route_backoff, intent, _)) =
+        let Ok((entity, position, target, mut pending, route_backoff, intent, _, _)) =
             movers.get_mut(entity)
         else {
             continue;
@@ -1997,6 +2011,29 @@ pub fn plan_villager_travel_routes(
 #[cfg(test)]
 mod local_tests {
     use super::*;
+
+    #[test]
+    fn a_work_objective_overrides_a_stale_ambient_marker() {
+        let resident = VillagerIntent::Resident {
+            settlement: Entity::PLACEHOLDER,
+        };
+        assert_eq!(
+            route_request_priority(
+                Some(&resident),
+                true,
+                Some(&CharacterObjective::GoingToLumberWork),
+            ),
+            ROUTE_PRIORITY_COMMITTED,
+        );
+        assert_eq!(
+            route_request_priority(
+                Some(&resident),
+                true,
+                Some(&CharacterObjective::WalkingAroundTown),
+            ),
+            ROUTE_PRIORITY_AMBIENT,
+        );
+    }
 
     #[test]
     fn nearby_migrants_can_join_one_certified_destination_route() {

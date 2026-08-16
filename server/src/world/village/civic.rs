@@ -21,6 +21,8 @@ use shared::economy::{
     PROFIT_TAX_REVIEW_STEP_BPS,
 };
 
+const CIVIC_UNPAID_DAYS_BEFORE_RESIGNATION: u64 = 3;
+
 pub(crate) fn filled_civic_positions(administration: &MootAdministration) -> usize {
     let workers = administration.city_workers.len().max(usize::from(
         administration.road_steward.is_some() || administration.market_porter.is_some(),
@@ -146,6 +148,7 @@ pub fn sync_civic_market_policy(
 /// former employee remains in the ledger until their debt reaches zero.
 #[allow(clippy::type_complexity)]
 pub fn run_civic_payroll(
+    mut commands: Commands,
     world_time: Query<&WorldTime>,
     mut halls: Query<(
         &SettlementId,
@@ -159,6 +162,10 @@ pub fn run_civic_payroll(
         &CharacterName,
         &CivicEmployment,
         &mut Wallet,
+        Option<&mut Occupation>,
+        Option<&mut WorkStatus>,
+        Has<MarketCollectionRoutine>,
+        Has<RoadBuilderRoutine>,
     )>,
 ) {
     let Some(day) = world_time.iter().next().map(|clock| clock.day) else {
@@ -167,7 +174,7 @@ pub fn run_civic_payroll(
     let mut workers: HashMap<SettlementId, Vec<(Entity, PersonId, String, CivicRole)>> =
         HashMap::new();
     let mut people: HashMap<PersonId, Entity> = HashMap::new();
-    for (entity, person_id, name, job, _) in villagers.iter() {
+    for (entity, person_id, name, job, ..) in villagers.iter() {
         people.insert(*person_id, entity);
         if matches!(
             job.role,
@@ -240,12 +247,68 @@ pub fn run_civic_payroll(
             let Some(worker) = people.get(&entry.person_id).copied() else {
                 continue;
             };
-            let Ok((_, _, _, _, mut wallet)) = villagers.get_mut(worker) else {
+            let Ok((_, _, _, _, mut wallet, ..)) = villagers.get_mut(worker) else {
                 continue;
             };
             settlement.treasury -= payment;
             entry.arrears -= payment;
             wallet.credit(payment);
+        }
+
+        // A public salary is a contract, not a vow of lifelong unpaid
+        // service. After three completely unpaid days, an idle worker keeps
+        // their durable claim but leaves for the ordinary labour market. A
+        // Moot Steward first finishes any promised cart or road movement so
+        // no physical cargo or half-built connector is orphaned.
+        let resignations: Vec<_> = administration
+            .payroll
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                (entry.active
+                    && entry.arrears
+                        >= entry
+                            .daily_wage
+                            .saturating_mul(CIVIC_UNPAID_DAYS_BEFORE_RESIGNATION))
+                .then_some((index, entry.person_id, entry.role))
+            })
+            .collect();
+        for (index, person_id, role) in resignations {
+            let Some(worker) = people.get(&person_id).copied() else {
+                continue;
+            };
+            let Ok((_, _, name, _, _, occupation, status, collecting, road_work)) =
+                villagers.get_mut(worker)
+            else {
+                continue;
+            };
+            if collecting || road_work {
+                continue;
+            }
+            if let Some(mut occupation) = occupation {
+                occupation.0 = None;
+            }
+            if let Some(mut status) = status {
+                *status = WorkStatus::LookingForWork;
+            } else {
+                commands.entity(worker).insert(WorkStatus::LookingForWork);
+            }
+            administration.payroll[index].active = false;
+            commands
+                .entity(worker)
+                .remove::<CivicEmployment>()
+                .remove::<crate::world::village_roads::RoadSteward>()
+                .remove::<MarketPorter>()
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>();
+            info!(
+                "{} left the {} post in '{}' after three unpaid days; the wage claim remains",
+                name.0,
+                role.label(),
+                settlement.name,
+            );
         }
         administration
             .payroll
@@ -664,6 +727,65 @@ mod tests {
             .payroll
             .iter()
             .any(|entry| entry.person_id == PersonId(1) && !entry.active && entry.arrears > 0));
+    }
+
+    #[test]
+    fn idle_civic_worker_resigns_after_three_unpaid_days_but_keeps_the_claim() {
+        let mut app = App::new();
+        app.add_systems(Update, run_civic_payroll);
+        let clock = app.world_mut().spawn(WorldTime::new_default()).id();
+        let settlement_id = SettlementId(9);
+        let hall = app
+            .world_mut()
+            .spawn((
+                settlement_id,
+                Settlement {
+                    name: "Emptycoffer".into(),
+                    tier: shared::components::SettlementTier::Village,
+                    residents: 2,
+                    treasury: 0,
+                },
+                MootAdministration::default(),
+                CivicAccount::default(),
+            ))
+            .id();
+        let guard = app
+            .world_mut()
+            .spawn((
+                PersonId(90),
+                CharacterName("Unpaid Guard".into()),
+                CivicEmployment {
+                    settlement: settlement_id,
+                    role: CivicRole::Guard,
+                },
+                Wallet::new(0),
+                Occupation(Some("Town Guard".into())),
+                WorkStatus::Employed,
+            ))
+            .id();
+
+        app.update();
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 3;
+        app.update();
+
+        assert!(app.world().get::<CivicEmployment>(guard).is_none());
+        assert_eq!(
+            app.world().get::<WorkStatus>(guard),
+            Some(&WorkStatus::LookingForWork)
+        );
+        assert_eq!(
+            app.world().get::<Occupation>(guard).unwrap().0,
+            None,
+            "resignation must reopen the ordinary labour market"
+        );
+        let administration = app.world().get::<MootAdministration>(hall).unwrap();
+        let claim = administration
+            .payroll
+            .iter()
+            .find(|entry| entry.person_id == PersonId(90))
+            .expect("the debt must survive the employment relationship");
+        assert_eq!(claim.arrears, 3 * FOUNDING_DAILY_WAGE);
+        assert!(!claim.active);
     }
 
     #[test]

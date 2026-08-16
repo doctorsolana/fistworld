@@ -7,9 +7,9 @@ use crate::components::{
     CharacterNavigationStatus, CharacterObjective, CivicEmployment, CivicHallLevel, CloudSeed,
     CommandedBy, Company, CompanyId, CompanyLeadership, CompanyOwnership, CompanyShareMarket,
     ConstructionSite, EmployedAt, FarmField, FishingPier, Health, Hero, HeroOutfit, Household,
-    LivesAt, MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId, Player,
-    PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation, Residence, ResidentOf,
-    Settlement, SettlementBuilding, SettlementDevelopment, SettlementId,
+    LivesAt, MarketLevel, MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId,
+    Player, PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation, Residence,
+    ResidentOf, Settlement, SettlementBuilding, SettlementDevelopment, SettlementId,
     SettlementOpportunityBoard, SettlementPolicies, SettlementPropertyBoard, SettlementSummary,
     TimeWarp, VillageRoad, WorkStatus, WorkplaceOperation, WorldTime,
 };
@@ -18,7 +18,8 @@ use crate::economy::{
     BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy,
     BusinessStaffingPolicy, BusinessSupplyPolicy, BusinessWagePolicy, CarriedLoad, CivicAccount,
     CompanyAccount, CompanyBranchPolicies, CompanyDecisionHistory, CompanyManagementPolicy,
-    GoodsInventory, HouseholdEconomy, MootMarket, SettlementEconomy, Wallet, WorkforceRequirements,
+    GoodsInventory, HouseholdEconomy, MootMarket, PorterCartState, SettlementEconomy, Wallet,
+    WorkforceRequirements,
 };
 use crate::terrain::TerrainDeltaChunk;
 
@@ -71,6 +72,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<WorkStatus>().replicate();
         app.component::<Nutrition>().replicate();
         app.component::<CarriedLoad>().replicate();
+        app.component::<PorterCartState>().replicate();
         app.component::<GoodsInventory>().replicate();
         app.component::<Wallet>().replicate();
         app.component::<MootMarket>().replicate();
@@ -79,6 +81,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<CommandedBy>().replicate();
         app.component::<Settlement>().replicate();
         app.component::<CivicHallLevel>().replicate();
+        app.component::<MarketLevel>().replicate();
         app.component::<SettlementDevelopment>().replicate();
         app.component::<SettlementOpportunityBoard>().replicate();
         app.component::<SettlementPropertyBoard>().replicate();

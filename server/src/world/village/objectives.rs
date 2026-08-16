@@ -214,7 +214,9 @@ fn objective_for(
     if let Some(collection) = market_collection {
         return match collection.phase {
             MarketCollectionPhase::GoingToBusiness => CharacterObjective::CollectingMarketGoods,
-            MarketCollectionPhase::ReturningToHall | MarketCollectionPhase::DeliveringInput => {
+            MarketCollectionPhase::ReturningToHall
+            | MarketCollectionPhase::DeliveringInput
+            | MarketCollectionPhase::ReturningFailedInput => {
                 CharacterObjective::DeliveringMarketGoods
             }
         };

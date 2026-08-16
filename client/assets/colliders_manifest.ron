@@ -290,6 +290,23 @@
       vertex_filter: LowerYPercent ( percent: 0.443 ),
       collidable: true,
     ),
+    // Open-air public squares. Villagers must walk through the plot to reach
+    // Anchor_Counter and Anchor_Trader, so neither the renderer nor the server
+    // navigation cache may turn the shared 12 x 12 m footprint into a hull.
+    (
+      kind: "building_market",
+      gltf_path: "game_assets/buildings/village/Market.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: All,
+      collidable: false,
+    ),
+    (
+      kind: "building_market_paved",
+      gltf_path: "game_assets/buildings/village/MarketPaved.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: All,
+      collidable: false,
+    ),
     // ---------------------------------------------------------------------------------------------
     (
       kind: "building_farmstead",

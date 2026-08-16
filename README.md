@@ -127,7 +127,8 @@ Runtime assets live in `client/assets/`. The server's domain map is in
 [server/README.md](server/README.md), contributor guardrails in
 [CONTRIBUTING.md](CONTRIBUTING.md), the current character contract in
 [character-animations.md](docs/character-animations.md), and asset naming in
-[ASSET_NAMING.md](asset_creation/ASSET_NAMING.md).
+[ASSET_NAMING.md](asset_creation/ASSET_NAMING.md). UI structure, theming, modal and
+live-panel rules are in [UI-ARCHITECTURE.md](docs/UI-ARCHITECTURE.md).
 
 ## Run the game
 

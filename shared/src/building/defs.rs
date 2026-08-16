@@ -13,10 +13,14 @@ pub enum BuildingType {
     Farmstead,
     MootHall,
     FishermansHut,
+    /// The permanent earthen market square. This keeps the old market
+    /// discriminant so replicated state and saves remain stable; the alias
+    /// reads pre-art RON data that still calls it `PlaceholderMarket`.
+    #[serde(alias = "PlaceholderMarket")]
+    Market,
     /// Generated blockouts used by the settlement simulation until authored
     /// civic art arrives. They deliberately have no scene path: the client
     /// draws their definitions as simple coloured boxes.
-    PlaceholderMarket,
     PlaceholderTavern,
     PlaceholderChurch,
     VillageHall,
@@ -29,9 +33,17 @@ pub enum BuildingType {
     Windmill,
     #[serde(alias = "PlaceholderBakery")]
     Bakery,
+    /// Paved upgrade of the market square. It deliberately shares the exact
+    /// same anchors and footprint as `Market`, so promotion never moves it.
+    MarketPaved,
+    /// Temporary private-depot art. Storage halls previously borrowed the old
+    /// market blockout; keeping that box separate prevents them becoming
+    /// walkable public plazas when the market receives authored art.
+    PlaceholderStorageHall,
 }
 
-/// All building types with GLTF models (for collider baking).
+/// All authored building types. Collider baking filters this list through
+/// [`BuildingType::has_baked_collider`] because open markets stay walkable.
 pub const ALL_BUILDING_TYPES: &[BuildingType] = &[
     BuildingType::LogCabin,
     BuildingType::LumberjackHut,
@@ -42,6 +54,8 @@ pub const ALL_BUILDING_TYPES: &[BuildingType] = &[
     BuildingType::FishermansHut,
     BuildingType::Windmill,
     BuildingType::Bakery,
+    BuildingType::Market,
+    BuildingType::MarketPaved,
 ];
 
 impl BuildingType {
@@ -59,11 +73,13 @@ impl BuildingType {
             BuildingType::VillageHall => "building_village_hall",
             BuildingType::TownHall => "building_town_hall",
             BuildingType::FishermansHut => "building_fishermans_hut",
-            BuildingType::PlaceholderMarket => "placeholder_market",
+            BuildingType::Market => "building_market",
             BuildingType::PlaceholderTavern => "placeholder_tavern",
             BuildingType::PlaceholderChurch => "placeholder_church",
             BuildingType::Windmill => "building_windmill",
             BuildingType::Bakery => "building_bakery",
+            BuildingType::MarketPaved => "building_market_paved",
+            BuildingType::PlaceholderStorageHall => "placeholder_storage_hall",
         }
     }
 
@@ -85,14 +101,25 @@ impl BuildingType {
             }
             BuildingType::Windmill => Some("game_assets/buildings/village/WindMill.glb#Scene0"),
             BuildingType::Bakery => Some("game_assets/buildings/village/Bakery.glb#Scene0"),
-            BuildingType::PlaceholderMarket
-            | BuildingType::PlaceholderTavern
-            | BuildingType::PlaceholderChurch => None,
+            BuildingType::Market => Some("game_assets/buildings/village/Market.glb#Scene0"),
+            BuildingType::MarketPaved => {
+                Some("game_assets/buildings/village/MarketPaved.glb#Scene0")
+            }
+            BuildingType::PlaceholderTavern | BuildingType::PlaceholderChurch => None,
+            BuildingType::PlaceholderStorageHall => None,
         }
     }
 
     pub const fn has_baked_collider(&self) -> bool {
-        self.scene_path().is_some()
+        self.scene_path().is_some() && !matches!(self, Self::Market | Self::MarketPaved)
+    }
+
+    /// Whether the coarse server navigation cache should treat the whole
+    /// authored footprint as solid. Markets are open-air walkable squares:
+    /// blocking their 12 x 12 m plot would prevent customers and traders from
+    /// reaching the stalls even though their render scenes have no collider.
+    pub const fn blocks_ground_navigation(self) -> bool {
+        !matches!(self, Self::Market | Self::MarketPaved)
     }
 
     pub const fn is_civic_hall(self) -> bool {
@@ -186,14 +213,40 @@ impl BuildingType {
                 color: Color::srgb(0.41, 0.28, 0.18),
                 model_path: Some("game_assets/buildings/village/FishermansHut.glb#Scene0"),
             },
-            BuildingType::PlaceholderMarket => BuildingDef {
+            // Open-air square: stalls, counters and paving are decoration, not
+            // a solid hall. Both levels intentionally share geometry, anchors
+            // and footprint so a settlement upgrade can swap scenes in place.
+            BuildingType::Market => BuildingDef {
                 building_type: *self,
-                display_name: "Marketplace (blockout)",
+                display_name: "Marketplace",
+                footprint: Vec2::new(12.0, 12.0),
+                footprint_center: Vec2::ZERO,
+                height: 3.2,
+                // Three metres of fully level apron prevents the 2 m terrain
+                // grid's triangles from interpolating through the authored
+                // floor edge; the remaining 1.8 m blends back to the meadow.
+                flatten_radius: 4.8,
+                color: Color::srgb(0.67, 0.48, 0.23),
+                model_path: Some("game_assets/buildings/village/Market.glb#Scene0"),
+            },
+            BuildingType::MarketPaved => BuildingDef {
+                building_type: *self,
+                display_name: "Paved Marketplace",
+                footprint: Vec2::new(12.0, 12.0),
+                footprint_center: Vec2::ZERO,
+                height: 3.2,
+                flatten_radius: 4.8,
+                color: Color::srgb(0.67, 0.48, 0.23),
+                model_path: Some("game_assets/buildings/village/MarketPaved.glb#Scene0"),
+            },
+            BuildingType::PlaceholderStorageHall => BuildingDef {
+                building_type: *self,
+                display_name: "Storage Hall (blockout)",
                 footprint: Vec2::new(9.0, 7.0),
                 footprint_center: Vec2::ZERO,
                 height: 3.2,
                 flatten_radius: 1.8,
-                color: Color::srgb(0.67, 0.48, 0.23),
+                color: Color::srgb(0.47, 0.34, 0.21),
                 model_path: None,
             },
             BuildingType::PlaceholderTavern => BuildingDef {
@@ -279,7 +332,9 @@ pub struct BuildingDef {
     pub footprint_center: Vec2,
     /// Building height in meters.
     pub height: f32,
-    /// Extra radius around footprint for terrain flattening (smooth transition).
+    /// Total landscaped radius outside the footprint. Most buildings use all
+    /// of it as a smooth transition; broad ground slabs can reserve an inner
+    /// fully-level apron through [`BuildingDef::terrain_flat_margin`].
     pub flatten_radius: f32,
     /// Building color (for dummy mesh fallback).
     pub color: Color,
@@ -288,6 +343,27 @@ pub struct BuildingDef {
 }
 
 impl BuildingDef {
+    /// Fully level ground outside the visible footprint before blending starts.
+    ///
+    /// A market's slab is as wide as its declared footprint. Because terrain
+    /// vertices are two metres apart, flattening only to the exact edge still
+    /// lets an adjacent triangle interpolate through the floor. A three-metre
+    /// apron keeps every contributing triangle below the authored ground.
+    pub const fn terrain_flat_margin(&self) -> f32 {
+        match self.building_type {
+            BuildingType::Market | BuildingType::MarketPaved => 3.0,
+            _ => 0.0,
+        }
+    }
+
+    pub fn terrain_flat_half_extents(&self) -> Vec2 {
+        self.footprint * 0.5 + Vec2::splat(self.terrain_flat_margin())
+    }
+
+    pub fn terrain_blend_width(&self) -> f32 {
+        (self.flatten_radius - self.terrain_flat_margin()).max(0.0)
+    }
+
     /// World-space X/Z centre of this model's rotated ground footprint.
     #[inline]
     pub fn world_footprint_center(&self, root: Vec3, rotation_y: f32) -> Vec2 {

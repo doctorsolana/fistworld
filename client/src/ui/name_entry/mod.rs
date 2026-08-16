@@ -20,14 +20,8 @@ use shared::protocol::{
 };
 
 use crate::states::GameState;
-
-// UI colors
-const TEXT_COLOR: Color = Color::srgb(0.9, 0.9, 0.9);
-const INPUT_BG: Color = Color::srgb(0.15, 0.15, 0.15);
-const BUTTON_NORMAL: Color = Color::srgb(0.25, 0.55, 0.35);
-const BUTTON_HOVERED: Color = Color::srgb(0.3, 0.65, 0.45);
-const BUTTON_PRESSED: Color = Color::srgb(0.35, 0.75, 0.55);
-const ERROR_COLOR: Color = Color::srgb(0.9, 0.3, 0.3);
+use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
+use crate::ui::styles::{ACCENT_RED, INK_INVERSE, SLATE};
 
 /// Plugin for name entry UI
 pub struct NameEntryPlugin;

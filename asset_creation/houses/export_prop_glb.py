@@ -54,7 +54,9 @@ GLB_PATH = {
     "village_hall": "game_assets/buildings/village/VillageHall.glb",    # village
     "town_hall": "game_assets/buildings/village/TownHall.glb",          # town
     "windmill": "game_assets/buildings/village/WindMill.glb",
+    # The market ladder: L1 on beaten earth, L2 once the settlement has paved it.
     "market": "game_assets/buildings/village/Market.glb",
+    "market_paved": "game_assets/buildings/village/MarketPaved.glb",
     "bakery": "game_assets/buildings/village/Bakery.glb",
     "fishermans_hut": "game_assets/buildings/village/FishermansHut.glb",
     "fishing_pier": "game_assets/environment/shore/FishingPier.glb",
@@ -195,7 +197,10 @@ CANON_DOOR_BY_STEM = {
     "village_hall": (0.0, -5.20),
     "town_hall": (0.0, -5.20),
     "windmill": (0.0, -4.00),           # door_offset(Windmill)
-    "market": (0.0, -4.00),             # door_offset(Market)
+    # The market is 12 x 12 now, so its edge is at -6.0 and -4.00 would put the threshold two
+    # metres INSIDE the square. door_offset(Market) has to move to -6.50 with it.
+    "market": (0.0, -6.50),             # door_offset(Market) -- NEEDS THE RUST CONSTANT MOVED
+    "market_paved": (0.0, -6.50),       # both levels share a threshold, as the halls do
     "bakery": (0.0, -4.00),             # door_offset(Bakery)
 }
 CIVIC = {"moot_hall", "village_hall", "town_hall"}

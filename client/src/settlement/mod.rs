@@ -18,7 +18,7 @@ use bevy::prelude::*;
 use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
 use shared::components::{
     BuildingDoorDemand, CivicHallLevel, CloudSeed, ConstructionSite, FarmField, FishingPier,
-    Household, PlayerPosition, PlayerRotation, Settlement, SettlementBuilding,
+    Household, MarketLevel, PlayerPosition, PlayerRotation, Settlement, SettlementBuilding,
     SettlementBuildingKind, TimeWarp, WorldTime,
 };
 use shared::debug::DebugGizmoMode;
@@ -146,8 +146,21 @@ pub struct SettlementVisual {
 }
 
 /// Marks a settlement building that already has its model drawn.
-#[derive(Component)]
-pub struct BuildingVisual;
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuildingVisual {
+    building_type: BuildingType,
+}
+
+fn building_visual_art(
+    kind: SettlementBuildingKind,
+    market_level: Option<&MarketLevel>,
+) -> BuildingType {
+    if kind == SettlementBuildingKind::Market {
+        market_level.copied().unwrap_or_default().building_type()
+    } else {
+        kind.art()
+    }
+}
 
 #[derive(Component)]
 pub struct FarmFieldVisual;
@@ -487,7 +500,7 @@ fn raise_construction_visuals(
                     ground + definition.height * 0.5
                 };
                 let common = (
-                    BuildingVisual,
+                    BuildingVisual { building_type: art },
                     RaisingVisual {
                         elapsed: 0.0,
                         sunk,
@@ -557,15 +570,15 @@ fn claim_building_ground(
         Option<&PlacedBuilding>,
         Option<&BuildingPosition>,
     )>,
-    built: Query<
-        (
-            Entity,
-            &SettlementBuilding,
-            &PlayerPosition,
-            &PlayerRotation,
-        ),
-        Without<PlacedBuilding>,
-    >,
+    built: Query<(
+        Entity,
+        &SettlementBuilding,
+        &PlayerPosition,
+        &PlayerRotation,
+        Option<&MarketLevel>,
+        Option<&PlacedBuilding>,
+        Option<&BuildingPosition>,
+    )>,
     sites: Query<(Entity, &ConstructionSite, &PlayerPosition), Without<PlacedBuilding>>,
 ) {
     for (entity, settlement, position, rotation, level, placed, building_position) in halls.iter() {
@@ -583,14 +596,19 @@ fn claim_building_ground(
             commands.entity(entity).insert(BuildingPosition(position.0));
         }
     }
-    for (entity, building, position, rotation) in built.iter() {
-        commands.entity(entity).insert((
-            PlacedBuilding {
-                building_type: building.kind.art(),
-                rotation: rotation.0,
-            },
-            BuildingPosition(position.0),
-        ));
+    for (entity, building, position, rotation, market_level, placed, building_position) in
+        built.iter()
+    {
+        let desired = PlacedBuilding {
+            building_type: building_visual_art(building.kind, market_level),
+            rotation: rotation.0,
+        };
+        if placed != Some(&desired) {
+            commands.entity(entity).insert(desired);
+        }
+        if building_position.is_none_or(|current| current.0 != position.0) {
+            commands.entity(entity).insert(BuildingPosition(position.0));
+        }
     }
     // Sites carry their rotation now, so the cleared patch is turned exactly
     // like the building that will stand on it.
@@ -616,27 +634,29 @@ fn attach_building_visuals(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     terrain: Option<Res<WorldTerrain>>,
-    built: Query<
-        (
-            Entity,
-            &SettlementBuilding,
-            &PlayerPosition,
-            &PlayerRotation,
-        ),
-        Without<BuildingVisual>,
-    >,
+    built: Query<(
+        Entity,
+        &SettlementBuilding,
+        &PlayerPosition,
+        &PlayerRotation,
+        Option<&MarketLevel>,
+        Option<&BuildingVisual>,
+    )>,
 ) {
     let Some(terrain) = terrain else {
         return;
     };
-    for (entity, building, position, rotation) in built.iter() {
+    for (entity, building, position, rotation, market_level, visual) in built.iter() {
         // The semantic kind chooses its own art, so re-skinning a Farmstead
         // never touches a rule.
-        let art = building.kind.art();
+        let art = building_visual_art(building.kind, market_level);
+        if visual.is_some_and(|visual| visual.building_type == art) {
+            continue;
+        }
         let definition = art.definition();
         let ground = terrain.get_height(position.0.x, position.0.z);
         let common = (
-            BuildingVisual,
+            BuildingVisual { building_type: art },
             Name::new(format!(
                 "{} ({})",
                 building.kind.label(),
@@ -644,19 +664,34 @@ fn attach_building_visuals(
             )),
             Visibility::Inherited,
         );
+        // Level changes reuse the authoritative building root. Clear wiring
+        // that points into the old scene so asynchronous setup can discover
+        // the replacement anchors and animation players.
+        commands
+            .entity(entity)
+            .remove::<BuildingDoorAnimation>()
+            .remove::<WindmillMotion>()
+            .remove::<BuildingNightLighting>()
+            .remove::<BakeryBreadDisplay>()
+            .remove::<HouseWindowLighting>()
+            .remove::<DoorVisualSource>();
         if let Some(scene) = art.scene_path() {
             let gltf_path = scene.split('#').next().unwrap_or(scene).to_string();
-            commands.entity(entity).insert((
-                common,
-                DoorVisualSource {
-                    kind: building.kind,
-                    building_type: art,
-                    gltf: asset_server.load(gltf_path),
-                },
-                WorldAssetRoot(asset_server.load(scene)),
-                Transform::from_xyz(position.0.x, ground, position.0.z)
-                    .with_rotation(Quat::from_rotation_y(rotation.0)),
-            ));
+            commands
+                .entity(entity)
+                .remove::<Mesh3d>()
+                .remove::<MeshMaterial3d<StandardMaterial>>()
+                .insert((
+                    common,
+                    DoorVisualSource {
+                        kind: building.kind,
+                        building_type: art,
+                        gltf: asset_server.load(gltf_path),
+                    },
+                    WorldAssetRoot(asset_server.load(scene)),
+                    Transform::from_xyz(position.0.x, ground, position.0.z)
+                        .with_rotation(Quat::from_rotation_y(rotation.0)),
+                ));
         } else {
             let mesh = meshes.add(Cuboid::new(
                 definition.footprint.x,
@@ -668,7 +703,7 @@ fn attach_building_visuals(
                 perceptual_roughness: 0.92,
                 ..default()
             });
-            commands.entity(entity).insert((
+            commands.entity(entity).remove::<WorldAssetRoot>().insert((
                 common,
                 Mesh3d(mesh),
                 MeshMaterial3d(material),
@@ -1109,6 +1144,13 @@ fn setup_building_night_lighting(
                     ("Light_Interior", 720_000.0, 9.0),
                     ("Light_Lantern", 440_000.0, 7.5),
                 ],
+                Some(SettlementBuildingKind::Market) => &[
+                    // The open square wants pools of warmth rather than one
+                    // building-sized floodlight. Both authored levels expose
+                    // these same anchors, so promotion keeps the composition.
+                    ("Light_Interior", 760_000.0, 11.0),
+                    ("Light_Lantern", 460_000.0, 8.0),
+                ],
                 _ => continue,
             }
         };
@@ -1164,16 +1206,28 @@ fn setup_building_night_lighting(
 }
 
 fn sync_building_night_lighting(
+    mut commands: Commands,
     time: Res<Time>,
     world_time: Query<&WorldTime>,
-    mut roots: Query<&mut BuildingNightLighting>,
+    mut roots: Query<(Entity, &mut BuildingNightLighting)>,
     mut lamps: Query<(&BuildingNightLamp, &mut PointLight, &mut Visibility)>,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
     };
     let target = house_window_target(clock, true);
-    for mut lighting in roots.iter_mut() {
+    for (root, mut lighting) in roots.iter_mut() {
+        // Replacing a level's WorldAssetRoot despawns its old anchor children.
+        // Drop stale wiring even if the fade target has not changed, allowing
+        // setup to bind the new market scene on the following frame.
+        if lighting
+            .lamps
+            .iter()
+            .any(|lamp| lamps.get_mut(*lamp).is_err())
+        {
+            commands.entity(root).remove::<BuildingNightLighting>();
+            continue;
+        }
         let next = move_towards(
             lighting.strength,
             target,

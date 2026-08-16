@@ -8,7 +8,8 @@ The companion document [WORLD-DESIGN.md](WORLD-DESIGN.md) describes what runs ON
 architecture: settlements, goods, caravans, clans, and the player's climb from one guy
 to a realm. [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md) is the executable reference for market
 ownership, municipal finance and settlement policy. The build order lives in
-[ROADMAP.md](ROADMAP.md).
+[ROADMAP.md](ROADMAP.md). Client presentation and interaction rules live in
+[UI-ARCHITECTURE.md](UI-ARCHITECTURE.md).
 
 > **Status, audited 2026-08-15.** This remains a design record, with implementation state
 > marked **[not built]**, **[partial]** or **[done]**. The living-village foundation now
@@ -333,3 +334,9 @@ The current village simulation uses these rules as hard boundaries:
   `village_roads/steward.rs`, and width/dryness
   geometry in `village_roads/geometry.rs`. Keep extending those seams instead of growing
   either facade into a monolith.
+- **UI chrome is a shared foundation, not screen-local behavior.** `ui/styles.rs` owns the
+  palette, `ui/foundation.rs` owns semantic layers, type scale, buttons, disabled/focus state
+  and live-panel refresh safety, `ui/modal.rs` owns the one-scrim modal structure, and
+  `ui/scroll.rs` owns nested wheel bubbling. Economy screens preserve the entity under the
+  pointer and bound structural refresh at high simulation speed. See
+  [UI-ARCHITECTURE.md](UI-ARCHITECTURE.md).

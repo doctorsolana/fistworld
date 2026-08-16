@@ -53,6 +53,7 @@ pub(super) fn spawn_hud(
         // every world click for as long as the cursor is on screen. The plates
         // inside it carry `Interaction` and swallow clicks; this does not.
         Pickable::IGNORE,
+        GlobalZIndex(crate::ui::foundation::layer::HUD),
         children![top_right_column(), selection_plate(), selection_box()],
     ));
 }
@@ -149,9 +150,10 @@ fn mode_toggle() -> impl Bundle {
             border_radius: BorderRadius::all(Val::Px(2.0)),
             ..default()
         },
-        BackgroundColor(Color::NONE),
+        button_chrome(UiButtonVariant::Ghost),
         children![(
             ModeChipText,
+            UiButtonLabel,
             Text::new("PLAY"),
             TextFont {
                 font_size: FontSize::Px(10.0),
@@ -238,10 +240,10 @@ fn warp_button(text: &str, factor: f32) -> impl Bundle {
             border_radius: BorderRadius::all(Val::Px(2.0)),
             ..default()
         },
-        BackgroundColor(BUTTON_NORMAL),
-        BorderColor::from(PLATE_RULE_SOFT),
+        button_chrome(UiButtonVariant::Secondary),
         children![(
             Text::new(text),
+            UiButtonLabel,
             TextFont {
                 font_size: FontSize::Px(13.0),
                 ..default()
@@ -266,10 +268,10 @@ fn spawn_hero_button() -> impl Bundle {
             border_radius: BorderRadius::all(Val::Px(2.0)),
             ..default()
         },
-        BackgroundColor(BUTTON_NORMAL),
-        BorderColor::from(PLATE_RULE_SOFT),
+        button_chrome(UiButtonVariant::Secondary),
         children![(
             SpawnHeroLabel,
+            UiButtonLabel,
             Text::new("SPAWN HERO"),
             TextFont {
                 font_size: FontSize::Px(11.0),
@@ -294,10 +296,10 @@ fn found_village_button() -> impl Bundle {
             border_radius: BorderRadius::all(Val::Px(2.0)),
             ..default()
         },
-        BackgroundColor(BUTTON_NORMAL),
-        BorderColor::from(PLATE_RULE_SOFT),
+        button_chrome(UiButtonVariant::Secondary),
         children![(
             FoundVillageLabel,
+            UiButtonLabel,
             Text::new("FOUND VILLAGE"),
             TextFont {
                 font_size: FontSize::Px(11.0),
@@ -367,10 +369,10 @@ fn spawn_npc_button() -> impl Bundle {
             border_radius: BorderRadius::all(Val::Px(2.0)),
             ..default()
         },
-        BackgroundColor(BUTTON_NORMAL),
-        BorderColor::from(PLATE_RULE_SOFT),
+        button_chrome(UiButtonVariant::Secondary),
         children![(
             SpawnNpcLabel,
+            UiButtonLabel,
             Text::new("SPAWN VILLAGER"),
             TextFont {
                 font_size: FontSize::Px(11.0),
@@ -484,10 +486,10 @@ fn selection_plate() -> impl Bundle {
                     border_radius: BorderRadius::all(Val::Px(RADIUS)),
                     ..default()
                 },
-                BackgroundColor(BUTTON_NORMAL),
-                BorderColor::from(PLATE_RULE_SOFT),
+                button_chrome(UiButtonVariant::Secondary),
                 children![(
                     Text::new("EXPAND"),
+                    UiButtonLabel,
                     TextFont {
                         font_size: FontSize::Px(9.0),
                         ..default()

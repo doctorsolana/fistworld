@@ -201,7 +201,7 @@ pub(super) fn ensure_marker_assets(
     if !map_open.0 || assets.player_arrow.is_some() {
         return;
     }
-    let arrow = build_player_arrow_image(PLAYER_ARROW_TEX, ACCENT_COLOR);
+    let arrow = build_player_arrow_image(PLAYER_ARROW_TEX, EMBER);
     assets.player_arrow = Some(images.add(arrow));
 }
 

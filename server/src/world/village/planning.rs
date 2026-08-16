@@ -488,14 +488,15 @@ pub fn consider_permits(
             houses: count(SettlementBuildingKind::House),
             ..Default::default()
         };
-        for (_, building, building_of, _, condition, inventory, account, _, _, _, _) in
+        for (_, building, building_of, _, condition, inventory, account, _, _, _, staffing) in
             business_read.iter()
         {
-            if building_of.0 != *settlement_id
-                || condition.is_some_and(|condition| !condition.state.counts_as_active_capacity())
-            {
+            if building_of.0 != *settlement_id {
                 continue;
             }
+            // Physical stock remains market information after a firm stops
+            // operating. Hiding a liquidator's full store makes the permit
+            // system construct a replacement into the same unresolved glut.
             if let Some(inventory) = inventory {
                 signals.wheat_stock = signals
                     .wheat_stock
@@ -509,8 +510,105 @@ pub fn consider_permits(
                 signals.wood_stock = signals
                     .wood_stock
                     .saturating_add(inventory.amount(Good::Wood));
+                if building.kind == SettlementBuildingKind::StorageHall {
+                    if condition.is_none_or(|condition| condition.state.can_operate()) {
+                        signals.active_storage_free_bulk = signals
+                            .active_storage_free_bulk
+                            .saturating_add(inventory.free_bulk());
+                    }
+                } else if let Some(output) = super::business_output(building.kind) {
+                    let units = inventory.amount(output);
+                    let bulk = units.saturating_mul(output.bulk_per_unit());
+                    signals.stranded_output_bulk =
+                        signals.stranded_output_bulk.saturating_add(bulk);
+                    let quote =
+                        market.map_or(output.base_price(), |market| market.suggested_price(output));
+                    signals.stranded_output_value = signals
+                        .stranded_output_value
+                        .saturating_add(u64::from(units).saturating_mul(quote));
+                }
+            }
+            if condition.is_some_and(|condition| !condition.state.counts_as_active_capacity()) {
+                if condition
+                    .is_some_and(|condition| condition.state.counts_as_recoverable_capacity())
+                {
+                    match building.kind {
+                        SettlementBuildingKind::Farmstead => signals.recoverable_farms += 1,
+                        SettlementBuildingKind::FishermansHut => signals.recoverable_fishers += 1,
+                        SettlementBuildingKind::Windmill => signals.recoverable_windmills += 1,
+                        SettlementBuildingKind::Bakery => signals.recoverable_bakeries += 1,
+                        SettlementBuildingKind::LumberjackHut => {
+                            signals.recoverable_lumber_huts += 1
+                        }
+                        SettlementBuildingKind::StorageHall => {
+                            signals.recoverable_storage_halls += 1
+                        }
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+            if let Some(capacity) = super::rated_daily_production(building.kind, building.quality) {
+                let enabled = staffing
+                    .copied()
+                    .unwrap_or_else(|| BusinessStaffingPolicy::new(building.kind.positions()))
+                    .target_for(building.kind);
+                let staffed = capacity.output_units.saturating_mul(u32::from(enabled))
+                    / u32::from(building.kind.positions().max(1));
+                let idle = capacity.output_units.saturating_sub(staffed);
+                match building.kind {
+                    SettlementBuildingKind::Windmill => {
+                        signals.active_windmill_output_capacity = signals
+                            .active_windmill_output_capacity
+                            .saturating_add(staffed);
+                        signals.idle_windmill_output_capacity =
+                            signals.idle_windmill_output_capacity.saturating_add(idle);
+                    }
+                    SettlementBuildingKind::Bakery => {
+                        signals.active_bakery_output_capacity = signals
+                            .active_bakery_output_capacity
+                            .saturating_add(staffed);
+                        signals.idle_bakery_output_capacity =
+                            signals.idle_bakery_output_capacity.saturating_add(idle);
+                    }
+                    _ => {}
+                }
+            }
+            if matches!(
+                building.kind,
+                SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut
+            ) {
+                let anticipated = super::rated_daily_production(building.kind, building.quality)
+                    .map_or(0, |capacity| capacity.output_units);
+                match building.kind {
+                    SettlementBuildingKind::Farmstead => {
+                        signals.anticipated_wheat_output =
+                            signals.anticipated_wheat_output.saturating_add(anticipated);
+                    }
+                    SettlementBuildingKind::FishermansHut => {
+                        signals.anticipated_fish_output =
+                            signals.anticipated_fish_output.saturating_add(anticipated);
+                    }
+                    _ => {}
+                }
             }
             if let Some(account) = account {
+                if let Some(output) = super::business_output(building.kind) {
+                    let dispatched = account
+                        .current_day
+                        .sold_units
+                        .saturating_add(account.previous_day.sold_units)
+                        .div_ceil(2)
+                        .saturating_mul(output.bulk_per_unit());
+                    signals.recent_logistics_bulk =
+                        signals.recent_logistics_bulk.saturating_add(dispatched);
+                }
+                if building.kind == SettlementBuildingKind::StorageHall {
+                    signals.recent_storage_cost = signals
+                        .recent_storage_cost
+                        .saturating_add(account.current_day.wage_expense)
+                        .saturating_add(account.previous_day.wage_expense);
+                }
                 let recent = account
                     .current_day
                     .produced_units
@@ -519,6 +617,10 @@ pub fn consider_permits(
                     SettlementBuildingKind::Farmstead => {
                         signals.recent_wheat_output =
                             signals.recent_wheat_output.saturating_add(recent);
+                    }
+                    SettlementBuildingKind::FishermansHut => {
+                        signals.recent_fish_output =
+                            signals.recent_fish_output.saturating_add(recent);
                     }
                     SettlementBuildingKind::Windmill => {
                         signals.unproven_windmill |= condition
@@ -543,6 +645,17 @@ pub fn consider_permits(
                             .recent_windmill_profit
                             .saturating_add(account.current_day.profit())
                             .saturating_add(account.previous_day.profit());
+                        if !condition.is_some_and(|condition| condition.state == BusinessState::New)
+                            && account.current_day.day != u32::MAX
+                            && account.previous_day.day != u32::MAX
+                            && account
+                                .current_day
+                                .profit()
+                                .saturating_add(account.previous_day.profit())
+                                <= 0
+                        {
+                            signals.lossmaking_windmills += 1;
+                        }
                     }
                     SettlementBuildingKind::Bakery => {
                         signals.unproven_bakery |= condition
@@ -565,6 +678,17 @@ pub fn consider_permits(
                             .recent_bakery_profit
                             .saturating_add(account.current_day.profit())
                             .saturating_add(account.previous_day.profit());
+                        if !condition.is_some_and(|condition| condition.state == BusinessState::New)
+                            && account.current_day.day != u32::MAX
+                            && account.previous_day.day != u32::MAX
+                            && account
+                                .current_day
+                                .profit()
+                                .saturating_add(account.previous_day.profit())
+                                <= 0
+                        {
+                            signals.lossmaking_bakeries += 1;
+                        }
                     }
                     _ => {}
                 }
@@ -586,6 +710,28 @@ pub fn consider_permits(
         }
         for (under, inventory) in pending.iter() {
             if under.settlement == settlement_entity {
+                if matches!(
+                    under.kind,
+                    SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut
+                ) {
+                    let anticipated = super::rated_daily_production(under.kind, under.quality)
+                        .map_or(0, |capacity| capacity.output_units);
+                    match under.kind {
+                        SettlementBuildingKind::Farmstead => {
+                            signals.anticipated_wheat_output =
+                                signals.anticipated_wheat_output.saturating_add(anticipated);
+                            signals.pending_wheat_output =
+                                signals.pending_wheat_output.saturating_add(anticipated);
+                        }
+                        SettlementBuildingKind::FishermansHut => {
+                            signals.anticipated_fish_output =
+                                signals.anticipated_fish_output.saturating_add(anticipated);
+                            signals.pending_fish_output =
+                                signals.pending_fish_output.saturating_add(anticipated);
+                        }
+                        _ => {}
+                    }
+                }
                 signals.construction_wood_demand = signals.construction_wood_demand.saturating_add(
                     under
                         .kind

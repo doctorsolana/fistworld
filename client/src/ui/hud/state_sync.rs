@@ -120,8 +120,8 @@ pub(super) fn sync_clock_chip(
 pub(super) fn sync_mode_chip(
     capability: Res<GodCapability>,
     mode: Res<HudMode>,
-    mut chips: Query<(&mut Node, &mut BorderColor), With<ModeChipButton>>,
-    mut labels: Query<(&mut Text, &mut TextColor), With<ModeChipText>>,
+    mut chips: Query<(&mut Node, &mut UiButtonStyle), With<ModeChipButton>>,
+    mut labels: Query<&mut Text, With<ModeChipText>>,
 ) {
     let display = if capability.0 {
         Display::Flex
@@ -131,25 +131,19 @@ pub(super) fn sync_mode_chip(
     // GOD reads as a neutral dark inversion, not as the accent: dev chrome must
     // never be mistakable for game state. It is also a ghost button at rest, so
     // PLAY is just a word in the clock row.
-    let (label, text_color, border) = match *mode {
-        HudMode::God => ("GOD", INK_INVERSE, PLATE_RULE),
-        HudMode::Play => ("PLAY", INK_MUTED, Color::NONE),
+    let (label, variant) = match *mode {
+        HudMode::God => ("GOD", UiButtonVariant::Developer),
+        HudMode::Play => ("PLAY", UiButtonVariant::Ghost),
     };
-    for (mut node, mut border_color) in chips.iter_mut() {
+    for (mut node, mut style) in chips.iter_mut() {
         if node.display != display {
             node.display = display;
         }
-        let border = BorderColor::from(border);
-        if *border_color != border {
-            *border_color = border;
-        }
+        style.variant = variant;
     }
-    for (mut text, mut color) in labels.iter_mut() {
+    for mut text in labels.iter_mut() {
         if text.0 != label {
             text.0 = label.to_string();
-        }
-        if color.0 != text_color {
-            color.0 = text_color;
         }
     }
 }
@@ -175,35 +169,19 @@ pub(super) fn sync_god_panel(
 /// local click state.
 pub(super) fn style_warp_buttons(
     warp: Query<&TimeWarp>,
-    mut buttons: Query<(&Interaction, &WarpButton, &mut BackgroundColor, &Children)>,
-    mut labels: Query<&mut TextColor>,
+    mut buttons: Query<(&WarpButton, &mut UiButtonStyle)>,
 ) {
     let current = warp.iter().next().map_or(1.0, |w| w.0);
 
-    for (interaction, WarpButton(factor), mut bg, children) in buttons.iter_mut() {
+    for (WarpButton(factor), mut style) in buttons.iter_mut() {
         // Exact match only: a non-preset factor (e.g. clamped or set by another god)
         // highlights nothing — the clock chip's suffix already shows the true value.
         let is_active = (current - factor).abs() < 1e-3;
-        let background = if is_active {
-            SLATE
+        style.variant = if is_active {
+            UiButtonVariant::Developer
         } else {
-            match *interaction {
-                Interaction::Pressed => BUTTON_PRESSED,
-                Interaction::Hovered => BUTTON_HOVERED,
-                Interaction::None => BUTTON_NORMAL,
-            }
+            UiButtonVariant::Secondary
         };
-        if bg.0 != background {
-            bg.0 = background;
-        }
-        let text_color = if is_active { WARP_ACTIVE_TEXT } else { INK };
-        for child in children.iter() {
-            if let Ok(mut color) = labels.get_mut(child) {
-                if color.0 != text_color {
-                    color.0 = text_color;
-                }
-            }
-        }
     }
 }
 
@@ -212,8 +190,8 @@ pub(super) fn sync_spawn_hero_button(
     mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
     heroes: Query<&shared::components::Hero>,
-    mut buttons: Query<(&mut BackgroundColor, &mut BorderColor), With<SpawnHeroButton>>,
-    mut labels: Query<(&mut Text, &mut TextColor), With<SpawnHeroLabel>>,
+    mut buttons: Query<&mut UiButtonStyle, With<SpawnHeroButton>>,
+    mut labels: Query<&mut Text, With<SpawnHeroLabel>>,
 ) {
     let owns_hero = local
         .as_ref()
@@ -222,36 +200,26 @@ pub(super) fn sync_spawn_hero_button(
         *placement = crate::hero::control::WorldPlacementMode::None;
     }
 
-    let (label, text_color, border) = if owns_hero {
-        ("HERO ACTIVE", INK_MUTED, PLATE_RULE_SOFT)
+    let label = if owns_hero {
+        "HERO ACTIVE"
     } else if placement.is_spawn_hero() {
         // Armed is the one dev affordance that genuinely needs to shout, so it
         // takes the slate inversion rather than the reserved accent.
-        ("CLICK TERRAIN", INK_INVERSE, PLATE_RULE)
+        "CLICK TERRAIN"
     } else {
-        ("SPAWN HERO", INK, PLATE_RULE_SOFT)
+        "SPAWN HERO"
     };
 
-    for (mut bg, mut border_color) in buttons.iter_mut() {
-        let background = if placement.is_spawn_hero() {
-            BUTTON_PRESSED
+    for mut style in buttons.iter_mut() {
+        style.variant = if placement.is_spawn_hero() {
+            UiButtonVariant::Developer
         } else {
-            BUTTON_NORMAL
+            UiButtonVariant::Secondary
         };
-        if bg.0 != background {
-            bg.0 = background;
-        }
-        let border = BorderColor::from(border);
-        if *border_color != border {
-            *border_color = border;
-        }
     }
-    for (mut text, mut color) in labels.iter_mut() {
+    for mut text in labels.iter_mut() {
         if text.0 != label {
             text.0 = label.to_string();
-        }
-        if color.0 != text_color {
-            color.0 = text_color;
         }
     }
 }
@@ -264,6 +232,7 @@ pub(super) fn sync_spawn_hero_button(
 ///
 /// A single selected person exposes the three real shared attributes immediately;
 /// EXPAND opens the complete live record (job, wage, home, food and inventory).
+#[allow(clippy::type_complexity)] // Disjoint Bevy UI mutations require one ParamSet.
 pub(super) fn sync_selection_plate(
     selection: Res<crate::selection::Selection>,
     account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
@@ -505,31 +474,25 @@ pub(super) fn sync_selection_box(
 /// Villager button reflects whether placement is armed.
 pub(super) fn sync_spawn_npc_button(
     placement: Res<crate::hero::control::WorldPlacementMode>,
-    mut buttons: Query<(&mut BackgroundColor, &mut BorderColor), With<SpawnNpcButton>>,
-    mut labels: Query<(&mut Text, &mut TextColor), With<SpawnNpcLabel>>,
+    mut buttons: Query<&mut UiButtonStyle, With<SpawnNpcButton>>,
+    mut labels: Query<&mut Text, With<SpawnNpcLabel>>,
 ) {
     let armed = placement.is_spawn_npc();
-    let (label, text_color, border) = if armed {
-        ("CLICK TO PLACE", INK_INVERSE, PLATE_RULE)
+    let label = if armed {
+        "CLICK TO PLACE"
     } else {
-        ("SPAWN VILLAGER", INK, PLATE_RULE_SOFT)
+        "SPAWN VILLAGER"
     };
-    for (mut bg, mut border_color) in buttons.iter_mut() {
-        let background = if armed { BUTTON_PRESSED } else { BUTTON_NORMAL };
-        if bg.0 != background {
-            bg.0 = background;
-        }
-        let next = BorderColor::from(border);
-        if *border_color != next {
-            *border_color = next;
-        }
+    for mut style in buttons.iter_mut() {
+        style.variant = if armed {
+            UiButtonVariant::Developer
+        } else {
+            UiButtonVariant::Secondary
+        };
     }
-    for (mut text, mut color) in labels.iter_mut() {
+    for mut text in labels.iter_mut() {
         if text.0 != label {
             text.0 = label.to_string();
-        }
-        if color.0 != text_color {
-            color.0 = text_color;
         }
     }
 }
@@ -537,31 +500,25 @@ pub(super) fn sync_spawn_npc_button(
 /// Found button reflects whether founding is armed.
 pub(super) fn sync_found_village_button(
     placement: Res<crate::hero::control::WorldPlacementMode>,
-    mut buttons: Query<(&mut BackgroundColor, &mut BorderColor), With<FoundVillageButton>>,
-    mut labels: Query<(&mut Text, &mut TextColor), With<FoundVillageLabel>>,
+    mut buttons: Query<&mut UiButtonStyle, With<FoundVillageButton>>,
+    mut labels: Query<&mut Text, With<FoundVillageLabel>>,
 ) {
     let armed = placement.is_found_settlement();
-    let (label, text_color, border) = if armed {
-        ("CLICK TO FOUND", INK_INVERSE, PLATE_RULE)
+    let label = if armed {
+        "CLICK TO FOUND"
     } else {
-        ("FOUND VILLAGE", INK, PLATE_RULE_SOFT)
+        "FOUND VILLAGE"
     };
-    for (mut bg, mut border_color) in buttons.iter_mut() {
-        let background = if armed { BUTTON_PRESSED } else { BUTTON_NORMAL };
-        if bg.0 != background {
-            bg.0 = background;
-        }
-        let next = BorderColor::from(border);
-        if *border_color != next {
-            *border_color = next;
-        }
+    for mut style in buttons.iter_mut() {
+        style.variant = if armed {
+            UiButtonVariant::Developer
+        } else {
+            UiButtonVariant::Secondary
+        };
     }
-    for (mut text, mut color) in labels.iter_mut() {
+    for mut text in labels.iter_mut() {
         if text.0 != label {
             text.0 = label.to_string();
-        }
-        if color.0 != text_color {
-            color.0 = text_color;
         }
     }
 }

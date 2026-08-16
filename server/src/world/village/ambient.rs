@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use shared::components::{
     BuildingDoorUse, CharacterActivity, CharacterKind, CharacterName, Occupation, PersonId,
-    PlayerPosition, PlayerRotation, Settlement, SettlementBuildingKind, VillageRoad, WorldTime,
+    PlayerPosition, PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind,
+    VillageRoad, WorkStatus, WorldTime,
 };
 use shared::region::{RegionCoord, SimLevel};
 use shared::spatial::SpatialObstacleGrid;
@@ -124,6 +125,7 @@ enum AmbientPhase {
 struct AmbientSpot {
     point: Vec2,
     facing: f32,
+    market: bool,
 }
 
 fn stable_hash(text: &str) -> u64 {
@@ -169,6 +171,7 @@ fn raw_roadside_spots(road: &VillageRoad) -> Vec<AmbientSpot> {
                 spots.push(AmbientSpot {
                     point,
                     facing: facing_toward(centre - point),
+                    market: false,
                 });
             }
         }
@@ -208,6 +211,15 @@ fn gathering_spots(
         Without<CharacterKind>,
     >,
     roads: &Query<(&VillageRoad, &shared::components::RoadOf)>,
+    buildings: &Query<
+        (
+            &SettlementBuilding,
+            &shared::components::BuildingOf,
+            &PlayerPosition,
+            Option<&PlayerRotation>,
+        ),
+        Without<CharacterKind>,
+    >,
 ) -> HashMap<Entity, Vec<AmbientSpot>> {
     let mut by_settlement = HashMap::new();
     let mut entity_by_id = HashMap::new();
@@ -223,6 +235,7 @@ fn gathering_spots(
             spots.push(AmbientSpot {
                 point,
                 facing: facing_toward(Vec2::new(hall.0.x, hall.0.z) - point),
+                market: false,
             });
         }
         by_settlement.insert(entity, spots);
@@ -234,6 +247,33 @@ fn gathering_spots(
         };
         let destination = by_settlement.entry(entity).or_insert_with(Vec::new);
         destination.extend(raw_roadside_spots(road));
+    }
+
+    // Markets are gathering places even before stalls and luxury purchases
+    // gain dedicated routines. These points share the ordinary cached ambient
+    // routing path, so adding visible owner leisure has no per-frame search.
+    for (building, building_of, position, rotation) in buildings.iter() {
+        if building.kind != SettlementBuildingKind::Market {
+            continue;
+        }
+        let Some(settlement) = entity_by_id.get(&building_of.0).copied() else {
+            continue;
+        };
+        let yaw = rotation.map_or(0.0, |rotation| rotation.0);
+        let entrance = building.kind.entrance_position(position.0, yaw);
+        let entrance = Vec2::new(entrance.x, entrance.z);
+        let centre = Vec2::new(position.0.x, position.0.z);
+        let side = shared::rotation::local_to_world_xz(Vec2::X, yaw);
+        let outward = (entrance - centre).try_normalize().unwrap_or(Vec2::Y);
+        let spots = by_settlement.entry(settlement).or_default();
+        for lateral in [-2.2_f32, 0.0, 2.2] {
+            let point = entrance + side * lateral + outward * 1.1;
+            spots.push(AmbientSpot {
+                point,
+                facing: facing_toward(entrance - point),
+                market: true,
+            });
+        }
     }
 
     by_settlement
@@ -251,6 +291,15 @@ fn spot_geometry_signature(
         Without<CharacterKind>,
     >,
     roads: &Query<(&VillageRoad, &shared::components::RoadOf)>,
+    buildings: &Query<
+        (
+            &SettlementBuilding,
+            &shared::components::BuildingOf,
+            &PlayerPosition,
+            Option<&PlayerRotation>,
+        ),
+        Without<CharacterKind>,
+    >,
 ) -> u64 {
     let mut signature = 0_u64;
     for (entity, _settlement, settlement_id, position, rotation) in settlements.iter() {
@@ -268,6 +317,16 @@ fn spot_geometry_signature(
             ^ u64::from(road.width.to_bits()).rotate_left(43);
         signature = signature.wrapping_add(mix(value));
     }
+    for (building, building_of, position, rotation) in buildings.iter() {
+        if building.kind != SettlementBuildingKind::Market {
+            continue;
+        }
+        let value = building_of.0 .0
+            ^ u64::from(position.0.x.to_bits()).rotate_left(5)
+            ^ u64::from(position.0.z.to_bits()).rotate_left(23)
+            ^ u64::from(rotation.map_or(0.0, |rotation| rotation.0).to_bits()).rotate_left(41);
+        signature = signature.wrapping_add(mix(value));
+    }
     signature
 }
 
@@ -281,12 +340,34 @@ fn clear_owned_movement(commands: &mut Commands, entity: Entity) {
         .remove::<NavigationRouteFailed>();
 }
 
+fn select_ambient_spot(
+    start: usize,
+    spots: &[AmbientSpot],
+    prefer_market: bool,
+    mut eligible: impl FnMut(AmbientSpot) -> bool,
+) -> Option<AmbientSpot> {
+    let find_spot = |market_only: bool, eligible: &mut dyn FnMut(AmbientSpot) -> bool| {
+        (0..spots.len()).find_map(|offset| {
+            let spot = spots[(start + offset) % spots.len()];
+            (!market_only || spot.market)
+                .then_some(spot)
+                .filter(|spot| eligible(*spot))
+        })
+    };
+    if prefer_market {
+        find_spot(true, &mut eligible).or_else(|| find_spot(false, &mut eligible))
+    } else {
+        find_spot(false, &mut eligible)
+    }
+}
+
 fn choose_spot(
     name: &str,
     identity_seed: u64,
     routine: &mut AmbientRoutine,
     origin: Vec2,
     spots: &[AmbientSpot],
+    prefer_market: bool,
     terrain: &WorldTerrain,
     obstacles: Option<&SpatialObstacleGrid>,
     colliders: Option<&StaticColliders>,
@@ -302,12 +383,9 @@ fn choose_spot(
     // choose the same first verge. Distance checks are deliberately cheap;
     // collider validation only runs for points inside the neighbourhood.
     let start = seed as usize % spots.len();
-    let spot = (0..spots.len()).find_map(|offset| {
-        let index = (start + offset) % spots.len();
-        let spot = spots[index];
-        (origin.distance_squared(spot.point) <= MAX_AMBIENT_WALK_DISTANCE.powi(2)
-            && point_is_safe(spot.point, terrain, obstacles, colliders, derived))
-        .then_some(spot)
+    let spot = select_ambient_spot(start, spots, prefer_market, |spot| {
+        origin.distance_squared(spot.point) <= MAX_AMBIENT_WALK_DISTANCE.powi(2)
+            && point_is_safe(spot.point, terrain, obstacles, colliders, derived)
     })?;
     let point = Vec3::new(
         spot.point.x,
@@ -347,6 +425,15 @@ pub fn run_ambient_routines(
         Without<CharacterKind>,
     >,
     roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
+    buildings: Query<
+        (
+            &SettlementBuilding,
+            &shared::components::BuildingOf,
+            &PlayerPosition,
+            Option<&PlayerRotation>,
+        ),
+        Without<CharacterKind>,
+    >,
     busy: Query<
         (),
         Or<(
@@ -376,7 +463,7 @@ pub fn run_ambient_routines(
             &mut PlayerRotation,
             &RegionCoord,
             &VillagerIntent,
-            &Occupation,
+            (&Occupation, Option<&WorkStatus>),
             Option<&PersonId>,
             Option<&HomeAssignment>,
             Option<&WorkerOffDuty>,
@@ -408,9 +495,9 @@ pub fn run_ambient_routines(
         return;
     };
     if any_tactical_observer {
-        let signature = spot_geometry_signature(&settlements, &roads);
+        let signature = spot_geometry_signature(&settlements, &roads, &buildings);
         if !spot_cache.initialized || spot_cache.signature != signature {
-            spot_cache.by_settlement = gathering_spots(&settlements, &roads);
+            spot_cache.by_settlement = gathering_spots(&settlements, &roads, &buildings);
             spot_cache.signature = signature;
             spot_cache.initialized = true;
         }
@@ -423,7 +510,7 @@ pub fn run_ambient_routines(
         mut facing,
         region,
         intent,
-        occupation,
+        (occupation, work_status),
         person_id,
         home,
         off_duty,
@@ -673,6 +760,7 @@ pub fn run_ambient_routines(
                             &mut routine,
                             Vec2::new(position.0.x, position.0.z),
                             spots,
+                            work_status.is_some_and(|status| *status == WorkStatus::Chilling),
                             &terrain,
                             obstacles.as_deref(),
                             colliders.as_deref(),
@@ -828,12 +916,35 @@ mod tests {
         assert!(spots.iter().all(|spot| {
             (spot.point.y.abs() - (road.width * 0.5 + ROADSIDE_MARGIN)).abs() < 1e-4
         }));
+        assert!(spots.iter().all(|spot| !spot.market));
         assert!(spots.iter().any(|spot| spot.point.y < 0.0));
         assert!(spots.iter().any(|spot| spot.point.y > 0.0));
         for spot in spots {
             let forward = Vec2::new(-spot.facing.sin(), -spot.facing.cos());
             assert!(forward.dot(Vec2::new(0.0, -spot.point.y).normalize()) > 0.99);
         }
+    }
+
+    #[test]
+    fn intentional_leisure_prefers_a_nearby_market_gathering_spot() {
+        let market = Vec2::new(4.0, 0.0);
+        let spots = [
+            AmbientSpot {
+                point: Vec2::new(2.0, 0.0),
+                facing: 0.0,
+                market: false,
+            },
+            AmbientSpot {
+                point: market,
+                facing: 0.0,
+                market: true,
+            },
+        ];
+
+        let chosen = select_ambient_spot(0, &spots, true, |_| true)
+            .expect("a marked market spot should be preferred");
+
+        assert_eq!(chosen.point, market);
     }
 
     #[test]

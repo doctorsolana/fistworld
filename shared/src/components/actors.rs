@@ -419,6 +419,46 @@ impl CivicHallLevel {
     }
 }
 
+/// The physical finish of a settlement's marketplace.
+///
+/// The two authored scenes have an identical 12 x 12 metre footprint and the
+/// same service anchors, so this can upgrade the existing entity in place
+/// without invalidating roads, inventories, ownership or visitor targets.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum MarketLevel {
+    #[default]
+    Earthen,
+    Paved,
+}
+
+impl MarketLevel {
+    /// Village markets begin as packed earth and receive paving when their
+    /// settlement reaches Town. A future art rung can extend this ladder
+    /// without changing the semantic `SettlementBuildingKind::Market`.
+    pub const fn for_tier(tier: SettlementTier) -> Self {
+        match tier {
+            SettlementTier::Ruins | SettlementTier::Hamlet | SettlementTier::Village => {
+                Self::Earthen
+            }
+            SettlementTier::Town | SettlementTier::City => Self::Paved,
+        }
+    }
+
+    pub const fn building_type(self) -> crate::building::BuildingType {
+        match self {
+            Self::Earthen => crate::building::BuildingType::Market,
+            Self::Paved => crate::building::BuildingType::MarketPaved,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Earthen => "EARTHEN MARKET",
+            Self::Paved => "PAVED MARKET",
+        }
+    }
+}
+
 /// The small public office operated from a settlement's Moot Hall.
 ///
 /// This is separate from [`Settlement`] because administration is optional
@@ -514,8 +554,8 @@ pub enum SettlementBuildingKind {
     FishermansHut,
     /// Somewhere to live.
     House,
-    /// Tier-two civic/commercial blockouts. These are semantic buildings now;
-    /// only their final art is temporary.
+    /// Tier-two civic/commercial buildings. These stay semantic even as their
+    /// physical art gains levels or regional variants.
     Market,
     Tavern,
     Church,
@@ -591,15 +631,15 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::LumberjackHut => Art::LumberjackHut,
             SettlementBuildingKind::FishermansHut => Art::FishermansHut,
             SettlementBuildingKind::House => Art::LogCabin,
-            SettlementBuildingKind::Market => Art::PlaceholderMarket,
+            SettlementBuildingKind::Market => Art::Market,
             SettlementBuildingKind::Tavern => Art::PlaceholderTavern,
             SettlementBuildingKind::Church => Art::PlaceholderChurch,
             SettlementBuildingKind::Windmill => Art::Windmill,
             SettlementBuildingKind::Bakery => Art::Bakery,
             // Dedicated art can replace this semantic mapping without a save
-            // migration. The marketplace blockout already reads as a broad
-            // timber commercial store and has a valid collider/door contract.
-            SettlementBuildingKind::StorageHall => Art::PlaceholderMarket,
+            // migration. Keep its temporary solid box distinct from the
+            // walkable open-air marketplace.
+            SettlementBuildingKind::StorageHall => Art::PlaceholderStorageHall,
         }
     }
 
@@ -678,7 +718,10 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::FishermansHut => Some("Fisher"),
             SettlementBuildingKind::Hall => Some("Reeve"),
             SettlementBuildingKind::House => None,
-            SettlementBuildingKind::Market => Some("Market Trader"),
+            // The Marketplace is currently a second physical counter for the
+            // Hall's shared store. It deliberately creates no civic job until
+            // staffed market roles have real behaviour and payroll.
+            SettlementBuildingKind::Market => None,
             SettlementBuildingKind::Tavern => Some("Innkeeper"),
             SettlementBuildingKind::Church => Some("Cleric"),
             SettlementBuildingKind::Windmill => Some("Miller"),
@@ -702,7 +745,7 @@ impl SettlementBuildingKind {
             // roads; those duties must never become separate jobs.
             SettlementBuildingKind::Hall => 3,
             SettlementBuildingKind::House => 0,
-            SettlementBuildingKind::Market => 2,
+            SettlementBuildingKind::Market => 0,
             SettlementBuildingKind::Tavern => 2,
             SettlementBuildingKind::Church => 1,
             SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => 2,
@@ -710,7 +753,9 @@ impl SettlementBuildingKind {
         }
     }
 
-    /// Bounded bulk storage physically available at this place.
+    /// Bounded bulk storage physically available at this place. Hall and
+    /// Marketplace values are applied independently to each public resource
+    /// compartment; private buildings use one combined allowance.
     ///
     /// The hall is attached to the [`Settlement`] entity rather than spawned as
     /// a `SettlementBuilding`, but keeping its capacity in this semantic table
@@ -791,7 +836,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::LumberjackHut => Vec2::new(0.0, -3.40),
             SettlementBuildingKind::FishermansHut => Vec2::new(0.0, -4.45),
             SettlementBuildingKind::House => Vec2::new(0.0, -3.80),
-            SettlementBuildingKind::Market => Vec2::new(0.0, -4.0),
+            SettlementBuildingKind::Market => Vec2::new(0.0, -6.5),
             SettlementBuildingKind::Tavern => Vec2::new(0.0, -4.0),
             SettlementBuildingKind::Church => Vec2::new(0.0, -6.5),
             SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => {
@@ -940,7 +985,7 @@ impl SettlementBuildingKind {
             // roads, prop collision and the authored footprints remain
             // separate hard constraints.
             SettlementBuildingKind::House => 6.0,
-            SettlementBuildingKind::Market => 11.0,
+            SettlementBuildingKind::Market => 13.0,
             SettlementBuildingKind::Tavern => 10.0,
             SettlementBuildingKind::Church => 12.0,
             SettlementBuildingKind::Windmill => 11.0,
@@ -1011,6 +1056,24 @@ mod settlement_building_kind_tests {
         assert_eq!(
             SettlementBuildingKind::Bakery.placement_suitability(&open_ground),
             SettlementBuildingKind::Bakery.placement_suitability(&dense_forest)
+        );
+    }
+
+    #[test]
+    fn market_plot_contract_matches_the_authored_open_square() {
+        let market = SettlementBuildingKind::Market;
+        assert_eq!(market.art(), crate::building::BuildingType::Market);
+        assert_eq!(market.positions(), 0, "market civic jobs remain disabled");
+        assert_eq!(market.trade(), None);
+        assert_eq!(market.door_offset(), Vec2::new(0.0, -6.5));
+        assert_eq!(market.clearance(), 13.0);
+        assert_eq!(
+            MarketLevel::for_tier(SettlementTier::Village),
+            MarketLevel::Earthen
+        );
+        assert_eq!(
+            MarketLevel::for_tier(SettlementTier::Town),
+            MarketLevel::Paved
         );
     }
 }

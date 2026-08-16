@@ -11,7 +11,7 @@ market rules remain in [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
 - Houses and household consumption remain personal/household property; they are not company assets.
 - Company cash pays payroll, external inputs, municipal delivery fees, taxes and other obligations for every operated site, including sites in different settlements.
 - Workers retain exactly one job and one workplace. Their wages are paid by the company but attributed to that site's operating ledger.
-- An eligible unemployed Company Master gets first refusal on one vacancy in their own company. This makes owner = Master = worker the normal one-site founding pattern without bypassing skill requirements or creating a second job. A wealthy Master may later hire a replacement and leave daily production when payroll is secure.
+- An eligible unemployed Company Master gets first refusal on one vacancy in their own company. This makes owner = Master = worker the normal one-site founding pattern without bypassing skill requirements or creating a second job. A financially secure Master may delegate daily production when a replacement and payroll are ready, but returns when an advertised position cannot otherwise be filled.
 - Compatible sites belonging to the same company may exchange inputs directly. These goods never enter the Moot Hall inventory, never receive a public listing and never pay a market fee.
 - Internal goods create equal bookkeeping credits and charges so site profitability remains visible. Consolidated company results eliminate both sides.
 - A company is global for ownership, leadership, cash, obligations and consolidated accounting. Physical goods are local: every site and Moot listing belongs to one settlement and stock never teleports between towns.
@@ -72,6 +72,34 @@ Customers pay the company, suppliers and workers are paid by the company, and
 taxes and delivery fees are paid by the company. The Master cannot casually
 move company cash into their wallet; dividends are the explicit audited path.
 
+## Work, ownership and basic leisure
+
+Employment and share ownership are separate relationships. Anyone filling a
+real position—including a founder, Company Master or minority shareholder—is
+owed the workplace's ordinary wage. That wage is recorded before profit and may
+become arrears if company cash is short. Ownership pays only the pro-rata
+dividend, so future co-owners cannot receive free labour or a disguised unequal
+distribution.
+
+NPC Masters do not retire at one universal coin threshold. Once per day they
+compare the offered wage with a personal reservation wage. The reservation
+wage rises gradually with the number of days their liquid wallet can cover at
+the town's current ready-meal cost, has stable person-to-person variation, and
+rises modestly when the Master operates several sites. A Master delegates only
+when another resident is looking for work and the company can protect the
+replacement's payroll. This gives successful owners more visible free time
+without making wealth an on/off state.
+
+`Chilling` is intentional non-participation in the general labour market, not
+permanent retirement. If one of the Master's sites advertises a productive
+position and no other resident can take it, the Master seeks work again and
+receives first refusal through the ordinary vacancy matcher. If the wage later
+becomes attractive relative to their security, they may also return by choice.
+Observed resting Masters use the bounded ambient-life system and prefer cached
+spots around a local Market when one exists. Later taverns, clothing, house
+improvements and other trades should attach real purchases to this leisure;
+the present foundation only supplies time, movement and labour choice.
+
 ## Formation, acting company and funding a new site
 
 A person must found a legal company before buying or receiving a business
@@ -119,9 +147,11 @@ unused permit returns its paid fee to the exact company. A sole owner may make
 an explicit capital contribution; a co-owned company waits until retained cash,
 a shareholder loan or a future approved share issue can fund it.
 
-Autonomous firms open one position first and expose more of the building only
-after production or revenue proves the operation; cash-tight and distressed
-sites contract to one position. The processor's recommended reserve covers one complete recipe
+Autonomous firms open one position first. After that, a cached daily operating
+plan tests every additional position against the output that can plausibly sell,
+the site's own stock and listings, current recipe/input quotes, market fees and
+the offered wage. Hiring and release move by at most one position per day; a
+cash-tight or distressed site cannot expose more than one. The processor's recommended reserve covers one complete recipe
 batch plus that prudent opening payroll. If the input market is temporarily
 unquoted, the applicant budgets against 260% of the input's base value so an
 otherwise viable Bakery does not spend all of its first cash on idle wages
@@ -179,8 +209,8 @@ than destroying money or guessing a recipient.
 - Branch stock policy: `CompanyBranchPolicies` stores absolute retain units plus the public-sale toggle per local good. This is separate from processor input cover and uses stable `SettlementId`, so identical company operations in two towns cannot leak policy or inventory into each other.
 - Staffing policy: `BusinessStaffingPolicy` is the operator's enabled-position target from zero to the building's architectural maximum. Closing a porter position waits for any active shipment and carried stock to reach a safe boundary before releasing the worker.
 - Matching: build settlement/company/good indexes once per bounded economy pass; do not perform an all-company scan for every NPC.
-- Delivery: persistent internal orders use stable building identities. An embodied civic or private porter receives a server-only routine only while performing one physical trip.
-- Strategic simulation: collapse the identical order, goods, fee and ledger transaction without spawning a body.
+- Delivery: persistent internal orders use stable building identities. An embodied civic or private porter receives a server-only routine only while performing one physical trip. If neither service covers a workplace, one of its employees may interrupt production and carry only a personal-capacity load to or from the public market; that employee cannot act as a general porter for another firm.
+- Strategic simulation: collapse the identical order, goods, fee and ledger transaction without spawning a body. Self-haul uses the real Hall-to-workplace round trip and personal-capacity trip count to deduct labour time, while a specialist cart carries six personal loads without stopping the producer.
 - Decisions: exact own books plus public market observations, smoothed over several days. Daily operational reviews and staggered weekly capital reviews use deterministic `CompanyId` offsets.
 
 ## Player-facing controls
@@ -202,15 +232,22 @@ than destroying money or guessing a recipient.
 
 - Survival order: obligations, payroll reserve, viable supply, turnaround, closure,
   investment, then shareholder distributions.
-- A small founder normally works at their own first site. Company leadership is not itself a second paid job, and successful Masters can step back only after an available replacement and protected payroll make that choice credible.
+- A small founder normally works at their own first site and receives the same wage as any employee. Company leadership is not itself a second paid job. A successful Master can delegate after their market-linked reservation wage exceeds the offer and an available replacement plus protected payroll make that choice credible; an unfilled company vacancy can call them back.
 - A person still holds exactly one active job. An off-shift employee who accepts a
   private construction permit resigns first and relinquishes every old workplace
   routine; someone in the middle of a shift is ineligible until that work is clear.
   Civic construction remains part of the Reeve's single civic appointment.
 - New sites receive a probation period. The executable lifecycle is `New`, `Operating`,
-  `Cash tight`, `Distressed`, `Insolvent`, `Liquidating`, `For sale` and `Closed`.
-  Formal reduced-activity and mothball states remain future branch-lifecycle work.
-- Investment uses expected throughput, contribution margin, labour, inputs, logistics, permit/capital cost and remaining payroll runway.
+  `Cash tight`, `Distressed`, `Insolvent`, `Mothballed`, `Liquidating`, `For sale` and `Closed`.
+  A solvent mature site gradually releases staff and mothballs after a completed
+  no-sale observation window with no unavailable demand and no profitable position.
+  Its stock remains saleable; profitable unmet demand reopens the same plant with
+  one position before any duplicate construction is considered.
+- Investment uses marginal expected throughput, contribution margin, labour, inputs,
+  logistics, permit/capital cost and remaining payroll runway. Idle positions and
+  mothballed/liquidating/for-sale capacity suppress another plant. A Storage Hall
+  is justified by the value of bulk stranded beyond recent cart throughput and
+  existing free depot space, rather than a business-count ratio.
 - Daily automatic pricing uses the previous day's observed wage cost per output unit
   plus the current replacement quote for exactly one unit's recipe inputs. Actual bulk
   procurement remains a real ledger expense, but is not mistaken for every unit's cost
@@ -232,6 +269,7 @@ than destroying money or guessing a recipient.
 - Farm, Windmill and Bakery owned by one company privately move Wheat and Flour, and only Bread reaches the public market when configured that way.
 - The same company operating in two settlements has one treasury but independent branch inventory, capacity and public-sale rules; no good crosses the boundary without a future physical trade route.
 - A Storage Hall accepts local overflow, its Company Porters supply local owned processors without a civic delivery fee, and closing a porter position cannot lose an in-flight load.
+- A workplace with no applicable porter can still buy inputs and consign output through bounded employee self-haul, with visibly and strategically equivalent lost production time.
 - A different owner's processor cannot consume privately committed stock.
 - `PreferOwned` falls back to the public market; `OwnedOnly` does not.
 - Internal transfers remain possible with several suppliers/receivers without duplicate reservations.
@@ -261,6 +299,8 @@ than destroying money or guessing a recipient.
 - [x] Pull-based cross-settlement company/site history archives and lab reports
 - [x] Company directory, multi-company player portfolio, share market and supply-chain UI
 - [x] NPC operational, dividend and capital controller
-- [ ] Branch review/mothball/sale lifecycle
+- [x] Demand-led staffing, productive-site mothball and automatic reopening lifecycle
+- [ ] Voluntary branch sale/reallocation across settlements
 - [x] Unit and coin/share conservation tests
-- [ ] Multi-seed economic tuning and explicit mothball acceptance tests
+- [ ] Multi-seed economic tuning
+- [x] Explicit marginal staffing, demand budget and mothball/reopen acceptance tests

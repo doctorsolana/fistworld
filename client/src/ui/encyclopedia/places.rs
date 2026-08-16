@@ -26,8 +26,9 @@ use shared::economy::{
 };
 
 use super::*;
+use crate::ui::foundation::{button_chrome, UiButtonStyle, UiButtonVariant};
 use crate::ui::hud::GodCapability;
-use crate::ui::styles::{BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, TEXT_COLOR, TEXT_MUTED};
+use crate::ui::styles::{INK, INK_MUTED};
 
 /// One settlement the player knows about.
 #[derive(Clone, Debug)]
@@ -326,7 +327,8 @@ pub(super) fn learn_settlements(
     // completely unclickable. Measured before the fix: 275 rebuilds in one short
     // capture, where the correct answer is 1.
     let snapshot = |settlement: &Settlement,
-                    settlement_id: Option<&shared::components::SettlementId>| {
+                    settlement_id: Option<&shared::components::SettlementId>,
+                    public_inventory: Option<&GoodsInventory>| {
         let mut records: Vec<PlaceBuildingRecord> = buildings
             .iter()
             .filter(|(building, owner, ..)| {
@@ -352,33 +354,40 @@ pub(super) fn learn_settlements(
                     condition,
                     for_sale,
                     operated_by,
-                )| PlaceBuildingRecord {
-                    id: building_id.copied(),
-                    kind: building.kind,
-                    position: position.0,
-                    owner: building.owner.clone(),
-                    for_sale: for_sale.copied(),
-                    quality: building.quality,
-                    workers: building.workers.clone(),
-                    residents: household
-                        .map(|household| household.residents.clone())
-                        .unwrap_or_default(),
-                    inventory: inventory_contents(inventory),
-                    inventory_used: inventory_bulk(inventory).0,
-                    inventory_capacity: inventory_bulk(inventory).1,
-                    business: account.map(|account| PlaceBusinessRecord {
-                        account: *account,
-                        company: operated_by
-                            .and_then(|company| company_accounts.get(&company.0))
-                            .copied(),
-                        company_id: operated_by.map(|company| company.0),
-                        sale: sale.copied(),
-                        wage: wage.copied(),
-                        staffing: staffing.copied(),
-                        management: management.copied(),
-                        procurement: procurement.copied(),
-                        condition: condition.copied(),
-                    }),
+                )| {
+                    let inventory = if building.kind == SettlementBuildingKind::Market {
+                        public_inventory
+                    } else {
+                        inventory
+                    };
+                    PlaceBuildingRecord {
+                        id: building_id.copied(),
+                        kind: building.kind,
+                        position: position.0,
+                        owner: building.owner.clone(),
+                        for_sale: for_sale.copied(),
+                        quality: building.quality,
+                        workers: building.workers.clone(),
+                        residents: household
+                            .map(|household| household.residents.clone())
+                            .unwrap_or_default(),
+                        inventory: inventory_contents(inventory),
+                        inventory_used: inventory_bulk(inventory).0,
+                        inventory_capacity: inventory_bulk(inventory).1,
+                        business: account.map(|account| PlaceBusinessRecord {
+                            account: *account,
+                            company: operated_by
+                                .and_then(|company| company_accounts.get(&company.0))
+                                .copied(),
+                            company_id: operated_by.map(|company| company.0),
+                            sale: sale.copied(),
+                            wage: wage.copied(),
+                            staffing: staffing.copied(),
+                            management: management.copied(),
+                            procurement: procurement.copied(),
+                            condition: condition.copied(),
+                        }),
+                    }
                 },
             )
             .collect();
@@ -426,7 +435,7 @@ pub(super) fn learn_settlements(
             policies,
             opportunities,
         )| {
-            let building_records = snapshot(settlement, settlement_id);
+            let building_records = snapshot(settlement, settlement_id, inventory);
             let permits = permit_snapshot(settlement, settlement_id);
             let wheat_fields = fields
                 .iter()
@@ -494,7 +503,7 @@ pub(super) fn learn_settlements(
         let hall_level = hall_level
             .copied()
             .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
-        let building_records = snapshot(settlement, settlement_id);
+        let building_records = snapshot(settlement, settlement_id, inventory);
         let summary_buildings = summarize_buildings(&building_records);
         let permits = permit_snapshot(settlement, settlement_id);
         let wheat_fields = fields
@@ -723,7 +732,7 @@ pub(super) fn rebuild_place_list(
                     font_size: FontSize::Px(12.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
                 Node {
                     margin: UiRect::all(Val::Px(10.0)),
                     ..default()
@@ -771,7 +780,7 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
             border_radius: BorderRadius::all(Val::Px(5.0)),
             ..default()
         },
-        BackgroundColor(ROW_NORMAL),
+        button_chrome(UiButtonVariant::Row),
     ))
     .with_children(|row| {
         row.spawn((
@@ -780,7 +789,7 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
                 font_size: FontSize::Px(11.0),
                 ..default()
             },
-            TextColor(TEXT_MUTED),
+            TextColor(INK_MUTED),
             Node {
                 width: Val::Px(12.0),
                 flex_shrink: 0.0,
@@ -793,7 +802,7 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
                 font_size: FontSize::Px(13.0),
                 ..default()
             },
-            TextColor(TEXT_COLOR),
+            TextColor(INK),
             Node {
                 flex_grow: 1.0,
                 ..default()
@@ -809,7 +818,7 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
                 font_size: FontSize::Px(9.0),
                 ..default()
             },
-            TextColor(TEXT_MUTED),
+            TextColor(INK_MUTED),
         ));
     });
 }
@@ -838,8 +847,7 @@ fn spawn_place_building_row(
             border_radius: BorderRadius::right(Val::Px(5.0)),
             ..default()
         },
-        BorderColor::from(DIVIDER),
-        BackgroundColor(ROW_NORMAL),
+        button_chrome(UiButtonVariant::Row),
     ))
     .with_children(|row| {
         row.spawn((
@@ -848,7 +856,7 @@ fn spawn_place_building_row(
                 font_size: FontSize::Px(11.0),
                 ..default()
             },
-            TextColor(TEXT_COLOR),
+            TextColor(INK),
             Node {
                 flex_grow: 1.0,
                 ..default()
@@ -860,7 +868,7 @@ fn spawn_place_building_row(
                 font_size: FontSize::Px(8.0),
                 ..default()
             },
-            TextColor(TEXT_MUTED),
+            TextColor(INK_MUTED),
         ));
     });
 }
@@ -934,20 +942,12 @@ pub(super) fn handle_place_rows(
 pub(super) fn handle_back_to_company(
     guard: Res<ClickGuard>,
     mouse: Res<ButtonInput<MouseButton>>,
-    mut buttons: Query<
-        (&Interaction, &mut BackgroundColor),
-        (With<PlaceBackToCompanyAction>, Changed<Interaction>),
-    >,
+    buttons: Query<&Interaction, (With<PlaceBackToCompanyAction>, Changed<Interaction>)>,
     mut return_to: ResMut<companies::CompanyDrilldownReturn>,
     mut selected: ResMut<companies::SelectedCompany>,
     mut tab: ResMut<EncyclopediaTab>,
 ) {
-    for (interaction, mut background) in buttons.iter_mut() {
-        background.0 = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
-        };
+    for interaction in buttons.iter() {
         if !guard.0
             || !mouse.just_pressed(MouseButton::Left)
             || *interaction != Interaction::Pressed
@@ -978,41 +978,16 @@ pub(super) fn sync_back_to_company(
 pub(super) fn style_place_rows(
     selected: Res<SelectedPlace>,
     selected_entry: Res<SelectedPlaceEntry>,
-    mut rows: Query<(&PlaceRow, &Interaction, &mut BackgroundColor), Without<PlaceBuildingRow>>,
-    mut buildings: Query<
-        (&PlaceBuildingRow, &Interaction, &mut BackgroundColor),
-        Without<PlaceRow>,
-    >,
+    mut rows: Query<(&PlaceRow, &mut UiButtonStyle), Without<PlaceBuildingRow>>,
+    mut buildings: Query<(&PlaceBuildingRow, &mut UiButtonStyle), Without<PlaceRow>>,
 ) {
-    for (PlaceRow(name), interaction, mut bg) in rows.iter_mut() {
-        let is_selected = selected.0.as_deref() == Some(name.as_str())
+    for (PlaceRow(name), mut style) in rows.iter_mut() {
+        style.selected = selected.0.as_deref() == Some(name.as_str())
             && *selected_entry == SelectedPlaceEntry::Overview;
-        let background = if is_selected {
-            ROW_SELECTED
-        } else {
-            match *interaction {
-                Interaction::Hovered | Interaction::Pressed => ROW_HOVERED,
-                Interaction::None => ROW_NORMAL,
-            }
-        };
-        if bg.0 != background {
-            bg.0 = background;
-        }
     }
-    for (row, interaction, mut bg) in buildings.iter_mut() {
-        let is_selected =
+    for (row, mut style) in buildings.iter_mut() {
+        style.selected =
             selected.0.as_deref() == Some(row.place.as_str()) && *selected_entry == row.entry;
-        let background = if is_selected {
-            ROW_SELECTED
-        } else {
-            match *interaction {
-                Interaction::Hovered | Interaction::Pressed => ROW_HOVERED,
-                Interaction::None => ROW_NORMAL,
-            }
-        };
-        if bg.0 != background {
-            bg.0 = background;
-        }
     }
 }
 
@@ -1414,6 +1389,22 @@ fn place_detail_model(
                     )
                 },
             );
+            let labour = place.economy.as_ref().map_or_else(
+                || "Awaiting first reading".to_string(),
+                |economy| {
+                    format!(
+                        "Private {}/{} ({} vacant), civic {}/{} ({} vacant), {} seeking; best opening {} coin/day",
+                        economy.private_filled_jobs,
+                        economy.private_job_positions,
+                        economy.private_vacant_jobs,
+                        economy.civic_filled_jobs,
+                        economy.civic_job_positions,
+                        economy.civic_vacant_jobs,
+                        economy.job_seekers,
+                        format_money(economy.best_open_private_wage),
+                    )
+                },
+            );
             let purchasable_food = place
                 .market
                 .as_ref()
@@ -1514,6 +1505,7 @@ fn place_detail_model(
                     ("MARKET MODEL".into(), market_model),
                     ("LIFETIME TRADE".into(), volume),
                     ("FOOD SECURITY".into(), food),
+                    ("LABOUR MARKET".into(), labour),
                     (
                         "PURCHASABLE / AT BUSINESSES".into(),
                         format!("{purchasable_food} / {unlisted_business_food} food units"),
@@ -1582,7 +1574,7 @@ fn place_detail_model(
                         }
                         SettlementBuildingKind::Hall => "Civic building".into(),
                         SettlementBuildingKind::Market => {
-                            "Public exchange / 2 work positions".into()
+                            "Shared Hall exchange and expanded storage / staffing disabled".into()
                         }
                         SettlementBuildingKind::Tavern => {
                             "Food and lodging amenity / 2 work positions".into()
@@ -2128,6 +2120,7 @@ mod tests {
                     display: Display::None,
                     ..default()
                 },
+                button_chrome(UiButtonVariant::Secondary),
             ))
             .id();
 

@@ -39,9 +39,10 @@ use bevy::prelude::*;
 use lightyear::prelude::{NetworkTarget, Replicate};
 use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
 use shared::components::{
-    BuildingDoorUse, CharacterActivity, CharacterKind, CharacterName, FarmField,
-    MootAdministration, Occupation, PlayerPosition, PlayerRotation, RoadClass, RoadSurface,
-    Settlement, SettlementBuilding, SettlementBuildingKind, VillageRoad, WorkStatus, WorldTime,
+    BuildingDoorUse, CharacterActivity, CharacterKind, CharacterName, CharacterObjective,
+    FarmField, MootAdministration, Occupation, PlayerPosition, PlayerRotation, RoadClass,
+    RoadSurface, Settlement, SettlementBuilding, SettlementBuildingKind, VillageRoad, WorkStatus,
+    WorldTime,
 };
 #[cfg(test)]
 use shared::economy::Wallet;
@@ -1977,6 +1978,9 @@ impl NavigationBuildingCache {
         self.buildings.clear();
         self.spatial.clear();
         for (building, position) in placed {
+            if !building.building_type.blocks_ground_navigation() {
+                continue;
+            }
             let kind = settlement_kind_for_art(building.building_type);
             let definition = building.building_type.definition();
             let half = definition.footprint * 0.5
@@ -2026,11 +2030,12 @@ fn settlement_kind_for_art(building_type: BuildingType) -> SettlementBuildingKin
         BuildingType::MootHall | BuildingType::VillageHall | BuildingType::TownHall => {
             SettlementBuildingKind::Hall
         }
-        BuildingType::PlaceholderMarket => SettlementBuildingKind::Market,
+        BuildingType::Market | BuildingType::MarketPaved => SettlementBuildingKind::Market,
         BuildingType::PlaceholderTavern => SettlementBuildingKind::Tavern,
         BuildingType::PlaceholderChurch => SettlementBuildingKind::Church,
         BuildingType::Windmill => SettlementBuildingKind::Windmill,
         BuildingType::Bakery => SettlementBuildingKind::Bakery,
+        BuildingType::PlaceholderStorageHall => SettlementBuildingKind::StorageHall,
     }
 }
 

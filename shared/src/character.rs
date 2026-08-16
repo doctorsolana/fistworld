@@ -207,6 +207,19 @@ mod tests {
         let document: serde_json::Value =
             serde_json::from_slice(&bytes[20..20 + json_len]).expect("humanoid GLB JSON parses");
         assert_eq!(document["scenes"][0]["name"], "Humanoid");
+        let animation_names: Vec<_> = document["animations"]
+            .as_array()
+            .expect("humanoid animations array")
+            .iter()
+            .filter_map(|animation| animation["name"].as_str())
+            .collect();
+        for clip in manifest.body_clips.iter().chain(&manifest.face_clips) {
+            assert!(
+                animation_names.contains(&clip.as_str()),
+                "manifest clip '{clip}' is missing from the shipped humanoid"
+            );
+        }
+        assert!(manifest.body_clips.iter().any(|clip| clip == "pull"));
         assert!(manifest.slot_index("hair").is_some());
         // Every slot fits the replicated component's capacity.
         assert!(

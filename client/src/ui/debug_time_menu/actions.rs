@@ -2,6 +2,14 @@
 
 use super::*;
 
+type DebugMenuControl = Or<(
+    With<TimeButton>,
+    With<CloseButton>,
+    With<CloudCoverButton>,
+    With<PerfWeightmapToggleButton>,
+    With<PerfRenderDiagToggleButton>,
+)>;
+
 pub(super) fn debug_menu_open(open: Res<DebugTimeMenuOpen>) -> bool {
     open.0
 }
@@ -25,7 +33,7 @@ pub(super) fn toggle_debug_time_menu(
     if !god.0 || *hud_mode != HudMode::God {
         return;
     }
-    if input_state.inventory_open || input_state.pause_menu_open || input_state.map_open {
+    if !open.0 && input_state.ui_blocking() {
         return;
     }
     if keyboard.just_pressed(KeyCode::KeyJ) {
@@ -72,9 +80,8 @@ pub(super) fn handle_debug_menu_interactions(
             Option<&CloudCoverButton>,
             Option<&PerfWeightmapToggleButton>,
             Option<&PerfRenderDiagToggleButton>,
-            &mut BackgroundColor,
         ),
-        Changed<Interaction>,
+        (Changed<Interaction>, DebugMenuControl),
     >,
 ) {
     for (
@@ -84,13 +91,10 @@ pub(super) fn handle_debug_menu_interactions(
         cover_button,
         weightmap_button,
         render_diag_button,
-        mut bg,
     ) in buttons.iter_mut()
     {
         match *interaction {
             Interaction::Pressed => {
-                *bg = BUTTON_PRESSED.into();
-
                 if close_button.is_some() {
                     open.0 = false;
                     continue;
@@ -124,12 +128,7 @@ pub(super) fn handle_debug_menu_interactions(
                     }
                 }
             }
-            Interaction::Hovered => {
-                *bg = BUTTON_HOVERED.into();
-            }
-            Interaction::None => {
-                *bg = BUTTON_NORMAL.into();
-            }
+            Interaction::Hovered | Interaction::None => {}
         }
     }
 }
@@ -140,4 +139,33 @@ pub(super) fn close_debug_menu_on_main_menu(
 ) {
     open.0 = false;
     input_state.debug_menu_open = false;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_button_styling_cannot_capture_the_modal_backdrop() {
+        let mut world = World::new();
+        let backdrop = world
+            .spawn((
+                DebugMenuBackdrop,
+                Interaction::Hovered,
+                BackgroundColor::default(),
+            ))
+            .id();
+        let control = world
+            .spawn((
+                CloseButton,
+                Interaction::Hovered,
+                BackgroundColor::default(),
+            ))
+            .id();
+
+        let mut controls = world.query_filtered::<Entity, DebugMenuControl>();
+        let matches: Vec<_> = controls.iter(&world).collect();
+        assert_eq!(matches, vec![control]);
+        assert!(!matches.contains(&backdrop));
+    }
 }

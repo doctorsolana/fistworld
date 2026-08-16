@@ -1,47 +1,31 @@
-"""Marketplace — an open-sided timber market hall.
+"""Marketplace — an OPEN-AIR market: paved ground, separate stalls, no roof over it.
 
     blender --background --factory-startup --python asset_creation/houses/build_market.py
     blender asset_creation/houses/market.blend --background --python asset_creation/houses/export_prop_glb.py
 
-SIZED FROM THE CODE, NOT CHOSEN. `BuildingType::PlaceholderMarket` reserves
-`footprint: Vec2::new(9.0, 7.0)` with `footprint_center: ZERO`, and `door_offset(Market)` is
-`Vec2::new(0.0, -4.0)`. Those are the contract this model has to fit, so the ROOF -- the widest part,
-and what a player reads as the building's extent -- is exactly 9.0 x 7.0 and centred, with the posts
-set in under its overhang. The one number that cannot be honoured is `height: 3.2`: see the note at
-the bottom of this docstring.
+THIS REPLACES A COVERED MARKET HALL, AND THE REASON IS WORTH KEEPING. The first version was a timber
+market hall -- an open ARCADE on posts under one big pitched roof, which is what Llanidloes, Chipping
+Campden and the Titchfield hall all are. Every detail of it was researched and it was the wrong
+building: "open air" means there is no roof over the market. A hall is open at the SIDES. Those are
+different things, and reference hunting cannot tell you which one was asked for.
 
-In glTF the footprint is (X, Z) = (9.0, 7.0), and the exporter turns the model -90 deg about Z, so in
-BLENDER the hall is 7.0 deep on X and 9.0 wide on Y. Front faces Blender -X like every other building
-here, which puts the long eaves side to the road -- correct for a market you walk into rather than a
-gable you walk past.
+What an open-air market is instead: a piece of paved ground with individual stalls standing on it,
+each under its own cloth canopy, arranged so there is somewhere to walk. The canopies are the whole
+read at RTS distance -- half a dozen bright striped rectangles on dark paving is unmistakable from
+directly overhead, where a shingle roof is just another shingle roof like every other building.
 
-WHAT AN OPEN-AIR MARKET ACTUALLY IS, from the surviving ones (Llanidloes, Chipping Campden, the
-Titchfield hall at the Weald & Downland museum). Every one of them is the same building:
+SIZED FROM THE CODE. `BuildingType::PlaceholderMarket` reserves `footprint: Vec2::new(9.0, 7.0)` with
+`footprint_center: ZERO` and `height: 3.2`; `door_offset(Market)` is `Vec2::new(0.0, -4.0)`. The
+paving is exactly 9.0 x 7.0 and centred, and nothing reaches past it. **The height fits now** -- the
+covered hall needed 4.68 m to get a village-pitched roof over head height, but canopies at 2.5 m and
+banner poles at 3.02 m fit inside it, so no Rust constant has to move.
 
-    an open ARCADE on timber posts, the posts standing on STONE PLINTHS
-    divided into BAYS by those posts
-    panelled up "about breast high" between them, WITH AN ENTRANCE ON EACH SIDE
-    a pitched roof whose carpentry is visible from underneath
-    pitched and cobbled paving for a floor
+In glTF the footprint is (X, Z) = (9.0, 7.0); the exporter turns the model -90 deg about Z, so in
+BLENDER the market is 7.0 deep on X and 9.0 wide on Y, front on -X.
 
-So it is not a shed and it is not a cluster of tents. Two details from that list are doing more work
-than they look:
-
-BREAST-HIGH BOARDING IS WHAT MAKES IT READ AS A BUILDING. A roof on bare posts is a bandstand -- there
-is no mass anywhere below the eaves and the eye passes straight through. Boarding to 0.95 m gives the
-thing a base, frames the bays, and still leaves it obviously open. The entrance gaps then read as
-entrances instead of as absence.
-
-THE ROOF IS SEEN FROM UNDERNEATH, which no other building here has to survive. On a cabin the stepped
-shingles are a surface; here the player looks up into them, so the steps need purlins and rafters
-under them or the interior is a bare staircase of blocks. That is also exactly what the sources
-single out -- "the original detailed carpentry of the roof can be seen clearly from underneath".
-
-HEIGHT: the blockout says 3.2 m and this model is 4.32 m to the ridge. 3.2 cannot be met honestly. The
-eaves alone must clear head height on a building people walk under -- 2.30 m here -- and any roof
-pitched like the rest of the village then adds ~2 m over a 3.5 m half-span. A 3.2 m ridge would mean
-either a nearly flat roof, which belongs to no other building in this settlement, or eaves at 1.6 m,
-which a villager cannot walk beneath. `BuildingDef::height` should be updated to the measured value.
+LAYOUT: stalls line the back and the two flanks, and the whole front is left open. A visitor arrives
+at Anchor_Door on the -X edge and walks into a plaza rather than into the back of a stall, and the
+open front means the market reads as a market from the road instead of as a wall of tents.
 
 Vertex colours, flat shading, no chamfer, symmetric about y=0 -- same rules as the rest of the props.
 """
@@ -54,50 +38,71 @@ import bpy
 import bmesh
 from mathutils import Vector, kdtree
 
-OUT_BLEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), "market.blend")
+# --- level ---------------------------------------------------------------------------------------
+# TWO VARIANTS, AND THE ONLY DIFFERENCE IS THE GROUND.
+#
+#     blender --background --factory-startup --python build_market.py -- 1   -> market.blend
+#     blender --background --factory-startup --python build_market.py -- 2   -> market_paved.blend
+#
+# L1 is a market on beaten earth: what a hamlet has when it starts trading in a field. L2 is the same
+# market once the settlement has paved it. The stalls, the layout and every measurement are identical,
+# which is the point -- an upgrade should look like the SAME PLACE improved, not a different building
+# dropped on the site, and the halls' ladder gets away with wholesale rebuilds only because a hall
+# genuinely is reconstructed. Paving a square is paving a square.
+#
+# The kerb follows the floor rather than the level number: a dressed stone kerb around a dirt floor is
+# a detail that contradicts itself, so L1 gets timber edging instead.
+import sys
+
+_argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+LEVEL = int(_argv[0]) if _argv else 1
+assert LEVEL in (1, 2), f"level must be 1 (dirt) or 2 (paved), got {LEVEL}"
+STEM = "market" if LEVEL == 1 else "market_paved"
+OUT_BLEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{STEM}.blend")
 
 # --- dimensions (metres) -----------------------------------------------------------------------------
-# The roof is the reserved footprint exactly; everything else lives inside it.
-DEPTH_X = 7.0
-WIDTH_Y = 9.0
+# SQUARE, AND BIGGER: a 12 x 12 market square instead of a 9 x 7 strip. This does NOT match
+# `BuildingType::PlaceholderMarket` as shipped and needs the Rust side moved to suit -- see the
+# handover. `footprint`, `clearance` and `door_offset(Market)` all follow from this number.
+DEPTH_X = 12.0
+WIDTH_Y = 12.0
 HX, HY = DEPTH_X / 2, WIDTH_Y / 2
-
-OVER = 0.55                    # roof overhang past the post frame, on all four sides
-PX = HX - OVER                 # post centres, 2.95
-PY = HY - OVER                 # 3.95
-BAYS = 4                       # four bays, five posts a side -- the Llanidloes arrangement
-POST = 0.15                    # post half-section (0.30 m square)
-
-PLINTH_H, PLINTH_HW = 0.26, 0.27
-EAVE_Z = 2.30                  # head height: a villager walks under this
-RIDGE_Z = 4.32
-BOARD_Z = 0.95                 # "panelled up about breast high"
-BEAM_D = 0.20                  # wall-plate / tie-beam half-depth
-
-ROOF_STEPS = 8
-ROOF_BLOCKS = 9
 FLOOR_Z0, FLOOR_Z1 = -0.16, 0.06
+
+COUNTER_Z = 0.90
+CANOPY_FRONT_Z = 2.42           # high at the shopper's side, so there is headroom to stand under it
+CANOPY_BACK_Z = 2.06
+# The tallest thing here. `height` in BuildingDef is the TOTAL extent, base_y included -- the bakery's
+# 5.33 spans -0.16..5.17 -- so the paving's -0.16 counts against the 3.2 and the poles get 3.02, not
+# 3.20. Measured off by the assert at the bottom rather than assumed.
+POLE_Z = 3.02
 
 # --- palette (linear) --------------------------------------------------------------------------------
 C_POST = (0.2350, 0.1180, 0.0400)
 C_BEAM = (0.2050, 0.1020, 0.0360)
 C_BOARD = (0.2750, 0.1480, 0.0520)
 C_BOARD_LT = (0.3600, 0.2050, 0.0740)
-C_SHINGLE = (0.5300, 0.3500, 0.1050)
-C_RIDGE = (0.1850, 0.0980, 0.0400)
 C_TRIM = (0.1750, 0.0920, 0.0380)
 C_DARK = (0.0170, 0.0140, 0.0125)
-C_METAL = (0.2100, 0.2150, 0.2300)
-# Stone, matched to the bakery's oven so masonry means one thing across the village.
-C_STONE = (0.1480, 0.1200, 0.0910)
-C_STONE_LT = (0.2280, 0.1880, 0.1400)
 C_COBBLE = (0.1950, 0.1720, 0.1420)
 C_COBBLE_LT = (0.2650, 0.2340, 0.1900)
-# The awning stripe, straight from the bakery: the two trading buildings should shout the same way.
-C_AWN_LT = (0.7200, 0.6600, 0.5100)
-C_AWN_DK = (0.4700, 0.3600, 0.2100)
-# Goods on the stalls, borrowed from the carried bundles so a crate of apples here and an apple in a
-# villager's arms are the same fruit.
+# Beaten earth for L1. Warm and low-saturation: a dirt floor that reads as MUD goes grey-brown and
+# fights the timber, and one that reads as SAND goes yellow and fights the canopies. This sits under
+# both, which is what a floor should do.
+# Pitched a little ABOVE the cobble it replaces (0.195 linear), because dry beaten earth in daylight
+# is not darker than wet grey stone -- at 0.142 it read as mud in shadow, and the mottling vanished
+# into it. Warm, so the two levels differ in hue as well as value and are told apart instantly.
+C_DIRT = (0.2100, 0.1450, 0.0880)
+C_DIRT_LT = (0.2950, 0.2100, 0.1300)
+C_DIRT_DK = (0.1400, 0.0950, 0.0570)
+C_STONE = (0.1480, 0.1200, 0.0910)
+C_STONE_LT = (0.2280, 0.1880, 0.1400)
+# Canopy cloth. Three stripe pairs so the stalls are not one repeated object -- the awning colour is
+# the single loudest thing on this building and identical stripes six times reads as wallpaper.
+CANOPY = (((0.7200, 0.6600, 0.5100), (0.4700, 0.3600, 0.2100)),     # the bakery's, unchanged
+          ((0.6900, 0.6300, 0.5600), (0.3400, 0.2400, 0.2000)),
+          ((0.7400, 0.6200, 0.4200), (0.5000, 0.2600, 0.1500)))
+# Goods, borrowed from the carried bundles so a crate here and a bundle in a villager's arms match.
 C_CRATE = (0.1900, 0.1050, 0.0420)
 C_CRATE_LT = (0.2700, 0.1600, 0.0650)
 C_SACK = (0.4750, 0.4350, 0.3500)
@@ -107,10 +112,10 @@ C_CRUST_LT = (0.7000, 0.4400, 0.1750)
 C_GRAIN = (0.7600, 0.5700, 0.1750)
 C_APPLE = (0.4200, 0.1150, 0.0620)
 C_GREEN = (0.1750, 0.2600, 0.0850)
+C_FISH = (0.2600, 0.3400, 0.4200)
 
 FACES = ((0, 3, 2, 1), (4, 5, 6, 7), (0, 1, 5, 4), (2, 3, 7, 6), (3, 0, 4, 7), (1, 2, 6, 5))
 TOP = 1
-EPS = 0.02
 
 
 def shade(rgb, f):
@@ -144,293 +149,281 @@ def box(x0, x1, y0, y1, z0, z1, rgb, top_rgb=None):
             lp[col] = (*c, 1.0)
 
 
-def span_minus(a0, a1, gaps):
-    parts = [(a0, a1)]
-    for g0, g1 in gaps:
-        nxt = []
-        for p0, p1 in parts:
-            if g1 <= p0 or g0 >= p1:
-                nxt.append((p0, p1))
-                continue
-            if p0 < g0 - 1e-6:
-                nxt.append((p0, g0))
-            if g1 < p1 - 1e-6:
-                nxt.append((g1, p1))
-        parts = nxt
-    return parts
+jrng = random.Random(4127)
+
+_placed = []
 
 
-jrng = random.Random(5311)
-POSTS_Y = [-PY + 2 * PY * i / BAYS for i in range(BAYS + 1)]      # -3.95 .. +3.95, five of them
+_placed = []
 
-# --- paving -------------------------------------------------------------------------------------------
-# "Pitched and cobbled paving", but drawn as a slab with joints rather than as individual cobbles: a
-# 7 x 9 m floor at any believable stone size is several hundred boxes, and at RTS distance the joint
-# lines are the entire read anyway. Accent flags break up the field for a fraction of the cost.
-box(-HX, HX, -HY, HY, FLOOR_Z0, FLOOR_Z1, C_COBBLE)
-for i in range(1, 7):                                              # joints running across the hall
-    y = -HY + WIDTH_Y * i / 7
-    box(-HX, HX, y - 0.035, y + 0.035, FLOOR_Z1 - 0.035, FLOOR_Z1 + 0.004,
-        shade(C_COBBLE, 0.72))
-for i in range(1, 5):
-    x = -HX + DEPTH_X * i / 5
-    box(x - 0.035, x + 0.035, -HY, HY, FLOOR_Z1 - 0.035, FLOOR_Z1 + 0.004,
-        shade(C_COBBLE, 0.72))
-for k in range(6):                                                 # accent flags, mirrored in pairs
-    fx = -1.90 + 1.30 * (k % 3)
-    fy = 1.05 + 1.35 * (k // 3)
+def ground_patch(px, py, hw, hd, rgb):
+    """One mottle, mirrored. Overlaps the slab top so it renders proud instead of being buried.
+
+    CLAMPED TO THE FOOTPRINT. Randomly placed patches near the edge otherwise hang over it, and
+    the market must not be one centimetre wider than the ground the settlement reserved. Clamping
+    is symmetric about both axes, so it cannot break the mirror."""
+    # HEIGHT IS ASSIGNED BY COLLISION, not by a counter. Two earlier tries both failed: cycling
+    # the offset (k % 9) put every ninth patch on one plane, and where two of those overlapped
+    # their top faces z-fought into fine stripes across the square; a unique 0.6 mm step per patch
+    # removed the stripes but 0.6 mm is far too tight to survive a depth buffer, and it also
+    # dragged the last patches centimetres into the air for no reason.
+    #
+    # Instead each patch takes the LOWEST free level that no already-placed overlapping patch is
+    # using. Almost everything lands on the first level, so the ground stays flat; only a genuine
+    # pile-up climbs, and no two overlapping tops can share a plane by construction.
+    #
+    # THE LEVEL IS CHOSEN ONCE FOR THE MIRRORED PAIR. Resolving each half separately let the -Y
+    # copy get bumped by the +Y copy that had just been placed, so the pair ended up at different
+    # heights and the symmetry assert failed. And a patch that STRADDLES y=0 overlaps its own
+    # reflection, so it is emitted as a single box spanning both halves -- two overlapping copies
+    # of it would be coplanar with each other, which is the very thing this is here to avoid.
+    x0, x1 = max(px - hw, -HX), min(px + hw, HX)
+    if x1 - x0 < 0.05:
+        return
+    if py < hd:                                   # straddles the centre line: one box, symmetric
+        spans = [(max(-(py + hd), -HY), min(py + hd, HY))]
+    else:
+        spans = []
+        for _sy in (-1, 1):
+            y0, y1 = max(_sy * py - hd, -HY), min(_sy * py + hd, HY)
+            if y1 - y0 >= 0.05:
+                spans.append((y0, y1))
+    if not spans:
+        return
+    lvl = 1
+    while any(l == lvl and not (x1 <= a or x0 >= b or sy1 <= c or sy0 >= d)
+              for a, b, c, d, l in _placed for sy0, sy1 in spans):
+        lvl += 1
+    z = FLOOR_Z1 + 0.0035 * lvl
+    for y0, y1 in spans:
+        _placed.append((x0, x1, y0, y1, lvl))
+        box(x0, x1, y0, y1, z - 0.014, z, rgb)
+
+
+# --- the ground ---------------------------------------------------------------------------------------
+# Without a roof this is the one part of the model that IS the building: it is what says "this ground
+# is the market" rather than "someone left some stalls out".
+if LEVEL == 2:
+    # PAVED. Drawn as a slab with joints rather than as individual cobbles -- a 12 x 12 floor at any
+    # believable stone size is many hundreds of boxes, and at RTS distance the joint lines are the
+    # entire read anyway. Accent flags break up the field for a fraction of the cost.
+    box(-HX, HX, -HY, HY, FLOOR_Z0, FLOOR_Z1, C_COBBLE)
+    for i in range(1, 11):
+        y = -HY + WIDTH_Y * i / 11
+        box(-HX, HX, y - 0.035, y + 0.035, FLOOR_Z1 - 0.035, FLOOR_Z1 + 0.004, shade(C_COBBLE, 0.72))
+    for i in range(1, 11):
+        x = -HX + DEPTH_X * i / 11
+        box(x - 0.035, x + 0.035, -HY, HY, FLOOR_Z1 - 0.035, FLOOR_Z1 + 0.004, shade(C_COBBLE, 0.72))
+    for k in range(12):                              # accent flags, mirrored in pairs
+        fx = -4.60 + 1.55 * (k % 6)
+        fy = 0.62 + 1.60 * (k // 6)
+        for sy in (-1, 1):
+            box(fx - 0.40, fx + 0.40, sy * fy - 0.38, sy * fy + 0.38,
+                FLOOR_Z1 - 0.012, FLOOR_Z1 + 0.008, shade(C_COBBLE_LT, 0.90 + 0.08 * (k % 3)))
+    # A dressed stone kerb, so the market has an edge rather than fading into terrain.
+    # Outer face 2 mm INSIDE the slab's. Flush, the kerb and the slab share all four edge planes,
+    # which was 2.64 m2 per side of coplanar same-facing area -- the largest overlap on the model.
     for sy in (-1, 1):
-        box(fx - 0.42, fx + 0.42, sy * fy - 0.40, sy * fy + 0.40, FLOOR_Z1 - 0.012, FLOOR_Z1 + 0.008,
-            shade(C_COBBLE_LT, 0.92 + 0.06 * (k % 2)))
-
-# --- plinths, posts, and the boarding between them -----------------------------------------------------
-# THE PLINTHS ARE NOT DECORATION. Every surviving hall stands its posts on stone, because timber set in
-# the ground rots; visually they also give the building a foot, which a post landing straight on paving
-# does not. They are the only masonry here, which is why they are worth the triangles.
-for sx in (-1, 1):
-    for py in POSTS_Y:
-        # Not FLOOR_Z0: sharing the paving's underside plane is 0.29 m2 of coplanar faces for two
-        # surfaces nobody can ever see.
-        box(sx * PX - PLINTH_HW, sx * PX + PLINTH_HW, py - PLINTH_HW, py + PLINTH_HW,
-            FLOOR_Z0 + 0.03, PLINTH_H, C_STONE, top_rgb=shade(C_STONE_LT, 1.05))
-        box(sx * PX - POST, sx * PX + POST, py - POST, py + POST, PLINTH_H - 0.02, EAVE_Z,
-            shade(C_POST, 0.94 + 0.08 * (int(abs(py) * 2) % 3)))
-
-# Boarding to breast height, with an ENTRANCE ON EACH SIDE. Without it a roof on bare posts is a
-# bandstand: nothing has mass below the eaves and the eye goes straight through the building. The
-# front (-X) keeps its whole middle bay open, which is where door_offset points.
-ENTRY_HY = 1.30                        # half-width of the front and back openings
-for sx in (-1, 1):                     # the two long sides, boarded between posts
-    gaps = [(-ENTRY_HY, ENTRY_HY)]
-    for a0, a1 in span_minus(-PY, PY, gaps):
-        for j, (z0, z1) in enumerate(((0.10, 0.50), (0.53, 0.93))):
-            box(sx * PX - 0.09, sx * PX + 0.09, a0 + POST, a1 - POST, z0, z1,
-                shade(C_BOARD, 0.92 + 0.14 * (j % 2)))
-    box(sx * PX - 0.11, sx * PX + 0.11, -PY, PY, BOARD_Z, BOARD_Z + 0.10, C_BOARD_LT)   # capping rail
-for sy in (-1, 1):                     # the two gable ends, with their own narrower entrance
-    for a0, a1 in span_minus(-PX, PX, [(-0.95, 0.95)]):
-        for j, (z0, z1) in enumerate(((0.10, 0.50), (0.53, 0.93))):
-            box(a0 + POST, a1 - POST, sy * PY - 0.09, sy * PY + 0.09, z0, z1,
-                shade(C_BOARD, 0.92 + 0.14 * (j % 2)))
-    box(-PX, PX, sy * PY - 0.11, sy * PY + 0.11, BOARD_Z, BOARD_Z + 0.10, C_BOARD_LT)
-
-# --- wall plates, tie beams and braces ------------------------------------------------------------------
-for sx in (-1, 1):                     # wall plates along the long sides
-    box(sx * PX - 0.13, sx * PX + 0.13, -PY - 0.18, PY + 0.18, EAVE_Z - BEAM_D, EAVE_Z, C_BEAM)
-for sy in (-1, 1):
-    # 0.025 below the long-side plates: flush, the four plates share a top plane and overlap at each
-    # corner, which was the largest coplanar area left on the building.
-    box(-PX - 0.18, PX + 0.18, sy * PY - 0.13, sy * PY + 0.13,
-        EAVE_Z - BEAM_D - 0.025, EAVE_Z - 0.025, shade(C_BEAM, 1.06))
-for py in POSTS_Y:                     # tie beams across the hall, one per post pair
-    box(-PX - 0.13, PX + 0.13, py - 0.11, py + 0.11, EAVE_Z - BEAM_D - 0.02, EAVE_Z - 0.02,
-        shade(C_BEAM, 1.10))
-# Curved braces, stepped -- the joint that says "framed" rather than "bolted". Two steps each is
-# enough at this size; a smooth curve would cost four times as much and read the same.
-for sx in (-1, 1):
-    for py in POSTS_Y:
-        for k, (r0, r1, z0, z1) in enumerate(((0.16, 0.44, 1.72, 2.02), (0.44, 0.72, 2.02, 2.28))):
-            box(sx * (PX - r1), sx * (PX - r0), py - 0.075, py + 0.075, z0, z1,
-                shade(C_BEAM, 1.16 - 0.08 * k))
-
-# --- purlins and rafters, because this roof is read from BELOW ------------------------------------------
-# The one structural difference from every other building here. On a cabin the stepped shingles are a
-# surface seen from outside; in an open hall the player looks up into them, and without something
-# under the steps the ceiling is a bare staircase of blocks.
-rise = RIDGE_Z - EAVE_Z
-for i in range(1, ROOF_STEPS):         # purlins, following the pitch up both slopes
-    t = i / ROOF_STEPS
-    x_in = HX * (1 - t)
-    z = EAVE_Z + rise * t
+        box(-HX + 0.002, HX - 0.002, sy * (HY - 0.16), sy * (HY - 0.002),
+            FLOOR_Z0, FLOOR_Z1 + 0.05, shade(C_STONE, 1.10))
     for sx in (-1, 1):
-        box(sx * x_in - 0.09, sx * x_in + 0.09, -PY - 0.20, PY + 0.20, z - 0.16, z - 0.02,
-            shade(C_BEAM, 1.04))
-for py in POSTS_Y:                     # principal rafters, a pair over each post pair
-    for sx in (-1, 1):
-        for k in range(ROOF_STEPS):
-            t0, t1 = k / ROOF_STEPS, (k + 1) / ROOF_STEPS
-            box(sx * HX * (1 - t1), sx * HX * (1 - t0), py - 0.085, py + 0.085,
-                EAVE_Z + rise * t0 - 0.10, EAVE_Z + rise * t1 - 0.04, shade(C_BEAM, 1.22))
-box(-0.16, 0.16, -PY - 0.24, PY + 0.24, RIDGE_Z - 0.30, RIDGE_Z - 0.06, shade(C_BEAM, 0.88))  # ridge beam
+        box(sx * (HX - 0.16), sx * (HX - 0.002), -HY + 0.002, HY - 0.002,
+            FLOOR_Z0, FLOOR_Z1 + 0.05, shade(C_STONE, 1.10))
+else:
+    # BEATEN EARTH, AND THE FIRST ATTEMPT GOT IT EXACTLY BACKWARDS. Two faults, one of them fatal:
+    #
+    #   1. the wear -- cart ruts and trodden ground -- was drawn from FLOOR_Z1-0.045 to FLOOR_Z1-0.008,
+    #      which is INSIDE the slab whose top is FLOOR_Z1. All of it was buried and invisible.
+    #   2. the only thing left visible was a set of pale accent patches laid out on a REGULAR GRID,
+    #      so the dirt floor rendered as a neat checkerboard -- i.e. as paving, the one thing it is
+    #      supposed not to be.
+    #
+    # A dirt floor has no grid and no repeating unit. What it has is mottling at many scales and wear
+    # where the traffic is. Everything below therefore (a) sits PROUD of the slab so it can be seen,
+    # (b) is placed by a seeded RNG rather than a lattice, and (c) carries its own small z offset so
+    # overlapping patches cannot z-fight. Contrast is kept low on purpose: earth is subtle, and every
+    # step up in contrast turns a patch back into a tile.
+    box(-HX, HX, -HY, HY, FLOOR_Z0, FLOOR_Z1, C_DIRT)
 
-# --- gable infill ------------------------------------------------------------------------------------
-# BOARD THE GABLE ENDS. Left open, the triangle above the wall plate is a hollow with the cut ends of
-# eight purlins stacked across it, and from either end the building read as a ladder floating in a
-# hole -- unfinished rather than open. "Open-sided" means the ARCADE is open; every surviving hall
-# still closes its gables. Stepped in bands like the cabins' gables, set at the post line so the roof
-# overhang stays a genuine overhang.
-for sy in (-1, 1):
-    for i in range(ROOF_STEPS):
-        x_h = HX * (1 - (i + 1) / ROOF_STEPS)
-        if x_h <= 0.03:
-            continue
-        z0 = EAVE_Z + rise * i / ROOF_STEPS
-        z1 = EAVE_Z + rise * (i + 1) / ROOF_STEPS
-        box(-x_h, x_h, sy * PY - 0.09, sy * PY + 0.09, z0 - EPS, z1,
-            shade(C_BOARD, 0.88 + 0.13 * (i % 3)))
-    for k in range(4):                       # vertical plank joints, mirrored about the ridge
-        px_ = 0.42 + 0.62 * k
-        for sx in (-1, 1):
-            top = EAVE_Z + rise * max(0.0, 1.0 - (px_ + 0.07) / HX)
-            if top <= EAVE_Z + 0.05:
-                continue
-            box(sx * px_ - 0.045, sx * px_ + 0.045, sy * PY - 0.11, sy * PY + 0.11,
-                EAVE_Z, top, shade(C_BOARD, 0.74))
-    # A louvre under the apex. Every covered market needs the air, and it gives the gable a centre --
-    # a plain boarded triangle is a big blank face at the two angles the building is widest.
-    box(-0.42, 0.42, sy * PY - 0.13, sy * PY + 0.13, RIDGE_Z - 1.02, RIDGE_Z - 0.34, C_DARK)
-    for k in range(3):
-        z = RIDGE_Z - 0.94 + 0.22 * k
-        box(-0.38, 0.38, sy * PY - 0.16, sy * PY + 0.16, z, z + 0.10, shade(C_BOARD_LT, 0.94))
-    for sx in (-1, 1):                       # its surround
-        box(sx * 0.42 - 0.07, sx * 0.42 + 0.07, sy * PY - 0.15, sy * PY + 0.15,
-            RIDGE_Z - 1.09, RIDGE_Z - 0.27, C_TRIM)
-    box(-0.49, 0.49, sy * PY - 0.15, sy * PY + 0.15, RIDGE_Z - 0.34, RIDGE_Z - 0.27, C_TRIM)
-    box(-0.49, 0.49, sy * PY - 0.15, sy * PY + 0.15, RIDGE_Z - 1.09, RIDGE_Z - 1.02, C_TRIM)
+    # Wear only: it follows the STALLS, which are symmetric, so it is symmetric too and belongs
+    # before the assert. The mottling, stones and weeds do not -- they are added after it. These are placed where the traffic actually
+    # is -- in from the entrance, and in front of every counter -- or they read as random stains.
+    for sy in (-1, 1):                               # cart ruts running in from the entrance
+        box(-HX, 2.10, sy * 0.42, sy * 0.86, FLOOR_Z1 - 0.004, FLOOR_Z1 + 0.004,
+            shade(C_DIRT_DK, 1.02))
+    ground_patch(-4.50, 0.0, 1.35, 1.05, shade(C_DIRT_DK, 1.10))          # the entrance mouth
+    for cx_, cy_, hw_, hd_ in ((2.45, 0.95, 0.62, 1.05), (2.45, 3.30, 0.60, 1.05),
+                               (-4.00, 2.55, 1.20, 0.62), (-0.40, 2.55, 1.20, 0.62)):
+        ground_patch(cx_, cy_, hw_, hd_, shade(C_DIRT_DK, 1.12))          # in front of each counter
 
-# --- stepped shingle roof ---------------------------------------------------------------------------------
-# Same vocabulary as the cabins, turned 90 deg: the ridge runs along Y here, so the courses step in X
-# and the blocks run along Y.
-SEAM, RISER = 0.006, 0.10
-# The shingles stop 0.15 short of the reserved edge and the verge boards fill that band. Turning the
-# verges INWARD over the shingles instead put two surfaces in the same place and speckled the whole
-# gable with z-fighting; sending them outward is what the cabins do, but here that would overrun the
-# footprint. Giving each its own strip of ground is the only version that is both clean and legal.
-ROOF_HY = HY - 0.15
-for i in range(ROOF_STEPS):
-    x_out = HX * (1 - i / ROOF_STEPS)
-    x_in = HX * (1 - (i + 1) / ROOF_STEPS)
-    z0 = EAVE_Z + rise * i / ROOF_STEPS
-    z1 = EAVE_Z + rise * (i + 1) / ROOF_STEPS
-    course = 1.0 + 0.11 * ((i % 2) * 2 - 1)
-    cuts = [-ROOF_HY + 2 * ROOF_HY * k / ROOF_BLOCKS for k in range(ROOF_BLOCKS + 1)]
-    # THE RESERVED FOOTPRINT IS A HARD EDGE, not a target. Seam slop and course jitter each
-    # push a few centimetres past it, and a building wider than the ground the settlement
-    # reserved for it will clip whatever is placed next door. Clamped, not trusted.
-    # JITTER MIRRORED ABOUT THE MIDDLE BLOCK. On the cabins the ridge runs along X and the shingle
-    # blocks are jittered along X too, so per-block randomness never touches the y=0 mirror. Here the
-    # ridge runs along Y, so the blocks march straight down the mirror axis and independent jitter
-    # per block breaks the assert -- block k must get exactly what block ROOF_BLOCKS-1-k gets.
-    half = [(jrng.uniform(-0.022, 0.022), jrng.uniform(0.0, 0.042), jrng.uniform(0.88, 1.14))
-            for _ in range((ROOF_BLOCKS + 1) // 2)]
-    jit = [half[min(k, ROOF_BLOCKS - 1 - k)] for k in range(ROOF_BLOCKS)]
-    for k in range(ROOF_BLOCKS):
-        zj, xj, cj = jit[k]
-        tone = shade(C_SHINGLE, course * cj)
-        for sx in (-1, 1):
-            lo, hi = sorted((sx * x_in, sx * min(x_out + xj, HX)))
-            box(lo, hi, max(cuts[k] - SEAM, -ROOF_HY), min(cuts[k + 1] + SEAM, ROOF_HY),
-                z0 + zj - RISER, z1 + zj, tone)
-box(-0.19, 0.19, -HY, HY, RIDGE_Z - 0.09, RIDGE_Z + 0.20, C_RIDGE)
-for sy in (-1, 1):                     # verge boards along the gable ends
-    y = sy * HY
-    for i in range(ROOF_STEPS):
-        x_out = HX * (1 - i / ROOF_STEPS)
-        x_in = HX * (1 - (i + 1) / ROOF_STEPS)
-        z0 = EAVE_Z + rise * i / ROOF_STEPS
-        z1 = EAVE_Z + rise * (i + 1) / ROOF_STEPS
-        t0, t1 = sorted((sy * ROOF_HY, y))           # exactly the band the shingles left
-        for sx in (-1, 1):
-            lo, hi = sorted((sx * x_in, sx * x_out))
-            box(lo, hi, t0, t1, z0 - 0.09, z1 - 0.02, C_TRIM)
-
-# --- the market itself: trestles, goods, and one awning spilling out the front ---------------------------
-def trestle(cx, cy, half_x, half_y, tone):
-    """A board on two crossed legs. Market tables are trestles, not carpentry."""
-    T = 0.055
-    box(cx - half_x, cx + half_x, cy - half_y, cy + half_y, 0.86 - T, 0.86, shade(C_BOARD_LT, tone))
+    # Outer face 2 mm inside the slab's, for the same reason as the paved kerb above.
     for sy in (-1, 1):
-        yy = cy + sy * (half_y - 0.14)
-        for sx in (-1, 1):
-            box(cx + sx * (half_x - 0.10) - 0.05, cx + sx * (half_x - 0.10) + 0.05,
-                yy - 0.05, yy + 0.05, 0.0, 0.86 - T, shade(C_BOARD, tone * 0.86))
-    box(cx - half_x + 0.10, cx + half_x - 0.10, cy - 0.045, cy + 0.045, 0.34, 0.42,
-        shade(C_BOARD, tone * 0.78))                    # stretcher
+        box(-HX + 0.002, HX - 0.002, sy * (HY - 0.18), sy * (HY - 0.002),
+            FLOOR_Z0, FLOOR_Z1 + 0.06, shade(C_BOARD, 0.74))
+    for sx in (-1, 1):
+        box(sx * (HX - 0.18), sx * (HX - 0.002), -HY + 0.002, HY - 0.002,
+            FLOOR_Z0, FLOOR_Z1 + 0.06, shade(C_BOARD, 0.74))
+    for sy in (-1, 1):                               # pegs holding the edging down
+        for gx in (-4.20, -1.40, 1.40, 4.20):
+            box(gx - 0.09, gx + 0.09, sy * (HY - 0.22), sy * (HY - 0.04),
+                FLOOR_Z1 + 0.04, FLOOR_Z1 + 0.20, shade(C_TRIM, 1.10))
 
 
-def crate(cx, cy, cz, hx, hy, hz, tone):
-    box(cx - hx, cx + hx, cy - hy, cy + hy, cz, cz + 2 * hz, shade(C_CRATE, tone))
-    # Battens stop short of the rail and the rail stands proud of both, so no two of the three share
-    # a top plane. Flush, they contributed the two largest coplanar areas on the whole building.
-    for sx in (-1, 1):                                  # corner battens
-        box(cx + sx * hx - 0.035, cx + sx * hx + 0.035, cy - hy - 0.012, cy + hy + 0.012,
-            cz, cz + 2 * hz - 0.06, shade(C_CRATE_LT, tone))
-    box(cx - hx - 0.018, cx + hx + 0.018, cy - hy - 0.018, cy + hy + 0.018,
-        cz + 2 * hz - 0.05, cz + 2 * hz + 0.012, shade(C_CRATE_LT, tone * 1.06))
+# --- one stall ----------------------------------------------------------------------------------------
+def stall(cx, cy, hu, hv, axis, sgn, kind, flip=False):
+    """A trestle counter under a cloth canopy on four posts.
+
+    Built in a local frame and mapped out, because five stalls face three different ways and writing
+    each one in world coordinates by hand is how the mirrored pair drifts apart. `u` runs ALONG the
+    counter, `v` runs back into the stall from the shopper's side, `w` is up.
+
+    v INCREASES AWAY FROM THE SHOPPER. (cx, cy) is the COUNTER, and sgn points from the counter into
+    the stall -- i.e. away from the plaza. Getting this backwards is not subtle and was shipped once:
+    with sgn inverted, the back shelf, the under-counter stock and the sacks all render on the
+    customer's side, so a plank runs across the middle of the goods and the stallholder stands out in
+    the street. If a stall looks like it has furniture in front of it, this sign is why.
+
+    axis='x' runs v along sgn*X (world y = cy + u); axis='y' runs v along sgn*Y (world x = cx + u).
+    `flip` negates u, which is what a mirrored pair on the y axis needs -- world y = cy + u means
+    mirroring cy is not enough, the contents have to reverse along the counter too.
+    """
+    def lbox(u0, u1, v0, v1, w0, w1, rgb, top_rgb=None):
+        if flip:
+            u0, u1 = -u1, -u0
+        if axis == 'x':
+            box(cx + sgn * v0, cx + sgn * v1, cy + u0, cy + u1, w0, w1, rgb, top_rgb)
+        else:
+            box(cx + u0, cx + u1, cy + sgn * v0, cy + sgn * v1, w0, w1, rgb, top_rgb)
+
+    # DEPTH IS A CLEARANCE, NOT A LOOK. At hv=0.62 the counter, its stretcher and the stock filled
+    # the stall end to end: measured, the clear gap behind the counter was 0.32 m and no villager
+    # could physically stand in it to serve. The counter needs 0.68, the back stock 0.40, and a
+    # person needs ~0.9 between them -- which is where hv=1.0 comes from.
+    depth = 2 * hv
+    # four posts
+    for su in (-1, 1):
+        for v in (0.14, depth - 0.14):
+            lbox(su * (hu - 0.09) - 0.075, su * (hu - 0.09) + 0.075, v - 0.075, v + 0.075,
+                 0.0, CANOPY_FRONT_Z - (CANOPY_FRONT_Z - CANOPY_BACK_Z) * (v / depth) + 0.04,
+                 shade(C_POST, 0.96 + 0.10 * (v > 0.5)))
+    # trestle counter, and a boarded front so the stall has mass at eye level
+    lbox(-hu, hu, -0.10, 0.62, COUNTER_Z - 0.07, COUNTER_Z, shade(C_BOARD_LT, 1.02))
+    lbox(-hu + 0.04, hu - 0.04, -0.02, 0.06, 0.16, COUNTER_Z - 0.08, shade(C_BOARD, 0.88))
+    lbox(-hu + 0.06, hu - 0.06, 0.50, 0.58, 0.34, 0.44, shade(C_BOARD, 0.78))       # stretcher
+    # NO BACK SHELF. One sat at z 1.24-1.31 spanning the full width, which is exactly villager eye
+    # height (1.50) -- from the plaza it ran as a plank straight across the goods and across the face
+    # of whoever was serving. A shelf is a real thing to want here, but there is no height for one:
+    # below 1.0 it fouls the counter, above 1.8 it fouls the canopy, and everything between is the
+    # sightline the stall exists to provide.
+
+    # THE CANOPY, sloping down toward the back so the shopper's side is the high side. Striped along
+    # u, and it oversails the counter by 0.22 -- an awning flush with the counter shades nothing and,
+    # more to the point here, does not read as an awning from above.
+    pale, dark = CANOPY[kind % len(CANOPY)]
+    N_ST, N_SEG = 5, 3
+    for i in range(N_ST):
+        u0 = -hu - 0.16 + 2 * (hu + 0.16) * i / N_ST
+        u1 = -hu - 0.16 + 2 * (hu + 0.16) * (i + 1) / N_ST
+        tone = pale if i % 2 == 0 else dark
+        for s in range(N_SEG):
+            t0, t1 = s / N_SEG, (s + 1) / N_SEG
+            v0 = -0.22 + (depth + 0.36) * t0
+            v1 = -0.22 + (depth + 0.36) * t1
+            w = CANOPY_FRONT_Z - (CANOPY_FRONT_Z - CANOPY_BACK_Z) * t0
+            lbox(u0, u1, v0, v1, w - 0.07, w, shade(tone, 1.0 - 0.045 * s))
+    # a valance along the front edge, which is what makes cloth read as cloth and not as a board
+    for i in range(N_ST):
+        u0 = -hu - 0.16 + 2 * (hu + 0.16) * i / N_ST
+        u1 = -hu - 0.16 + 2 * (hu + 0.16) * (i + 1) / N_ST
+        m = min(i, N_ST - 1 - i)
+        drop = 0.20 if m % 2 == 0 else 0.28
+        lbox(u0, u1, -0.24, -0.16, CANOPY_FRONT_Z - drop, CANOPY_FRONT_Z - 0.02,
+             shade(pale if i % 2 == 0 else dark, 0.92))
+
+    # what this stall sells
+    if kind % 3 == 0:                                   # bread
+        for j, u in enumerate((-hu * 0.52, 0.0, hu * 0.52)):
+            for m, (f, z0, z1) in enumerate(((1.00, 0.00, 0.46), (0.84, 0.42, 0.80), (0.60, 0.76, 1.00))):
+                ln, wd, ht = 0.42, 0.24, 0.16
+                lbox(u - ln * f / 2, u + ln * f / 2, 0.24 - wd * f / 2, 0.24 + wd * f / 2,
+                     COUNTER_Z + ht * z0, COUNTER_Z + ht * z1,
+                     shade(C_CRUST if m < 2 else C_CRUST_LT, 0.86 + 0.04 * m - 0.03 * j))
+    elif kind % 3 == 1:                                 # produce, in a crate on the counter
+        lbox(-hu * 0.66, hu * 0.66, 0.06, 0.44, COUNTER_Z, COUNTER_Z + 0.20, shade(C_CRATE, 1.00))
+        lbox(-hu * 0.60, hu * 0.60, 0.10, 0.40, COUNTER_Z + 0.18, COUNTER_Z + 0.30,
+             shade(C_APPLE, 0.96))
+        for j in range(3):
+            u = -hu * 0.40 + hu * 0.40 * j
+            lbox(u - 0.10, u + 0.10, 0.14, 0.34, COUNTER_Z + 0.28, COUNTER_Z + 0.40,
+                 shade(C_GREEN, 0.88 + 0.14 * (j % 2)))
+    elif kind % 4 == 3:                                 # fish, on a wet tray
+        lbox(-hu * 0.74, hu * 0.74, 0.08, 0.46, COUNTER_Z, COUNTER_Z + 0.07, shade(C_BOARD, 0.80))
+        for j, u in enumerate((-hu * 0.44, 0.0, hu * 0.44)):
+            lbox(u - 0.26, u + 0.13, 0.16, 0.36, COUNTER_Z + 0.06, COUNTER_Z + 0.17,
+                 shade(C_FISH, 0.92 + 0.10 * (j % 2)))
+            lbox(u + 0.13, u + 0.27, 0.21, 0.31, COUNTER_Z + 0.07, COUNTER_Z + 0.15,
+                 shade(C_FISH, 0.78))                   # tail
+    else:                                               # grain and flour
+        for j, u in enumerate((-hu * 0.48, hu * 0.30)):
+            lbox(u - 0.20, u + 0.20, 0.10, 0.42, COUNTER_Z, COUNTER_Z + 0.26, shade(C_SACK, 1.0 - 0.08 * j),
+                 top_rgb=shade(C_SACK_LT, 1.02))
+            lbox(u - 0.07, u + 0.07, 0.20, 0.32, COUNTER_Z + 0.24, COUNTER_Z + 0.34,
+                 shade(C_SACK_LT, 0.94))
+    # Stock AT THE BACK of the stall, not under the counter -- see the depth note above. Laid out
+    # symmetrically in u, which matters for
+    # exactly one stall: the centre of the back row sits ON y=0, so it is its own mirror image and its
+    # contents have to be too. The other four are mirror PAIRS and could be lopsided; making them all
+    # symmetric and varying only the TONE keeps one code path, and tone does not enter the assert.
+    for su in (-1, 1):
+        lbox(su * (hu - 0.68), su * (hu - 0.18), depth - 0.52, depth - 0.12, 0.0, 0.42,
+             shade(C_CRATE, 0.92 + 0.14 * (su > 0)))
+        # ON each crate, not spanning both: drawn across the full width it bridged the gap between
+        # them and read as a bright yellow plank floating in mid-air.
+        lbox(su * (hu - 0.64), su * (hu - 0.22), depth - 0.48, depth - 0.16, 0.42, 0.48,
+             shade(C_GRAIN, 0.82 + 0.10 * (su > 0)))
 
 
-def sack(cx, cy, cz, r, h, tone):
-    """The flour sack's silhouette in miniature -- three rings drawing in to a tied neck.
-
-    NO 45-DEGREE CORNER TRICK HERE. The carried FlourSack softens its arrises by drawing the body a
-    second time turned 45 deg, but that needs `tbox` and an arbitrary transform; this file only has an
-    axis-aligned `box`. A first pass tried it anyway and simply emitted a flat slab sharing both z
-    planes with the body -- no rotation at all, and 0.089 m2 of coplanar faces for the trouble. At
-    0.3 m across, seen from ten metres up, the corners were never going to read regardless."""
-    for z0, z1, hr in ((cz, cz + h * 0.34, r * 0.86),
-                       (cz + h * 0.34, cz + h * 0.66, r),
-                       (cz + h * 0.66, cz + h * 0.90, r * 0.62)):
-        box(cx - hr, cx + hr, cy - hr, cy + hr, z0, z1, shade(C_SACK, tone))
-    box(cx - r * 0.30, cx + r * 0.30, cy - r * 0.30, cy + r * 0.30,
-        cz + h * 0.88, cz + h, shade(C_SACK_LT, tone))
-
-
-# Two trestles a side, mirrored, standing in the outer bays so the middle stays a through-route -- a
-# market you cannot walk through is a warehouse.
+# Three stalls across the back and two on each flank, all facing the plaza; the whole front stays
+# open so the market reads as a market from the road rather than as a wall of tents. The mirrored
+# pairs get flip=True on one side so their contents mirror instead of both sliding the same way.
+# LAID OUT SO EVERY COUNTER CAN BE REACHED, which is not automatic and was wrong first time. A
+# villager is 0.8 m in radius (`horizontal_radius`, server/src/player/hero.rs), so it needs 1.6 m of
+# clear width to pass and 0.8 m of standoff to stand at a counter. In the first arrangement the flank
+# stalls ran out to x=2.45 while the back corner stalls began at x=3.50, leaving a 1.05 m pinch --
+# and a flood fill over the square showed the two back corner stalls had NO reachable customer spot
+# at all. Two of seven stalls were decoration. The flanks are pulled back and the back corners drawn
+# in; the assert at the bottom of this file now fails the build if any counter becomes unreachable.
+stall(3.60, 0.00, 1.45, 1.00, 'x', 1, 0)
 for sy in (-1, 1):
-    trestle(-1.30, sy * 2.75, 0.62, 0.95, 1.00)
-    trestle(1.35, sy * 2.75, 0.58, 0.95, 0.92)
-    # goods on them: bread, grain and apples, so the stalls sell what the village actually makes
-    for i, (lx, ly, ln, wd, ht) in enumerate(((-1.30, -0.52, 0.44, 0.26, 0.17),
-                                              (-1.30, 0.10, 0.40, 0.24, 0.15))):
-        for j, (f, z0, z1) in enumerate(((1.00, 0.00, 0.46), (0.84, 0.42, 0.80), (0.60, 0.76, 1.00))):
-            # sy * (2.75 + ly), not sy * 2.75 + ly: an offset added AFTER the mirror does not mirror,
-            # which put the far trestle's loaves 0.40 m out of place and failed the assert.
-            ly_m = sy * (2.75 + ly)
-            box(lx - ln * f / 2, lx + ln * f / 2, ly_m - wd * f / 2, ly_m + wd * f / 2,
-                0.86 + ht * z0, 0.86 + ht * z1,
-                shade(C_CRUST if j < 2 else C_CRUST_LT, 0.88 + 0.04 * j))
-    crate(1.35, sy * 2.42, 0.86, 0.34, 0.28, 0.13, 1.02)
-    for k in range(4):                                  # apples heaped in the crate
-        ax = 1.35 - 0.18 + 0.24 * (k % 2)
-        ay = sy * 2.42 - 0.12 + 0.24 * (k // 2)
-        box(ax - 0.075, ax + 0.075, ay - 0.075, ay + 0.075, 1.12, 1.25,
-            shade(C_APPLE, 0.92 + 0.10 * (k % 2)))
-    crate(1.35, sy * 3.08, 0.0, 0.36, 0.30, 0.22, 0.94)
-    box(1.35 - 0.30, 1.35 + 0.30, sy * 3.08 - 0.24, sy * 3.08 + 0.24, 0.44, 0.50, shade(C_GRAIN, 0.86))
-    sack(-2.10, sy * 1.35, 0.0, 0.30, 0.62, 1.00)
-    sack(-2.10, sy * 2.05, 0.0, 0.26, 0.54, 0.90)
-    box(-2.35, -1.85, sy * 3.30 - 0.30, sy * 3.30 + 0.30, 0.0, 0.16, shade(C_GREEN, 0.80))  # produce pile
-    for k in range(3):
-        gx = -2.28 + 0.22 * k
-        box(gx - 0.10, gx + 0.10, sy * 3.30 - 0.20, sy * 3.30 + 0.20, 0.16, 0.30,
-            shade(C_GREEN, 0.92 + 0.12 * (k % 2)))
+    stall(3.60, sy * 3.30, 1.30, 1.00, 'x', 1, 1, flip=(sy < 0))
+    stall(-4.00, sy * 3.60, 1.25, 1.00, 'y', sy, 2)
+    stall(-0.40, sy * 3.60, 1.25, 1.00, 'y', sy, 3)
 
-# A STRIPED VALANCE HUNG FROM THE FRONT EAVES, in the bakery's stripe: the two trading buildings
-# should shout in the same voice, and it marks the way in from a long way off -- which the roof alone
-# does not, because from above it is the same shingle as every other roof in the village.
-#
-# It hangs UNDER the eaves rather than projecting on posts. A proper 1.15 m awning was built first and
-# pushed the model to 7.70 m deep against a reserved 7.0, which would have had the market clipping
-# whatever the settlement placed in front of it. Hung inside the roof line it costs no ground at all.
-AW_Z = EAVE_Z - 0.16
-N_STRIPE = 8
-VAL_HY = ENTRY_HY + 0.55
-for i in range(N_STRIPE):
-    y0 = -VAL_HY + 2 * VAL_HY * i / N_STRIPE
-    y1 = -VAL_HY + 2 * VAL_HY * (i + 1) / N_STRIPE
-    # Keyed to distance from the CENTRE, not to i: across 8 stripes, stripe i mirrors to 7-i, whose
-    # i%2 is the opposite parity -- so alternating on i alone gives a valance that is striped one way
-    # on the left and the other on the right.
-    m = min(i, N_STRIPE - 1 - i)
-    tone = C_AWN_LT if m % 2 == 0 else C_AWN_DK
-    drop = 0.34 if m % 2 == 0 else 0.44           # a scalloped hem, so it reads as cloth not a board
-    box(-HX + 0.02, -HX + 0.16, y0, y1, AW_Z - drop, AW_Z, shade(tone, 1.0))
-box(-HX + 0.00, -HX + 0.19, -VAL_HY - 0.04, VAL_HY + 0.04, AW_Z, AW_Z + 0.12, C_TRIM)   # its rail
+# --- banner poles at the two front corners --------------------------------------------------------------
+# The market has no roof, so from a distance it has no silhouette at all. Two poles give it one, and
+# they are the reason the reserved 3.2 m height is now enough rather than merely survivable.
+for sy in (-1, 1):
+    px, py = -5.35, sy * 5.35
+    box(px - 0.085, px + 0.085, py - 0.085, py + 0.085, FLOOR_Z0, POLE_Z, C_POST)
+    box(px - 0.22, px + 0.22, py - 0.22, py + 0.22, FLOOR_Z0, 0.22, C_STONE,
+        top_rgb=shade(C_STONE_LT, 1.05))
+    pale, dark = CANOPY[0]
+    for i in range(4):                                  # a hanging pennant, striped like the canopies
+        z0 = POLE_Z - 0.30 - 0.26 * i
+        w = 0.46 - 0.09 * i
+        box(px + 0.06, px + 0.06 + w, py - 0.05, py + 0.05, z0, z0 + 0.26,
+            shade(pale if i % 2 == 0 else dark, 0.98))
+    box(px - 0.10, px + 0.62, py - 0.07, py + 0.07, POLE_Z - 0.10, POLE_Z, C_TRIM)
 
 # ==================================================================================================
-# SYMMETRY ASSERT — everything is mirrored about y=0
+# SYMMETRY ASSERT — the DESIGNED structure is mirrored about y=0
 # ==================================================================================================
+# The stalls, the poles, the paving and the wear in front of each counter are a designed arrangement
+# and mirroring them is correct. What follows the assert is not: ground mottling, loose stones, weeds
+# and stray barrels are things that HAPPENED to the market, and nothing that happened to a market is
+# symmetric. Mirrored barrels in particular read as deliberately placed scenery, which is the one
+# thing a stray barrel must not look like. Same split as the bakery's oven corner: assert at full
+# strength on everything that should mirror, then add what should not.
 _kd = kdtree.KDTree(len(bm.verts))
 bm.verts.ensure_lookup_table()
 for _i, _v in enumerate(bm.verts):
@@ -443,6 +436,61 @@ if _worst > 1e-6:
                            for v in bm.verts), key=lambda t: -t[1])[:5]:
         print(f"[mkt]   unmatched ({_c.x:+.3f},{_c.y:+.3f},{_c.z:+.3f}) off by {_dd:.4f}")
 assert _worst < 1e-6, f"not symmetric about y=0: {_worst:.6f}"
+
+
+# ==================================================================================================
+# ORGANIC PASS — deliberately NOT symmetric
+# ==================================================================================================
+if LEVEL == 1:
+    # Mottling: 40 patches at jittered position, size and tone, placed independently rather than in
+    # mirrored pairs. Sizes span 0.3 to 1.1 m so there is no readable "unit", and they overlap on
+    # purpose -- a patch whose whole outline is visible is a tile, a patch cut by three others is
+    # ground.
+    for _k in range(40):
+        ground_patch(jrng.uniform(-5.6, 5.6), jrng.uniform(-5.5, 5.5),
+                     jrng.uniform(0.30, 1.10), jrng.uniform(0.26, 0.95),
+                     shade(C_DIRT, jrng.uniform(0.80, 1.24)))
+    for _k in range(14):                             # darker damp hollows
+        ground_patch(jrng.uniform(-5.4, 5.4), jrng.uniform(-5.2, 5.2),
+                     jrng.uniform(0.24, 0.62), jrng.uniform(0.22, 0.54),
+                     shade(C_DIRT_DK, jrng.uniform(1.02, 1.30)))
+    for _k in range(18):                             # loose stones trodden into the surface
+        _gx, _gy = jrng.uniform(-5.4, 5.4), jrng.uniform(-5.3, 5.3)
+        _r = jrng.uniform(0.07, 0.15)
+        box(_gx - _r, _gx + _r, _gy - _r * 0.8, _gy + _r * 0.8,
+            FLOOR_Z1 - 0.004, FLOOR_Z1 + 0.016 + jrng.uniform(0.0, 0.022),
+            shade(C_STONE_LT, jrng.uniform(0.78, 1.00)))
+    for _k in range(22):                             # weeds along the edging, where no one walks
+        _e = jrng.random()
+        _wx = jrng.uniform(-5.4, 5.4) if _e < 0.5 else (HX - 0.28) * (1 if jrng.random() < 0.5 else -1)
+        _wy = (HY - 0.28) * (1 if jrng.random() < 0.5 else -1) if _e < 0.5 else jrng.uniform(-5.4, 5.4)
+        box(_wx - 0.07, _wx + 0.06, _wy - 0.06, _wy + 0.07,
+            FLOOR_Z1, FLOOR_Z1 + jrng.uniform(0.10, 0.24), shade(C_GREEN, jrng.uniform(0.66, 0.98)))
+    print(f"[mkt] ground patches: {len(_placed)}, stacked "
+          f"{max(l for *_, l in _placed)} deep ({0.0035 * max(l for *_, l in _placed) * 100:.1f} cm)")
+
+# Stray barrels and crates. Hand-placed rather than random so they sit in genuinely free ground, but
+# NOT in mirrored pairs -- that was the tell. Every one is in a corner or against the kerb; the
+# walkability assert below is what proves none of them has closed a route.
+for _lx, _ly, _kind, _r, _h in ((5.45, 5.25, 'barrel', 0.30, 0.66),
+                                (5.05, 5.55, 'barrel', 0.25, 0.54),
+                                (5.55, -5.20, 'crate', 0.29, 0.44),
+                                (-5.60, 2.55, 'barrel', 0.28, 0.60),
+                                (-5.50, -2.40, 'crate', 0.27, 0.40),
+                                (1.90, -5.40, 'crate', 0.28, 0.42),
+                                (-2.35, 5.50, 'barrel', 0.26, 0.56)):
+    if _kind == 'barrel':
+        for _j, (_z0, _z1, _hr) in enumerate(((0.0, _h * 0.20, _r * 0.86),
+                                              (_h * 0.20, _h * 0.80, _r),
+                                              (_h * 0.80, _h, _r * 0.86))):
+            box(_lx - _hr, _lx + _hr, _ly - _hr, _ly + _hr, _z0, _z1,
+                shade(C_BOARD, 0.88 + 0.12 * (_j % 2)))
+        box(_lx - _r - 0.02, _lx + _r + 0.02, _ly - _r - 0.02, _ly + _r + 0.02,
+            _h * 0.34, _h * 0.42, shade(C_TRIM, 1.20))
+    else:
+        box(_lx - _r, _lx + _r, _ly - _r, _ly + _r, 0.0, _h, shade(C_CRATE, 0.96))
+        box(_lx - _r + 0.05, _lx + _r - 0.05, _ly - _r - 0.012, _ly + _r + 0.012,
+            _h - 0.06, _h + 0.012, shade(C_CRATE_LT, 1.04))
 
 
 def finish(b, name):
@@ -459,7 +507,6 @@ def finish(b, name):
 
 obj, me = finish(bm, "Market")
 
-# --- material -----------------------------------------------------------------------------------------
 mat = bpy.data.materials.new("MarketWood")
 if not mat.node_tree:
     mat.use_nodes = True
@@ -480,18 +527,15 @@ for nm in ("Specular IOR Level", "Specular"):
 me.materials.append(mat)
 
 # --- anchors --------------------------------------------------------------------------------------------
-# No door leaf and no door clip: an open market has no door to swing. Anchor_Door still ships, because
-# door_offset(Market) is what the road survey and every queue aim at, and it must land on the entrance.
+# Anchor_Door is authored EXACTLY on door_offset(Market) = (0, -4.0) so the exporter's door-pin applies
+# a zero shift. The pin would otherwise translate the whole model to place the door, which would move
+# footprint_center off the ZERO the def promises. Blender (-4.00, 0) maps to glTF (0, -4.00).
 for nm, loc in (
-    # PLACED EXACTLY ON door_offset(Market) SO THE EXPORT NEEDS NO SHIFT. The door-pin will happily
-    # translate the whole model to make the anchor land on (0, -4.00), but the market also has to keep
-    # `footprint_center: Vec2::ZERO` -- and a 0.40 m shift to fix the door would have quietly broken
-    # that instead. Blender (-4.00, 0) maps to glTF (0, -4.00) through the exporter's -90 deg turn,
-    # which puts the threshold 0.50 m clear of the roof edge: right for a building you walk into.
-    ("Anchor_Door",     (-4.00, 0.0, 0.0)),
-    ("Anchor_Counter",  (-PX - 0.55, 0.0, 0.0)),
-    ("Light_Interior",  (0.0, 0.0, 1.90)),
-    ("Light_Lantern",   (-HX + 0.35, 0.0, AW_Z - 0.30)),
+    ("Anchor_Door",     (-6.50, 0.0, 0.0)),     # 0.5 m clear of the paving edge at -6.0
+    ("Anchor_Counter",  (2.85, 0.0, 0.0)),      # OUTSIDE, in the plaza: where a customer stands
+    ("Anchor_Trader",   (4.70, 0.0, 0.0)),      # INSIDE, behind the counter: where the seller stands
+    ("Light_Interior",  (0.00, 0.0, 1.70)),
+    ("Light_Lantern",   (-5.35, 5.35, 2.72)),   # on the left banner pole
 ):
     e = bpy.data.objects.new(nm, None)
     e.empty_display_size = 0.25
@@ -509,8 +553,54 @@ hi = Vector((max(p[i] for p in allv) for i in range(3)))
 tris = sum(len(p.vertices) - 2 for p in me.polygons)
 print(f"[mkt] {tris} tris")
 print(f"[mkt] {hi.x-lo.x:.2f} x {hi.y-lo.y:.2f} x {hi.z-lo.z:.2f} m (blender X x Y x Z), base z={lo.z:+.2f}")
-print(f"[mkt] reserved footprint is 9.0 x 7.0 (gltf X x Z) = {hi.y-lo.y:.2f} x {hi.x-lo.x:.2f} here")
-print(f"[mkt] eaves {EAVE_Z:.2f}, ridge {RIDGE_Z:.2f}, blockout height was 3.20")
+assert hi.x - lo.x <= DEPTH_X + 1e-4 and hi.y - lo.y <= WIDTH_Y + 1e-4, \
+    (f"model is {hi.x-lo.x:.2f} x {hi.y-lo.y:.2f}, over the reserved "
+     f"{DEPTH_X:.1f} x {WIDTH_Y:.1f} footprint")
+print(f"[mkt] tallest {hi.z:.2f} against the reserved height of 3.20 -- "
+      f"{'FITS' if hi.z - lo.z <= 3.20 else 'OVER'}")
+
+# ==================================================================================================
+# WALKABILITY ASSERT — every counter must be reachable on foot from the door
+# ==================================================================================================
+# The market is the one building villagers go INTO, so "can you get to each stall" is a correctness
+# property of the model, not a matter of taste. Flood fill the square on a 0.25 m grid with a 0.8 m
+# villager radius, starting from the door approach, and require a customer standing spot in front of
+# every counter. This caught two stranded stalls that looked perfectly fine in every render.
+import collections
+
+R, STEP = 0.8, 0.25
+_occ = [(p.x, p.y) for p in (obj.matrix_world @ v.co for v in me.vertices) if 0.35 < p.z < 1.60]
+_n = int(HX / STEP)
+
+
+def _free(gx, gy):
+    x, y = gx * STEP, gy * STEP
+    if abs(x) > HX or abs(y) > HY:
+        return False
+    return not any(abs(ox - x) < R and abs(oy - y) < R for ox, oy in _occ)
+
+
+_start = (int((-HX + 0.4) / STEP), 0)
+assert _free(*_start), "the door approach itself is blocked"
+_seen, _q = {_start}, collections.deque([_start])
+while _q:
+    _gx, _gy = _q.popleft()
+    for _dx, _dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        _k = (_gx + _dx, _gy + _dy)
+        if _k not in _seen and _free(*_k):
+            _seen.add(_k)
+            _q.append(_k)
+print(f"[mkt] walkable from the door: {len(_seen) * STEP * STEP:.1f} m2 "
+      f"(villager radius {R} m, {len(_seen)} cells)")
+
+_stalls = (("back centre", 2.55, 0.00), ("back +Y", 2.55, 3.30), ("back -Y", 2.55, -3.30),
+           ("flank +Y grain", -4.00, 2.55), ("flank +Y fish", -0.40, 2.55),
+           ("flank -Y grain", -4.00, -2.55), ("flank -Y fish", -0.40, -2.55))
+_bad = [nm for nm, tx, ty in _stalls if (round(tx / STEP), round(ty / STEP)) not in _seen]
+for _nm, _tx, _ty in _stalls:
+    print(f"[mkt]   {_nm:16s} customer spot "
+          f"{'reachable' if (round(_tx / STEP), round(_ty / STEP)) in _seen else 'UNREACHABLE'}")
+assert not _bad, f"stalls with no reachable customer spot: {_bad}"
 
 bpy.ops.wm.save_as_mainfile(filepath=OUT_BLEND)
 print(f"[mkt] saved {OUT_BLEND}")

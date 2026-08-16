@@ -3,18 +3,36 @@
 use super::*;
 
 pub(super) fn spawn_button(parent: &mut ChildSpawnerCommands<'_>, text: &str, action: PauseButton) {
+    let variant = match action {
+        PauseButton::Disconnect | PauseButton::Exit => UiButtonVariant::Danger,
+        _ => UiButtonVariant::Secondary,
+    };
     parent
         .spawn((
             Button,
             action,
             Node {
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..button_style()
+                width: Val::Px(280.0),
+                height: Val::Px(55.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                margin: UiRect::all(Val::Px(8.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                ..default()
             },
-            BackgroundColor(BUTTON_NORMAL),
+            button_chrome(variant),
         ))
         .with_children(|btn| {
-            btn.spawn((Text::new(text), button_text_style(), TextColor(TEXT_COLOR)));
+            btn.spawn((
+                Text::new(text),
+                UiButtonLabel,
+                TextFont {
+                    font_size: FontSize::Px(22.0),
+                    ..default()
+                },
+                TextColor(INK),
+            ));
         });
 }
 
@@ -40,7 +58,7 @@ pub(super) fn spawn_graphics_panel(
                 border_radius: BorderRadius::all(Val::Px(12.0)),
                 ..default()
             },
-            BackgroundColor(PAUSE_PANEL_BACKGROUND),
+            BackgroundColor(FRONT_PANEL),
         ))
         .with_children(|panel| {
             // Panel title
@@ -50,7 +68,7 @@ pub(super) fn spawn_graphics_panel(
                     font_size: FontSize::Px(26.0),
                     ..default()
                 },
-                TextColor(PAUSE_HEADING_COLOR),
+                TextColor(INK_INVERSE_HEADING),
                 Node {
                     margin: UiRect::bottom(Val::Px(8.0)),
                     ..default()
@@ -64,7 +82,7 @@ pub(super) fn spawn_graphics_panel(
                     font_size: FontSize::Px(12.0),
                     ..default()
                 },
-                TextColor(PAUSE_MUTED_TEXT_COLOR),
+                TextColor(INK_INVERSE_MUTED),
                 Node {
                     margin: UiRect::bottom(Val::Px(20.0)),
                     ..default()
@@ -142,7 +160,7 @@ pub(super) fn spawn_graphics_panel(
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.18, 0.13, 0.06, 0.96)),
-                    BorderColor::from(PAUSE_HEADING_COLOR),
+                    BorderColor::from(INK_INVERSE_HEADING),
                 ))
                 .with_children(|confirmation| {
                     confirmation.spawn((
@@ -152,7 +170,7 @@ pub(super) fn spawn_graphics_panel(
                             font_size: FontSize::Px(13.0),
                             ..default()
                         },
-                        TextColor(PAUSE_TEXT_COLOR),
+                        TextColor(INK_INVERSE),
                     ));
                     confirmation
                         .spawn(Node {
@@ -162,16 +180,16 @@ pub(super) fn spawn_graphics_panel(
                             ..default()
                         })
                         .with_children(|buttons| {
-                            for (label, action, color) in [
+                            for (label, action, variant) in [
                                 (
                                     "KEEP",
                                     DisplayConfirmationAction::Keep,
-                                    Color::srgb(0.2, 0.55, 0.3),
+                                    UiButtonVariant::Primary,
                                 ),
                                 (
                                     "REVERT",
                                     DisplayConfirmationAction::Revert,
-                                    Color::srgb(0.55, 0.2, 0.2),
+                                    UiButtonVariant::Danger,
                                 ),
                             ] {
                                 buttons
@@ -186,16 +204,17 @@ pub(super) fn spawn_graphics_panel(
                                             border_radius: BorderRadius::all(Val::Px(5.0)),
                                             ..default()
                                         },
-                                        BackgroundColor(color),
+                                        button_chrome(variant),
                                     ))
                                     .with_children(|button| {
                                         button.spawn((
                                             Text::new(label),
+                                            UiButtonLabel,
                                             TextFont {
                                                 font_size: FontSize::Px(12.0),
                                                 ..default()
                                             },
-                                            TextColor(PAUSE_TEXT_COLOR),
+                                            TextColor(INK_INVERSE),
                                         ));
                                     });
                             }
@@ -277,7 +296,7 @@ pub(super) fn spawn_toggle(
                     font_size: FontSize::Px(18.0),
                     ..default()
                 },
-                TextColor(PAUSE_TEXT_COLOR),
+                TextColor(INK_INVERSE),
                 Node {
                     margin: UiRect::right(Val::Px(40.0)),
                     ..default()
@@ -285,11 +304,7 @@ pub(super) fn spawn_toggle(
             ));
 
             // Toggle button
-            let (text, color) = if enabled {
-                ("ON", Color::srgb(0.2, 0.55, 0.3))
-            } else {
-                ("OFF", Color::srgb(0.55, 0.2, 0.2))
-            };
+            let text = if enabled { "ON" } else { "OFF" };
 
             row.spawn((
                 Button,
@@ -302,17 +317,18 @@ pub(super) fn spawn_toggle(
                     border_radius: BorderRadius::all(Val::Px(6.0)),
                     ..default()
                 },
-                BackgroundColor(color),
+                selected_button_chrome(UiButtonVariant::Secondary, enabled),
             ))
             .with_children(|btn| {
                 btn.spawn((
                     ToggleText(toggle),
+                    UiButtonLabel,
                     Text::new(text),
                     TextFont {
                         font_size: FontSize::Px(14.0),
                         ..default()
                     },
-                    TextColor(PAUSE_TEXT_COLOR),
+                    TextColor(INK_INVERSE),
                 ));
             });
         });
@@ -341,7 +357,7 @@ pub(super) fn spawn_slider(
                     font_size: FontSize::Px(18.0),
                     ..default()
                 },
-                TextColor(PAUSE_TEXT_COLOR),
+                TextColor(INK_INVERSE),
                 Node {
                     margin: UiRect::right(Val::Px(20.0)),
                     ..default()
@@ -356,31 +372,7 @@ pub(super) fn spawn_slider(
                 ..default()
             })
             .with_children(|controls| {
-                // Minus button
-                controls
-                    .spawn((
-                        Button,
-                        SliderStep { control, delta: -1 },
-                        Node {
-                            width: Val::Px(28.0),
-                            height: Val::Px(28.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border_radius: BorderRadius::all(Val::Px(4.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.3, 0.3, 0.35)),
-                    ))
-                    .with_children(|btn| {
-                        btn.spawn((
-                            Text::new("-"),
-                            TextFont {
-                                font_size: FontSize::Px(18.0),
-                                ..default()
-                            },
-                            TextColor(PAUSE_TEXT_COLOR),
-                        ));
-                    });
+                spawn_step_button(controls, SliderStep { control, delta: -1 }, "-");
 
                 // Value display
                 controls.spawn((
@@ -391,7 +383,7 @@ pub(super) fn spawn_slider(
                         ..default()
                     },
                     TextLayout::no_wrap(),
-                    TextColor(PAUSE_TEXT_COLOR),
+                    TextColor(INK_INVERSE),
                     Node {
                         min_width: Val::Px(82.0),
                         justify_content: JustifyContent::Center,
@@ -399,31 +391,7 @@ pub(super) fn spawn_slider(
                     },
                 ));
 
-                // Plus button
-                controls
-                    .spawn((
-                        Button,
-                        SliderStep { control, delta: 1 },
-                        Node {
-                            width: Val::Px(28.0),
-                            height: Val::Px(28.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border_radius: BorderRadius::all(Val::Px(4.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.3, 0.3, 0.35)),
-                    ))
-                    .with_children(|btn| {
-                        btn.spawn((
-                            Text::new("+"),
-                            TextFont {
-                                font_size: FontSize::Px(18.0),
-                                ..default()
-                            },
-                            TextColor(PAUSE_TEXT_COLOR),
-                        ));
-                    });
+                spawn_step_button(controls, SliderStep { control, delta: 1 }, "+");
             });
         });
 }
@@ -446,7 +414,7 @@ pub(super) fn spawn_controls_panel(
                 border_radius: BorderRadius::all(Val::Px(12.0)),
                 ..default()
             },
-            BackgroundColor(PAUSE_PANEL_BACKGROUND),
+            BackgroundColor(FRONT_PANEL),
         ))
         .with_children(|panel| {
             // Panel title
@@ -456,7 +424,7 @@ pub(super) fn spawn_controls_panel(
                     font_size: FontSize::Px(26.0),
                     ..default()
                 },
-                TextColor(PAUSE_HEADING_COLOR),
+                TextColor(INK_INVERSE_HEADING),
                 Node {
                     margin: UiRect::bottom(Val::Px(8.0)),
                     ..default()
@@ -470,7 +438,7 @@ pub(super) fn spawn_controls_panel(
                     font_size: FontSize::Px(12.0),
                     ..default()
                 },
-                TextColor(PAUSE_MUTED_TEXT_COLOR),
+                TextColor(INK_INVERSE_MUTED),
                 Node {
                     margin: UiRect::bottom(Val::Px(20.0)),
                     ..default()
@@ -510,7 +478,7 @@ pub(super) fn spawn_input_slider(
                     font_size: FontSize::Px(18.0),
                     ..default()
                 },
-                TextColor(PAUSE_TEXT_COLOR),
+                TextColor(INK_INVERSE),
                 Node {
                     margin: UiRect::right(Val::Px(20.0)),
                     ..default()
@@ -525,31 +493,7 @@ pub(super) fn spawn_input_slider(
                 ..default()
             })
             .with_children(|controls| {
-                // Minus button
-                controls
-                    .spawn((
-                        Button,
-                        InputSliderStep { control, delta: -1 },
-                        Node {
-                            width: Val::Px(28.0),
-                            height: Val::Px(28.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border_radius: BorderRadius::all(Val::Px(4.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.3, 0.3, 0.35)),
-                    ))
-                    .with_children(|btn| {
-                        btn.spawn((
-                            Text::new("-"),
-                            TextFont {
-                                font_size: FontSize::Px(18.0),
-                                ..default()
-                            },
-                            TextColor(PAUSE_TEXT_COLOR),
-                        ));
-                    });
+                spawn_step_button(controls, InputSliderStep { control, delta: -1 }, "-");
 
                 // Value display
                 controls.spawn((
@@ -559,7 +503,7 @@ pub(super) fn spawn_input_slider(
                         font_size: FontSize::Px(14.0),
                         ..default()
                     },
-                    TextColor(PAUSE_TEXT_COLOR),
+                    TextColor(INK_INVERSE),
                     Node {
                         min_width: Val::Px(70.0),
                         justify_content: JustifyContent::Center,
@@ -567,31 +511,34 @@ pub(super) fn spawn_input_slider(
                     },
                 ));
 
-                // Plus button
-                controls
-                    .spawn((
-                        Button,
-                        InputSliderStep { control, delta: 1 },
-                        Node {
-                            width: Val::Px(28.0),
-                            height: Val::Px(28.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border_radius: BorderRadius::all(Val::Px(4.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgb(0.3, 0.3, 0.35)),
-                    ))
-                    .with_children(|btn| {
-                        btn.spawn((
-                            Text::new("+"),
-                            TextFont {
-                                font_size: FontSize::Px(18.0),
-                                ..default()
-                            },
-                            TextColor(PAUSE_TEXT_COLOR),
-                        ));
-                    });
+                spawn_step_button(controls, InputSliderStep { control, delta: 1 }, "+");
             });
         });
+}
+
+fn spawn_step_button<M: Component>(parent: &mut ChildSpawnerCommands<'_>, marker: M, glyph: &str) {
+    parent
+        .spawn((
+            Button,
+            marker,
+            Node {
+                width: Val::Px(28.0),
+                height: Val::Px(28.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                ..default()
+            },
+            button_chrome(UiButtonVariant::Inverse),
+        ))
+        .with_child((
+            Text::new(glyph),
+            UiButtonLabel,
+            TextFont {
+                font_size: FontSize::Px(18.0),
+                ..default()
+            },
+            TextColor(INK_INVERSE),
+        ));
 }

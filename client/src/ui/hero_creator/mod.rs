@@ -16,11 +16,12 @@ use crate::hero::control::{SelectedOutfit, WorldPlacementMode};
 use crate::hero::{spawn_character_scene_child, HeroFullRig, HeroPreviewRig, HeroVisual};
 use crate::input::InputState;
 use crate::states::GameState;
-use crate::ui::modal::{handle_backdrop_pressed, update_modal_click_guard};
-use crate::ui::styles::{
-    ACCENT_COLOR, BUTTON_BORDER, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, TEXT_COLOR,
-    TEXT_MUTED,
+use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
+use crate::ui::modal::{
+    handle_backdrop_pressed, modal_backdrop_chrome, modal_root_chrome, update_modal_click_guard,
+    ModalRoot,
 };
+use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE};
 
 /// Where the diorama parks while the modal is closed: far below the map.
 const PREVIEW_PARK_POS: Vec3 = Vec3::new(0.0, -600.0, 0.0);
@@ -57,7 +58,6 @@ impl Plugin for HeroCreatorPlugin {
                     handle_confirm_buttons,
                     close_on_escape_or_backdrop,
                     sync_slot_labels,
-                    style_creator_buttons,
                     spin_preview_rig,
                 )
                     .run_if(creator_open),
@@ -283,30 +283,9 @@ fn spawn_creator(
     // translucent backdrop would gray-filter him. The fullscreen button only
     // catches outside-clicks to close.
     commands
-        .spawn((
-            CreatorRoot,
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-        ))
+        .spawn((CreatorRoot, ModalRoot, modal_root_chrome()))
         .with_children(|root| {
-            root.spawn((
-                CreatorBackdrop,
-                Button,
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(0.0),
-                    top: Val::Px(0.0),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ));
+            root.spawn((CreatorBackdrop, modal_backdrop_chrome(Color::NONE)));
 
             // Two floating cards over the fullscreen void: title above, the
             // open stage (character on the void) between, controls below.
@@ -318,9 +297,8 @@ fn spawn_creator(
                     row_gap: Val::Px(10.0),
                     ..default()
                 },
-                // This custom modal predates `spawn_modal`: capture clicks in
-                // its transparent preview gaps so they cannot reach the
-                // fullscreen close backdrop underneath.
+                // Capture clicks in the transparent preview gaps so they
+                // cannot reach the fullscreen close backdrop underneath.
                 FocusPolicy::Block,
                 Pickable::default(),
             ))
@@ -334,8 +312,8 @@ fn spawn_creator(
                             border_radius: BorderRadius::all(Val::Px(8.0)),
                             ..default()
                         },
-                        BackgroundColor(crate::ui::hud::PANEL_BACKGROUND),
-                        BorderColor::from(BUTTON_BORDER),
+                        BackgroundColor(crate::ui::styles::LIMEWASH),
+                        BorderColor::from(PLATE_RULE),
                     ))
                     .with_children(|bar| {
                         bar.spawn((
@@ -344,7 +322,7 @@ fn spawn_creator(
                                 font_size: FontSize::Px(15.0),
                                 ..default()
                             },
-                            TextColor(ACCENT_COLOR),
+                            TextColor(EMBER),
                         ));
                     });
 
@@ -364,8 +342,8 @@ fn spawn_creator(
                             border_radius: BorderRadius::all(Val::Px(8.0)),
                             ..default()
                         },
-                        BackgroundColor(crate::ui::hud::PANEL_BACKGROUND),
-                        BorderColor::from(BUTTON_BORDER),
+                        BackgroundColor(crate::ui::styles::LIMEWASH),
+                        BorderColor::from(PLATE_RULE),
                     ))
                     .with_children(|controls| {
                         // Wardrobe rows straight from the asset manifest.
@@ -389,15 +367,13 @@ fn spawn_creator(
                                 spawn_action_button(
                                     row,
                                     "CANCEL",
-                                    TEXT_MUTED,
-                                    BUTTON_BORDER,
+                                    UiButtonVariant::Ghost,
                                     CancelButton,
                                 );
                                 spawn_action_button(
                                     row,
                                     "PLACE",
-                                    TEXT_COLOR,
-                                    ACCENT_COLOR,
+                                    UiButtonVariant::Primary,
                                     PlaceButton,
                                 );
                             });
@@ -431,7 +407,7 @@ fn spawn_slot_row(panel: &mut ChildSpawnerCommands<'_>, label: &str, row: Creato
                         font_size: FontSize::Px(10.0),
                         ..default()
                     },
-                    TextColor(TEXT_MUTED),
+                    TextColor(INK_MUTED),
                 ));
                 center.spawn((
                     SlotValueText(row),
@@ -440,7 +416,7 @@ fn spawn_slot_row(panel: &mut ChildSpawnerCommands<'_>, label: &str, row: Creato
                         font_size: FontSize::Px(15.0),
                         ..default()
                     },
-                    TextColor(TEXT_COLOR),
+                    TextColor(INK),
                 ));
             });
             spawn_arrow(line, ">", ArrowButton { row, dir: 1 });
@@ -460,17 +436,17 @@ fn spawn_arrow(line: &mut ChildSpawnerCommands<'_>, glyph: &str, marker: ArrowBu
             border_radius: BorderRadius::all(Val::Px(5.0)),
             ..default()
         },
-        BackgroundColor(BUTTON_NORMAL),
-        BorderColor::from(BUTTON_BORDER),
+        button_chrome(UiButtonVariant::Secondary),
     ))
     .with_children(|btn| {
         btn.spawn((
             Text::new(glyph),
+            UiButtonLabel,
             TextFont {
                 font_size: FontSize::Px(16.0),
                 ..default()
             },
-            TextColor(ACCENT_COLOR),
+            TextColor(EMBER),
         ));
     });
 }
@@ -478,8 +454,7 @@ fn spawn_arrow(line: &mut ChildSpawnerCommands<'_>, glyph: &str, marker: ArrowBu
 fn spawn_action_button(
     row: &mut ChildSpawnerCommands<'_>,
     label: &str,
-    text: Color,
-    border: Color,
+    variant: UiButtonVariant,
     marker: impl Component,
 ) {
     row.spawn((
@@ -494,17 +469,17 @@ fn spawn_action_button(
             border_radius: BorderRadius::all(Val::Px(5.0)),
             ..default()
         },
-        BackgroundColor(BUTTON_NORMAL),
-        BorderColor::from(border),
+        button_chrome(variant),
     ))
     .with_children(|btn| {
         btn.spawn((
             Text::new(label),
+            UiButtonLabel,
             TextFont {
                 font_size: FontSize::Px(13.0),
                 ..default()
             },
-            TextColor(text),
+            TextColor(INK),
         ));
     });
 }
@@ -648,27 +623,6 @@ fn sync_slot_labels(
         };
         if text.0 != value {
             text.0 = value;
-        }
-    }
-}
-
-fn style_creator_buttons(
-    mut buttons: Query<
-        (&Interaction, &mut BackgroundColor),
-        (
-            Changed<Interaction>,
-            Or<(With<ArrowButton>, With<PlaceButton>, With<CancelButton>)>,
-        ),
-    >,
-) {
-    for (interaction, mut bg) in buttons.iter_mut() {
-        let background = match *interaction {
-            Interaction::Pressed => BUTTON_PRESSED,
-            Interaction::Hovered => BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
-        };
-        if bg.0 != background {
-            bg.0 = background;
         }
     }
 }

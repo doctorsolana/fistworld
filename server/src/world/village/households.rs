@@ -9,6 +9,13 @@ use super::*;
 /// preference only as a tie-breaker. A household may prefer Bread, but it
 /// should not spend its entire purse on one luxury loaf while affordable Fish
 /// or Flour is sitting on the next market table.
+///
+/// The first absent preference is retained after all physical offers. If the
+/// available substitutes cannot fill the pantry, the caller records the
+/// remaining request against exactly that one good. This is how a completely
+/// empty market still tells a bakery that residents want bread without also
+/// claiming that the same rations were independently demanded as fish and
+/// flour.
 fn household_food_purchase_order(hall_store: &GoodsInventory, market: &MootMarket) -> Vec<Good> {
     let mut foods: Vec<(usize, Good)> = Good::HOUSEHOLD_FOOD_PRIORITY
         .into_iter()
@@ -16,7 +23,38 @@ fn household_food_purchase_order(hall_store: &GoodsInventory, market: &MootMarke
         .filter(|(_, good)| hall_store.amount(*good) > 0)
         .collect();
     foods.sort_by_key(|(preference, good)| (market.pool(*good).ask.max(1), *preference));
-    foods.into_iter().map(|(_, good)| good).collect()
+    let mut order: Vec<_> = foods.into_iter().map(|(_, good)| good).collect();
+    if let Some(absent_preference) = Good::HOUSEHOLD_FOOD_PRIORITY
+        .into_iter()
+        .find(|good| hall_store.amount(*good) == 0)
+    {
+        order.push(absent_preference);
+    }
+    order
+}
+
+/// Cash moved into the shared pantry purse must correspond to food that can
+/// actually be bought today. An unavailable order still records demand below,
+/// but pre-funding empty shelves strands household wealth precisely when a new
+/// farm, mill or bakery needs that coin as investment capital.
+fn stocked_food_budget(
+    deficit: u32,
+    hall_store: &GoodsInventory,
+    market: &MootMarket,
+    order: &[Good],
+) -> u64 {
+    let mut remaining = deficit;
+    let mut pennies = 0u64;
+    for good in order.iter().copied() {
+        if remaining == 0 {
+            break;
+        }
+        let units = remaining.min(hall_store.amount(good));
+        pennies =
+            pennies.saturating_add(u64::from(units).saturating_mul(market.pool(good).ask.max(1)));
+        remaining -= units;
+    }
+    pennies
 }
 
 /// Give every completed cabin a bounded, inspectable household roster.
@@ -77,6 +115,16 @@ pub fn update_household_budgets_and_pantries(
         ),
         Without<CharacterKind>,
     >,
+    marketplaces: Query<
+        (
+            &SettlementBuilding,
+            &shared::components::BuildingOf,
+            &PlayerPosition,
+            &PlayerRotation,
+        ),
+        Without<Household>,
+    >,
+    positions: Query<&PlayerPosition>,
     mut residents: Query<(
         Entity,
         &shared::components::PersonId,
@@ -162,7 +210,7 @@ pub fn update_household_budgets_and_pantries(
         let Some(hall_entity) = hall_by_id.get(&building_of.0).copied() else {
             continue;
         };
-        let Ok((_, _, _, _hall_position, _hall_rotation, mut hall_store, mut market)) =
+        let Ok((_, _, _, hall_position, hall_rotation, mut hall_store, mut market)) =
             halls.get_mut(hall_entity)
         else {
             continue;
@@ -171,7 +219,7 @@ pub fn update_household_budgets_and_pantries(
         let estimated_unit_price = food_order
             .first()
             .map_or(0, |good| market.pool(*good).ask.max(1));
-        let wanted_budget = u64::from(deficit).saturating_mul(estimated_unit_price);
+        let wanted_budget = stocked_food_budget(deficit, &hall_store, &market, &food_order);
         let mut needed = wanted_budget.saturating_sub(economy.pennies);
         if needed > 0 {
             // All earners contribute toward the same concrete pantry target.
@@ -221,25 +269,55 @@ pub fn update_household_budgets_and_pantries(
                     })
                 })
         });
-        let can_purchase_now = estimated_unit_price > 0 && economy.pennies >= estimated_unit_price;
+        let can_purchase_now = food_order.first().is_some_and(|good| {
+            hall_store.amount(*good) > 0
+                && estimated_unit_price > 0
+                && economy.pennies >= estimated_unit_price
+        });
         if tactical_shopper && can_purchase_now && clock.is_day() {
             if let Some(shopper) = shopper_entity {
-                if let Some(queue_clock) = queue_clock.as_deref_mut() {
-                    commands.entity(shopper).insert(HouseholdShoppingRoutine {
-                        home: house_entity,
-                        hall: hall_entity,
-                        phase: HouseholdShoppingPhase::GoingToMarket,
-                    });
-                    moot_services::enqueue_moot_service(
-                        &mut commands,
-                        queue_clock,
-                        shopper,
-                        hall_entity,
-                        MootServiceKind::HouseholdShopping,
-                    );
-                    economy.last_budget_day = day;
-                    continue;
+                let hall_entrance = SettlementBuildingKind::Hall.entrance_position(
+                    hall_position.0,
+                    hall_rotation.map_or(0.0, |rotation| rotation.0),
+                );
+                let counter = nearest_public_market_entrance(
+                    positions
+                        .get(house_entity)
+                        .map_or(hall_position.0, |position| position.0),
+                    hall_entrance,
+                    marketplaces
+                        .iter()
+                        .filter(|(building, owner, ..)| {
+                            building.kind == SettlementBuildingKind::Market
+                                && owner.0 == building_of.0
+                        })
+                        .map(|(building, _, position, rotation)| {
+                            building.kind.entrance_position(position.0, rotation.0)
+                        }),
+                );
+                commands.entity(shopper).insert(HouseholdShoppingRoutine {
+                    home: house_entity,
+                    hall: hall_entity,
+                    counter,
+                    phase: HouseholdShoppingPhase::GoingToMarket,
+                });
+                if counter == hall_entrance {
+                    if let Some(queue_clock) = queue_clock.as_deref_mut() {
+                        moot_services::enqueue_moot_service(
+                            &mut commands,
+                            queue_clock,
+                            shopper,
+                            hall_entity,
+                            MootServiceKind::HouseholdShopping,
+                        );
+                    } else {
+                        commands.entity(shopper).insert(MoveTarget(counter));
+                    }
+                } else {
+                    commands.entity(shopper).insert(MoveTarget(counter));
                 }
+                economy.last_budget_day = day;
+                continue;
             }
         }
 
@@ -248,20 +326,16 @@ pub fn update_household_budgets_and_pantries(
             if remaining == 0 {
                 break;
             }
-            if hall_store.amount(good) == 0 {
-                // Food groups are substitutes. Do not claim that every cabin
-                // demanded every absent food before successfully buying one of
-                // the later choices; generic food pressure records a wholly
-                // empty market. Once a good is actually offered, rejected and
-                // partially filled demand is economically meaningful.
-                continue;
-            }
             let room = pantry.free_bulk() / good.bulk_per_unit();
             let requested = remaining.min(room);
             let purchase =
                 market.purchase_recording_demand(good, requested, economy.pennies, None, None);
             if purchase.trade.units == 0 {
-                continue;
+                // The order helper places at most one absent substitute after
+                // every live offer. Its failed purchase has now recorded the
+                // residual shortage, so stop rather than duplicating the same
+                // ration demand across other food groups.
+                break;
             }
             if economy.pennies < purchase.trade.pennies {
                 continue;
@@ -340,7 +414,7 @@ pub fn run_household_shopping(
         if home.is_some() {
             continue;
         }
-        let Ok((settlement_id, hall_position, hall_rotation, mut hall_store, mut market)) =
+        let Ok((settlement_id, _hall_position, _hall_rotation, mut hall_store, mut market)) =
             halls.get_mut(routine.hall)
         else {
             commands
@@ -366,10 +440,6 @@ pub fn run_household_shopping(
                 .remove::<NavigationRouteFailed>();
             continue;
         };
-        let hall_entrance = SettlementBuildingKind::Hall.entrance_position(
-            hall_position.0,
-            hall_rotation.map_or(0.0, |rotation| rotation.0),
-        );
         let home_entrance = building
             .kind
             .entrance_position(home_position.0, home_rotation.0);
@@ -404,10 +474,10 @@ pub fn run_household_shopping(
                     if !ticket.is_ready() {
                         continue;
                     }
-                } else if ground_distance(position.0, hall_entrance) > WORK_REACH {
+                } else if ground_distance(position.0, routine.counter) > WORK_REACH {
                     // Compatibility for a pre-queue save or a focused test
                     // that creates only the shopping routine.
-                    ensure_move_target(&mut commands, shopper, move_target, hall_entrance);
+                    ensure_move_target(&mut commands, shopper, move_target, routine.counter);
                     continue;
                 }
                 let target = (household.resident_ids.len() as u32)
@@ -418,9 +488,6 @@ pub fn run_household_shopping(
                     if remaining == 0 {
                         break;
                     }
-                    if hall_store.amount(good) == 0 {
-                        continue;
-                    }
                     let requested = remaining.min(carrier.free_bulk() / good.bulk_per_unit());
                     let purchase = market.purchase_recording_demand(
                         good,
@@ -430,7 +497,7 @@ pub fn run_household_shopping(
                         None,
                     );
                     if purchase.trade.units == 0 || economy.pennies < purchase.trade.pennies {
-                        continue;
+                        break;
                     }
                     economy.pennies -= purchase.trade.pennies;
                     let moved = hall_store.transfer_to(&mut carrier, good, purchase.trade.units);
@@ -1129,7 +1196,35 @@ mod tests {
 
         assert_eq!(
             household_food_purchase_order(&hall, &market),
-            vec![Good::Flour, Good::Bread]
+            vec![Good::Flour, Good::Bread, Good::Food]
         );
+    }
+
+    #[test]
+    fn empty_food_shelves_leave_one_preferred_restart_order() {
+        let hall = GoodsInventory::new(shared::economy::capacity::HALL);
+        let market = MootMarket::founding();
+
+        assert_eq!(
+            household_food_purchase_order(&hall, &market),
+            vec![Good::Bread]
+        );
+        assert_eq!(stocked_food_budget(8, &hall, &market, &[Good::Bread]), 0);
+    }
+
+    #[test]
+    fn pantry_purse_funds_only_rations_that_are_physically_for_sale() {
+        let mut hall = GoodsInventory::new(shared::economy::capacity::HALL);
+        assert_eq!(hall.add(Good::Flour, 3), 3);
+        let mut market = MootMarket::founding();
+        market.consign(
+            MarketSeller::Business(shared::components::BuildingId(7)),
+            Good::Flour,
+            3,
+            120,
+        );
+        let order = household_food_purchase_order(&hall, &market);
+
+        assert_eq!(stocked_food_budget(8, &hall, &market, &order), 360);
     }
 }

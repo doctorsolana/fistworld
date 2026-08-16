@@ -3,32 +3,23 @@
 use super::*;
 
 pub(super) fn handle_submit_button(
-    mut interaction_query: Query<
-        (&Interaction, &mut BackgroundColor),
-        (Changed<Interaction>, With<SubmitButton>),
-    >,
+    interaction_query: Query<&Interaction, (Changed<Interaction>, With<SubmitButton>)>,
     name_input: Res<PlayerNameInput>,
     mut feedback: ResMut<NameSubmissionFeedback>,
     client_query: Query<(Entity, &MessageSender<SubmitPlayerName>), With<crate::GameClient>>,
     mut error_text_query: Query<&mut Text, With<ErrorMessageText>>,
     mut commands: Commands,
 ) {
-    for (interaction, mut bg_color) in interaction_query.iter_mut() {
-        *bg_color = match interaction {
-            Interaction::Pressed => {
-                // Submit name when button is pressed
-                submit_name(
-                    &name_input,
-                    &mut feedback,
-                    client_query,
-                    &mut error_text_query,
-                    &mut commands,
-                );
-                BackgroundColor(BUTTON_PRESSED)
-            }
-            Interaction::Hovered => BackgroundColor(BUTTON_HOVERED),
-            Interaction::None => BackgroundColor(BUTTON_NORMAL),
-        };
+    for interaction in interaction_query.iter() {
+        if *interaction == Interaction::Pressed {
+            submit_name(
+                &name_input,
+                &mut feedback,
+                client_query,
+                &mut error_text_query,
+                &mut commands,
+            );
+        }
     }
 }
 

@@ -73,6 +73,9 @@ pub(super) fn sell_carried_to_moot(
     hall: &mut GoodsInventory,
     market: &mut MootMarket,
 ) -> u32 {
+    if !market.can_trade(good) {
+        return 0;
+    }
     let room = hall.free_bulk() / good.bulk_per_unit();
     let offered = carrier.amount(good).min(room);
     let moved = carrier.transfer_to(hall, good, offered);
@@ -140,6 +143,11 @@ pub fn update_moot_market_targets(
         &mut MootMarket,
     )>,
     sites: Query<(&UnderConstruction, &GoodsInventory)>,
+    marketplaces: Query<(
+        &SettlementBuilding,
+        &shared::components::BuildingOf,
+        Option<&shared::components::MarketLevel>,
+    )>,
 ) {
     for (settlement_id, settlement, inventory, mut market) in halls.iter_mut() {
         let outstanding_wood = sites
@@ -151,9 +159,83 @@ pub fn update_moot_market_targets(
                     .saturating_sub(materials.amount(Good::Wood))
             })
             .fold(0u32, u32::saturating_add);
-        market.set_targets(settlement.residents, outstanding_wood);
+        let market_level = marketplaces
+            .iter()
+            .filter(|(building, building_of, _)| {
+                building.kind == SettlementBuildingKind::Market && building_of.0 == *settlement_id
+            })
+            .map(|(_, _, level)| {
+                level
+                    .copied()
+                    .unwrap_or_else(|| shared::components::MarketLevel::for_tier(settlement.tier))
+            })
+            .max_by_key(|level| match level {
+                shared::components::MarketLevel::Earthen => 0_u8,
+                shared::components::MarketLevel::Paved => 1_u8,
+            });
+        let has_marketplace = market_level.is_some();
+        let trade_tier = match market_level {
+            None => shared::economy::MarketTradeTier::Moot,
+            Some(shared::components::MarketLevel::Earthen) => {
+                shared::economy::MarketTradeTier::Marketplace
+            }
+            Some(shared::components::MarketLevel::Paved) => {
+                shared::economy::MarketTradeTier::PavedMarketplace
+            }
+        };
+        market.unlock_trade_tier(trade_tier);
+        market.set_targets_with_marketplace(
+            settlement.residents,
+            outstanding_wood,
+            has_marketplace,
+        );
         market.reconcile_inventory(*settlement_id, inventory);
         market.refresh_all(inventory);
+    }
+}
+
+/// Keep one authoritative public inventory per settlement. Completed
+/// Marketplaces add physical capacity and another access point, but never own
+/// a duplicate pile of goods or a second order book. The transfer also repairs
+/// older saves which may have stock stranded on the Marketplace entity.
+pub fn sync_public_market_storage(
+    mut halls: Query<
+        (&shared::components::SettlementId, &mut GoodsInventory),
+        (With<Settlement>, Without<SettlementBuilding>),
+    >,
+    mut marketplaces: Query<
+        (
+            &SettlementBuilding,
+            &shared::components::BuildingOf,
+            &mut GoodsInventory,
+        ),
+        (With<SettlementBuilding>, Without<Settlement>),
+    >,
+) {
+    for (settlement_id, mut hall_store) in halls.iter_mut() {
+        let marketplace_count = marketplaces
+            .iter()
+            .filter(|(building, building_of, _)| {
+                building.kind == SettlementBuildingKind::Market && building_of.0 == *settlement_id
+            })
+            .count()
+            .min(u32::MAX as usize) as u32;
+        let desired_capacity_per_good = shared::economy::capacity::HALL
+            .saturating_add(shared::economy::capacity::MARKET.saturating_mul(marketplace_count));
+        hall_store.resize_partitioned_bulk_capacity(desired_capacity_per_good);
+
+        for (building, building_of, mut marketplace_store) in marketplaces.iter_mut() {
+            if building.kind != SettlementBuildingKind::Market || building_of.0 != *settlement_id {
+                continue;
+            }
+            for good in Good::ALL {
+                marketplace_store.transfer_to(&mut hall_store, good, u32::MAX);
+            }
+            // This component remains as a compatibility shell for generic
+            // building inspection. Zero capacity makes accidental writes fail
+            // instead of silently splitting the settlement's public stock.
+            marketplace_store.resize_bulk_capacity(0);
+        }
     }
 }
 
@@ -216,12 +298,21 @@ pub fn update_settlement_economies(
         Option<&SettlementPolicies>,
         Option<&mut shared::economy::CivicAccount>,
     )>,
-    buildings: Query<(Entity, &SettlementBuilding, &shared::components::BuildingOf)>,
+    buildings: Query<(
+        Entity,
+        &SettlementBuilding,
+        &shared::components::BuildingOf,
+        &shared::components::BuildingId,
+        Option<&BusinessStaffingPolicy>,
+        Option<&BusinessWagePolicy>,
+        Option<&BusinessCondition>,
+    )>,
     employment: Query<
         (
             &shared::components::ResidentOf,
             Option<&shared::components::EmployedAt>,
             Option<&shared::components::CivicEmployment>,
+            Option<&WorkStatus>,
         ),
         With<CharacterKind>,
     >,
@@ -256,16 +347,62 @@ pub fn update_settlement_economies(
     let mut pantries: HashMap<shared::components::SettlementId, Vec<Entity>> = HashMap::new();
     let mut housing: HashMap<shared::components::SettlementId, u32> = HashMap::new();
     let mut employed: HashMap<shared::components::SettlementId, u32> = HashMap::new();
-    for (entity, building, building_of) in buildings.iter() {
+    for (entity, building, building_of, ..) in buildings.iter() {
         stores.entry(building_of.0).or_default().push(entity);
         if building.kind == SettlementBuildingKind::House {
             pantries.entry(building_of.0).or_default().push(entity);
         }
         *housing.entry(building_of.0).or_default() += u32::from(building.kind.housing_capacity());
     }
-    for (resident_of, employed_at, civic_job) in employment.iter() {
+    let mut filled_by_building = HashMap::<shared::components::BuildingId, u16>::new();
+    let mut civic_filled = HashMap::<shared::components::SettlementId, u16>::new();
+    let mut job_seekers = HashMap::<shared::components::SettlementId, u16>::new();
+    for (resident_of, employed_at, civic_job, status) in employment.iter() {
         if employed_at.is_some() || civic_job.is_some() {
             *employed.entry(resident_of.0).or_default() += 1;
+        }
+        if let Some(employed_at) = employed_at {
+            let filled = filled_by_building.entry(employed_at.0).or_default();
+            *filled = filled.saturating_add(1);
+        }
+        if civic_job.is_some() {
+            let filled = civic_filled.entry(resident_of.0).or_default();
+            *filled = filled.saturating_add(1);
+        }
+        if employed_at.is_none()
+            && civic_job.is_none()
+            && status.is_some_and(|status| *status == WorkStatus::LookingForWork)
+        {
+            let seeking = job_seekers.entry(resident_of.0).or_default();
+            *seeking = seeking.saturating_add(1);
+        }
+    }
+    let mut private_positions = HashMap::<shared::components::SettlementId, u16>::new();
+    let mut private_filled = HashMap::<shared::components::SettlementId, u16>::new();
+    let mut private_vacancies = HashMap::<shared::components::SettlementId, u16>::new();
+    let mut best_open_wage = HashMap::<shared::components::SettlementId, u64>::new();
+    for (_, building, building_of, building_id, staffing, wage, condition) in buildings.iter() {
+        if !is_private_business(building.kind)
+            || condition.is_some_and(|condition| !condition.state.accepts_new_workers())
+        {
+            continue;
+        }
+        let target = staffing.map_or_else(
+            || building.kind.positions(),
+            |staffing| staffing.target_for(building.kind),
+        );
+        let filled = filled_by_building.get(building_id).copied().unwrap_or(0);
+        let vacant = u16::from(target).saturating_sub(filled);
+        let positions = private_positions.entry(building_of.0).or_default();
+        *positions = positions.saturating_add(u16::from(target));
+        let actual = private_filled.entry(building_of.0).or_default();
+        *actual = actual.saturating_add(filled);
+        let openings = private_vacancies.entry(building_of.0).or_default();
+        *openings = openings.saturating_add(vacant);
+        if vacant > 0 {
+            let offer = wage.map_or(FOUNDING_DAILY_WAGE, |wage| wage.daily_wage);
+            let best = best_open_wage.entry(building_of.0).or_default();
+            *best = (*best).max(offer);
         }
     }
     for store_entities in stores.values_mut() {
@@ -619,6 +756,20 @@ pub fn update_settlement_economies(
             + economy.employment_prosperity
             + economy.hunger_penalty)
             .clamp(0.0, 100.0);
+        economy.private_job_positions = private_positions.get(settlement_id).copied().unwrap_or(0);
+        economy.private_filled_jobs = private_filled.get(settlement_id).copied().unwrap_or(0);
+        economy.private_vacant_jobs = private_vacancies.get(settlement_id).copied().unwrap_or(0);
+        economy.civic_job_positions = u16::try_from(super::civic::desired_civic_positions(
+            settlement.tier,
+            policies.copied().unwrap_or_default().staffing_posture,
+        ))
+        .unwrap_or(u16::MAX);
+        economy.civic_filled_jobs = civic_filled.get(settlement_id).copied().unwrap_or(0);
+        economy.civic_vacant_jobs = economy
+            .civic_job_positions
+            .saturating_sub(economy.civic_filled_jobs);
+        economy.job_seekers = job_seekers.get(settlement_id).copied().unwrap_or(0);
+        economy.best_open_private_wage = best_open_wage.get(settlement_id).copied().unwrap_or(0);
 
         if advanced_day {
             let secure = residents > 0

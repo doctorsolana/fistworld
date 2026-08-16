@@ -8,11 +8,9 @@
 use bevy::prelude::*;
 
 use super::*;
+use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
 use crate::ui::modal::{spawn_modal, ModalLayout};
-use crate::ui::styles::{
-    ACCENT_COLOR, BUTTON_BORDER, BUTTON_NORMAL, INK, PLATE_RULE_SOFT, RADIUS, TEXT_COLOR,
-    TEXT_MUTED,
-};
+use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE, RADIUS};
 
 const PANEL_SIZE: Vec2 = Vec2::new(940.0, 620.0);
 const LIST_WIDTH: f32 = 320.0;
@@ -61,8 +59,8 @@ pub(super) fn spawn_encyclopedia(
             overflow: Overflow::clip(),
             ..default()
         },
-        BackgroundColor(PANEL_BG),
-        BorderColor::from(BUTTON_BORDER),
+        BackgroundColor(LIMEWASH),
+        BorderColor::from(PLATE_RULE),
         // Lifts the window off the world instead of sitting flat on it.
         BoxShadow::new(
             Color::srgba(0.0, 0.0, 0.0, 0.55),
@@ -92,8 +90,8 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>) {
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(HEADER_BG),
-            BorderColor::from(DIVIDER),
+            BackgroundColor(LIMEWASH_HEADER),
+            BorderColor::from(PLATE_RULE_SOFT),
         ))
         .with_children(|header| {
             header.spawn((
@@ -102,7 +100,7 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>) {
                     font_size: FontSize::Px(17.0),
                     ..default()
                 },
-                TextColor(ACCENT_COLOR),
+                TextColor(EMBER),
             ));
             header
                 .spawn(Node {
@@ -137,16 +135,16 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>) {
                                 border_radius: BorderRadius::all(Val::Px(6.0)),
                                 ..default()
                             },
-                            BackgroundColor(Color::NONE),
-                            BorderColor::from(DIVIDER),
+                            button_chrome(UiButtonVariant::Ghost),
                         ))
                         .with_child((
                             Text::new("X"),
+                            UiButtonLabel,
                             TextFont {
                                 font_size: FontSize::Px(13.0),
                                 ..default()
                             },
-                            TextColor(TEXT_MUTED),
+                            TextColor(INK_MUTED),
                         ));
                 });
         });
@@ -165,17 +163,17 @@ fn spawn_tab(parent: &mut ChildSpawnerCommands<'_>, tab: EncyclopediaTab) {
                 border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
-            BackgroundColor(Color::NONE),
-            BorderColor::from(Color::NONE),
+            button_chrome(UiButtonVariant::Tab),
         ))
         .with_children(|button| {
             button.spawn((
                 Text::new(tab.label()),
+                UiButtonLabel,
                 TextFont {
                     font_size: FontSize::Px(12.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
             ));
         });
 }
@@ -193,17 +191,17 @@ fn spawn_filter(parent: &mut ChildSpawnerCommands<'_>, filter: PeopleFilter) {
                 border_radius: BorderRadius::all(Val::Px(11.0)),
                 ..default()
             },
-            BackgroundColor(Color::NONE),
-            BorderColor::from(DIVIDER),
+            button_chrome(UiButtonVariant::Tab),
         ))
         .with_children(|chip| {
             chip.spawn((
                 Text::new(filter.label()),
+                UiButtonLabel,
                 TextFont {
                     font_size: FontSize::Px(10.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
             ));
         });
 }
@@ -270,7 +268,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
-            BorderColor::from(DIVIDER),
+            BorderColor::from(PLATE_RULE_SOFT),
         ))
         .with_children(|row| {
             row.spawn((
@@ -285,11 +283,11 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                     border_radius: BorderRadius::all(Val::Px(RADIUS)),
                     ..default()
                 },
-                BackgroundColor(BUTTON_NORMAL),
-                BorderColor::all(PLATE_RULE_SOFT),
+                button_chrome(UiButtonVariant::Secondary),
             ))
             .with_child((
                 Text::new("WORLD HISTORY"),
+                UiButtonLabel,
                 TextFont {
                     font_size: FontSize::Px(8.5),
                     ..default()
@@ -304,7 +302,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                     font_size: FontSize::Px(11.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
             ));
         });
 
@@ -332,7 +330,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                         scrollbar_width: 8.0,
                         ..default()
                     },
-                    BorderColor::from(DIVIDER),
+                    BorderColor::from(PLATE_RULE_SOFT),
                 ))
                 .with_children(|list| {
                     list.spawn((
@@ -363,7 +361,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                         scrollbar_width: 8.0,
                         ..default()
                     },
-                    BackgroundColor(DETAIL_BG),
+                    BackgroundColor(LIMEWASH_DETAIL),
                 ))
                 .with_children(|detail| {
                     detail.spawn((
@@ -380,7 +378,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                 font_size: FontSize::Px(12.0),
                                 ..default()
                             },
-                            TextColor(TEXT_MUTED),
+                            TextColor(INK_MUTED),
                         )],
                     ));
 
@@ -403,7 +401,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                     font_size: FontSize::Px(22.0),
                                     ..default()
                                 },
-                                TextColor(TEXT_COLOR),
+                                TextColor(INK),
                             ));
                             card.spawn((
                                 PlaceDetailSubtitle,
@@ -412,7 +410,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                     font_size: FontSize::Px(11.0),
                                     ..default()
                                 },
-                                TextColor(ACCENT_COLOR),
+                                TextColor(EMBER),
                                 Node {
                                     margin: UiRect::bottom(Val::Px(18.0)),
                                     ..default()
@@ -443,11 +441,11 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                             border_radius: BorderRadius::all(Val::Px(RADIUS)),
                                             ..default()
                                         },
-                                        BackgroundColor(BUTTON_NORMAL),
-                                        BorderColor::all(PLATE_RULE_SOFT),
+                                        button_chrome(UiButtonVariant::Secondary),
                                     ))
                                     .with_child((
                                         Text::new("BACK TO COMPANY"),
+                                        UiButtonLabel,
                                         TextFont {
                                             font_size: FontSize::Px(8.5),
                                             ..default()
@@ -469,11 +467,11 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                             border_radius: BorderRadius::all(Val::Px(RADIUS)),
                                             ..default()
                                         },
-                                        BackgroundColor(BUTTON_NORMAL),
-                                        BorderColor::all(PLATE_RULE_SOFT),
+                                        button_chrome(UiButtonVariant::Secondary),
                                     ))
                                     .with_child((
                                         Text::new("BUSINESS HISTORY"),
+                                        UiButtonLabel,
                                         TextFont {
                                             font_size: FontSize::Px(8.5),
                                             ..default()
@@ -494,11 +492,11 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                             border_radius: BorderRadius::all(Val::Px(RADIUS)),
                                             ..default()
                                         },
-                                        BackgroundColor(BUTTON_NORMAL),
-                                        BorderColor::all(PLATE_RULE_SOFT),
+                                        button_chrome(UiButtonVariant::Secondary),
                                     ))
                                     .with_child((
                                         Text::new("SETTLEMENT HISTORY"),
+                                        UiButtonLabel,
                                         TextFont {
                                             font_size: FontSize::Px(8.5),
                                             ..default()
@@ -518,7 +516,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                         border: UiRect::bottom(Val::Px(1.0)),
                                         ..default()
                                     },
-                                    BorderColor::from(DIVIDER),
+                                    BorderColor::from(PLATE_RULE_SOFT),
                                     children![
                                         (
                                             PlaceDetailLabel(index),
@@ -527,7 +525,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                                 font_size: FontSize::Px(10.0),
                                                 ..default()
                                             },
-                                            TextColor(TEXT_MUTED),
+                                            TextColor(INK_MUTED),
                                             // Never compress the label: a long
                                             // value would otherwise wrap "TO
                                             // ADVANCE" onto two lines and the
@@ -546,7 +544,7 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                                 font_size: FontSize::Px(13.0),
                                                 ..default()
                                             },
-                                            TextColor(TEXT_COLOR),
+                                            TextColor(INK),
                                             // The value wraps instead, right-aligned
                                             // so the column edge stays straight.
                                             TextLayout::justify(Justify::Right),
@@ -589,7 +587,7 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
-            BorderColor::from(DIVIDER),
+            BorderColor::from(PLATE_RULE_SOFT),
         ))
         .with_children(|row| {
             row.spawn(Node {
@@ -613,7 +611,7 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                     font_size: FontSize::Px(11.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
             ));
         });
 
@@ -641,7 +639,7 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                         border: UiRect::right(Val::Px(1.0)),
                         ..default()
                     },
-                    BorderColor::from(DIVIDER),
+                    BorderColor::from(PLATE_RULE_SOFT),
                 ))
                 .with_children(|viewport| {
                     viewport.spawn((
@@ -669,7 +667,7 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                         scrollbar_width: 8.0,
                         ..default()
                     },
-                    BackgroundColor(DETAIL_BG),
+                    BackgroundColor(LIMEWASH_DETAIL),
                 ))
                 .with_children(|detail| {
                     spawn_detail_card(detail);
@@ -690,7 +688,7 @@ fn spawn_people_tab(body: &mut ChildSpawnerCommands<'_>) {
                                     font_size: FontSize::Px(13.0),
                                     ..default()
                                 },
-                                TextColor(TEXT_MUTED),
+                                TextColor(INK_MUTED),
                             ));
                         });
                 });
@@ -718,7 +716,7 @@ fn spawn_detail_card(detail: &mut ChildSpawnerCommands<'_>) {
                     font_size: FontSize::Px(26.0),
                     ..default()
                 },
-                TextColor(TEXT_COLOR),
+                TextColor(INK),
             ));
             card.spawn((
                 DetailSubtitle,
@@ -727,7 +725,7 @@ fn spawn_detail_card(detail: &mut ChildSpawnerCommands<'_>) {
                     font_size: FontSize::Px(12.0),
                     ..default()
                 },
-                TextColor(ACCENT_COLOR),
+                TextColor(EMBER),
                 Node {
                     margin: UiRect::bottom(Val::Px(18.0)),
                     ..default()
@@ -751,7 +749,7 @@ fn spawn_detail_stat(card: &mut ChildSpawnerCommands<'_>, field: DetailField) {
             border: UiRect::bottom(Val::Px(1.0)),
             ..default()
         },
-        BorderColor::from(DIVIDER),
+        BorderColor::from(PLATE_RULE_SOFT),
     ))
     .with_children(|row| {
         row.spawn((
@@ -760,7 +758,7 @@ fn spawn_detail_stat(card: &mut ChildSpawnerCommands<'_>, field: DetailField) {
                 font_size: FontSize::Px(10.0),
                 ..default()
             },
-            TextColor(TEXT_MUTED),
+            TextColor(INK_MUTED),
         ));
         row.spawn((
             Node {
@@ -784,7 +782,7 @@ fn spawn_detail_stat(card: &mut ChildSpawnerCommands<'_>, field: DetailField) {
                     font_size: FontSize::Px(13.0),
                     ..default()
                 },
-                TextColor(TEXT_COLOR),
+                TextColor(INK),
             ));
             if field == DetailField::Affiliation {
                 spawn_banner_button(value_row, ">", 1);
@@ -807,18 +805,18 @@ fn spawn_retinue_button(card: &mut ChildSpawnerCommands<'_>) {
             border_radius: BorderRadius::all(Val::Px(2.0)),
             ..default()
         },
-        BackgroundColor(HEADER_BG),
-        BorderColor::from(ACCENT_COLOR),
+        button_chrome(UiButtonVariant::Secondary),
     ))
     .with_children(|btn| {
         btn.spawn((
             RetinueLabel,
+            UiButtonLabel,
             Text::new("CONSCRIPT"),
             TextFont {
                 font_size: FontSize::Px(11.0),
                 ..default()
             },
-            TextColor(TEXT_COLOR),
+            TextColor(INK),
         ));
     });
 }
@@ -841,17 +839,17 @@ fn spawn_banner_button(parent: &mut ChildSpawnerCommands<'_>, glyph: &str, step:
                 border_radius: BorderRadius::all(Val::Px(2.0)),
                 ..default()
             },
-            BackgroundColor(Color::NONE),
-            BorderColor::from(DIVIDER),
+            button_chrome(UiButtonVariant::Ghost),
         ))
         .with_children(|btn| {
             btn.spawn((
                 Text::new(glyph),
+                UiButtonLabel,
                 TextFont {
                     font_size: FontSize::Px(11.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
             ));
         });
 }
@@ -884,7 +882,7 @@ fn spawn_placeholder_tab(
                 font_size: FontSize::Px(15.0),
                 ..default()
             },
-            TextColor(ACCENT_COLOR),
+            TextColor(EMBER),
         ));
         panel.spawn((
             Text::new(blurb),
@@ -892,7 +890,7 @@ fn spawn_placeholder_tab(
                 font_size: FontSize::Px(12.0),
                 ..default()
             },
-            TextColor(TEXT_MUTED),
+            TextColor(INK_MUTED),
             TextLayout::justify(Justify::Center),
             Node {
                 max_width: Val::Px(430.0),
@@ -914,8 +912,8 @@ fn spawn_footer(panel: &mut ChildSpawnerCommands<'_>) {
                 border: UiRect::top(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(HEADER_BG),
-            BorderColor::from(DIVIDER),
+            BackgroundColor(LIMEWASH_HEADER),
+            BorderColor::from(PLATE_RULE_SOFT),
         ))
         .with_children(|footer| {
             footer.spawn((
@@ -924,7 +922,7 @@ fn spawn_footer(panel: &mut ChildSpawnerCommands<'_>) {
                     font_size: FontSize::Px(10.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
             ));
         });
 }

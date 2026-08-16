@@ -11,8 +11,10 @@ business pricing and production are mentioned here only where money crosses the 
 
 - Residents, households, companies and the settlement treasury are separate owners.
   Productive buildings are operating sites of a company, not extra personal purses.
-- The Moot Hall is a physical consignment market. It does not buy all local output and it
-  begins with no goods.
+- The settlement exchange is a physical consignment market. Its authoritative stock starts
+  in the Moot Hall, with an independent 1,200-bulk compartment for every resource. A completed
+  Marketplace adds a second counter and 600 bulk to every compartment rather than creating
+  another inventory or order book.
 - A buyer pays only when a real listed good is purchased. The seller receives the price
   minus the enacted market fee; the fee enters the treasury.
 - Private companies pay an enacted levy only on a completed day's positive consolidated
@@ -62,11 +64,31 @@ the settlement treasury. They bootstrap circulation; they are not recurring inco
 | Company | One authoritative `CompanyAccount` treasury | Goods remain at settlement-local sites/listings | 1,000-share cap table, Company Master, consolidated obligations, profit, capital and dividends |
 | Business site | No wallet | Workplace inventory plus seller-owned Moot listings | `BusinessAccount` cost-centre ledger: attributed revenue, expenses, labour, policy, production, liabilities and solvency |
 | Settlement | `Settlement::treasury` | Treasury-owned hall stock only | `CivicAccount`, enacted policy and public payroll |
-| Moot market | No independent wallet | Hall inventory with seller-aware listings | Offers, completed trades and market quotes |
+| Public market | No independent wallet | One compartmentalised Hall-owned inventory, expanded and accessible at either counter after a Marketplace is built | Seller-aware offers, completed trades and market quotes |
 
 A good stored at the Moot is not automatically public property. Every listing retains a
-`MarketSeller`: a `BusinessId`, `PersonId` or the settlement treasury. The physical hall
-inventory and offer book are reconciled so the market cannot sell phantom stock.
+`MarketSeller`: a `BusinessId`, `PersonId` or the settlement treasury. The physical shared
+inventory and offer book are reconciled so the market cannot sell phantom stock. Each Hall
+resource compartment has 1,200 bulk; a Marketplace raises every compartment to
+1,800 bulk. Wood, Wheat, Flour, Bread and the other goods therefore never consume one another's
+reserved physical space. Porters, shoppers, builders, processors and heroes may use whichever
+Hall or Marketplace entrance is closer, but all mutate the same stock. Old Marketplace-local
+stock is migrated into that ledger, then the local shell is held at zero capacity so no path
+can silently split the goods.
+
+Public trade has an explicit infrastructure tier, separate from physical storage. A founding
+Moot can list every current good except Iron: Fish, Wheat, Wood, Stone, Flour and Bread. An
+earthen Marketplace is trade level 1 and is the extension point for the next crafted goods.
+The paved Marketplace is trade level 2 and unlocks Iron. A locked good can still exist in a
+person, workplace or private company inventory, but cannot be consigned, purchased, collected
+by a public porter or counted as unmet public demand. The exchange panel shows its current tier
+and the required tier beside locked rows. Each future `Good` declares one minimum tier in shared
+data rather than adding special cases to villagers, businesses and UI.
+
+Public stock targets are shortage and pricing signals, not consignment limits. Businesses may
+continue posting competing or undercutting asks after a target is met; that good's compartment is
+the hard limit. A Hall-only settlement now treats 32 Wheat as its minimum planning depth, while a
+completed Marketplace raises the minimum to 96 for processor supply and producer-town trade.
 
 Moot Stewards are the early physical logistics workers. A solvent Hamlet can employ up to
 two. Each resident in that role collects saleable output from businesses, operates a goods
@@ -82,6 +104,22 @@ and retain/sell rules. Cross-town movement waits for the later physical caravan 
 An NPC only founds a depot for a company that already controls at least two other local sites,
 and it will not autonomously duplicate one in the same branch. Players remain free to buy the
 tier-unlocked permit as a speculative infrastructure investment.
+
+Local extractor permits count active and already-approved sites conservatively: one-third of
+uninterrupted rated output until the observed two-day flow proves a higher embodied rate. This
+prevents a permit burst while leaving room for commute and handling losses. It is not a
+town-production cap:
+the Farmstead opportunity has a separate committed external-Wheat-demand input. It is zero while
+markets are local, and future physical caravan contracts will populate it from reachable export
+orders and prices. Fertile ground then supports specialization by satisfying more real demand per
+farm rather than by making duplicate farms attractive in a closed market.
+
+A completed private business which finishes liquidation enters the local property market rather
+than vanishing immediately. If it remains unsold for three complete world days, has no physical
+stock, listings, workers, creditor claims, road work or deliveries in flight, the abandoned shell
+and its attached field or pier decay out of the embodied world. Its road spur remains as settlement
+infrastructure. Temporary distress never removes a building, and unfinished projects retain their
+materials for takeover instead of using this completed-property rule.
 
 ## Money flows
 
@@ -105,7 +143,7 @@ All arrows move existing coin. Neither the market nor policy review creates mone
 
 1. A business produces a physical good into its workplace inventory.
 2. Its company's local branch protects an absolute retain amount and decides whether excess may be sold; the rule is applied once across all of that company's sites in the settlement.
-3. An available Moot Steward or local Company Porter moves a bounded load to the hall and creates a listing owned by that business. Private porters work only for their own company.
+3. An available Moot Steward or local Company Porter moves a bounded load to the hall and creates a listing owned by that business. Dispatch rotates fairly through available sites and goods without using price as freight priority; an active claim excludes that workplace from other porters until the trip finishes. Private porters work only for their own company.
 4. A real buyer purchases the cheapest acceptable listed units.
 5. The buyer loses the gross price. The operating company treasury receives gross minus the market fee. The
    treasury receives the fee.
@@ -122,6 +160,16 @@ Household preference is not permission to ignore price. The shopper orders the
 currently listed foods by price per ration and uses Bread → Fish → Flour only to
 break equal-price ties. Bread can command a premium, but a household will buy
 affordable Fish or Flour before exhausting its necessities purse on luxury loaves.
+
+The authored `Good::base_price` values are founding references for an unobserved
+market, not price controls. A first autonomous producer quotes its estimated labour
+and input cost plus its strategy margin. Once real offers or trades exist, entrants
+position against the cheapest live listing and established owners review their own
+sell-through, accumulating stock, the last clearing price, competing asks, unavailable
+demand and explicitly unaffordable demand every day. A weak seller moves toward a
+one-penny undercut when replacement cost permits it. Rejected buyers accelerate the
+markdown and temporarily remove the target profit margin, while real shortages and
+sell-outs support increases. Manual owners may still choose any positive price.
 
 A household normally protects two personal discretionary coins per member while funding
 its three-day pantry target. That floor disappears when the pantry holds fewer than one
@@ -193,12 +241,19 @@ days. It can hire, buy inputs and produce, but its owner cannot open another fir
 has left that state. Distressed, insolvent, liquidating and for-sale holdings also block
 portfolio expansion. A viable established firm may still fund a later holding.
 
+Automatic owners do not cross-subsidise a useless branch forever. Once a site is past
+probation, has accumulated saleable output, has made no sale for seven consecutive days and
+is still losing money on the latest day, its owner voluntarily starts liquidation. This is a
+site decision even when another branch of the same company is profitable. Manual/player
+management is never closed by this rule.
+
 Five unpaid-liability days start bankruptcy liquidation. Production and hiring stop;
 workers return to the labour market, while their claims remain attached by stable
 `PersonId`. The Moot Steward collects **every** good in the failed workplace—including
 processor inputs such as Flour, not merely its normal output—and consigns it under the
-firm's stable `BuildingId`. Existing and new offers fall by 15% per day to a 25%-of-base
-floor. No treasury purchase or invented liquidity is involved.
+firm's stable `BuildingId`. Existing and new offers fall by 15% per day to the universal
+one-penny transaction floor. Sunk liquidation stock is not protected by an arbitrary
+percentage of an authored reference price. No treasury purchase or invented liquidity is involved.
 
 Liquidation receipts enter the company treasury and settle wage claims first, then ordinary
 tax collection. After the workplace, porter and order book are empty for two reviews, the
@@ -263,7 +318,10 @@ For a settlement-requested private business:
 price = base × ownership multiplier × (1 - enacted subsidy)
 ```
 
-The result never falls below `1.00 coin`. A speculative business receives no subsidy. The
+The result never falls below `1.00 coin`, except that a Windmill explicitly requested by the
+opportunity board has a zero permit fee: raw Wheat is not edible, and the Hall must not drain
+the processor's opening input cash during a food emergency. A speculative Windmill and every
+other speculative business receive no subsidy. The
 discount is foregone permit revenue, not a treasury payment and not newly minted coin.
 For an autonomous resident, the permit fee moves from the applicant's wallet into the treasury
 when the resident and Hall approve a legal plot. Approval reserves that plot immediately. An observed applicant then joins the shared
@@ -423,7 +481,11 @@ services remain aggregate.
 
 The food reserve target informs the permit-market food signal. Low reserve days and weak
 recent production raise both farming and fishing opportunities, but neither is a civic
-order. Existing farms, fishers and already-approved sites reduce the next signal. A raw
+order. Existing farms, fishers and already-approved sites reduce the next signal, but at
+only one-third of uninterrupted nameplate output until their physically observed two-day
+throughput proves a higher rate. Commutes, carrying and market hand-offs are real capacity
+costs. Fishing is displaced only by Wheat which the local chain has actually turned into
+Flour or Bread; a field full of raw Wheat cannot claim that residents are fed. A raw
 Wheat backlog suppresses another Farmstead and raises Windmill investment; Flour flow and
 Bread scarcity similarly attract Bakeries. Fishing competes directly with farming and can
 repeat wherever another complete shoreline plot exists. Site ranking excludes the old failure mode
@@ -457,8 +519,9 @@ staffing posture:
 | Full | All tier worker slots | All tier guard slots |
 
 Both founding worker slots are combined Moot Stewards. Each is independently available for
-goods collection and road repair, and the collection reservation ledger prevents them from
-claiming the same stock or processor order. Guards are already real exclusive jobs and
+goods collection and road repair. The collection reservation ledger prevents duplicate stock
+claims, while the dispatch claim prevents two porters travelling to the same workplace at once.
+Guards are already real exclusive jobs and
 receive wages, although patrol and combat behaviour remain future work. No resident can
 simultaneously hold a civic and private production job. Reducing posture releases an excess
 steward only after their current delivery or road job finishes; it does not erase cargo,
@@ -472,6 +535,31 @@ foundation to carry three civic salaries.
 
 An advertised position still needs an eligible resident and the hiring reserve. A posture
 is therefore a target, not a promise that every slot is instantly filled.
+
+### Labour-market response
+
+Private firms already review their own wage offer from staffing, cash, arrears and recent
+results. Employees now review those offers once per world day as well. A worker can move
+directly to an open job in the same settlement when it pays at least 20% and 0.10 coin more
+per day. Requiring both thresholds gives employment inertia: neighbouring firms changing
+their offer by one ordinary ten-penny review step do not swap the whole workforce every dawn.
+Three days' worth of workplace wage arrears overrides that inertia; a non-owner worker then
+takes the best open alternative or returns to `LookingForWork`. They finish an in-flight
+delivery, door crossing or carried load first so changing jobs cannot duplicate or strand
+physical goods. An owner does not quit their own site through the employee rule—the ordinary
+business lifecycle decides whether that branch closes.
+
+Civic contracts follow the same principle. An idle public worker resigns after three unpaid
+days while their durable payroll claim remains payable; a Moot Steward first completes any
+promised cart or road task. Marketplaces, Taverns, Churches and other public architecture do
+not advertise fictional private `EmployedAt` slots. A future service role must be introduced
+with an explicit civic staffing target and a real treasury payroll.
+
+Every replicated `SettlementEconomy` reading exposes private and civic positions, filled and
+vacant counts, residents looking for work, and the highest wage among open private positions.
+The selected settlement panel, settlement encyclopedia page and Village Lab report all show
+the same figures. These counts distinguish “people are idle because no job exists” from
+“firms cannot fill their vacancies” and “the treasury advertised work it cannot sustain.”
 
 ## Civic strategies and autopilot
 
@@ -549,12 +637,15 @@ tier is development state, not a hard population cap.
 
 ## Inspection and history
 
-Clicking a Moot Hall exposes:
+Clicking either a Moot Hall or its Marketplace exposes the same public inventory and exchange.
+The Marketplace currently adds no jobs; its future staff remain disabled until they have an
+explicit civic role, useful behaviour and treasury payroll. The shared panel exposes:
 
 - treasury and common physical store;
 - filled and targeted public jobs;
 - strategy and auto/manual status;
 - market fee and positive-profit levy;
+- current public trade tier and the requirement for locked goods;
 - relief mode, food target, payroll target, staffing and permit subsidy;
 - the highest permit-market signals, explicitly labelled as discounted or full-price;
 - wage arrears and settlement progression.

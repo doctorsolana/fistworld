@@ -65,17 +65,17 @@ pub(super) fn load_server_presets_sync() -> (ServerPresets, ServerAddress) {
 
 /// Handle clicking on the IP input field to focus/unfocus
 pub(super) fn handle_ip_input_focus(
-    mut input_fields: Query<(&Interaction, &mut IpInputField, &mut BorderColor)>,
+    mut input_fields: Query<(&Interaction, &mut IpInputField, &mut UiButtonStyle)>,
     mouse_button: Res<ButtonInput<MouseButton>>,
     mut presets: ResMut<ServerPresets>,
 ) {
     let mut any_clicked = false;
 
-    for (interaction, mut field, mut border) in input_fields.iter_mut() {
+    for (interaction, mut field, mut style) in input_fields.iter_mut() {
         if *interaction == Interaction::Pressed {
             field.focused = true;
             any_clicked = true;
-            *border = BorderColor::from(ACCENT_COLOR);
+            style.focused = true;
             // When manually editing, deselect preset
             presets.selected_index = None;
         }
@@ -83,10 +83,10 @@ pub(super) fn handle_ip_input_focus(
 
     // Unfocus if clicked elsewhere
     if mouse_button.just_pressed(MouseButton::Left) && !any_clicked {
-        for (_, mut field, mut border) in input_fields.iter_mut() {
+        for (_, mut field, mut style) in input_fields.iter_mut() {
             if field.focused {
                 field.focused = false;
-                *border = BorderColor::from(BUTTON_BORDER);
+                style.focused = false;
             }
         }
     }
@@ -94,13 +94,14 @@ pub(super) fn handle_ip_input_focus(
 
 /// Handle keyboard input when IP field is focused
 pub(super) fn handle_ip_keyboard_input(
-    mut input_fields: Query<&mut IpInputField>,
+    mut input_fields: Query<(&mut IpInputField, &mut UiButtonStyle)>,
     mut server_address: ResMut<ServerAddress>,
     mut keyboard_events: MessageReader<KeyboardInput>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut presets: ResMut<ServerPresets>,
 ) {
-    let Some(mut field) = input_fields.iter_mut().find(|f| f.focused) else {
+    let Some((mut field, mut style)) = input_fields.iter_mut().find(|(field, _)| field.focused)
+    else {
         return;
     };
 
@@ -125,6 +126,7 @@ pub(super) fn handle_ip_keyboard_input(
             Key::Escape | Key::Enter => {
                 // Unfocus on escape or enter
                 field.focused = false;
+                style.focused = false;
             }
             Key::Character(c) => {
                 let c_str = c.as_str();

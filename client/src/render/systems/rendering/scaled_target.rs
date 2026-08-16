@@ -88,7 +88,7 @@ pub(super) fn setup_scene_render_target(
             ..default()
         },
         ImageNode::new(image.clone()).with_mode(NodeImageMode::Stretch),
-        GlobalZIndex(-1000),
+        GlobalZIndex(crate::ui::foundation::layer::PRESENT_SURFACE),
     ));
 
     image

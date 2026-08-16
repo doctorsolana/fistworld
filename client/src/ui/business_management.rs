@@ -21,12 +21,16 @@ use shared::protocol::{
 };
 
 use crate::states::GameState;
+use crate::ui::foundation::{
+    button_chrome, retained_scroll, subtree_is_interacting, UiButtonLabel, UiButtonVariant,
+    UiRefreshStamp,
+};
 use crate::ui::modal::{
     handle_backdrop_pressed, spawn_modal, update_modal_click_guard, ModalLayout,
 };
 use crate::ui::styles::{
-    plate_shadow, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, INK, INK_MUTED, LIMEWASH,
-    LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE, PLATE_RULE_SOFT, RADIUS,
+    plate_shadow, INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE,
+    PLATE_RULE_SOFT, RADIUS,
 };
 
 pub struct BusinessManagementPlugin;
@@ -122,6 +126,7 @@ impl Default for ShareOrderDraft {
 #[allow(clippy::type_complexity)]
 fn ensure_panel(
     mut commands: Commands,
+    time: Res<Time<Real>>,
     mut target: ResMut<BusinessManagementTarget>,
     feedback: Res<BusinessFeedback>,
     return_to: Res<BusinessManagementReturn>,
@@ -152,11 +157,13 @@ fn ensure_panel(
     )>,
     people: Query<(&PersonId, &CharacterName)>,
     heroes: Query<(&Hero, &PersonId, Option<&Wallet>)>,
-    roots: Query<(Entity, &Root)>,
+    roots: Query<(Entity, &Root, Option<&UiRefreshStamp>)>,
     body_scroll: Query<&ScrollPosition, With<BodyScroll>>,
+    children: Query<&Children>,
+    interactions: Query<(&Interaction, Has<crate::ui::foundation::UiRefreshExempt>)>,
 ) {
     let Some(entity) = target.0 else {
-        for (root, _) in roots.iter() {
+        for (root, ..) in roots.iter() {
             commands.entity(root).despawn();
         }
         return;
@@ -176,7 +183,7 @@ fn ensure_panel(
     )) = businesses.get(entity)
     else {
         target.0 = None;
-        for (root, _) in roots.iter() {
+        for (root, ..) in roots.iter() {
             commands.entity(root).despawn();
         }
         return;
@@ -204,14 +211,20 @@ fn ensure_panel(
         "{entity:?}|{building:?}|{building_id:?}|{operated_by:?}|{account:?}|{management:?}|{wage:?}|{sale:?}|{staffing:?}|{procurement:?}|{supply:?}|{inventory:?}|{company:?}|{local_person:?}|{local_balance:?}|{share_draft:?}|{}|{}|{:?}",
         feedback.success, feedback.message, return_to.0
     );
-    if roots.iter().any(|(_, root)| root.signature == signature) {
+    if roots.iter().any(|(_, root, _)| root.signature == signature) {
         return;
     }
-    let retained_scroll = retained_panel_scroll(
-        roots.iter().any(|(_, root)| root.target == entity),
+    let retained_scroll = retained_scroll(
+        roots.iter().any(|(_, root, _)| root.target == entity),
         body_scroll.iter().next().map(|position| position.0),
     );
-    for (root, _) in roots.iter() {
+    if roots.iter().any(|(entity, _, stamp)| {
+        subtree_is_interacting(entity, &children, &interactions)
+            || stamp.is_some_and(|stamp| !stamp.is_ready(&time))
+    }) {
+        return;
+    }
+    for (root, ..) in roots.iter() {
         commands.entity(root).despawn();
     }
 
@@ -228,6 +241,9 @@ fn ensure_panel(
             panel_padding: 0.0,
         },
     );
+    commands
+        .entity(modal.root)
+        .insert(UiRefreshStamp::now(&time));
     commands.entity(modal.panel).insert((
         Node {
             width: Val::Vw(86.0),
@@ -934,14 +950,6 @@ fn output_good(kind: SettlementBuildingKind) -> Option<Good> {
     }
 }
 
-fn retained_panel_scroll(rebuilding_same_site: bool, current: Option<Vec2>) -> Vec2 {
-    if rebuilding_same_site {
-        current.unwrap_or(Vec2::ZERO)
-    } else {
-        Vec2::ZERO
-    }
-}
-
 const COMPANY_STOCK_FILL: Color = Color::srgba(0.34, 0.32, 0.28, 0.94);
 const MARKET_STOCK_FILL: Color = Color::srgba(0.62, 0.57, 0.48, 0.94);
 
@@ -1178,11 +1186,11 @@ fn button<M: Component>(
                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::all(PLATE_RULE_SOFT),
+            button_chrome(UiButtonVariant::Secondary),
         ))
         .with_child((
             Text::new(label),
+            UiButtonLabel,
             TextFont {
                 font_size: FontSize::Px(9.0),
                 ..default()
@@ -1211,17 +1219,9 @@ fn share_draft_button(
 fn handle_share_draft_buttons(
     guard: Res<BusinessClickGuard>,
     mut draft: ResMut<ShareOrderDraft>,
-    mut buttons: Query<
-        (&Interaction, &ShareDraftAction, &mut BackgroundColor),
-        Changed<Interaction>,
-    >,
+    buttons: Query<(&Interaction, &ShareDraftAction), Changed<Interaction>>,
 ) {
-    for (interaction, action, mut background) in buttons.iter_mut() {
-        *background = match interaction {
-            Interaction::Pressed => BackgroundColor(BUTTON_PRESSED),
-            Interaction::Hovered => BackgroundColor(BUTTON_HOVERED),
-            Interaction::None => BackgroundColor(BUTTON_NORMAL),
-        };
+    for (interaction, action) in buttons.iter() {
         if *interaction != Interaction::Pressed || !guard.0 {
             continue;
         }
@@ -1241,18 +1241,13 @@ fn handle_share_draft_buttons(
 fn handle_action_buttons(
     guard: Res<BusinessClickGuard>,
     target: Res<BusinessManagementTarget>,
-    mut buttons: Query<(&Interaction, &Action, &mut BackgroundColor), Changed<Interaction>>,
+    buttons: Query<(&Interaction, &Action), Changed<Interaction>>,
     mut clients: Query<
         &mut MessageSender<HeroBusinessOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
 ) {
-    for (interaction, action, mut background) in buttons.iter_mut() {
-        *background = match interaction {
-            Interaction::Pressed => BackgroundColor(BUTTON_PRESSED),
-            Interaction::Hovered => BackgroundColor(BUTTON_HOVERED),
-            Interaction::None => BackgroundColor(BUTTON_NORMAL),
-        };
+    for (interaction, action) in buttons.iter() {
         if *interaction != Interaction::Pressed || !guard.0 {
             continue;
         }
@@ -1360,13 +1355,6 @@ mod tests {
     #[test]
     fn quarter_coin_steps_are_exact_pennies() {
         assert_eq!(shared::economy::PENNIES_PER_COIN / 4, 25);
-    }
-
-    #[test]
-    fn rebuilding_controls_keeps_scroll_but_switching_sites_starts_at_top() {
-        let current = Vec2::new(0.0, 487.0);
-        assert_eq!(retained_panel_scroll(true, Some(current)), current);
-        assert_eq!(retained_panel_scroll(false, Some(current)), Vec2::ZERO);
     }
 
     #[test]

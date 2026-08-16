@@ -143,13 +143,24 @@ fn sale_policy_for(_kind: SettlementBuildingKind, output: Good) -> BusinessSaleP
     BusinessSalePolicy::for_good(output)
 }
 
+fn staffing_payroll_reserve(
+    kind: SettlementBuildingKind,
+    daily_wage: u64,
+    staffing: Option<BusinessStaffingPolicy>,
+) -> u64 {
+    let target = staffing
+        .unwrap_or_else(|| BusinessStaffingPolicy::new(kind.positions()))
+        .target_for(kind);
+    daily_wage.saturating_mul(u64::from(target))
+}
+
 fn liquidation_price(good: Good, liquidation_days: u16) -> u64 {
     let mut price = good.base_price().max(1);
     for _ in 0..liquidation_days.min(10) {
         let movement = price.saturating_mul(1_500).div_ceil(BASIS_POINTS).max(1);
         price = price.saturating_sub(movement).max(1);
     }
-    price.max(good.base_price().saturating_mul(25) / 100).max(1)
+    price.max(1)
 }
 
 /// Add the small ledgers used by every productive workplace. Founding working
@@ -185,13 +196,14 @@ pub fn ensure_business_economies(
         .iter()
         .map(|(settlement_id, market)| {
             let mut prices = [0; Good::COUNT];
+            let mut observed = [false; Good::COUNT];
             let mut scarce = [false; Good::COUNT];
             for good in Good::ALL {
                 let pool = market.pool(good);
-                prices[good.index()] = market
-                    .suggested_price(good)
-                    .max(pool.day.high_ask)
-                    .max(pool.previous_day.high_ask);
+                // Entry competes with the cheapest live offer (or last real
+                // trade), not the most ambitious ask remembered this week.
+                prices[good.index()] = market.suggested_price(good);
+                observed[good.index()] = market.listed_units(good) > 0 || pool.bid > 0;
                 scarce[good.index()] = pool
                     .day
                     .unmet_units()
@@ -203,6 +215,7 @@ pub fn ensure_business_economies(
                 *settlement_id,
                 OpeningMarketSnapshot {
                     prices,
+                    observed,
                     scarce,
                     market_fee_bps: market.market_fee_bps(),
                 },
@@ -329,6 +342,7 @@ pub fn ensure_business_economies(
 #[derive(Debug, Clone, Copy)]
 struct OpeningMarketSnapshot {
     prices: [u64; Good::COUNT],
+    observed: [bool; Good::COUNT],
     scarce: [bool; Good::COUNT],
     market_fee_bps: u16,
 }
@@ -340,14 +354,6 @@ fn owner_opening_asking_price(
     strategy: BusinessStrategy,
     market: Option<&OpeningMarketSnapshot>,
 ) -> u64 {
-    let local_price = market.map_or(output.base_price(), |market| {
-        market.prices[output.index()].max(1)
-    });
-    let scarce = market.is_some_and(|market| market.scarce[output.index()]);
-    let positioned_price = local_price
-        .saturating_mul(u64::from(strategy.opening_market_position_bps(scarce)))
-        .div_ceil(BASIS_POINTS);
-
     let sustainable = rated_daily_production(kind, 1.0).map_or(minimum_price, |capacity| {
         let input_cost = capacity.input.map_or(0, |(input, units)| {
             let input_price = market.map_or(input.base_price(), |market| {
@@ -365,6 +371,19 @@ fn owner_opening_asking_price(
             strategy.target_margin_bps(),
         )
     });
+    let positioned_price = if market.is_some_and(|market| market.observed[output.index()]) {
+        let market = market.expect("observed output market has a snapshot");
+        market.prices[output.index()]
+            .max(1)
+            .saturating_mul(u64::from(
+                strategy.opening_market_position_bps(market.scarce[output.index()]),
+            ))
+            .div_ceil(BASIS_POINTS)
+    } else {
+        // With no real offer or trade, cost is evidence and the authored base
+        // price is not. Strategy is already expressed by the target margin.
+        sustainable
+    };
     positioned_price.max(sustainable).max(minimum_price).max(1)
 }
 
@@ -389,6 +408,22 @@ mod policy_tests {
     }
 
     #[test]
+    fn processor_input_cash_protects_only_enacted_staffing() {
+        assert_eq!(
+            staffing_payroll_reserve(
+                SettlementBuildingKind::Windmill,
+                FOUNDING_DAILY_WAGE,
+                Some(BusinessStaffingPolicy::new(1)),
+            ),
+            FOUNDING_DAILY_WAGE,
+        );
+        assert_eq!(
+            staffing_payroll_reserve(SettlementBuildingKind::Windmill, FOUNDING_DAILY_WAGE, None,),
+            2 * FOUNDING_DAILY_WAGE,
+        );
+    }
+
+    #[test]
     fn entrants_choose_different_opening_prices_from_their_owner_strategy() {
         let mut prices = [0; Good::COUNT];
         prices[Good::Wheat.index()] = Good::Wheat.base_price();
@@ -397,6 +432,7 @@ mod policy_tests {
         scarce[Good::Flour.index()] = true;
         let market = OpeningMarketSnapshot {
             prices,
+            observed: [true; Good::COUNT],
             scarce,
             market_fee_bps: 500,
         };
@@ -415,6 +451,20 @@ mod policy_tests {
         assert_eq!(price(BusinessStrategy::Cautious), 600);
         assert_eq!(price(BusinessStrategy::HighMargin), 690);
         assert_eq!(price(BusinessStrategy::Opportunistic), 720);
+    }
+
+    #[test]
+    fn first_extractor_quotes_cost_instead_of_the_authored_reference_price() {
+        let price = owner_opening_asking_price(
+            SettlementBuildingKind::Farmstead,
+            Good::Wheat,
+            1,
+            BusinessStrategy::Balanced,
+            None,
+        );
+
+        assert!(price > 1);
+        assert!(price < Good::Wheat.base_price());
     }
 }
 
@@ -1267,10 +1317,20 @@ pub fn run_internal_deliveries(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn run_market_collections(
     mut commands: Commands,
+    mut collection_cursors: Local<HashMap<shared::components::SettlementId, u64>>,
     world_time: Query<&WorldTime>,
     road_requests: Query<&RoadRequest>,
     mut business_events: ResMut<BusinessEventQueue>,
     private_supply: Query<(&BusinessSupplyPolicy, &shared::components::OperatedBy)>,
+    marketplaces: Query<
+        (
+            &SettlementBuilding,
+            &shared::components::BuildingOf,
+            &PlayerPosition,
+            &PlayerRotation,
+        ),
+        Without<BusinessAccount>,
+    >,
     mut halls: Query<
         (
             &shared::components::SettlementId,
@@ -1295,6 +1355,7 @@ pub fn run_market_collections(
             Option<&BusinessProcurementPolicy>,
             &mut BusinessAccount,
             &BusinessWagePolicy,
+            Option<&BusinessStaffingPolicy>,
             &shared::components::OperatedBy,
         ),
         Without<CharacterKind>,
@@ -1308,8 +1369,13 @@ pub fn run_market_collections(
     mut porters: Query<
         (
             Entity,
-            Option<&MarketPorter>,
-            Option<&CompanyPorter>,
+            (Option<&MarketPorter>, Option<&CompanyPorter>),
+            (
+                Option<&FarmerRoutine>,
+                Option<&FishingRoutine>,
+                Option<&LumberjackRoutine>,
+                Option<&ProcessingRoutine>,
+            ),
             &PlayerPosition,
             &mut CharacterActivity,
             &mut GoodsInventory,
@@ -1326,7 +1392,15 @@ pub fn run_market_collections(
         (
             With<CharacterKind>,
             Without<strategic::StrategicPerson>,
-            Or<(With<MarketPorter>, With<CompanyPorter>)>,
+            Or<(
+                With<MarketPorter>,
+                With<CompanyPorter>,
+                With<FarmerRoutine>,
+                With<FishingRoutine>,
+                With<LumberjackRoutine>,
+                With<ProcessingRoutine>,
+                With<MarketCollectionRoutine>,
+            )>,
         ),
     >,
 ) {
@@ -1347,28 +1421,34 @@ pub fn run_market_collections(
         .iter()
         .filter_map(|(_, _, _, _, _, _, _, _, routine, ..)| routine.cloned())
         .collect();
+    let civic_porter_halls: HashSet<_> = porters
+        .iter()
+        .filter_map(|(_, (civic, _), ..)| civic.map(|porter| porter.settlement))
+        .collect();
+    let company_porter_routes: HashSet<_> = porters
+        .iter()
+        .filter_map(|(_, (_, company), ..)| {
+            company.map(|porter| (porter.settlement, porter.company))
+        })
+        .collect();
     let mut reserved_output: HashMap<(Entity, Good), u32> = HashMap::new();
     let mut reserved_input: HashMap<(Entity, Good), u32> = HashMap::new();
-    let mut reserved_hall_bulk: HashMap<Entity, u32> = HashMap::new();
-    let mut reserved_market_units: HashMap<(Entity, Good), u32> = HashMap::new();
+    let mut reserved_hall_units: HashMap<(Entity, Good), u32> = HashMap::new();
+    let mut claimed_businesses: HashSet<Entity> = HashSet::new();
     for routine in active_collections {
+        claimed_businesses.insert(routine.business);
         match routine.phase {
             MarketCollectionPhase::GoingToBusiness => {
                 *reserved_output
                     .entry((routine.business, routine.good))
                     .or_default() += routine.reserved_units;
-                *reserved_hall_bulk.entry(routine.hall).or_default() += routine
-                    .reserved_units
-                    .saturating_mul(routine.good.bulk_per_unit());
-                *reserved_market_units
+                *reserved_hall_units
                     .entry((routine.hall, routine.good))
                     .or_default() += routine.reserved_units;
             }
-            MarketCollectionPhase::ReturningToHall => {
-                *reserved_hall_bulk.entry(routine.hall).or_default() += routine
-                    .reserved_units
-                    .saturating_mul(routine.good.bulk_per_unit());
-                *reserved_market_units
+            MarketCollectionPhase::ReturningToHall
+            | MarketCollectionPhase::ReturningFailedInput => {
+                *reserved_hall_units
                     .entry((routine.hall, routine.good))
                     .or_default() += routine.reserved_units;
             }
@@ -1380,6 +1460,8 @@ pub fn run_market_collections(
         }
     }
     for routine in active_internal {
+        claimed_businesses.insert(routine.supplier);
+        claimed_businesses.insert(routine.receiver);
         if routine.phase == InternalDeliveryPhase::GoingToSupplier {
             *reserved_output
                 .entry((routine.supplier, routine.good))
@@ -1421,7 +1503,7 @@ pub fn run_market_collections(
             shared::components::SettlementId,
         ),
     >::new();
-    for (entity, _, building_of, _, _, inventory, _, _, _, _, _, _, operated_by) in
+    for (entity, _, building_of, _, _, inventory, _, _, _, _, _, _, _, operated_by) in
         businesses.iter()
     {
         site_branches.insert(entity, (operated_by.0, building_of.0));
@@ -1462,7 +1544,9 @@ pub fn run_market_collections(
         ),
         u64,
     >::new();
-    for (_, building, building_of, _, _, _, sale, _, _, _, _, _, operated_by) in businesses.iter() {
+    for (_, building, building_of, _, _, _, sale, _, _, _, _, _, _, operated_by) in
+        businesses.iter()
+    {
         let Some(good) = business_output(building.kind) else {
             continue;
         };
@@ -1474,13 +1558,13 @@ pub fn run_market_collections(
     }
     for (
         porter_entity,
-        civic_porter,
-        company_porter,
+        (civic_porter, company_porter),
+        (farmer, fisher, lumberjack, processor),
         position,
         mut activity,
         mut carrier,
         move_target,
-        routine,
+        mut routine,
         internal_delivery,
         home,
         road_work,
@@ -1490,13 +1574,41 @@ pub fn run_market_collections(
         route_failed,
     ) in porters.iter_mut()
     {
+        let employee_work = farmer
+            .map(|routine| (routine.farmstead(), routine.hall()))
+            .or_else(|| fisher.map(|routine| (routine.workplace(), routine.hall())))
+            .or_else(|| lumberjack.map(|routine| (routine.workplace(), routine.hall())))
+            .or_else(|| processor.map(|routine| (routine.workplace(), routine.hall())));
+        let active_self_haul_hall = routine.as_deref().map(|routine| routine.hall);
         let Some(porter_hall) = civic_porter
             .map(|porter| porter.settlement)
             .or_else(|| company_porter.map(|porter| porter.settlement))
+            .or_else(|| employee_work.map(|(_, hall)| hall))
+            .or(active_self_haul_hall)
         else {
             continue;
         };
         let porter_company = company_porter.map(|porter| porter.company);
+        let self_hauling_business = employee_work
+            .and_then(|(workplace, _)| {
+                site_branches
+                    .get(&workplace)
+                    .map(|(company, _)| (workplace, *company))
+            })
+            .filter(|(_, company)| {
+                civic_porter.is_none()
+                    && company_porter.is_none()
+                    && !civic_porter_halls.contains(&porter_hall)
+                    && !company_porter_routes.contains(&(porter_hall, *company))
+            })
+            .map(|(workplace, _)| workplace);
+        // A worker only substitutes for a missing logistics role. Merely
+        // being a farmer, fisher, woodcutter or processor must never turn
+        // every employee into an additional public porter when a specialist
+        // is already assigned.
+        if employee_work.is_some() && self_hauling_business.is_none() && routine.is_none() {
+            continue;
+        }
         let assigned_road_repair = road_requests
             .iter()
             .any(|request| request.builder == porter_entity);
@@ -1518,9 +1630,24 @@ pub fn run_market_collections(
             hall_position.0,
             hall_rotation.map_or(0.0, |rotation| rotation.0),
         );
+        let marketplace_entrances: Vec<_> = marketplaces
+            .iter()
+            .filter(|(building, building_of, ..)| {
+                building.kind == SettlementBuildingKind::Market && building_of.0 == *settlement_id
+            })
+            .map(|(building, _, at, rotation)| building.kind.entrance_position(at.0, rotation.0))
+            .collect();
+        let nearest_counter = |origin| {
+            nearest_public_market_entrance(
+                origin,
+                hall_entrance,
+                marketplace_entrances.iter().copied(),
+            )
+        };
+        let available_counter = nearest_counter(position.0);
 
         if let Some(failed) = route_failed {
-            match routine.as_deref() {
+            match routine.as_deref_mut() {
                 Some(active) if active.phase == MarketCollectionPhase::GoingToBusiness => {
                     warn!(
                         "Market porter could not reach business at {:.1},{:.1}; cancelling that collection so another offer can be tried",
@@ -1534,38 +1661,64 @@ pub fn run_market_collections(
                         .remove::<NavigationRoutePending>()
                         .remove::<NavigationRouteFailed>();
                 }
-                Some(active) if active.phase == MarketCollectionPhase::ReturningToHall => {
-                    // Once stock is physically aboard it must reach the hall.
-                    // Clear the static failure and explicitly dirty the target
-                    // so the bounded planner gets a fresh request next tick.
+                Some(active)
+                    if matches!(
+                        active.phase,
+                        MarketCollectionPhase::ReturningToHall
+                            | MarketCollectionPhase::ReturningFailedInput
+                    ) =>
+                {
+                    // Once stock is physically aboard it must reach the shared
+                    // store, but it need not use the counter which rejected a
+                    // route. Prefer the closest other public entrance. This
+                    // also changes the destination, so the planner can discard
+                    // the failed doorway's persistent backoff immediately.
+                    let fallback = std::iter::once(hall_entrance)
+                        .chain(marketplace_entrances.iter().copied())
+                        .filter(|counter| ground_distance(*counter, failed.goal) > WORK_REACH)
+                        .min_by(|a, b| {
+                            ground_distance(position.0, *a)
+                                .total_cmp(&ground_distance(position.0, *b))
+                        })
+                        .unwrap_or(active.counter);
+                    active.counter = fallback;
                     warn!(
-                        "Market porter retrying a loaded return to the Moot Hall after route failure at {:.1},{:.1}",
-                        failed.goal.x, failed.goal.z
+                        "Market porter rerouting a loaded return from failed public counter {:.1},{:.1} to {:.1},{:.1}",
+                        failed.goal.x, failed.goal.z, fallback.x, fallback.z,
                     );
                     commands
                         .entity(porter_entity)
                         .remove::<TravelRoute>()
                         .remove::<NavigationRoutePending>()
                         .remove::<NavigationRouteFailed>()
-                        .insert(MoveTarget(hall_entrance));
+                        .insert(MoveTarget(fallback));
                 }
-                Some(active) => {
-                    debug_assert_eq!(active.phase, MarketCollectionPhase::DeliveringInput);
-                    let target = businesses.get(active.business).ok().map(
-                        |(_, building, _, at, rotation, ..)| {
-                            building.kind.entrance_position(at.0, rotation.0)
-                        },
-                    );
-                    let mut porter_commands = commands.entity(porter_entity);
-                    porter_commands
+                Some(active) if active.phase == MarketCollectionPhase::DeliveringInput => {
+                    // Payment and title already changed hands at pickup. If
+                    // the destination doorway is unreachable, preserve that
+                    // transaction by returning and relisting the buyer-owned
+                    // cargo rather than retrying forever, refunding money, or
+                    // silently turning it into Treasury property.
+                    active.counter = available_counter;
+                    active.unit_price = market.suggested_price(active.good).max(1);
+                    active.phase = MarketCollectionPhase::ReturningFailedInput;
+                    commands
+                        .entity(porter_entity)
                         .remove::<TravelRoute>()
                         .remove::<NavigationRoutePending>()
-                        .remove::<NavigationRouteFailed>();
-                    if let Some(target) = target {
-                        porter_commands.insert(MoveTarget(target));
-                    }
+                        .remove::<NavigationRouteFailed>()
+                        .insert(MoveTarget(available_counter));
                 }
+                Some(active) => unreachable!("unhandled market porter phase: {:?}", active.phase),
                 None => {
+                    if employee_work.is_some() {
+                        // This failure belongs to the farmer/fisher/lumberjack/
+                        // processor routine that made the worker eligible for
+                        // fallback hauling. It is not a stale porter route.
+                        // Leave it intact for that job system's bounded retry
+                        // and loaded-output recovery on the next pass.
+                        continue;
+                    }
                     // A stale failure without a live transaction must never
                     // prevent this unique civic worker from accepting work.
                     let mut porter_commands = commands.entity(porter_entity);
@@ -1574,7 +1727,7 @@ pub fn run_market_collections(
                         .remove::<NavigationRoutePending>()
                         .remove::<NavigationRouteFailed>();
                     if carrier.used_bulk() > 0 {
-                        porter_commands.insert(MoveTarget(hall_entrance));
+                        porter_commands.insert(MoveTarget(available_counter));
                     } else {
                         porter_commands.remove::<MoveTarget>();
                     }
@@ -1584,6 +1737,14 @@ pub fn run_market_collections(
         }
 
         let Some(mut routine) = routine else {
+            if employee_work.is_some() && carrier.used_bulk() > 0 {
+                // Wheat returning from a field, fish returning from a pier and
+                // wood returning from a tree still belong to the ordinary job
+                // loop. They are not orphaned porter freight. Let that routine
+                // unload at its workplace before this employee is considered
+                // for a new public-market self-haul.
+                continue;
+            }
             if carrier.used_bulk() > 0 {
                 if let Some(private_porter) = company_porter {
                     let storage = businesses.iter().find_map(
@@ -1597,6 +1758,7 @@ pub fn run_market_collections(
                             _,
                             _,
                             id,
+                            _,
                             _,
                             _,
                             _,
@@ -1635,8 +1797,13 @@ pub fn run_market_collections(
                 // vanished we no longer know a private claimant, so return it
                 // as Treasury stock rather than trapping the unique porter in
                 // an endless loaded-at-the-hall loop.
-                if ground_distance(position.0, hall_entrance) > WORK_REACH {
-                    ensure_move_target(&mut commands, porter_entity, move_target, hall_entrance);
+                if ground_distance(position.0, available_counter) > WORK_REACH {
+                    ensure_move_target(
+                        &mut commands,
+                        porter_entity,
+                        move_target,
+                        available_counter,
+                    );
                     continue;
                 }
                 for good in Good::ALL {
@@ -1695,11 +1862,14 @@ pub fn run_market_collections(
                 procurement,
                 account,
                 wage,
+                staffing,
                 operated_by,
             ) in businesses.iter()
             {
                 if building_of.0 != *settlement_id
                     || porter_company.is_some_and(|company| company != operated_by.0)
+                    || self_hauling_business.is_some_and(|workplace| workplace != entity)
+                    || claimed_businesses.contains(&entity)
                     || condition.is_some_and(|condition| !condition.state.can_operate())
                 {
                     continue;
@@ -1717,8 +1887,7 @@ pub fn run_market_collections(
                 {
                     0
                 } else {
-                    wage.daily_wage
-                        .saturating_mul(u64::from(building.kind.positions()))
+                    staffing_payroll_reserve(building.kind, wage.daily_wage, staffing.copied())
                 };
                 let budget = companies_by_id
                     .get(&operated_by.0)
@@ -1797,8 +1966,13 @@ pub fn run_market_collections(
             if let Some((_, buyer_entity, buyer_id, good, wanted, max_price, budget, entrance)) =
                 input_orders.into_iter().next()
             {
-                if ground_distance(position.0, hall_entrance) > WORK_REACH {
-                    ensure_move_target(&mut commands, porter_entity, move_target, hall_entrance);
+                if ground_distance(position.0, available_counter) > WORK_REACH {
+                    ensure_move_target(
+                        &mut commands,
+                        porter_entity,
+                        move_target,
+                        available_counter,
+                    );
                     continue;
                 }
                 let preview = market.preview_purchase(
@@ -1809,7 +1983,7 @@ pub fn run_market_collections(
                     Some(shared::economy::MarketSeller::Business(buyer_id)),
                 );
                 if preview.units > 0 {
-                    let Ok((_, _, _, _, _, _, _, _, _, _, mut buyer, _, operated_by)) =
+                    let Ok((_, _, _, _, _, _, _, _, _, _, mut buyer, _, _, operated_by)) =
                         businesses.get_mut(buyer_entity)
                     else {
                         continue;
@@ -1839,18 +2013,31 @@ pub fn run_market_collections(
                     debug_assert_eq!(moved, purchase.trade.units);
                     business_events.record_market_purchase(day, *settlement_id, purchase.fills);
                     *activity = CharacterActivity::Idle;
-                    commands.entity(porter_entity).insert((
-                        MarketCollectionRoutine {
-                            business: buyer_entity,
-                            seller: buyer_id,
-                            hall: porter_hall,
-                            good,
-                            reserved_units: moved,
-                            unit_price: 0,
-                            phase: MarketCollectionPhase::DeliveringInput,
-                        },
-                        MoveTarget(entrance),
-                    ));
+                    commands
+                        .entity(porter_entity)
+                        .remove::<FarmerRoutine>()
+                        .remove::<FishingRoutine>()
+                        .remove::<LumberjackRoutine>()
+                        .remove::<ProcessingRoutine>()
+                        .remove::<WorkplaceDoorTransit>()
+                        .remove::<BuildingDoorUse>()
+                        .remove::<TravelRoute>()
+                        .remove::<NavigationRoutePending>()
+                        .remove::<NavigationRouteFailed>()
+                        .insert((
+                            MarketCollectionRoutine {
+                                business: buyer_entity,
+                                seller: buyer_id,
+                                hall: porter_hall,
+                                counter: available_counter,
+                                good,
+                                reserved_units: moved,
+                                unit_price: 0,
+                                phase: MarketCollectionPhase::DeliveringInput,
+                            },
+                            MoveTarget(entrance),
+                        ));
+                    claimed_businesses.insert(buyer_entity);
                     *reserved_input.entry((buyer_entity, good)).or_default() += moved;
                     continue;
                 }
@@ -1882,22 +2069,33 @@ pub fn run_market_collections(
                 _,
                 _,
                 _,
+                _,
                 operated_by,
             ) in businesses.iter()
             {
                 if building_of.0 != *settlement_id
                     || porter_company.is_some_and(|company| company != operated_by.0)
+                    || self_hauling_business.is_some_and(|workplace| workplace != entity)
+                    || claimed_businesses.contains(&entity)
                     || (!policy.collection_enabled
                         && building.kind != SettlementBuildingKind::StorageHall)
                 {
                     continue;
                 }
                 let state = condition.map_or(BusinessState::Operating, |condition| condition.state);
-                if !state.can_operate() && state != BusinessState::Liquidating {
+                if !state.can_operate()
+                    && !matches!(
+                        state,
+                        BusinessState::Liquidating | BusinessState::Mothballed
+                    )
+                {
                     continue;
                 }
                 let liquidating = state == BusinessState::Liquidating;
                 for good in Good::ALL {
+                    if !market.can_trade(good) {
+                        continue;
+                    }
                     if !liquidating
                         && building.kind != SettlementBuildingKind::StorageHall
                         && business_output(building.kind) != Some(good)
@@ -1922,14 +2120,8 @@ pub fn run_market_collections(
                         .saturating_sub(already_reserved)
                         .min(branch_available);
                     let carrier_room = carrier.free_bulk() / good.bulk_per_unit();
-                    let hall_room = hall_store.free_bulk().saturating_sub(
-                        reserved_hall_bulk
-                            .get(&porter_hall)
-                            .copied()
-                            .unwrap_or_default(),
-                    ) / good.bulk_per_unit();
-                    let shelf_room = market.collection_room(good).saturating_sub(
-                        reserved_market_units
+                    let hall_room = hall_store.free_units(good).saturating_sub(
+                        reserved_hall_units
                             .get(&(porter_hall, good))
                             .copied()
                             .unwrap_or_default(),
@@ -1941,8 +2133,7 @@ pub fn run_market_collections(
                             policy.max_units_per_collection
                         })
                         .min(carrier_room)
-                        .min(hall_room)
-                        .min(shelf_room);
+                        .min(hall_room);
                     if units == 0 {
                         continue;
                     }
@@ -1975,37 +2166,55 @@ pub fn run_market_collections(
                     ));
                 }
             }
-            offers
-                .sort_unstable_by_key(|(entity, _, _, _, price, _, _)| (*price, entity.to_bits()));
+            // Freight dispatch is deliberately price-neutral. Cycle through
+            // the stable site/good roster so neither cheap bulk goods nor a
+            // permanently-low entity id can monopolise the public carts.
+            offers.sort_unstable_by_key(|(entity, _, good, ..)| (entity.to_bits(), good.index()));
+            let cursor = collection_cursors.entry(*settlement_id).or_default();
+            let selected = (*cursor as usize) % offers.len().max(1);
+            *cursor = cursor.wrapping_add(1);
             let Some((business, seller, good, offered, unit_price, entrance, branch_key)) =
-                offers.into_iter().next()
+                offers.into_iter().nth(selected)
             else {
+                if self_hauling_business.is_some() {
+                    continue;
+                }
                 *activity = CharacterActivity::Indoors;
                 commands.entity(porter_entity).remove::<MoveTarget>();
                 continue;
             };
+            let return_counter = nearest_counter(entrance);
             *activity = CharacterActivity::Idle;
-            commands.entity(porter_entity).insert((
-                MarketCollectionRoutine {
-                    business,
-                    seller,
-                    hall: porter_hall,
-                    good,
-                    reserved_units: offered,
-                    unit_price,
-                    phase: MarketCollectionPhase::GoingToBusiness,
-                },
-                MoveTarget(entrance),
-            ));
+            commands
+                .entity(porter_entity)
+                .remove::<FarmerRoutine>()
+                .remove::<FishingRoutine>()
+                .remove::<LumberjackRoutine>()
+                .remove::<ProcessingRoutine>()
+                .remove::<WorkplaceDoorTransit>()
+                .remove::<BuildingDoorUse>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>()
+                .insert((
+                    MarketCollectionRoutine {
+                        business,
+                        seller,
+                        hall: porter_hall,
+                        counter: return_counter,
+                        good,
+                        reserved_units: offered,
+                        unit_price,
+                        phase: MarketCollectionPhase::GoingToBusiness,
+                    },
+                    MoveTarget(entrance),
+                ));
+            claimed_businesses.insert(business);
             *reserved_output.entry((business, good)).or_default() += offered;
-            *reserved_market_units
-                .entry((porter_hall, good))
-                .or_default() += offered;
             if let Some(remaining) = branch_public_remaining.get_mut(&branch_key) {
                 *remaining = remaining.saturating_sub(offered);
             }
-            *reserved_hall_bulk.entry(porter_hall).or_default() +=
-                offered.saturating_mul(good.bulk_per_unit());
+            *reserved_hall_units.entry((porter_hall, good)).or_default() += offered;
             continue;
         };
 
@@ -2018,7 +2227,7 @@ pub fn run_market_collections(
         }
         match routine.phase {
             MarketCollectionPhase::GoingToBusiness => {
-                let Ok((_, building, _, at, rotation, mut store, _, _, _, _, _, _, _)) =
+                let Ok((_, building, _, at, rotation, mut store, _, _, _, _, _, _, _, _)) =
                     businesses.get_mut(routine.business)
                 else {
                     commands
@@ -2044,12 +2253,13 @@ pub fn run_market_collections(
                 *activity = CharacterActivity::Idle;
                 commands
                     .entity(porter_entity)
-                    .insert(MoveTarget(hall_entrance));
+                    .insert(MoveTarget(routine.counter));
                 routine.phase = MarketCollectionPhase::ReturningToHall;
             }
-            MarketCollectionPhase::ReturningToHall => {
-                if ground_distance(position.0, hall_entrance) > WORK_REACH {
-                    ensure_move_target(&mut commands, porter_entity, move_target, hall_entrance);
+            MarketCollectionPhase::ReturningToHall
+            | MarketCollectionPhase::ReturningFailedInput => {
+                if ground_distance(position.0, routine.counter) > WORK_REACH {
+                    ensure_move_target(&mut commands, porter_entity, move_target, routine.counter);
                     continue;
                 }
                 let delivered =
@@ -2069,7 +2279,7 @@ pub fn run_market_collections(
                     .remove::<MoveTarget>();
             }
             MarketCollectionPhase::DeliveringInput => {
-                let Ok((_, building, _, at, rotation, mut store, _, _, _, _, _, _, _)) =
+                let Ok((_, building, _, at, rotation, mut store, _, _, _, _, _, _, _, _)) =
                     businesses.get_mut(routine.business)
                 else {
                     // The purchased input remains physically aboard. Drop the
@@ -2078,7 +2288,7 @@ pub fn run_market_collections(
                     commands
                         .entity(porter_entity)
                         .remove::<MarketCollectionRoutine>()
-                        .insert(MoveTarget(hall_entrance));
+                        .insert(MoveTarget(routine.counter));
                     continue;
                 };
                 let entrance = building.kind.entrance_position(at.0, rotation.0);
@@ -2100,14 +2310,73 @@ pub fn run_market_collections(
     }
 }
 
-/// Pay daily wages from the company treasury and let a wealthy owner leave hands-on
-/// work when a replacement is ready. Profit withdrawals are reviewed by the
-/// management system after payroll. This is daily O(people + workplaces), not
-/// per-frame decision search.
+/// Approximate one ordinary day's unavoidable personal spending. The live
+/// ready-meal quote makes a dear town keep owners in paid work longer, while a
+/// half-wage floor stands in for housing and other essentials not modelled yet.
+fn owner_daily_living_cost(market: Option<&MootMarket>) -> u64 {
+    let meal = market
+        .and_then(|market| {
+            Good::READY_TO_EAT_PRIORITY
+                .into_iter()
+                .filter(|good| market.listed_units(*good) > 0)
+                .map(|good| market.suggested_price(good).max(1))
+                .min()
+        })
+        .unwrap_or(FOUNDING_DAILY_WAGE);
+    meal.max(MINIMUM_BUSINESS_DAILY_WAGE).max(1)
+}
+
+/// The wage at which a Company Master still considers an ordinary production
+/// shift worth giving up a day of leisure. This deliberately has no universal
+/// "rich" cutoff: every extra day of liquid security raises the reservation
+/// wage a little, a stable personal inclination varies it, and a multi-site
+/// Master has a modest reason to delegate hands-on work.
+fn owner_reservation_wage(
+    person: shared::components::PersonId,
+    wallet: u64,
+    daily_living_cost: u64,
+    company_sites: usize,
+) -> u64 {
+    let living_cost = daily_living_cost.max(1);
+    let runway_days = wallet.saturating_div(living_cost).min(365);
+    let multi_site_premium_bps = u64::try_from(company_sites.saturating_sub(1).min(4))
+        .unwrap_or(4)
+        .saturating_mul(1_000);
+    // At no savings, ordinary work remains attractive. Security raises the
+    // value of free time smoothly instead of flipping at a fixed coin amount.
+    let security_bps = 6_000_u64
+        .saturating_add(runway_days.saturating_mul(250))
+        .saturating_add(multi_site_premium_bps)
+        .min(30_000);
+    let temperament_bps = 8_500_u64.saturating_add(
+        person
+            .0
+            .wrapping_mul(37)
+            .wrapping_add(17)
+            .wrapping_rem(3_001),
+    );
+    living_cost
+        .saturating_mul(security_bps)
+        .div_ceil(BASIS_POINTS)
+        .saturating_mul(temperament_bps)
+        .div_ceil(BASIS_POINTS)
+        .max(1)
+}
+
+/// Pay every employee, including an owner who fills a real position, from the
+/// company treasury. Separately, let a financially secure Company Master
+/// delegate hands-on work when a replacement and payroll are ready, and bring
+/// a resting Master back when their firm has a vacancy nobody else can fill.
+/// Profit withdrawals remain dividends reviewed by the management system.
+/// This is one indexed daily pass, not a per-frame decision search.
 pub fn run_business_payroll_and_owner_leisure(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
-    settlements: Query<(Entity, &shared::components::SettlementId)>,
+    settlements: Query<(
+        Entity,
+        &shared::components::SettlementId,
+        Option<&MootMarket>,
+    )>,
     mut businesses: Query<(
         Entity,
         &SettlementBuilding,
@@ -2117,8 +2386,15 @@ pub fn run_business_payroll_and_owner_leisure(
         &shared::components::BuildingId,
         &shared::components::BuildingOf,
         Option<&shared::components::OwnedBy>,
+        Option<&BusinessStaffingPolicy>,
+        Option<&BusinessCondition>,
     )>,
-    company_entities: Query<(Entity, &shared::components::CompanyId)>,
+    company_entities: Query<(
+        Entity,
+        &shared::components::CompanyId,
+        Option<&shared::components::CompanyLeadership>,
+    )>,
+    company_sites: Query<&shared::components::OperatedBy, With<BusinessAccount>>,
     mut company_accounts: Query<&mut shared::economy::CompanyAccount>,
     mut villagers: Query<(
         Entity,
@@ -2141,12 +2417,24 @@ pub fn run_business_payroll_and_owner_leisure(
     *processed_day = Some(day);
     let settlements_by_id: HashMap<shared::components::SettlementId, Entity> = settlements
         .iter()
-        .map(|(entity, settlement_id)| (*settlement_id, entity))
+        .map(|(entity, settlement_id, _)| (*settlement_id, entity))
+        .collect();
+    let living_costs: HashMap<shared::components::SettlementId, u64> = settlements
+        .iter()
+        .map(|(_, settlement_id, market)| (*settlement_id, owner_daily_living_cost(market)))
         .collect();
     let companies_by_id: HashMap<shared::components::CompanyId, Entity> = company_entities
         .iter()
-        .map(|(entity, id)| (*id, entity))
+        .map(|(entity, id, _)| (*id, entity))
         .collect();
+    let masters_by_company: HashMap<_, _> = company_entities
+        .iter()
+        .filter_map(|(_, id, leadership)| leadership.map(|leadership| (*id, leadership.master)))
+        .collect();
+    let mut site_counts = HashMap::<shared::components::CompanyId, usize>::new();
+    for operated_by in company_sites.iter() {
+        *site_counts.entry(operated_by.0).or_default() += 1;
+    }
     // Build one daily index. Looking up every roster name by scanning all
     // villagers made payroll O(businesses * population), and the wealthy-owner
     // check repeated that cost even on ticks with no day boundary.
@@ -2179,7 +2467,9 @@ pub fn run_business_payroll_and_owner_leisure(
         mut wage_policy,
         building_id,
         building_of,
-        owner_id,
+        legacy_owner,
+        staffing,
+        condition,
     ) in businesses.iter_mut()
     {
         if !is_private_business(building.kind) {
@@ -2195,7 +2485,11 @@ pub fn run_business_payroll_and_owner_leisure(
         worker_entities.sort_unstable_by_key(|entity| entity.to_bits());
         worker_entities.dedup();
         let worker_count = worker_entities.len();
-        let owner_entity = owner_id.and_then(|owner| people_by_id.get(&owner.0).copied());
+        let master_id = masters_by_company
+            .get(&operated_by.0)
+            .copied()
+            .or_else(|| legacy_owner.map(|owner| owner.0));
+        let owner_entity = master_id.and_then(|owner| people_by_id.get(&owner).copied());
         if account.last_payroll_day == u32::MAX {
             account.last_payroll_day = day;
         }
@@ -2253,35 +2547,54 @@ pub fn run_business_payroll_and_owner_leisure(
                 &mut wage_policy,
                 elapsed,
                 worker_count,
-                building.kind.positions() as usize,
+                usize::from(
+                    staffing
+                        .copied()
+                        .unwrap_or_else(|| BusinessStaffingPolicy::new(building.kind.positions()))
+                        .target_for(building.kind),
+                ),
                 company_cash,
                 account.wage_arrears,
             );
         }
 
-        let Some(_owner_id) = owner_id else {
+        let Some(master_id) = master_id else {
             continue;
         };
         let Some(owner_entity) = owner_entity else {
             continue;
         };
-        let owner_is_worker =
-            villagers
-                .get(owner_entity)
-                .is_ok_and(|(_, _, _, _, employed_at, _, _, _)| {
-                    employed_at.copied() == Some(shared::components::EmployedAt(*building_id))
-                });
-        if !owner_is_worker {
-            continue;
-        }
-        let replacement_exists = available_replacements
+        let replacement_count = available_replacements
             .get(&settlement)
             .copied()
-            .unwrap_or(0)
-            > 0;
-        let owner_is_wealthy = villagers
-            .get(owner_entity)
-            .is_ok_and(|(_, _, _, _, _, wallet, _, _)| wallet.balance() >= WEALTHY_OWNER_MONEY);
+            .unwrap_or(0);
+        let target_workers = usize::from(
+            staffing
+                .copied()
+                .unwrap_or_else(|| BusinessStaffingPolicy::new(building.kind.positions()))
+                .target_for(building.kind),
+        );
+        let has_real_vacancy = condition
+            .is_none_or(|condition| condition.state.accepts_new_workers())
+            && worker_count < target_workers;
+        let company_site_count = site_counts.get(&operated_by.0).copied().unwrap_or(1);
+        let living_cost = living_costs
+            .get(&building_of.0)
+            .copied()
+            .unwrap_or(FOUNDING_DAILY_WAGE);
+        let (owner_is_worker, owner_is_chilling, owner_wallet) =
+            villagers.get(owner_entity).map_or(
+                (false, false, 0),
+                |(_, _, _, _, employed_at, wallet, _, status)| {
+                    (
+                        employed_at.copied() == Some(shared::components::EmployedAt(*building_id)),
+                        *status == WorkStatus::Chilling,
+                        wallet.balance(),
+                    )
+                },
+            );
+        let reservation_wage =
+            owner_reservation_wage(master_id, owner_wallet, living_cost, company_site_count);
         let payroll_secure = companies_by_id
             .get(&operated_by.0)
             .and_then(|entity| company_accounts.get(*entity).ok())
@@ -2295,7 +2608,32 @@ pub fn run_business_payroll_and_owner_leisure(
                 .daily_wage
                 .saturating_mul(worker_count as u64)
                 .saturating_mul(2);
-        if !replacement_exists || !owner_is_wealthy || !payroll_secure {
+
+        if !owner_is_worker {
+            // A resting Master remains out of the general labour pool while a
+            // replacement is available. If nobody else can cover a profitable
+            // advertised position, or the wage again beats their personal
+            // reservation wage, they seek their own company's work. The
+            // vacancy matcher gives that Master first refusal across its sites.
+            if owner_is_chilling
+                && has_real_vacancy
+                && (replacement_count == 0 || wage_policy.daily_wage >= reservation_wage)
+            {
+                if let Ok((_, owner_name, _, _, _, _, _, mut status)) =
+                    villagers.get_mut(owner_entity)
+                {
+                    *status = WorkStatus::LookingForWork;
+                    info!(
+                        "Village '{}': {} returned to the labour pool because {} needed a worker",
+                        building.settlement,
+                        owner_name.0,
+                        building.kind.label(),
+                    );
+                }
+            }
+            continue;
+        }
+        if replacement_count == 0 || wage_policy.daily_wage >= reservation_wage || !payroll_secure {
             continue;
         }
         if let Ok((_, owner_name, _, _, _, _, mut occupation, mut status)) =
@@ -2309,14 +2647,26 @@ pub fn run_business_payroll_and_owner_leisure(
                 .remove::<FarmerRoutine>()
                 .remove::<FishingRoutine>()
                 .remove::<LumberjackRoutine>()
+                .remove::<ProcessingRoutine>()
                 .remove::<WorkplaceDoorTransit>()
-                .remove::<MoveTarget>();
+                .remove::<BuildingDoorUse>()
+                .remove::<PierTraversal>()
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>()
+                .remove::<WorkerOffDuty>();
             info!(
-                "Village '{}': {} became a wealthy owner and left daily {} work",
+                "Village '{}': {} delegated daily {} work (offered {}, reservation {})",
                 building.settlement,
                 owner_name.0,
-                building.kind.trade().unwrap_or("business")
+                building.kind.trade().unwrap_or("business"),
+                shared::economy::format_money(wage_policy.daily_wage),
+                shared::economy::format_money(reservation_wage),
             );
+        }
+        if let Some(replacements) = available_replacements.get_mut(&settlement) {
+            *replacements = replacements.saturating_sub(1);
         }
         let _ = business_entity;
     }

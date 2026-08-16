@@ -83,6 +83,51 @@ FISTWORLD_LAB_ARRIVAL_DAY=7 \
 FISTWORLD_LAB_MINUTES=220 \
 cargo village-lab
 
+# Exact cohort experiment: 5 founders, 5 more on day 3, 5 more on day 5,
+# then observe the closed population through day 40 (28 minutes per day).
+FISTWORLD_LAB_SCENARIO=inland-meadow \
+FISTWORLD_LAB_FOUNDERS=5 \
+FISTWORLD_LAB_DAY_TWO_ARRIVALS=5 \
+FISTWORLD_LAB_ARRIVAL_DAY=3 \
+FISTWORLD_LAB_DAILY_ARRIVALS=5 \
+FISTWORLD_LAB_DAILY_ARRIVAL_DAYS=1 \
+FISTWORLD_LAB_DAILY_ARRIVAL_START_DAY=5 \
+FISTWORLD_LAB_WARP=100 \
+FISTWORLD_LAB_MINUTES=1120 \
+cargo village-lab
+
+# Run that same 5 -> 5 -> 5, 40-day grain experiment twice in parallel.
+# Both inland towns have closely matched farmland/timber and no fishing;
+# only their Frugal versus Mutual Aid civic strategies differ.
+FISTWORLD_LAB_SCENARIO=policy-comparison \
+FISTWORLD_LAB_FOUNDERS=5 \
+FISTWORLD_LAB_DAY_TWO_ARRIVALS=5 \
+FISTWORLD_LAB_ARRIVAL_DAY=3 \
+FISTWORLD_LAB_DAILY_ARRIVALS=5 \
+FISTWORLD_LAB_DAILY_ARRIVAL_DAYS=1 \
+FISTWORLD_LAB_DAILY_ARRIVAL_START_DAY=5 \
+FISTWORLD_LAB_WARP=100 \
+FISTWORLD_LAB_MINUTES=1120 \
+cargo village-lab
+
+# Long matched-policy experiment: 5 founders, 5 arrivals on day 3, 5 on day 5,
+# then 2 every 3 days from day 8 through day 35. Migration then stops for fifty
+# days and both 35-person towns run through day 85 (2,380 simulated minutes).
+CITYSIM_PATHFINDING_MILLISECONDS_PER_TICK=50 \
+FISTWORLD_LAB_SCENARIO=policy-comparison \
+FISTWORLD_LAB_FOUNDERS=5 \
+FISTWORLD_LAB_DAY_TWO_ARRIVALS=5 \
+FISTWORLD_LAB_ARRIVAL_DAY=3 \
+FISTWORLD_LAB_SECOND_WAVE_ARRIVALS=5 \
+FISTWORLD_LAB_SECOND_WAVE_DAY=5 \
+FISTWORLD_LAB_DAILY_ARRIVALS=2 \
+FISTWORLD_LAB_DAILY_ARRIVAL_DAYS=10 \
+FISTWORLD_LAB_DAILY_ARRIVAL_START_DAY=8 \
+FISTWORLD_LAB_DAILY_ARRIVAL_INTERVAL_DAYS=3 \
+FISTWORLD_LAB_WARP=100 \
+FISTWORLD_LAB_MINUTES=2380 \
+cargo village-lab
+
 # Recurring migration soak: disable the default wave, add 3 people on each
 # scenario day from day 1 through day 12, and run through HUD day 12 at 25x.
 FISTWORLD_LAB_DAY_TWO_ARRIVALS=0 \
@@ -123,7 +168,10 @@ cargo village-lab
 ```
 
 Scenario aliases are `secure`, `food-secure`, `meadow`, `coast`, `coastal` and
-`port` for the meadow settlement; `poor`, `food-poor`, `cold` and `north` for
+`port` for the coastal meadow settlement; `inland-meadow`, `grain`, `grain-only`
+and `no-fishing` for the fertile grain-only settlement; `policy-comparison`,
+`policy-compare`, `twin-meadow` and `twin` for the matched Frugal/Mutual Aid pair;
+`poor`, `food-poor`, `cold` and `north` for
 the frozen settlement; and `dual`, `both` or `two` for both.
 The three-settlement crowd fixture accepts `triple-stress`, `triple`, `stress`
 or `three`. The single-town thousand-person fixture accepts `dense-stress`,
@@ -143,6 +191,22 @@ visibly harvest non-edible Wheat, mill it into household-edible Flour, bake effi
 Bread and land ready-to-eat Fish. It must cover one daily portion per resident, hold
 at least three reserve days, sustain the food rule for three days and advance from
 Hamlet to Village.
+
+`Lab Meadow` in the `inland-meadow` scenario instead uses a separate fertile Meadows
+anchor with no legal fishing site. It is the deterministic control for the complete
+Wheat → Flour → Bread chain: fish cannot conceal a stalled mill, a broken delivery or
+an insolvent bakery. Arrival overrides and the exact 5 → 5 → 5 cohort experiment work
+the same way as in the coastal scenario.
+
+`policy-comparison` runs two separated versions of that inland control. Candidate sites
+are ranked together for matching farmland and nearby timber, and both must independently
+prove that farming, bootstrap lumber and construction are reachable while fishing is not.
+Every configured arrival wave is duplicated, once for `Lab Frugal` and once for
+`Lab Mutual Aid`. The final `LAB policy result` puts living population, deaths, reserve,
+hunger, filled/open private and civic jobs, job seekers and the best private opening on
+one line. Death is reported as an economic outcome rather than misreported as failed
+immigration: living residents plus retained death records must still equal the identical
+admitted cohort in each town.
 
 `Lab Coldbarrow` starts with eight residents on poor frozen ground and no valid
 fishing shore in reach. It begins hungry and advertises food investment strongly.
@@ -197,9 +261,18 @@ settlement's road network—so neither responsibility becomes a second job. Tiny
 fill the first steward before advertising the budget-gated second slot, and the complete
 civic roster must still leave at least one resident available for permits and productive
 work. Producers return output only to their own workplace. Either steward can collect a
-bounded consignment into the hall inventory, while explicit reservations prevent both from
-claiming the same goods. Delivery creates a seller-owned offer but no revenue; payment
-happens only when a real household, builder or business buys.
+bounded consignment into the hall inventory. Dispatch rotates through available workplaces
+without price priority; explicit claims prevent both stewards travelling to the same workplace
+or promising the same goods. Delivery creates a seller-owned offer but no revenue; payment
+happens only when a real household, builder or business buys. The stock target is not a
+delivery ceiling: offers keep flowing until that resource's public compartment is full, which
+permits new sellers to undercut existing asks. A Hall has 1,200 bulk independently for every
+resource. Once a Marketplace is complete it adds 600 bulk to every compartment and acts as a
+second physical pickup/drop-off counter without adding staffing slots or a duplicate inventory.
+The same market also carries a monotonic trade tier: the founding Moot accepts every current
+good except Iron, the earthen Marketplace establishes level 1, and its paved Town upgrade
+establishes level 2 and unlocks Iron. Locked stock stays physical at its owner and creates no
+false public shortage signal.
 
 Balanced/Full staffing activates the second steward at 24 residents or twenty full
 cartloads of saleable workplace backlog, then retains a surge hire until fewer than six
@@ -215,9 +288,12 @@ three-Wood load, then deposits that load at the Lumberjack Hut. Better forest
 quality shortens the professional harvest cycle. Emergency construction
 self-supply yields only two Wood from the same interaction, making it a bootstrap
 fallback rather than a competitive industry.
-There is no per-day production cap. All three trades continue until the ordinary
-shift ends near 18:00, retain partial progress toward the next unit overnight,
-and then yield to ambient, household and home behaviour until the next shift.
+The physical interactions have no authored daily resource grant. Manual firms can
+run the entire ordinary shift; autonomous firms instead share a cached daily output
+budget derived from recent sales, unmet demand, stock already onsite/listed and the
+owner's strategy. They stop after filling that budget, retain partial progress toward
+the next unit overnight, and yield to ambient, household and home behaviour until the
+next shift. This same budget is consumed by the strategic off-screen path.
 
 Once a settlement reaches Village, the Reeve supplies and raises Marketplace and
 Tavern projects one at a time; a Town later requests its Church. Essential farmers,
@@ -259,7 +335,7 @@ requires all of the following:
 - every Farmstead creates two authored wheat fields and every Fisherman's Hut one pier;
 - farmers and fishers carry production only from the field or pier into their
   own workplace store; the Moot Steward alone collects policy-approved surplus and
-  deposits it as a private consignment at the Moot Hall;
+  deposits it as a private consignment through the closest Hall or Marketplace counter;
 - each company's one treasury receives customer sale proceeds, pays daily wages,
   buys configured inputs and retains working capital; individual business accounts
   remain site P&L and policy ledgers only; cabin households fund a shared purse, stock a bounded pantry and
@@ -316,7 +392,8 @@ bookkeeping; only the accountable Moot Steward is woken into tactical movement
 when physical repair is actually required.
 
 The lab reports structural changes immediately and prints a compact economy row
-every five simulated minutes. Each settlement row includes its three leading permit
+every five simulated minutes. Each settlement row includes filled/total/vacant private
+and civic jobs, active job seekers and the best open private wage, plus its three leading permit
 signals; `*` marks the signal currently receiving the hall's growth discount. At the end it also prints `LAB wealth` lines naming
 the richest and poorest residents (including ties), the top and bottom three,
 and mean personal wealth. Every resident then receives a `LAB life` summary with
@@ -358,6 +435,12 @@ finish with large `at businesses` food beside hungry households. Failed firms sh
 through `Liquidating` to `For sale`, with falling offers rather than permanently closed
 inventory. Processor counts should remain tied to actual two-day utilisation, sales and
 profit—not merely to one large Wheat or Flour stockpile.
+
+No-porter regressions should remove the applicable civic/private carrier and verify that
+the producer moves one personal-capacity load, leaves its work routine for the trip, and
+later resumes production. The strategic equivalent must cap the load identically and
+charge the Hall-to-workplace round trip against productive seconds. A specialist cart
+must restore six-times personal capacity without interrupting the producer.
 
 Economy reports include the current Fish/Flour/Bread asks so a starvation event can be
 distinguished from an affordability failure. Public consignment is capped per good at the

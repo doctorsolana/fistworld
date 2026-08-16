@@ -11,8 +11,33 @@ use shared::protocol::CharacterRoster;
 
 use super::*;
 use crate::input::InputState;
+use crate::ui::foundation::{button_chrome, UiButtonStyle, UiButtonVariant};
 use crate::ui::hud::GodCapability;
-use crate::ui::styles::{ACCENT_COLOR, TEXT_COLOR, TEXT_MUTED};
+use crate::ui::styles::{INK, INK_MUTED};
+
+type VisiblePersonFacts<'a> = (
+    &'a shared::components::CharacterName,
+    Option<&'a shared::components::Residence>,
+    Option<&'a shared::components::Occupation>,
+    Option<&'a shared::components::WorkStatus>,
+    Option<&'a shared::economy::Wallet>,
+    (
+        Option<&'a shared::components::Nutrition>,
+        Option<&'a shared::components::Health>,
+    ),
+    Option<&'a shared::components::CharacterActivity>,
+    (
+        Option<&'a shared::components::CharacterObjective>,
+        Option<&'a shared::components::CharacterNavigationStatus>,
+    ),
+    Option<&'a shared::components::CharacterAttributes>,
+    Option<&'a shared::economy::GoodsInventory>,
+    Option<&'a shared::economy::CarriedLoad>,
+    Option<&'a shared::components::EmployedAt>,
+    Option<&'a shared::components::CivicEmployment>,
+    Option<&'a shared::components::LivesAt>,
+    Option<&'a shared::components::PersonId>,
+);
 
 /// The camera must not pan and world clicks must not fire underneath.
 pub(super) fn sync_input_state(open: Res<EncyclopediaOpen>, mut input_state: ResMut<InputState>) {
@@ -178,29 +203,7 @@ pub(super) fn learn_visible_characters(
 /// the encyclopedia cannot claim a job or bed that the corresponding building
 /// does not also show.
 pub(super) fn refresh_visible_person_facts(
-    seen: Query<(
-        &shared::components::CharacterName,
-        Option<&shared::components::Residence>,
-        Option<&shared::components::Occupation>,
-        Option<&shared::components::WorkStatus>,
-        Option<&shared::economy::Wallet>,
-        (
-            Option<&shared::components::Nutrition>,
-            Option<&shared::components::Health>,
-        ),
-        Option<&shared::components::CharacterActivity>,
-        (
-            Option<&shared::components::CharacterObjective>,
-            Option<&shared::components::CharacterNavigationStatus>,
-        ),
-        Option<&shared::components::CharacterAttributes>,
-        Option<&shared::economy::GoodsInventory>,
-        Option<&shared::economy::CarriedLoad>,
-        Option<&shared::components::EmployedAt>,
-        Option<&shared::components::CivicEmployment>,
-        Option<&shared::components::LivesAt>,
-        Option<&shared::components::PersonId>,
-    )>,
+    seen: Query<VisiblePersonFacts<'_>>,
     buildings: Query<(
         &shared::components::SettlementBuilding,
         Option<&shared::components::BuildingId>,
@@ -474,7 +477,7 @@ pub(super) fn rebuild_people_list(
                     font_size: FontSize::Px(12.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
                 Node {
                     margin: UiRect::all(Val::Px(10.0)),
                     ..default()
@@ -489,7 +492,7 @@ pub(super) fn rebuild_people_list(
 }
 
 fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) {
-    let name_color = if record.known { TEXT_COLOR } else { TEXT_MUTED };
+    let name_color = if record.known { INK } else { INK_MUTED };
     list.spawn((
         Button,
         PersonRow(record.name.clone()),
@@ -502,7 +505,7 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
             border_radius: BorderRadius::all(Val::Px(5.0)),
             ..default()
         },
-        BackgroundColor(ROW_NORMAL),
+        button_chrome(UiButtonVariant::Row),
     ))
     .with_children(|row| {
         // Status pip: filled + green online, hollow-dim otherwise.
@@ -514,11 +517,11 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
                 ..default()
             },
             BackgroundColor(if record.online {
-                STATUS_ONLINE
+                STATUS_GOOD
             } else if record.known {
-                TEXT_MUTED
+                INK_MUTED
             } else {
-                DIVIDER
+                PLATE_RULE_SOFT
             }),
         ));
         row.spawn((
@@ -555,47 +558,23 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
                 font_size: FontSize::Px(9.0),
                 ..default()
             },
-            TextColor(if record.known { TEXT_MUTED } else { DIVIDER }),
+            TextColor(if record.known {
+                INK_MUTED
+            } else {
+                PLATE_RULE_SOFT
+            }),
         ));
     });
 }
 
 pub(super) fn sync_tab_visuals(
     tab: Res<EncyclopediaTab>,
-    mut buttons: Query<(
-        &TabButton,
-        &Interaction,
-        &mut BackgroundColor,
-        &mut BorderColor,
-        &Children,
-    )>,
+    mut buttons: Query<(&TabButton, &mut UiButtonStyle)>,
     mut bodies: Query<(&TabBody, &mut Node)>,
-    mut labels: Query<&mut TextColor>,
 ) {
-    for (TabButton(button_tab), interaction, mut bg, mut border, children) in buttons.iter_mut() {
+    for (TabButton(button_tab), mut style) in buttons.iter_mut() {
         let active = *button_tab == *tab;
-        let background = if active {
-            ROW_SELECTED
-        } else if *interaction == Interaction::Hovered {
-            ROW_HOVERED
-        } else {
-            Color::NONE
-        };
-        if bg.0 != background {
-            bg.0 = background;
-        }
-        let border_color = BorderColor::from(if active { ACCENT_COLOR } else { Color::NONE });
-        if *border != border_color {
-            *border = border_color;
-        }
-        let text_color = if active { TEXT_COLOR } else { TEXT_MUTED };
-        for child in children.iter() {
-            if let Ok(mut color) = labels.get_mut(child) {
-                if color.0 != text_color {
-                    color.0 = text_color;
-                }
-            }
-        }
+        style.selected = active;
     }
 
     for (body_tab, mut node) in bodies.iter_mut() {
@@ -613,9 +592,9 @@ pub(super) fn sync_tab_visuals(
 pub(super) fn sync_filter_visuals(
     filter: Res<PeopleFilter>,
     god: Res<GodCapability>,
-    mut buttons: Query<(&FilterButton, &Interaction, &mut BackgroundColor, &mut Node)>,
+    mut buttons: Query<(&FilterButton, &mut UiButtonStyle, &mut Node)>,
 ) {
-    for (FilterButton(button_filter), interaction, mut bg, mut node) in buttons.iter_mut() {
+    for (FilterButton(button_filter), mut style, mut node) in buttons.iter_mut() {
         // UNKNOWN is the god-mode view of the fog; hide it without capability.
         let display = if *button_filter == PeopleFilter::Unknown && !god.0 {
             Display::None
@@ -626,37 +605,16 @@ pub(super) fn sync_filter_visuals(
             node.display = display;
         }
 
-        let active = *button_filter == *filter;
-        let background = if active {
-            ROW_SELECTED
-        } else if *interaction == Interaction::Hovered {
-            ROW_HOVERED
-        } else {
-            Color::NONE
-        };
-        if bg.0 != background {
-            bg.0 = background;
-        }
+        style.selected = *button_filter == *filter;
     }
 }
 
 pub(super) fn style_person_rows(
     selected: Res<SelectedPerson>,
-    mut rows: Query<(&PersonRow, &Interaction, &mut BackgroundColor)>,
+    mut rows: Query<(&PersonRow, &mut UiButtonStyle)>,
 ) {
-    for (PersonRow(name), interaction, mut bg) in rows.iter_mut() {
-        let is_selected = selected.0.as_deref() == Some(name.as_str());
-        let background = if is_selected {
-            ROW_SELECTED
-        } else {
-            match *interaction {
-                Interaction::Hovered | Interaction::Pressed => ROW_HOVERED,
-                Interaction::None => ROW_NORMAL,
-            }
-        };
-        if bg.0 != background {
-            bg.0 = background;
-        }
+    for (PersonRow(name), mut style) in rows.iter_mut() {
+        style.selected = selected.0.as_deref() == Some(name.as_str());
     }
 }
 
@@ -898,7 +856,7 @@ pub(super) fn sync_banner_controls(
     god: Res<crate::ui::hud::GodCapability>,
     people: Res<KnownPeople>,
     selected: Res<SelectedPerson>,
-    mut buttons: Query<(&mut Node, &Interaction, &mut BorderColor), With<BannerButton>>,
+    mut buttons: Query<&mut Node, With<BannerButton>>,
     mut rows: Query<(&DetailRow, &mut Node), Without<BannerButton>>,
 ) {
     let kind = selected
@@ -907,7 +865,7 @@ pub(super) fn sync_banner_controls(
         .and_then(|name| people.find(name))
         .map(|record| record.kind);
 
-    for (mut node, interaction, mut border) in buttons.iter_mut() {
+    for mut node in buttons.iter_mut() {
         // Editable only in god mode, and only when the row it lives on is shown.
         let visible = god.0 && kind.is_some_and(|k| DetailField::Affiliation.applies_to(k));
         let display = if visible {
@@ -917,14 +875,6 @@ pub(super) fn sync_banner_controls(
         };
         if node.display != display {
             node.display = display;
-        }
-        let next = BorderColor::from(if *interaction == Interaction::Hovered {
-            ACCENT_COLOR
-        } else {
-            DIVIDER
-        });
-        if *border != next {
-            *border = next;
         }
     }
 

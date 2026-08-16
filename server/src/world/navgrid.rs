@@ -51,6 +51,9 @@ pub fn sync_obstacle_grid(
 
     let buildings = building_index.snapshot();
     for building in buildings {
+        if !building.building_type.blocks_ground_navigation() {
+            continue;
+        }
         let def = building.building_type.definition();
         let half_extents = Vec2::new(
             def.footprint.x / 2.0 + VILLAGER_NAV_RADIUS,
@@ -73,7 +76,9 @@ pub fn sync_obstacle_grid(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collision::building_index::{sync_building_spatial_index, BuildingSpatialIndex};
     use shared::building::BuildingType;
+    use shared::building::{BuildingPosition, PlacedBuilding};
     use shared::components::SettlementBuildingKind;
 
     #[test]
@@ -108,5 +113,28 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn open_air_market_is_not_a_navigation_blocker() {
+        let mut app = App::new();
+        app.init_resource::<BuildingSpatialIndex>();
+        app.init_resource::<SpatialObstacleGrid>();
+        app.init_resource::<ObstacleGridState>();
+        app.add_systems(
+            Update,
+            (sync_building_spatial_index, sync_obstacle_grid).chain(),
+        );
+        app.world_mut().spawn((
+            PlacedBuilding {
+                building_type: BuildingType::Market,
+                rotation: 0.0,
+            },
+            BuildingPosition(Vec3::ZERO),
+        ));
+
+        app.update();
+
+        assert!(app.world().resource::<SpatialObstacleGrid>().is_empty());
     }
 }

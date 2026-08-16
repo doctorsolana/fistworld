@@ -716,8 +716,10 @@ with a player who does nothing but found the hall and put people on the map.
    Fishers, Windmills two Millers, Bakeries two Bakers, Lumberjack Huts one
    Woodcutter, Storage Halls up to four Company Porters, and Houses deliberately
    employ nobody. Each private site exposes an enabled-position target from zero to
-   that architectural maximum. NPC firms open one position, add positions after
-   proving production or sales, and contract to one under cash stress. Equal-wage founding hiring
+   that architectural maximum. NPC firms open one position, then move the target by
+   at most one per day toward the roster whose marginal sellable output covers its
+   recipe inputs, fee and wage. Stock already onsite or listed consumes that day's
+   production budget; cash stress caps the target at one. Equal-wage founding hiring
    staffs each essential production link once before filling a workplace's second
    position; an owner's higher wage still overrides that tie-break.
 11. Every villager and completed building has bounded bulk storage. Fish, Wheat,
@@ -730,7 +732,9 @@ with a player who does nothing but found the hall and put people on the map.
     into their assigned fields, work them, carry bounded wheat loads back, and
     deposit them. One field unlocks 50% of the workplace's land capacity; both
     unlock full capacity. Output scales per active Farmer and field quality as
-    continuous work time, with no artificial daily grant or trip cap.
+    continuous work time. The interaction has no fictional daily grant or trip
+    grant, but autonomous firms stop assigning new output once their cached daily
+    sales/unmet-demand budget is filled.
 13. A staffed Lumberjack Hut runs an observed physical loop: the woodcutter
     enters through the authored door, rests out of sight, walks to a real tree
     prop, plays the chop action, carries only what fits, and deposits it at the
@@ -774,6 +778,12 @@ with a player who does nothing but found the hall and put people on the map.
     left outside civic work. Each Moot Steward combines market collection and road
     maintenance as one job, walks to an offering business, carries a
     bounded load back and consigns it under that business's stable `BuildingId`.
+    When no Moot Steward or same-company porter covers a workplace, its own farmer,
+    fisher, lumberjack or processor interrupts the shift and carries one personal load.
+    The fallback never services another firm: it prevents a missing logistics hire from
+    deadlocking the market while preserving the value of a cart, whose six-times-larger
+    capacity keeps the specialist at work. Strategic regions deduct the same distance-
+    and-trip-based travel time from production instead of granting free teleportation.
     Delivery is not a sale: the firm receives revenue only when a household,
     builder or another business buys the stock. The Moot keeps no dealer fund or
     founding inventory; its fee is credited to the civic treasury. Business
@@ -791,7 +801,7 @@ with a player who does nothing but found the hall and put people on the map.
     solvency. Generic input rules now supply Windmills and Bakeries and are the same
     seam future taverns, breweries and smithies use. Their owner-facing quantity is a
     simple 0–7 days of stock cover. The authoritative simulation converts that setting
-    into a staffing- and recipe-aware unit target with internal reorder hysteresis;
+    into a staffing-, recipe- and current-demand-budget-aware unit target with internal reorder hysteresis;
     owners do not have to balance two raw thresholds. Same-company input requests take
     first claim on compatible output. An absolute per-good branch retain amount comes
     next, followed by one `Sell excess`/`Hold all` choice; only the remaining local stock
@@ -873,6 +883,10 @@ with a player who does nothing but found the hall and put people on the map.
     retaining two personal discretionary coins whenever today's ration is already
     covered. An empty same-day pantry removes that floor: households spend discretionary
     coin before accepting hunger. An available household member is named as shopper.
+    Residents fund this shared purse only for food physically offered that day. Empty
+    shelves still record one preferred unavailable order—Bread first—so demand restarts
+    the Bakery → Windmill → Farm chain without trapping investment coin in an unspendable
+    pantry budget or multiplying one missing ration across every substitute.
     In a tactical region that shopper joins the Moot's shared FIFO
     service line, buys physical stock at the counter and carries it home; strategic
     households settle the same bounded purchase directly. Each housed resident consumes
@@ -1243,13 +1257,29 @@ running world; restart persistence and remote logistics remain later work. Compa
 identities, cap tables and share ownership are already
 authoritative.
 
+Without a suitable civic or company porter, an employee provides a deliberately weaker
+local fallback for their own workplace: sixteen bulk per trip instead of the cart's
+ninety-six, with the actual round trip taken out of production. This applies to public
+market collection and processor purchasing; private same-company direct transfer remains
+the Storage Hall/Company Porter service.
+
 **Business lifecycle.** A private firm begins `New`, operates after three reviewed
 days, and can become cash-tight, distressed or insolvent as real liabilities exceed
 cash. Company distributions protect strategy-defined payroll days, configured input targets,
 tax/wage arrears and an operating buffer; opening capital is never distributable profit.
 Owners may expand only when every existing firm is completed, past probation and not in
 distress. The first Windmill or Bakery may anticipate an upstream trade, but later copies
-require measured input utilisation, sales, positive recent profit and uncovered supply.
+require requested output beyond currently staffed capacity, matching upstream supply and
+positive recent profit. Unused positions, individually loss-making incumbents and any
+mothballed, liquidating or for-sale plant are counted before a new permit. Storage investment
+likewise compares stranded stock value with recent cart throughput, free depot bulk and porter
+cost instead of targeting a fixed warehouse-to-workplace ratio.
+
+A solvent mature firm whose stock has not sold through a complete two-ledger observation
+window and which has no profitable position gradually releases its roster and becomes
+`Mothballed`. Production and input buying stop, but ownership, inventory and listings remain;
+porters may still expose the stock to buyers. Unavailable demand with a positive marginal
+contribution reopens one position in the same building.
 
 After five insolvent days the firm stops production and enters physical liquidation. Moot
 Stewards carry all workplace goods—including edible processor inputs—to seller-owned hall

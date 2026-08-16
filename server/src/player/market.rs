@@ -9,7 +9,10 @@ use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, MessageSender, RemoteId};
 
-use shared::components::{Hero, PersonId, PlayerPosition, Settlement, SettlementId, WorldTime};
+use shared::components::{
+    BuildingOf, Hero, PersonId, PlayerPosition, PlayerRotation, Settlement, SettlementBuilding,
+    SettlementBuildingKind, SettlementId, WorldTime,
+};
 use shared::economy::{
     format_money, Good, GoodsInventory, MarketFill, MarketSeller, MootMarket, Wallet,
 };
@@ -44,6 +47,13 @@ fn execute_hero_market_order(
     hall_store: &mut GoodsInventory,
     market: &mut MootMarket,
 ) -> Result<CompletedHeroTrade, String> {
+    if !market.can_trade(good) {
+        return Err(format!(
+            "{} trade requires {}.",
+            good.label(),
+            good.minimum_market_tier().requirement_label(),
+        ));
+    }
     match action {
         HeroMarketAction::Buy => {
             let cargo_units = hero_store.free_bulk() / good.bulk_per_unit();
@@ -95,7 +105,7 @@ fn execute_hero_market_order(
         HeroMarketAction::PostSellOrder { unit_price } => {
             let price = unit_price.max(1);
             let available = hero_store.amount(good);
-            let cargo_units = hall_store.free_bulk() / good.bulk_per_unit();
+            let cargo_units = hall_store.free_units(good);
             let moved = units.min(available).min(cargo_units);
             if moved == 0 {
                 let reason = if available == 0 {
@@ -133,7 +143,21 @@ pub fn handle_hero_market_orders(
         With<ClientOf>,
     >,
     heroes: Query<(Entity, &Hero, &PersonId, &PlayerPosition), Without<OfflineHero>>,
-    halls: Query<(&SettlementId, &Settlement, &PlayerPosition), With<MootMarket>>,
+    halls: Query<
+        (
+            &SettlementId,
+            &Settlement,
+            &PlayerPosition,
+            Option<&PlayerRotation>,
+        ),
+        With<MootMarket>,
+    >,
+    marketplaces: Query<(
+        &SettlementBuilding,
+        &BuildingOf,
+        &PlayerPosition,
+        &PlayerRotation,
+    )>,
     mut stores: Query<(
         &mut GoodsInventory,
         Option<&mut Wallet>,
@@ -154,17 +178,36 @@ pub fn handle_hero_market_orders(
                 reply(false, "Create your hero before trading.".to_string());
                 continue;
             };
-            let Ok((settlement_id, settlement, hall_position)) = halls.get(order.market) else {
+            let Ok((settlement_id, settlement, hall_position, hall_rotation)) =
+                halls.get(order.market)
+            else {
                 reply(false, "That building is not a public exchange.".to_string());
                 continue;
             };
+            let hall_entrance = SettlementBuildingKind::Hall.entrance_position(
+                hall_position.0,
+                hall_rotation.map_or(0.0, |rotation| rotation.0),
+            );
+            let counter = crate::world::village::nearest_public_market_entrance(
+                hero_position.0,
+                hall_entrance,
+                marketplaces
+                    .iter()
+                    .filter(|(building, building_of, ..)| {
+                        building.kind == SettlementBuildingKind::Market
+                            && building_of.0 == *settlement_id
+                    })
+                    .map(|(building, _, position, rotation)| {
+                        building.kind.entrance_position(position.0, rotation.0)
+                    }),
+            );
             let distance = Vec2::new(hero_position.0.x, hero_position.0.z)
-                .distance(Vec2::new(hall_position.0.x, hall_position.0.z));
+                .distance(Vec2::new(counter.x, counter.z));
             if distance > HERO_MARKET_INTERACTION_RANGE {
                 reply(
                     false,
                     format!(
-                        "Move your hero closer to {} Hall ({distance:.1}m / {:.0}m).",
+                        "Move your hero closer to a {} public market counter ({distance:.1}m / {:.0}m).",
                         settlement.name, HERO_MARKET_INTERACTION_RANGE
                     ),
                 );
@@ -243,6 +286,36 @@ mod tests {
             market.seller_listed_units(MarketSeller::Person(seller), Good::Wood),
             2
         );
+    }
+
+    #[test]
+    fn a_locked_good_cannot_leave_the_hero_inventory() {
+        let seller = PersonId(42);
+        let mut hero_store = GoodsInventory::new(capacity::VILLAGER);
+        hero_store.add(Good::Iron, 2);
+        let mut wallet = Wallet::new(0);
+        let mut hall_store = GoodsInventory::new(capacity::HALL);
+        let mut market = MootMarket::founding();
+
+        let result = execute_hero_market_order(
+            seller,
+            Good::Iron,
+            HeroMarketAction::PostSellOrder { unit_price: 400 },
+            2,
+            &mut hero_store,
+            &mut wallet,
+            &mut hall_store,
+            &mut market,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("a Moot must reject level-two Iron trade"),
+        };
+
+        assert!(error.contains("level 2 paved Marketplace"));
+        assert_eq!(hero_store.amount(Good::Iron), 2);
+        assert_eq!(hall_store.amount(Good::Iron), 0);
+        assert_eq!(market.listed_units(Good::Iron), 0);
     }
 
     #[test]

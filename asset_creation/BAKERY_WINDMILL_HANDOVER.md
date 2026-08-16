@@ -6,8 +6,9 @@
 > supplied business is on shift. Its cap now follows deterministic, slowly changing local wind
 > direction throughout the day. The checklist below remains the exact art/runtime contract.
 >
-> **The Market is new and is NOT integrated** — it still resolves to `PlaceholderMarket` with
-> `model_path: None`. See section 1a; it needs two things the other two did not.
+> **Market integrated 2026-08-15.** The earthen and paved scenes share one 12 × 12 m contract,
+> upgrade in place through `MarketLevel`, remain walkable in both collision systems, and use the
+> authored counter, trader and night-light anchors. See section 5a for the completed runtime seam.
 
 Three village buildings, exported and contract-checked. All follow `PROP_PIPELINE.md`: authored
 facing Blender −X, turned −90° about Z on export, so in game they face Bevy forward.
@@ -17,7 +18,8 @@ facing Blender −X, turned −90° about Z on export, so in game they face Bevy
 ```
 Bakery.glb     7.04 x 8.24 m, height  5.33 m, base_y -0.16, eaves 2.20, ridge 4.55, flue 5.17
 WindMill.glb   5.82 x 5.82 m, height 12.58 m, base_y -0.18, cabin head 2.20, cap 9.20, sails to 12.40
-Market.glb     9.00 x 7.00 m, height  4.68 m, base_y -0.16, eaves 2.30, ridge 4.32   <- NOT yet integrated
+Market.glb       12.00 x 12.00 m, height 3.18 m, base_y -0.16   L1, beaten earth
+MarketPaved.glb  12.00 x 12.00 m, height 3.18 m, base_y -0.16   L2, cobbled
 ```
 
 Verify either yourself:
@@ -66,45 +68,95 @@ inboard of the porch tip at −3.400 and 3.6 m up, so it clears the building at 
 > and landed 0.49 m out in front of the mill. Roots only now. If you add parenting to any other prop,
 > this is the trap.
 
-## 1a. The Market — built to the reserved footprint exactly, and two things it needs from Rust
+## 1a. The Market — an OPEN-AIR square, and it does not fit the current blockout
 
-Unlike the other two, the market had a blockout to fit: `BuildingType::PlaceholderMarket` reserves
-`footprint: Vec2::new(9.0, 7.0)` with `footprint_center: Vec2::ZERO`. The shipped glb is **exactly**
-9.00 × 7.00 and centred on the origin (X −4.500..+4.500, Z −3.500..+3.500), so both fields stay
-correct as written. Getting there needed three things clamped rather than trusted — shingle course
-jitter, seam slop and the verge boards each pushed a few centimetres past the edge, and a first pass
-with a projecting awning came out 7.70 m deep. A building wider than the ground the settlement
-reserved for it will clip whatever is placed next door.
+**It ships as TWO LEVELS, and the only difference between them is the ground.** `Market.glb` is on
+beaten earth — what a settlement has when it starts trading in a field — and `MarketPaved.glb` is the
+same market once the ground has been paved. Every measurement, the stall layout, the anchors and the
+canopies are byte-for-byte identical; one build script emits both (`-- 1` / `-- 2`).
 
-`Anchor_Door` is authored **directly on** `door_offset(Market)` = `(0.0, -4.0)`, so the exporter's
-door-pin applies a zero shift. That matters here specifically: the pin would happily translate the
-model to fix the door, and would have moved `footprint_center` off zero to do it.
+That is deliberate and it differs from the hall ladder. A hall upgrade is a genuine reconstruction, so
+Moot/Village/Town are three different buildings. Paving a square is paving a square: the upgrade has
+to read as *the same place improved*, not as a different market dropped on the site. The kerb follows
+the floor rather than the level number — L1 gets timber edging, because a dressed stone kerb around a
+dirt floor is a detail that contradicts itself.
 
-**Two changes it needs beyond the usual:**
+`MarketLevel` now selects the two scenes on the same authoritative market entity; see section 5a.
 
-**`height` must go from 3.2 to 4.68.** 3.2 cannot be met honestly. The eaves alone have to clear head
-height on a building people walk under (2.30 m here), and any roof pitched like the rest of the
-village then adds ~2 m over a 3.5 m half-span. A 3.2 m ridge means either a nearly flat roof, which
-belongs to no other building in this settlement, or eaves at 1.6 m, which a villager cannot walk
-beneath.
+**Both are a paved/earthen market square with free-standing stalls, not a building.** An earlier version was a
+covered timber market hall — an open arcade on posts under one pitched roof, which is what Llanidloes
+and Chipping Campden are — and it was the wrong object: a hall is open at the *sides*, an open-air
+market has no roof over it at all. The stalls' cloth canopies are the read at RTS distance, where a
+shingle roof is just another shingle roof.
 
-**Its collider should be `collidable: false`, not a hull.** This is the one building in the set you
-are meant to walk *into* — that is what "open-air market" means, and the arcade has an entrance on all
-four sides. `collider_baker_v2` only offers a single `ConvexHull`, and the convex hull of an open
-arcade is a solid 9 × 7 block: villagers would path around the market rather than through it, and the
-stalls, paving and through-route would all be decoration nobody can reach. Ship it uncollidable, or
-leave it out of the manifest entirely.
+**It is 12.0 × 12.0 and the blockout reserves 9.0 × 7.0.** The square shape and the size were asked
+for directly, so the Rust side has to move rather than the art. Everything below follows from that one
+number:
 
-Anchors: `Anchor_Door` (0, −4.00), `Anchor_Counter` (0, −3.10, the through-route centre where a trader
-stands), `Light_Interior`, `Light_Lantern`. No door leaf and no door clip — an open market has no door
-to swing, so a `door_open` lookup on this asset will warn and should not be attempted.
+| `BuildingDef` / constant | before integration | integrated value | why |
+|---|---|---|---|
+| `footprint` | `Vec2::new(9.0, 7.0)` | **`Vec2::new(12.0, 12.0)`** | the ground is exactly this, centred |
+| `footprint_center` | `Vec2::ZERO` | **unchanged** | the model is centred on the origin |
+| `height` | `3.2` | **unchanged** | measured 3.18 — it fits, just |
+| `door_offset(Market)` | `Vec2::new(0.0, -4.0)` | **`Vec2::new(0.0, -6.5)`** | the edge is now at −6.0; −4.0 is *inside* the square |
+| `clearance(Market)` | `11.0` | **raise to ≥ 13.0** | a 12 m square needs more than 11 m of ground |
 
-The design follows the surviving halls (Llanidloes, Chipping Campden, the Titchfield hall at the Weald
-& Downland museum), which are all the same building: an open arcade on timber posts standing on stone
-plinths, divided into bays, *panelled up about breast high with an entrance on each side*, under a
-pitched roof whose carpentry is visible from underneath. Two of those turned out to be load-bearing —
-without the breast-high boarding a roof on bare posts is a bandstand, and this is the only building
-here whose roof is read from below, so the shingle steps need purlins and rafters under them.
+`height` surviving is worth noting: the covered hall needed 4.68 m to get a village-pitched roof over
+head height, and would have forced that constant to move. Canopies at 2.50 m and banner poles at
+3.02 m come to 3.18 m total including the paving's −0.16 base, so 3.2 still holds.
+
+`Anchor_Door` is authored **directly on** the new `(0.0, -6.5)`, so the exporter's door-pin applies a
+zero shift — the pin would otherwise translate the model to place the door and move `footprint_center`
+off zero to do it. `export_prop_glb.py`'s `CANON_DOOR_BY_STEM` already carries `-6.50` for the market,
+so **the asset and the Rust constant now agree**, while the export keeps asserting the asset side so
+future edits cannot silently move the road endpoint inside the square.
+
+**Its collider should be `collidable: false`, not a hull.** This is the one building you are meant to
+walk *into*. `collider_baker_v2` only offers a single `ConvexHull`, and the hull of a market square is
+a solid 12 × 12 block — villagers would path around the whole thing, and the plaza, the stalls and the
+paving would be decoration nobody can reach.
+
+Layout: three stalls across the back, two on each flank, all facing a central plaza, with the whole
+front left open so a visitor arriving at `Anchor_Door` walks into the square rather than into the back
+of a stall. Two banner poles mark the front corners — with no roof the market has no silhouette from a
+distance, and they give it one.
+
+**Walkability is asserted at build time, not eyeballed.** The build flood-fills the square on a 0.25 m
+grid at the villager's real 0.8 m `horizontal_radius` from the door approach and fails if any counter
+has no reachable customer spot. That check earned its place immediately: the first layout stranded
+**two of seven stalls** behind a 1.05 m pinch between the flank and back-corner stalls, and it looked
+completely fine in every render. Current figure: **50.2 m² walkable, all seven counters reachable**
+(51.8 m² before the stray barrels, which legitimately occupy 1.6 m²).
+
+The same assert caught a barrel placed on the door approach and failed the build with *"the door
+approach itself is blocked"* rather than shipping a market nobody could enter. If you move anything on
+the ground, rebuild — do not eyeball it.
+
+Each stall has 1.16 m of clear standing room behind its counter, which is why `Anchor_Trader` can
+exist at all — an earlier version left 0.32 m and no villager could physically stand in it to serve.
+
+Anchors, identical on both levels: `Anchor_Door` (0, −6.50), `Anchor_Counter` (0, +2.85, OUTSIDE in
+the plaza where a customer stands), `Anchor_Trader` (0, +4.70, INSIDE behind the counter where the
+seller stands), `Light_Interior`, `Light_Lantern` (on a banner pole).
+
+**Only the DESIGNED structure is mirrored.** The symmetry assert covers the stalls, poles, paving and
+the wear in front of each counter — an arrangement someone laid out, so mirroring it is right. Ground
+mottling, loose stones, weeds and seven stray barrels and crates are added *after* the assert and are
+deliberately asymmetric: they are things that happened to the market, and mirrored barrels read as
+placed scenery, which is the one thing a stray barrel must not look like. Same split as the bakery's
+oven corner. No door leaf and no door clip — an open market
+has no door to swing, so a `door_open` lookup on this asset will warn.
+
+> **Two bugs worth knowing if you ever edit the stalls.** There is no room for a back shelf: one sat
+> at z 1.24–1.31, which is exactly villager eye height, so from the plaza it ran as a plank straight
+> across the goods and across the face of whoever was serving. Below 1.0 fouls the counter, above 1.8
+> fouls the canopy, and everything between is the sightline the stall exists to provide.
+>
+> And: They are built in a local frame where `v`
+> runs *away* from the shopper. With that sign inverted — as it shipped once — the back shelf, the
+> under-counter stock and the sacks all render on the customer's side of the counter, so a plank runs
+> straight across the goods and the stallholder stands out in the street. If a stall looks like it has
+> furniture in front of it, that sign is why.
 
 ## 2. `Stock_Bread_1..6` — the one node contract unlike any other building
 
@@ -237,31 +289,48 @@ pivot on the tower's vertical axis, and keep the sails pivot centred on their hu
 
 `door_offset` needs **no change** — see §1.
 
-## 5a. Market — outstanding
+## 5a. Market — integrated 2026-08-15
 
 Follows the same shape as (a)–(c) above, with two deliberate differences flagged in section 1a.
 
+The replicated `MarketLevel` selects between the two scenes. Village and earlier state uses Earthen;
+Town and City use Paved. Both share `Anchor_Door` at `(0, -6.5)`, so switching levels moves nothing
+and preserves the market entity, inventory, owner, workers and road relationships.
+
 ```rust
 // shared/src/building/defs.rs -- rename in place, do NOT reorder
-BuildingType::Market => "building_market",        // was PlaceholderMarket / "placeholder_market"
-BuildingType::Market => Some("game_assets/buildings/village/Market.glb#Scene0"),
+BuildingType::Market      => "building_market",        // was PlaceholderMarket
+BuildingType::MarketPaved => "building_market_paved",  // new variant, append at the end
+BuildingType::Market      => Some("game_assets/buildings/village/Market.glb#Scene0"),
+BuildingType::MarketPaved => Some("game_assets/buildings/village/MarketPaved.glb#Scene0"),
+
+// and on the Market's BuildingDef:
+footprint: Vec2::new(12.0, 12.0),                 // was (9.0, 7.0) -- the market is square now
+// footprint_center and height are already right: ZERO and 3.2. Do not change them.
 ```
 
-On the Market's `BuildingDef`, `height` must go **3.2 → 4.68** (measured; see section 1a for why 3.2
-is unreachable). `footprint: Vec2::new(9.0, 7.0)` and `footprint_center: Vec2::ZERO` are already
-correct and the asset was built to them exactly — do not change either.
+Plus, outside `defs.rs`:
 
-Also update the `PlaceholderMarket` call sites at
-[`village_roads.rs:2020-2021`](../server/src/world/village_roads.rs#L2020) and
-[`actors.rs:560`](../shared/src/components/actors.rs#L560).
+```rust
+SettlementBuildingKind::Market => Vec2::new(0.0, -6.5),   // door_offset, was -4.0
+SettlementBuildingKind::Market => 13.0,                   // clearance, was 11.0
+```
 
-**Do NOT add it to `ALL_BUILDING_TYPES` expecting a hull.** `has_baked_collider()` is
-`scene_path().is_some()`, so giving it a scene path switches collider baking on — and a single
-`ConvexHull` over an open arcade is a solid 9 × 7 block. Villagers would path *around* the one
-building in the village they are supposed to walk *through*. Ship it `collidable: false` or leave it
-out of the manifest.
+The old market discriminant was renamed in place with a serde alias for `PlaceholderMarket`; the
+new paved variant was appended. Storage halls no longer borrow market art and retain a separate
+`PlaceholderStorageHall` blockout.
 
-`door_offset(Market)` is already `(0.0, -4.0)` and the asset is authored on it — no change.
+Both variants are in `ALL_BUILDING_TYPES` for model-contract coverage but explicitly report no baked
+collider, and their manifest entries are `collidable: false`. The independent server rectangle
+navigation cache also skips both variants; otherwise their 12 × 12 m footprints would still become
+solid invisible walls despite the missing baked hull.
+
+Construction levels a 3 m terrain apron beyond the visible 12 × 12 m floor, then blends back into
+the biome over 1.8 m. The apron is intentional: terrain vertices are 2 m apart, so flattening only
+to the asset edge lets an outside triangle interpolate through the slab. Completed markets loaded
+from older saves are sampled once and re-levelled if they still carry the former 9 × 7 m terrace.
+
+`door_offset(Market)` is `(0.0, -6.5)` and the asset is authored on it.
 
 There is no `door_open`/`door_close` on this asset and there should not be: an open market has no door.
 

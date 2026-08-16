@@ -6,6 +6,48 @@ use shared::economy::{
     BusinessProcurementPolicy, BusinessSalePolicy, Good, BASIS_POINTS, MAXIMUM_STOCK_COVERAGE_DAYS,
 };
 
+/// One cached, daily operating decision for a productive workplace.
+///
+/// Market reasoning happens once in the employment review. Tactical workers
+/// and the strategic simulation only claim units from this component, keeping
+/// high-speed worlds O(businesses) per day rather than O(NPC decisions) per
+/// frame. Manual businesses receive an uncapped plan.
+#[derive(bevy::prelude::Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BusinessOperatingPlan {
+    pub day: u32,
+    pub target_output_units: u32,
+    pub produced_output_units: u32,
+    pub optimal_positions: u8,
+    pub marginal_daily_profit: i64,
+}
+
+impl BusinessOperatingPlan {
+    pub const fn uncapped(day: u32, positions: u8) -> Self {
+        Self {
+            day,
+            target_output_units: u32::MAX,
+            produced_output_units: 0,
+            optimal_positions: positions,
+            marginal_daily_profit: 0,
+        }
+    }
+
+    pub const fn remaining(self, day: u32) -> u32 {
+        if self.day != day {
+            0
+        } else {
+            self.target_output_units
+                .saturating_sub(self.produced_output_units)
+        }
+    }
+
+    pub fn record(&mut self, day: u32, units: u32) {
+        if self.day == day {
+            self.produced_output_units = self.produced_output_units.saturating_add(units);
+        }
+    }
+}
+
 /// Rated output used by investors and development planning.
 ///
 /// This is derived from the same worker slots, recipe durations and ordinary
@@ -208,26 +250,53 @@ pub(crate) fn rated_input_stock_targets(
 /// Output retention is no longer derived per-site from days: it is an
 /// absolute company-branch policy enforced once across all local sites.
 pub fn sync_business_stock_targets(
+    world_time: bevy::prelude::Query<&WorldTime>,
     mut businesses: bevy::prelude::Query<(
         &shared::components::SettlementBuilding,
         &mut BusinessProcurementPolicy,
         &mut BusinessSalePolicy,
+        Option<&BusinessOperatingPlan>,
     )>,
 ) {
-    for (building, mut procurement, mut sale) in businesses.iter_mut() {
+    let day = world_time.iter().next().map_or(0, |clock| clock.day);
+    for (building, mut procurement, mut sale, operating_plan) in businesses.iter_mut() {
         for good in Good::ALL {
             let mut rule = procurement.rule(good);
             if !rule.enabled {
                 continue;
             }
             rule.set_coverage_days(rule.coverage_days);
-            let targets = rated_input_stock_targets(
+            let mut targets = rated_input_stock_targets(
                 building.kind,
                 good,
                 building.workers.len(),
                 rule.coverage_days,
             )
             .unwrap_or_default();
+            if let (Some(plan), Some(recipe)) = (
+                operating_plan
+                    .filter(|plan| plan.day == day && plan.target_output_units != u32::MAX),
+                processing_recipe(building.kind).filter(|recipe| recipe.input == good),
+            ) {
+                let cycles = plan
+                    .target_output_units
+                    .div_ceil(recipe.output_units.max(1));
+                let daily_units = cycles.saturating_mul(recipe.input_units);
+                let storage_limit = building.kind.storage_bulk_capacity().saturating_mul(2)
+                    / 3
+                    / good.bulk_per_unit().max(1);
+                let target_units = daily_units
+                    .saturating_mul(u32::from(rule.coverage_days))
+                    .min(storage_limit);
+                targets = InputStockTargets {
+                    daily_units,
+                    reorder_below: target_units
+                        .div_ceil(2)
+                        .max(u32::from(target_units > 0).saturating_mul(recipe.input_units))
+                        .min(target_units),
+                    target_units,
+                };
+            }
             if rule.reorder_below != targets.reorder_below
                 || rule.target_units != targets.target_units
             {

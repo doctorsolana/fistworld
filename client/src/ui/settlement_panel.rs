@@ -6,15 +6,16 @@
 //! [`MootMarket`]) additionally expose a dedicated, read-only trade board.
 
 use bevy::ecs::system::SystemParam;
+use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
-use bevy::ui::FocusPolicy;
+use bevy::ui::{FocusPolicy, InteractionDisabled};
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
 use shared::components::{
     BuildingId, BuildingOf, CivicHallLevel, CompanyId, CompanyLeadership, ConstructionSite,
-    Household, MootAdministration, OperatedBy, OwnedBy, PersonId, PlayerPosition, Settlement,
-    SettlementBuilding, SettlementDevelopment, SettlementId, SettlementOpportunityBoard,
-    SettlementPolicies,
+    Household, MootAdministration, OperatedBy, OwnedBy, PersonId, PlayerPosition, PlayerRotation,
+    Settlement, SettlementBuilding, SettlementBuildingKind, SettlementDevelopment, SettlementId,
+    SettlementOpportunityBoard, SettlementPolicies,
 };
 use shared::economy::{
     business_working_capital, format_money, BusinessAccount, BusinessCondition, BusinessForSale,
@@ -26,13 +27,16 @@ use shared::protocol::{HeroMarketAction, HeroMarketOrder, HeroMarketResult, Reli
 
 use crate::selection::Selection;
 use crate::states::GameState;
+use crate::ui::foundation::{
+    button_chrome, layer, retained_scroll, subtree_is_interacting, UiButtonLabel, UiButtonVariant,
+    UiRefreshStamp,
+};
 use crate::ui::good_icon_path;
 use crate::ui::modal::{
     handle_backdrop_pressed, spawn_modal, update_modal_click_guard, ModalLayout,
 };
 use crate::ui::styles::{
-    plate_shadow, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, INK, INK_MUTED, LIMEWASH,
-    LIMEWASH_LIT, PLATE_RULE, PLATE_RULE_SOFT, RADIUS,
+    plate_shadow, INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, PLATE_RULE, PLATE_RULE_SOFT, RADIUS,
 };
 
 pub struct SettlementPanelPlugin;
@@ -57,7 +61,7 @@ impl Plugin for SettlementPanelPlugin {
                 sync_trade_feedback,
                 update_trade_guard,
                 handle_trade_close,
-                sync_trade_input_state,
+                sync_permit_tray_input_state,
             )
                 .chain()
                 .run_if(in_state(GameState::Playing)),
@@ -87,6 +91,26 @@ struct InspectPropertyButton;
 
 #[derive(Component)]
 struct InspectManageButton;
+
+#[derive(SystemParam)]
+struct CompactPanelUi<'w, 's> {
+    panels: Query<
+        'w,
+        's,
+        (Entity, &'static mut Node, &'static mut PanelSignature),
+        With<SettlementPanel>,
+    >,
+    bodies: Query<'w, 's, Entity, With<SettlementPanelBody>>,
+    children: Query<'w, 's, &'static Children>,
+    interactions: Query<
+        'w,
+        's,
+        (
+            &'static Interaction,
+            Has<crate::ui::foundation::UiRefreshExempt>,
+        ),
+    >,
+}
 
 #[derive(SystemParam)]
 struct LocalBusinessOwnership<'w, 's> {
@@ -128,10 +152,12 @@ impl LocalBusinessOwnership<'_, '_> {
 fn spawn_compact_panel(mut commands: Commands) {
     commands.spawn((
         SettlementPanel,
+        TabGroup::new(0),
         PanelSignature::default(),
         Interaction::default(),
         FocusPolicy::Block,
         Pickable::default(),
+        GlobalZIndex(layer::FLOATING_PANEL),
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(12.0),
@@ -294,11 +320,11 @@ fn spawn_card_button<M: Component>(parent: &mut ChildSpawnerCommands<'_>, marker
                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::all(PLATE_RULE_SOFT),
+            button_chrome(UiButtonVariant::Secondary),
         ))
         .with_child((
             Text::new(label),
+            UiButtonLabel,
             TextFont {
                 font_size: FontSize::Px(10.0),
                 ..default()
@@ -316,13 +342,29 @@ fn inventory_summary(inventory: Option<&GoodsInventory>) -> String {
         .into_iter()
         .filter_map(|good| {
             let amount = inventory.amount(good);
-            (amount > 0).then_some(format!("{} {amount}", good.label()))
+            (amount > 0).then_some(if inventory.partition_bulk_capacity().is_some() {
+                format!(
+                    "{} {amount}/{}",
+                    good.label(),
+                    inventory.bulk_capacity_for(good) / good.bulk_per_unit()
+                )
+            } else {
+                format!("{} {amount}", good.label())
+            })
         })
         .collect::<Vec<_>>();
     if goods.is_empty() {
-        format!("Empty / {} bulk", inventory.bulk_capacity())
+        inventory.partition_bulk_capacity().map_or_else(
+            || format!("Empty / {} bulk", inventory.bulk_capacity()),
+            |capacity| format!("Empty / {capacity} bulk per resource"),
+        )
     } else {
-        goods.join(" / ")
+        let contents = goods.join(" / ");
+        inventory
+            .partition_bulk_capacity()
+            .map_or(contents.clone(), |capacity| {
+                format!("{contents} / {capacity} bulk per resource")
+            })
     }
 }
 
@@ -415,10 +457,9 @@ fn sync_compact_panel(
         ),
         With<SettlementBuilding>,
     >,
-    mut panels: Query<(&mut Node, &mut PanelSignature), With<SettlementPanel>>,
-    bodies: Query<Entity, With<SettlementPanelBody>>,
+    mut ui: CompactPanelUi,
 ) {
-    let Ok((node, signature)) = panels.single() else {
+    let Ok((panel_entity, node, signature)) = ui.panels.single() else {
         return;
     };
     let selected = selection.primary();
@@ -573,6 +614,25 @@ fn sync_compact_panel(
                             ),
                         ),
                         (
+                            "LABOUR MARKET".into(),
+                            economy.map_or_else(
+                                || "Awaiting first reading".to_string(),
+                                |economy| {
+                                    format!(
+                                        "Private {}/{} ({} vacant), civic {}/{} ({} vacant), {} seeking; best opening {} coin/day",
+                                        economy.private_filled_jobs,
+                                        economy.private_job_positions,
+                                        economy.private_vacant_jobs,
+                                        economy.civic_filled_jobs,
+                                        economy.civic_job_positions,
+                                        economy.civic_vacant_jobs,
+                                        economy.job_seekers,
+                                        format_money(economy.best_open_private_wage),
+                                    )
+                                },
+                            ),
+                        ),
+                        (
                             "COMPANY TREASURIES / ARREARS".into(),
                             format!(
                                 "{} / {} wage / {} tax coin",
@@ -594,7 +654,17 @@ fn sync_compact_panel(
             ));
         }
         if let Ok(building) = buildings.get(entity) {
-            let inventory = inventories.get(entity).ok();
+            let public_hall = (building.kind == SettlementBuildingKind::Market)
+                .then(|| {
+                    building_of.get(entity).ok().and_then(|owner| {
+                        settlement_ids
+                            .iter()
+                            .find(|(_, id)| **id == owner.0)
+                            .map(|(hall, _)| hall)
+                    })
+                })
+                .flatten();
+            let inventory = inventories.get(public_hall.unwrap_or(entity)).ok();
             let household = households.get(entity).ok();
             let (
                 _,
@@ -886,7 +956,7 @@ fn sync_compact_panel(
                     title: building.kind.label().to_string(),
                     subtitle: building.settlement.to_uppercase(),
                     rows,
-                    trade: markets.get(entity).is_ok(),
+                    trade: public_hall.is_some() || markets.get(entity).is_ok(),
                     property: false,
                     manage: account.is_some() && ownership.can_open(entity, local_person),
                     business_history,
@@ -953,18 +1023,21 @@ fn sync_compact_panel(
 
     let Some((next_signature, model)) = fact else {
         if node.display != Display::None {
-            panels.single_mut().unwrap().0.display = Display::None;
+            ui.panels.single_mut().unwrap().1.display = Display::None;
         }
         return;
     };
     if signature.0 == next_signature && node.display == Display::Flex {
         return;
     }
+    if subtree_is_interacting(panel_entity, &ui.children, &ui.interactions) {
+        return;
+    }
 
-    let (mut node, mut signature) = panels.single_mut().unwrap();
+    let (_, mut node, mut signature) = ui.panels.single_mut().unwrap();
     node.display = Display::Flex;
     signature.0 = next_signature;
-    let Ok(body) = bodies.single() else {
+    let Ok(body) = ui.bodies.single() else {
         return;
     };
     commands.entity(body).despawn_related::<Children>();
@@ -995,8 +1068,8 @@ struct CompactModel {
 #[allow(clippy::too_many_arguments)]
 fn handle_compact_actions(
     selection: Res<Selection>,
-    settlements: Query<&Settlement>,
-    buildings: Query<(&SettlementBuilding, &PlayerPosition)>,
+    settlements: Query<(Entity, &Settlement, &SettlementId)>,
+    buildings: Query<(&SettlementBuilding, &PlayerPosition, Option<&BuildingOf>)>,
     sites: Query<(&ConstructionSite, Option<&OwnedBy>)>,
     markets: Query<&MootMarket>,
     places: Res<crate::ui::encyclopedia::places::KnownPlaces>,
@@ -1006,8 +1079,8 @@ fn handle_compact_actions(
     mut selected_entry: ResMut<crate::ui::encyclopedia::places::SelectedPlaceEntry>,
     mut trade_target: ResMut<TradePanelTarget>,
     mut property_target: ResMut<crate::ui::property_market::PropertyMarketTarget>,
-    mut expand_buttons: Query<
-        (&Interaction, &mut BackgroundColor),
+    expand_buttons: Query<
+        &Interaction,
         (
             With<InspectExpandButton>,
             Changed<Interaction>,
@@ -1016,8 +1089,8 @@ fn handle_compact_actions(
             Without<InspectManageButton>,
         ),
     >,
-    mut trade_buttons: Query<
-        (&Interaction, &mut BackgroundColor),
+    trade_buttons: Query<
+        &Interaction,
         (
             With<InspectTradeButton>,
             Changed<Interaction>,
@@ -1026,8 +1099,8 @@ fn handle_compact_actions(
             Without<InspectManageButton>,
         ),
     >,
-    mut property_buttons: Query<
-        (&Interaction, &mut BackgroundColor),
+    property_buttons: Query<
+        &Interaction,
         (
             With<InspectPropertyButton>,
             Changed<Interaction>,
@@ -1037,20 +1110,19 @@ fn handle_compact_actions(
         ),
     >,
 ) {
-    for (interaction, mut background) in expand_buttons.iter_mut() {
-        *background = button_background(*interaction);
+    for interaction in expand_buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;
         }
         let Some(entity) = selection.primary() else {
             continue;
         };
-        let (place_name, entry) = if let Ok(settlement) = settlements.get(entity) {
+        let (place_name, entry) = if let Ok((_, settlement, _)) = settlements.get(entity) {
             (
                 settlement.name.clone(),
                 crate::ui::encyclopedia::places::SelectedPlaceEntry::Hall,
             )
-        } else if let Ok((building, position)) = buildings.get(entity) {
+        } else if let Ok((building, position, _)) = buildings.get(entity) {
             let entry = places
                 .find(&building.settlement)
                 .and_then(|place| {
@@ -1081,23 +1153,30 @@ fn handle_compact_actions(
         encyclopedia_open.0 = true;
     }
 
-    for (interaction, mut background) in trade_buttons.iter_mut() {
-        *background = button_background(*interaction);
+    for interaction in trade_buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;
         }
         let Some(entity) = selection.primary() else {
             continue;
         };
-        if markets.get(entity).is_ok() {
+        let market = markets.get(entity).is_ok().then_some(entity).or_else(|| {
+            let (building, _, owner) = buildings.get(entity).ok()?;
+            (building.kind == SettlementBuildingKind::Market).then_some(())?;
+            let owner = owner?;
+            settlements
+                .iter()
+                .find(|(_, _, id)| **id == owner.0)
+                .map(|(hall, _, _)| hall)
+        });
+        if let Some(market) = market {
             encyclopedia_open.0 = false;
             property_target.0 = None;
-            trade_target.0 = Some(entity);
+            trade_target.0 = Some(market);
         }
     }
 
-    for (interaction, mut background) in property_buttons.iter_mut() {
-        *background = button_background(*interaction);
+    for interaction in property_buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;
         }
@@ -1119,13 +1198,9 @@ fn handle_manage_action(
     mut tab: ResMut<crate::ui::encyclopedia::EncyclopediaTab>,
     mut selected_company: ResMut<crate::ui::encyclopedia::companies::SelectedCompany>,
     mut return_to: ResMut<crate::ui::encyclopedia::companies::CompanyDrilldownReturn>,
-    mut buttons: Query<
-        (&Interaction, &mut BackgroundColor),
-        (With<InspectManageButton>, Changed<Interaction>),
-    >,
+    buttons: Query<&Interaction, (With<InspectManageButton>, Changed<Interaction>)>,
 ) {
-    for (interaction, mut background) in buttons.iter_mut() {
-        *background = button_background(*interaction);
+    for interaction in buttons.iter() {
         if *interaction == Interaction::Pressed {
             let Some(entity) = selection.primary() else {
                 continue;
@@ -1141,14 +1216,6 @@ fn handle_manage_action(
     }
 }
 
-fn button_background(interaction: Interaction) -> BackgroundColor {
-    match interaction {
-        Interaction::Pressed => BUTTON_PRESSED.into(),
-        Interaction::Hovered => BUTTON_HOVERED.into(),
-        Interaction::None => BUTTON_NORMAL.into(),
-    }
-}
-
 // --- market board ----------------------------------------------------------
 
 #[derive(Resource, Default)]
@@ -1160,6 +1227,7 @@ struct TradeClickGuard(bool);
 #[derive(Component)]
 struct TradePanelRoot {
     signature: String,
+    target: Entity,
 }
 
 #[derive(Component)]
@@ -1184,6 +1252,9 @@ struct MarketTradeButton {
 #[derive(Component)]
 struct TradeFeedbackText;
 
+#[derive(Component)]
+struct TradeListingViewport;
+
 #[derive(Resource, Default)]
 struct TradeFeedback {
     message: String,
@@ -1192,11 +1263,41 @@ struct TradeFeedback {
 
 const HERO_MARKET_INTERACTION_RANGE: f32 = 12.0;
 
+fn nearest_public_market_entrance(
+    origin: Vec3,
+    hall_entrance: Vec3,
+    marketplace_entrances: impl IntoIterator<Item = Vec3>,
+) -> Vec3 {
+    let distance_squared =
+        |point: Vec3| Vec2::new(origin.x, origin.z).distance_squared(Vec2::new(point.x, point.z));
+    marketplace_entrances
+        .into_iter()
+        .fold(hall_entrance, |nearest, candidate| {
+            if distance_squared(candidate) < distance_squared(nearest) {
+                candidate
+            } else {
+                nearest
+            }
+        })
+}
+
 fn ensure_trade_panel(
     mut commands: Commands,
+    time: Res<Time<Real>>,
     target: Res<TradePanelTarget>,
-    settlements: Query<(&Settlement, Option<&CivicHallLevel>, &PlayerPosition)>,
-    buildings: Query<&SettlementBuilding>,
+    settlements: Query<(
+        &Settlement,
+        &SettlementId,
+        Option<&CivicHallLevel>,
+        &PlayerPosition,
+        Option<&PlayerRotation>,
+    )>,
+    buildings: Query<(
+        &SettlementBuilding,
+        Option<&BuildingOf>,
+        Option<&PlayerPosition>,
+        Option<&PlayerRotation>,
+    )>,
     inventories: Query<&GoodsInventory>,
     markets: Query<&MootMarket>,
     feedback: Res<TradeFeedback>,
@@ -1207,24 +1308,29 @@ fn ensure_trade_panel(
         Option<&Wallet>,
     )>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
-    roots: Query<(Entity, &TradePanelRoot)>,
+    roots: Query<(Entity, &TradePanelRoot, Option<&UiRefreshStamp>)>,
     asset_server: Res<AssetServer>,
+    children: Query<&Children>,
+    interactions: Query<(&Interaction, Has<crate::ui::foundation::UiRefreshExempt>)>,
+    scrolls: Query<&ScrollPosition, With<TradeListingViewport>>,
 ) {
     let Some(entity) = target.0 else {
-        for (root, _) in roots.iter() {
+        for (root, ..) in roots.iter() {
             commands.entity(root).despawn();
         }
         return;
     };
     let Ok(market) = markets.get(entity) else {
-        for (root, _) in roots.iter() {
+        for (root, ..) in roots.iter() {
             commands.entity(root).despawn();
         }
         return;
     };
     let inventory = inventories.get(entity).ok();
-    let (place, subtitle, treasury, market_position) =
-        if let Ok((settlement, hall_level, position)) = settlements.get(entity) {
+    let (place, subtitle, treasury, hall_access) =
+        if let Ok((settlement, settlement_id, hall_level, position, rotation)) =
+            settlements.get(entity)
+        {
             let hall_level = hall_level
                 .copied()
                 .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
@@ -1236,9 +1342,13 @@ fn ensure_trade_panel(
                     hall_level.label()
                 ),
                 Some(settlement.treasury),
-                Some(position.0),
+                Some((
+                    *settlement_id,
+                    position.0,
+                    rotation.map_or(0.0, |rotation| rotation.0),
+                )),
             )
-        } else if let Ok(building) = buildings.get(entity) {
+        } else if let Ok((building, ..)) = buildings.get(entity) {
             (
                 building.settlement.clone(),
                 format!("{} / LOCAL EXCHANGE", building.kind.label()),
@@ -1255,6 +1365,25 @@ fn ensure_trade_panel(
     });
     let hero_inventory = local_hero.and_then(|(_, _, inventory, _)| inventory);
     let hero_wallet = local_hero.and_then(|(_, _, _, wallet)| wallet);
+    let market_position = local_hero.zip(hall_access).map(
+        |((_, hero_position, ..), (settlement_id, hall_position, hall_rotation))| {
+            let hall_entrance =
+                SettlementBuildingKind::Hall.entrance_position(hall_position, hall_rotation);
+            nearest_public_market_entrance(
+                hero_position.0,
+                hall_entrance,
+                buildings
+                    .iter()
+                    .filter(|(building, building_of, ..)| {
+                        building.kind == SettlementBuildingKind::Market
+                            && building_of.is_some_and(|owner| owner.0 == settlement_id)
+                    })
+                    .filter_map(|(building, _, position, rotation)| {
+                        Some(building.kind.entrance_position(position?.0, rotation?.0))
+                    }),
+            )
+        },
+    );
     let hero_distance = local_hero
         .zip(market_position)
         .map(|((_, position, ..), market)| {
@@ -1266,10 +1395,20 @@ fn ensure_trade_panel(
         feedback.success,
         feedback.message,
     );
-    if roots.iter().any(|(_, root)| root.signature == signature) {
+    if roots.iter().any(|(_, root, _)| root.signature == signature) {
         return;
     }
-    for (root, _) in roots.iter() {
+    if roots.iter().any(|(entity, _, stamp)| {
+        subtree_is_interacting(entity, &children, &interactions)
+            || stamp.is_some_and(|stamp| !stamp.is_ready(&time))
+    }) {
+        return;
+    }
+    let retained_scroll = retained_scroll(
+        roots.iter().any(|(_, root, _)| root.target == entity),
+        scrolls.iter().next().map(|position| position.0),
+    );
+    for (root, ..) in roots.iter() {
         commands.entity(root).despawn();
     }
 
@@ -1277,6 +1416,7 @@ fn ensure_trade_panel(
         &mut commands,
         TradePanelRoot {
             signature: signature.clone(),
+            target: entity,
         },
         TradeBackdrop,
         TradePanel,
@@ -1285,6 +1425,9 @@ fn ensure_trade_panel(
             panel_padding: 0.0,
         },
     );
+    commands
+        .entity(nodes.root)
+        .insert(UiRefreshStamp::now(&time));
     commands.entity(nodes.panel).insert((
         Node {
             width: Val::Px(900.0),
@@ -1352,11 +1495,11 @@ fn ensure_trade_panel(
                             border_radius: BorderRadius::all(Val::Px(RADIUS)),
                             ..default()
                         },
-                        BackgroundColor(BUTTON_NORMAL),
-                        BorderColor::all(PLATE_RULE_SOFT),
+                        button_chrome(UiButtonVariant::Ghost),
                     ))
                     .with_child((
                         Text::new("X"),
+                        UiButtonLabel,
                         TextFont {
                             font_size: FontSize::Px(11.0),
                             ..default()
@@ -1379,8 +1522,9 @@ fn ensure_trade_panel(
                     summary,
                     "MARKET MODEL",
                     format!(
-                        "Private consignment / {}% fee",
-                        market.market_fee_bps() as f32 / 100.0
+                        "{} / private consignment / {}% fee",
+                        market.trade_tier().label(),
+                        market.market_fee_bps() as f32 / 100.0,
                     ),
                 );
                 spawn_market_stat(
@@ -1393,7 +1537,18 @@ fn ensure_trade_panel(
                     "COMMON STORAGE",
                     inventory.map_or_else(
                         || "No store".to_string(),
-                        |stock| format!("{} / {} bulk", stock.used_bulk(), stock.bulk_capacity()),
+                        |stock| {
+                            stock.partition_bulk_capacity().map_or_else(
+                                || {
+                                    format!(
+                                        "{} / {} bulk",
+                                        stock.used_bulk(),
+                                        stock.bulk_capacity()
+                                    )
+                                },
+                                |capacity| format!("{capacity} bulk per resource"),
+                            )
+                        },
                     ),
                 );
                 if let Some(treasury) = treasury {
@@ -1424,15 +1579,19 @@ fn ensure_trade_panel(
             });
 
         panel
-            .spawn(Node {
-                flex_grow: 1.0,
-                min_height: Val::Px(0.0),
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::axes(Val::Px(22.0), Val::Px(12.0)),
-                overflow: Overflow::scroll_y(),
-                scrollbar_width: 8.0,
-                ..default()
-            })
+            .spawn((
+                TradeListingViewport,
+                ScrollPosition(retained_scroll),
+                Node {
+                    flex_grow: 1.0,
+                    min_height: Val::Px(0.0),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::axes(Val::Px(22.0), Val::Px(12.0)),
+                    overflow: Overflow::scroll_y(),
+                    scrollbar_width: 8.0,
+                    ..default()
+                },
+            ))
             .with_children(|table| {
                 spawn_market_header(table);
                 for good in Good::ALL {
@@ -1457,7 +1616,7 @@ fn ensure_trade_panel(
             } else if can_trade {
                 "BUY clears real listed stock. POST OFFER consigns physical cargo at the shown ask; it pays nothing until a real buyer clears it."
             } else {
-                "Select your hero and walk within 12m of the Hall, then press E or reopen this board to trade."
+                "Select your hero and walk within 12m of the Hall or Marketplace, then press E or reopen this board to trade."
             }),
             TextFont {
                 font_size: FontSize::Px(10.0),
@@ -1564,7 +1723,10 @@ fn spawn_market_row(
     let pool = market.pool(good);
     let stock = inventory.map_or(0, |inventory| inventory.amount(good));
     let unmet = pool.day.unmet_units();
-    let condition = if unmet > 0 {
+    let trade_unlocked = market.can_trade(good);
+    let condition = if !trade_unlocked {
+        format!("UNLOCKS AT {}", good.minimum_market_tier().label())
+    } else if unmet > 0 {
         format!("{} UNMET TODAY", unmet)
     } else if stock < pool.target_stock {
         "SHORT SUPPLY".to_string()
@@ -1632,11 +1794,15 @@ fn spawn_market_row(
             market_value_cell(row, format!("{stock} / {}", pool.target_stock), 90.0);
             market_value_cell(row, format_money(pool.bid), 66.0);
             market_value_cell(row, format_money(pool.ask), 66.0);
-            let offers = market
-                .listings()
-                .iter()
-                .filter(|listing| listing.good == good)
-                .count();
+            let offers = if trade_unlocked {
+                market
+                    .listings()
+                    .iter()
+                    .filter(|listing| listing.good == good)
+                    .count()
+            } else {
+                0
+            };
             market_value_cell(
                 row,
                 format!("{} / {}u", offers, market.listed_units(good)),
@@ -1656,7 +1822,7 @@ fn spawn_market_row(
                     market: settlement,
                     good,
                     action: HeroMarketAction::Buy,
-                    enabled: can_trade && market.listed_units(good) > 0,
+                    enabled: can_trade && trade_unlocked && market.listed_units(good) > 0,
                 },
             );
             spawn_market_trade_button(
@@ -1669,6 +1835,7 @@ fn spawn_market_row(
                         unit_price: market.suggested_price(good),
                     },
                     enabled: can_trade
+                        && trade_unlocked
                         && hero_inventory.is_some_and(|stock| stock.amount(good) > 0),
                 },
             );
@@ -1689,11 +1856,11 @@ fn spawn_market_row(
                     border_radius: BorderRadius::all(Val::Px(RADIUS)),
                     ..default()
                 },
-                BackgroundColor(BUTTON_NORMAL),
-                BorderColor::all(PLATE_RULE_SOFT),
+                button_chrome(UiButtonVariant::Secondary),
             ))
             .with_child((
                 Text::new("HISTORY"),
+                UiButtonLabel,
                 TextFont {
                     font_size: FontSize::Px(8.0),
                     ..default()
@@ -1710,51 +1877,45 @@ fn spawn_market_trade_button(
     marker: MarketTradeButton,
 ) {
     let enabled = marker.enabled;
-    parent
-        .spawn((
-            marker,
-            Button,
-            Node {
-                width: Val::Px(62.0),
-                height: Val::Px(26.0),
-                margin: UiRect::left(Val::Px(6.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(RADIUS)),
-                ..default()
-            },
-            BackgroundColor(if enabled { BUTTON_NORMAL } else { LIMEWASH }),
-            BorderColor::all(PLATE_RULE_SOFT),
-        ))
-        .with_child((
-            Text::new(label),
-            TextFont {
-                font_size: FontSize::Px(8.0),
-                ..default()
-            },
-            TextColor(if enabled { INK } else { INK_MUTED }),
-            Pickable::IGNORE,
-        ));
+    let mut button = parent.spawn((
+        marker,
+        Button,
+        Node {
+            width: Val::Px(62.0),
+            height: Val::Px(26.0),
+            margin: UiRect::left(Val::Px(6.0)),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(RADIUS)),
+            ..default()
+        },
+        button_chrome(UiButtonVariant::Secondary),
+    ));
+    if !enabled {
+        button.insert(InteractionDisabled);
+    }
+    button.with_child((
+        Text::new(label),
+        UiButtonLabel,
+        TextFont {
+            font_size: FontSize::Px(8.0),
+            ..default()
+        },
+        TextColor(if enabled { INK } else { INK_MUTED }),
+        Pickable::IGNORE,
+    ));
 }
 
 fn handle_market_trade_buttons(
     mouse: Res<ButtonInput<MouseButton>>,
-    mut buttons: Query<
-        (&Interaction, &MarketTradeButton, &mut BackgroundColor),
-        Changed<Interaction>,
-    >,
+    buttons: Query<(&Interaction, &MarketTradeButton), Changed<Interaction>>,
     mut senders: Query<
         &mut MessageSender<HeroMarketOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
 ) {
-    for (interaction, order, mut background) in buttons.iter_mut() {
-        *background = if !order.enabled {
-            LIMEWASH.into()
-        } else {
-            button_background(*interaction)
-        };
+    for (interaction, order) in buttons.iter() {
         if !order.enabled
             || *interaction != Interaction::Pressed
             || !mouse.just_pressed(MouseButton::Left)
@@ -1805,14 +1966,28 @@ fn sync_trade_feedback(
 }
 
 /// Conventional nearby-world interaction. The compact inspection button still
-/// opens a remote read-only board; E opens the nearest Hall only when the
-/// player's embodied hero is physically at it.
+/// opens a remote read-only board; E opens the settlement's shared exchange
+/// when the embodied hero is at either its Hall or Marketplace counter.
 fn open_nearby_market_on_interact(
     keyboard: Res<ButtonInput<KeyCode>>,
     input: Res<crate::input::InputState>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
     heroes: Query<(&shared::components::Hero, &PlayerPosition)>,
-    halls: Query<(Entity, &PlayerPosition), With<MootMarket>>,
+    halls: Query<
+        (
+            Entity,
+            &SettlementId,
+            &PlayerPosition,
+            Option<&PlayerRotation>,
+        ),
+        With<MootMarket>,
+    >,
+    marketplaces: Query<(
+        &SettlementBuilding,
+        &BuildingOf,
+        &PlayerPosition,
+        &PlayerRotation,
+    )>,
     mut target: ResMut<TradePanelTarget>,
 ) {
     if !keyboard.just_pressed(KeyCode::KeyE) || input.ui_blocking() {
@@ -1827,9 +2002,24 @@ fn open_nearby_market_on_interact(
     };
     target.0 = halls
         .iter()
-        .filter_map(|(entity, position)| {
+        .filter_map(|(entity, settlement_id, position, rotation)| {
+            let hall_entrance = SettlementBuildingKind::Hall
+                .entrance_position(position.0, rotation.map_or(0.0, |rotation| rotation.0));
+            let counter = nearest_public_market_entrance(
+                hero_position.0,
+                hall_entrance,
+                marketplaces
+                    .iter()
+                    .filter(|(building, building_of, ..)| {
+                        building.kind == SettlementBuildingKind::Market
+                            && building_of.0 == *settlement_id
+                    })
+                    .map(|(building, _, position, rotation)| {
+                        building.kind.entrance_position(position.0, rotation.0)
+                    }),
+            );
             let distance = Vec2::new(hero_position.0.x, hero_position.0.z)
-                .distance(Vec2::new(position.0.x, position.0.z));
+                .distance(Vec2::new(counter.x, counter.z));
             (distance <= HERO_MARKET_INTERACTION_RANGE).then_some((entity, distance))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -1880,15 +2070,12 @@ fn handle_trade_close(
     }
 }
 
-fn sync_trade_input_state(
-    target: Res<TradePanelTarget>,
-    property: Res<crate::ui::property_market::PropertyMarketTarget>,
+fn sync_permit_tray_input_state(
     permits: Res<crate::ui::player_permits::PermitTrayOpen>,
     mut input: ResMut<crate::input::InputState>,
 ) {
-    let open = target.0.is_some() || property.0.is_some() || permits.0;
-    if input.inventory_open != open {
-        input.inventory_open = open;
+    if input.permit_tray_open != permits.0 {
+        input.permit_tray_open = permits.0;
     }
 }
 

@@ -39,7 +39,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                         font_size: FontSize::Px(32.0),
                         ..default()
                     })
-                    .insert(TextColor(TEXT_COLOR));
+                    .insert(TextColor(INK_INVERSE));
 
                 // Input field
                 panel
@@ -55,7 +55,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                                 font_size: FontSize::Px(18.0),
                                 ..default()
                             })
-                            .insert(TextColor(TEXT_COLOR));
+                            .insert(TextColor(INK_INVERSE));
 
                         input_col
                             .spawn((
@@ -66,7 +66,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                                     border_radius: BorderRadius::all(Val::Px(4.0)),
                                     ..default()
                                 },
-                                BackgroundColor(INPUT_BG),
+                                BackgroundColor(SLATE),
                             ))
                             .with_children(|input_box| {
                                 input_box
@@ -76,7 +76,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                                         font_size: FontSize::Px(18.0),
                                         ..default()
                                     })
-                                    .insert(TextColor(TEXT_COLOR));
+                                    .insert(TextColor(INK_INVERSE));
                             });
 
                         // Helper text
@@ -97,7 +97,7 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                         font_size: FontSize::Px(14.0),
                         ..default()
                     })
-                    .insert(TextColor(ERROR_COLOR))
+                    .insert(TextColor(ACCENT_RED))
                     .insert(Node {
                         min_height: Val::Px(20.0),
                         ..default()
@@ -117,15 +117,16 @@ pub(super) fn spawn_name_entry_ui(mut commands: Commands, mut name_input: ResMut
                             border_radius: BorderRadius::all(Val::Px(4.0)),
                             ..default()
                         },
-                        BackgroundColor(BUTTON_NORMAL),
+                        button_chrome(UiButtonVariant::Primary),
                     ))
                     .with_children(|btn| {
                         btn.spawn(Text::new("Join Game"))
+                            .insert(UiButtonLabel)
                             .insert(TextFont {
                                 font_size: FontSize::Px(20.0),
                                 ..default()
                             })
-                            .insert(TextColor(TEXT_COLOR));
+                            .insert(TextColor(INK_INVERSE));
                     });
             });
         });

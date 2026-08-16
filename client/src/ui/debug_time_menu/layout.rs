@@ -31,7 +31,7 @@ pub(super) fn spawn_debug_time_menu(
                 font_size: FontSize::Px(26.0),
                 ..default()
             },
-            TextColor(ACCENT_COLOR),
+            TextColor(EMBER),
             Node {
                 margin: UiRect::bottom(Val::Px(8.0)),
                 ..default()
@@ -44,7 +44,7 @@ pub(super) fn spawn_debug_time_menu(
                 font_size: FontSize::Px(12.0),
                 ..default()
             },
-            TextColor(TEXT_MUTED),
+            TextColor(INK_MUTED),
             Node {
                 margin: UiRect::bottom(Val::Px(16.0)),
                 ..default()
@@ -62,7 +62,7 @@ pub(super) fn spawn_debug_time_menu(
                 font_size: FontSize::Px(12.0),
                 ..default()
             },
-            TextColor(TEXT_MUTED),
+            TextColor(INK_MUTED),
             Node {
                 margin: UiRect::top(Val::Px(12.0)),
                 ..default()
@@ -80,7 +80,7 @@ pub(super) fn spawn_debug_time_menu(
                 font_size: FontSize::Px(12.0),
                 ..default()
             },
-            TextColor(TEXT_MUTED),
+            TextColor(INK_MUTED),
             Node {
                 margin: UiRect::top(Val::Px(12.0)),
                 ..default()
@@ -97,7 +97,7 @@ pub(super) fn spawn_debug_time_menu(
                 font_size: FontSize::Px(12.0),
                 ..default()
             },
-            TextColor(TEXT_MUTED),
+            TextColor(INK_MUTED),
             Node {
                 margin: UiRect::top(Val::Px(12.0)),
                 ..default()
@@ -110,7 +110,7 @@ pub(super) fn spawn_debug_time_menu(
                 font_size: FontSize::Px(12.0),
                 ..default()
             },
-            TextColor(TEXT_MUTED),
+            TextColor(INK_MUTED),
             Node {
                 margin: UiRect::top(Val::Px(12.0)),
                 ..default()
@@ -123,37 +123,19 @@ pub(super) fn spawn_debug_time_menu(
                 CloseButton,
                 Node {
                     border_radius: BorderRadius::all(Val::Px(4.0)),
-                    ..button_style()
+                    ..debug_button_node()
                 },
-                BackgroundColor(BUTTON_NORMAL),
+                button_chrome(UiButtonVariant::Secondary),
             ))
             .with_children(|btn| {
                 btn.spawn((
                     Text::new("CLOSE"),
-                    button_text_style(),
-                    TextColor(TEXT_COLOR),
+                    UiButtonLabel,
+                    debug_button_font(),
+                    TextColor(INK),
                 ));
             });
     });
-}
-
-pub(super) fn style_debug_time_menu(
-    mut colors: ParamSet<(
-        Query<&mut BackgroundColor, With<DebugMenuRoot>>,
-        Query<&mut BackgroundColor, With<DebugMenuBackdrop>>,
-        Query<&mut BackgroundColor, With<DebugMenuPanel>>,
-    )>,
-) {
-    let clear = BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0));
-    for mut bg in colors.p0().iter_mut() {
-        *bg = clear;
-    }
-    for mut bg in colors.p1().iter_mut() {
-        *bg = clear;
-    }
-    for mut bg in colors.p2().iter_mut() {
-        *bg = clear;
-    }
 }
 
 pub(super) fn spawn_time_button(
@@ -167,12 +149,17 @@ pub(super) fn spawn_time_button(
             TimeButton(preset),
             Node {
                 border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..button_style()
+                ..debug_button_node()
             },
-            BackgroundColor(BUTTON_NORMAL),
+            button_chrome(UiButtonVariant::Secondary),
         ))
         .with_children(|btn| {
-            btn.spawn((Text::new(text), button_text_style(), TextColor(TEXT_COLOR)));
+            btn.spawn((
+                Text::new(text),
+                UiButtonLabel,
+                debug_button_font(),
+                TextColor(INK),
+            ));
         });
 }
 
@@ -187,12 +174,17 @@ pub(super) fn spawn_cloud_cover_button(
             CloudCoverButton(mode),
             Node {
                 border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..button_style()
+                ..debug_button_node()
             },
-            BackgroundColor(BUTTON_NORMAL),
+            button_chrome(UiButtonVariant::Secondary),
         ))
         .with_children(|btn| {
-            btn.spawn((Text::new(text), button_text_style(), TextColor(TEXT_COLOR)));
+            btn.spawn((
+                Text::new(text),
+                UiButtonLabel,
+                debug_button_font(),
+                TextColor(INK),
+            ));
         });
 }
 
@@ -203,16 +195,17 @@ pub(super) fn spawn_weightmap_stats_button(parent: &mut ChildSpawnerCommands<'_>
             PerfWeightmapToggleButton,
             Node {
                 border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..button_style()
+                ..debug_button_node()
             },
-            BackgroundColor(BUTTON_NORMAL),
+            button_chrome(UiButtonVariant::Developer),
         ))
         .with_children(|btn| {
             btn.spawn((
                 PerfWeightmapLabel,
                 Text::new("WEIGHTMAP STATS: OFF"),
-                button_text_style(),
-                TextColor(TEXT_COLOR),
+                UiButtonLabel,
+                debug_button_font(),
+                TextColor(INK),
             ));
         });
 }
@@ -224,18 +217,39 @@ pub(super) fn spawn_render_diag_button(parent: &mut ChildSpawnerCommands<'_>) {
             PerfRenderDiagToggleButton,
             Node {
                 border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..button_style()
+                ..debug_button_node()
             },
-            BackgroundColor(BUTTON_NORMAL),
+            button_chrome(UiButtonVariant::Developer),
         ))
         .with_children(|btn| {
             btn.spawn((
                 PerfRenderDiagLabel,
                 Text::new("RENDER DIAG LOGGING: OFF"),
-                button_text_style(),
-                TextColor(TEXT_COLOR),
+                UiButtonLabel,
+                debug_button_font(),
+                TextColor(INK),
             ));
         });
+}
+
+fn debug_button_node() -> Node {
+    Node {
+        width: Val::Px(280.0),
+        height: Val::Px(55.0),
+        justify_content: JustifyContent::Center,
+        align_items: AlignItems::Center,
+        margin: UiRect::all(Val::Px(8.0)),
+        border: UiRect::all(Val::Px(1.0)),
+        border_radius: BorderRadius::all(Val::Px(4.0)),
+        ..default()
+    }
+}
+
+fn debug_button_font() -> TextFont {
+    TextFont {
+        font_size: FontSize::Px(22.0),
+        ..default()
+    }
 }
 
 pub(super) fn despawn_debug_time_menu(

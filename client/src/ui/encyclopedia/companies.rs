@@ -23,10 +23,8 @@ use shared::economy::{
 use shared::protocol::{HeroCompanyAction, HeroCompanyOrder, HeroCompanyResult, ReliableChannel};
 
 use super::*;
-use crate::ui::styles::{
-    ACCENT_COLOR, BUTTON_BORDER, BUTTON_NORMAL, INK, PLATE_RULE_SOFT, RADIUS, TEXT_COLOR,
-    TEXT_MUTED,
-};
+use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant};
+use crate::ui::styles::{BUTTON_NORMAL, EMBER, INK, INK_MUTED, PLATE_RULE_SOFT, RADIUS};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompanyHolderRecord {
@@ -495,7 +493,7 @@ pub(super) fn spawn_companies_tab(body: &mut ChildSpawnerCommands<'_>) {
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
-            BorderColor::from(DIVIDER),
+            BorderColor::from(PLATE_RULE_SOFT),
         ));
 
         tab.spawn((
@@ -508,7 +506,7 @@ pub(super) fn spawn_companies_tab(body: &mut ChildSpawnerCommands<'_>) {
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
-            BorderColor::from(DIVIDER),
+            BorderColor::from(PLATE_RULE_SOFT),
         ))
         .with_children(|bar| {
             bar.spawn(Node {
@@ -528,16 +526,16 @@ pub(super) fn spawn_companies_tab(body: &mut ChildSpawnerCommands<'_>) {
                                 border_radius: BorderRadius::all(Val::Px(11.0)),
                                 ..default()
                             },
-                            BackgroundColor(Color::NONE),
-                            BorderColor::from(DIVIDER),
+                            button_chrome(UiButtonVariant::Tab),
                         ))
                         .with_child((
                             Text::new(filter.label()),
+                            UiButtonLabel,
                             TextFont {
                                 font_size: FontSize::Px(9.5),
                                 ..default()
                             },
-                            TextColor(TEXT_MUTED),
+                            TextColor(INK_MUTED),
                             Pickable::IGNORE,
                         ));
                 }
@@ -549,7 +547,7 @@ pub(super) fn spawn_companies_tab(body: &mut ChildSpawnerCommands<'_>) {
                     font_size: FontSize::Px(10.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
             ));
         });
 
@@ -574,7 +572,7 @@ pub(super) fn spawn_companies_tab(body: &mut ChildSpawnerCommands<'_>) {
                         border: UiRect::right(Val::Px(1.0)),
                         ..default()
                     },
-                    BorderColor::from(DIVIDER),
+                    BorderColor::from(PLATE_RULE_SOFT),
                 ))
                 .with_child((
                     CompanyListContent,
@@ -597,7 +595,7 @@ pub(super) fn spawn_companies_tab(body: &mut ChildSpawnerCommands<'_>) {
                         scrollbar_width: 8.0,
                         ..default()
                     },
-                    BackgroundColor(DETAIL_BG),
+                    BackgroundColor(LIMEWASH_DETAIL),
                 ))
                 .with_child((
                     CompanyDetailContent,
@@ -726,27 +724,13 @@ pub(super) fn handle_company_management_buttons(
 pub(super) fn handle_company_branch_policy_buttons(
     guard: Res<ClickGuard>,
     mouse: Res<ButtonInput<MouseButton>>,
-    mut buttons: Query<
-        (
-            &Interaction,
-            &CompanyBranchPolicyButton,
-            &mut BackgroundColor,
-        ),
-        Changed<Interaction>,
-    >,
+    buttons: Query<(&Interaction, &CompanyBranchPolicyButton), Changed<Interaction>>,
     mut clients: Query<
         &mut MessageSender<HeroCompanyOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
 ) {
-    for (interaction, button, mut background) in buttons.iter_mut() {
-        background.0 = if *interaction == Interaction::Pressed {
-            Color::srgba(0.68, 0.64, 0.56, 1.0)
-        } else if *interaction == Interaction::Hovered {
-            ROW_HOVERED
-        } else {
-            BUTTON_NORMAL
-        };
+    for (interaction, button) in buttons.iter() {
         if *interaction != Interaction::Pressed
             || !guard.0
             || !mouse.just_pressed(MouseButton::Left)
@@ -858,32 +842,14 @@ pub(super) fn rebuild_company_view(
 pub(super) fn style_company_controls(
     filter: Res<CompanyFilter>,
     selected: Res<SelectedCompany>,
-    mut filters: Query<
-        (&CompanyFilterButton, &Interaction, &mut BackgroundColor),
-        Without<CompanyRow>,
-    >,
-    mut rows: Query<
-        (&CompanyRow, &Interaction, &mut BackgroundColor),
-        Without<CompanyFilterButton>,
-    >,
+    mut filters: Query<(&CompanyFilterButton, &mut UiButtonStyle), Without<CompanyRow>>,
+    mut rows: Query<(&CompanyRow, &mut UiButtonStyle), Without<CompanyFilterButton>>,
 ) {
-    for (CompanyFilterButton(button), interaction, mut background) in filters.iter_mut() {
-        background.0 = if *button == *filter {
-            ROW_SELECTED
-        } else if *interaction == Interaction::Hovered {
-            ROW_HOVERED
-        } else {
-            Color::NONE
-        };
+    for (CompanyFilterButton(button), mut style) in filters.iter_mut() {
+        style.selected = *button == *filter;
     }
-    for (CompanyRow(company), interaction, mut background) in rows.iter_mut() {
-        background.0 = if selected.0 == Some(*company) {
-            ROW_SELECTED
-        } else if matches!(interaction, Interaction::Hovered | Interaction::Pressed) {
-            ROW_HOVERED
-        } else {
-            ROW_NORMAL
-        };
+    for (CompanyRow(company), mut style) in rows.iter_mut() {
+        style.selected = selected.0 == Some(*company);
     }
 }
 
@@ -931,7 +897,7 @@ fn spawn_portfolio(parent: &mut ChildSpawnerCommands<'_>, directory: &CompanyDir
                 font_size: FontSize::Px(10.0),
                 ..default()
             },
-            TextColor(TEXT_MUTED),
+            TextColor(INK_MUTED),
         ));
         return;
     };
@@ -998,7 +964,7 @@ fn portfolio_card(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: Str
                 ..default()
             },
             BackgroundColor(Color::srgba(0.9, 0.88, 0.84, 0.58)),
-            BorderColor::from(DIVIDER),
+            BorderColor::from(PLATE_RULE_SOFT),
         ))
         .with_children(|card| {
             card.spawn((
@@ -1007,7 +973,7 @@ fn portfolio_card(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: Str
                     font_size: FontSize::Px(8.5),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
             ));
             card.spawn((
                 Text::new(value),
@@ -1015,7 +981,7 @@ fn portfolio_card(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: Str
                     font_size: FontSize::Px(14.0),
                     ..default()
                 },
-                TextColor(TEXT_COLOR),
+                TextColor(INK),
             ));
             card.spawn((
                 Text::new(note),
@@ -1023,7 +989,7 @@ fn portfolio_card(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: Str
                     font_size: FontSize::Px(7.5),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
             ));
         });
 }
@@ -1047,7 +1013,7 @@ fn spawn_company_row(
                 border_radius: BorderRadius::all(Val::Px(5.0)),
                 ..default()
             },
-            BackgroundColor(ROW_NORMAL),
+            button_chrome(UiButtonVariant::Row),
         ))
         .with_children(|row| {
             row.spawn(Node {
@@ -1062,7 +1028,7 @@ fn spawn_company_row(
                         font_size: FontSize::Px(12.5),
                         ..default()
                     },
-                    TextColor(TEXT_COLOR),
+                    TextColor(INK),
                 ));
                 line.spawn((
                     Text::new(company.status()),
@@ -1071,9 +1037,9 @@ fn spawn_company_row(
                         ..default()
                     },
                     TextColor(if company.status() == "AT RISK" {
-                        ACCENT_COLOR
+                        EMBER
                     } else {
-                        TEXT_MUTED
+                        INK_MUTED
                     }),
                 ));
             });
@@ -1094,7 +1060,7 @@ fn spawn_company_row(
                     font_size: FontSize::Px(8.5),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
             ));
             if shares > 0 {
                 row.spawn((
@@ -1112,7 +1078,7 @@ fn spawn_company_row(
                         font_size: FontSize::Px(8.5),
                         ..default()
                     },
-                    TextColor(ACCENT_COLOR),
+                    TextColor(EMBER),
                 ));
             }
         });
@@ -1147,7 +1113,7 @@ fn spawn_company_detail(
                             font_size: FontSize::Px(22.0),
                             ..default()
                         },
-                        TextColor(TEXT_COLOR),
+                        TextColor(INK),
                     ));
                     copy.spawn((
                         Text::new(format!(
@@ -1160,7 +1126,7 @@ fn spawn_company_detail(
                             font_size: FontSize::Px(9.0),
                             ..default()
                         },
-                        TextColor(ACCENT_COLOR),
+                        TextColor(EMBER),
                     ));
                 });
             header
@@ -1314,7 +1280,7 @@ fn spawn_company_detail(
                                 font_size: FontSize::Px(9.0),
                                 ..default()
                             },
-                            TextColor(TEXT_MUTED),
+                            TextColor(INK_MUTED),
                         ));
                         detail_button(
                             actions,
@@ -1410,8 +1376,7 @@ fn spawn_company_detail(
                     border: UiRect::bottom(Val::Px(1.0)),
                     ..default()
                 },
-                BackgroundColor(Color::NONE),
-                BorderColor::from(DIVIDER),
+                button_chrome(UiButtonVariant::Row),
             ))
             .with_children(|row| {
                 row.spawn((
@@ -1424,7 +1389,7 @@ fn spawn_company_detail(
                         font_size: FontSize::Px(10.5),
                         ..default()
                     },
-                    TextColor(TEXT_COLOR),
+                    TextColor(INK),
                     Pickable::IGNORE,
                 ));
                 row.spawn((
@@ -1437,7 +1402,7 @@ fn spawn_company_detail(
                         font_size: FontSize::Px(10.0),
                         ..default()
                     },
-                    TextColor(TEXT_MUTED),
+                    TextColor(INK_MUTED),
                     Pickable::IGNORE,
                 ));
             });
@@ -1562,7 +1527,7 @@ fn spawn_branch_card(
                     font_size: FontSize::Px(9.5),
                     ..default()
                 },
-                TextColor(ACCENT_COLOR),
+                TextColor(EMBER),
             ));
             for (good, held, policy) in &branch.resources {
                 let unit_capacity = branch.bulk_capacity / good.bulk_per_unit().max(1);
@@ -1591,7 +1556,7 @@ fn spawn_branch_card(
                                 font_size: FontSize::Px(9.0),
                                 ..default()
                             },
-                            TextColor(TEXT_COLOR),
+                            TextColor(INK),
                         ));
                         line.spawn((
                             Text::new(if policy.sell_excess {
@@ -1603,7 +1568,7 @@ fn spawn_branch_card(
                                 font_size: FontSize::Px(8.0),
                                 ..default()
                             },
-                            TextColor(TEXT_MUTED),
+                            TextColor(INK_MUTED),
                         ));
                     });
                     if can_manage {
@@ -1629,7 +1594,7 @@ fn spawn_branch_card(
                                 height: Val::Percent(100.0),
                                 ..default()
                             },
-                            BackgroundColor(ACCENT_COLOR),
+                            BackgroundColor(EMBER),
                         ));
                         row.spawn(Node {
                             flex_direction: FlexDirection::Row,
@@ -1708,11 +1673,11 @@ fn branch_policy_button(
                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::from(BUTTON_BORDER),
+            button_chrome(UiButtonVariant::Secondary),
         ))
         .with_child((
             Text::new(label),
+            UiButtonLabel,
             TextFont {
                 font_size: FontSize::Px(8.0),
                 ..default()
@@ -1815,7 +1780,7 @@ fn spawn_site_card(
                         font_size: FontSize::Px(10.5),
                         ..default()
                     },
-                    TextColor(TEXT_COLOR),
+                    TextColor(INK),
                     Pickable::IGNORE,
                 ));
                 line.spawn((
@@ -1824,7 +1789,7 @@ fn spawn_site_card(
                         font_size: FontSize::Px(8.0),
                         ..default()
                     },
-                    TextColor(TEXT_MUTED),
+                    TextColor(INK_MUTED),
                     Pickable::IGNORE,
                 ));
             });
@@ -1842,7 +1807,7 @@ fn spawn_site_card(
                     font_size: FontSize::Px(8.5),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
                 Pickable::IGNORE,
             ));
             if let (Some(output), Some(price)) = (site.output, site.asking_price) {
@@ -1858,7 +1823,7 @@ fn spawn_site_card(
                         font_size: FontSize::Px(8.5),
                         ..default()
                     },
-                    TextColor(TEXT_MUTED),
+                    TextColor(INK_MUTED),
                     Pickable::IGNORE,
                 ));
             }
@@ -1880,7 +1845,7 @@ fn spawn_site_card(
                         font_size: FontSize::Px(8.5),
                         ..default()
                     },
-                    TextColor(TEXT_MUTED),
+                    TextColor(INK_MUTED),
                     Pickable::IGNORE,
                 ));
             }
@@ -1918,11 +1883,11 @@ fn detail_button<M: Component>(parent: &mut ChildSpawnerCommands<'_>, marker: M,
                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::from(BUTTON_BORDER),
+            button_chrome(UiButtonVariant::Secondary),
         ))
         .with_child((
             Text::new(label),
+            UiButtonLabel,
             TextFont {
                 font_size: FontSize::Px(8.0),
                 ..default()
@@ -1947,7 +1912,7 @@ fn detail_stat(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String
                 ..default()
             },
             BackgroundColor(Color::srgba(0.84, 0.81, 0.76, 0.36)),
-            BorderColor::from(DIVIDER),
+            BorderColor::from(PLATE_RULE_SOFT),
         ))
         .with_children(|card| {
             card.spawn((
@@ -1956,7 +1921,7 @@ fn detail_stat(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String
                     font_size: FontSize::Px(8.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
             ));
             card.spawn((
                 Text::new(value),
@@ -1964,7 +1929,7 @@ fn detail_stat(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String
                     font_size: FontSize::Px(12.0),
                     ..default()
                 },
-                TextColor(TEXT_COLOR),
+                TextColor(INK),
             ));
         });
 }
@@ -1986,7 +1951,7 @@ fn spawn_section_title(parent: &mut ChildSpawnerCommands<'_>, title: &str, note:
                     font_size: FontSize::Px(10.0),
                     ..default()
                 },
-                TextColor(ACCENT_COLOR),
+                TextColor(EMBER),
             ));
             row.spawn((
                 Text::new(note),
@@ -1994,7 +1959,7 @@ fn spawn_section_title(parent: &mut ChildSpawnerCommands<'_>, title: &str, note:
                     font_size: FontSize::Px(7.5),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
             ));
         });
 }
@@ -2010,7 +1975,7 @@ fn key_value(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String) 
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
-            BorderColor::from(DIVIDER),
+            BorderColor::from(PLATE_RULE_SOFT),
         ))
         .with_children(|row| {
             row.spawn((
@@ -2019,7 +1984,7 @@ fn key_value(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String) 
                     font_size: FontSize::Px(8.0),
                     ..default()
                 },
-                TextColor(TEXT_MUTED),
+                TextColor(INK_MUTED),
                 Node {
                     width: Val::Px(112.0),
                     flex_shrink: 0.0,
@@ -2032,7 +1997,7 @@ fn key_value(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String) 
                     font_size: FontSize::Px(9.5),
                     ..default()
                 },
-                TextColor(TEXT_COLOR),
+                TextColor(INK),
                 TextLayout::justify(Justify::Right),
                 Node {
                     min_width: Val::Px(0.0),
@@ -2050,7 +2015,7 @@ fn spawn_note(parent: &mut ChildSpawnerCommands<'_>, text: &str) {
             font_size: FontSize::Px(9.5),
             ..default()
         },
-        TextColor(TEXT_MUTED),
+        TextColor(INK_MUTED),
     ));
 }
 
@@ -2061,7 +2026,7 @@ fn spawn_empty(parent: &mut ChildSpawnerCommands<'_>, text: &str) {
             font_size: FontSize::Px(11.0),
             ..default()
         },
-        TextColor(TEXT_MUTED),
+        TextColor(INK_MUTED),
         TextLayout::justify(Justify::Center),
         Node {
             align_self: AlignSelf::Center,

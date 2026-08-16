@@ -60,11 +60,13 @@ pub use companies::{
     review_company_finance, review_company_strategies, CompanyDividendQueue,
     CompanyEscrowRefundQueue,
 };
+pub(crate) use construction::ensure_market_ground_is_level;
 pub use construction::{advance_construction, run_construction_material_logistics};
 pub(crate) use development_market::minimum_startup_capital;
 pub(crate) use economy::review_automatic_wage_offer;
 pub use employment::{
-    enforce_staffing_targets, fill_vacancies, review_automatic_staffing, sync_company_porters,
+    enforce_staffing_targets, fill_vacancies, review_automatic_staffing, review_worker_job_choices,
+    sync_company_porters,
 };
 pub use households::{
     assign_households, ensure_households, run_household_schedules, run_household_shopping,
@@ -104,13 +106,14 @@ pub(crate) use production::{
     automatic_opening_positions, farmer_seconds_per_wheat, fisher_seconds_per_food,
     lumber_seconds_per_tree, lumber_tree_yield, maximum_viable_input_unit_price,
     process_available_cycles, processing_recipe, rated_daily_production,
-    viable_processing_input_purchase, ProcessingRecipe, SELF_SUPPLY_TREE_YIELD,
+    viable_processing_input_purchase, BusinessOperatingPlan, ProcessingRecipe,
+    SELF_SUPPLY_TREE_YIELD,
 };
-pub use property_market::publish_property_boards;
+pub use property_market::{publish_property_boards, remove_abandoned_businesses};
 use settlement_economy::{buy_from_moot, sell_carried_to_moot};
 pub use settlement_economy::{
-    ensure_settlement_economies, ensure_village_finances, update_moot_market_targets,
-    update_settlement_economies, SettlementEconomyRuntime,
+    ensure_settlement_economies, ensure_village_finances, sync_public_market_storage,
+    update_moot_market_targets, update_settlement_economies, SettlementEconomyRuntime,
 };
 pub(crate) use trades::lumber_plot_has_reachable_tree;
 #[cfg(test)]
@@ -120,7 +123,7 @@ use trades::{
 pub use trades::{
     assign_farmer_routines, assign_fishing_routines, assign_lumberjack_routines,
     ensure_farm_fields, ensure_fishing_piers, run_farmer_routines, run_fishing_routines,
-    run_lumberjack_routines, sync_carried_load,
+    run_lumberjack_routines, sync_carried_load, sync_porter_cart_state,
 };
 use trades::{
     build_clip_facing, exterior_door_clearance_position, find_tree_for_cycle_cached,
@@ -149,7 +152,7 @@ use shared::economy::{
     WorkforceRequirements, BASIS_POINTS, FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE,
     MAXIMUM_BUSINESS_DAILY_WAGE, MINIMUM_BUSINESS_DAILY_WAGE, PENNIES_PER_COIN,
     PROPERTY_MARKET_EXPOSURE_DAYS, STARTING_TREASURY_MONEY, VILLAGE_MIN_PROSPERITY,
-    VILLAGE_MIN_RESIDENTS, VILLAGE_REQUIRED_SECURE_DAYS, WEALTHY_OWNER_MONEY,
+    VILLAGE_MIN_RESIDENTS, VILLAGE_REQUIRED_SECURE_DAYS,
 };
 use shared::region::{RegionCoord, SimLevel};
 use shared::spatial::SpatialObstacleGrid;
@@ -306,6 +309,25 @@ const TREE_MIN_DISTANCE: f32 = 10.0;
 const TREE_MAX_DISTANCE: f32 = 120.0;
 const DOOR_REACH: f32 = 0.4;
 const DOOR_OPEN_SECONDS: f32 = 0.667;
+
+/// Select the closest physical counter backed by one settlement-owned market
+/// inventory. Callers provide only completed Marketplace entrances belonging
+/// to that settlement; the Hall is always the safe fallback.
+pub(crate) fn nearest_public_market_entrance(
+    origin: Vec3,
+    hall_entrance: Vec3,
+    marketplace_entrances: impl IntoIterator<Item = Vec3>,
+) -> Vec3 {
+    marketplace_entrances
+        .into_iter()
+        .fold(hall_entrance, |nearest, candidate| {
+            if ground_distance(origin, candidate) < ground_distance(origin, nearest) {
+                candidate
+            } else {
+                nearest
+            }
+        })
+}
 
 /// How long a fully supplied building takes to raise, in seconds.
 ///
@@ -544,6 +566,16 @@ pub struct LumberjackRoutine {
     phase: LumberjackPhase,
 }
 
+impl LumberjackRoutine {
+    pub(crate) const fn workplace(&self) -> Entity {
+        self.hut
+    }
+
+    pub(crate) const fn hall(&self) -> Entity {
+        self.hall
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum LumberjackPhase {
     GoingToHut,
@@ -577,12 +609,15 @@ pub struct FarmerRoutine {
     phase: FarmerPhase,
 }
 
-#[cfg(test)]
 impl FarmerRoutine {
     /// Exposes workplace identity to the deterministic Village Lab without
     /// publishing the rest of the routine's server-only state.
     pub(crate) fn farmstead(&self) -> Entity {
         self.farmstead
+    }
+
+    pub(crate) const fn hall(&self) -> Entity {
+        self.hall
     }
 }
 
@@ -628,6 +663,16 @@ pub struct FishingRoutine {
     phase: FishingPhase,
 }
 
+impl FishingRoutine {
+    pub(crate) const fn workplace(&self) -> Entity {
+        self.hut
+    }
+
+    pub(crate) const fn hall(&self) -> Entity {
+        self.hall
+    }
+}
+
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct FishingWorkProgress {
     hut: Entity,
@@ -664,6 +709,10 @@ pub struct MarketCollectionRoutine {
     business: Entity,
     seller: shared::components::BuildingId,
     hall: Entity,
+    /// Physical Hall or Marketplace counter used for this trip. Economic
+    /// authority remains `hall`; pinning the entrance prevents route flapping
+    /// halfway through a delivery.
+    counter: Vec3,
     good: Good,
     reserved_units: u32,
     unit_price: u64,
@@ -699,6 +748,7 @@ enum MarketCollectionPhase {
     GoingToBusiness,
     ReturningToHall,
     DeliveringInput,
+    ReturningFailedInput,
 }
 
 /// A tactical-region household's one visible restocking trip. Strategic
@@ -707,6 +757,8 @@ enum MarketCollectionPhase {
 pub struct HouseholdShoppingRoutine {
     home: Entity,
     hall: Entity,
+    /// Hall or Marketplace entrance chosen when this shopping trip begins.
+    counter: Vec3,
     phase: HouseholdShoppingPhase,
 }
 

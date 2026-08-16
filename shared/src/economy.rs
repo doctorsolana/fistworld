@@ -29,6 +29,42 @@ pub enum Good {
     Bread,
 }
 
+/// Civic infrastructure required before a good may enter a settlement's
+/// public order book. Physical ownership and private company transfers remain
+/// legal at every tier; this controls only Hall/Marketplace trade.
+///
+/// The empty level-one rung is intentional with today's resource set. Future
+/// crafted goods can opt into the ordinary Marketplace without changing save
+/// data or scattering building checks throughout the economy.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[repr(u8)]
+pub enum MarketTradeTier {
+    #[default]
+    Moot,
+    Marketplace,
+    PavedMarketplace,
+}
+
+impl MarketTradeTier {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Moot => "MOOT EXCHANGE",
+            Self::Marketplace => "MARKETPLACE LEVEL 1",
+            Self::PavedMarketplace => "MARKETPLACE LEVEL 2",
+        }
+    }
+
+    pub const fn requirement_label(self) -> &'static str {
+        match self {
+            Self::Moot => "the Moot",
+            Self::Marketplace => "a level 1 Marketplace",
+            Self::PavedMarketplace => "a level 2 paved Marketplace",
+        }
+    }
+}
+
 /// One displayed coin is one hundred internal pennies.
 ///
 /// Money never uses floating point. Prices may be derived with floating-point
@@ -56,9 +92,6 @@ pub const BUSINESS_WAGE_REVIEW_STEP: u64 = PENNIES_PER_COIN / 10;
 pub const VACANCY_DAYS_BEFORE_RAISE: u16 = 2;
 pub const PAYROLL_STRESS_DAYS_BEFORE_CUT: u16 = 2;
 pub const FULLY_STAFFED_DAYS_BEFORE_REVIEW: u16 = 7;
-/// A productive owner may leave the worker roster only after reaching this
-/// personal liquid cushion and finding a replacement worker.
-pub const WEALTHY_OWNER_MONEY: u64 = 30 * PENNIES_PER_COIN;
 /// Portion of a consignment sale retained by the settlement operating the
 /// marketplace. Five percent is meaningful without making food taxation the
 /// dominant part of its price; the enacted civic policy may move it within
@@ -1293,7 +1326,13 @@ impl BusinessSalePolicy {
     pub fn for_good(good: Good) -> Self {
         Self {
             asking_unit_price: good.base_price(),
-            minimum_unit_price: good.base_price().saturating_mul(35) / 100,
+            // The authored base price seeds an unobserved market; it is not a
+            // legal price floor. Automatic firms protect their live unit cost
+            // in the business review, while a manual owner may deliberately
+            // clear stock below cost. Keeping this at one penny lets genuine
+            // competition discover a price instead of preserving 35% of an
+            // arbitrary founding quote forever.
+            minimum_unit_price: 1,
             ..Self::default()
         }
     }
@@ -1600,6 +1639,11 @@ pub enum BusinessState {
     New,
     Liquidating,
     ForSale,
+    /// A solvent workplace whose owner has temporarily withdrawn its labour
+    /// and production. The building, stock, listings and company ownership
+    /// remain intact so observed demand can reopen it without constructing a
+    /// duplicate plant.
+    Mothballed,
 }
 
 impl BusinessState {
@@ -1613,6 +1657,7 @@ impl BusinessState {
             Self::Liquidating => "Liquidating",
             Self::ForSale => "For sale",
             Self::Closed => "Closed",
+            Self::Mothballed => "Mothballed",
         }
     }
 
@@ -1632,6 +1677,12 @@ impl BusinessState {
 
     pub const fn counts_as_active_capacity(self) -> bool {
         self.can_operate()
+    }
+
+    /// Existing physical capacity which can answer future demand without a
+    /// fresh permit and construction project.
+    pub const fn counts_as_recoverable_capacity(self) -> bool {
+        matches!(self, Self::Mothballed | Self::Liquidating | Self::ForSale)
     }
 
     pub const fn blocks_owner_expansion(self) -> bool {
@@ -1724,11 +1775,23 @@ const fn liquidation_staff_already_released() -> bool {
 
 impl BusinessLiquidation {
     pub fn insolvency(day: u32, wage_claims: Vec<BusinessWageClaim>) -> Self {
+        Self::with_reason(day, BusinessSaleReason::Insolvent, wage_claims)
+    }
+
+    pub fn voluntary_closure(day: u32, wage_claims: Vec<BusinessWageClaim>) -> Self {
+        Self::with_reason(day, BusinessSaleReason::VoluntaryClosure, wage_claims)
+    }
+
+    fn with_reason(
+        day: u32,
+        reason: BusinessSaleReason,
+        wage_claims: Vec<BusinessWageClaim>,
+    ) -> Self {
         Self {
             started_day: day,
             last_review_day: day,
             empty_days: 0,
-            reason: BusinessSaleReason::Insolvent,
+            reason,
             wage_claims,
             staff_released: true,
         }
@@ -1859,6 +1922,31 @@ impl CarriedLoad {
     }
 }
 
+/// Replicated presentation state for an embodied porter trip.
+///
+/// The server's [`GoodsInventory`] remains the cargo authority. Presence says
+/// the character is currently hauling the handcart (including an empty
+/// outbound leg); `load_slots` is the bounded 0..=2 visual summary consumed by
+/// the two authored `Anchor_Load.*` nodes.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PorterCartState {
+    pub load_slots: u8,
+}
+
+impl PorterCartState {
+    pub const fn for_used_bulk(used_bulk: u32) -> Self {
+        Self {
+            load_slots: if used_bulk == 0 {
+                0
+            } else if used_bulk <= capacity::PORTER / 2 {
+                1
+            } else {
+                2
+            },
+        }
+    }
+}
+
 impl Good {
     /// Existing discriminants stay in their original order for replicated and
     /// saved data; new goods are appended.
@@ -1880,6 +1968,18 @@ impl Good {
     /// Food which can be handed to an unhoused resident and eaten in the Moot
     /// commons. Flour deliberately is not on this list.
     pub const READY_TO_EAT_PRIORITY: [Self; 2] = [Self::Bread, Self::Food];
+
+    /// Minimum public exchange able to list and clear this good. All current
+    /// founding resources remain Moot-tradeable; Iron is the first specialist
+    /// commodity reserved for a level-two Marketplace.
+    pub const fn minimum_market_tier(self) -> MarketTradeTier {
+        match self {
+            Self::Iron => MarketTradeTier::PavedMarketplace,
+            Self::Food | Self::Wheat | Self::Wood | Self::Stone | Self::Flour | Self::Bread => {
+                MarketTradeTier::Moot
+            }
+        }
+    }
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -2149,6 +2249,8 @@ pub struct MootMarket {
     listings: Vec<MarketListing>,
     #[serde(default = "default_market_fee_bps")]
     market_fee_bps: u16,
+    #[serde(default)]
+    trade_tier: MarketTradeTier,
 }
 
 const fn default_market_fee_bps() -> u16 {
@@ -2169,7 +2271,22 @@ impl MootMarket {
             ],
             listings: Vec::new(),
             market_fee_bps: DEFAULT_MARKET_FEE_BPS,
+            trade_tier: MarketTradeTier::Moot,
         }
+    }
+
+    pub const fn trade_tier(&self) -> MarketTradeTier {
+        self.trade_tier
+    }
+
+    /// Settlement development is monotonic, so a temporarily missing streamed
+    /// Marketplace must never hide or strand goods which were already legal.
+    pub fn unlock_trade_tier(&mut self, tier: MarketTradeTier) {
+        self.trade_tier = self.trade_tier.max(tier);
+    }
+
+    pub const fn can_trade(&self, good: Good) -> bool {
+        self.trade_tier as u8 >= good.minimum_market_tier() as u8
     }
 
     pub fn pool(&self, good: Good) -> &MarketPool {
@@ -2200,12 +2317,13 @@ impl MootMarket {
             .fold(0u32, u32::saturating_add)
     }
 
-    /// Remaining public shelf space for this good. Porters use the enacted
-    /// market target as a bounded consignment level instead of filling the
-    /// entire Moot Hall with one unsold commodity. A four-unit minimum keeps
-    /// newly introduced goods tradable before settlement policy assigns a
-    /// population-derived target.
-    pub fn collection_room(&self, good: Good) -> u32 {
+    /// How far current listings sit below the planning target. This is a
+    /// shortage signal, not a storage or consignment limit: competing sellers
+    /// must remain free to post cheaper asks until physical storage fills.
+    pub fn target_shortfall(&self, good: Good) -> u32 {
+        if !self.can_trade(good) {
+            return 0;
+        }
         self.pool(good)
             .target_stock
             .max(4)
@@ -2218,6 +2336,18 @@ impl MootMarket {
             .filter(|listing| listing.seller == seller && listing.good == good)
             .map(|listing| listing.units)
             .fold(0u32, u32::saturating_add)
+    }
+
+    /// Cheapest live offer from somebody other than `seller`.
+    ///
+    /// Listings are already sorted by good, price and stable seller identity,
+    /// so this is the actual rival an autonomous owner must beat rather than a
+    /// synthetic settlement-wide quote or yesterday's highest asking price.
+    pub fn best_competing_price(&self, seller: MarketSeller, good: Good) -> Option<u64> {
+        self.listings
+            .iter()
+            .find(|listing| listing.good == good && listing.seller != seller && listing.units > 0)
+            .map(|listing| listing.unit_price)
     }
 
     pub fn seller_total_listed_units(&self, seller: MarketSeller) -> u32 {
@@ -2284,15 +2414,42 @@ impl MootMarket {
             .fold(0u64, u64::saturating_add)
     }
 
-    /// Update desired reserves from current population and construction demand.
+    /// Update desired reserves for a founding Hall from current population and
+    /// construction demand.
     pub fn set_targets(&mut self, residents: u32, outstanding_wood: u32) {
+        self.set_targets_with_marketplace(residents, outstanding_wood, false);
+    }
+
+    /// Update desired public shelves. A completed Marketplace does not create
+    /// a second order book: it expands the same settlement exchange and gives
+    /// it enough depth to serve processors and export-oriented producers.
+    pub fn set_targets_with_marketplace(
+        &mut self,
+        residents: u32,
+        outstanding_wood: u32,
+        has_marketplace: bool,
+    ) {
         let edible_target = residents.saturating_mul(3).max(4);
+        let edible_target = if has_marketplace {
+            edible_target.saturating_mul(2).max(24)
+        } else {
+            edible_target
+        };
         self.pool_mut(Good::Food).target_stock = edible_target;
         self.pool_mut(Good::Flour).target_stock = edible_target;
         self.pool_mut(Good::Bread).target_stock = edible_target;
-        // Wheat is working stock for mills rather than a resident reserve.
-        self.pool_mut(Good::Wheat).target_stock = residents.max(4);
-        self.pool_mut(Good::Wood).target_stock = outstanding_wood.saturating_add(10);
+        // Wheat is both mill working stock and the settlement's main tradable
+        // crop. One unit per resident made a 16-person town stop accepting at
+        // 16 Wheat despite an otherwise empty Hall. The founding shelf now
+        // supports two local processing turns; a Marketplace supports a much
+        // deeper regional-producer shelf.
+        self.pool_mut(Good::Wheat).target_stock = if has_marketplace {
+            residents.saturating_mul(6).max(96)
+        } else {
+            residents.saturating_mul(2).max(32)
+        };
+        self.pool_mut(Good::Wood).target_stock =
+            outstanding_wood.saturating_add(if has_marketplace { 40 } else { 10 });
     }
 
     /// Refresh the visible last-sale and best-offer quote from the order book.
@@ -2325,7 +2482,7 @@ impl MootMarket {
 
     /// Put physically delivered goods on sale without paying the seller early.
     pub fn consign(&mut self, seller: MarketSeller, good: Good, units: u32, unit_price: u64) {
-        if units == 0 {
+        if units == 0 || !self.can_trade(good) {
             return;
         }
         let unit_price = unit_price.max(1);
@@ -2374,12 +2531,7 @@ impl MootMarket {
                 .saturating_mul(basis_points)
                 .div_ceil(BASIS_POINTS)
                 .max(1);
-            let floor = listing.good.base_price().saturating_mul(25) / 100;
-            listing.unit_price = listing
-                .unit_price
-                .saturating_sub(movement)
-                .max(floor)
-                .max(1);
+            listing.unit_price = listing.unit_price.saturating_sub(movement).max(1);
         }
         self.sort_listings();
         for good in Good::ALL {
@@ -2398,6 +2550,9 @@ impl MootMarket {
         maximum_unit_price: Option<u64>,
         excluded_seller: Option<MarketSeller>,
     ) -> MarketPurchase {
+        if !self.can_trade(good) {
+            return MarketPurchase::default();
+        }
         let mut purchase = MarketPurchase::default();
         let mut remaining = requested;
         for listing in &mut self.listings {
@@ -2474,6 +2629,11 @@ impl MootMarket {
         maximum_unit_price: Option<u64>,
         excluded_seller: Option<MarketSeller>,
     ) -> MarketPurchase {
+        // Locked goods do not create false scarcity signals. Demand becomes
+        // economically visible only once this settlement can legally trade it.
+        if !self.can_trade(good) {
+            return MarketPurchase::default();
+        }
         let available = self
             .listings
             .iter()
@@ -2521,6 +2681,9 @@ impl MootMarket {
         maximum_unit_price: Option<u64>,
         excluded_seller: Option<MarketSeller>,
     ) -> MarketTrade {
+        if !self.can_trade(good) {
+            return MarketTrade::default();
+        }
         let mut trade = MarketTrade::default();
         let mut remaining = requested;
         for listing in &self.listings {
@@ -2558,6 +2721,11 @@ impl MootMarket {
         inventory: &GoodsInventory,
     ) {
         for good in Good::ALL {
+            // Locked physical stock may remain safely stored. It becomes a
+            // Treasury listing on the first review after the tier unlocks.
+            if !self.can_trade(good) {
+                continue;
+            }
             let physical = inventory.amount(good);
             let listed = self.listed_units(good);
             if physical > listed {
@@ -2925,6 +3093,13 @@ pub fn permit_price_with_subsidy(
     if kind == SettlementBuildingKind::Hall {
         return u64::MAX;
     }
+    // Turning raw Wheat into the settlement's first edible grain supply is
+    // emergency infrastructure. When the opportunity board explicitly asks
+    // for a Windmill, the Hall waives the land-use fee rather than taking the
+    // processor's scarce opening input cash. Speculative mills still pay.
+    if kind == SettlementBuildingKind::Windmill && needed_by_settlement {
+        return 0;
+    }
     let base: u64 = match kind {
         SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut => 300,
         SettlementBuildingKind::LumberjackHut => 250,
@@ -2996,14 +3171,16 @@ pub fn player_permit_price_with_subsidy(
 
 /// Server-owned bounded storage for bulk goods.
 ///
-/// One representation serves carried loads, workplace stores, houses and the
-/// settlement hall. Different capacities make them different without giving
-/// each location subtly different transfer rules. The fixed array keeps the
-/// strategic tick cheap and makes serialization stable and predictable.
+/// Carried loads, workplaces and houses share one physical bulk allowance.
+/// Public market stores can instead opt into equal independent compartments:
+/// a full Wood bay then cannot consume the space reserved for Bread or Flour.
+/// The fixed arrays keep the strategic tick cheap and serialization stable.
 #[derive(Component, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GoodsInventory {
     amounts: [u32; Good::COUNT],
     bulk_capacity: u32,
+    #[serde(default)]
+    partition_bulk_capacity: Option<u32>,
 }
 
 impl GoodsInventory {
@@ -3011,6 +3188,18 @@ impl GoodsInventory {
         Self {
             amounts: [0; Good::COUNT],
             bulk_capacity,
+            partition_bulk_capacity: None,
+        }
+    }
+
+    /// Build storage with the same independent bulk allowance for every good.
+    /// `partition_bulk_capacity` is therefore the capacity of each named bay,
+    /// not a total shared between unlike resources.
+    pub const fn new_partitioned(partition_bulk_capacity: u32) -> Self {
+        Self {
+            amounts: [0; Good::COUNT],
+            bulk_capacity: partition_bulk_capacity.saturating_mul(Good::COUNT as u32),
+            partition_bulk_capacity: Some(partition_bulk_capacity),
         }
     }
 
@@ -3018,11 +3207,36 @@ impl GoodsInventory {
         self.bulk_capacity
     }
 
+    pub const fn partition_bulk_capacity(&self) -> Option<u32> {
+        self.partition_bulk_capacity
+    }
+
+    pub fn bulk_capacity_for(&self, good: Good) -> u32 {
+        self.partition_bulk_capacity.unwrap_or_else(|| {
+            self.amount(good).saturating_mul(good.bulk_per_unit()) + self.free_bulk()
+        })
+    }
+
     /// Resize physical storage without ever deleting goods. A requested
     /// shrink stops at the currently occupied bulk; callers can retry after
     /// the inventory is unloaded.
     pub fn resize_bulk_capacity(&mut self, requested: u32) {
         self.bulk_capacity = requested.max(self.used_bulk());
+        self.partition_bulk_capacity = None;
+    }
+
+    /// Convert to, or resize, equal per-good compartments without deleting an
+    /// over-capacity legacy stack. A later resize can finish shrinking once
+    /// that particular good has been removed.
+    pub fn resize_partitioned_bulk_capacity(&mut self, requested_per_good: u32) {
+        let occupied_high_water = Good::ALL
+            .iter()
+            .map(|good| self.amount(*good).saturating_mul(good.bulk_per_unit()))
+            .max()
+            .unwrap_or(0);
+        let per_good = requested_per_good.max(occupied_high_water);
+        self.partition_bulk_capacity = Some(per_good);
+        self.bulk_capacity = per_good.saturating_mul(Good::COUNT as u32);
     }
 
     pub fn amount(&self, good: Good) -> u32 {
@@ -3037,7 +3251,30 @@ impl GoodsInventory {
     }
 
     pub fn free_bulk(&self) -> u32 {
-        self.bulk_capacity.saturating_sub(self.used_bulk())
+        if self.partition_bulk_capacity.is_some() {
+            Good::ALL
+                .iter()
+                .map(|good| self.free_bulk_for(*good))
+                .fold(0, u32::saturating_add)
+        } else {
+            self.bulk_capacity.saturating_sub(self.used_bulk())
+        }
+    }
+
+    /// Remaining bulk which can accept this specific good. For ordinary
+    /// inventories this is the shared remainder; for a public market it is
+    /// only the named resource's compartment.
+    pub fn free_bulk_for(&self, good: Good) -> u32 {
+        self.partition_bulk_capacity.map_or_else(
+            || self.bulk_capacity.saturating_sub(self.used_bulk()),
+            |capacity| {
+                capacity.saturating_sub(self.amount(good).saturating_mul(good.bulk_per_unit()))
+            },
+        )
+    }
+
+    pub fn free_units(&self, good: Good) -> u32 {
+        self.free_bulk_for(good) / good.bulk_per_unit()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -3076,7 +3313,7 @@ impl GoodsInventory {
 
     /// Add up to `requested` units and return the amount accepted.
     pub fn add(&mut self, good: Good, requested: u32) -> u32 {
-        let accepted = requested.min(self.free_bulk() / good.bulk_per_unit());
+        let accepted = requested.min(self.free_units(good));
         self.amounts[good.index()] = self.amount(good).saturating_add(accepted);
         accepted
     }
@@ -3127,6 +3364,22 @@ pub struct SettlementEconomy {
     pub employment_prosperity: f32,
     pub hunger_penalty: f32,
     pub prosperity: f32,
+    #[serde(default)]
+    pub private_job_positions: u16,
+    #[serde(default)]
+    pub private_filled_jobs: u16,
+    #[serde(default)]
+    pub private_vacant_jobs: u16,
+    #[serde(default)]
+    pub civic_job_positions: u16,
+    #[serde(default)]
+    pub civic_filled_jobs: u16,
+    #[serde(default)]
+    pub civic_vacant_jobs: u16,
+    #[serde(default)]
+    pub job_seekers: u16,
+    #[serde(default)]
+    pub best_open_private_wage: u64,
 }
 
 impl Default for SettlementEconomy {
@@ -3145,6 +3398,14 @@ impl Default for SettlementEconomy {
             employment_prosperity: 0.0,
             hunger_penalty: 0.0,
             prosperity: 0.0,
+            private_job_positions: 0,
+            private_filled_jobs: 0,
+            private_vacant_jobs: 0,
+            civic_job_positions: 0,
+            civic_filled_jobs: 0,
+            civic_vacant_jobs: 0,
+            job_seekers: 0,
+            best_open_private_wage: 0,
         }
     }
 }
@@ -3170,7 +3431,8 @@ pub const CITY_REQUIRED_DAYS: u16 = 5;
 ///
 /// These are tuning, not economic values. They say how much can physically be
 /// present before somebody must haul it elsewhere; they say nothing about who
-/// owns the contents or what they are worth.
+/// owns the contents or what they are worth. `HALL` and `MARKET` are per-good
+/// compartment sizes; the remaining constants are ordinary combined stores.
 pub mod capacity {
     /// Personal cargo carried by both villagers and player heroes. Sixteen
     /// bulk fits four Wood bundles (up from three) while remaining far below
@@ -3246,6 +3508,11 @@ mod tests {
     fn porter_cart_capacity_is_large_and_inventory_resizing_is_lossless() {
         assert_eq!(capacity::PORTER, capacity::VILLAGER * 6);
         assert_eq!(BusinessSalePolicy::default().max_units_per_collection, 64);
+        assert_eq!(PorterCartState::for_used_bulk(0).load_slots, 0);
+        assert_eq!(PorterCartState::for_used_bulk(1).load_slots, 1);
+        assert_eq!(PorterCartState::for_used_bulk(48).load_slots, 1);
+        assert_eq!(PorterCartState::for_used_bulk(49).load_slots, 2);
+        assert_eq!(PorterCartState::for_used_bulk(96).load_slots, 2);
 
         let mut inventory = GoodsInventory::new(capacity::VILLAGER);
         inventory.resize_bulk_capacity(capacity::PORTER);
@@ -3265,6 +3532,36 @@ mod tests {
         assert_eq!(inventory.amount(Good::Wood), 2);
         assert_eq!(inventory.used_bulk(), 12);
         assert_eq!(inventory.free_bulk(), 0);
+    }
+
+    #[test]
+    fn partitioned_public_storage_keeps_each_goods_space_independent() {
+        let mut inventory = GoodsInventory::new_partitioned(12);
+
+        assert_eq!(inventory.add(Good::Wood, 4), 3);
+        assert_eq!(inventory.free_units(Good::Wood), 0);
+        assert_eq!(inventory.add(Good::Bread, 12), 12);
+        assert_eq!(inventory.amount(Good::Wood), 3);
+        assert_eq!(inventory.amount(Good::Bread), 12);
+        assert_eq!(inventory.free_units(Good::Bread), 0);
+        assert_eq!(inventory.free_units(Good::Flour), 12);
+        assert_eq!(inventory.used_bulk(), 24);
+        assert_eq!(
+            inventory.bulk_capacity(),
+            12 * u32::try_from(Good::COUNT).unwrap()
+        );
+    }
+
+    #[test]
+    fn converting_a_full_legacy_store_preserves_every_stack() {
+        let mut inventory = GoodsInventory::new(12);
+        assert_eq!(inventory.add(Good::Wood, 3), 3);
+
+        inventory.resize_partitioned_bulk_capacity(8);
+
+        assert_eq!(inventory.amount(Good::Wood), 3);
+        assert_eq!(inventory.partition_bulk_capacity(), Some(12));
+        assert_eq!(inventory.add(Good::Bread, 12), 12);
     }
 
     #[test]
@@ -3588,7 +3885,7 @@ mod tests {
     }
 
     #[test]
-    fn liquidation_markdown_keeps_food_listed_and_never_reaches_zero_price() {
+    fn liquidation_markdown_keeps_food_listed_and_can_clear_below_the_reference_price() {
         let mut market = MootMarket::founding();
         let seller = MarketSeller::Business(crate::components::BuildingId(92));
         market.consign(seller, Good::Bread, 5, 200);
@@ -3597,20 +3894,84 @@ mod tests {
         }
         assert_eq!(market.seller_listed_units(seller, Good::Bread), 5);
         assert_eq!(market.listed_edible_units(), 5);
-        assert!(market.suggested_price(Good::Bread) >= Good::Bread.base_price() / 4);
+        assert!(market.suggested_price(Good::Bread) < Good::Bread.base_price() / 4);
+        assert!(market.suggested_price(Good::Bread) > 0);
     }
 
     #[test]
-    fn public_collection_room_stops_one_good_from_filling_the_market() {
+    fn competing_price_excludes_the_reviewing_seller() {
+        let mut market = MootMarket::founding();
+        let first = MarketSeller::Business(crate::components::BuildingId(1));
+        let second = MarketSeller::Business(crate::components::BuildingId(2));
+        market.consign(first, Good::Bread, 4, 90);
+        market.consign(second, Good::Bread, 4, 75);
+
+        assert_eq!(market.best_competing_price(first, Good::Bread), Some(75));
+        assert_eq!(market.best_competing_price(second, Good::Bread), Some(90));
+    }
+
+    #[test]
+    fn public_target_shortfall_is_a_signal_not_a_consignment_cap() {
         let mut market = MootMarket::founding();
         let seller = MarketSeller::Business(crate::components::BuildingId(190));
-        assert_eq!(market.collection_room(Good::Wheat), 4);
+        assert_eq!(market.target_shortfall(Good::Wheat), 4);
         market.consign(seller, Good::Wheat, 3, Good::Wheat.base_price());
-        assert_eq!(market.collection_room(Good::Wheat), 1);
+        assert_eq!(market.target_shortfall(Good::Wheat), 1);
 
         market.set_targets(12, 0);
-        assert_eq!(market.collection_room(Good::Wheat), 9);
-        assert_eq!(market.collection_room(Good::Stone), 4);
+        assert_eq!(market.target_shortfall(Good::Wheat), 29);
+        assert_eq!(market.target_shortfall(Good::Stone), 4);
+        market.consign(seller, Good::Wheat, 40, Good::Wheat.base_price() - 1);
+        assert_eq!(market.target_shortfall(Good::Wheat), 0);
+        assert_eq!(market.listed_units(Good::Wheat), 43);
+    }
+
+    #[test]
+    fn marketplace_deepens_wheat_planning_without_capping_offers() {
+        let mut market = MootMarket::founding();
+        market.set_targets_with_marketplace(16, 0, false);
+        assert_eq!(market.pool(Good::Wheat).target_stock, 32);
+        market.set_targets_with_marketplace(16, 0, true);
+        assert_eq!(market.pool(Good::Wheat).target_stock, 96);
+        assert_eq!(market.pool(Good::Food).target_stock, 96);
+    }
+
+    #[test]
+    fn public_goods_unlock_once_at_their_declared_market_tier() {
+        let seller = MarketSeller::Business(crate::components::BuildingId(195));
+        let mut market = MootMarket::founding();
+
+        for good in Good::ALL {
+            assert_eq!(
+                market.can_trade(good),
+                good != Good::Iron,
+                "every current founding good except Iron should trade at the Moot",
+            );
+        }
+        market.consign(seller, Good::Iron, 2, Good::Iron.base_price());
+        assert_eq!(market.listed_units(Good::Iron), 0);
+        assert_eq!(
+            market.purchase_recording_demand(Good::Iron, 2, u64::MAX, None, None),
+            MarketPurchase::default(),
+        );
+        assert_eq!(
+            market.pool(Good::Iron).day.unmet_units(),
+            0,
+            "a legally locked good must not look like an economic shortage",
+        );
+
+        market.unlock_trade_tier(MarketTradeTier::Marketplace);
+        assert!(!market.can_trade(Good::Iron));
+        market.unlock_trade_tier(MarketTradeTier::PavedMarketplace);
+        assert!(market.can_trade(Good::Iron));
+        market.consign(seller, Good::Iron, 2, Good::Iron.base_price());
+        assert_eq!(market.listed_units(Good::Iron), 2);
+
+        market.unlock_trade_tier(MarketTradeTier::Moot);
+        assert!(
+            market.can_trade(Good::Iron),
+            "an exchange unlock cannot regress and strand existing listings",
+        );
     }
 
     #[test]
@@ -3685,6 +4046,8 @@ mod tests {
         use crate::components::SettlementBuildingKind;
         assert_eq!(permit_price(SettlementBuildingKind::House, 4, true), 0);
         assert!(permit_price(SettlementBuildingKind::Farmstead, 0, true) >= PENNIES_PER_COIN);
+        assert_eq!(permit_price(SettlementBuildingKind::Windmill, 0, true), 0);
+        assert!(permit_price(SettlementBuildingKind::Windmill, 0, false) > 0);
         assert!(
             permit_price(SettlementBuildingKind::Farmstead, 2, false)
                 > permit_price(SettlementBuildingKind::Farmstead, 0, true)

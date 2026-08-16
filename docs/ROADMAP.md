@@ -508,6 +508,12 @@ sell it dear. The M&B opening hour.
 - [x] Operator staffing targets: every private site exposes zero through its physical position
       maximum, vacancy matching obeys the target, and a porter finishes an active shipment before
       the closing position releases them.
+- [x] Marginal automatic operations: one daily indexed review budgets output from sales,
+      unavailable demand and stock, adds/releases at most one position, caps processor input
+      procurement to that budget, and drives both tactical and strategic production.
+- [x] Recoverable capacity and logistics investment: unwanted solvent sites mothball/reopen;
+      idle, mothballed, liquidating and for-sale plant suppresses duplicate permits; depot
+      opportunities use stranded value, recent cart throughput, free bulk and porter cost.
 - [x] Company-funded expansion: an established Company's retained cash buys its business
       permit only after its decision tree considers wage/tax liabilities, payroll runway and
       recommended operating cash. Working capital remains ordinary treasury cash. Explicit

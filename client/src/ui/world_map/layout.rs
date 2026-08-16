@@ -11,11 +11,7 @@ pub(super) fn toggle_map(
     if game_state.get() != &GameState::Playing {
         return;
     }
-    if keyboard.just_pressed(KeyCode::KeyM)
-        && !input_state.inventory_open
-        && !input_state.pause_menu_open
-        && !input_state.debug_menu_open
-    {
+    if keyboard.just_pressed(KeyCode::KeyM) && (map_open.0 || !input_state.ui_blocking()) {
         map_open.0 = !map_open.0;
     }
 }
@@ -108,37 +104,14 @@ pub(super) fn spawn_map_ui(
     });
 
     commands
-        .spawn((
-            MapRoot,
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.4)),
-        ))
+        .spawn((MapRoot, ModalRoot, modal_root_chrome()))
         .with_children(|root| {
             // Backdrop button (click outside map to close)
-            root.spawn((
-                MapBackdrop,
-                Button,
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(0.0),
-                    top: Val::Px(0.0),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
-            ));
+            root.spawn((MapBackdrop, modal_backdrop_chrome(MODAL_BACKDROP)));
 
             // Map panel
             root.spawn((
                 MapPanel,
-                Button,
                 Node {
                     width: Val::Px(MAP_PANEL_SIZE + 24.0),
                     height: Val::Px(MAP_PANEL_SIZE + 64.0),
@@ -150,7 +123,9 @@ pub(super) fn spawn_map_ui(
                     ..default()
                 },
                 BackgroundColor(MENU_BACKGROUND),
-                BorderColor::from(BUTTON_BORDER),
+                BorderColor::from(PLATE_RULE),
+                bevy::ui::FocusPolicy::Block,
+                Pickable::default(),
             ))
             .with_children(|panel| {
                 panel.spawn((
@@ -159,7 +134,7 @@ pub(super) fn spawn_map_ui(
                         font_size: FontSize::Px(18.0),
                         ..default()
                     },
-                    TextColor(TEXT_COLOR),
+                    TextColor(INK_INVERSE),
                     Node {
                         margin: UiRect::bottom(Val::Px(8.0)),
                         ..default()
@@ -174,7 +149,7 @@ pub(super) fn spawn_map_ui(
                             border: UiRect::all(Val::Px(1.0)),
                             ..default()
                         },
-                        BorderColor::from(BUTTON_BORDER),
+                        BorderColor::from(PLATE_RULE),
                     ))
                     .with_children(|map_container| {
                         map_container.spawn((

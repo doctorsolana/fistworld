@@ -8,16 +8,16 @@
 
 pub mod control;
 
-use bevy::animation::AnimationTargetId;
+use bevy::animation::{AnimatedBy, AnimationTargetId};
 use bevy::gltf::{Gltf, GltfMaterialName};
-use bevy::platform::collections::HashMap;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use shared::character::CharacterManifest;
 use shared::components::{
     CharacterActivity, CharacterKind, CharacterMotion, HeroOutfit, PlayerPosition, PlayerRotation,
     TimeWarp,
 };
-use shared::economy::{CarriedAppearance, CarriedLoad};
+use shared::economy::{CarriedAppearance, CarriedLoad, PorterCartState};
 use shared::player::HERO_MOVE_SPEED;
 
 use crate::states::GameState;
@@ -50,6 +50,7 @@ impl Plugin for HeroPlugin {
         app.insert_resource(HeroManifest(manifest));
         app.init_resource::<HeroAssets>();
         app.init_resource::<CarriedLoadAssets>();
+        app.init_resource::<PorterCartAssets>();
         app.init_resource::<ToolAssets>();
         app.init_resource::<control::WorldPlacementMode>();
         app.add_systems(
@@ -67,9 +68,21 @@ impl Plugin for HeroPlugin {
                     tag_carry_attachments,
                     tag_tool_attachments,
                     sync_indoor_visibility,
+                    sync_porter_cart_visuals,
                     sync_carried_load_visuals,
                     sync_tool_visuals,
-                    drive_hero_locomotion,
+                    (
+                        tag_porter_cart_load_attachments,
+                        sync_porter_cart_load_visuals,
+                    )
+                        .chain(),
+                    (
+                        recover_stale_porter_cart_animation,
+                        setup_porter_cart_animation,
+                        drive_hero_locomotion,
+                        drive_porter_cart_motion,
+                    )
+                        .chain(),
                 ),
                 (
                     control::handle_world_clicks,
@@ -101,6 +114,28 @@ pub struct HeroAssets {
 #[derive(Resource, Default)]
 struct CarriedLoadAssets {
     scenes: HashMap<CarriedAppearance, Handle<WorldAsset>>,
+}
+
+const PORTER_CART_GLTF_PATH: &str = "game_assets/props/HandCart.glb";
+const PORTER_CART_SCENE_PATH: &str = "game_assets/props/HandCart.glb#Scene0";
+const PORTER_CART_WHEEL_RADIUS: f32 = 0.35;
+
+fn advanced_cart_wheel_angle(current: f32, ground_distance: f32) -> f32 {
+    (current - ground_distance / PORTER_CART_WHEEL_RADIUS).rem_euclid(std::f32::consts::TAU)
+}
+
+/// Shared scene, source glTF and graph for every active porter cart.
+#[derive(Resource, Default)]
+struct PorterCartAssets {
+    scene: Option<Handle<WorldAsset>>,
+    gltf: Option<Handle<Gltf>>,
+    graph: Option<PorterCartGraph>,
+}
+
+#[derive(Clone)]
+struct PorterCartGraph {
+    handle: Handle<AnimationGraph>,
+    pull: AnimationNodeIndex,
 }
 
 /// Authored hand-tool scenes, loaded once and shared by every character.
@@ -217,6 +252,7 @@ struct HeroAnim {
     chop: Option<AnimationNodeIndex>,
     harvest: Option<AnimationNodeIndex>,
     carry: Option<AnimationNodeIndex>,
+    pull: Option<AnimationNodeIndex>,
     sit_idle: Option<AnimationNodeIndex>,
     current_body: Option<AnimationNodeIndex>,
     fading_body: Option<AnimationNodeIndex>,
@@ -229,6 +265,42 @@ const BODY_ANIMATION_FADE_SECONDS: f32 = 0.14;
 /// The authored resource scene parented to the rig's `attach.carry` joint.
 #[derive(Component)]
 struct CarriedLoadVisual(CarriedAppearance);
+
+/// Link from a replicated character to its world-space handcart child.
+#[derive(Component)]
+struct PorterCartLink(Entity);
+
+/// Root of the instantiated handcart scene. Parenting this directly beneath
+/// the character root copies locomotion without inheriting skeleton bob.
+#[derive(Component)]
+struct PorterCartVisual {
+    owner: Entity,
+}
+
+#[derive(Component)]
+struct PorterCartLoadAttachment {
+    owner: Entity,
+    slot: u8,
+}
+
+#[derive(Component)]
+struct PorterCartLoadVisual {
+    appearance: CarriedAppearance,
+    slot: u8,
+}
+
+#[derive(Component)]
+struct PorterCartAnimationTarget;
+
+#[derive(Component)]
+struct PorterCartAnimation {
+    player: Entity,
+    pull: AnimationNodeIndex,
+    wheels: [Entity; 2],
+    wheel_rest: [Quat; 2],
+    wheel_angle: f32,
+    last_position: Vec3,
+}
 
 /// An authored rig node that accepts the current carried-goods visual.
 #[derive(Component)]
@@ -523,6 +595,8 @@ const CLIP_CHOP: &str = "chop";
 /// Played while cutting and gathering a wheat field.
 const CLIP_HARVEST: &str = "harvest";
 const CLIP_CARRY: &str = "carry";
+/// Played while an active porter trip owns the world-space handcart.
+const CLIP_PULL: &str = "pull";
 const CLIP_SIT_IDLE: &str = "sit_idle";
 /// Resting expression; face clips play on their own masked layer.
 const CLIP_FACE_IDLE: &str = "face_idle";
@@ -723,6 +797,7 @@ fn setup_hero_animation(
         let chop = hero_graph.body.get(CLIP_CHOP).copied();
         let harvest = hero_graph.body.get(CLIP_HARVEST).copied();
         let carry = hero_graph.body.get(CLIP_CARRY).copied();
+        let pull = hero_graph.body.get(CLIP_PULL).copied();
         let sit_idle = hero_graph.body.get(CLIP_SIT_IDLE).copied();
         if let Some(idle) = idle {
             player.play(idle).repeat().set_weight(1.0);
@@ -744,6 +819,7 @@ fn setup_hero_animation(
             chop,
             harvest,
             carry,
+            pull,
             sit_idle,
             current_body: idle,
             fading_body: None,
@@ -885,23 +961,367 @@ fn tag_tool_attachments(
     }
 }
 
+/// Add and remove the cart as a direct child of the replicated character.
+/// Its authored root is already in the character's final game-space frame, so
+/// no corrective offset, rotation or scale belongs here.
+fn sync_porter_cart_visuals(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut assets: ResMut<PorterCartAssets>,
+    active: Query<(Entity, Option<&PorterCartLink>), (With<CharacterKind>, With<PorterCartState>)>,
+    inactive: Query<(Entity, &PorterCartLink), (With<CharacterKind>, Without<PorterCartState>)>,
+    cart_visuals: Query<(), With<PorterCartVisual>>,
+) {
+    for (owner, link) in active.iter() {
+        if link.is_some_and(|link| cart_visuals.get(link.0).is_ok()) {
+            continue;
+        }
+
+        let scene = assets
+            .scene
+            .get_or_insert_with(|| asset_server.load(PORTER_CART_SCENE_PATH))
+            .clone();
+        assets
+            .gltf
+            .get_or_insert_with(|| asset_server.load(PORTER_CART_GLTF_PATH));
+        let cart = commands
+            .spawn((
+                Name::new("Porter Handcart"),
+                PorterCartVisual { owner },
+                Transform::IDENTITY,
+                Visibility::default(),
+                WorldAssetRoot(scene),
+            ))
+            .id();
+        commands
+            .entity(owner)
+            .add_child(cart)
+            .insert(PorterCartLink(cart));
+    }
+
+    for (owner, link) in inactive.iter() {
+        if cart_visuals.get(link.0).is_ok() {
+            commands.entity(link.0).despawn();
+        }
+        commands.entity(owner).remove::<PorterCartLink>();
+    }
+}
+
+/// Resolve the two authored bed anchors to their replicated character owner.
+/// This is a one-time hierarchy walk per instantiated cart, not a per-frame
+/// scene-name search.
+fn tag_porter_cart_load_attachments(
+    mut commands: Commands,
+    named: Query<(Entity, &Name), (Added<Name>, Without<PorterCartLoadAttachment>)>,
+    parents: Query<&ChildOf>,
+    carts: Query<&PorterCartVisual>,
+) {
+    for (entity, name) in named.iter() {
+        let slot = match name.as_str() {
+            "Anchor_Load.1" => 1,
+            "Anchor_Load.2" => 2,
+            _ => continue,
+        };
+        let mut ancestor = entity;
+        while let Ok(parent) = parents.get(ancestor) {
+            ancestor = parent.parent();
+            if let Ok(cart) = carts.get(ancestor) {
+                commands.entity(entity).insert(PorterCartLoadAttachment {
+                    owner: cart.owner,
+                    slot,
+                });
+                break;
+            }
+        }
+    }
+}
+
+/// Rebind if scene streaming ever replaces the animated descendants while
+/// retaining the cart root.
+fn recover_stale_porter_cart_animation(
+    mut commands: Commands,
+    carts: Query<(Entity, &PorterCartAnimation)>,
+    players: Query<(), With<AnimationPlayer>>,
+    transforms: Query<(), With<Transform>>,
+    children: Query<&Children>,
+    wired: Query<(), With<PorterCartAnimationTarget>>,
+) {
+    for (root, animation) in carts.iter() {
+        let stale = players.get(animation.player).is_err()
+            || animation
+                .wheels
+                .iter()
+                .any(|wheel| transforms.get(*wheel).is_err());
+        if !stale {
+            continue;
+        }
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            if wired.get(entity).is_ok() {
+                commands
+                    .entity(entity)
+                    .remove::<PorterCartAnimationTarget>();
+            }
+            if let Ok(entity_children) = children.get(entity) {
+                stack.extend(entity_children.iter());
+            }
+        }
+        commands.entity(root).remove::<PorterCartAnimation>();
+    }
+}
+
+/// Bind the authored cart-body nod. Wheel rotation is intentionally excluded
+/// from the graph and driven from measured world distance below.
+#[allow(clippy::too_many_arguments)]
+fn setup_porter_cart_animation(
+    mut commands: Commands,
+    gltfs: Res<Assets<Gltf>>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
+    mut assets: ResMut<PorterCartAssets>,
+    targets: Query<(Entity, &Name, &AnimatedBy), Without<PorterCartAnimationTarget>>,
+    mut players: Query<&mut AnimationPlayer>,
+    parents: Query<&ChildOf>,
+    children: Query<&Children>,
+    names: Query<&Name>,
+    transforms: Query<&Transform>,
+    carts: Query<&PorterCartVisual, Without<PorterCartAnimation>>,
+    owners: Query<&Transform, With<CharacterKind>>,
+) {
+    for (target, name, animated_by) in targets.iter() {
+        if name.as_str() != "HandCartBody" {
+            continue;
+        }
+
+        let mut ancestor = target;
+        let mut cart_root = None;
+        loop {
+            if let Ok(cart) = carts.get(ancestor) {
+                cart_root = Some((ancestor, cart));
+                break;
+            }
+            let Ok(parent) = parents.get(ancestor) else {
+                break;
+            };
+            ancestor = parent.parent();
+        }
+        let Some((root, cart)) = cart_root else {
+            continue;
+        };
+
+        let mut wheels = [None, None];
+        let mut stack = vec![root];
+        while let Some(entity) = stack.pop() {
+            if let Ok(node_name) = names.get(entity) {
+                match node_name.as_str() {
+                    "HandCartWheelL" => wheels[0] = Some(entity),
+                    "HandCartWheelR" => wheels[1] = Some(entity),
+                    _ => {}
+                }
+            }
+            if let Ok(entity_children) = children.get(entity) {
+                stack.extend(entity_children.iter());
+            }
+        }
+        let [Some(wheel_l), Some(wheel_r)] = wheels else {
+            continue;
+        };
+        let Ok([wheel_l_transform, wheel_r_transform]) = transforms.get_many([wheel_l, wheel_r])
+        else {
+            continue;
+        };
+        let Ok(owner_transform) = owners.get(cart.owner) else {
+            continue;
+        };
+        let Ok(mut player) = players.get_mut(animated_by.0) else {
+            continue;
+        };
+
+        let cart_graph = if let Some(graph) = &assets.graph {
+            graph.clone()
+        } else {
+            let Some(gltf) = assets.gltf.as_ref().and_then(|handle| gltfs.get(handle)) else {
+                continue;
+            };
+            let Some(clip) = gltf.named_animations.get("cart_pull") else {
+                warn!("HandCart.glb has no cart_pull clip");
+                continue;
+            };
+            let mut graph = AnimationGraph::new();
+            let pull = graph.add_clip(clip.clone(), 1.0, graph.root);
+            let graph = PorterCartGraph {
+                handle: graphs.add(graph),
+                pull,
+            };
+            assets.graph = Some(graph.clone());
+            graph
+        };
+
+        player.play(cart_graph.pull).repeat().set_speed(0.0);
+        commands
+            .entity(animated_by.0)
+            .insert(AnimationGraphHandle(cart_graph.handle.clone()));
+        commands.entity(target).insert(PorterCartAnimationTarget);
+        commands.entity(root).insert(PorterCartAnimation {
+            player: animated_by.0,
+            pull: cart_graph.pull,
+            wheels: [wheel_l, wheel_r],
+            wheel_rest: [wheel_l_transform.rotation, wheel_r_transform.rotation],
+            wheel_angle: 0.0,
+            last_position: owner_transform.translation,
+        });
+    }
+}
+
+/// Parent one or two copies of the authoritative carried-good appearance to
+/// the cart bed. Cart slots use the resource GLBs at authored scale; the 1.35
+/// hand-held compensation belongs only to the character's carry joint.
+fn sync_porter_cart_load_visuals(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut assets: ResMut<CarriedLoadAssets>,
+    attachments: Query<(Entity, Ref<PorterCartLoadAttachment>)>,
+    children: Query<&Children>,
+    loads: Query<(Ref<CarriedLoad>, Ref<PorterCartState>), With<CharacterKind>>,
+    existing_visuals: Query<&PorterCartLoadVisual>,
+) {
+    for (attachment, marker) in attachments.iter() {
+        let Ok((load, cart)) = loads.get(marker.owner) else {
+            continue;
+        };
+        if !marker.is_added() && !load.is_changed() && !cart.is_changed() {
+            continue;
+        }
+        let desired = (marker.slot <= cart.load_slots)
+            .then(|| load.visible_appearance())
+            .flatten();
+        let existing = children.get(attachment).ok().and_then(|children| {
+            children.iter().find_map(|child| {
+                existing_visuals
+                    .get(child)
+                    .ok()
+                    .map(|visual| (child, visual.appearance, visual.slot))
+            })
+        });
+        if existing
+            .is_some_and(|(_, appearance, slot)| Some(appearance) == desired && slot == marker.slot)
+        {
+            continue;
+        }
+        if let Some((entity, _, _)) = existing {
+            commands.entity(entity).despawn();
+        }
+        let Some(appearance) = desired else {
+            continue;
+        };
+        let spec = carried_asset_spec(appearance);
+        let scene = assets
+            .scenes
+            .entry(appearance)
+            .or_insert_with(|| asset_server.load(spec.scene_path))
+            .clone();
+        commands.entity(attachment).with_children(|anchor| {
+            anchor.spawn((
+                Name::new(format!("Cart load {}", marker.slot)),
+                PorterCartLoadVisual {
+                    appearance,
+                    slot: marker.slot,
+                },
+                WorldAssetRoot(scene),
+                Transform::IDENTITY,
+            ));
+        });
+    }
+}
+
+/// Keep the cart-body nod phase-identical to the character's pull clip and
+/// rotate both wheels by actual ground distance (`theta = -distance / r`).
+fn drive_porter_cart_motion(
+    mut carts: Query<(&PorterCartVisual, &mut PorterCartAnimation)>,
+    heroes: Query<(&Transform, &HeroAnim), With<CharacterKind>>,
+    mut animation_players: ParamSet<(Query<&AnimationPlayer>, Query<&mut AnimationPlayer>)>,
+    mut wheel_transforms: Query<&mut Transform, Without<CharacterKind>>,
+) {
+    for (cart, mut animation) in carts.iter_mut() {
+        let Ok((owner_transform, hero_anim)) = heroes.get(cart.owner) else {
+            continue;
+        };
+
+        let hero_pose = {
+            let players = animation_players.p0();
+            let Some(pull) = hero_anim.pull else {
+                continue;
+            };
+            let Ok(player) = players.get(hero_anim.player) else {
+                continue;
+            };
+            let Some(active) = player.animation(pull) else {
+                continue;
+            };
+            (active.seek_time(), active.speed(), active.weight())
+        };
+        {
+            let mut players = animation_players.p1();
+            let Ok(mut player) = players.get_mut(animation.player) else {
+                continue;
+            };
+            if !player.is_playing_animation(animation.pull) {
+                player.play(animation.pull).repeat();
+            }
+            if let Some(active) = player.animation_mut(animation.pull) {
+                active.set_seek_time(hero_pose.0);
+                active.set_speed(hero_pose.1);
+                active.set_weight(hero_pose.2);
+            }
+        }
+
+        let position = owner_transform.translation;
+        let delta = Vec2::new(
+            position.x - animation.last_position.x,
+            position.z - animation.last_position.z,
+        );
+        let travelled = delta.length();
+        animation.last_position = position;
+        // Network correction/teleport: relocate the cart without presenting a
+        // wildly spinning wheel for one frame. Ordinary 100x lab movement is
+        // far below this threshold and remains distance-exact.
+        if travelled <= 32.0 {
+            animation.wheel_angle = advanced_cart_wheel_angle(animation.wheel_angle, travelled);
+        }
+        let wheel_rotation = Quat::from_rotation_x(animation.wheel_angle);
+        for (index, wheel) in animation.wheels.into_iter().enumerate() {
+            if let Ok(mut transform) = wheel_transforms.get_mut(wheel) {
+                transform.rotation = animation.wheel_rest[index] * wheel_rotation;
+            }
+        }
+    }
+}
+
 fn sync_carried_load_visuals(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut assets: ResMut<CarriedLoadAssets>,
     attachments: Query<(Entity, Ref<CarryAttachment>, &CharacterAttachmentOwner)>,
     children: Query<&Children>,
-    loads: Query<Ref<CarriedLoad>, With<CharacterKind>>,
+    loads: Query<(Ref<CarriedLoad>, Option<Ref<PorterCartState>>), With<CharacterKind>>,
+    mut removed_carts: RemovedComponents<PorterCartState>,
     existing_visuals: Query<&CarriedLoadVisual>,
 ) {
+    let removed_carts: HashSet<_> = removed_carts.read().collect();
     for (attachment, marker, owner) in attachments.iter() {
-        let Ok(load) = loads.get(owner.0) else {
+        let Ok((load, cart)) = loads.get(owner.0) else {
             continue;
         };
-        if !marker.is_added() && !load.is_changed() {
+        if !marker.is_added()
+            && !load.is_changed()
+            && !cart.as_ref().is_some_and(|cart| cart.is_changed())
+            && !removed_carts.contains(&owner.0)
+        {
             continue;
         }
-        let desired = load.visible_appearance();
+        // A cart load belongs on its authored bed anchors, never duplicated in
+        // the porter's arms. Removing the cart re-evaluates this attachment so
+        // an abnormal in-flight personal load remains visible.
+        let desired = cart.is_none().then(|| load.visible_appearance()).flatten();
         let existing = children.get(attachment).ok().and_then(|children| {
             children.iter().find_map(|child| {
                 existing_visuals
@@ -1009,13 +1429,19 @@ fn sync_tool_visuals(
     attachments: Query<(Entity, Ref<ToolAttachment>, &CharacterAttachmentOwner)>,
     children: Query<&Children>,
     characters: Query<
-        (Option<Ref<CharacterActivity>>, Option<Ref<CarriedLoad>>),
+        (
+            Option<Ref<CharacterActivity>>,
+            Option<Ref<CarriedLoad>>,
+            Option<Ref<PorterCartState>>,
+        ),
         With<CharacterKind>,
     >,
+    mut removed_carts: RemovedComponents<PorterCartState>,
     existing_visuals: Query<&ToolVisual>,
 ) {
+    let removed_carts: HashSet<_> = removed_carts.read().collect();
     for (attachment, marker, owner) in attachments.iter() {
-        let Ok((activity, carried)) = characters.get(owner.0) else {
+        let Ok((activity, carried, cart)) = characters.get(owner.0) else {
             continue;
         };
         if !marker.is_added()
@@ -1023,12 +1449,14 @@ fn sync_tool_visuals(
                 .as_ref()
                 .is_some_and(|activity| activity.is_changed())
             && !carried.as_ref().is_some_and(|carried| carried.is_changed())
+            && !cart.as_ref().is_some_and(|cart| cart.is_changed())
+            && !removed_carts.contains(&owner.0)
         {
             continue;
         }
         let desired = desired_tool(
             activity.as_deref().copied(),
-            carried.is_some_and(|load| !load.is_empty()),
+            cart.is_some() || carried.is_some_and(|load| !load.is_empty()),
         );
         let existing = children.get(attachment).ok().and_then(|children| {
             children.iter().find_map(|child| {
@@ -1072,6 +1500,7 @@ fn desired_body_animation(
     anim: &HeroAnim,
     activity: Option<CharacterActivity>,
     carrying: bool,
+    carting: bool,
 ) -> (Option<AnimationNodeIndex>, f32, bool) {
     // Different start/stop thresholds keep small replicated speed noise from
     // continually restarting idle and walk.
@@ -1079,6 +1508,13 @@ fn desired_body_animation(
     let moving = visual.speed > if was_walking { 0.10 } else { 0.24 };
     let stride_speed = (visual.speed / HERO_MOVE_SPEED).clamp(0.4, 1.6);
 
+    if carting {
+        return (
+            anim.pull.or(anim.carry).or(anim.idle),
+            if moving { stride_speed } else { 0.0 },
+            !moving,
+        );
+    }
     if carrying {
         return (
             anim.carry.or(anim.idle),
@@ -1111,10 +1547,11 @@ fn drive_hero_locomotion(
         Option<&InheritedVisibility>,
         Option<&CharacterActivity>,
         Option<&CarriedLoad>,
+        Option<&PorterCartState>,
     )>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    for (visual, mut anim, inherited, activity, carried) in heroes.iter_mut() {
+    for (visual, mut anim, inherited, activity, carried, cart) in heroes.iter_mut() {
         let hidden = inherited.is_some_and(|visibility| !visibility.get())
             || activity.is_some_and(|activity| *activity == CharacterActivity::Indoors);
         let Ok(mut player) = players.get_mut(anim.player) else {
@@ -1133,9 +1570,10 @@ fn drive_hero_locomotion(
             anim.paused = false;
         }
 
-        let carrying = carried.is_some_and(|load| !load.is_empty());
+        let carting = cart.is_some();
+        let carrying = !carting && carried.is_some_and(|load| !load.is_empty());
         let (desired, speed, freeze_at_contact) =
-            desired_body_animation(visual, &anim, activity.copied(), carrying);
+            desired_body_animation(visual, &anim, activity.copied(), carrying, carting);
         let Some(desired) = desired else {
             continue;
         };
@@ -1369,6 +1807,80 @@ mod carried_tests {
     }
 
     #[test]
+    fn porter_cart_asset_matches_the_runtime_node_and_clip_contract() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/game_assets/props/HandCart.glb");
+        let bytes = std::fs::read(&path).expect("shipped handcart GLB exists");
+        assert_eq!(&bytes[0..4], b"glTF");
+        let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        let document: serde_json::Value =
+            serde_json::from_slice(&bytes[20..20 + json_len]).expect("handcart GLB JSON parses");
+        let nodes = document["nodes"].as_array().expect("handcart nodes");
+        let node_index = |wanted: &str| {
+            nodes
+                .iter()
+                .position(|node| node["name"].as_str() == Some(wanted))
+                .unwrap_or_else(|| panic!("handcart node '{wanted}' is missing"))
+        };
+        let body = node_index("HandCartBody");
+        let wheels = [node_index("HandCartWheelL"), node_index("HandCartWheelR")];
+        for name in [
+            "HandCart",
+            "Anchor_Load.1",
+            "Anchor_Load.2",
+            "Anchor_GripL",
+            "Anchor_GripR",
+        ] {
+            node_index(name);
+        }
+
+        let animations = document["animations"]
+            .as_array()
+            .expect("handcart animations");
+        let animation = |wanted: &str| {
+            animations
+                .iter()
+                .find(|animation| animation["name"].as_str() == Some(wanted))
+                .unwrap_or_else(|| panic!("handcart clip '{wanted}' is missing"))
+        };
+        let pull_channels = animation("cart_pull")["channels"]
+            .as_array()
+            .expect("cart_pull channels");
+        assert_eq!(pull_channels.len(), 1);
+        assert_eq!(
+            pull_channels[0]["target"]["node"].as_u64(),
+            Some(body as u64)
+        );
+        assert_eq!(
+            pull_channels[0]["target"]["path"].as_str(),
+            Some("rotation")
+        );
+
+        let wheel_channels = animation("wheels_roll")["channels"]
+            .as_array()
+            .expect("wheels_roll channels");
+        assert_eq!(wheel_channels.len(), 2);
+        let mut wheel_targets: Vec<_> = wheel_channels
+            .iter()
+            .filter_map(|channel| channel["target"]["node"].as_u64())
+            .map(|node| node as usize)
+            .collect();
+        wheel_targets.sort_unstable();
+        let mut expected = wheels;
+        expected.sort_unstable();
+        assert_eq!(wheel_targets, expected);
+    }
+
+    #[test]
+    fn wheel_roll_uses_distance_and_the_authored_negative_direction() {
+        let angle = advanced_cart_wheel_angle(0.0, PORTER_CART_WHEEL_RADIUS);
+        assert!((angle - (std::f32::consts::TAU - 1.0)).abs() < 1e-5);
+        let circumference = std::f32::consts::TAU * PORTER_CART_WHEEL_RADIUS;
+        let revolution = advanced_cart_wheel_angle(0.0, circumference);
+        assert!(revolution < 1e-5 || (std::f32::consts::TAU - revolution) < 1e-5);
+    }
+
+    #[test]
     fn work_activity_selects_one_tool_and_carrying_selects_none() {
         assert_eq!(
             desired_tool(Some(CharacterActivity::Chopping), false),
@@ -1407,6 +1919,7 @@ mod carried_tests {
                 chop: None,
                 harvest: Some(harvest),
                 carry: None,
+                pull: None,
                 sit_idle: None,
                 current_body: Some(idle),
                 fading_body: None,
@@ -1450,6 +1963,7 @@ mod carried_tests {
                 chop: None,
                 harvest: None,
                 carry: Some(carry),
+                pull: None,
                 sit_idle: None,
                 current_body: Some(idle),
                 fading_body: None,
@@ -1476,6 +1990,58 @@ mod carried_tests {
         assert_eq!(active_carry.weight(), 1.0);
         assert_eq!(active_carry.speed(), 0.0);
         assert_eq!(active_carry.seek_time(), 0.0);
+        assert!(player.animation(idle).is_none());
+        assert_eq!(player.playing_animations().count(), 1);
+    }
+
+    #[test]
+    fn an_active_porter_cart_uses_pull_instead_of_the_hand_carry_clip() {
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        let idle = AnimationNodeIndex::new(0);
+        let carry = AnimationNodeIndex::new(1);
+        let pull = AnimationNodeIndex::new(2);
+        let mut player = AnimationPlayer::default();
+        player.play(idle).repeat().set_weight(1.0);
+        let player_entity = world.spawn(player).id();
+        world.spawn((
+            HeroVisual {
+                speed: HERO_MOVE_SPEED,
+            },
+            HeroAnim {
+                player: player_entity,
+                idle: Some(idle),
+                walk: None,
+                build: None,
+                chop: None,
+                harvest: None,
+                carry: Some(carry),
+                pull: Some(pull),
+                sit_idle: None,
+                current_body: Some(idle),
+                fading_body: None,
+                body_fade_seconds: 0.0,
+                paused: false,
+            },
+            CarriedLoad {
+                good: Some(shared::economy::Good::Wood),
+                amount: 24,
+                appearance: Some(CarriedAppearance::WoodBundle),
+            },
+            PorterCartState { load_slots: 2 },
+        ));
+
+        world.run_system_once(drive_hero_locomotion).unwrap();
+        world
+            .resource_mut::<Time<()>>()
+            .advance_by(std::time::Duration::from_secs_f32(
+                BODY_ANIMATION_FADE_SECONDS,
+            ));
+        world.run_system_once(drive_hero_locomotion).unwrap();
+
+        let player = world.get::<AnimationPlayer>(player_entity).unwrap();
+        assert_eq!(player.animation(pull).unwrap().weight(), 1.0);
+        assert!(player.animation(carry).is_none());
         assert!(player.animation(idle).is_none());
         assert_eq!(player.playing_animations().count(), 1);
     }

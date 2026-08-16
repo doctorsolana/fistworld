@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
@@ -23,9 +24,13 @@ use shared::protocol::{
 use crate::camera_rts::{CommanderCamera, CursorTerrainHit, LocalPeerId};
 use crate::hero::control::WorldPlacementMode;
 use crate::states::GameState;
+use crate::ui::foundation::{
+    button_chrome, layer, retained_scroll, subtree_is_interacting, UiButtonLabel, UiButtonVariant,
+    UiRefreshStamp,
+};
 use crate::ui::styles::{
-    plate_shadow, BUTTON_HOVERED, BUTTON_NORMAL, BUTTON_PRESSED, INK, INK_INVERSE, INK_MUTED,
-    LIMEWASH, LIMEWASH_LIT, PLATE_RULE, PLATE_RULE_SOFT, RADIUS,
+    plate_shadow, INK, INK_INVERSE, INK_MUTED, LIMEWASH, LIMEWASH_LIT, PLATE_RULE, PLATE_RULE_SOFT,
+    RADIUS,
 };
 
 pub struct PlayerPermitsPlugin;
@@ -163,6 +168,9 @@ struct PermitTrayRoot {
 
 #[derive(Component)]
 struct PermitTrayToggle;
+
+#[derive(Component)]
+struct PermitTrayScroll;
 
 #[derive(Component)]
 struct ResumePermitButton {
@@ -316,27 +324,11 @@ fn receive_permit_results(
     }
 }
 
-fn permit_button_background(interaction: Interaction, background: &mut BackgroundColor) -> bool {
-    background.0 = match interaction {
-        Interaction::Pressed => BUTTON_PRESSED,
-        Interaction::Hovered => BUTTON_HOVERED,
-        Interaction::None => BUTTON_NORMAL,
-    };
-    interaction == Interaction::Pressed
-}
-
 fn handle_property_permit_buttons(
     time: Res<Time>,
-    mut quote_buttons: Query<
-        (
-            &Interaction,
-            &RequestPermitQuoteButton,
-            &mut BackgroundColor,
-        ),
-        Changed<Interaction>,
-    >,
-    mut purchase_buttons: Query<
-        (&Interaction, &PurchasePermitButton, &mut BackgroundColor),
+    quote_buttons: Query<(&Interaction, &RequestPermitQuoteButton), Changed<Interaction>>,
+    purchase_buttons: Query<
+        (&Interaction, &PurchasePermitButton),
         (Changed<Interaction>, Without<RequestPermitQuoteButton>),
     >,
     mut clients: Query<
@@ -346,8 +338,8 @@ fn handle_property_permit_buttons(
     mut notice: ResMut<PermitNotice>,
 ) {
     let now = time.elapsed_secs_f64();
-    for (interaction, request, mut background) in quote_buttons.iter_mut() {
-        if !permit_button_background(*interaction, &mut background) {
+    for (interaction, request) in quote_buttons.iter() {
+        if *interaction != Interaction::Pressed {
             continue;
         }
         if !send_permit_action(
@@ -361,8 +353,8 @@ fn handle_property_permit_buttons(
             notice.show(now, false, "Permit office is not connected yet.");
         }
     }
-    for (interaction, purchase, mut background) in purchase_buttons.iter_mut() {
-        if !permit_button_background(*interaction, &mut background) {
+    for (interaction, purchase) in purchase_buttons.iter() {
+        if *interaction != Interaction::Pressed {
             continue;
         }
         if !send_permit_action(
@@ -385,16 +377,13 @@ fn handle_permit_tray_buttons(
     mut tray: ResMut<PermitTrayOpen>,
     mut placement: ResMut<WorldPlacementMode>,
     mut controls: ResMut<PermitPlacementControls>,
-    mut toggles: Query<
-        (&Interaction, &mut BackgroundColor),
-        (With<PermitTrayToggle>, Changed<Interaction>),
-    >,
-    mut resume: Query<
-        (&Interaction, &ResumePermitButton, &mut BackgroundColor),
+    toggles: Query<&Interaction, (With<PermitTrayToggle>, Changed<Interaction>)>,
+    resume: Query<
+        (&Interaction, &ResumePermitButton),
         (Changed<Interaction>, Without<PermitTrayToggle>),
     >,
-    mut surrender: Query<
-        (&Interaction, &SurrenderPermitButton, &mut BackgroundColor),
+    surrender: Query<
+        (&Interaction, &SurrenderPermitButton),
         (
             Changed<Interaction>,
             Without<PermitTrayToggle>,
@@ -410,13 +399,13 @@ fn handle_permit_tray_buttons(
     mut notice: ResMut<PermitNotice>,
 ) {
     let now = time.elapsed_secs_f64();
-    for (interaction, mut background) in toggles.iter_mut() {
-        if permit_button_background(*interaction, &mut background) {
+    for interaction in toggles.iter() {
+        if *interaction == Interaction::Pressed {
             tray.0 = !tray.0;
         }
     }
-    for (interaction, button, mut background) in resume.iter_mut() {
-        if !permit_button_background(*interaction, &mut background) {
+    for (interaction, button) in resume.iter() {
+        if *interaction != Interaction::Pressed {
             continue;
         }
         controls.snap_choice = 0;
@@ -437,8 +426,8 @@ fn handle_permit_tray_buttons(
             }
         }
     }
-    for (interaction, button, mut background) in surrender.iter_mut() {
-        if !permit_button_background(*interaction, &mut background) {
+    for (interaction, button) in surrender.iter() {
+        if *interaction != Interaction::Pressed {
             continue;
         }
         if !send_permit_action(
@@ -481,11 +470,11 @@ fn spawn_small_button(
                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::all(PLATE_RULE_SOFT),
+            button_chrome(UiButtonVariant::Secondary),
         ))
         .with_child((
             Text::new(label),
+            UiButtonLabel,
             TextFont {
                 font_size: FontSize::Px(9.0),
                 ..default()
@@ -497,6 +486,7 @@ fn spawn_small_button(
 #[allow(clippy::too_many_arguments)]
 fn ensure_permit_tray(
     mut commands: Commands,
+    time: Res<Time<Real>>,
     local: Option<Res<LocalPeerId>>,
     heroes: Query<(
         Entity,
@@ -509,13 +499,16 @@ fn ensure_permit_tray(
     companies: Query<(&CompanyId, &Company)>,
     tray: Res<PermitTrayOpen>,
     placement: Res<WorldPlacementMode>,
-    roots: Query<(Entity, &PermitTrayRoot)>,
+    roots: Query<(Entity, &PermitTrayRoot, Option<&UiRefreshStamp>)>,
+    children: Query<&Children>,
+    interactions: Query<(&Interaction, Has<crate::ui::foundation::UiRefreshExempt>)>,
+    scrolls: Query<&ScrollPosition, With<PermitTrayScroll>>,
 ) {
     let permits = local_hero(local.as_deref(), &heroes)
         .and_then(|(_, _, ledger, _)| ledger)
         .map_or(&[][..], |ledger| ledger.permits.as_slice());
     if permits.is_empty() {
-        for (root, _) in roots.iter() {
+        for (root, ..) in roots.iter() {
             commands.entity(root).despawn();
         }
         return;
@@ -531,15 +524,24 @@ fn ensure_permit_tray(
         tray.0,
         placement.is_armed()
     );
-    if roots.iter().any(|(_, root)| root.signature == signature) {
+    if roots.iter().any(|(_, root, _)| root.signature == signature) {
         return;
     }
-    for (root, _) in roots.iter() {
+    if roots.iter().any(|(entity, _, stamp)| {
+        subtree_is_interacting(entity, &children, &interactions)
+            || stamp.is_some_and(|stamp| !stamp.is_ready(&time))
+    }) {
+        return;
+    }
+    let retained_scroll = retained_scroll(true, scrolls.iter().next().map(|position| position.0));
+    for (root, ..) in roots.iter() {
         commands.entity(root).despawn();
     }
-    commands
+    let root = commands
         .spawn((
             PermitTrayRoot { signature },
+            TabGroup::new(10),
+            UiRefreshStamp::now(&time),
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::Px(22.0),
@@ -550,136 +552,139 @@ fn ensure_permit_tray(
                 row_gap: Val::Px(8.0),
                 ..default()
             },
-            ZIndex(70),
+            GlobalZIndex(layer::FLOATING_PANEL),
             Pickable::IGNORE,
         ))
-        .with_children(|root| {
-            if tray.0 {
-                root.spawn((
-                    Node {
-                        width: Val::Percent(100.0),
-                        max_height: Val::Px(360.0),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(8.0),
-                        padding: UiRect::all(Val::Px(13.0)),
-                        border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(RADIUS)),
-                        overflow: Overflow::scroll_y(),
+        .id();
+    commands.entity(root).with_children(|root| {
+        if tray.0 {
+            root.spawn((
+                PermitTrayScroll,
+                ScrollPosition(retained_scroll),
+                Node {
+                    width: Val::Percent(100.0),
+                    max_height: Val::Px(360.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
+                    padding: UiRect::all(Val::Px(13.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                    overflow: Overflow::scroll_y(),
+                    ..default()
+                },
+                BackgroundColor(LIMEWASH_LIT),
+                BorderColor::all(PLATE_RULE),
+                plate_shadow(),
+            ))
+            .with_children(|panel| {
+                panel.spawn((
+                    Text::new("OWNED PERMITS"),
+                    TextFont {
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
-                    BackgroundColor(LIMEWASH_LIT),
-                    BorderColor::all(PLATE_RULE),
-                    plate_shadow(),
-                ))
-                .with_children(|panel| {
-                    panel.spawn((
-                        Text::new("OWNED PERMITS"),
-                        TextFont {
-                            font_size: FontSize::Px(12.0),
-                            ..default()
+                    TextColor(INK),
+                ));
+                panel.spawn((
+                    Text::new("Unused rights remain here when placement is closed."),
+                    TextFont {
+                        font_size: FontSize::Px(9.0),
+                        ..default()
+                    },
+                    TextColor(INK_MUTED),
+                ));
+                for permit in permits {
+                    let place = settlement_name(permit.settlement, &settlements);
+                    let owner = permit.company.map_or_else(
+                        || "Personal housing".to_string(),
+                        |id| {
+                            companies
+                                .iter()
+                                .find(|(candidate, _)| **candidate == id)
+                                .map_or_else(
+                                    || format!("Company #{}", id.0),
+                                    |(_, company)| company.name.clone(),
+                                )
                         },
-                        TextColor(INK),
-                    ));
-                    panel.spawn((
-                        Text::new("Unused rights remain here when placement is closed."),
-                        TextFont {
-                            font_size: FontSize::Px(9.0),
-                            ..default()
-                        },
-                        TextColor(INK_MUTED),
-                    ));
-                    for permit in permits {
-                        let place = settlement_name(permit.settlement, &settlements);
-                        let owner = permit.company.map_or_else(
-                            || "Personal housing".to_string(),
-                            |id| {
-                                companies
-                                    .iter()
-                                    .find(|(candidate, _)| **candidate == id)
-                                    .map_or_else(
-                                        || format!("Company #{}", id.0),
-                                        |(_, company)| company.name.clone(),
-                                    )
+                    );
+                    panel
+                        .spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(6.0),
+                                padding: UiRect::all(Val::Px(10.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                                ..default()
                             },
-                        );
-                        panel
-                            .spawn((
-                                Node {
-                                    width: Val::Percent(100.0),
-                                    flex_direction: FlexDirection::Column,
-                                    row_gap: Val::Px(6.0),
-                                    padding: UiRect::all(Val::Px(10.0)),
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                            BackgroundColor(LIMEWASH),
+                            BorderColor::all(PLATE_RULE_SOFT),
+                        ))
+                        .with_children(|card| {
+                            card.spawn((
+                                Text::new(format!(
+                                    "{}  |  {}",
+                                    permit.kind.label(),
+                                    place.to_uppercase()
+                                )),
+                                TextFont {
+                                    font_size: FontSize::Px(10.0),
                                     ..default()
                                 },
-                                BackgroundColor(LIMEWASH),
-                                BorderColor::all(PLATE_RULE_SOFT),
-                            ))
-                            .with_children(|card| {
-                                card.spawn((
-                                    Text::new(format!(
-                                        "{}  |  {}",
-                                        permit.kind.label(),
-                                        place.to_uppercase()
-                                    )),
-                                    TextFont {
-                                        font_size: FontSize::Px(10.0),
-                                        ..default()
-                                    },
-                                    TextColor(INK),
-                                ));
-                                card.spawn((
-                                    Text::new(format!(
-                                        "Owned by {} | paid fee {} coin | {} Wood required",
-                                        owner,
-                                        format_money(permit.fee_escrow),
-                                        permit.kind.construction_wood_required()
-                                    )),
-                                    TextFont {
-                                        font_size: FontSize::Px(9.0),
-                                        ..default()
-                                    },
-                                    TextColor(INK_MUTED),
-                                ));
-                                card.spawn(Node {
-                                    width: Val::Percent(100.0),
-                                    column_gap: Val::Px(7.0),
+                                TextColor(INK),
+                            ));
+                            card.spawn((
+                                Text::new(format!(
+                                    "Owned by {} | paid fee {} coin | {} Wood required",
+                                    owner,
+                                    format_money(permit.fee_escrow),
+                                    permit.kind.construction_wood_required()
+                                )),
+                                TextFont {
+                                    font_size: FontSize::Px(9.0),
                                     ..default()
-                                })
-                                .with_children(|actions| {
-                                    spawn_small_button(
-                                        actions,
-                                        ResumePermitButton {
-                                            permit: permit.clone(),
-                                            settlement_name: place.clone(),
-                                        },
-                                        "CHOOSE PLOT",
-                                    );
-                                    spawn_small_button(
-                                        actions,
-                                        SurrenderPermitButton(permit.id),
-                                        "RETURN & REFUND",
-                                    );
-                                });
+                                },
+                                TextColor(INK_MUTED),
+                            ));
+                            card.spawn(Node {
+                                width: Val::Percent(100.0),
+                                column_gap: Val::Px(7.0),
+                                ..default()
+                            })
+                            .with_children(|actions| {
+                                spawn_small_button(
+                                    actions,
+                                    ResumePermitButton {
+                                        permit: permit.clone(),
+                                        settlement_name: place.clone(),
+                                    },
+                                    "CHOOSE PLOT",
+                                );
+                                spawn_small_button(
+                                    actions,
+                                    SurrenderPermitButton(permit.id),
+                                    "RETURN & REFUND",
+                                );
                             });
-                    }
-                });
-            }
-            spawn_small_button(
-                root,
-                PermitTrayToggle,
-                if placement.is_armed() {
-                    format!(
-                        "PLACING  |  {} PERMIT{}",
-                        permits.len(),
-                        if permits.len() == 1 { "" } else { "S" }
-                    )
-                } else {
-                    format!("PERMITS  {}", permits.len())
-                },
-            );
-        });
+                        });
+                }
+            });
+        }
+        spawn_small_button(
+            root,
+            PermitTrayToggle,
+            if placement.is_armed() {
+                format!(
+                    "PLACING  |  {} PERMIT{}",
+                    permits.len(),
+                    if permits.len() == 1 { "" } else { "S" }
+                )
+            } else {
+                format!("PERMITS  {}", permits.len())
+            },
+        );
+    });
 }
 
 fn update_permit_placement_controls(
@@ -1227,7 +1232,7 @@ fn ensure_placement_status(
                     border_radius: BorderRadius::all(Val::Px(RADIUS)),
                     ..default()
                 },
-                ZIndex(65),
+                GlobalZIndex(layer::FLOATING_PANEL),
                 BackgroundColor(LIMEWASH_LIT),
                 BorderColor::all(PLATE_RULE),
                 plate_shadow(),
@@ -1409,7 +1414,7 @@ fn ensure_permit_notice(
                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
-            ZIndex(90),
+            GlobalZIndex(layer::TOAST),
             BackgroundColor(if notice.success {
                 Color::srgba(0.14, 0.26, 0.19, 0.95)
             } else {

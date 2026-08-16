@@ -153,6 +153,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             (
                 (
                     super::sync_civic_market_policy,
+                    super::sync_public_market_storage,
                     super::update_moot_market_targets,
                     super::refund_company_escrows,
                     super::run_business_payroll_and_owner_leisure,
@@ -161,6 +162,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                     super::review_business_management,
                     super::review_company_finance,
                     super::acquire_businesses_for_sale,
+                    super::remove_abandoned_businesses,
                 )
                     .chain()
                     .in_set(VillageEconomySet::MarketsBusinesses),
@@ -209,6 +211,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 (
                     super::review_automatic_staffing,
                     super::enforce_staffing_targets,
+                    super::review_worker_job_choices,
                     super::fill_vacancies,
                     super::sync_company_porters,
                 )
@@ -224,6 +227,8 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 world::settlement_development::upgrade_town_roads,
                 world::settlement_development::update_settlement_developments,
                 world::settlement_development::sync_civic_hall_levels,
+                world::settlement_development::sync_market_levels,
+                super::ensure_market_ground_is_level,
                 (
                     super::ensure_fishing_piers,
                     super::assign_farmer_routines,
@@ -242,7 +247,12 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                     super::ambient::run_ambient_routines,
                     super::apply_business_events,
                     player::hero::sync_hero_attributes_to_player_progression,
-                    (super::sync_carried_load, super::sync_building_door_demands).chain(),
+                    (
+                        super::sync_carried_load,
+                        super::sync_porter_cart_state,
+                        super::sync_building_door_demands,
+                    )
+                        .chain(),
                 )
                     .chain(),
                 super::sync_character_objectives,

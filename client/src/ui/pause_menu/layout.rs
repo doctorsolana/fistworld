@@ -17,14 +17,9 @@ pub(super) fn spawn_pause_menu(
     commands
         .spawn((
             PauseMenuRoot,
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+            ModalRoot,
+            modal_root_chrome(),
+            BackgroundColor(MODAL_BACKDROP),
         ))
         .with_children(|parent| {
             // Content container - this is what we shift left/right
@@ -57,8 +52,11 @@ pub(super) fn spawn_pause_menu(
                             // Pause title
                             col.spawn((
                                 Text::new("PAUSED"),
-                                title_text_style(),
-                                TextColor(PAUSE_TEXT_COLOR),
+                                TextFont {
+                                    font_size: FontSize::Px(72.0),
+                                    ..default()
+                                },
+                                TextColor(INK_INVERSE),
                                 Node {
                                     margin: UiRect::bottom(Val::Px(40.0)),
                                     ..default()
@@ -87,7 +85,7 @@ pub(super) fn spawn_pause_menu(
                                     font_size: FontSize::Px(14.0),
                                     ..default()
                                 },
-                                TextColor(PAUSE_MUTED_TEXT_COLOR),
+                                TextColor(INK_INVERSE_MUTED),
                                 Node {
                                     margin: UiRect::top(Val::Px(30.0)),
                                     ..default()

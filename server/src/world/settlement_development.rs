@@ -5,12 +5,14 @@
 //! that already exists.
 
 use bevy::prelude::*;
+use shared::building::PlacedBuilding;
 #[cfg(test)]
 use shared::components::MootAdministration;
 use shared::components::{
-    CivicEmployment, CivicHallLevel, CivicRole, PlayerPosition, PlayerRotation, RoadClass,
-    RoadSurface, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementDevelopment,
-    SettlementProgressGate, SettlementTier, VillageRoad, WorldTime,
+    BuildingOf, CivicEmployment, CivicHallLevel, CivicRole, MarketLevel, PlayerPosition,
+    PlayerRotation, RoadClass, RoadSurface, Settlement, SettlementBuilding, SettlementBuildingKind,
+    SettlementDevelopment, SettlementId, SettlementProgressGate, SettlementTier, VillageRoad,
+    WorldTime,
 };
 use shared::economy::{
     Good, GoodsInventory, MootMarket, SettlementEconomy, CITY_MIN_PROSPERITY, CITY_MIN_RESIDENTS,
@@ -59,6 +61,56 @@ pub fn sync_civic_hall_levels(
             );
         }
         commands.entity(entity).insert(desired);
+    }
+}
+
+/// Upgrade a completed marketplace's physical finish without replacing its
+/// authoritative building entity. Inventory, ownership, jobs and road links
+/// all remain attached while the local art/navigation record changes from the
+/// earthen square to its identically sized paved counterpart.
+pub fn sync_market_levels(
+    mut commands: Commands,
+    settlements: Query<(&SettlementId, &Settlement)>,
+    markets: Query<(
+        Entity,
+        &SettlementBuilding,
+        &BuildingOf,
+        &PlayerRotation,
+        Option<&MarketLevel>,
+        Option<&PlacedBuilding>,
+    )>,
+) {
+    for (entity, building, building_of, rotation, current, placed) in markets.iter() {
+        if building.kind != SettlementBuildingKind::Market {
+            continue;
+        }
+        let Some((_, settlement)) = settlements
+            .iter()
+            .find(|(settlement_id, _)| **settlement_id == building_of.0)
+        else {
+            continue;
+        };
+        let desired = MarketLevel::for_tier(settlement.tier);
+        let desired_art = desired.building_type();
+        if !current.is_some_and(|current| *current == desired) {
+            if let Some(previous) = current {
+                info!(
+                    "Settlement '{}': marketplace upgraded from {} to {}",
+                    settlement.name,
+                    previous.label(),
+                    desired.label()
+                );
+            }
+            commands.entity(entity).insert(desired);
+        }
+        if !placed.is_some_and(|placed| {
+            placed.building_type == desired_art && placed.rotation.to_bits() == rotation.0.to_bits()
+        }) {
+            commands.entity(entity).insert(PlacedBuilding {
+                building_type: desired_art,
+                rotation: rotation.0,
+            });
+        }
     }
 }
 
@@ -418,6 +470,81 @@ mod tests {
         assert_eq!(
             app.world().get::<CivicHallLevel>(settlement),
             Some(&CivicHallLevel::Town)
+        );
+    }
+
+    #[test]
+    fn town_paves_the_existing_market_without_replacing_its_state() {
+        let mut app = App::new();
+        app.add_systems(Update, sync_market_levels);
+        let settlement_id = SettlementId(17);
+        let settlement = app
+            .world_mut()
+            .spawn((
+                settlement_id,
+                Settlement {
+                    name: "Marketford".into(),
+                    tier: SettlementTier::Village,
+                    residents: 11,
+                    treasury: 83,
+                },
+            ))
+            .id();
+        let market = app
+            .world_mut()
+            .spawn((
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::Market,
+                    settlement: "Marketford".into(),
+                    owner: None,
+                    quality: 0.5,
+                    workers: vec!["Alda".into()],
+                },
+                BuildingOf(settlement_id),
+                PlayerRotation(0.37),
+                PlacedBuilding {
+                    building_type: shared::building::BuildingType::Market,
+                    rotation: 0.37,
+                },
+                GoodsInventory::new(250),
+            ))
+            .id();
+
+        app.update();
+        assert_eq!(
+            app.world().get::<MarketLevel>(market),
+            Some(&MarketLevel::Earthen)
+        );
+        assert_eq!(
+            app.world()
+                .get::<PlacedBuilding>(market)
+                .unwrap()
+                .building_type,
+            shared::building::BuildingType::Market
+        );
+
+        app.world_mut()
+            .get_mut::<Settlement>(settlement)
+            .unwrap()
+            .tier = SettlementTier::Town;
+        app.update();
+        assert_eq!(
+            app.world().get::<MarketLevel>(market),
+            Some(&MarketLevel::Paved)
+        );
+        let placed = app.world().get::<PlacedBuilding>(market).unwrap();
+        assert_eq!(
+            placed.building_type,
+            shared::building::BuildingType::MarketPaved
+        );
+        assert_eq!(placed.rotation, 0.37);
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(market)
+                .unwrap()
+                .bulk_capacity(),
+            250,
+            "art promotion must not replace the market entity or inventory"
         );
     }
 

@@ -38,8 +38,9 @@ use super::{
     review_company_finance, review_company_strategies, run_business_payroll_and_owner_leisure,
     run_civic_payroll, run_farmer_routines, run_household_schedules, run_workplace_door_transits,
     sync_building_door_demands, sync_carried_load, sync_civic_market_policy,
-    update_household_budgets_and_pantries, update_moot_market_targets, update_settlement_economies,
-    FarmerPhase, FarmerRoutine, HomeAssignment, SettlementEconomyRuntime, VillagerIntent,
+    sync_public_market_storage, update_household_budgets_and_pantries, update_moot_market_targets,
+    update_settlement_economies, FarmerPhase, FarmerRoutine, HomeAssignment,
+    SettlementEconomyRuntime, VillagerIntent,
 };
 use super::{apply_business_events, BusinessEventQueue, CompanyDividendQueue};
 use crate::collision::library::StaticColliders;
@@ -112,7 +113,7 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
         let town_x = (town_index % 6) as f32 * 500.0;
         let town_z = (town_index / 6) as f32 * 500.0;
         let hall_position = Vec3::new(town_x, 5.0, town_z);
-        let mut hall_inventory = GoodsInventory::new(shared::economy::capacity::HALL);
+        let mut hall_inventory = GoodsInventory::new_partitioned(shared::economy::capacity::HALL);
         hall_inventory.add(Good::Food, 600);
         let hall = world
             .spawn((
@@ -367,6 +368,7 @@ fn configure_app(towns: usize, npcs: usize) -> App {
             reconcile_work_statuses,
             run_civic_payroll,
             sync_civic_market_policy,
+            sync_public_market_storage,
             update_moot_market_targets,
             post_site_capital_to_company,
             update_household_budgets_and_pantries,
@@ -391,6 +393,7 @@ fn configure_app(towns: usize, npcs: usize) -> App {
             reconcile_work_statuses,
             run_civic_payroll,
             sync_civic_market_policy,
+            sync_public_market_storage,
             update_moot_market_targets,
             post_site_capital_to_company,
             update_household_budgets_and_pantries,
@@ -440,6 +443,7 @@ fn configure_app(towns: usize, npcs: usize) -> App {
                 reconcile_work_statuses,
                 run_civic_payroll,
                 sync_civic_market_policy,
+                sync_public_market_storage,
                 update_moot_market_targets,
                 post_site_capital_to_company,
                 update_household_budgets_and_pantries,

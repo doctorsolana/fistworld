@@ -6,6 +6,7 @@
 
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+use bevy::ui::InteractionDisabled;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
 use shared::components::{
@@ -22,11 +23,15 @@ use shared::protocol::{HeroCompanyFoundingOrder, HeroCompanyFoundingResult, Reli
 
 use crate::camera_rts::LocalPeerId;
 use crate::states::GameState;
+use crate::ui::foundation::{
+    button_chrome, retained_scroll, subtree_is_interacting, UiButtonLabel, UiButtonStyle,
+    UiButtonVariant, UiRefreshStamp,
+};
 use crate::ui::modal::{
     handle_backdrop_pressed, spawn_modal, update_modal_click_guard, ModalLayout,
 };
 use crate::ui::styles::{
-    plate_shadow, BUTTON_NORMAL, INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE,
+    plate_shadow, INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE,
     PLATE_RULE_SOFT, RADIUS,
 };
 
@@ -68,6 +73,7 @@ struct PropertyClickGuard(bool);
 #[derive(Component)]
 struct PropertyPanelRoot {
     signature: String,
+    target: Entity,
 }
 
 #[derive(Component)]
@@ -134,6 +140,15 @@ struct OpenCompanyFounding;
 #[derive(Component)]
 struct CancelCompanyFounding;
 
+type CompanyContextControl = Or<(
+    With<CompanyNameField>,
+    With<AdjustFoundingCapital>,
+    With<CycleActingCompany>,
+    With<OpenCompanyFounding>,
+    With<CancelCompanyFounding>,
+    With<FoundCompanyButton>,
+)>;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ActingCompanyView {
     id: CompanyId,
@@ -185,6 +200,14 @@ fn suggested_company_name(hero: &str, existing: usize) -> String {
     }
 }
 
+fn suggested_founding_capital(available: u64) -> u64 {
+    if available < shared::economy::PENNIES_PER_COIN {
+        shared::economy::PENNIES_PER_COIN
+    } else {
+        available.min(10 * shared::economy::PENNIES_PER_COIN)
+    }
+}
+
 fn receive_company_founding_results(
     mut receivers: Query<&mut MessageReceiver<HeroCompanyFoundingResult>, With<crate::GameClient>>,
     mut active: ResMut<ActiveCompany>,
@@ -213,7 +236,6 @@ fn handle_company_context_buttons(
     mut buttons: Query<
         (
             &Interaction,
-            &mut BackgroundColor,
             Option<&CompanyNameField>,
             Option<&AdjustFoundingCapital>,
             Option<&CycleActingCompany>,
@@ -221,7 +243,7 @@ fn handle_company_context_buttons(
             Option<&CancelCompanyFounding>,
             Option<&FoundCompanyButton>,
         ),
-        Changed<Interaction>,
+        (Changed<Interaction>, CompanyContextControl),
     >,
     local: Option<Res<LocalPeerId>>,
     heroes: Query<(&Hero, &PersonId, &CharacterName, &Wallet)>,
@@ -241,14 +263,7 @@ fn handle_company_context_buttons(
     });
     let clicked = guard.0 && mouse.just_pressed(MouseButton::Left);
     let mut clicked_name = false;
-    for (interaction, mut background, name, adjust, cycle, open, cancel, found) in
-        buttons.iter_mut()
-    {
-        background.0 = match interaction {
-            Interaction::Pressed => crate::ui::styles::BUTTON_PRESSED,
-            Interaction::Hovered => crate::ui::styles::BUTTON_HOVERED,
-            Interaction::None => BUTTON_NORMAL,
-        };
+    for (interaction, name, adjust, cycle, open, cancel, found) in buttons.iter_mut() {
         if !clicked || *interaction != Interaction::Pressed {
             continue;
         }
@@ -269,10 +284,7 @@ fn handle_company_context_buttons(
             draft.visible = true;
             draft.editing_name = true;
             draft.name = suggested_company_name(&hero_name.0, mastered.len());
-            draft.initial_capital = wallet
-                .balance()
-                .min(10 * shared::economy::PENNIES_PER_COIN)
-                .max(shared::economy::PENNIES_PER_COIN);
+            draft.initial_capital = suggested_founding_capital(wallet.balance());
             feedback.message.clear();
             continue;
         }
@@ -365,6 +377,7 @@ fn handle_company_name_input(
 
 fn ensure_property_panel(
     mut commands: Commands,
+    time: Res<Time<Real>>,
     mut target: ResMut<PropertyMarketTarget>,
     quote: Res<PendingPermitQuote>,
     mut active_company: ResMut<ActiveCompany>,
@@ -389,10 +402,16 @@ fn ensure_property_panel(
     )>,
     companies: Query<(&CompanyId, &Company, &CompanyLeadership, &CompanyAccount)>,
     world_time: Query<&WorldTime>,
-    roots: Query<(Entity, &PropertyPanelRoot)>,
+    roots: Query<(Entity, &PropertyPanelRoot, Option<&UiRefreshStamp>)>,
+    children: Query<&Children>,
+    interactions: Query<(&Interaction, Has<crate::ui::foundation::UiRefreshExempt>)>,
+    mut viewport_scrolls: ParamSet<(
+        Query<&ScrollPosition, With<PermitListingViewport>>,
+        Query<&ScrollPosition, With<PropertyListingViewport>>,
+    )>,
 ) {
     let Some(entity) = target.0 else {
-        for (root, _) in roots.iter() {
+        for (root, ..) in roots.iter() {
             commands.entity(root).despawn();
         }
         return;
@@ -407,7 +426,7 @@ fn ensure_property_panel(
         policy,
     )) = settlements.get(entity)
     else {
-        for (root, _) in roots.iter() {
+        for (root, ..) in roots.iter() {
             commands.entity(root).despawn();
         }
         target.0 = None;
@@ -437,12 +456,11 @@ fn ensure_property_panel(
     let mut mastered_companies: Vec<_> = local_person.map_or_else(Vec::new, |person| {
         companies
             .iter()
-            .filter_map(|(id, company, leadership, account)| {
-                (leadership.master == person).then(|| ActingCompanyView {
-                    id: *id,
-                    name: company.name.clone(),
-                    cash: account.cash,
-                })
+            .filter(|(_, _, leadership, _)| leadership.master == person)
+            .map(|(id, company, _, account)| ActingCompanyView {
+                id: *id,
+                name: company.name.clone(),
+                cash: account.cash,
             })
             .collect()
     });
@@ -463,9 +481,7 @@ fn ensure_property_panel(
         founding.name = local_hero.map_or_else(String::new, |(_, _, name, ..)| {
             suggested_company_name(&name.0, mastered_companies.len())
         });
-        founding.initial_capital = hero_balance
-            .min(10 * shared::economy::PENNIES_PER_COIN)
-            .max(shared::economy::PENNIES_PER_COIN);
+        founding.initial_capital = suggested_founding_capital(hero_balance);
         founding.editing_name = false;
         founding.pending = false;
     }
@@ -480,14 +496,37 @@ fn ensure_property_panel(
     let signature = format!(
         "{entity:?}|{settlement_id:?}|{settlement:?}|{hall_level:?}|{permit_offers:?}|{property_listings:?}|{policy:?}|{day}|{has_hero}|{hero_nearby}|{hero_balance}|{mastered_companies:?}|{:?}|{:?}|{:?}|{:?}",
         active_company.0,
-        &*founding,
-        &*founding_feedback,
+        *founding,
+        *founding_feedback,
         quote.0,
     );
-    if roots.iter().any(|(_, root)| root.signature == signature) {
+    if roots.iter().any(|(_, root, _)| root.signature == signature) {
         return;
     }
-    for (root, _) in roots.iter() {
+    if roots.iter().any(|(entity, _, stamp)| {
+        subtree_is_interacting(entity, &children, &interactions)
+            || stamp.is_some_and(|stamp| !stamp.is_ready(&time))
+    }) {
+        return;
+    }
+    let same_target = roots.iter().any(|(_, root, _)| root.target == entity);
+    let permit_scroll = retained_scroll(
+        same_target,
+        viewport_scrolls
+            .p0()
+            .iter()
+            .next()
+            .map(|position| position.0),
+    );
+    let property_scroll = retained_scroll(
+        same_target,
+        viewport_scrolls
+            .p1()
+            .iter()
+            .next()
+            .map(|position| position.0),
+    );
+    for (root, ..) in roots.iter() {
         commands.entity(root).despawn();
     }
 
@@ -495,6 +534,7 @@ fn ensure_property_panel(
         &mut commands,
         PropertyPanelRoot {
             signature: signature.clone(),
+            target: entity,
         },
         PropertyBackdrop,
         PropertyPanel,
@@ -503,6 +543,9 @@ fn ensure_property_panel(
             panel_padding: 0.0,
         },
     );
+    commands
+        .entity(nodes.root)
+        .insert(UiRefreshStamp::now(&time));
     commands.entity(nodes.panel).insert((
         Node {
             width: Val::Vw(90.0),
@@ -565,8 +608,9 @@ fn ensure_property_panel(
                     hero_nearby,
                     hero_balance,
                     acting_company,
+                    permit_scroll,
                 );
-                spawn_property_column(body, property_listings, day);
+                spawn_property_column(body, property_listings, day, property_scroll);
             });
         panel.spawn((
             Text::new(
@@ -644,11 +688,11 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>, place: &str, tier: &str, h
                         border_radius: BorderRadius::all(Val::Px(RADIUS)),
                         ..default()
                     },
-                    BackgroundColor(BUTTON_NORMAL),
-                    BorderColor::all(PLATE_RULE_SOFT),
+                    button_chrome(UiButtonVariant::Ghost),
                 ))
                 .with_child((
                     Text::new("X"),
+                    UiButtonLabel,
                     TextFont {
                         font_size: FontSize::Px(11.0),
                         ..default()
@@ -798,6 +842,8 @@ fn spawn_company_context(
                             } else {
                                 PLATE_RULE_SOFT
                             }),
+                            UiButtonStyle::new(UiButtonVariant::Secondary)
+                                .focused(founding.editing_name),
                         ));
                         field.with_child((
                             Text::new(format!(
@@ -809,6 +855,7 @@ fn spawn_company_context(
                                 },
                                 if founding.editing_name { " |" } else { "" }
                             )),
+                            UiButtonLabel,
                             TextFont {
                                 font_size: FontSize::Px(9.0),
                                 ..default()
@@ -951,11 +998,11 @@ fn context_button(
                 border_radius: BorderRadius::all(Val::Px(RADIUS)),
                 ..default()
             },
-            BackgroundColor(BUTTON_NORMAL),
-            BorderColor::all(PLATE_RULE_SOFT),
+            button_chrome(UiButtonVariant::Secondary),
         ))
         .with_child((
             Text::new(label),
+            UiButtonLabel,
             TextFont {
                 font_size: FontSize::Px(8.5),
                 ..default()
@@ -976,6 +1023,7 @@ fn spawn_permit_column(
     hero_nearby: bool,
     hero_balance: u64,
     acting_company: Option<&ActingCompanyView>,
+    scroll: Vec2,
 ) {
     body.spawn(Node {
         width: Val::Percent(50.0),
@@ -994,6 +1042,7 @@ fn spawn_permit_column(
         column
             .spawn((
                 PermitListingViewport,
+                ScrollPosition(scroll),
                 Node {
                     flex_grow: 1.0,
                     min_height: Val::Px(0.0),
@@ -1032,6 +1081,7 @@ fn spawn_property_column(
     body: &mut ChildSpawnerCommands<'_>,
     listings: &[PropertyMarketListing],
     day: u32,
+    scroll: Vec2,
 ) {
     body.spawn(Node {
         width: Val::Percent(50.0),
@@ -1050,6 +1100,7 @@ fn spawn_property_column(
         column
             .spawn((
                 PropertyListingViewport,
+                ScrollPosition(scroll),
                 Node {
                     flex_grow: 1.0,
                     min_height: Val::Px(0.0),
@@ -1390,13 +1441,11 @@ fn spawn_permit_action(
             border_radius: BorderRadius::all(Val::Px(RADIUS)),
             ..default()
         },
-        BackgroundColor(if enabled {
-            BUTTON_NORMAL
-        } else {
-            LIMEWASH_WELL
-        }),
-        BorderColor::all(PLATE_RULE_SOFT),
+        button_chrome(UiButtonVariant::Secondary),
     ));
+    if !enabled {
+        button.insert(InteractionDisabled);
+    }
     if let Some(marker) = marker {
         button.insert(marker);
     } else if enabled {
@@ -1418,6 +1467,7 @@ fn spawn_permit_action(
             .with_children(|copy| {
                 copy.spawn((
                     Text::new(label),
+                    UiButtonLabel,
                     TextFont {
                         font_size: FontSize::Px(9.0),
                         ..default()
@@ -1632,6 +1682,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn company_context_styling_cannot_capture_an_unrelated_backdrop() {
+        let mut world = World::new();
+        let backdrop = world
+            .spawn((
+                PropertyBackdrop,
+                Interaction::Hovered,
+                BackgroundColor::default(),
+            ))
+            .id();
+        let company_control = world
+            .spawn((
+                OpenCompanyFounding,
+                Interaction::Hovered,
+                BackgroundColor::default(),
+            ))
+            .id();
+
+        let mut controls = world.query_filtered::<Entity, CompanyContextControl>();
+        let matches: Vec<_> = controls.iter(&world).collect();
+        assert_eq!(matches, vec![company_control]);
+        assert!(!matches.contains(&backdrop));
+    }
+
+    #[test]
     fn requested_business_uses_enacted_discount_but_speculation_does_not() {
         let mut policy = SettlementPolicies::from_foundation("Market Cross", Vec3::ZERO);
         policy.business_permit_subsidy_bps = 4_500;
@@ -1672,8 +1746,9 @@ mod tests {
                 false,
                 0,
                 None,
+                Vec2::ZERO,
             );
-            spawn_property_column(body, &[], 0);
+            spawn_property_column(body, &[], 0, Vec2::ZERO);
         });
         world.flush();
 

@@ -25,8 +25,8 @@ use bevy::window::{CursorOptions, PrimaryWindow};
 use shared::components::{LocalPlayer, PlayerPosition, PlayerRotation};
 use shared::map::MapBounds;
 
-use super::modal::sync_modal_cursor;
-use super::styles::{ACCENT_COLOR, BUTTON_BORDER, MENU_BACKGROUND, TEXT_COLOR};
+use super::modal::{modal_backdrop_chrome, modal_root_chrome, sync_modal_cursor, ModalRoot};
+use super::styles::{EMBER, INK_INVERSE, MENU_BACKGROUND, MODAL_BACKDROP, PLATE_RULE};
 use crate::input::InputState;
 use crate::states::GameState;
 

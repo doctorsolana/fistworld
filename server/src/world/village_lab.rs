@@ -13,12 +13,12 @@ use std::time::Instant;
 use bevy::prelude::*;
 use shared::components::{
     BuildingDoorDemand, BuildingDoorUse, BuildingId, CharacterActivity, CharacterAffiliation,
-    CharacterAttributes, CharacterKind, CharacterName, Company, CompanyId, CompanyLeadership,
-    CompanyOwnership, EmployedAt, FarmField, FishingPier, Health, Household, MootAdministration,
-    Nutrition, Occupation, OperatedBy, OwnedBy, PersonId, PlayerPosition, PlayerRotation,
-    Residence, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
-    SettlementOpportunityBoard, SettlementPolicies, SettlementTier, TimeWarp, VillageRoad,
-    WorkStatus, WorldTime, COMPANY_TOTAL_SHARES,
+    CharacterAttributes, CharacterKind, CharacterName, CivicStrategy, Company, CompanyId,
+    CompanyLeadership, CompanyOwnership, EmployedAt, FarmField, FishingPier, Health, Household,
+    MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId, PlayerPosition,
+    PlayerRotation, Residence, Settlement, SettlementBuilding, SettlementBuildingKind,
+    SettlementId, SettlementOpportunityBoard, SettlementPolicies, SettlementTier, TimeWarp,
+    VillageRoad, WorkStatus, WorldTime, COMPANY_TOTAL_SHARES,
 };
 use shared::economy::{
     BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessWagePolicy, CarriedLoad,
@@ -42,8 +42,9 @@ use crate::world::village::{
     UnderConstruction, VillageClock, VillagerIntent, WorkerOffDuty, WorkplaceDoorTransit,
 };
 use crate::world::village_lab_scenario::{
-    choose_greenwood_site, choose_poor_site, choose_secure_site, lab_arrival_offset,
-    lab_arrival_waves, LabArrivalTarget, LabScenario,
+    choose_greenwood_site, choose_inland_meadow_site, choose_policy_comparison_sites,
+    choose_poor_site, choose_secure_site, lab_arrival_offset, lab_arrival_waves, LabArrivalTarget,
+    LabScenario,
 };
 use crate::world::village_roads::{
     self, NavigationRouteFailed, NavigationRoutePending, PlannedRoadAccess, RoadBuilderRoutine,
@@ -766,10 +767,14 @@ impl LabLifeLedger {
     }
 
     fn print_final_report(&self, world: &mut World) {
-        let deaths: HashMap<PersonId, (u32, shared::components::DeathCause)> = world
+        let death_records: Vec<_> = world
             .resource::<village::MortalityLedger>()
             .iter()
-            .map(|death| (death.id, (death.day, death.cause)))
+            .map(|death| (death.id, death.name.clone(), death.day, death.cause))
+            .collect();
+        let deaths: HashMap<PersonId, (u32, shared::components::DeathCause)> = death_records
+            .iter()
+            .map(|(id, _, day, cause)| (*id, (*day, *cause)))
             .collect();
         let total_deaths = world.resource::<village::MortalityLedger>().total_deaths;
         let starvation_deaths = deaths
@@ -794,6 +799,12 @@ impl LabLifeLedger {
                 .collect::<Vec<_>>()
                 .join(", "),
         );
+        for (id, name, day, cause) in &death_records {
+            println!(
+                "LAB mortality person=#{} '{}' day={} cause={cause:?}",
+                id.0, name, day,
+            );
+        }
         if self.people.is_empty() {
             println!("LAB wealth no residents recorded");
             return;
@@ -1170,10 +1181,13 @@ fn spawn_lab_village(
     world: &mut World,
     name: &str,
     resident_prefix: &str,
+    strategy: CivicStrategy,
     hall_position: Vec3,
     resident_count: usize,
 ) {
-    let hall_inventory = GoodsInventory::new(shared::economy::capacity::HALL);
+    let hall_inventory = GoodsInventory::new_partitioned(shared::economy::capacity::HALL);
+    let mut policies = shared::components::SettlementPolicies::poor_relief();
+    policies.strategy = strategy;
     world.spawn((
         Settlement {
             name: name.to_string(),
@@ -1183,13 +1197,19 @@ fn spawn_lab_village(
         },
         hall_inventory,
         shared::economy::MootMarket::founding(),
-        shared::components::SettlementPolicies::poor_relief(),
+        policies,
         PlayerPosition(hall_position),
         PlayerRotation(0.0),
     ));
 
     let entrance = SettlementBuildingKind::Hall.entrance_position(hall_position, 0.0);
-    let seed_base = resident_prefix.bytes().fold(0_u64, |hash, byte| {
+    let policy_pair = matches!(name, "Lab Frugal" | "Lab Mutual Aid");
+    let seed_key = if policy_pair {
+        "PolicyResident"
+    } else {
+        resident_prefix
+    };
+    let seed_base = seed_key.bytes().fold(0_u64, |hash, byte| {
         hash.wrapping_mul(109).wrapping_add(u64::from(byte))
     });
     let positions: Vec<_> = {
@@ -1217,7 +1237,7 @@ fn spawn_lab_village(
     };
     for (index, position) in positions.into_iter().enumerate() {
         let angle = index as f32 / resident_count as f32 * std::f32::consts::TAU;
-        world.spawn((
+        let mut resident = world.spawn((
             CharacterName(format!("{resident_prefix}{index}")),
             CharacterKind::Villager,
             CharacterAffiliation::default(),
@@ -1230,6 +1250,11 @@ fn spawn_lab_village(
             PlayerRotation(angle),
             RegionCoord::from_world_pos(position),
         ));
+        if policy_pair {
+            resident.insert(CharacterAttributes::from_seed(
+                0x504f_4c49_4359_u64.wrapping_add(index as u64),
+            ));
+        }
     }
 }
 
@@ -1257,7 +1282,7 @@ fn spawn_lab_arrivals(
                 let z = entrance.z + offset.y - 0.45;
                 let requested = Vec3::new(x, terrain.get_height(x, z), z);
                 let seed = (u64::from(day) << 32)
-                    ^ target.seed_salt()
+                    ^ target.cohort_seed_salt()
                     ^ u64::try_from(index).unwrap_or(u64::MAX);
                 crate::world::dev::safe_villager_spawn_position(
                     requested, seed, terrain, obstacles, colliders, derived,
@@ -1271,7 +1296,7 @@ fn spawn_lab_arrivals(
             .collect()
     };
     for (index, position) in positions.into_iter().enumerate() {
-        world.spawn((
+        let mut arrival = world.spawn((
             CharacterName(format!("{}ArrivalD{day}_{index}", target.resident_prefix())),
             CharacterKind::Villager,
             CharacterAffiliation::default(),
@@ -1284,15 +1309,31 @@ fn spawn_lab_arrivals(
             PlayerRotation(0.0),
             RegionCoord::from_world_pos(position),
         ));
+        if matches!(
+            target,
+            LabArrivalTarget::FrugalMeadow | LabArrivalTarget::MutualAidMeadow
+        ) {
+            arrival.insert(CharacterAttributes::from_seed(
+                (u64::from(day) << 32)
+                    ^ 0x504f_4c49_4359_u64
+                    ^ u64::try_from(index).unwrap_or(u64::MAX),
+            ));
+        }
     }
 }
 
 fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
-    let (secure, poor, greenwood) = {
+    let (secure, inland_meadow, policy_comparison, poor, greenwood) = {
         let terrain = world.resource::<WorldTerrain>();
         let secure = scenario
             .includes_secure()
             .then(|| choose_secure_site(terrain));
+        let inland_meadow = scenario
+            .includes_inland_meadow()
+            .then(|| choose_inland_meadow_site(terrain));
+        let policy_comparison = scenario
+            .is_policy_comparison()
+            .then(|| choose_policy_comparison_sites(terrain));
         let poor = scenario
             .includes_poor()
             .then(|| choose_poor_site(terrain, secure.map(|choice| choice.0)));
@@ -1306,13 +1347,15 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             }
             choose_greenwood_site(terrain, &occupied)
         });
-        (secure, poor, greenwood)
+        (secure, inland_meadow, policy_comparison, poor, greenwood)
     };
     let residents_per_village = scenario.residents_per_village();
 
     println!(
         "LAB map=village_lab scenario={scenario:?} villages={} warp={}x",
         usize::from(secure.is_some())
+            + usize::from(inland_meadow.is_some())
+            + if policy_comparison.is_some() { 2 } else { 0 }
             + usize::from(poor.is_some())
             + usize::from(greenwood.is_some()),
         warp,
@@ -1336,7 +1379,59 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             world,
             "Lab Meadow",
             "MeadowResident",
+            CivicStrategy::Balanced,
             hall,
+            residents_per_village,
+        );
+    }
+
+    if let Some((hall, trees, farmland)) = inland_meadow {
+        println!(
+            "LAB inland-meadow='Lab Meadow' hall=({:.1},{:.1},{:.1}) farmland={:.0}% trees={} fishing=none",
+            hall.x,
+            hall.y,
+            hall.z,
+            farmland * 100.0,
+            trees,
+        );
+        spawn_lab_village(
+            world,
+            "Lab Meadow",
+            "MeadowResident",
+            CivicStrategy::Balanced,
+            hall,
+            residents_per_village,
+        );
+    }
+
+    if let Some((frugal, mutual)) = policy_comparison {
+        println!(
+            "LAB policy-comparison frugal='Lab Frugal' hall=({:.1},{:.1},{:.1}) farmland={:.0}% trees={} mutual='Lab Mutual Aid' hall=({:.1},{:.1},{:.1}) farmland={:.0}% trees={} fishing=none/none",
+            frugal.0.x,
+            frugal.0.y,
+            frugal.0.z,
+            frugal.2 * 100.0,
+            frugal.1,
+            mutual.0.x,
+            mutual.0.y,
+            mutual.0.z,
+            mutual.2 * 100.0,
+            mutual.1,
+        );
+        spawn_lab_village(
+            world,
+            "Lab Frugal",
+            "FrugalResident",
+            CivicStrategy::Frugal,
+            frugal.0,
+            residents_per_village,
+        );
+        spawn_lab_village(
+            world,
+            "Lab Mutual Aid",
+            "MutualResident",
+            CivicStrategy::MutualAid,
+            mutual.0,
             residents_per_village,
         );
     }
@@ -1354,6 +1449,7 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             world,
             "Lab Coldbarrow",
             "ColdResident",
+            CivicStrategy::Balanced,
             hall,
             residents_per_village,
         );
@@ -1372,6 +1468,7 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             world,
             "Lab Greenwood",
             "GreenResident",
+            CivicStrategy::Balanced,
             hall,
             residents_per_village,
         );
@@ -2746,7 +2843,7 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
                 .copied()
                 .unwrap_or((0, [0; 3]));
             format!(
-                "{}:{} pop={} stock={} purchasable={} asks=[fish:{} flour:{} bread:{}] at_businesses={} reserve={:.1}d prod={:.1}/d eaten={:.1}/d hungry={} prosperity={:.0} secure={}d company_cash={} business_arrears={} permits=[{}]",
+                "{}:{} pop={} stock={} purchasable={} asks=[fish:{} flour:{} bread:{}] at_businesses={} reserve={:.1}d prod={:.1}/d eaten={:.1}/d hungry={} prosperity={:.0} secure={}d jobs=[private:{}/{} vacant:{} civic:{}/{} vacant:{} seeking:{} best:{}] company_cash={} business_arrears={} permits=[{}]",
                 settlement.name,
                 settlement.tier.label(),
                 settlement.residents,
@@ -2762,6 +2859,14 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
                 economy.unmet_food,
                 economy.prosperity,
                 economy.food_secure_days,
+                economy.private_filled_jobs,
+                economy.private_job_positions,
+                economy.private_vacant_jobs,
+                economy.civic_filled_jobs,
+                economy.civic_job_positions,
+                economy.civic_vacant_jobs,
+                economy.job_seekers,
+                shared::economy::format_money(economy.best_open_private_wage),
                 shared::economy::format_money(company_cash),
                 shared::economy::format_money(business_arrears),
                 permits,
@@ -3729,6 +3834,156 @@ fn assert_arrival_stress_outcome(
     }
 }
 
+fn assert_policy_comparison_outcome(world: &mut World, expected_residents: usize) {
+    let expected_each = expected_residents / 2;
+    let settlements: Vec<_> = world
+        .query::<(&Settlement, &SettlementEconomy, &SettlementPolicies)>()
+        .iter(world)
+        .filter(|(settlement, ..)| {
+            matches!(settlement.name.as_str(), "Lab Frugal" | "Lab Mutual Aid")
+        })
+        .map(|(settlement, economy, policies)| (settlement.clone(), economy.clone(), *policies))
+        .collect();
+    assert_eq!(settlements.len(), 2, "policy comparison lost a town");
+    let (frugal_deaths, mutual_deaths) = {
+        let mortality = world.resource::<village::MortalityLedger>();
+        (
+            mortality
+                .iter()
+                .filter(|record| record.name.starts_with("Frugal"))
+                .count(),
+            mortality
+                .iter()
+                .filter(|record| record.name.starts_with("Mutual"))
+                .count(),
+        )
+    };
+    assert_eq!(
+        settlements
+            .iter()
+            .map(|(settlement, ..)| settlement.residents as usize)
+            .sum::<usize>()
+            .saturating_add(frugal_deaths)
+            .saturating_add(mutual_deaths),
+        expected_residents,
+        "the policy comparison did not account for every admitted resident"
+    );
+    let frugal = settlements
+        .iter()
+        .find(|(settlement, ..)| settlement.name == "Lab Frugal")
+        .expect("Frugal policy town missing");
+    let mutual = settlements
+        .iter()
+        .find(|(settlement, ..)| settlement.name == "Lab Mutual Aid")
+        .expect("Mutual Aid policy town missing");
+    assert_eq!(
+        frugal.0.residents as usize + frugal_deaths,
+        expected_each,
+        "the Frugal town did not receive its complete cohort"
+    );
+    assert_eq!(
+        mutual.0.residents as usize + mutual_deaths,
+        expected_each,
+        "the Mutual Aid town did not receive its complete cohort"
+    );
+    assert_eq!(frugal.2.strategy, CivicStrategy::Frugal);
+    assert_eq!(mutual.2.strategy, CivicStrategy::MutualAid);
+    assert!(
+        settlements.iter().all(|(_, economy, _)| {
+            economy.private_job_positions
+                == economy
+                    .private_filled_jobs
+                    .saturating_add(economy.private_vacant_jobs)
+        }),
+        "live private vacancy accounting is inconsistent: {settlements:#?}"
+    );
+
+    let mut kinds = HashMap::<String, HashMap<SettlementBuildingKind, usize>>::new();
+    let building_kind_by_id: HashMap<_, _> = world
+        .query::<(&BuildingId, &SettlementBuilding)>()
+        .iter(world)
+        .map(|(id, building)| {
+            *kinds
+                .entry(building.settlement.clone())
+                .or_default()
+                .entry(building.kind)
+                .or_default() += 1;
+            (*id, building.kind)
+        })
+        .collect();
+    for name in ["Lab Frugal", "Lab Mutual Aid"] {
+        let built = kinds.get(name).expect("comparison town built nothing");
+        for required in [
+            SettlementBuildingKind::Farmstead,
+            SettlementBuildingKind::Windmill,
+            SettlementBuildingKind::Bakery,
+        ] {
+            assert!(
+                built.get(&required).copied().unwrap_or(0) > 0,
+                "{name} never completed its grain chain: {built:#?}"
+            );
+        }
+        assert_eq!(
+            built
+                .get(&SettlementBuildingKind::FishermansHut)
+                .copied()
+                .unwrap_or(0),
+            0,
+            "{name} found fishing in a grain-only policy comparison"
+        );
+    }
+    let false_public_jobs: Vec<_> = world
+        .query::<(&CharacterName, &EmployedAt)>()
+        .iter(world)
+        .filter_map(|(name, employment)| {
+            building_kind_by_id
+                .get(&employment.0)
+                .copied()
+                .filter(|kind| !village::is_private_business(*kind))
+                .map(|kind| (name.0.clone(), kind))
+        })
+        .collect();
+    assert!(
+        false_public_jobs.is_empty(),
+        "civic buildings advertised unfunded private jobs: {false_public_jobs:?}"
+    );
+    assert!(
+        world
+            .query::<&NavigationRouteFailed>()
+            .iter(world)
+            .next()
+            .is_none(),
+        "policy comparison ended with a failed route"
+    );
+    println!(
+        "LAB policy result Frugal living={} deaths={} reserve={:.1}d hungry={} private_jobs={}/{} vacant={} civic_jobs={}/{} vacant={} seeking={} best_wage={} | MutualAid living={} deaths={} reserve={:.1}d hungry={} private_jobs={}/{} vacant={} civic_jobs={}/{} vacant={} seeking={} best_wage={}",
+        frugal.0.residents,
+        frugal_deaths,
+        frugal.1.reserve_days,
+        frugal.1.unmet_food,
+        frugal.1.private_filled_jobs,
+        frugal.1.private_job_positions,
+        frugal.1.private_vacant_jobs,
+        frugal.1.civic_filled_jobs,
+        frugal.1.civic_job_positions,
+        frugal.1.civic_vacant_jobs,
+        frugal.1.job_seekers,
+        shared::economy::format_money(frugal.1.best_open_private_wage),
+        mutual.0.residents,
+        mutual_deaths,
+        mutual.1.reserve_days,
+        mutual.1.unmet_food,
+        mutual.1.private_filled_jobs,
+        mutual.1.private_job_positions,
+        mutual.1.private_vacant_jobs,
+        mutual.1.civic_filled_jobs,
+        mutual.1.civic_job_positions,
+        mutual.1.civic_vacant_jobs,
+        mutual.1.job_seekers,
+        shared::economy::format_money(mutual.1.best_open_private_wage),
+    );
+}
+
 fn assert_economy_soak_outcome(world: &mut World, evidence: &Evidence) {
     const RESIDENTS_PER_SETTLEMENT: u32 = 30;
     const TOTAL_RESIDENTS: u32 = RESIDENTS_PER_SETTLEMENT * 3;
@@ -4117,7 +4372,8 @@ fn village_simulation_lab() {
                                 | shared::building::BuildingType::TownHall => {
                                     SettlementBuildingKind::Hall
                                 }
-                                shared::building::BuildingType::PlaceholderMarket => {
+                                shared::building::BuildingType::Market
+                                | shared::building::BuildingType::MarketPaved => {
                                     SettlementBuildingKind::Market
                                 }
                                 shared::building::BuildingType::PlaceholderTavern => {
@@ -4131,6 +4387,9 @@ fn village_simulation_lab() {
                                 }
                                 shared::building::BuildingType::Bakery => {
                                     SettlementBuildingKind::Bakery
+                                }
+                                shared::building::BuildingType::PlaceholderStorageHall => {
+                                    SettlementBuildingKind::StorageHall
                                 }
                             };
                             let door = kind.entrance_position(position.0, building.rotation);
@@ -4343,6 +4602,8 @@ fn village_simulation_lab() {
         assert_economy_soak_outcome(app.world_mut(), &evidence);
     } else if scenario.is_crowd_stress() {
         assert_crowd_stress_outcome(app.world_mut(), &evidence, scenario, expected_residents);
+    } else if scenario.is_policy_comparison() {
+        assert_policy_comparison_outcome(app.world_mut(), expected_residents);
     } else if arrival_count == 0 {
         assert_lab_outcome(app.world_mut(), &evidence, scenario, expected_residents);
     } else {

@@ -4,6 +4,13 @@ use super::*;
 
 const MAX_CERTIFIED_DELIVERY_FAILURES: u8 = 12;
 
+/// Runtime acknowledgement that a completed market has been checked against
+/// the current 12 m square terrain contract. The marker is deliberately not
+/// persisted: after a server restart the inexpensive height check runs once,
+/// repairing saves whose market was levelled with the former 9 x 7 blockout.
+#[derive(Component)]
+pub(crate) struct MarketGroundLeveled;
+
 fn material_stock_may_supply(
     owns_priority: bool,
     available_wood: u32,
@@ -178,6 +185,15 @@ pub fn run_construction_material_logistics(
     >,
     mut inventories: Query<&mut GoodsInventory>,
     mut markets: Query<&mut MootMarket>,
+    marketplaces: Query<
+        (
+            &SettlementBuilding,
+            &shared::components::BuildingOf,
+            &PlayerPosition,
+            &PlayerRotation,
+        ),
+        Without<CharacterKind>,
+    >,
     mut tree_candidates: Local<TreeWorkCandidateCache>,
     mut builders: Query<
         (
@@ -507,6 +523,19 @@ pub fn run_construction_material_logistics(
             hall_position.0,
             hall_rotation.map(|rotation| rotation.0).unwrap_or(0.0),
         );
+        let public_store_entrance = nearest_public_market_entrance(
+            position.0,
+            hall_entrance,
+            marketplaces
+                .iter()
+                .filter(|(building, building_of, ..)| {
+                    building.kind == SettlementBuildingKind::Market
+                        && building_of.0 == *settlement_id
+                })
+                .map(|(building, _, at, rotation)| {
+                    building.kind.entrance_position(at.0, rotation.0)
+                }),
+        );
         let carried_wood = inventories
             .get(builder)
             .map(|inventory| inventory.amount(Good::Wood))
@@ -537,10 +566,10 @@ pub fn run_construction_material_logistics(
                 }
                 if carries_other_goods {
                     commands.entity(builder).remove::<ambient::AmbientRoutine>();
-                    ensure_move_target(&mut commands, builder, move_target, hall_entrance);
+                    ensure_move_target(&mut commands, builder, move_target, public_store_entrance);
                     routine.phase = ConstructionMaterialPhase::UnloadingAtHall {
                         hall: hall_entity,
-                        entrance: hall_entrance,
+                        entrance: public_store_entrance,
                     };
                     continue;
                 }
@@ -590,7 +619,7 @@ pub fn run_construction_material_logistics(
                             && inventory.amount(Good::Wood) > 0
                             && affordable
                     })
-                    .then_some((hall_entity, hall_entrance));
+                    .then_some((hall_entity, public_store_entrance));
                 if let Some((source, entrance)) = source {
                     let available_wood = inventories
                         .get(hall_entity)
@@ -614,8 +643,13 @@ pub fn run_construction_material_logistics(
                         if ambient_routine.is_some() {
                             continue;
                         }
-                        if ground_distance(position.0, hall_entrance) > WORK_REACH {
-                            ensure_move_target(&mut commands, builder, move_target, hall_entrance);
+                        if ground_distance(position.0, public_store_entrance) > WORK_REACH {
+                            ensure_move_target(
+                                &mut commands,
+                                builder,
+                                move_target,
+                                public_store_entrance,
+                            );
                         }
                         continue;
                     }
@@ -658,7 +692,12 @@ pub fn run_construction_material_logistics(
                         // candidate. Back off rather than retrying a sparse
                         // grove at the server tick rate.
                         postpone_construction_tree_search(&mut routine, now);
-                        ensure_move_target(&mut commands, builder, move_target, hall_entrance);
+                        ensure_move_target(
+                            &mut commands,
+                            builder,
+                            move_target,
+                            public_store_entrance,
+                        );
                         continue;
                     }
                     TreeCandidateLookup::Found { tree, stand } => (tree, stand),
@@ -1339,6 +1378,15 @@ fn clear_and_level(
 ) {
     let affected = level_construction_ground(terrain, under);
 
+    publish_terrain_chunks(terrain, deltas, commands, affected);
+}
+
+fn publish_terrain_chunks(
+    terrain: &WorldTerrain,
+    deltas: &mut PublishedTerrainDeltas,
+    commands: &mut Commands,
+    affected: impl IntoIterator<Item = shared::terrain::ChunkCoord>,
+) {
     for coord in affected {
         let Some(data) = terrain.get_delta_chunk(coord) else {
             continue;
@@ -1360,22 +1408,31 @@ fn clear_and_level(
     }
 }
 
+fn level_building_ground(
+    terrain: &mut WorldTerrain,
+    kind: SettlementBuildingKind,
+    position: Vec3,
+    rotation: f32,
+) -> Vec<shared::terrain::ChunkCoord> {
+    let def = kind.art().definition();
+    // Level TO the plot's own height, so a building on a slope cuts a terrace
+    // rather than the whole village drifting to one altitude.
+    let ground = terrain.get_height(position.x, position.z);
+    let footprint_center = def.world_footprint_center(position, rotation);
+    let centre = Vec3::new(footprint_center.x, ground, footprint_center.y);
+    terrain.apply_flatten_rect(
+        centre,
+        def.terrain_flat_half_extents(),
+        rotation,
+        def.terrain_blend_width(),
+    )
+}
+
 fn level_construction_ground(
     terrain: &mut WorldTerrain,
     under: &UnderConstruction,
 ) -> Vec<shared::terrain::ChunkCoord> {
-    let def = under.kind.art().definition();
-    // Level TO the plot's own height, so a building on a slope cuts a terrace
-    // rather than the whole village drifting to one altitude.
-    let ground = terrain.get_height(under.position.x, under.position.z);
-    let footprint_center = def.world_footprint_center(under.position, under.rotation);
-    let centre = Vec3::new(footprint_center.x, ground, footprint_center.y);
-    let mut affected = terrain.apply_flatten_rect(
-        centre,
-        def.footprint * 0.5,
-        under.rotation,
-        def.flatten_radius,
-    );
+    let mut affected = level_building_ground(terrain, under.kind, under.position, under.rotation);
 
     // A Farmstead is one agricultural land claim: terrace both adjacent crop
     // plots to a shared working plane, while the farmyard keeps its own local
@@ -1410,11 +1467,79 @@ fn level_construction_ground(
     affected
 }
 
+fn market_ground_needs_leveling(terrain: &WorldTerrain, position: Vec3, rotation: f32) -> bool {
+    let def = SettlementBuildingKind::Market.art().definition();
+    let center = def.world_footprint_center(position, rotation);
+    let target = terrain.get_height(position.x, position.z);
+    let half = def.footprint * 0.5;
+
+    // Seven samples per axis cover the visible slab through its local +/-6 m
+    // edges, so an old 9 x 7 blockout terrace cannot pass merely because its
+    // centre happens to be level. The construction-only apron is intentionally
+    // outside this check: it protects interpolation beneath the visible floor,
+    // but its outermost blend-side edge need not itself be perfectly level.
+    (0..=6).any(|z| {
+        (0..=6).any(|x| {
+            let local = Vec2::new(
+                -half.x + 2.0 * half.x * x as f32 / 6.0,
+                -half.y + 2.0 * half.y * z as f32 / 6.0,
+            );
+            let offset = shared::rotation::local_to_world_xz(local, rotation);
+            (terrain.get_height(center.x + offset.x, center.y + offset.y) - target).abs() > 0.03
+        })
+    })
+}
+
+/// Repair completed marketplaces created before the authored 12 x 12 m
+/// square replaced the old storage-hall blockout. Newly built markets already
+/// pass because construction uses the same definition; loaded saves are
+/// sampled once and republished only if their larger apron is not level.
+pub(crate) fn ensure_market_ground_is_level(
+    mut commands: Commands,
+    mut terrain: Option<ResMut<WorldTerrain>>,
+    mut deltas: ResMut<PublishedTerrainDeltas>,
+    markets: Query<
+        (
+            Entity,
+            &SettlementBuilding,
+            &PlayerPosition,
+            &PlayerRotation,
+        ),
+        (
+            With<shared::components::MarketLevel>,
+            Without<MarketGroundLeveled>,
+        ),
+    >,
+) {
+    let Some(terrain) = terrain.as_mut() else {
+        return;
+    };
+
+    for (entity, building, position, rotation) in markets.iter() {
+        if building.kind == SettlementBuildingKind::Market
+            && market_ground_needs_leveling(terrain, position.0, rotation.0)
+        {
+            let affected = level_building_ground(
+                terrain,
+                SettlementBuildingKind::Market,
+                position.0,
+                rotation.0,
+            );
+            publish_terrain_chunks(terrain, &mut deltas, &mut commands, affected);
+            info!(
+                "Re-levelled completed marketplace at {:.1},{:.1} for the authored square",
+                position.0.x, position.0.z,
+            );
+        }
+        commands.entity(entity).insert(MarketGroundLeveled);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        delivery_egress_points, level_construction_ground, material_stock_may_supply, BuildStage,
-        PlannedRoadAccess, UnderConstruction, WorldTerrain,
+        delivery_egress_points, level_construction_ground, market_ground_needs_leveling,
+        material_stock_may_supply, BuildStage, PlannedRoadAccess, UnderConstruction, WorldTerrain,
     };
     use bevy::prelude::{Entity, Vec2, Vec3};
     use shared::components::SettlementBuildingKind;
@@ -1499,6 +1624,70 @@ mod tests {
                 assert!(
                     (height - target).abs() < 0.08,
                     "field corner remained {:.2} m from its terrace height",
+                    height - target,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn market_earthworks_keep_the_full_visible_square_above_the_terrain() {
+        let mut terrain = WorldTerrain::default();
+        let kind = SettlementBuildingKind::Market;
+        let position = (-1800..=1800)
+            .step_by(40)
+            .flat_map(|x| (-1200..=1200).step_by(40).map(move |z| (x, z)))
+            .find_map(|(x, z)| {
+                let x = x as f32;
+                let z = z as f32;
+                let target = terrain.get_height(x, z);
+                if target <= 1.0 {
+                    return None;
+                }
+                let uneven = [-6.0, 0.0, 6.0].into_iter().any(|dz| {
+                    [-6.0, 0.0, 6.0]
+                        .into_iter()
+                        .any(|dx| (terrain.get_height(x + dx, z + dz) - target).abs() > 0.12)
+                });
+                uneven.then_some(Vec3::new(x, target, z))
+            })
+            .expect("deterministic world contains uneven dry market ground");
+        let under = UnderConstruction {
+            kind,
+            position,
+            rotation: 0.37,
+            owner: None,
+            owner_id: None,
+            builder: None,
+            settlement: Entity::PLACEHOLDER,
+            settlement_id: shared::components::SettlementId(1),
+            stand: position,
+            failed_stand_routes: 0,
+            stage: BuildStage::Walking,
+            quality: 0.5,
+        };
+
+        assert!(market_ground_needs_leveling(
+            &terrain,
+            position,
+            under.rotation
+        ));
+        assert!(!level_construction_ground(&mut terrain, &under).is_empty());
+        assert!(!market_ground_needs_leveling(
+            &terrain,
+            position,
+            under.rotation
+        ));
+
+        let target = terrain.get_height(position.x, position.z);
+        for z in 0..=6 {
+            for x in 0..=6 {
+                let local = Vec2::new(-6.0 + 2.0 * x as f32, -6.0 + 2.0 * z as f32);
+                let offset = shared::rotation::local_to_world_xz(local, under.rotation);
+                let height = terrain.get_height(position.x + offset.x, position.z + offset.y);
+                assert!(
+                    (height - target).abs() < 0.03,
+                    "market slab sample remained {:.2} m from the levelled plane",
                     height - target,
                 );
             }

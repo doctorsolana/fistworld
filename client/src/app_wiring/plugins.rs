@@ -120,6 +120,7 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
     app.add_plugins(props::PropsPlugin);
 
     // UI plugins
+    app.add_plugins(ui::UiFoundationPlugin);
     app.add_plugins(ui::UiScrollPlugin);
     app.add_plugins(ui::MainMenuPlugin);
     app.add_plugins(ui::PauseMenuPlugin);

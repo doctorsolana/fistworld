@@ -1,13 +1,13 @@
 //! Main menu UI
 //!
-//! Updated for Bevy 0.18 with server preset dropdown
+//! Server connection launcher and preset dropdown.
 
 pub mod actions;
 pub mod dropdown;
 pub mod layout;
 pub mod network_input;
 
-use actions::{animate_logo, button_interactions, handle_menu_actions};
+use actions::{animate_logo, handle_menu_actions};
 use dropdown::{
     handle_dropdown_selection, handle_dropdown_toggle, spawn_dropdown, update_dropdown_display,
 };
@@ -25,6 +25,9 @@ use bevy::ui::UiScale;
 use bevy::window::{Monitor, PrimaryMonitor, PrimaryWindow};
 use serde::Deserialize;
 
+use super::foundation::{
+    button_chrome, selected_button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant,
+};
 use super::styles::*;
 use crate::render::systems::{DisplayMode, DisplayResolution, LAUNCHER_RESOLUTION};
 use crate::states::GameState;
@@ -48,7 +51,6 @@ impl Plugin for MainMenuPlugin {
         app.add_systems(
             Update,
             (
-                button_interactions,
                 handle_menu_actions,
                 animate_logo,
                 handle_ip_input_focus,

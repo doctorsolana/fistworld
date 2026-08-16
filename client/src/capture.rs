@@ -356,11 +356,12 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
     // "village" additionally populates the first one; "coast" stages the
     // deterministic Village Lab hut/pier pair for shoreline inspection; and
     // "industries" frames the authored founding production buildings closely;
-    // "bakery" isolates a staffed bakery for chimney, lighting and stock-art QA.
+    // "bakery" isolates a staffed bakery for chimney, lighting and stock-art QA;
+    // "market" and "market_paved" isolate the two identically sized square levels.
     if std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").is_ok_and(|v| {
         matches!(
             v.as_str(),
-            "1" | "village" | "coast" | "industries" | "bakery"
+            "1" | "village" | "coast" | "industries" | "bakery" | "market" | "market_paved"
         )
     }) {
         commands.queue(|world: &mut World| {
@@ -373,6 +374,26 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                 .and_then(|c| c.shots.first().map(|s| s.focus))
                 .unwrap_or_default();
             let mode = std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").unwrap_or_default();
+            if matches!(mode.as_str(), "market" | "market_paved") {
+                // Reproduce the authoritative construction earthwork in this
+                // network-free visual fixture. This makes the capture useful
+                // for spotting terrain triangles through the 12 m ground slab,
+                // not merely for checking the GLB in isolation.
+                if let Some(mut terrain) =
+                    world.get_resource_mut::<shared::terrain::WorldTerrain>()
+                {
+                    let def = shared::components::SettlementBuildingKind::Market
+                        .art()
+                        .definition();
+                    let target = terrain.get_height(focus.x, focus.z);
+                    terrain.apply_flatten_rect(
+                        Vec3::new(focus.x, target, focus.z),
+                        def.terrain_flat_half_extents(),
+                        0.0,
+                        def.terrain_blend_width(),
+                    );
+                }
+            }
             let settlement_focus = match mode.as_str() {
                 "coast" => {
                     // The requested focus is the hut. This is its deterministic
@@ -382,7 +403,9 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                 // Centre the authored production cluster rather than its Hall.
                 // This keeps close asset-validation shots reusable as the Hall
                 // ladder grows substantially taller than founding industries.
-                "industries" | "bakery" => focus + Vec3::new(0.0, 0.0, 140.0),
+                "industries" | "bakery" | "market" | "market_paved" => {
+                    focus + Vec3::new(0.0, 0.0, 140.0)
+                }
                 _ if std::env::var("FISTFORCE_CAPTURE_PERMIT_PLACEMENT").is_ok() => {
                     focus + Vec3::new(0.0, 0.0, -50.0)
                 }
@@ -419,8 +442,9 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                     ))
                     .id();
                 if i == 0 && mode == "village" {
-                    let mut store =
-                        shared::economy::GoodsInventory::new(shared::economy::capacity::HALL);
+                    let mut store = shared::economy::GoodsInventory::new_partitioned(
+                        shared::economy::capacity::HALL,
+                    );
                     store.add(shared::economy::Good::Food, 9);
                     store.add(shared::economy::Good::Wheat, 18);
                     store.add(shared::economy::Good::Wood, 7);
@@ -500,6 +524,14 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                             employment_prosperity: 18.0,
                             hunger_penalty: 0.0,
                             prosperity: 78.0,
+                            private_job_positions: 8,
+                            private_filled_jobs: 6,
+                            private_vacant_jobs: 2,
+                            civic_job_positions: 3,
+                            civic_filled_jobs: 2,
+                            civic_vacant_jobs: 1,
+                            job_seekers: 1,
+                            best_open_private_wage: 120,
                         },
                     ));
                 }
@@ -511,7 +543,12 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
             // produces, so the settlement panel can be photographed without
             // waiting out a live village.
             if std::env::var("FISTFORCE_CAPTURE_SETTLEMENT")
-                .is_ok_and(|v| matches!(v.as_str(), "village" | "industries" | "bakery"))
+                .is_ok_and(|v| {
+                    matches!(
+                        v.as_str(),
+                        "village" | "industries" | "bakery" | "market" | "market_paved"
+                    )
+                })
             {
                 use shared::components::SettlementBuildingKind as K;
                 let people: Vec<String> = (0..3)
@@ -537,11 +574,13 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                 }
                 let kinds: &[K] = if mode == "bakery" {
                     &[K::Bakery]
+                } else if matches!(mode.as_str(), "market" | "market_paved") {
+                    &[K::Market]
                 } else {
                     &[K::Farmstead, K::LumberjackHut, K::Windmill, K::Bakery]
                 };
                 for (index, kind) in kinds.iter().copied().enumerate() {
-                    let at = if mode == "bakery" {
+                    let at = if matches!(mode.as_str(), "bakery" | "market" | "market_paved") {
                         focus
                     } else if mode == "industries" {
                         // One authored comparison line: equal frontage,
@@ -574,6 +613,10 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                         K::Bakery => {
                             store.add(shared::economy::Good::Flour, 6);
                             store.add(shared::economy::Good::Bread, 160);
+                        }
+                        K::Market => {
+                            store.add(shared::economy::Good::Food, 18);
+                            store.add(shared::economy::Good::Wood, 10);
                         }
                         _ => unreachable!(),
                     }
@@ -609,6 +652,7 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                             K::LumberjackHut => shared::economy::Good::Wood,
                             K::Windmill => shared::economy::Good::Flour,
                             K::Bakery => shared::economy::Good::Bread,
+                            K::Market => shared::economy::Good::Wood,
                             _ => unreachable!(),
                         }),
                         shared::economy::BusinessWagePolicy::default(),
@@ -624,6 +668,15 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                         // live server production drives.
                         world.entity_mut(building_entity).insert(
                             shared::components::WorkplaceOperation { active_workers: 1 },
+                        );
+                    }
+                    if kind == K::Market {
+                        world.entity_mut(building_entity).insert(
+                            if mode == "market_paved" {
+                                shared::components::MarketLevel::Paved
+                            } else {
+                                shared::components::MarketLevel::Earthen
+                            },
                         );
                     }
                 }
@@ -1400,6 +1453,8 @@ fn open_capture_history(
 /// into the manifest's slot items / skin tones (order as in Humanoid.ron:
 /// bottom, top, hair). Missing or unparsable fields use the manifest default.
 /// `FISTFORCE_CAPTURE_HERO=default` spawns one hero in the declared default.
+/// `FISTFORCE_CAPTURE_PORTER_CART=0|1|2` gives that fixture an empty, half or
+/// full cart while `FISTFORCE_CAPTURE_CARRIED` chooses its visible cargo.
 fn spawn_capture_heroes(
     mut commands: Commands,
     config: Res<CaptureConfig>,
@@ -1413,6 +1468,10 @@ fn spawn_capture_heroes(
     let villager_count = std::env::var("FISTFORCE_CAPTURE_VILLAGERS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok());
+    let cart_slots = std::env::var("FISTFORCE_CAPTURE_PORTER_CART")
+        .ok()
+        .and_then(|value| value.parse::<u8>().ok())
+        .map(|slots| slots.min(2));
     // Comma-separated authored bundle appearances. Supplying this alone
     // creates one default hero, making the first-integration WoodBundle shot a
     // one-flag exercise rather than a bespoke capture path.
@@ -1469,11 +1528,14 @@ fn spawn_capture_heroes(
         && villager_count.is_none()
         && carried.is_empty()
         && activities.is_empty()
+        && cart_slots.is_none()
     {
         *spawned = true;
         return;
     }
-    if hero_spec.is_none() && (!carried.is_empty() || !activities.is_empty()) {
+    if hero_spec.is_none()
+        && (!carried.is_empty() || !activities.is_empty() || cart_slots.is_some())
+    {
         let fixture_count = carried.len().max(activities.len()).max(1);
         hero_spec = Some(vec!["default"; fixture_count].join(";"));
     }
@@ -1528,13 +1590,23 @@ fn spawn_capture_heroes(
             ))
             .id();
         if let Some((good, appearance)) = carried.get(i % carried.len().max(1)).copied() {
+            let amount = if cart_slots == Some(2) {
+                shared::economy::capacity::PORTER / good.bulk_per_unit()
+            } else {
+                1
+            };
             commands
                 .entity(entity)
                 .insert(shared::economy::CarriedLoad {
                     good: Some(good),
-                    amount: 1,
+                    amount,
                     appearance: Some(appearance),
                 });
+        }
+        if let Some(load_slots) = cart_slots {
+            commands
+                .entity(entity)
+                .insert(shared::economy::PorterCartState { load_slots });
         }
         if let Some(activity) = activities.get(i % activities.len().max(1)).copied() {
             commands.entity(entity).insert(activity);

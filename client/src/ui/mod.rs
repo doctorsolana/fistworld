@@ -42,6 +42,7 @@ pub fn pointer_over_ui(blockers: &Query<&Interaction>) -> bool {
 pub mod business_management;
 pub mod debug_time_menu;
 pub mod encyclopedia;
+pub mod foundation;
 pub mod hero_creator;
 pub mod history;
 pub mod hud;
@@ -59,6 +60,7 @@ pub mod world_map;
 pub use business_management::BusinessManagementPlugin;
 pub use debug_time_menu::{DebugPerfSettings, DebugTimeMenuPlugin};
 pub use encyclopedia::EncyclopediaPlugin;
+pub use foundation::UiFoundationPlugin;
 pub use hero_creator::HeroCreatorPlugin;
 pub use history::HistoryPlugin;
 pub use hud::HudPlugin;

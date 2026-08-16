@@ -275,12 +275,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn baked_database_contains_every_authored_building() {
+    fn baked_database_contains_every_collidable_authored_building() {
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../client/assets/colliders.bin");
         let db = shared::colliders::load_baked_collider_db_from_file(&path)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         for building in shared::building::ALL_BUILDING_TYPES {
+            if !building.has_baked_collider() {
+                continue;
+            }
             let baked = db.entries.get(building.id()).unwrap_or_else(|| {
                 panic!(
                     "{} is registered as authored art but missing from colliders.bin",

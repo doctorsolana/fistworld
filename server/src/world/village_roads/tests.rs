@@ -3267,3 +3267,50 @@ fn a_retained_road_request_cannot_steal_a_builder_from_a_new_site() {
         "the old road should wait until its builder is free"
     );
 }
+
+#[test]
+fn open_market_squares_are_not_published_as_solid_navigation_blocks() {
+    let markets = [
+        (
+            PlacedBuilding {
+                building_type: BuildingType::Market,
+                rotation: 0.0,
+            },
+            BuildingPosition(Vec3::ZERO),
+        ),
+        (
+            PlacedBuilding {
+                building_type: BuildingType::MarketPaved,
+                rotation: 0.4,
+            },
+            BuildingPosition(Vec3::new(20.0, 0.0, 0.0)),
+        ),
+    ];
+    let mut cache = NavigationBuildingCache::default();
+    cache.rebuild(
+        markets
+            .iter()
+            .map(|(building, position)| (building, position)),
+    );
+
+    assert!(cache.blockers.is_empty());
+    assert!(cache.buildings.is_empty());
+    assert!(!cache.spatial.point_blocked(Vec2::ZERO));
+    assert!(!cache.spatial.point_blocked(Vec2::new(20.0, 0.0)));
+
+    let cabin = [(
+        PlacedBuilding {
+            building_type: BuildingType::LogCabin,
+            rotation: 0.0,
+        },
+        BuildingPosition(Vec3::ZERO),
+    )];
+    cache.rebuild(
+        cabin
+            .iter()
+            .map(|(building, position)| (building, position)),
+    );
+    assert_eq!(cache.blockers.len(), 1);
+    assert_eq!(cache.buildings.len(), 1);
+    assert!(cache.spatial.point_blocked(Vec2::ZERO));
+}

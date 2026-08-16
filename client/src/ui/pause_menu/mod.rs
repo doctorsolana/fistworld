@@ -1,6 +1,5 @@
 //! Pause menu UI (in-game escape menu)
 //!
-//! Updated for Bevy 0.18 / Lightyear 0.26
 //! Now includes graphics settings panel for troubleshooting flickering/performance.
 //! Menu smoothly slides when opening/closing the graphics panel.
 
@@ -10,7 +9,7 @@ pub mod layout;
 pub mod widgets;
 
 use actions::{
-    button_interactions, handle_display_confirmation, handle_escape_key, handle_graphics_toggles,
+    handle_display_confirmation, handle_escape_key, handle_graphics_toggles,
     handle_input_slider_steps, handle_pause_actions, handle_slider_steps, pause_menu_closed,
     pause_menu_open, reset_menu_state, sync_display_confirmation, sync_pause_menu_cursor,
 };
@@ -24,7 +23,10 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, Monitor, PrimaryMonitor, PrimaryWindow};
 use lightyear::prelude::client::*;
 
-use super::modal::sync_modal_cursor;
+use super::foundation::{
+    button_chrome, selected_button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant,
+};
+use super::modal::{modal_root_chrome, sync_modal_cursor, ModalRoot};
 use super::styles::*;
 use crate::input::InputState;
 use crate::render::systems::{
@@ -33,14 +35,6 @@ use crate::render::systems::{
 };
 use crate::states::GameState;
 use crate::GameClient;
-
-// The pause menu deliberately remains a dark, front-of-house surface. Shared
-// `TEXT_COLOR` now aliases the dark ink used on limewash panels, so text placed
-// directly on the scrim or settings wells must use an explicit inverse palette.
-const PAUSE_TEXT_COLOR: Color = INK_INVERSE;
-const PAUSE_MUTED_TEXT_COLOR: Color = Color::srgb(0.72, 0.69, 0.64);
-const PAUSE_HEADING_COLOR: Color = Color::srgb(0.93, 0.72, 0.48);
-const PAUSE_PANEL_BACKGROUND: Color = Color::srgba(0.06, 0.055, 0.05, 0.95);
 
 /// Deterministically opens a pause-menu state for the offline visual harness.
 pub(crate) fn open_for_capture(commands: &mut Commands, panel: &str) {
@@ -76,7 +70,6 @@ impl Plugin for PauseMenuPlugin {
         app.add_systems(
             Update,
             (
-                button_interactions,
                 handle_pause_actions,
                 handle_graphics_toggles,
                 handle_slider_steps,
@@ -235,9 +228,9 @@ mod tests {
 
     #[test]
     fn expanded_pause_panels_keep_readable_text_contrast() {
-        assert!(contrast(PAUSE_TEXT_COLOR, PAUSE_PANEL_BACKGROUND) >= 7.0);
-        assert!(contrast(PAUSE_MUTED_TEXT_COLOR, PAUSE_PANEL_BACKGROUND) >= 7.0);
-        assert!(contrast(PAUSE_HEADING_COLOR, PAUSE_PANEL_BACKGROUND) >= 7.0);
+        assert!(contrast(INK_INVERSE, FRONT_PANEL) >= 7.0);
+        assert!(contrast(INK_INVERSE_MUTED, FRONT_PANEL) >= 7.0);
+        assert!(contrast(INK_INVERSE_HEADING, FRONT_PANEL) >= 7.0);
     }
 
     #[test]

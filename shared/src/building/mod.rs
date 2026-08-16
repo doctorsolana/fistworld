@@ -12,6 +12,7 @@ pub use zones::*;
 
 #[cfg(test)]
 mod tests {
+    use bevy::prelude::Vec2;
     use std::collections::HashSet;
     use std::fs;
     use std::path::Path;
@@ -72,6 +73,26 @@ mod tests {
             let encoded = ron::to_string(&kind).unwrap();
             assert_eq!(ron::from_str::<BuildingType>(&encoded).unwrap(), kind);
         }
+    }
+
+    #[test]
+    fn market_levels_share_the_authored_walkable_square_contract() {
+        for kind in [BuildingType::Market, BuildingType::MarketPaved] {
+            let definition = kind.definition();
+            assert_eq!(definition.footprint, Vec2::splat(12.0));
+            assert_eq!(definition.footprint_center, Vec2::ZERO);
+            assert_eq!(definition.terrain_flat_margin(), 3.0);
+            assert_eq!(definition.terrain_flat_half_extents(), Vec2::splat(9.0));
+            assert!((definition.terrain_blend_width() - 1.8).abs() < 1e-5);
+            assert!(definition.model_path.is_some());
+            assert!(!kind.has_baked_collider());
+            assert!(!kind.blocks_ground_navigation());
+        }
+        assert_eq!(
+            ron::from_str::<BuildingType>("PlaceholderMarket").unwrap(),
+            BuildingType::Market,
+            "pre-art RON saves must continue to deserialize"
+        );
     }
 
     #[test]

@@ -1,14 +1,31 @@
 //! Shared modal helpers (backdrop + panel + cursor sync)
 
+use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::input::InputState;
-use crate::ui::styles::{BUTTON_BORDER, MENU_BACKGROUND};
+use crate::ui::foundation::{layer, UiButtonStyleExempt, UiRefreshExempt};
+use crate::ui::styles::{MENU_BACKGROUND, MODAL_BACKDROP, PLATE_RULE};
 
-pub const MODAL_BACKDROP: Color = Color::srgba(0.0, 0.0, 0.0, 0.4);
-pub const MODAL_BACKDROP_HIT: Color = Color::srgba(0.0, 0.0, 0.0, 0.35);
+/// Common marker for all windows created by [`spawn_modal`].
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModalRoot;
+
+/// One central, read-only answer to “is a shared modal open?”. Screen-specific
+/// resources still own navigation and data; input code no longer has to know
+/// which screen happens to be borrowing an unrelated flag.
+#[derive(Resource, Default, Clone, Debug, PartialEq, Eq)]
+pub struct ModalState {
+    pub open_count: usize,
+}
+
+impl ModalState {
+    pub const fn is_open(&self) -> bool {
+        self.open_count > 0
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct ModalLayout {
@@ -26,7 +43,54 @@ impl Default for ModalLayout {
 }
 
 pub struct ModalNodes {
+    pub root: Entity,
+    pub backdrop: Entity,
     pub panel: Entity,
+}
+
+/// Canonical full-screen root shared by standard and custom modal layouts.
+/// Keeping the input, layer and tab-group policy together prevents a new modal
+/// from being visually correct while still leaking world input or keyboard
+/// focus.
+pub fn modal_root_chrome() -> (Node, Pickable, GlobalZIndex, TabGroup) {
+    (
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        Pickable::IGNORE,
+        GlobalZIndex(layer::MODAL),
+        TabGroup::modal(),
+    )
+}
+
+/// Canonical outside-click target for custom modal layouts.
+pub fn modal_backdrop_chrome(
+    color: Color,
+) -> (
+    UiRefreshExempt,
+    UiButtonStyleExempt,
+    Button,
+    Node,
+    BackgroundColor,
+) {
+    (
+        UiRefreshExempt,
+        UiButtonStyleExempt,
+        Button,
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            top: Val::Px(0.0),
+            ..default()
+        },
+        BackgroundColor(color),
+    )
 }
 
 pub fn spawn_modal<R, B, P>(
@@ -42,34 +106,16 @@ where
     P: Component,
 {
     let root = commands
-        .spawn((
-            root_marker,
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(MODAL_BACKDROP),
-        ))
+        .spawn((root_marker, ModalRoot, modal_root_chrome()))
         .id();
 
+    let mut backdrop_entity = None;
     let mut panel_entity = None;
     commands.entity(root).with_children(|root| {
-        root.spawn((
-            backdrop_marker,
-            Button,
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                top: Val::Px(0.0),
-                ..default()
-            },
-            BackgroundColor(MODAL_BACKDROP_HIT),
-        ));
+        let backdrop = root
+            .spawn((backdrop_marker, modal_backdrop_chrome(MODAL_BACKDROP)))
+            .id();
+        backdrop_entity = Some(backdrop);
         let panel = root
             .spawn((
                 panel_marker,
@@ -84,7 +130,7 @@ where
                     ..default()
                 },
                 // `Node` requires `FocusPolicy`, whose default is `Pass`. Without
-                // this override the legacy Bevy UI interaction system continues
+                // this override the Bevy UI interaction system continues
                 // through blank parts of the panel and presses the full-screen
                 // backdrop underneath it. The picking backend blocks by default,
                 // but declaring both policies makes the modal correct for either
@@ -92,13 +138,30 @@ where
                 FocusPolicy::Block,
                 Pickable::default(),
                 BackgroundColor(MENU_BACKGROUND),
-                BorderColor::from(BUTTON_BORDER),
+                BorderColor::from(PLATE_RULE),
             ))
             .id();
         panel_entity = Some(panel);
     });
     ModalNodes {
+        root,
+        backdrop: backdrop_entity.unwrap_or(root),
         panel: panel_entity.unwrap_or(root),
+    }
+}
+
+pub fn sync_modal_state(
+    roots: Query<(), With<ModalRoot>>,
+    mut state: ResMut<ModalState>,
+    mut input: ResMut<InputState>,
+) {
+    let open_count = roots.iter().count();
+    if state.open_count != open_count {
+        state.open_count = open_count;
+    }
+    let open = state.is_open();
+    if input.modal_open != open {
+        input.modal_open = open;
     }
 }
 
@@ -150,5 +213,61 @@ pub fn sync_modal_cursor(
     if let Ok(mut cursor) = cursor_opts.get_mut(window_entity) {
         cursor.grab_mode = CursorGrabMode::None;
         cursor.visible = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[derive(Component)]
+    struct Root;
+    #[derive(Component)]
+    struct Backdrop;
+    #[derive(Component)]
+    struct Panel;
+
+    #[test]
+    fn shared_modal_has_exactly_one_visible_scrim() {
+        let mut world = World::new();
+        let nodes = spawn_modal(
+            &mut world.commands(),
+            Root,
+            Backdrop,
+            Panel,
+            ModalLayout::default(),
+        );
+        world.flush();
+
+        assert_eq!(
+            world.get::<BackgroundColor>(nodes.root).unwrap().0,
+            Color::NONE
+        );
+        assert_eq!(
+            world.get::<BackgroundColor>(nodes.backdrop).unwrap().0,
+            MODAL_BACKDROP
+        );
+        assert_eq!(
+            world.get::<GlobalZIndex>(nodes.root),
+            Some(&GlobalZIndex(layer::MODAL))
+        );
+    }
+
+    #[test]
+    fn modal_roots_drive_the_central_input_mutex() {
+        let mut world = World::new();
+        world.insert_resource(ModalState::default());
+        world.insert_resource(InputState::default());
+        let root = world.spawn(ModalRoot).id();
+
+        world.run_system_once(sync_modal_state).unwrap();
+        assert!(world.resource::<ModalState>().is_open());
+        assert!(world.resource::<InputState>().modal_open);
+
+        world.entity_mut(root).despawn();
+        world.run_system_once(sync_modal_state).unwrap();
+        assert!(!world.resource::<ModalState>().is_open());
+        assert!(!world.resource::<InputState>().modal_open);
     }
 }
