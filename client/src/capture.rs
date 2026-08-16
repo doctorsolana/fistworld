@@ -1519,6 +1519,9 @@ fn spawn_capture_heroes(
                         Some(shared::components::CharacterActivity::Farming)
                     }
                     "fish" | "fishing" => Some(shared::components::CharacterActivity::Fishing),
+                    "mine" | "mining" | "quarrying" => {
+                        Some(shared::components::CharacterActivity::Mining)
+                    }
                     _ => None,
                 })
                 .collect::<Vec<_>>()

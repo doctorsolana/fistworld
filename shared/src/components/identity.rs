@@ -36,6 +36,8 @@ stable_id!(SettlementId);
 stable_id!(BuildingId);
 stable_id!(PermitId);
 stable_id!(CompanyId);
+stable_id!(TradeContractId);
+stable_id!(TradeRouteId);
 
 /// One person's durable voting/economic interest in a company. Every share is
 /// an ordinary equal unit; percentages are derived for display only.

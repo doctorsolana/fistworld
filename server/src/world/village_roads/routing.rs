@@ -687,15 +687,24 @@ struct IncrementalRouteJob {
     start_apron: Vec<Vec2>,
     goal_apron: Vec<Vec2>,
     props: PropBlockers,
+    max_nodes: usize,
     scratch: SurveyScratch,
     search: SurveySearchState,
     geometry_version: u64,
     road_opportunity_version: u64,
+    /// Inter-settlement cargo searches span both towns and can take several
+    /// bounded planner slices. Unrelated house/road completion elsewhere must
+    /// not throw their entire frontier away every tick. Their finished path
+    /// is still certified against the current live world before installation.
+    allow_geometry_drift: bool,
 }
 
 #[derive(Default)]
 pub(crate) struct RouteRequestState {
-    next_request_by_priority: [usize; ROUTE_PRIORITY_COUNT],
+    // A stable entity cursor survives insertions and removals ahead of it in
+    // the sorted queue. An index cursor can skip the same request forever when
+    // a busy town continuously changes the bucket's membership between ticks.
+    last_request_bits_by_priority: [Option<u64>; ROUTE_PRIORITY_COUNT],
     incremental_jobs: HashMap<Entity, IncrementalRouteJob>,
     collision_snapshot: RouteCollisionSnapshot,
     warning_limiter: RouteWarningLimiter,
@@ -739,9 +748,15 @@ impl RouteWarningLimiter {
     }
 }
 
-const ROUTE_PRIORITY_COUNT: usize = 2;
-const ROUTE_PRIORITY_COMMITTED: usize = 0;
-const ROUTE_PRIORITY_AMBIENT: usize = 1;
+const ROUTE_PRIORITY_COUNT: usize = 3;
+const ROUTE_PRIORITY_CARAVAN: usize = 0;
+const ROUTE_PRIORITY_COMMITTED: usize = 1;
+const ROUTE_PRIORITY_AMBIENT: usize = 2;
+/// A retained cross-town search gets a tiny slice measured from the moment it
+/// actually resumes. Shared road/collision preparation may legitimately use
+/// the ordinary 2 ms budget first; without this reservation a growing town
+/// can leave the caravan expanding zero useful nodes forever.
+const CARAVAN_INCREMENTAL_SLICE: Duration = Duration::from_millis(1);
 
 /// Embodied work, construction, migration, shopping and home journeys must
 /// not queue behind cosmetic roadside wandering during a population burst.
@@ -752,6 +767,9 @@ fn route_request_priority(
     ambient: bool,
     objective: Option<&CharacterObjective>,
 ) -> usize {
+    if is_intersettlement_route_objective(objective) {
+        return ROUTE_PRIORITY_CARAVAN;
+    }
     // AmbientRoutine can survive a handoff into a real work routine until the
     // ambient system next owns the actor. CharacterObjective is synchronized
     // after every activity system and therefore tells us why this particular
@@ -773,6 +791,51 @@ fn route_request_priority(
     }
 }
 
+fn is_intersettlement_route_objective(objective: Option<&CharacterObjective>) -> bool {
+    matches!(
+        objective,
+        Some(
+            CharacterObjective::HaulingInterSettlementCargo
+                | CharacterObjective::ReturningFromTradeRoute
+        )
+    )
+}
+
+fn agent_survey_max_nodes(local_distance: f32, objective: Option<&CharacterObjective>) -> usize {
+    if is_intersettlement_route_objective(objective) {
+        INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES
+    } else if (EXTENDED_LOCAL_SURVEY_MIN_DISTANCE..=EXTENDED_LOCAL_SURVEY_MAX_DISTANCE)
+        .contains(&local_distance)
+    {
+        EXTENDED_LOCAL_SURVEY_MAX_NODES
+    } else {
+        AGENT_SURVEY_MAX_NODES
+    }
+}
+
+fn incremental_versions_compatible(
+    allow_geometry_drift: bool,
+    job_geometry_version: u64,
+    current_geometry_version: u64,
+    job_road_opportunity_version: u64,
+    current_road_opportunity_version: u64,
+) -> bool {
+    allow_geometry_drift
+        || (job_geometry_version == current_geometry_version
+            && job_road_opportunity_version == current_road_opportunity_version)
+}
+
+fn rotate_request_bucket_after(bucket: &mut [Entity], last: Option<u64>) {
+    bucket.sort_unstable_by_key(|entity| entity.to_bits());
+    if let Some(last) = last {
+        let start = bucket
+            .iter()
+            .position(|entity| entity.to_bits() > last)
+            .unwrap_or(0);
+        bucket.rotate_left(start);
+    }
+}
+
 enum IncrementalRouteResult {
     Pending,
     Found(Vec<Vec2>),
@@ -786,6 +849,11 @@ fn resume_incremental_route(
     deadline: Instant,
     telemetry: &mut RoutePlannerTelemetry,
 ) -> IncrementalRouteResult {
+    let survey_padding = if job.allow_geometry_drift {
+        INTERSETTLEMENT_SURVEY_PADDING
+    } else {
+        SURVEY_PADDING
+    };
     let survey = RoadSurvey {
         terrain,
         buildings: &building_cache.blockers,
@@ -793,9 +861,20 @@ fn resume_incremental_route(
         props: &job.props,
         start: job.start.survey,
         goal: job.goal.survey,
-        min: job.start.survey.min(job.goal.survey) - Vec2::splat(SURVEY_PADDING),
-        max: job.start.survey.max(job.goal.survey) + Vec2::splat(SURVEY_PADDING),
-        max_nodes: EXTENDED_LOCAL_SURVEY_MAX_NODES,
+        min: job.start.survey.min(job.goal.survey) - Vec2::splat(survey_padding),
+        max: job.start.survey.max(job.goal.survey) + Vec2::splat(survey_padding),
+        max_nodes: job.max_nodes,
+        cell_size: SURVEY_CELL,
+        coarse_stride: if job.allow_geometry_drift {
+            INTERSETTLEMENT_SURVEY_STRIDE
+        } else {
+            1
+        },
+        fine_endpoint_radius: if job.allow_geometry_drift {
+            INTERSETTLEMENT_FINE_ENDPOINT_RADIUS
+        } else {
+            0.0
+        },
     };
     let metrics_before = job.scratch.metrics;
     // Road-first requests only arrive here after no useful graph connector
@@ -1302,37 +1381,23 @@ pub fn plan_villager_travel_routes(
         .retain(|entity, _| active_requests.contains(entity));
     let request_count = active_requests.len();
     telemetry.pending_peak = telemetry.pending_peak.max(request_count);
-    let mut bucket_starts = [0usize; ROUTE_PRIORITY_COUNT];
-    let mut bucket_counts = [0usize; ROUTE_PRIORITY_COUNT];
     let mut request_order = Vec::with_capacity(request_count);
     for (priority, bucket) in request_buckets.iter_mut().enumerate() {
-        bucket.sort_unstable_by_key(|entity| entity.to_bits());
-        bucket_counts[priority] = bucket.len();
-        if !bucket.is_empty() {
-            let start = request_state.next_request_by_priority[priority] % bucket.len();
-            bucket_starts[priority] = start;
-            bucket.rotate_left(start);
-        }
+        rotate_request_bucket_after(
+            bucket,
+            request_state.last_request_bits_by_priority[priority],
+        );
         request_order.extend(bucket.iter().copied().map(|entity| (priority, entity)));
     }
     let mut processed = 0usize;
-    let mut visited_by_priority = [0usize; ROUTE_PRIORITY_COUNT];
     'requests: for (priority, entity) in request_order {
-        visited_by_priority[priority] += 1;
-        let Ok((entity, position, target, mut pending, route_backoff, intent, _, _)) =
+        let Ok((entity, position, target, mut pending, route_backoff, intent, _, objective)) =
             movers.get_mut(entity)
         else {
             continue;
         };
         let local_distance = position.0.distance(target.0);
-        let survey_max_nodes = if (EXTENDED_LOCAL_SURVEY_MIN_DISTANCE
-            ..=EXTENDED_LOCAL_SURVEY_MAX_DISTANCE)
-            .contains(&local_distance)
-        {
-            EXTENDED_LOCAL_SURVEY_MAX_NODES
-        } else {
-            AGENT_SURVEY_MAX_NODES
-        };
+        let survey_max_nodes = agent_survey_max_nodes(local_distance, objective);
         if pending.goal.distance_squared(target.0) > 0.01 {
             *pending = NavigationRoutePending::new(target.0);
         }
@@ -1370,10 +1435,10 @@ pub fn plan_villager_travel_routes(
         {
             // This request has not had its turn yet; begin with it next tick.
             telemetry.budget_yields = telemetry.budget_yields.saturating_add(1);
-            visited_by_priority[priority] -= 1;
             break;
         }
         processed += 1;
+        request_state.last_request_bits_by_priority[priority] = Some(entity.to_bits());
         telemetry.requests = telemetry.requests.saturating_add(1);
 
         // The previous full A* already proved this exact route impossible for
@@ -1401,9 +1466,16 @@ pub fn plan_villager_travel_routes(
         }
 
         if let Some(mut job) = request_state.incremental_jobs.remove(&entity) {
+            let versions_are_current = job.geometry_version == geometry_version
+                && job.road_opportunity_version == road_opportunity_version;
             let job_is_current = job.target.distance_squared(target.0) <= 0.01
-                && job.geometry_version == geometry_version
-                && job.road_opportunity_version == road_opportunity_version
+                && incremental_versions_compatible(
+                    job.allow_geometry_drift,
+                    job.geometry_version,
+                    geometry_version,
+                    job.road_opportunity_version,
+                    road_opportunity_version,
+                )
                 && job
                     .start
                     .actual
@@ -1411,23 +1483,38 @@ pub fn plan_villager_travel_routes(
                     <= 0.01;
             if job_is_current {
                 let direct_started = Instant::now();
+                let ordinary_deadline = planner_started + budget.max_duration();
+                let resume_deadline = if job.allow_geometry_drift {
+                    ordinary_deadline.max(Instant::now() + CARAVAN_INCREMENTAL_SLICE)
+                } else {
+                    ordinary_deadline
+                };
                 let result = resume_incremental_route(
                     &terrain,
                     &building_cache,
                     &mut job,
-                    planner_started + budget.max_duration(),
+                    resume_deadline,
                     &mut telemetry,
                 );
                 telemetry.direct_survey_time += direct_started.elapsed();
                 match result {
                     IncrementalRouteResult::Pending => {
+                        let used_reserved_slice = job.allow_geometry_drift;
                         request_state.incremental_jobs.insert(entity, job);
                         telemetry.budget_yields = telemetry.budget_yields.saturating_add(1);
                         // Retain this frontier, but advance the priority
                         // cursor. Pinning the cursor here can starve every
                         // worker behind a difficult route if preparation has
                         // already consumed this tick's time budget and the
-                        // retained search repeatedly yields with zero nodes.
+                        // retained search repeatedly gets only its eight-cell
+                        // minimum slice.
+                        if used_reserved_slice {
+                            // The caravan owns its small reserved slice, not
+                            // the rest of the planner. Continue so ordinary
+                            // requests can use any part of the normal budget
+                            // that remains this tick.
+                            continue;
+                        }
                         break;
                     }
                     IncrementalRouteResult::Found(direct) => {
@@ -1446,6 +1533,35 @@ pub fn plan_villager_travel_routes(
                             colliders,
                             derived,
                         ) {
+                            if job.allow_geometry_drift && !versions_are_current {
+                                // The retained frontier crossed geometry that
+                                // changed while it was being solved. Its final
+                                // live-world proof correctly rejected it; keep
+                                // the authoritative request pending so the
+                                // next slice starts from the current snapshot.
+                                *pending = NavigationRoutePending::new(target.0);
+                            } else {
+                                telemetry.failed_attempts =
+                                    telemetry.failed_attempts.saturating_add(1);
+                                reject_navigation_route(
+                                    &mut commands,
+                                    entity,
+                                    target.0,
+                                    route_backoff.copied(),
+                                    geometry_version,
+                                    road_opportunity_version,
+                                    now,
+                                    "failed final live-obstacle certification",
+                                    &mut request_state.warning_limiter,
+                                );
+                            }
+                        }
+                        continue;
+                    }
+                    IncrementalRouteResult::Failed => {
+                        if job.allow_geometry_drift && !versions_are_current {
+                            *pending = NavigationRoutePending::new(target.0);
+                        } else {
                             telemetry.failed_attempts = telemetry.failed_attempts.saturating_add(1);
                             reject_navigation_route(
                                 &mut commands,
@@ -1455,25 +1571,10 @@ pub fn plan_villager_travel_routes(
                                 geometry_version,
                                 road_opportunity_version,
                                 now,
-                                "failed final live-obstacle certification",
+                                "is blocked",
                                 &mut request_state.warning_limiter,
                             );
                         }
-                        continue;
-                    }
-                    IncrementalRouteResult::Failed => {
-                        telemetry.failed_attempts = telemetry.failed_attempts.saturating_add(1);
-                        reject_navigation_route(
-                            &mut commands,
-                            entity,
-                            target.0,
-                            route_backoff.copied(),
-                            geometry_version,
-                            road_opportunity_version,
-                            now,
-                            "is blocked",
-                            &mut request_state.warning_limiter,
-                        );
                         continue;
                     }
                 }
@@ -1518,6 +1619,7 @@ pub fn plan_villager_travel_routes(
         // Scatter deterministic collidable props once for this order, covering
         // the direct path and every possible road connector.
         let prop_started = Instant::now();
+        let intersettlement_route = is_intersettlement_route_objective(objective);
         let prop_blockers = blockers_for_agent_route(
             &terrain,
             start.survey,
@@ -1525,7 +1627,11 @@ pub fn plan_villager_travel_routes(
             &building_cache.spatial,
             derived,
             colliders,
-            ROAD_ROUTE_JOIN_DISTANCE,
+            if intersettlement_route {
+                INTERSETTLEMENT_SURVEY_PADDING
+            } else {
+                ROAD_ROUTE_JOIN_DISTANCE
+            },
             &mut prop_cache,
         );
         telemetry.prop_time += prop_started.elapsed();
@@ -1903,10 +2009,12 @@ pub fn plan_villager_travel_routes(
                     start_apron,
                     goal_apron,
                     props: prop_blockers,
+                    max_nodes: survey_max_nodes,
                     scratch: SurveyScratch::default(),
                     search: SurveySearchState::default(),
                     geometry_version,
                     road_opportunity_version,
+                    allow_geometry_drift: intersettlement_route,
                 },
             );
             telemetry.budget_yields = telemetry.budget_yields.saturating_add(1);
@@ -1998,12 +2106,6 @@ pub fn plan_villager_travel_routes(
             start.escaping_building,
         );
     }
-    for priority in 0..ROUTE_PRIORITY_COUNT {
-        if bucket_counts[priority] != 0 {
-            request_state.next_request_by_priority[priority] =
-                (bucket_starts[priority] + visited_by_priority[priority]) % bucket_counts[priority];
-        }
-    }
     telemetry.finish_invocation(planner_started);
     telemetry.maybe_report(&graph);
 }
@@ -2011,6 +2113,72 @@ pub fn plan_villager_travel_routes(
 #[cfg(test)]
 mod local_tests {
     use super::*;
+
+    #[test]
+    fn embodied_caravan_gets_a_bounded_intersettlement_search() {
+        assert_eq!(
+            agent_survey_max_nodes(
+                600.0,
+                Some(&CharacterObjective::HaulingInterSettlementCargo),
+            ),
+            INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
+        );
+        let terrain = WorldTerrain::default();
+        let props = PropBlockers::default();
+        let survey = RoadSurvey {
+            terrain: &terrain,
+            buildings: &[],
+            live_buildings: None,
+            props: &props,
+            start: Vec2::ZERO,
+            goal: Vec2::new(600.0, 0.0),
+            min: Vec2::splat(-SURVEY_PADDING),
+            max: Vec2::new(600.0 + SURVEY_PADDING, SURVEY_PADDING),
+            max_nodes: INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
+            cell_size: SURVEY_CELL,
+            coarse_stride: INTERSETTLEMENT_SURVEY_STRIDE,
+            fine_endpoint_radius: INTERSETTLEMENT_FINE_ENDPOINT_RADIUS,
+        };
+        assert_eq!(survey.stride_at(survey.start), 1);
+        assert_eq!(survey.stride_at(Vec2::new(300.0, 0.0)), 4);
+        assert_eq!(survey.stride_at(survey.goal), 1);
+        assert_eq!(
+            agent_survey_max_nodes(600.0, Some(&CharacterObjective::ReturningFromTradeRoute)),
+            INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
+            "the empty return wagon still needs the inter-settlement corridor",
+        );
+        assert_eq!(
+            agent_survey_max_nodes(600.0, Some(&CharacterObjective::GoingToFarm)),
+            AGENT_SURVEY_MAX_NODES,
+            "ordinary villagers must not inherit the expensive caravan budget",
+        );
+    }
+
+    #[test]
+    fn embodied_caravan_frontier_survives_unrelated_world_growth() {
+        assert!(incremental_versions_compatible(true, 10, 11, 20, 21,));
+        assert!(incremental_versions_compatible(false, 10, 10, 20, 20,));
+        assert!(
+            !incremental_versions_compatible(false, 10, 11, 20, 20),
+            "ordinary local jobs must still restart when their collision snapshot changes",
+        );
+        assert_eq!(
+            route_request_priority(
+                None,
+                false,
+                Some(&CharacterObjective::HaulingInterSettlementCargo),
+            ),
+            ROUTE_PRIORITY_CARAVAN,
+        );
+        assert_eq!(
+            route_request_priority(
+                None,
+                false,
+                Some(&CharacterObjective::ReturningFromTradeRoute),
+            ),
+            ROUTE_PRIORITY_CARAVAN,
+        );
+    }
 
     #[test]
     fn a_work_objective_overrides_a_stale_ambient_marker() {
@@ -2033,6 +2201,24 @@ mod local_tests {
             ),
             ROUTE_PRIORITY_AMBIENT,
         );
+    }
+
+    #[test]
+    fn request_cursor_survives_membership_changes_without_skipping_the_successor() {
+        let one = Entity::from_bits(1);
+        let two = Entity::from_bits(2);
+        let three = Entity::from_bits(3);
+        let four = Entity::from_bits(4);
+
+        let mut first = vec![four, one, three, two];
+        rotate_request_bucket_after(&mut first, Some(two.to_bits()));
+        assert_eq!(first, vec![three, four, one, two]);
+
+        // Entity #3 remains the next request even though an older entity was
+        // removed and a new one appeared before the cursor in sorted order.
+        let mut changed = vec![four, one, three];
+        rotate_request_bucket_after(&mut changed, Some(two.to_bits()));
+        assert_eq!(changed, vec![three, four, one]);
     }
 
     #[test]

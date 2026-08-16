@@ -8,7 +8,7 @@ pub(super) fn stable_name_hash(name: &str) -> u32 {
     })
 }
 
-pub(super) fn ensure_move_target(
+pub(crate) fn ensure_move_target(
     commands: &mut Commands,
     entity: Entity,
     current: Option<&MoveTarget>,

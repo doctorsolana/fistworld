@@ -35,11 +35,13 @@ mod population;
 mod processing;
 mod production;
 mod property_market;
+mod quarry;
 #[cfg(test)]
 mod scale_lab;
 pub mod schedule;
 mod settlement_economy;
 pub mod strategic;
+mod trade_routes;
 mod trades;
 
 pub use businesses::{apply_business_events, review_business_management, BusinessEventQueue};
@@ -83,7 +85,8 @@ pub use mortality::{
     ensure_character_vitals, process_character_deaths, recover_orphaned_construction,
     MortalityLedger,
 };
-use movement::{ensure_move_target, stable_name_hash};
+pub(crate) use movement::ensure_move_target;
+use movement::stable_name_hash;
 pub use objectives::sync_character_objectives;
 #[cfg(test)]
 pub(crate) use planning::find_site;
@@ -105,15 +108,21 @@ pub use production::sync_business_stock_targets;
 pub(crate) use production::{
     automatic_opening_positions, farmer_seconds_per_wheat, fisher_seconds_per_food,
     lumber_seconds_per_tree, lumber_tree_yield, maximum_viable_input_unit_price,
-    process_available_cycles, processing_recipe, rated_daily_production,
+    process_available_cycles, processing_recipe, quarry_seconds_per_stone, rated_daily_production,
     viable_processing_input_purchase, BusinessOperatingPlan, ProcessingRecipe,
     SELF_SUPPLY_TREE_YIELD,
 };
 pub use property_market::{publish_property_boards, remove_abandoned_businesses};
+pub(crate) use quarry::QuarryWorkProgress;
+pub use quarry::{assign_quarry_routines, run_quarry_routines, QuarryRoutine};
 use settlement_economy::{buy_from_moot, sell_carried_to_moot};
 pub use settlement_economy::{
     ensure_settlement_economies, ensure_village_finances, sync_public_market_storage,
     update_moot_market_targets, update_settlement_economies, SettlementEconomyRuntime,
+};
+pub use trade_routes::{
+    manage_company_trade_routes, post_civic_import_contracts, run_company_trade_routes,
+    TradeRouteRoutine,
 };
 pub(crate) use trades::lumber_plot_has_reachable_tree;
 #[cfg(test)]
@@ -151,8 +160,7 @@ use shared::economy::{
     GoodsInventory, HouseholdEconomy, MarketSeller, MootMarket, SettlementEconomy, Wallet,
     WorkforceRequirements, BASIS_POINTS, FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE,
     MAXIMUM_BUSINESS_DAILY_WAGE, MINIMUM_BUSINESS_DAILY_WAGE, PENNIES_PER_COIN,
-    PROPERTY_MARKET_EXPOSURE_DAYS, STARTING_TREASURY_MONEY, VILLAGE_MIN_PROSPERITY,
-    VILLAGE_MIN_RESIDENTS, VILLAGE_REQUIRED_SECURE_DAYS,
+    PROPERTY_MARKET_EXPOSURE_DAYS, STARTING_TREASURY_MONEY,
 };
 use shared::region::{RegionCoord, SimLevel};
 use shared::spatial::SpatialObstacleGrid;
@@ -178,6 +186,16 @@ pub struct PermitPlanningResources<'w, 's> {
     derived: Option<Res<'w, DerivedColliderLibrary>>,
     diagnostics: Option<ResMut<'w, PermitPlanningDiagnostics>>,
     planned_road_accesses: Query<'w, 's, &'static PlannedRoadAccess>,
+    hall_upgrades: Query<
+        'w,
+        's,
+        (
+            &'static shared::components::CivicHallUpgradeWorksite,
+            &'static shared::components::BuildingOf,
+            &'static GoodsInventory,
+        ),
+    >,
+    trade_contracts: Query<'w, 's, &'static shared::components::CivicTradeContract>,
     permit_busy: Query<
         'w,
         's,
@@ -186,9 +204,11 @@ pub struct PermitPlanningResources<'w, 's> {
             With<FarmerRoutine>,
             With<FishingRoutine>,
             With<LumberjackRoutine>,
+            With<QuarryRoutine>,
             With<ProcessingRoutine>,
             With<MarketCollectionRoutine>,
             With<InternalDeliveryRoutine>,
+            With<TradeRouteRoutine>,
             With<HouseholdShoppingRoutine>,
             With<MootQueueTicket>,
             With<MootMealRoutine>,

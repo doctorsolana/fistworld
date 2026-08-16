@@ -12,8 +12,9 @@ The build order for both lives in [ROADMAP.md](ROADMAP.md).
 > households, local prices, payroll, daily consumption and civic jobs. The positive tier
 > ladder reaches City with placeholder civic art. Ordinary off-screen residents now use
 > aggregate production and commerce. Player Hall trading, physical permit construction,
-> company treasuries, 1,000-share ownership, vertical integration, Storage Halls and local
-> private porters are also live. World-state persistence, caravans, travelling-party
+> company treasuries, 1,000-share ownership, vertical integration, Storage Halls, local
+> private porters and the first buyer-funded inter-settlement Stone routes are also live.
+> World-state persistence, independent merchant caravans, travelling-party
 > promotion, physical walls, clans and combat remain future work. Read §1b as the report of
 > current code and the rest as design unless it explicitly says otherwise.
 
@@ -246,8 +247,8 @@ character:
 | Step | Requires | Expressed as |
 |---|---|---|
 | founded → **Hamlet** | a city hall | the founding act itself |
-| Hamlet → **Village** | food SECURITY | reliable food, whether grown here or bought in |
-| Village → **Town** | external trade and administration | a market with real volume through it |
+| Hamlet → **Village** | food SECURITY + 12 Wood | reliable food, then a paid and physically built Village Hall |
+| Village → **Town** | external trade, administration + 8 Stone | real market volume, then a paid and physically built Town Hall |
 | Town → **City** | regional pull and amenities | diverse employment, and services people travel to |
 
 Every requirement is a BUILDING plus a PERSON WORKING IT plus a sustained
@@ -934,8 +935,9 @@ with a player who does nothing but found the hall and put people on the map.
     employment coverage 10, while hunger can subtract 30. A Hamlet with at
     least 12 residents advances to Village after three consecutive days with
     at least three reserve days, recent production covering its population, no
-    hunger, and prosperity of at least 65. The following rules extend that live
-    ladder; decline remains design-only.
+    hunger, and prosperity of at least 65, then purchasing/staging 12 Wood and
+    completing an embodied Village Hall project. The following rules extend that
+    live ladder; decline remains design-only.
 20. Each foundation now receives a deterministic, replicated development
     charter derived from its name and position. The charter chooses one of five
     planning temperaments (organic, radial, grid, avenue or polycentric), a
@@ -960,7 +962,14 @@ with a player who does nothing but found the hall and put people on the map.
     Hamlet/Ruins use the Moot Hall, Village uses the Village Hall, and Town/City
     use the Town Hall until City Hall art exists. Promotion swaps only the visual,
     collider and ground claim on that same entity; treasury, market, queues,
-    policies, history and stable settlement identity remain intact.
+    policies, history and stable settlement identity remain intact. The visual swap is
+    the result, not the construction rule: the Moot first buys real private Wood for
+    its Village Hall, and the Village later buys real private Stone for its Town Hall.
+    Material piles are visible beside the Hall and one named civic worker walks to the
+    stand, faces the building and raises it. Promotion does not occur until that work
+    completes. Town → City still uses the direct gate only because a City Hall asset and
+    recipe have not been authored; future Hall/building upgrades reuse this generic
+    material-project pipeline.
 22. Public positions are explicit named rosters at the hall. A Hamlet and later
     rungs expose two combined Moot-Steward worker positions; Village and later
     rungs additionally expose two guard positions. Vacancies remain visible when population is too small, and further
@@ -981,6 +990,23 @@ with a player who does nothing but found the hall and put people on the map.
     pave only inside it, so established plots never have to move. Roads loaded
     from an older save conservatively reserve only their existing width; they
     cannot retroactively claim ground that may already be occupied.
+24. Stone is now a real founding extraction trade rather than a future map label. A
+    Stone Quarry permit is legal at Hamlet tier but autonomous investors strongly prefer
+    high-quality rocky ground and respond to a pending Town Hall shortage. Two Quarriers
+    can work its outdoor face; extraction time ranges from five world minutes per Stone on
+    poor ground to three on perfect ground. An ordinary worker carries two Stone at a time
+    to the quarry's finite store. Company policy and the Moot Steward then decide what is
+    consigned, at whose asking price, through the same private order book as every other good.
+25. The first regional cargo loop is a real company-owned contract route rather than shared
+    global inventory. A Meadow Town Works which cannot buy its eight Stone locally escrows an
+    open purchase-and-freight tender before a supplier exists; enough real listed Stone later
+    binds its exact seller. Any ordinary company with a completed Storage Hall and employed
+    Company Porter may accept it; a quarry concern can
+    vertically integrate naturally. The porter collects from the source Hall, carries a finite
+    cart load, delivers to the destination worksite and returns to the warehouse. Seller payment
+    happens at collection, freight income at delivery, and both route history and civic expense
+    lines remain inspectable. Player-authored policies and risk-bearing merchant speculation are
+    the next layer, not a separate `TradeCompany` class.
 
 Door traversal uses the same threshold choreography at Farmsteads, Fisherman's
 Huts and Lumberjack Huts: open, cross to the shallow interior point, become hidden, then open and walk
@@ -1089,12 +1115,13 @@ workplace/household passes. Re-observation rebuilds those routines from durable 
 economic/social state. Phase 2 still owns derived-route `Travelling` records and the
 lossless traveller/army promotion contract.
 
-**Deliberately not in this slice:** births, boats, remote markets and caravans,
+**Deliberately not in this slice:** births, boats, player-authored/merchant routes,
 recipes beyond Flour and Bread, tree
 depletion/regrowth, decline, physical walls and guard patrol/combat behaviour.
 The implemented local Moot is a private consignment exchange with physical stock,
 seller-owned listings, last-sale/best-offer quotes and a civic transaction fee; it
-now has a nearby on-foot player exchange, but not carts, caravans or a regional economy. Wheat must be milled,
+now has a nearby on-foot player exchange and a first cash-backed Stone delivery route, but not
+general merchant arbitrage or a complete regional economy. Wheat must be milled,
 households can finish Flour at home, Bakeries add efficient Bread, fishing lands
 ready-to-eat Fish, and the shortage response can repeat cabins, Farmsteads and their
 processors when individual owners accept the current signals, but this is not yet a complete regional economy. The seeded
@@ -1252,8 +1279,9 @@ when the settlement later requests another business. Every firm retains a bounde
 pull-based 365-day history of site P&L, company treasury context, liabilities,
 prices, wages, physical flow, stock, owner decisions and solvency changes; it is
 sent only when its history view or settlement archive is requested rather than
-added to ordinary replication. Storage Halls and local Company Porters are live within the
-running world; restart persistence and remote logistics remain later work. Company
+added to ordinary replication. Storage Halls, local Company Porters and contracted remote Stone
+delivery are live within the running world; restart persistence and risk-bearing merchant
+logistics remain later work. Company
 identities, cap tables and share ownership are already
 authoritative.
 

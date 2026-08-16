@@ -167,6 +167,9 @@ pub enum CharacterActivity {
     /// clients only need this coarse state to play the authored seated loop.
     Sitting,
     Indoors,
+    /// Extracting Stone at an outdoor quarry face. Until dedicated pickaxe
+    /// art exists, clients reuse the construction work motion.
+    Mining,
 }
 
 impl CharacterActivity {
@@ -179,6 +182,7 @@ impl CharacterActivity {
             Self::Fishing => "Fishing",
             Self::Sitting => "Taking a rest",
             Self::Indoors => "Indoors",
+            Self::Mining => "Quarrying stone",
         }
     }
 }
@@ -231,6 +235,9 @@ pub enum CharacterObjective {
     GoingToProcessingWork,
     MillingFlour,
     BakingBread,
+    GoingToQuarryWork,
+    QuarryingStone,
+    ReturningStone,
     EndingWorkShift,
     WalkingAroundTown,
     Resting,
@@ -240,6 +247,9 @@ pub enum CharacterObjective {
     WalkingToDestination,
     CollectingCompanyInputs,
     DeliveringCompanyInputs,
+    GoingToTradeRoutePickup,
+    HaulingInterSettlementCargo,
+    ReturningFromTradeRoute,
 }
 
 impl CharacterObjective {
@@ -283,6 +293,9 @@ impl CharacterObjective {
             Self::GoingToProcessingWork => "Going to processing work",
             Self::MillingFlour => "Milling Wheat into Flour",
             Self::BakingBread => "Baking Bread",
+            Self::GoingToQuarryWork => "Going to quarry work",
+            Self::QuarryingStone => "Quarrying Stone",
+            Self::ReturningStone => "Taking Stone to the quarry store",
             Self::EndingWorkShift => "Finishing the work shift",
             Self::WalkingAroundTown => "Walking around town",
             Self::Resting => "Resting",
@@ -292,6 +305,9 @@ impl CharacterObjective {
             Self::WalkingToDestination => "Walking to a destination",
             Self::CollectingCompanyInputs => "Collecting an internal company shipment",
             Self::DeliveringCompanyInputs => "Delivering goods between company workplaces",
+            Self::GoingToTradeRoutePickup => "Going to collect inter-settlement cargo",
+            Self::HaulingInterSettlementCargo => "Hauling cargo between settlements",
+            Self::ReturningFromTradeRoute => "Returning to the company warehouse",
         }
     }
 }
@@ -368,6 +384,20 @@ pub enum CivicHallLevel {
     Moot,
     Village,
     Town,
+}
+
+/// Stable, replicated description of an in-place civic Hall upgrade.
+///
+/// The worksite is a separate entity at the Hall root. Its bounded
+/// [`GoodsInventory`](crate::economy::GoodsInventory) contains the material pile;
+/// [`ConstructionSite::raising`] flips only after all purchased material is
+/// physically staged. Per-tick timers remain server-local to avoid needless
+/// replication churn.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CivicHallUpgradeWorksite {
+    pub target: CivicHallLevel,
+    pub material: crate::economy::Good,
+    pub material_required: u32,
 }
 
 impl CivicHallLevel {
@@ -566,6 +596,9 @@ pub enum SettlementBuildingKind {
     /// Private local depot. Its workers move company goods; it does not pool
     /// physical inventory with branches in other settlements.
     StorageHall,
+    /// Extracts Stone from rocky ground. Appended to keep existing replicated
+    /// enum discriminants stable.
+    StoneQuarry,
 }
 
 impl SettlementBuildingKind {
@@ -593,6 +626,7 @@ impl SettlementBuildingKind {
             | SettlementBuildingKind::Windmill
             | SettlementBuildingKind::Bakery
             | SettlementBuildingKind::StorageHall => Some(SettlementTier::Hamlet),
+            SettlementBuildingKind::StoneQuarry => Some(SettlementTier::Hamlet),
             SettlementBuildingKind::Market | SettlementBuildingKind::Tavern => {
                 Some(SettlementTier::Village)
             }
@@ -618,6 +652,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Windmill => "WINDMILL",
             SettlementBuildingKind::Bakery => "BAKERY",
             SettlementBuildingKind::StorageHall => "STORAGE HALL",
+            SettlementBuildingKind::StoneQuarry => "STONE QUARRY",
         }
     }
 
@@ -640,6 +675,7 @@ impl SettlementBuildingKind {
             // migration. Keep its temporary solid box distinct from the
             // walkable open-air marketplace.
             SettlementBuildingKind::StorageHall => Art::PlaceholderStorageHall,
+            SettlementBuildingKind::StoneQuarry => Art::PlaceholderStoneQuarry,
         }
     }
 
@@ -654,6 +690,7 @@ impl SettlementBuildingKind {
         match self {
             SettlementBuildingKind::Farmstead => profile.farmland,
             SettlementBuildingKind::LumberjackHut => profile.wood,
+            SettlementBuildingKind::StoneQuarry => profile.stone,
             // Fishing quality is geometry rather than a land resource: the
             // server measures navigable open water around the authored pier.
             SettlementBuildingKind::FishermansHut => 0.5,
@@ -679,6 +716,7 @@ impl SettlementBuildingKind {
         match self {
             SettlementBuildingKind::Farmstead => profile.farmland,
             SettlementBuildingKind::LumberjackHut => profile.wood,
+            SettlementBuildingKind::StoneQuarry => profile.stone,
             SettlementBuildingKind::Windmill => (1.0 - profile.wood * 0.75).clamp(0.0, 1.0),
             SettlementBuildingKind::Hall
             | SettlementBuildingKind::FishermansHut
@@ -698,6 +736,7 @@ impl SettlementBuildingKind {
         match self {
             SettlementBuildingKind::Farmstead => Some("FARMLAND QUALITY"),
             SettlementBuildingKind::LumberjackHut => Some("TIMBER QUALITY"),
+            SettlementBuildingKind::StoneQuarry => Some("STONE QUALITY"),
             SettlementBuildingKind::FishermansHut => Some("FISHING QUALITY"),
             SettlementBuildingKind::Hall
             | SettlementBuildingKind::House
@@ -727,6 +766,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Windmill => Some("Miller"),
             SettlementBuildingKind::Bakery => Some("Baker"),
             SettlementBuildingKind::StorageHall => Some("Company Porter"),
+            SettlementBuildingKind::StoneQuarry => Some("Quarrier"),
         }
     }
 
@@ -750,6 +790,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Church => 1,
             SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => 2,
             SettlementBuildingKind::StorageHall => 4,
+            SettlementBuildingKind::StoneQuarry => 2,
         }
     }
 
@@ -773,6 +814,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Windmill => crate::economy::capacity::WINDMILL,
             SettlementBuildingKind::Bakery => crate::economy::capacity::BAKERY,
             SettlementBuildingKind::StorageHall => crate::economy::capacity::STORAGE_HALL,
+            SettlementBuildingKind::StoneQuarry => crate::economy::capacity::STONE_QUARRY,
         }
     }
 
@@ -793,6 +835,7 @@ impl SettlementBuildingKind {
             | SettlementBuildingKind::Windmill
             | SettlementBuildingKind::Bakery
             | SettlementBuildingKind::StorageHall => 0,
+            SettlementBuildingKind::StoneQuarry => 0,
         }
     }
 
@@ -816,6 +859,7 @@ impl SettlementBuildingKind {
             // retaining some working capital for the first input purchase.
             SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => 8,
             SettlementBuildingKind::StorageHall => 14,
+            SettlementBuildingKind::StoneQuarry => 12,
         }
     }
 
@@ -843,6 +887,7 @@ impl SettlementBuildingKind {
                 Vec2::new(0.0, -4.0)
             }
             SettlementBuildingKind::StorageHall => Vec2::new(0.0, -4.0),
+            SettlementBuildingKind::StoneQuarry => Vec2::new(0.0, -4.8),
         }
     }
 
@@ -964,6 +1009,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Windmill => (30.0, 96.0),
             SettlementBuildingKind::Bakery => (18.0, 60.0),
             SettlementBuildingKind::StorageHall => (22.0, 78.0),
+            SettlementBuildingKind::StoneQuarry => (36.0, 150.0),
         }
     }
 
@@ -991,6 +1037,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Windmill => 11.0,
             SettlementBuildingKind::Bakery => 9.0,
             SettlementBuildingKind::StorageHall => 12.0,
+            SettlementBuildingKind::StoneQuarry => 12.0,
         }
     }
 }
@@ -1153,6 +1200,8 @@ pub enum SettlementProgressGate {
     Prosperity,
     Church,
     Sustaining,
+    CivicHallMaterials,
+    CivicHallConstruction,
     Complete,
 }
 
@@ -1167,6 +1216,8 @@ impl SettlementProgressGate {
             Self::Prosperity => "raise prosperity",
             Self::Church => "build a church",
             Self::Sustaining => "sustain all requirements",
+            Self::CivicHallMaterials => "buy and stage materials for the Hall upgrade",
+            Self::CivicHallConstruction => "construct the Hall upgrade",
             Self::Complete => "highest settlement tier reached",
         }
     }

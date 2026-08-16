@@ -24,6 +24,7 @@ pub struct DevelopmentMarketSignals {
     pub windmills: usize,
     pub bakeries: usize,
     pub storage_halls: usize,
+    pub stone_quarries: usize,
     /// Completed capacity which is temporarily idle, liquidating or offered
     /// for takeover. It suppresses duplicate construction while remaining
     /// distinct from currently productive capacity.
@@ -33,6 +34,7 @@ pub struct DevelopmentMarketSignals {
     pub recoverable_bakeries: usize,
     pub recoverable_lumber_huts: usize,
     pub recoverable_storage_halls: usize,
+    pub recoverable_stone_quarries: usize,
     pub completed_windmills: usize,
     pub completed_bakeries: usize,
     pub unproven_windmill: bool,
@@ -43,6 +45,9 @@ pub struct DevelopmentMarketSignals {
     pub flour_stock: u32,
     pub bread_stock: u32,
     pub wood_stock: u32,
+    pub stone_stock: u32,
+    /// Physical Stone the civic centre still needs for its Town Hall project.
+    pub town_hall_stone_demand: u32,
     pub recent_wheat_output: u32,
     pub recent_fish_output: u32,
     /// Rated daily output from active and already-approved farms. Unlike
@@ -85,6 +90,10 @@ pub struct DevelopmentMarketSignals {
     pub recent_logistics_bulk: u32,
     pub active_storage_free_bulk: u32,
     pub recent_storage_cost: u64,
+    /// Buyer-funded inter-settlement cargo currently offered from this
+    /// settlement. A live contract can justify branch warehouse capacity even
+    /// before local output becomes stranded.
+    pub export_contract_bulk: u32,
     pub construction_wood_demand: u32,
 }
 
@@ -102,6 +111,7 @@ impl DevelopmentMarketSignals {
             SettlementBuildingKind::Bakery => self.recoverable_bakeries,
             SettlementBuildingKind::LumberjackHut => self.recoverable_lumber_huts,
             SettlementBuildingKind::StorageHall => self.recoverable_storage_halls,
+            SettlementBuildingKind::StoneQuarry => self.recoverable_stone_quarries,
             _ => 0,
         }
     }
@@ -119,7 +129,7 @@ pub struct DevelopmentOpportunity {
     pub requires_independent_owner: bool,
 }
 
-const FOUNDING_PRIVATE_KINDS: [SettlementBuildingKind; 7] = [
+const FOUNDING_PRIVATE_KINDS: [SettlementBuildingKind; 8] = [
     SettlementBuildingKind::House,
     SettlementBuildingKind::Farmstead,
     SettlementBuildingKind::FishermansHut,
@@ -127,6 +137,7 @@ const FOUNDING_PRIVATE_KINDS: [SettlementBuildingKind; 7] = [
     SettlementBuildingKind::Bakery,
     SettlementBuildingKind::LumberjackHut,
     SettlementBuildingKind::StorageHall,
+    SettlementBuildingKind::StoneQuarry,
 ];
 
 /// A processor may reasonably invest against an existing stockpile, but that
@@ -570,7 +581,25 @@ fn opportunity_score(
             let missing_capacity = desired.saturating_sub(signals.lumber_huts) as f32;
             48.0 + missing_capacity * 13.0 + (shortage as f32 * 0.08).min(18.0)
         }
+        SettlementBuildingKind::StoneQuarry => {
+            let shortage = signals
+                .town_hall_stone_demand
+                .saturating_sub(signals.stone_stock);
+            if shortage == 0 {
+                return 5.0;
+            }
+            let rated = super::rated_daily_production(kind, 1.0)
+                .map_or(1, |capacity| capacity.output_units.max(1));
+            let desired = shortage.div_ceil(rated) as usize;
+            if signals.stone_quarries >= desired.max(1) {
+                return 5.0;
+            }
+            58.0 + (shortage as f32 * 4.0).min(42.0)
+        }
         SettlementBuildingKind::StorageHall => {
+            if signals.export_contract_bulk > 0 && signals.storage_halls == 0 {
+                return 78.0 + (signals.export_contract_bulk as f32 * 0.15).min(18.0);
+            }
             let unhandled_bulk = signals
                 .stranded_output_bulk
                 .saturating_sub(signals.recent_logistics_bulk)
@@ -678,6 +707,7 @@ pub fn replicated_opportunity_board(
         SettlementBuildingKind::Bakery,
         SettlementBuildingKind::StorageHall,
         SettlementBuildingKind::LumberjackHut,
+        SettlementBuildingKind::StoneQuarry,
         SettlementBuildingKind::Market,
         SettlementBuildingKind::Tavern,
         SettlementBuildingKind::Church,
@@ -715,11 +745,12 @@ fn kind_order(kind: SettlementBuildingKind) -> u8 {
         SettlementBuildingKind::Windmill => 3,
         SettlementBuildingKind::Bakery => 4,
         SettlementBuildingKind::LumberjackHut => 5,
-        SettlementBuildingKind::StorageHall => 6,
-        SettlementBuildingKind::Market => 7,
-        SettlementBuildingKind::Tavern => 8,
-        SettlementBuildingKind::Church => 9,
-        SettlementBuildingKind::Hall => 10,
+        SettlementBuildingKind::StoneQuarry => 6,
+        SettlementBuildingKind::StorageHall => 7,
+        SettlementBuildingKind::Market => 8,
+        SettlementBuildingKind::Tavern => 9,
+        SettlementBuildingKind::Church => 10,
+        SettlementBuildingKind::Hall => 11,
     }
 }
 
@@ -855,6 +886,7 @@ pub fn investor_score(
         SettlementBuildingKind::Farmstead
             | SettlementBuildingKind::FishermansHut
             | SettlementBuildingKind::LumberjackHut
+            | SettlementBuildingKind::StoneQuarry
     ) {
         (site_quality.clamp(0.0, 1.0) - 0.5) * 60.0
     } else {
@@ -873,6 +905,46 @@ pub fn investor_score(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shared::economy::TOWN_HALL_STONE_REQUIRED;
+
+    #[test]
+    fn town_hall_stone_shortage_advertises_exactly_one_initial_quarry() {
+        let shortage = DevelopmentMarketSignals {
+            residents: 30,
+            houses: 8,
+            town_hall_stone_demand: TOWN_HALL_STONE_REQUIRED,
+            ..Default::default()
+        };
+        let opportunity =
+            private_opportunities(shortage, None, None, &SettlementPolicies::default())
+                .into_iter()
+                .find(|opportunity| opportunity.kind == SettlementBuildingKind::StoneQuarry)
+                .unwrap();
+        assert!(opportunity.score >= 80.0);
+        assert!(opportunity.civic_priority);
+
+        let approved = DevelopmentMarketSignals {
+            stone_quarries: 1,
+            ..shortage
+        };
+        let duplicate = private_opportunities(approved, None, None, &SettlementPolicies::default())
+            .into_iter()
+            .find(|opportunity| opportunity.kind == SettlementBuildingKind::StoneQuarry)
+            .unwrap();
+        assert_eq!(duplicate.score, 5.0);
+
+        let supplied = DevelopmentMarketSignals {
+            stone_stock: TOWN_HALL_STONE_REQUIRED,
+            stone_quarries: 0,
+            ..shortage
+        };
+        let no_longer_needed =
+            private_opportunities(supplied, None, None, &SettlementPolicies::default())
+                .into_iter()
+                .find(|opportunity| opportunity.kind == SettlementBuildingKind::StoneQuarry)
+                .unwrap();
+        assert_eq!(no_longer_needed.score, 5.0);
+    }
 
     #[test]
     fn raw_wheat_backlog_does_not_bypass_existing_mill_viability() {

@@ -179,6 +179,17 @@ pub(crate) fn rated_daily_production(
         });
     }
 
+    if kind == SettlementBuildingKind::StoneQuarry {
+        let worker_seconds = RATED_SHIFT_SECONDS * f32::from(kind.positions());
+        let output_units =
+            ((worker_seconds / quarry_seconds_per_stone(site_quality)).floor() as u32).max(1);
+        return Some(DailyProductionEstimate {
+            output: Good::Stone,
+            output_units,
+            input: None,
+        });
+    }
+
     let seconds_per_unit = match kind {
         SettlementBuildingKind::Farmstead => farmer_seconds_per_wheat(site_quality),
         SettlementBuildingKind::FishermansHut => fisher_seconds_per_food(site_quality),
@@ -195,6 +206,13 @@ pub(crate) fn rated_daily_production(
         output_units,
         input: None,
     })
+}
+
+/// Productive seconds for one dressed Stone unit. Rocky highland sites expose
+/// workable faces and fractured material; meadow quarries remain possible but
+/// substantially less competitive rather than being prohibited by biome.
+pub(crate) fn quarry_seconds_per_stone(site_quality: f32) -> f32 {
+    300.0 - 120.0 * site_quality.clamp(0.0, 1.0)
 }
 
 fn staffed_daily_units(full_staffed_units: u32, workers: usize, positions: u8) -> u32 {

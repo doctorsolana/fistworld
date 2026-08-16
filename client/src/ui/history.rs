@@ -2187,6 +2187,17 @@ fn spawn_village_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Settleme
                         .collect(),
                 ),
                 Series::new(
+                    "freight",
+                    BLUE_GREY,
+                    days.iter()
+                        .map(|day| {
+                            day.civic
+                                .observed
+                                .then_some(day.civic.freight_expense as f64 / 100.0)
+                        })
+                        .collect(),
+                ),
+                Series::new(
                     "poor relief",
                     SAGE,
                     days.iter()
@@ -2816,7 +2827,8 @@ fn spawn_civic_daily_table(parent: &mut ChildSpawnerCommands<'_>, days: &[Settle
             .civic
             .wage_expense
             .saturating_add(day.civic.poor_relief_expense)
-            .saturating_add(day.civic.material_expense);
+            .saturating_add(day.civic.material_expense)
+            .saturating_add(day.civic.freight_expense);
         let change = if day.civic.adjustment == shared::components::CivicPolicyAdjustment::None {
             "No change".to_string()
         } else {

@@ -102,6 +102,17 @@ pub struct TravelCollisionResources<'w> {
 
 pub const VILLAGE_ROAD_WIDTH: f32 = 2.6;
 const SURVEY_CELL: f32 = 1.5;
+/// Cross-settlement caravans need a strategic corridor, not a fine town-scale
+/// search across the whole space between two settlements. Four ordinary cells
+/// make a six-metre middle-country step. The search returns to fine cells near
+/// both halls so a crowded doorway cannot trap the coarse lattice.
+const INTERSETTLEMENT_SURVEY_STRIDE: i32 = 4;
+const INTERSETTLEMENT_FINE_ENDPOINT_RADIUS: f32 = 36.0;
+/// Rivers, lakes and steep foothills can require a caravan to leave the
+/// straight-line town-to-town band. This is deliberately much wider than a
+/// local commute but remains finite; together with the coarse middle lattice
+/// it covers at most a bounded regional corridor rather than the whole map.
+const INTERSETTLEMENT_SURVEY_PADDING: f32 = 192.0;
 const SURVEY_PADDING: f32 = 20.0;
 const SURVEY_MAX_NODES: usize = 12_000;
 /// Embodied villagers only travel locally. A failed temporary route must not
@@ -117,6 +128,12 @@ const AGENT_SURVEY_MAX_NODES: usize = 400;
 /// that preserves the cheap common case while avoiding false failures on the
 /// settlement's outer envelope.
 const EXTENDED_LOCAL_SURVEY_MAX_NODES: usize = 2_400;
+/// A company caravan is the one embodied actor which deliberately crosses
+/// between otherwise disconnected settlement road networks. Its route is
+/// still collision-certified and solved incrementally under the ordinary
+/// per-tick pathfinding budget, but may inspect a wider bounded corridor than
+/// a local commute. Ordinary villagers retain the 2,400-node cap.
+const INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES: usize = 24_000;
 /// A retained long-distance A* must make enough progress that one difficult
 /// commute cannot remain at zero expansion merely because preparation spent
 /// this tick's deadline. Eight cells keep that overrun bounded; the fair
@@ -634,6 +651,9 @@ struct RoadSurvey<'a> {
     min: Vec2,
     max: Vec2,
     max_nodes: usize,
+    cell_size: f32,
+    coarse_stride: i32,
+    fine_endpoint_radius: f32,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -712,6 +732,17 @@ impl SurveyScratch {
 }
 
 impl RoadSurvey<'_> {
+    fn stride_at(&self, point: Vec2) -> i32 {
+        if self.coarse_stride <= 1
+            || point.distance_squared(self.start) <= self.fine_endpoint_radius.powi(2)
+            || point.distance_squared(self.goal) <= self.fine_endpoint_radius.powi(2)
+        {
+            1
+        } else {
+            self.coarse_stride
+        }
+    }
+
     fn blocked(&self, point: Vec2, scratch: &mut SurveyScratch) -> bool {
         scratch.metrics.blocked_checks = scratch.metrics.blocked_checks.saturating_add(1);
         let key = SurveyScratch::point_key(point);
@@ -847,15 +878,15 @@ impl PartialOrd for SurveyOpen {
     }
 }
 
-fn survey_cell(point: Vec2) -> SurveyCell {
+fn survey_cell(point: Vec2, cell_size: f32) -> SurveyCell {
     SurveyCell {
-        x: (point.x / SURVEY_CELL).round() as i32,
-        z: (point.y / SURVEY_CELL).round() as i32,
+        x: (point.x / cell_size).round() as i32,
+        z: (point.y / cell_size).round() as i32,
     }
 }
 
-fn survey_point(cell: SurveyCell) -> Vec2 {
-    Vec2::new(cell.x as f32 * SURVEY_CELL, cell.z as f32 * SURVEY_CELL)
+fn survey_point(cell: SurveyCell, cell_size: f32) -> Vec2 {
+    Vec2::new(cell.x as f32 * cell_size, cell.z as f32 * cell_size)
 }
 
 fn survey_heuristic(a: SurveyCell, b: SurveyCell) -> f32 {
@@ -868,8 +899,8 @@ fn resume_survey_a_star(
     state: &mut SurveySearchState,
     deadline: Option<Instant>,
 ) -> SurveySearchResult {
-    let start = survey_cell(survey.start);
-    let goal = survey_cell(survey.goal);
+    let start = survey_cell(survey.start, survey.cell_size);
+    let goal = survey_cell(survey.goal, survey.cell_size);
     if !state.initialized {
         scratch.begin_search();
         scratch.score.insert(start, 0.0);
@@ -906,12 +937,12 @@ fn resume_survey_a_star(
         let current_point = if current == start {
             survey.start
         } else {
-            survey_point(current)
+            survey_point(current, survey.cell_size)
         };
         // The exact endpoint rarely lies at its rounded grid-cell centre. A
         // nearby cell with a certified final edge is a valid virtual goal and
         // avoids forcing a short corner-cut from the rounded goal cell.
-        let reaches_goal = current_point.distance(survey.goal) <= SURVEY_CELL * 1.6
+        let reaches_goal = current_point.distance(survey.goal) <= survey.cell_size * 1.6
             && survey.line_clear(current_point, survey.goal, scratch);
         if reaches_goal {
             let mut cells = vec![current];
@@ -923,7 +954,12 @@ fn resume_survey_a_star(
             cells.reverse();
             let mut points = Vec::with_capacity(cells.len() + 2);
             points.push(survey.start);
-            points.extend(cells.into_iter().skip(1).map(survey_point));
+            points.extend(
+                cells
+                    .into_iter()
+                    .skip(1)
+                    .map(|cell| survey_point(cell, survey.cell_size)),
+            );
             if points
                 .last()
                 .is_none_or(|point| point.distance_squared(survey.goal) > 0.01)
@@ -939,16 +975,17 @@ fn resume_survey_a_star(
             .get(&current)
             .copied()
             .unwrap_or(f32::INFINITY);
+        let stride = survey.stride_at(current_point);
         for dx in -1..=1 {
             for dz in -1..=1 {
                 if dx == 0 && dz == 0 {
                     continue;
                 }
                 let next = SurveyCell {
-                    x: current.x + dx,
-                    z: current.z + dz,
+                    x: current.x + dx * stride,
+                    z: current.z + dz * stride,
                 };
-                let next_point = survey_point(next);
+                let next_point = survey_point(next, survey.cell_size);
                 // Endpoints alone are insufficient for rotated blockers: two
                 // adjacent clear grid points can have an edge that clips a
                 // narrow corner. Movement checks the segment, so planning must
@@ -957,14 +994,20 @@ fn resume_survey_a_star(
                     continue;
                 }
                 if dx != 0 && dz != 0 {
-                    let side_x = survey_point(SurveyCell {
-                        x: current.x + dx,
-                        z: current.z,
-                    });
-                    let side_z = survey_point(SurveyCell {
-                        x: current.x,
-                        z: current.z + dz,
-                    });
+                    let side_x = survey_point(
+                        SurveyCell {
+                            x: current.x + dx * stride,
+                            z: current.z,
+                        },
+                        survey.cell_size,
+                    );
+                    let side_z = survey_point(
+                        SurveyCell {
+                            x: current.x,
+                            z: current.z + dz * stride,
+                        },
+                        survey.cell_size,
+                    );
                     if survey.blocked(side_x, scratch) || survey.blocked(side_z, scratch) {
                         continue;
                     }
@@ -985,7 +1028,7 @@ fn resume_survey_a_star(
                 let hash = (next.x as u32).wrapping_mul(73_856_093)
                     ^ (next.z as u32).wrapping_mul(19_349_663);
                 let texture = (hash & 255) as f32 / 255.0 * 0.06;
-                let step_cost = distance * (1.0 + rise * 0.7 + texture);
+                let step_cost = distance * stride as f32 * (1.0 + rise * 0.7 + texture);
                 let tentative = current_score + step_cost;
                 if tentative >= scratch.score.get(&next).copied().unwrap_or(f32::INFINITY) {
                     continue;
@@ -1009,6 +1052,36 @@ fn survey_a_star(survey: &RoadSurvey<'_>, scratch: &mut SurveyScratch) -> Vec<Ve
         SurveySearchResult::Failed => Vec::new(),
         SurveySearchResult::Pending => unreachable!("an unbounded survey cannot yield"),
     }
+}
+
+/// Cheap terrain-only proof used when a controlled scenario needs two towns
+/// that a wagon can actually connect. Buildings and generated props remain
+/// the embodied planner's responsibility; this rejects different landmasses
+/// before an economy creates an impossible first caravan contract.
+pub(crate) fn overland_trade_corridor_exists(
+    terrain: &WorldTerrain,
+    start: Vec2,
+    goal: Vec2,
+) -> bool {
+    let props = PropBlockers::default();
+    let survey = RoadSurvey {
+        terrain,
+        buildings: &[],
+        live_buildings: None,
+        props: &props,
+        start,
+        goal,
+        min: start.min(goal) - Vec2::splat(INTERSETTLEMENT_SURVEY_PADDING),
+        max: start.max(goal) + Vec2::splat(INTERSETTLEMENT_SURVEY_PADDING),
+        max_nodes: INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
+        // Hall centres are selected on clear, flat terrain, so this coarse
+        // proof does not need the embodied route's fine doorway escapes.
+        cell_size: SURVEY_CELL * INTERSETTLEMENT_SURVEY_STRIDE as f32,
+        coarse_stride: 1,
+        fine_endpoint_radius: 0.0,
+    };
+    let mut scratch = SurveyScratch::default();
+    !survey_a_star(&survey, &mut scratch).is_empty()
 }
 
 fn simplify_visible(
@@ -1151,6 +1224,9 @@ fn survey_village_road(
         min: start.min(goal) - Vec2::splat(SURVEY_PADDING),
         max: start.max(goal) + Vec2::splat(SURVEY_PADDING),
         max_nodes: SURVEY_MAX_NODES,
+        cell_size: SURVEY_CELL,
+        coarse_stride: 1,
+        fine_endpoint_radius: 0.0,
     };
     scratch.begin_search();
     let raw = survey_a_star(&survey, scratch);
@@ -1762,6 +1838,9 @@ fn survey_agent_route(
         min: start.min(goal) - Vec2::splat(SURVEY_PADDING),
         max: start.max(goal) + Vec2::splat(SURVEY_PADDING),
         max_nodes,
+        cell_size: SURVEY_CELL,
+        coarse_stride: 1,
+        fine_endpoint_radius: 0.0,
     };
     scratch.begin_search();
     if survey.line_clear(start, goal, scratch) {
@@ -2036,6 +2115,7 @@ fn settlement_kind_for_art(building_type: BuildingType) -> SettlementBuildingKin
         BuildingType::Windmill => SettlementBuildingKind::Windmill,
         BuildingType::Bakery => SettlementBuildingKind::Bakery,
         BuildingType::PlaceholderStorageHall => SettlementBuildingKind::StorageHall,
+        BuildingType::PlaceholderStoneQuarry => SettlementBuildingKind::StoneQuarry,
     }
 }
 

@@ -47,6 +47,7 @@ fn marginal_operating_plan(
     seller: Option<MarketSeller>,
     responsive_sellers: usize,
     generic_output_demand: u32,
+    external_output_bid: Option<u64>,
     opening_trial: bool,
 ) -> BusinessOperatingPlan {
     let positions = building.kind.positions();
@@ -67,7 +68,7 @@ fn marginal_operating_plan(
     let own_current = account.current_day.sold_units;
     let own_previous = account.previous_day.sold_units;
     let proven_daily_sales = own_current.max(own_previous);
-    let (unavailable, demand_variation, fee_bps, output_quote, input_quote) =
+    let (unavailable, demand_variation, fee_bps, mut output_quote, input_quote) =
         market.map_or((0, 0, 0, output.base_price(), 0), |market| {
             let pool = market.pool(output);
             let sellers = u64::try_from(responsive_sellers.max(1)).unwrap_or(u64::MAX);
@@ -94,6 +95,15 @@ fn marginal_operating_plan(
                 input_quote,
             )
         });
+    // A funded inter-settlement tender is a real bid, not merely an abstract
+    // quantity shortage. The seller remains free to choose any ask at or
+    // below the buyer's ceiling; this price is used only to answer whether a
+    // rational shift could pay for itself. Without it, a mothballed quarry
+    // evaluates the remote order at its stale local ask and may reject a
+    // profitable 2.50-coin bid as though it were worth only 0.23 coin.
+    if generic_output_demand > 0 {
+        output_quote = output_quote.max(external_output_bid.unwrap_or_default());
+    }
     let strategy_buffer = match management.strategy {
         shared::economy::BusinessStrategy::Growth
         | shared::economy::BusinessStrategy::Opportunistic => demand_variation,
@@ -203,6 +213,7 @@ pub fn review_automatic_staffing(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
     mut last_day: Local<Option<u32>>,
+    trade_contracts: Query<&shared::components::CivicTradeContract>,
     halls: Query<
         (
             &shared::components::SettlementId,
@@ -250,6 +261,10 @@ pub fn review_automatic_staffing(
     let mut responsive_sellers = HashMap::<(shared::components::SettlementId, Good), usize>::new();
     let mut food_restart_leaders =
         HashMap::<(shared::components::SettlementId, Good), shared::components::BuildingId>::new();
+    let mut trade_restart_leaders =
+        HashMap::<(shared::components::SettlementId, Good), shared::components::BuildingId>::new();
+    let mut carrier_restart_leaders =
+        HashMap::<shared::components::SettlementId, shared::components::BuildingId>::new();
     let mut branch_backlog = HashMap::<
         (
             shared::components::SettlementId,
@@ -274,10 +289,20 @@ pub fn review_automatic_staffing(
                 condition.state.can_operate() || condition.state == BusinessState::Mothballed
             });
             if responds_to_demand {
+                if building.kind == SettlementBuildingKind::StorageHall {
+                    carrier_restart_leaders
+                        .entry(building_of.0)
+                        .and_modify(|current| *current = (*current).min(*building_id))
+                        .or_insert(*building_id);
+                }
                 if let Some(output) = business_output(building.kind) {
                     *responsive_sellers
                         .entry((building_of.0, output))
                         .or_default() += 1;
+                    trade_restart_leaders
+                        .entry((building_of.0, output))
+                        .and_modify(|current| *current = (*current).min(*building_id))
+                        .or_insert(*building_id);
                     if output.is_edible() {
                         food_restart_leaders
                             .entry((building_of.0, output))
@@ -313,6 +338,51 @@ pub fn review_automatic_staffing(
                         .or_default() += workload;
                 }
             }
+        }
+    }
+    // A buyer-funded inter-settlement tender is a real order even before the
+    // source market has a listing. Route formation deliberately waits for
+    // physical stock, so the production planner must expose that demand to one
+    // deterministic producer in every eligible source settlement. Otherwise a
+    // previously mothballed Quarry sees an empty *local* order book forever and
+    // the public tender can never acquire the first unit which would bind it.
+    // Once a tender is bound, only its named seller receives the order.
+    let mut external_trade_demand = HashMap::<shared::components::BuildingId, (u32, u64)>::new();
+    let mut external_carrier_bulk = HashMap::<shared::components::BuildingId, u32>::new();
+    for contract in trade_contracts
+        .iter()
+        .filter(|contract| contract.status.is_active() && contract.remaining_units() > 0)
+    {
+        if let Some(origin) = contract.origin {
+            if let Some(storage) = carrier_restart_leaders.get(&origin) {
+                let bulk = contract
+                    .remaining_units()
+                    .saturating_mul(contract.good.bulk_per_unit());
+                let demand = external_carrier_bulk.entry(*storage).or_default();
+                *demand = demand.saturating_add(bulk);
+            }
+        }
+        if let Some(MarketSeller::Business(seller)) = contract.source_seller {
+            let demand = external_trade_demand.entry(seller).or_default();
+            demand.0 = demand.0.saturating_add(contract.remaining_units());
+            demand.1 = demand.1.max(contract.maximum_unit_price);
+            continue;
+        }
+        if let Some(origin) = contract.origin {
+            if let Some(leader) = trade_restart_leaders.get(&(origin, contract.good)) {
+                let demand = external_trade_demand.entry(*leader).or_default();
+                demand.0 = demand.0.saturating_add(contract.remaining_units());
+                demand.1 = demand.1.max(contract.maximum_unit_price);
+            }
+            continue;
+        }
+        for ((settlement, good), leader) in &trade_restart_leaders {
+            if *settlement == contract.destination || *good != contract.good {
+                continue;
+            }
+            let demand = external_trade_demand.entry(*leader).or_default();
+            demand.0 = demand.0.saturating_add(contract.remaining_units());
+            demand.1 = demand.1.max(contract.maximum_unit_price);
         }
     }
     // When every edible listing is gone, route the settlement's generic
@@ -407,12 +477,25 @@ pub fn review_automatic_staffing(
                     .unwrap_or_default()
                     .saturating_add(inventory.used_bulk())
             });
-            let measured_load = backlog.max(
-                u32::try_from(throughput)
-                    .unwrap_or(u32::MAX)
-                    .min(u32::MAX / Good::Wood.bulk_per_unit())
-                    .saturating_mul(Good::Wood.bulk_per_unit()),
-            );
+            let measured_load = backlog
+                .max(
+                    u32::try_from(throughput)
+                        .unwrap_or(u32::MAX)
+                        .min(u32::MAX / Good::Wood.bulk_per_unit())
+                        .saturating_mul(Good::Wood.bulk_per_unit()),
+                )
+                // A bound, cash-backed export contract is physical work even
+                // before the first collection. Assign it only to the stable
+                // lowest-id source warehouse so one route hires one porter rather
+                // than waking every depot in town. Route management will bind an
+                // unbound tender to a real seller/origin first; the next daily
+                // staffing review then exposes this ordinary paid position.
+                .max(
+                    external_carrier_bulk
+                        .get(building_id)
+                        .copied()
+                        .unwrap_or_default(),
+                );
             let optimal = if measured_load == 0 {
                 u8::from(state == BusinessState::New)
             } else {
@@ -442,16 +525,22 @@ pub fn review_automatic_staffing(
             .copied()
             .map_or((None, None), |(market, economy)| (Some(market), economy));
         let seller = output.map(|_| MarketSeller::Business(*building_id));
+        let external_trade = external_trade_demand
+            .get(building_id)
+            .copied()
+            .unwrap_or_default();
         let generic_output_demand = output.map_or(0, |good| {
             let selected_good = food_restart_goods
                 .get(&building_of.0)
                 .map(|(selected, _)| *selected);
             let selected_site = food_restart_leaders.get(&(building_of.0, good)).copied();
-            if selected_good == Some(good) && selected_site == Some(*building_id) {
-                settlement_economy.map_or(0, |economy| economy.unmet_food)
-            } else {
-                0
-            }
+            let local_restart =
+                if selected_good == Some(good) && selected_site == Some(*building_id) {
+                    settlement_economy.map_or(0, |economy| economy.unmet_food)
+                } else {
+                    0
+                };
+            local_restart.max(external_trade.0)
         });
         let opening_trial = state == BusinessState::New
             && account.gross_revenue == 0
@@ -474,6 +563,7 @@ pub fn review_automatic_staffing(
                     .unwrap_or(1)
             }),
             generic_output_demand,
+            (external_trade.0 > 0).then_some(external_trade.1),
             opening_trial,
         );
         let has_unavailable_demand = output.is_some_and(|good| {
@@ -915,6 +1005,7 @@ pub fn enforce_staffing_targets(
         &GoodsInventory,
         Has<InternalDeliveryRoutine>,
         Has<MarketCollectionRoutine>,
+        Has<TradeRouteRoutine>,
     )>,
 ) {
     let targets: HashMap<_, _> = buildings
@@ -937,7 +1028,7 @@ pub fn enforce_staffing_targets(
         roster.sort_unstable_by_key(|(person, entity)| (*person, entity.to_bits()));
         let target = targets.get(building).copied().unwrap_or(roster.len());
         for (_, entity) in roster.iter().skip(target) {
-            let Ok((_, _, _, mut occupation, mut status, carrier, internal, market)) =
+            let Ok((_, _, _, mut occupation, mut status, carrier, internal, market, trade_route)) =
                 villagers.get_mut(*entity)
             else {
                 continue;
@@ -946,7 +1037,7 @@ pub fn enforce_staffing_targets(
             // an already-promised shipment reaches its destination and the
             // carrier is empty; otherwise the same person can be hired into a
             // second job while physically holding somebody else's goods.
-            if internal || market || !carrier.is_empty() {
+            if internal || market || trade_route || !carrier.is_empty() {
                 continue;
             }
             occupation.0 = None;
@@ -957,6 +1048,7 @@ pub fn enforce_staffing_targets(
                 .remove::<FarmerRoutine>()
                 .remove::<FishingRoutine>()
                 .remove::<LumberjackRoutine>()
+                .remove::<QuarryRoutine>()
                 .remove::<ProcessingRoutine>()
                 .remove::<WorkplaceDoorTransit>()
                 .remove::<BuildingDoorUse>()
@@ -1011,6 +1103,7 @@ pub fn review_worker_job_choices(
         &GoodsInventory,
         Has<InternalDeliveryRoutine>,
         Has<MarketCollectionRoutine>,
+        Has<TradeRouteRoutine>,
         Has<WorkplaceDoorTransit>,
     )>,
     mut last_day: Local<Option<u32>>,
@@ -1080,6 +1173,7 @@ pub fn review_worker_job_choices(
             inventory,
             internal_delivery,
             market_collection,
+            trade_route,
             door_transit,
         )) = workers.get_mut(worker)
         else {
@@ -1092,6 +1186,7 @@ pub fn review_worker_job_choices(
             || !inventory.is_empty()
             || internal_delivery
             || market_collection
+            || trade_route
             || door_transit
         {
             continue;
@@ -1125,6 +1220,7 @@ pub fn review_worker_job_choices(
             .remove::<FarmerRoutine>()
             .remove::<FishingRoutine>()
             .remove::<LumberjackRoutine>()
+            .remove::<QuarryRoutine>()
             .remove::<ProcessingRoutine>()
             .remove::<WorkplaceDoorTransit>()
             .remove::<BuildingDoorUse>()
@@ -1186,6 +1282,7 @@ pub fn sync_company_porters(
             &GoodsInventory,
             Has<InternalDeliveryRoutine>,
             Has<MarketCollectionRoutine>,
+            Has<TradeRouteRoutine>,
         ),
         With<CharacterKind>,
     >,
@@ -1211,7 +1308,9 @@ pub fn sync_company_porters(
             })
         })
         .collect();
-    for (entity, employment, current, civic_job, carrier, internal, market) in workers.iter() {
+    for (entity, employment, current, civic_job, carrier, internal, market, trade_route) in
+        workers.iter()
+    {
         let wanted = employment
             .and_then(|employment| storage_by_id.get(&employment.0))
             .copied()
@@ -1225,7 +1324,7 @@ pub fn sync_company_porters(
             // Employment normally disappears only after the graceful staffing
             // boundary above. Keep this fallback for death, sale and unusual
             // lifecycle changes so an in-flight shipment can still complete.
-            if internal || market || !carrier.is_empty() {
+            if internal || market || trade_route || !carrier.is_empty() {
                 continue;
             }
             commands
@@ -1379,6 +1478,7 @@ mod tests {
             None,
             1,
             0,
+            None,
             false,
         );
         assert_eq!(plan.target_output_units, 2);
@@ -1411,6 +1511,7 @@ mod tests {
             None,
             1,
             0,
+            None,
             false,
         );
         assert_eq!(plan.target_output_units, 0);
@@ -1438,6 +1539,7 @@ mod tests {
             None,
             1,
             0,
+            None,
             true,
         );
         assert_eq!(
@@ -1474,6 +1576,7 @@ mod tests {
             Some(MarketSeller::Business(shared::components::BuildingId(100))),
             1,
             0,
+            None,
             true,
         );
         assert_eq!(mill_plan.target_output_units, 1);
@@ -1509,6 +1612,7 @@ mod tests {
             Some(MarketSeller::Business(shared::components::BuildingId(100))),
             1,
             5,
+            None,
             false,
         );
 
@@ -1606,6 +1710,182 @@ mod tests {
                 .unwrap()
                 .enabled_positions,
             1
+        );
+    }
+
+    #[test]
+    fn cash_backed_remote_tender_reopens_a_mothballed_quarry() {
+        let mut app = App::new();
+        app.add_systems(Update, review_automatic_staffing);
+        let mut clock = WorldTime::new_default();
+        clock.day = 28;
+        app.world_mut().spawn(clock);
+
+        let source = shared::components::SettlementId(7);
+        let destination = shared::components::SettlementId(8);
+        app.world_mut().spawn((
+            source,
+            Settlement {
+                name: "Stonefield".into(),
+                tier: shared::components::SettlementTier::Village,
+                residents: 30,
+                treasury: 0,
+            },
+            MootMarket::founding(),
+        ));
+        let quarry_id = shared::components::BuildingId(70);
+        let mut stale_sale = BusinessSalePolicy::for_good(Good::Stone);
+        stale_sale.asking_unit_price = 23;
+        stale_sale.minimum_unit_price = 1;
+        let quarry = app
+            .world_mut()
+            .spawn((
+                quarry_id,
+                shared::components::BuildingOf(source),
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::StoneQuarry,
+                    settlement: "Stonefield".into(),
+                    owner: None,
+                    quality: 0.84,
+                    workers: Vec::new(),
+                },
+                GoodsInventory::new(SettlementBuildingKind::StoneQuarry.storage_bulk_capacity()),
+                BusinessManagementPolicy::default(),
+                BusinessCondition {
+                    state: BusinessState::Mothballed,
+                    ..default()
+                },
+                BusinessAccount::default(),
+                stale_sale,
+                BusinessWagePolicy::default(),
+                BusinessStaffingPolicy::new(0),
+            ))
+            .id();
+        app.world_mut()
+            .spawn(shared::components::CivicTradeContract {
+                origin: None,
+                destination,
+                good: Good::Stone,
+                source_seller: None,
+                requested_units: 7,
+                delivered_units: 0,
+                maximum_unit_price: Good::Stone.base_price(),
+                delivery_fee_per_bulk: 5,
+                reserved_cash: 1_960,
+                escrow_cash: 1_960,
+                spent_on_goods: 0,
+                spent_on_freight: 0,
+                created_day: 27,
+                last_attempt_day: u32::MAX,
+                status: shared::components::TradeContractStatus::Open,
+            });
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<BusinessCondition>(quarry).unwrap().state,
+            BusinessState::Operating
+        );
+        assert_eq!(
+            app.world()
+                .get::<BusinessStaffingPolicy>(quarry)
+                .unwrap()
+                .enabled_positions,
+            1
+        );
+        assert!(
+            app.world()
+                .get::<BusinessOperatingPlan>(quarry)
+                .unwrap()
+                .target_output_units
+                > 0
+        );
+    }
+
+    #[test]
+    fn bound_export_contract_keeps_exactly_one_source_warehouse_staffed() {
+        let mut app = App::new();
+        app.add_systems(Update, review_automatic_staffing);
+        let mut clock = WorldTime::new_default();
+        clock.day = 12;
+        app.world_mut().spawn(clock);
+
+        let source = shared::components::SettlementId(7);
+        let destination = shared::components::SettlementId(8);
+        app.world_mut().spawn((
+            source,
+            Settlement {
+                name: "Stonefield".into(),
+                tier: shared::components::SettlementTier::Village,
+                residents: 30,
+                treasury: 0,
+            },
+            MootMarket::founding(),
+        ));
+        let spawn_warehouse = |world: &mut World, id: u64, company: u64| {
+            world
+                .spawn((
+                    shared::components::BuildingId(id),
+                    shared::components::BuildingOf(source),
+                    shared::components::OperatedBy(shared::components::CompanyId(company)),
+                    SettlementBuilding {
+                        kind: SettlementBuildingKind::StorageHall,
+                        settlement: "Stonefield".into(),
+                        owner: None,
+                        quality: 1.0,
+                        workers: Vec::new(),
+                    },
+                    GoodsInventory::new(
+                        SettlementBuildingKind::StorageHall.storage_bulk_capacity(),
+                    ),
+                    BusinessManagementPolicy::default(),
+                    BusinessCondition {
+                        state: BusinessState::Operating,
+                        ..default()
+                    },
+                    BusinessAccount::default(),
+                    BusinessSalePolicy::for_good(Good::Stone),
+                    BusinessWagePolicy::default(),
+                    BusinessStaffingPolicy::new(0),
+                ))
+                .id()
+        };
+        let first = spawn_warehouse(app.world_mut(), 70, 20);
+        let second = spawn_warehouse(app.world_mut(), 71, 21);
+        app.world_mut()
+            .spawn(shared::components::CivicTradeContract {
+                origin: Some(source),
+                destination,
+                good: Good::Stone,
+                source_seller: Some(MarketSeller::Business(shared::components::BuildingId(90))),
+                requested_units: 4,
+                delivered_units: 0,
+                maximum_unit_price: Good::Stone.base_price(),
+                delivery_fee_per_bulk: 9,
+                reserved_cash: 888,
+                escrow_cash: 888,
+                spent_on_goods: 0,
+                spent_on_freight: 0,
+                created_day: 11,
+                last_attempt_day: u32::MAX,
+                status: shared::components::TradeContractStatus::Open,
+            });
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<BusinessStaffingPolicy>(first)
+                .unwrap()
+                .enabled_positions,
+            1
+        );
+        assert_eq!(
+            app.world()
+                .get::<BusinessStaffingPolicy>(second)
+                .unwrap()
+                .enabled_positions,
+            0
         );
     }
 }

@@ -623,6 +623,7 @@ pub fn capture_settlement_history(
                         wage_expense: civic_ledger.wage_expense,
                         poor_relief_expense: civic_ledger.poor_relief_expense,
                         material_expense: civic_ledger.material_expense,
+                        freight_expense: civic_ledger.freight_expense,
                         filled_positions,
                         vacant_positions: desired_positions.saturating_sub(filled_positions),
                         market_fee_bps: policy.market_fee_bps,

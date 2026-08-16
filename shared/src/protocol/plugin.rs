@@ -4,14 +4,16 @@ use lightyear::prelude::*;
 use crate::components::{
     ActiveMapState, AttachedTo, BuildingDoorDemand, BuildingId, BuildingOf, CharacterActivity,
     CharacterAffiliation, CharacterAttributes, CharacterKind, CharacterMotion, CharacterName,
-    CharacterNavigationStatus, CharacterObjective, CivicEmployment, CivicHallLevel, CloudSeed,
-    CommandedBy, Company, CompanyId, CompanyLeadership, CompanyOwnership, CompanyShareMarket,
-    ConstructionSite, EmployedAt, FarmField, FishingPier, Health, Hero, HeroOutfit, Household,
-    LivesAt, MarketLevel, MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId,
-    Player, PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation, Residence,
-    ResidentOf, Settlement, SettlementBuilding, SettlementDevelopment, SettlementId,
+    CharacterNavigationStatus, CharacterObjective, CivicEmployment, CivicHallLevel,
+    CivicHallUpgradeWorksite, CivicTradeContract, CloudSeed, CommandedBy, Company, CompanyId,
+    CompanyLeadership, CompanyOwnership, CompanyShareMarket, CompanyTradeRoute, ConstructionSite,
+    EmployedAt, FarmField, FishingPier, Health, Hero, HeroOutfit, Household, LivesAt, MarketLevel,
+    MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId, Player,
+    PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation, Residence, ResidentOf,
+    Settlement, SettlementBuilding, SettlementDevelopment, SettlementId,
     SettlementOpportunityBoard, SettlementPolicies, SettlementPropertyBoard, SettlementSummary,
-    TimeWarp, VillageRoad, WorkStatus, WorkplaceOperation, WorldTime,
+    TimeWarp, TradeContractId, TradeRouteHistory, TradeRouteId, VillageRoad, WorkStatus,
+    WorkplaceOperation, WorldTime,
 };
 use crate::economy::{
     BusinessAccount, BusinessCondition, BusinessForSale, BusinessLiquidation,
@@ -50,10 +52,15 @@ impl Plugin for ProtocolPlugin {
         app.component::<SettlementSummary>().replicate();
         app.component::<BuildingId>().replicate();
         app.component::<CompanyId>().replicate();
+        app.component::<TradeContractId>().replicate();
+        app.component::<TradeRouteId>().replicate();
         app.component::<Company>().replicate();
         app.component::<CompanyLeadership>().replicate();
         app.component::<CompanyOwnership>().replicate();
         app.component::<CompanyShareMarket>().replicate();
+        app.component::<CivicTradeContract>().replicate();
+        app.component::<CompanyTradeRoute>().replicate();
+        app.component::<TradeRouteHistory>().replicate();
         app.component::<ResidentOf>().replicate();
         app.component::<BuildingOf>().replicate();
         app.component::<AttachedTo>().replicate();
@@ -81,6 +88,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<CommandedBy>().replicate();
         app.component::<Settlement>().replicate();
         app.component::<CivicHallLevel>().replicate();
+        app.component::<CivicHallUpgradeWorksite>().replicate();
         app.component::<MarketLevel>().replicate();
         app.component::<SettlementDevelopment>().replicate();
         app.component::<SettlementOpportunityBoard>().replicate();

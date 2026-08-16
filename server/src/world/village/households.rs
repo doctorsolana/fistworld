@@ -750,6 +750,8 @@ pub fn run_household_schedules(
             With<MootQueueTicket>,
             With<MootMealRoutine>,
             With<HouseholdShoppingRoutine>,
+            With<TradeRouteRoutine>,
+            With<crate::world::settlement_development::CivicHallBuilderRoutine>,
         )>,
     >,
     carried_inventories: Query<&GoodsInventory, With<CharacterKind>>,
@@ -763,13 +765,16 @@ pub fn run_household_schedules(
             &HomeAssignment,
             Option<&MoveTarget>,
             Option<&mut HomeRoutine>,
-            Option<&mut FarmerRoutine>,
-            Option<&mut LumberjackRoutine>,
-            Option<&mut FishingRoutine>,
-            Option<&mut ProcessingRoutine>,
-            Option<&mut RoadBuilderRoutine>,
-            Option<&WorkplaceDoorTransit>,
-            Option<&NavigationRouteFailed>,
+            (
+                Option<&mut FarmerRoutine>,
+                Option<&mut LumberjackRoutine>,
+                Option<&mut FishingRoutine>,
+                Option<&mut QuarryRoutine>,
+                Option<&mut ProcessingRoutine>,
+                Option<&mut RoadBuilderRoutine>,
+                Option<&WorkplaceDoorTransit>,
+                Option<&NavigationRouteFailed>,
+            ),
         ),
         (With<CharacterKind>, Without<strategic::StrategicPerson>),
     >,
@@ -789,13 +794,16 @@ pub fn run_household_schedules(
         assignment,
         move_target,
         routine,
-        mut farmer,
-        mut lumberjack,
-        mut fisher,
-        mut processor,
-        mut road_builder,
-        workplace_transit,
-        route_failed,
+        (
+            mut farmer,
+            mut lumberjack,
+            mut fisher,
+            mut quarry,
+            mut processor,
+            mut road_builder,
+            workplace_transit,
+            route_failed,
+        ),
     ) in villagers.iter_mut()
     {
         if moot_service_busy.get(villager).is_ok() {
@@ -817,6 +825,7 @@ pub fn run_household_schedules(
                     (farmer.is_some() && inventory.amount(Good::Wheat) > 0)
                         || (fisher.is_some() && inventory.amount(Good::Food) > 0)
                         || (lumberjack.is_some() && inventory.amount(Good::Wood) > 0)
+                        || (quarry.is_some() && inventory.amount(Good::Stone) > 0)
                 });
             if returning_workplace_goods {
                 continue;
@@ -903,6 +912,13 @@ pub fn run_household_schedules(
                     .remove::<PierTraversal>()
                     .remove::<TravelRoute>()
                     .remove::<NavigationRoutePending>();
+            }
+            if let Some(quarry) = quarry.as_deref_mut() {
+                // Quarry work is outdoors; after an empty-handed cutoff the
+                // retained routine can safely restart from its workplace on
+                // the next daylight shift. A loaded quarrier was kept above
+                // until the Stone reached bounded business storage.
+                quarry.restart_for_morning();
             }
             if let Some(processor) = processor.as_deref_mut() {
                 processor.reset_for_morning();

@@ -275,7 +275,7 @@ The engine steps this section listed map onto it as follows, with their real sta
 | Old step | Reality | Lands in |
 |---|---|---|
 | 1. Region layer | Interest management done; ownership and persistence never started, and both move off regions entirely (§3) | Phase 1 |
-| 2. Strategic tick | **Partial.** Villager production, workplace stock, porter commerce and household purchasing run in aggregate; caravans, armies and strategic construction do not. | Phase 3 |
+| 2. Strategic tick | **Partial.** Villager production, workplace stock, porter commerce and household purchasing run in aggregate. The first tactical company-owned caravan route now performs buyer-funded Stone contracts between two observed settlements; off-screen caravan aggregation, armies and strategic construction remain future work. | Phase 3 |
 | 3. Tactical units + flow fields | Not started. Deliberately moved LATE: it is the biggest block of work and carries the least architectural uncertainty. | Phase 6 |
 | 4. Promotion/demotion | **Partial for ordinary villagers.** Tactical routine state is shed/rebuilt across `SimLevel`; army and travelling-party aggregate contracts remain. | Phase 2 |
 | 5. Zoom bands + render LOD | Camera range and dense-villager full-rig/proxy split done; buildings, armies and effects still need representation across bands. | as needed |

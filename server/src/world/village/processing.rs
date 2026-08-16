@@ -103,6 +103,7 @@ pub fn assign_processing_routines(
             Without<FarmerRoutine>,
             Without<FishingRoutine>,
             Without<LumberjackRoutine>,
+            Without<QuarryRoutine>,
             Without<MootQueueTicket>,
             Without<MootMealRoutine>,
         ),

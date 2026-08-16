@@ -1,6 +1,9 @@
 use super::*;
 use shared::components::CompanyOwnership;
-use shared::economy::{CompanyAccount, CompanyManagementPolicy};
+use shared::economy::{
+    CompanyAccount, CompanyManagementPolicy, VILLAGE_MIN_PROSPERITY, VILLAGE_MIN_RESIDENTS,
+    VILLAGE_REQUIRED_SECURE_DAYS,
+};
 
 #[test]
 fn porter_cart_presentation_follows_real_freight_and_real_load_bulk() {
@@ -3817,7 +3820,7 @@ fn a_broke_resident_declines_to_a_safe_floor_then_dies_after_ten_hungry_days() {
 }
 
 #[test]
-fn three_secure_days_advance_a_hamlet_to_village() {
+fn three_secure_days_qualify_a_hamlet_without_skipping_civic_construction() {
     let mut app = village_test_app();
     app.init_resource::<SettlementEconomyRuntime>();
     app.add_systems(
@@ -3854,7 +3857,11 @@ fn three_secure_days_advance_a_hamlet_to_village() {
 
     let settlement = app.world().get::<Settlement>(hall).unwrap();
     let economy = app.world().get::<SettlementEconomy>(hall).unwrap();
-    assert_eq!(settlement.tier, shared::components::SettlementTier::Village);
+    assert_eq!(
+        settlement.tier,
+        shared::components::SettlementTier::Hamlet,
+        "economy evidence must not bypass the Village Hall worksite"
+    );
     assert_eq!(economy.food_secure_days, VILLAGE_REQUIRED_SECURE_DAYS);
     assert!(economy.prosperity >= VILLAGE_MIN_PROSPERITY);
 }
@@ -4144,6 +4151,10 @@ fn the_reeve_builds_public_progression_without_stopping_essential_trades() {
         SettlementBuildingKind::Windmill,
         SettlementBuildingKind::Bakery,
         SettlementBuildingKind::LumberjackHut,
+        // Keep this test focused on the Reeve's public Marketplace duty. The
+        // completed Quarry prevents unrelated Stone opportunities from
+        // competing with the civic permit under test.
+        SettlementBuildingKind::StoneQuarry,
         SettlementBuildingKind::House,
     ] {
         app.world_mut().spawn(SettlementBuilding {

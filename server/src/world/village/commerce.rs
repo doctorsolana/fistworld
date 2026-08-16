@@ -34,6 +34,7 @@ pub(crate) fn business_output(kind: SettlementBuildingKind) -> Option<Good> {
         SettlementBuildingKind::Farmstead => Some(Good::Wheat),
         SettlementBuildingKind::FishermansHut => Some(Good::Food),
         SettlementBuildingKind::LumberjackHut => Some(Good::Wood),
+        SettlementBuildingKind::StoneQuarry => Some(Good::Stone),
         SettlementBuildingKind::Windmill => Some(Good::Flour),
         SettlementBuildingKind::Bakery => Some(Good::Bread),
         _ => None,
@@ -49,6 +50,7 @@ pub(crate) const fn is_private_business(kind: SettlementBuildingKind) -> bool {
             | SettlementBuildingKind::Windmill
             | SettlementBuildingKind::Bakery
             | SettlementBuildingKind::StorageHall
+            | SettlementBuildingKind::StoneQuarry
     )
 }
 
@@ -728,14 +730,18 @@ pub fn run_internal_deliveries(
             &mut CharacterActivity,
             &mut GoodsInventory,
             Option<&MoveTarget>,
-            Option<&mut InternalDeliveryRoutine>,
-            Option<&MarketCollectionRoutine>,
-            Option<&HomeRoutine>,
-            Option<&RoadBuilderRoutine>,
-            Option<&HouseholdShoppingRoutine>,
-            Option<&MootQueueTicket>,
-            Option<&MootMealRoutine>,
-            Option<&NavigationRouteFailed>,
+            (
+                Option<&mut InternalDeliveryRoutine>,
+                Option<&MarketCollectionRoutine>,
+                Option<&HomeRoutine>,
+                Option<&RoadBuilderRoutine>,
+                Option<&HouseholdShoppingRoutine>,
+                Option<&MootQueueTicket>,
+                Option<&MootMealRoutine>,
+                Option<&NavigationRouteFailed>,
+                Option<&TradeRouteRoutine>,
+                Option<&crate::world::settlement_development::CivicHallBuilderRoutine>,
+            ),
         ),
         (
             With<CharacterKind>,
@@ -747,7 +753,7 @@ pub fn run_internal_deliveries(
     let day = world_time.iter().next().map_or(0, |clock| clock.day);
     let active: Vec<_> = porters
         .iter()
-        .filter_map(|(_, _, _, _, _, _, _, routine, ..)| routine.cloned())
+        .filter_map(|(_, _, _, _, _, _, _, (routine, ..))| routine.cloned())
         .collect();
     let mut reserved_output: HashMap<(Entity, Good), u32> = HashMap::new();
     let mut reserved_input: HashMap<(Entity, Good), u32> = HashMap::new();
@@ -847,14 +853,18 @@ pub fn run_internal_deliveries(
         mut activity,
         mut carrier,
         move_target,
-        routine,
-        market_trip,
-        home,
-        road_work,
-        shopping,
-        queue_ticket,
-        meal,
-        route_failed,
+        (
+            routine,
+            market_trip,
+            home,
+            road_work,
+            shopping,
+            queue_ticket,
+            meal,
+            route_failed,
+            trade_route,
+            civic_hall_building,
+        ),
     ) in porters.iter_mut()
     {
         let Some(porter_hall) = civic_porter
@@ -870,6 +880,8 @@ pub fn run_internal_deliveries(
             || shopping.is_some()
             || queue_ticket.is_some()
             || meal.is_some()
+            || trade_route.is_some()
+            || civic_hall_building.is_some()
         {
             continue;
         }
@@ -1374,7 +1386,10 @@ pub fn run_market_collections(
                 Option<&FarmerRoutine>,
                 Option<&FishingRoutine>,
                 Option<&LumberjackRoutine>,
+                Option<&QuarryRoutine>,
                 Option<&ProcessingRoutine>,
+                Option<&TradeRouteRoutine>,
+                Option<&crate::world::settlement_development::CivicHallBuilderRoutine>,
             ),
             &PlayerPosition,
             &mut CharacterActivity,
@@ -1398,6 +1413,7 @@ pub fn run_market_collections(
                 With<FarmerRoutine>,
                 With<FishingRoutine>,
                 With<LumberjackRoutine>,
+                With<QuarryRoutine>,
                 With<ProcessingRoutine>,
                 With<MarketCollectionRoutine>,
             )>,
@@ -1559,7 +1575,7 @@ pub fn run_market_collections(
     for (
         porter_entity,
         (civic_porter, company_porter),
-        (farmer, fisher, lumberjack, processor),
+        (farmer, fisher, lumberjack, quarry, processor, trade_route, civic_hall_building),
         position,
         mut activity,
         mut carrier,
@@ -1578,6 +1594,7 @@ pub fn run_market_collections(
             .map(|routine| (routine.farmstead(), routine.hall()))
             .or_else(|| fisher.map(|routine| (routine.workplace(), routine.hall())))
             .or_else(|| lumberjack.map(|routine| (routine.workplace(), routine.hall())))
+            .or_else(|| quarry.map(|routine| (routine.workplace(), routine.hall())))
             .or_else(|| processor.map(|routine| (routine.workplace(), routine.hall())));
         let active_self_haul_hall = routine.as_deref().map(|routine| routine.hall);
         let Some(porter_hall) = civic_porter
@@ -1613,11 +1630,13 @@ pub fn run_market_collections(
             .iter()
             .any(|request| request.builder == porter_entity);
         if internal_delivery.is_some()
+            || trade_route.is_some()
             || home.is_some()
             || road_work.is_some()
             || shopping.is_some()
             || queue_ticket.is_some()
             || meal.is_some()
+            || civic_hall_building.is_some()
         {
             continue;
         }
@@ -2018,6 +2037,7 @@ pub fn run_market_collections(
                         .remove::<FarmerRoutine>()
                         .remove::<FishingRoutine>()
                         .remove::<LumberjackRoutine>()
+                        .remove::<QuarryRoutine>()
                         .remove::<ProcessingRoutine>()
                         .remove::<WorkplaceDoorTransit>()
                         .remove::<BuildingDoorUse>()
@@ -2190,6 +2210,7 @@ pub fn run_market_collections(
                 .remove::<FarmerRoutine>()
                 .remove::<FishingRoutine>()
                 .remove::<LumberjackRoutine>()
+                .remove::<QuarryRoutine>()
                 .remove::<ProcessingRoutine>()
                 .remove::<WorkplaceDoorTransit>()
                 .remove::<BuildingDoorUse>()
@@ -2647,6 +2668,7 @@ pub fn run_business_payroll_and_owner_leisure(
                 .remove::<FarmerRoutine>()
                 .remove::<FishingRoutine>()
                 .remove::<LumberjackRoutine>()
+                .remove::<QuarryRoutine>()
                 .remove::<ProcessingRoutine>()
                 .remove::<WorkplaceDoorTransit>()
                 .remove::<BuildingDoorUse>()

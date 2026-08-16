@@ -20,7 +20,7 @@ From the workspace root:
 cargo village-lab
 ```
 
-The default is the `secure` scenario: 190 simulated minutes at 100x, with eight
+The default is the `secure` scenario: 190 simulated minutes at the selected warp, with eight
 founders and eight uncommitted arrivals at the start of day 2. This exercises the
 current 12-resident Hamlet → Village population gate and tests late immigration,
 repeated housing and workforce recovery on every run. The live population gates are
@@ -33,6 +33,23 @@ Useful overrides:
 # Run the two-climate comparison or isolate the frozen inland control.
 FISTWORLD_LAB_SCENARIO=dual cargo village-lab
 FISTWORLD_LAB_SCENARIO=poor cargo village-lab
+
+# Compare the fertile Meadow with a separated Stone-rich settlement. This is
+# the canonical Quarry and paid Hall-upgrade acceptance run.
+FISTWORLD_LAB_SCENARIO=stone-comparison \
+FISTWORLD_LAB_WARP=10 \
+FISTWORLD_LAB_MINUTES=190 \
+cargo village-lab
+
+# Watch the same two settlements in the real rendered client. It starts at 1x;
+# use the HUD to select 10x or 25x when ready.
+./run.sh stoneworld
+
+# Focused route run: two established Village controls begin with 12 founders
+# each, then grow to 35 residents at 10x. This exercises Town Works,
+# a remote Stone order, Storage Hall staffing and physical delivery without an
+# artificial day-one population shock.
+./run.sh tradeworld
 
 # Canonical long economy experiment: 10 arrivals on day 1, 5 on day 5,
 # then 3 per day on days 6-30, evenly divided between three settlements.
@@ -173,6 +190,8 @@ and `no-fishing` for the fertile grain-only settlement; `policy-comparison`,
 `policy-compare`, `twin-meadow` and `twin` for the matched Frugal/Mutual Aid pair;
 `poor`, `food-poor`, `cold` and `north` for
 the frozen settlement; and `dual`, `both` or `two` for both.
+The geology comparison accepts `stone`, `quarry`, `stone-comparison` or
+`stone-vs-meadow`.
 The three-settlement crowd fixture accepts `triple-stress`, `triple`, `stress`
 or `three`. The single-town thousand-person fixture accepts `dense-stress`,
 `dense`, `thousand` or `1000`.
@@ -215,6 +234,49 @@ surplus to establish a three-day reserve, so it remains a Hamlet. That constrain
 adaptation is part of the control: otherwise identical autonomy responds to
 measured scarcity, but geography still matters instead of every settlement
 converging on the fertile Meadow outcome.
+
+`stone-comparison` runs ordinary `Lab Meadow` beside `Lab Stonefield`. The latter is
+selected only when its normal settlement work ring contains at least a 55% Stone prospect;
+on seed 3 the chosen prospect is about 84%. The fixture does not prebuild or grant a Quarry.
+Both towns start with empty Halls, obtain normal private permits, supply construction Wood,
+hire through the ordinary labour market and use ordinary road/access validation. Once a
+settlement actually opens Town Works, its remaining 8-Stone material gap creates a strong but
+non-mandatory Quarry opportunity. Acceptance requires a completed Stone Quarry, visible outdoor mining,
+a bounded carried Stone load and Stone deposited into business storage. Hall procurement clears
+local private listings first. If the first qualifying Town Works still lacks Stone, it posts a
+cash-backed remote tender before a supplier exists. That demand can justify a Quarry in the other
+settlement; once a full real listing appears, the tender binds that seller and origin. The source
+then advertises a Storage Hall strongly. The bound contract keeps exactly one deterministic source
+warehouse position open until an ordinary Company Porter is hired; it does not wake every depot in
+town. The resulting company route collects the named consignment, carries it across the map and
+deposits it at the destination worksite before the carrier earns freight.
+
+A Village does not advertise Stone extraction merely because Town is its eventual next tier. The
+investment signal begins with an actual Town Works material gap or another settlement's funded
+tender. An existing mothballed Quarry receives that external order in its normal daily operating
+plan and may reopen if its own asking price, site output and wage make the work profitable.
+
+`trade-comparison`/`./run.sh tradeworld` isolates that Village-to-Town seam. Its two controls begin
+as established Villages with empty stores and 12 residents, then receive two ordinary immigrants
+per day from day 13 until each reaches 35. The inland Meadow control has roughly 90% farmland and
+no fishing shortcut; Stonefield has roughly 84% nearby Stone and 30% farmland. The fixture proves
+the two controls share one walkable overland corridor before accepting the Stonefield site. It
+grants no Quarry, Storage Hall, porter, Stone or route; those must still emerge from the tender and
+normal company decisions. Its assertions accept either economically emergent direction, but
+require the buyer to finish Town Works, the source to own the staffed warehouse and the paid
+physical trip to remain in route history.
+
+The embodied caravan uses the normal collision-certified tactical planner, with a wider but still
+finite 24,000-node ceiling. It searches the middle of the bounded 192-metre corridor on a 6-metre
+grid, while retaining the normal 1.5-metre precision within 36 metres of both settlement endpoints.
+Every coarse edge is still sampled against terrain and obstacles. Its retained frontier survives
+unrelated construction elsewhere and receives a 1 ms continuation slice ahead of ordinary
+committed routes; any normal pathfinding budget left in that tick remains available to residents.
+The completed path is certified again against current buildings and props before movement, so this
+scheduling guarantee cannot authorize a stale route through newly built geometry. Failed searches
+use the shared navigation backoff instead of being resubmitted every tick. After unloading, the
+empty wagon returns Hall-to-Hall over the same inter-settlement corridor and then takes an ordinary
+local route from its origin Hall to its private Storage Hall.
 
 Both halls begin with empty stores and no fictional Moot buying fund, with Poor
 Relief enabled. Builders must personally chop their first construction Wood, and later

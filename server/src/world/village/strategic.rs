@@ -32,12 +32,13 @@ use super::commerce::{internal_transfer_unit_value, MUNICIPAL_DELIVERY_PENNIES_P
 use super::{
     ambient, business_output, farmer_seconds_per_wheat, fisher_seconds_per_food, ground_distance,
     lumber_seconds_per_tree, lumber_tree_yield, process_available_cycles, processing_recipe,
-    viable_processing_input_purchase, BusinessEventQueue, BusinessOperatingPlan, CompanyPorter,
-    ConstructionMaterialRoutine, FarmerHarvestProgress, FarmerRoutine, FishingRoutine,
-    FishingWorkProgress, HomeRoutine, HouseholdShoppingRoutine, InternalDeliveryRoutine,
-    LumberjackRoutine, LumberjackWorkProgress, MarketCollectionRoutine, MootMealRoutine,
-    MootQueueTicket, PierTraversal, ProcessingRoutine, ProcessorWorkProgress,
-    SettlementEconomyRuntime, WorkerOffDuty, WorkplaceDoorTransit, WORKDAY_END_DAY_T,
+    quarry_seconds_per_stone, viable_processing_input_purchase, BusinessEventQueue,
+    BusinessOperatingPlan, CompanyPorter, ConstructionMaterialRoutine, FarmerHarvestProgress,
+    FarmerRoutine, FishingRoutine, FishingWorkProgress, HomeRoutine, HouseholdShoppingRoutine,
+    InternalDeliveryRoutine, LumberjackRoutine, LumberjackWorkProgress, MarketCollectionRoutine,
+    MootMealRoutine, MootQueueTicket, PierTraversal, ProcessingRoutine, ProcessorWorkProgress,
+    QuarryRoutine, QuarryWorkProgress, SettlementEconomyRuntime, TradeRouteRoutine, WorkerOffDuty,
+    WorkplaceDoorTransit, WORKDAY_END_DAY_T,
 };
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -551,6 +552,7 @@ pub fn update_person_simulation_lod(
                 Has<RoadBuilderRoutine>,
                 Has<MarketCollectionRoutine>,
                 Has<InternalDeliveryRoutine>,
+                Has<TradeRouteRoutine>,
                 Has<HouseholdShoppingRoutine>,
                 Has<MootQueueTicket>,
                 Has<MootMealRoutine>,
@@ -577,6 +579,7 @@ pub fn update_person_simulation_lod(
                 Has<RoadBuilderRoutine>,
                 Has<MarketCollectionRoutine>,
                 Has<InternalDeliveryRoutine>,
+                Has<TradeRouteRoutine>,
                 Has<HouseholdShoppingRoutine>,
                 Has<MootQueueTicket>,
                 Has<MootMealRoutine>,
@@ -606,6 +609,7 @@ pub fn update_person_simulation_lod(
                 Has<RoadBuilderRoutine>,
                 Has<MarketCollectionRoutine>,
                 Has<InternalDeliveryRoutine>,
+                Has<TradeRouteRoutine>,
                 Has<HouseholdShoppingRoutine>,
                 Has<MootQueueTicket>,
                 Has<MootMealRoutine>,
@@ -641,6 +645,7 @@ pub fn update_person_simulation_lod(
                 road,
                 market,
                 internal,
+                trade_route,
                 shopping,
                 queue,
                 meal,
@@ -668,6 +673,7 @@ pub fn update_person_simulation_lod(
                     || road
                     || market
                     || internal
+                    || trade_route
                     || shopping
                     || queue
                     || meal
@@ -691,6 +697,7 @@ pub fn update_person_simulation_lod(
                 road,
                 market,
                 internal,
+                trade_route,
                 shopping,
                 queue,
                 meal,
@@ -718,6 +725,7 @@ pub fn update_person_simulation_lod(
                     || road
                     || market
                     || internal
+                    || trade_route
                     || shopping
                     || queue
                     || meal
@@ -736,7 +744,19 @@ pub fn update_person_simulation_lod(
         target,
         route,
         strategic_travel,
-        (construction, road, market, internal, shopping, queue, meal, farmer, fisher, lumberjack),
+        (
+            construction,
+            road,
+            market,
+            internal,
+            trade_route,
+            shopping,
+            queue,
+            meal,
+            farmer,
+            fisher,
+            lumberjack,
+        ),
         intent,
     ) in pending.iter()
     {
@@ -746,6 +766,7 @@ pub fn update_person_simulation_lod(
             || road
             || market
             || internal
+            || trade_route
             || shopping
             || queue
             || meal
@@ -850,10 +871,12 @@ fn apply_person_lod(
         .remove::<FarmerRoutine>()
         .remove::<FishingRoutine>()
         .remove::<LumberjackRoutine>()
+        .remove::<QuarryRoutine>()
         .remove::<ProcessingRoutine>()
         .remove::<FarmerHarvestProgress>()
         .remove::<FishingWorkProgress>()
         .remove::<LumberjackWorkProgress>()
+        .remove::<QuarryWorkProgress>()
         .remove::<ProcessorWorkProgress>()
         .remove::<WorkerOffDuty>()
         .remove::<ambient::AmbientRoutine>();
@@ -1231,6 +1254,7 @@ pub fn advance_strategic_villages(
                 SettlementBuildingKind::Farmstead => farmer_seconds_per_wheat(building.quality),
                 SettlementBuildingKind::FishermansHut => fisher_seconds_per_food(building.quality),
                 SettlementBuildingKind::LumberjackHut => lumber_seconds_per_tree(building.quality),
+                SettlementBuildingKind::StoneQuarry => quarry_seconds_per_stone(building.quality),
                 _ => continue,
             } as f64;
             let accumulated = progress.seconds.entry(*id).or_default();

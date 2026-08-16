@@ -29,7 +29,7 @@ use crate::world::village_roads::{
 use super::{
     ConstructionMaterialRoutine, FarmerRoutine, FishingRoutine, HomeAssignment, HomeRoutine,
     HouseholdShoppingRoutine, LumberjackRoutine, MarketPorter, MootMealRoutine, MootQueueTicket,
-    PierTraversal, VillagerIntent, WorkerOffDuty, WorkplaceDoorTransit,
+    PierTraversal, TradeRouteRoutine, VillagerIntent, WorkerOffDuty, WorkplaceDoorTransit,
 };
 
 const AMBIENT_REACH: f32 = 0.65;
@@ -448,6 +448,8 @@ pub fn run_ambient_routines(
             With<HouseholdShoppingRoutine>,
             With<MootQueueTicket>,
             With<MootMealRoutine>,
+            With<TradeRouteRoutine>,
+            With<crate::world::settlement_development::CivicHallBuilderRoutine>,
             // The combined Moot Steward waits inside the hall between
             // collections. An unhoused founding steward is still on duty and
             // must not receive an ambient roadside order that fights the

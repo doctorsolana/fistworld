@@ -24,6 +24,8 @@ pub(crate) const SECURE_VILLAGERS: usize = 8;
 pub(crate) const POOR_VILLAGERS: usize = 8;
 pub(crate) const TRIPLE_STRESS_VILLAGERS_PER_VILLAGE: usize = 200;
 pub(crate) const DENSE_STRESS_VILLAGERS: usize = 1_000;
+pub(crate) const TRADE_FOUNDERS_PER_VILLAGE: usize = 12;
+pub(crate) const TRADE_TARGET_RESIDENTS_PER_VILLAGE: usize = 35;
 const DEFAULT_LAB_WARP: f32 = 1.0;
 // The normal lab crosses the real Hamlet -> Village population threshold and
 // also exercises the late-immigration recovery path every run.
@@ -44,7 +46,8 @@ const DEFAULT_REALWORLD_POINT: Vec2 = Vec2::new(-346.0, 306.0);
 // sample on the server's first Update (which can block the network handshake).
 const LAB_MEADOW_ANCHOR: Vec2 = Vec2::new(112.0, -158.0);
 const LAB_COLDBARROW_ANCHOR: Vec2 = Vec2::new(-278.0, -428.0);
-const LAB_GREENWOOD_ANCHOR: Vec2 = Vec2::new(-120.0, 220.0);
+const LAB_GREENWOOD_ANCHOR: Vec2 = Vec2::new(-108.0, 220.0);
+const LAB_STONE_ANCHOR: Vec2 = Vec2::new(-390.0, 102.0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LabScenario {
@@ -54,6 +57,8 @@ pub(crate) enum LabScenario {
     Poor,
     Dual,
     EconomySoak,
+    StoneComparison,
+    TradeComparison,
     TripleStress,
     DenseStress,
 }
@@ -73,10 +78,16 @@ impl LabScenario {
             "poor" | "food-poor" | "cold" | "north" => Self::Poor,
             "dual" | "both" | "two" => Self::Dual,
             "economy" | "economy-soak" | "economy50" | "fifty-days" => Self::EconomySoak,
+            "stone" | "quarry" | "stone-comparison" | "stone-vs-meadow" => {
+                Self::StoneComparison
+            }
+            "trade" | "trade-comparison" | "stone-trade" | "caravan" => {
+                Self::TradeComparison
+            }
             "triple" | "triple-stress" | "stress" | "three" => Self::TripleStress,
             "dense" | "dense-stress" | "thousand" | "1000" => Self::DenseStress,
             value => panic!(
-                "unknown FISTWORLD_LAB_SCENARIO '{value}'; use secure, inland-meadow, policy-comparison, poor, dual, economy-soak, triple-stress, or dense-stress"
+                "unknown FISTWORLD_LAB_SCENARIO '{value}'; use secure, inland-meadow, policy-comparison, poor, dual, economy-soak, stone-comparison, trade-comparison, triple-stress, or dense-stress"
             ),
         }
     }
@@ -84,7 +95,12 @@ impl LabScenario {
     pub(crate) fn includes_secure(self) -> bool {
         matches!(
             self,
-            Self::Secure | Self::Dual | Self::EconomySoak | Self::TripleStress | Self::DenseStress
+            Self::Secure
+                | Self::Dual
+                | Self::EconomySoak
+                | Self::StoneComparison
+                | Self::TripleStress
+                | Self::DenseStress
         )
     }
 
@@ -96,7 +112,7 @@ impl LabScenario {
     }
 
     pub(crate) fn includes_inland_meadow(self) -> bool {
-        self == Self::InlandMeadow
+        matches!(self, Self::InlandMeadow | Self::TradeComparison)
     }
 
     pub(crate) fn is_policy_comparison(self) -> bool {
@@ -105,6 +121,14 @@ impl LabScenario {
 
     pub(crate) fn includes_greenwood(self) -> bool {
         matches!(self, Self::EconomySoak | Self::TripleStress)
+    }
+
+    pub(crate) fn includes_stonefield(self) -> bool {
+        matches!(self, Self::StoneComparison | Self::TradeComparison)
+    }
+
+    pub(crate) fn is_trade_comparison(self) -> bool {
+        self == Self::TradeComparison
     }
 
     pub(crate) fn is_triple_stress(self) -> bool {
@@ -123,7 +147,8 @@ impl LabScenario {
         !self.is_crowd_stress()
             && (self.includes_secure()
                 || self.includes_inland_meadow()
-                || self.is_policy_comparison())
+                || self.is_policy_comparison()
+                || self.is_trade_comparison())
     }
 
     pub(crate) fn residents_per_village(self) -> usize {
@@ -131,14 +156,23 @@ impl LabScenario {
             Self::EconomySoak => 0,
             Self::TripleStress => TRIPLE_STRESS_VILLAGERS_PER_VILLAGE,
             Self::DenseStress => DENSE_STRESS_VILLAGERS,
+            Self::TradeComparison => TRADE_FOUNDERS_PER_VILLAGE,
             Self::Poor => POOR_VILLAGERS,
-            Self::Secure | Self::InlandMeadow | Self::PolicyComparison | Self::Dual => {
-                SECURE_VILLAGERS
-            }
+            Self::Secure
+            | Self::InlandMeadow
+            | Self::PolicyComparison
+            | Self::StoneComparison
+            | Self::Dual => SECURE_VILLAGERS,
         };
         if matches!(
             self,
-            Self::Secure | Self::InlandMeadow | Self::PolicyComparison | Self::Poor | Self::Dual
+            Self::Secure
+                | Self::InlandMeadow
+                | Self::PolicyComparison
+                | Self::StoneComparison
+                | Self::TradeComparison
+                | Self::Poor
+                | Self::Dual
         ) {
             std::env::var("FISTWORLD_LAB_FOUNDERS")
                 .ok()
@@ -156,6 +190,8 @@ impl LabScenario {
             Self::TripleStress => TRIPLE_STRESS_VILLAGERS_PER_VILLAGE * 3,
             Self::DenseStress => DENSE_STRESS_VILLAGERS,
             Self::PolicyComparison => self.residents_per_village().saturating_mul(2),
+            Self::StoneComparison => self.residents_per_village().saturating_mul(2),
+            Self::TradeComparison => self.residents_per_village().saturating_mul(2),
             _ => {
                 (usize::from(self.includes_secure())
                     + usize::from(self.includes_inland_meadow())
@@ -521,6 +557,119 @@ pub(crate) fn choose_policy_comparison_sites(
     panic!("village_lab needs two separated fertile inland Meadows sites without fishing access");
 }
 
+/// A flat civic centre whose normal 36-150 metre work ring contains a strong
+/// Stone prospect, separated from the fertile meadow control. The quarry must
+/// still win a real permit and pass the ordinary plot/access proof; this only
+/// gives that settlement honest geology to discover.
+pub(crate) fn choose_stone_site(
+    terrain: &WorldTerrain,
+    away_from: Vec3,
+) -> (Vec3, f32, f32, WorldBiome) {
+    let map = terrain.generator.loaded_map();
+    let field = map
+        .biome_field
+        .as_deref()
+        .expect("village_lab must be a generated map with a biome field");
+    let bounds = map.definition.bounds;
+    let margin = 170.0;
+    let minimum_spacing = shared::components::MIN_SETTLEMENT_SPACING;
+
+    let best_nearby_stone = |hall: Vec3| {
+        let mut best = 0.0_f32;
+        for radius in [42.0_f32, 66.0, 90.0, 120.0, 144.0] {
+            for bearing in 0..16 {
+                let angle = bearing as f32 * std::f32::consts::TAU / 16.0;
+                let x = hall.x + angle.cos() * radius;
+                let z = hall.z + angle.sin() * radius;
+                let height = terrain.get_height(x, z);
+                let slope = slope_at(terrain, x, z);
+                best = best.max(field.resources(x, z, height, slope).stone);
+            }
+        }
+        best
+    };
+
+    if map.definition.map_id == "village_lab" {
+        let x = LAB_STONE_ANCHOR.x;
+        let z = LAB_STONE_ANCHOR.y;
+        let height = terrain.get_height(x, z);
+        let slope = slope_at(terrain, x, z);
+        let hall = Vec3::new(x, height, z);
+        let spacing = Vec2::new(x - away_from.x, z - away_from.z).length();
+        let resources = field.resources(x, z, height, slope);
+        let stone = best_nearby_stone(hall);
+        if slope < 0.12
+            && spacing >= minimum_spacing
+            && stone >= 0.55
+            && shared::components::minimum_building_water_clearance(
+                terrain,
+                hall,
+                SettlementBuildingKind::Hall,
+                0.0,
+            ) >= shared::components::SETTLEMENT_FREEBOARD
+            && crate::world::village_roads::overland_trade_corridor_exists(
+                terrain,
+                Vec2::new(away_from.x, away_from.z),
+                LAB_STONE_ANCHOR,
+            )
+        {
+            return (
+                hall,
+                stone,
+                resources.farmland,
+                field.biome(x, z, height, slope),
+            );
+        }
+    }
+
+    let mut candidates = Vec::new();
+    let mut x = bounds.min[0] + margin;
+    while x <= bounds.max[0] - margin {
+        let mut z = bounds.min[1] + margin;
+        while z <= bounds.max[1] - margin {
+            let height = terrain.get_height(x, z);
+            let slope = slope_at(terrain, x, z);
+            let hall = Vec3::new(x, height, z);
+            let spacing = Vec2::new(hall.x - away_from.x, hall.z - away_from.z).length();
+            if slope < 0.12
+                && spacing >= minimum_spacing
+                && shared::components::minimum_building_water_clearance(
+                    terrain,
+                    hall,
+                    SettlementBuildingKind::Hall,
+                    0.0,
+                ) >= shared::components::SETTLEMENT_FREEBOARD
+            {
+                let resources = field.resources(x, z, height, slope);
+                let stone = best_nearby_stone(hall);
+                let biome = field.biome(x, z, height, slope);
+                if stone >= 0.55 {
+                    let score = stone * 12.0 - resources.farmland * 2.0
+                        + (spacing / bounds.width().max(1.0)).min(1.0);
+                    candidates.push((score, hall, stone, resources.farmland, biome));
+                }
+            }
+            z += 12.0;
+        }
+        x += 12.0;
+    }
+    candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
+    candidates
+        .into_iter()
+        .take(192)
+        .find_map(|(_, hall, stone, farmland, biome)| {
+            crate::world::village_roads::overland_trade_corridor_exists(
+                terrain,
+                Vec2::new(away_from.x, away_from.z),
+                Vec2::new(hall.x, hall.z),
+            )
+            .then_some((hall, stone, farmland, biome))
+        })
+        .expect(
+            "village_lab needs a flat Stone prospect connected to the meadow by an overland caravan corridor",
+        )
+}
+
 /// A third, temperate inland site for the 600-person stress scenario.
 ///
 /// Unlike the two control sites, Greenwood is selected for room to expand as
@@ -633,6 +782,28 @@ fn lab_warp() -> f32 {
         .clamp(1.0, 1000.0)
 }
 
+#[cfg(test)]
+mod trade_site_tests {
+    use super::*;
+
+    #[test]
+    fn stone_control_is_reachable_by_an_overland_caravan() {
+        std::env::set_var("CITYSIM_MAP_ID", "village_lab");
+        let terrain = WorldTerrain::default();
+        let meadow = choose_inland_meadow_site(&terrain).0;
+        let stone = choose_stone_site(&terrain, meadow).0;
+        assert!(crate::world::village_roads::overland_trade_corridor_exists(
+            &terrain,
+            Vec2::new(meadow.x, meadow.z),
+            Vec2::new(stone.x, stone.z),
+        ));
+        eprintln!(
+            "reachable trade controls meadow={:.1},{:.1} stone={:.1},{:.1}",
+            meadow.x, meadow.z, stone.x, stone.z,
+        );
+    }
+}
+
 fn realworld_villager_count() -> usize {
     std::env::var("FISTWORLD_REALWORLD_VILLAGERS")
         .ok()
@@ -699,6 +870,7 @@ fn lab_second_wave_day() -> u32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LabArrivalTarget {
     Meadow,
+    Stonefield,
     FrugalMeadow,
     MutualAidMeadow,
     Coldbarrow,
@@ -709,6 +881,7 @@ impl LabArrivalTarget {
     pub(crate) const fn settlement_name(self) -> &'static str {
         match self {
             Self::Meadow => "Lab Meadow",
+            Self::Stonefield => "Lab Stonefield",
             Self::FrugalMeadow => "Lab Frugal",
             Self::MutualAidMeadow => "Lab Mutual Aid",
             Self::Coldbarrow => "Lab Coldbarrow",
@@ -719,6 +892,7 @@ impl LabArrivalTarget {
     pub(crate) const fn resident_prefix(self) -> &'static str {
         match self {
             Self::Meadow => "Meadow",
+            Self::Stonefield => "Stone",
             Self::FrugalMeadow => "Frugal",
             Self::MutualAidMeadow => "Mutual",
             Self::Coldbarrow => "Cold",
@@ -729,6 +903,7 @@ impl LabArrivalTarget {
     pub(crate) const fn seed_salt(self) -> u64 {
         match self {
             Self::Meadow => 0x4d45_4144,
+            Self::Stonefield => 0x5354_4f4e,
             Self::FrugalMeadow => 0x4652_5547,
             Self::MutualAidMeadow => 0x4d55_5455,
             Self::Coldbarrow => 0x434f_4c44,
@@ -873,6 +1048,33 @@ fn economy_soak_arrival_waves() -> Vec<LabArrivalWave> {
     waves
 }
 
+/// Grow both trade controls at the same measured pace. Starting all seventy
+/// residents on bare ground turns the fixture into a starvation-recovery test
+/// and can postpone the actual Town Works contract indefinitely. Twelve
+/// founders are enough to establish a Village. Growth starts on day thirteen
+/// so the real three-day food-security gate and physical Wood-funded Hall
+/// upgrade can complete before newcomers add
+/// pressure; two arrivals per day then expose ordinary housing, employment and
+/// food-pressure decisions until each settlement naturally reaches
+/// thirty-five residents.
+fn trade_comparison_arrival_waves(founders_per_village: usize) -> Vec<LabArrivalWave> {
+    let arrivals_per_village =
+        TRADE_TARGET_RESIDENTS_PER_VILLAGE.saturating_sub(founders_per_village);
+    let mut waves = Vec::new();
+    for target in [LabArrivalTarget::Meadow, LabArrivalTarget::Stonefield] {
+        let mut remaining = arrivals_per_village;
+        let mut day = 13;
+        while remaining > 0 {
+            let count = remaining.min(2);
+            waves.push(LabArrivalWave { day, count, target });
+            remaining -= count;
+            day += 1;
+        }
+    }
+    waves.sort_unstable_by_key(|wave| (wave.day, wave.target.seed_salt()));
+    waves
+}
+
 /// All configured migration waves, shared by the rendered fixture and the
 /// headless evidence run. The daily schedule is additive; set the legacy
 /// one-shot count to zero when only recurring arrivals are wanted.
@@ -880,6 +1082,9 @@ pub(crate) fn lab_arrival_waves() -> Vec<LabArrivalWave> {
     let scenario = LabScenario::from_environment();
     if scenario.is_economy_soak() {
         return economy_soak_arrival_waves();
+    }
+    if scenario.is_trade_comparison() {
+        return trade_comparison_arrival_waves(scenario.residents_per_village());
     }
     let daily_count = std::env::var("FISTWORLD_LAB_DAILY_ARRIVALS")
         .ok()
@@ -906,6 +1111,8 @@ pub(crate) fn lab_arrival_waves() -> Vec<LabArrivalWave> {
             LabArrivalTarget::FrugalMeadow,
             LabArrivalTarget::MutualAidMeadow,
         ]
+    } else if scenario.includes_stonefield() {
+        &[LabArrivalTarget::Meadow, LabArrivalTarget::Stonefield]
     } else {
         &[LabArrivalTarget::Meadow]
     };
@@ -954,6 +1161,7 @@ fn spawn_runtime_village(
     strategy: CivicStrategy,
     hall_position: Vec3,
     resident_count: usize,
+    initial_tier: SettlementTier,
 ) {
     let hall_inventory = GoodsInventory::new_partitioned(shared::economy::capacity::HALL);
     let mut policies = shared::components::SettlementPolicies::default();
@@ -961,7 +1169,7 @@ fn spawn_runtime_village(
     commands.spawn((
         Settlement {
             name: name.to_string(),
-            tier: SettlementTier::Hamlet,
+            tier: initial_tier,
             residents: 0,
             treasury: shared::economy::STARTING_TREASURY_MONEY,
         },
@@ -1206,6 +1414,23 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn trade_comparison_grows_both_settlements_smoothly_to_thirty_five() {
+        let waves = trade_comparison_arrival_waves(TRADE_FOUNDERS_PER_VILLAGE);
+        assert_eq!(waves.iter().map(|wave| wave.count).sum::<usize>(), 46);
+        assert_eq!(waves.iter().map(|wave| wave.day).min(), Some(13));
+        assert_eq!(waves.iter().map(|wave| wave.day).max(), Some(24));
+        for target in [LabArrivalTarget::Meadow, LabArrivalTarget::Stonefield] {
+            let arrivals = waves
+                .iter()
+                .filter(|wave| wave.target == target)
+                .map(|wave| wave.count)
+                .sum::<usize>();
+            assert_eq!(TRADE_FOUNDERS_PER_VILLAGE + arrivals, 35);
+        }
+        assert!(waves.iter().all(|wave| wave.count <= 2));
+    }
 }
 
 /// Stage the visible lab once when `./run.sh testworld` opts into it.
@@ -1281,6 +1506,7 @@ pub(crate) fn stage_rendered_lab_once(
             CivicStrategy::Balanced,
             hall,
             residents,
+            SettlementTier::Hamlet,
         );
         let factor = lab_warp();
         *warp = TimeWarp::clamped(factor);
@@ -1308,7 +1534,12 @@ pub(crate) fn stage_rendered_lab_once(
     if settlements.iter().any(|settlement| {
         matches!(
             settlement.name.as_str(),
-            "Lab Meadow" | "Lab Frugal" | "Lab Mutual Aid" | "Lab Coldbarrow" | "Lab Greenwood"
+            "Lab Meadow"
+                | "Lab Stonefield"
+                | "Lab Frugal"
+                | "Lab Mutual Aid"
+                | "Lab Coldbarrow"
+                | "Lab Greenwood"
         )
     }) {
         warn!("Rendered Village Lab already exists; skipping duplicate staging");
@@ -1329,6 +1560,15 @@ pub(crate) fn stage_rendered_lab_once(
     let poor = scenario
         .includes_poor()
         .then(|| choose_poor_site(&terrain, secure.map(|choice| choice.0)));
+    let stonefield = scenario.includes_stonefield().then(|| {
+        choose_stone_site(
+            &terrain,
+            secure
+                .map(|choice| choice.0)
+                .or_else(|| inland_meadow.map(|choice| choice.0))
+                .expect("stone comparison includes a meadow control"),
+        )
+    });
     let greenwood = scenario.includes_greenwood().then(|| {
         let mut occupied = Vec::new();
         if let Some(choice) = secure {
@@ -1340,6 +1580,14 @@ pub(crate) fn stage_rendered_lab_once(
         choose_greenwood_site(&terrain, &occupied)
     });
     let residents_per_village = scenario.residents_per_village();
+    // The focused trade controls begin at the Village rung. They still build
+    // every economic site autonomously; this merely removes the unrelated
+    // Hamlet food-security gate from a Village -> Town cargo acceptance run.
+    let initial_tier = if scenario.is_trade_comparison() {
+        SettlementTier::Village
+    } else {
+        SettlementTier::Hamlet
+    };
 
     if let Some((hall, trees, hut, rotation, fishing_quality, farmland)) = secure {
         spawn_runtime_village(
@@ -1350,6 +1598,7 @@ pub(crate) fn stage_rendered_lab_once(
             CivicStrategy::Balanced,
             hall,
             residents_per_village,
+            initial_tier,
         );
         info!(
             "Rendered lab staged Lab Meadow at ({:.1}, {:.1}) — farmland {:.0}%, trees {}, fishing {:.0}% at ({:.1}, {:.1}) rotation {:.3}",
@@ -1372,6 +1621,7 @@ pub(crate) fn stage_rendered_lab_once(
             CivicStrategy::Balanced,
             hall,
             residents_per_village,
+            initial_tier,
         );
         info!(
             "Rendered lab staged inland Lab Meadow at ({:.1}, {:.1}) — farmland {:.0}%, trees {}, fishing none",
@@ -1390,6 +1640,7 @@ pub(crate) fn stage_rendered_lab_once(
             CivicStrategy::Frugal,
             frugal.0,
             residents_per_village,
+            initial_tier,
         );
         spawn_runtime_village(
             &mut commands,
@@ -1399,6 +1650,7 @@ pub(crate) fn stage_rendered_lab_once(
             CivicStrategy::MutualAid,
             mutual.0,
             residents_per_village,
+            initial_tier,
         );
         info!(
             "Rendered policy comparison staged Frugal ({:.0}% farmland, {} trees) and Mutual Aid ({:.0}% farmland, {} trees); both fishing none",
@@ -1417,6 +1669,7 @@ pub(crate) fn stage_rendered_lab_once(
             CivicStrategy::Balanced,
             hall,
             residents_per_village,
+            initial_tier,
         );
         info!(
             "Rendered lab staged Lab Coldbarrow at ({:.1}, {:.1}) — farmland {:.1}%, trees {}, fishing none",
@@ -1424,6 +1677,26 @@ pub(crate) fn stage_rendered_lab_once(
             hall.z,
             farmland * 100.0,
             trees,
+        );
+    }
+    if let Some((hall, stone, farmland, biome)) = stonefield {
+        spawn_runtime_village(
+            &mut commands,
+            &terrain,
+            &mut villager_seed,
+            "Lab Stonefield",
+            CivicStrategy::Balanced,
+            hall,
+            residents_per_village,
+            initial_tier,
+        );
+        info!(
+            "Rendered lab staged Lab Stonefield at ({:.1}, {:.1}) — nearby Stone {:.0}%, farmland {:.0}%, biome {:?}",
+            hall.x,
+            hall.z,
+            stone * 100.0,
+            farmland * 100.0,
+            biome,
         );
     }
     if let Some((hall, trees, farmland)) = greenwood {
@@ -1435,6 +1708,7 @@ pub(crate) fn stage_rendered_lab_once(
             CivicStrategy::Balanced,
             hall,
             residents_per_village,
+            initial_tier,
         );
         info!(
             "Rendered lab staged Lab Greenwood at ({:.1}, {:.1}) — farmland {:.0}%, trees {}",
@@ -1615,6 +1889,7 @@ pub(crate) fn log_rendered_village_diagnostics(
                     | CharacterActivity::Chopping
                     | CharacterActivity::Farming
                     | CharacterActivity::Fishing
+                    | CharacterActivity::Mining
             )
         }));
         counts.farming +=

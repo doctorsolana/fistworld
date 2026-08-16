@@ -1069,6 +1069,9 @@ fn extended_agent_search_yields_and_resumes_instead_of_monopolising_a_tick() {
         min: start.min(goal) - Vec2::splat(SURVEY_PADDING),
         max: start.max(goal) + Vec2::splat(SURVEY_PADDING),
         max_nodes: EXTENDED_LOCAL_SURVEY_MAX_NODES,
+        cell_size: SURVEY_CELL,
+        coarse_stride: 1,
+        fine_endpoint_radius: 0.0,
     };
     let mut scratch = SurveyScratch::default();
     let mut state = SurveySearchState::default();
@@ -1156,6 +1159,9 @@ fn survey_memoizes_repeated_geometry_checks_within_one_search() {
         min: Vec2::new(1680.0, -20.0),
         max: Vec2::new(1730.0, 20.0),
         max_nodes: AGENT_SURVEY_MAX_NODES,
+        cell_size: SURVEY_CELL,
+        coarse_stride: 1,
+        fine_endpoint_radius: 0.0,
     };
     scratch.begin_search();
     let first = survey.line_clear(survey.start, survey.goal, &mut scratch);

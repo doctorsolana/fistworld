@@ -19,7 +19,8 @@ for shares, pooled finance and vertical integration,
 - A chunk-streamed generated world with biomes, rivers, coastlines, water, foliage,
   atmospheric day/night lighting and a seamless commander camera.
 - Server-authoritative multiplayer, region interest management, session accounts and
-  stable `PersonId`, `SettlementId`, `BuildingId` and `CompanyId` relationships. A disconnected player
+  stable `PersonId`, `SettlementId`, `BuildingId`, `CompanyId`, `TradeContractId` and
+  `TradeRouteId` relationships. A disconnected player
   can rejoin the same running server and re-adopt their live hero, cargo, coin and retinue;
   restarting the server intentionally begins a fresh world.
 - God-mode settlement founding and villager spawning. Unaffiliated people choose a
@@ -57,7 +58,15 @@ for shares, pooled finance and vertical integration,
   ledgers retain attributed internal flow while company P&L eliminates both memorandum
   sides. The encyclopedia's Companies tab exposes a global firm directory, each Hero's
   multi-company share portfolio, cap tables, public offers, linked sites, capital assets,
-  decisions and a pull-based cross-settlement company ledger.
+  decisions, settlement-local branches and company-owned inter-settlement route history.
+- Buyer-funded inter-settlement Stone delivery is live. A qualified Town Works project
+  posts a cash-backed public tender even when no quarry has opened yet. Stone-rich settlements
+  can respond to that real demand; once enough Stone is listed the tender binds the exact seller. The source town then
+  needs a completed Storage Hall and one employed Company Porter; that ordinary company
+  owns the reusable route, physically collects the exact seller's cargo, carries it between
+  settlements, and earns freight only after delivery. A small minimum call-out keeps a valid
+  partial load above the carrier's fixed wage cost. There is no hardcoded trade-company
+  category, and active contracts/routes are visible in Hall and company UI.
 - Door traversal, designated homes, night routines, occupied-window lighting, ambient
   walking/sitting, character attributes and bounded life histories.
 - Shared 100-point Health for heroes and villagers, staged hunger ceilings, gradual fed recovery, safe offline-Hero dormancy, bounded
@@ -93,15 +102,20 @@ for shares, pooled finance and vertical integration,
   and lab, aggregate off-screen village production, and summary/detail replication.
 
 The live tier ladder is **Hamlet → Village → Town → City**. Its current executable
-population gates are 4, 12 and 24 residents, combined with sustained food, prosperity,
-trade and civic-building requirements. Those values are prototype balance, not final
-design.
+population gates are 12, 30 and a provisional 75 residents, combined with sustained food,
+prosperity, trade and civic-building requirements. Promotion is now physical: a qualified
+Hamlet must purchase and stage 12 Wood for its Village Hall, while a qualified Village must
+purchase and stage 8 Stone for its Town Hall, importing it by a physical company route when
+the local market cannot supply it; a named civic worker then walks to the Hall and
+constructs it. Those values remain prototype balance, not final design.
 
 ## Major work still ahead
 
 - Versioned world-state persistence, migrations, backups and hosted durable storage.
 - Births, aging, non-starvation mortality, decline and persistent tree depletion/regrowth.
-- Custom trade-order quantities, carts, caravans and inter-settlement markets. Players can now
+- Player-authored trade orders/routes, merchant speculation, wagon art, route scaling and
+  general inter-settlement markets. The first automatic buyer-funded Stone contract and
+  physical warehouse-porter route are live. Players can now
   commission and physically build an ordinary business, then manage strategy, wages, prices,
   collection, input procurement, company shares, private supply and profit retention through
   the same policies as NPC owners. Company-funded purchases of existing listed firms and
@@ -177,6 +191,26 @@ optional two-climate comparison adds the food-poor frozen control:
 
 ```bash
 FISTWORLD_LAB_SCENARIO=dual cargo village-lab
+```
+
+The Stone comparison puts a fertile Meadow beside a genuinely Stone-rich control. It checks
+the autonomous Quarry permit, embodied mining and the paid Hall-upgrade material pipeline:
+
+```bash
+FISTWORLD_LAB_SCENARIO=stone-comparison FISTWORLD_LAB_WARP=10 cargo village-lab
+./run.sh stoneworld
+```
+
+The focused rendered trade fixture starts two established Village controls with 12 founders each,
+then grows them smoothly to 35 residents at 10x. Whichever settlement first qualifies for Town
+Works becomes the real Stone buyer; the other economy can respond with a quarry, warehouse,
+porter and company route. The lab follows the resulting market direction instead of forcing a
+named settlement to win the development race. The chosen Meadow and Stonefield controls are on a
+proved walkable overland corridor, so this fixture tests economics and embodied transport rather
+than a future bridge or shipping mechanic:
+
+```bash
+./run.sh tradeworld
 ```
 
 For the repeatable heavy fixture, run three settlements with 200 residents

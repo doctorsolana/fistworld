@@ -366,20 +366,23 @@ fn tag_settlement_buildings_selectable(
 fn tag_construction_sites_selectable(
     mut commands: Commands,
     sites: Query<
-        (Entity, &shared::components::ConstructionSite),
+        (
+            Entity,
+            &shared::components::ConstructionSite,
+            Option<&shared::components::CivicHallUpgradeWorksite>,
+        ),
         (
             With<shared::components::PlayerPosition>,
             Without<Selectable>,
         ),
     >,
 ) {
-    for (entity, site) in sites.iter() {
-        commands
-            .entity(entity)
-            .insert(Selectable::settlement_building_rotated(
-                site.kind,
-                site.rotation,
-            ));
+    for (entity, site, hall_upgrade) in sites.iter() {
+        let selectable = hall_upgrade.map_or_else(
+            || Selectable::settlement_building_rotated(site.kind, site.rotation),
+            |upgrade| Selectable::hall_rotated(upgrade.target, site.rotation),
+        );
+        commands.entity(entity).insert(selectable);
     }
 }
 

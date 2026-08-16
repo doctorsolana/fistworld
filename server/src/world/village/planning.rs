@@ -453,7 +453,12 @@ pub fn consider_permits(
         let active_worksites = pending
             .iter()
             .filter(|(under, _)| under.settlement == settlement_entity)
-            .count();
+            .count()
+            + planning
+                .hall_upgrades
+                .iter()
+                .filter(|(_, building_of, _)| building_of.0 == *settlement_id)
+                .count();
         let active_connectors = road_requests
             .iter()
             .filter(|request| request.settlement == settlement_entity)
@@ -485,9 +490,37 @@ pub fn consider_permits(
                 .copied()
                 .unwrap_or(0),
             lumber_huts: count(SettlementBuildingKind::LumberjackHut),
+            stone_quarries: count(SettlementBuildingKind::StoneQuarry),
             houses: count(SettlementBuildingKind::House),
+            // A Village does not create a speculative Stone shortage merely
+            // because Town is its eventual next tier. Demand begins when its
+            // physical Town Works exists, or when another settlement posts a
+            // cash-backed tender which this town could supply.
+            town_hall_stone_demand: planning
+                .trade_contracts
+                .iter()
+                .filter(|contract| {
+                    contract.origin.is_none()
+                        && contract.destination != *settlement_id
+                        && contract.good == Good::Stone
+                        && contract.status.is_active()
+                })
+                .map(|contract| contract.remaining_units())
+                .fold(0u32, u32::saturating_add),
             ..Default::default()
         };
+        signals.export_contract_bulk = planning
+            .trade_contracts
+            .iter()
+            .filter(|contract| {
+                contract.origin == Some(*settlement_id) && contract.status.is_active()
+            })
+            .map(|contract| {
+                contract
+                    .remaining_units()
+                    .saturating_mul(contract.good.bulk_per_unit())
+            })
+            .fold(0u32, u32::saturating_add);
         for (_, building, building_of, _, condition, inventory, account, _, _, _, staffing) in
             business_read.iter()
         {
@@ -510,6 +543,9 @@ pub fn consider_permits(
                 signals.wood_stock = signals
                     .wood_stock
                     .saturating_add(inventory.amount(Good::Wood));
+                signals.stone_stock = signals
+                    .stone_stock
+                    .saturating_add(inventory.amount(Good::Stone));
                 if building.kind == SettlementBuildingKind::StorageHall {
                     if condition.is_none_or(|condition| condition.state.can_operate()) {
                         signals.active_storage_free_bulk = signals
@@ -539,6 +575,9 @@ pub fn consider_permits(
                         SettlementBuildingKind::Bakery => signals.recoverable_bakeries += 1,
                         SettlementBuildingKind::LumberjackHut => {
                             signals.recoverable_lumber_huts += 1
+                        }
+                        SettlementBuildingKind::StoneQuarry => {
+                            signals.recoverable_stone_quarries += 1
                         }
                         SettlementBuildingKind::StorageHall => {
                             signals.recoverable_storage_halls += 1
@@ -707,6 +746,9 @@ pub fn consider_permits(
             signals.wood_stock = signals
                 .wood_stock
                 .saturating_add(market.listed_units(Good::Wood));
+            signals.stone_stock = signals
+                .stone_stock
+                .saturating_add(market.listed_units(Good::Stone));
         }
         for (under, inventory) in pending.iter() {
             if under.settlement == settlement_entity {
@@ -738,6 +780,25 @@ pub fn consider_permits(
                         .construction_wood_required()
                         .saturating_sub(inventory.amount(Good::Wood)),
                 );
+            }
+        }
+        for (upgrade, building_of, inventory) in planning.hall_upgrades.iter() {
+            if building_of.0 != *settlement_id {
+                continue;
+            }
+            let remaining = upgrade
+                .material_required
+                .saturating_sub(inventory.amount(upgrade.material));
+            match upgrade.material {
+                Good::Wood => {
+                    signals.construction_wood_demand =
+                        signals.construction_wood_demand.saturating_add(remaining);
+                }
+                Good::Stone => {
+                    signals.town_hall_stone_demand =
+                        signals.town_hall_stone_demand.saturating_add(remaining);
+                }
+                _ => {}
             }
         }
 
@@ -782,9 +843,11 @@ pub fn consider_permits(
         // still free to buy the tier-unlocked permit from the public board,
         // but autonomous founders do not create a 2,400-bulk warehouse as
         // their first or only business.
+        let export_warehouse_needed = signals.export_contract_bulk > 0;
         let may_found_storage = |who: shared::components::PersonId| -> bool {
             company_by_master.contains_key(&who)
-                && private_site_counts.get(&who).copied().unwrap_or(0) >= 2
+                && private_site_counts.get(&who).copied().unwrap_or(0)
+                    >= if export_warehouse_needed { 1 } else { 2 }
                 && !storage_holders.contains(&who)
         };
         let mut blocked_portfolios = HashSet::<shared::components::PersonId>::new();
@@ -1220,6 +1283,7 @@ pub fn consider_permits(
                 SettlementBuildingKind::Farmstead
                     | SettlementBuildingKind::LumberjackHut
                     | SettlementBuildingKind::Windmill
+                    | SettlementBuildingKind::StoneQuarry
             );
             find_site_with_plan_diagnostics(
                 terrain,
@@ -1335,6 +1399,7 @@ pub fn consider_permits(
                     SettlementBuildingKind::Farmstead
                         | SettlementBuildingKind::LumberjackHut
                         | SettlementBuildingKind::Windmill
+                        | SettlementBuildingKind::StoneQuarry
                 )
             }) {
                 let cursor = clock
@@ -1411,6 +1476,7 @@ pub fn consider_permits(
                 SettlementBuildingKind::Farmstead
                     | SettlementBuildingKind::LumberjackHut
                     | SettlementBuildingKind::Windmill
+                    | SettlementBuildingKind::StoneQuarry
             ) {
                 let cursor = clock
                     .site_search_radii
@@ -1456,6 +1522,7 @@ pub fn consider_permits(
             SettlementBuildingKind::Farmstead
                 | SettlementBuildingKind::LumberjackHut
                 | SettlementBuildingKind::Windmill
+                | SettlementBuildingKind::StoneQuarry
         ) {
             clock.site_search_radii.insert(
                 (settlement_entity, kind),
@@ -1816,6 +1883,7 @@ pub fn consider_permits(
                 .remove::<FarmerRoutine>()
                 .remove::<FishingRoutine>()
                 .remove::<LumberjackRoutine>()
+                .remove::<QuarryRoutine>()
                 .remove::<ProcessingRoutine>()
                 .remove::<InternalDeliveryRoutine>()
                 .remove::<MarketCollectionRoutine>()
@@ -3575,7 +3643,8 @@ fn find_site_with_plan_diagnostics(
         SettlementBuildingKind::Farmstead
         | SettlementBuildingKind::LumberjackHut
         | SettlementBuildingKind::FishermansHut
-        | SettlementBuildingKind::Windmill => 12.0,
+        | SettlementBuildingKind::Windmill
+        | SettlementBuildingKind::StoneQuarry => 12.0,
         SettlementBuildingKind::Hall => 0.0,
     };
     max_radius =
@@ -3605,6 +3674,7 @@ fn find_site_with_plan_diagnostics(
         SettlementBuildingKind::Farmstead
             | SettlementBuildingKind::LumberjackHut
             | SettlementBuildingKind::Windmill
+            | SettlementBuildingKind::StoneQuarry
     );
     // The authored grammar needs only its stable lane/spoke samples. If that
     // preferred pass is exhausted, the open-land fallback deliberately probes

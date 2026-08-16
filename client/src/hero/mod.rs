@@ -1412,7 +1412,7 @@ fn desired_tool(activity: Option<CharacterActivity>, carrying: bool) -> Option<T
     match activity {
         Some(CharacterActivity::Chopping) => Some(ToolKind::Axe),
         Some(CharacterActivity::Farming) => Some(ToolKind::Scythe),
-        Some(CharacterActivity::Building) => Some(ToolKind::Hammer),
+        Some(CharacterActivity::Building | CharacterActivity::Mining) => Some(ToolKind::Hammer),
         _ => None,
     }
 }
@@ -1530,7 +1530,9 @@ fn desired_body_animation(
         Some(CharacterActivity::Sitting) => anim.sit_idle,
         Some(CharacterActivity::Chopping) => anim.chop,
         Some(CharacterActivity::Farming) => anim.harvest,
-        Some(CharacterActivity::Fishing | CharacterActivity::Building) => anim.build,
+        Some(
+            CharacterActivity::Fishing | CharacterActivity::Building | CharacterActivity::Mining,
+        ) => anim.build,
         _ => anim.idle,
     }
     .or(anim.idle);

@@ -47,8 +47,11 @@ rule more precisely.
     growth subsidies and bounded policy review
   - `settlement_economy`: Moot transactions, food security and prosperity
   - `households`: homes, pantry funding, shopping, meals and daily schedules
-  - `trades` / `production`: physical and aggregate farming, fishing and lumber work,
+  - `trades` / `production`: physical and aggregate farming, fishing, lumber and Stone work,
     plus the shared Wheat → Flour → Bread recipes
+  - `quarry`: embodied outdoor Stone extraction, bounded personal loads and workplace deposit
+  - `trade_routes`: buyer-funded civic import contracts, company-owned route assets,
+    staffed Storage Hall dispatch, physical inter-settlement cargo and freight accounting
   - `processing`: embodied Windmill and Bakery shifts using bounded private inventories
   - `property_market`: compact Hall-published takeover listings for completed firms and worksites
   - `strategic`: off-screen person compression and aggregate settlement work
@@ -75,15 +78,22 @@ Company/share authority, retained-cash expansion and vertical-integration rules 
 Processor input management exposes 0–7 days of physical coverage. Public output policy is
 instead an absolute per-good retain amount on the company's settlement-local branch, followed
 by one `Sell excess`/`Hold all` choice. Sites expose a separate bounded enabled-position target.
-Storage Halls and Company Porters extend only their local branch; do not transfer inventory
-between settlements without a future explicit caravan/trade-route order.
+Storage Halls and Company Porters extend a local branch. Cross-settlement movement is legal
+only through an explicit `CompanyTradeRoute`: the first live use is a cash-backed civic Stone
+tender which exists before a supplier does. Once a complete real offer appears it binds that
+exact source consignment; the carrier is paid only at the destination, with a small minimum
+call-out fee for otherwise uneconomic partial loads. The first carrier implementation requires a
+completed Storage Hall and an employed Company Porter, uses a coarse-middle/fine-endpoint bounded
+overland route, and returns destination Hall -> origin Hall -> private warehouse. Do not add
+implicit shared stock between branches.
 Autonomous firms begin with one enabled position, then change by one position per day toward
 the marginally profitable roster supported by recent sales, unmet demand and existing stock.
 Their cached output budget is shared by tactical and strategic production. Solvent unwanted
 sites mothball and reopen before the permit planner considers duplicate capacity. All
 expansion/dividend reserves must use enabled positions, not architectural maximums.
-NPC Storage Halls require an established branch with two other local sites; player permits stay
-available independently of that autopilot rule.
+NPC Storage Halls normally require an established branch with two other local sites. A real
+export contract lowers that threshold to one productive site so a quarry concern can vertically
+integrate into transport; player permits stay available independently of the autopilot rule.
 
 ## Scheduling rules
 

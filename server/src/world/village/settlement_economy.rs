@@ -1,4 +1,4 @@
-//! Settlement-level markets, food security, prosperity and tier advancement.
+//! Settlement-level markets, food security and prosperity evidence.
 //!
 //! This module owns aggregate economic state. Embodied trade work remains in
 //! `commerce` and physical resource creation remains in `trades`.
@@ -782,17 +782,9 @@ pub fn update_settlement_economies(
                 0
             };
 
-            if settlement.tier == shared::components::SettlementTier::Hamlet
-                && residents >= VILLAGE_MIN_RESIDENTS
-                && economy.food_secure_days >= VILLAGE_REQUIRED_SECURE_DAYS
-                && economy.prosperity >= VILLAGE_MIN_PROSPERITY
-            {
-                settlement.tier = shared::components::SettlementTier::Village;
-                info!(
-                    "Village '{}': advanced from Hamlet to Village with {:.0} prosperity and {:.1} reserve days",
-                    settlement.name, economy.prosperity, economy.reserve_days
-                );
-            }
+            // Civic tier changes are physical Hall projects. This system owns
+            // the economic evidence only; settlement development purchases,
+            // stages and constructs the required materials before promotion.
         }
     }
 }

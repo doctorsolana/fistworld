@@ -100,17 +100,21 @@ Companies may instead build a private Storage Hall. It adds 2,400 local bulk and
 Company Porter jobs. Those workers move only their employer's stock inside the same settlement;
 they do not maintain public roads and their trips pay no municipal delivery fee. A company still
 has one global treasury, but each settlement keeps independent physical goods, storage capacity
-and retain/sell rules. Cross-town movement waits for the later physical caravan system.
-An NPC only founds a depot for a company that already controls at least two other local sites,
-and it will not autonomously duplicate one in the same branch. Players remain free to buy the
-tier-unlocked permit as a speculative infrastructure investment.
+and retain/sell rules. Cross-town movement occurs only through an explicit company route; it is never implicit
+shared branch stock. The first live route serves cash-backed civic Stone tenders posted before
+any supplier exists. Stone-rich investors can see the unmet order; a complete listing binds the
+actual seller and origin. An NPC
+normally founds a depot only for a company that already controls at least two other local sites,
+but a real export contract lowers that threshold to one productive site. It will not
+autonomously duplicate a depot in the same branch. Players remain free to buy the tier-unlocked
+permit as a speculative infrastructure investment.
 
 Local extractor permits count active and already-approved sites conservatively: one-third of
 uninterrupted rated output until the observed two-day flow proves a higher embodied rate. This
 prevents a permit burst while leaving room for commute and handling losses. It is not a
 town-production cap:
 the Farmstead opportunity has a separate committed external-Wheat-demand input. It is zero while
-markets are local, and future physical caravan contracts will populate it from reachable export
+markets are local, and later merchant/export contracts can populate it from reachable export
 orders and prices. Fertile ground then supports specialization by satisfying more real demand per
 farm rather than by making duplicate farms attractive in a closed market.
 
@@ -635,6 +639,26 @@ civic-building requirements documented in [WORLD-DESIGN.md](WORLD-DESIGN.md) and
 [ROADMAP.md](ROADMAP.md). A settlement may continue housing residents below the next tier;
 tier is development state, not a hard population cap.
 
+Promotion also has a real public-works bill. Once the social gates qualify, the Hall opens a
+bounded upgrade worksite: Moot → Village Hall requires 12 Wood and Village Hall → Town Hall
+requires 8 Stone. Once per world day the treasury first tries to clear a personal-load-sized
+batch from the cheapest local private public offers, but only from discretionary cash left after
+wage arrears and the enacted payroll reserve. If the local exchange cannot cover a Town Works
+Stone shortage, the project becomes the real remote buyer: it reserves treasury cash in an
+open `CivicTradeContract` tender with a price ceiling before a supplier exists. A complete real
+listing later binds the origin and exact seller. A source company must own a completed Storage
+Hall and employ an available Company Porter before it accepts the route. Small partial loads use
+a two-coin minimum carrier call-out fee; larger loads retain the ordinary per-bulk freight rate,
+so a legitimate remainder can still cover the fixed porter-and-wagon cost.
+Payment credits the source seller at physical collection, the destination owns the in-transit
+cargo, and the carrier earns its separate freight fee only upon worksite delivery. Material and
+freight spending remain separate civic-ledger lines; unused escrow returns to the destination.
+Purchased bundles or blocks move into the visible worksite; they never become unowned public stock. After
+the full recipe is staged, an available Moot/road/City worker walks to the Hall, faces it and
+performs the construction animation. The tier and Hall art change only when that embodied work
+finishes. The same project type carries its target, material and quantity so later building
+upgrades can reuse the pipeline instead of adding timer-only promotions.
+
 ## Inspection and history
 
 Clicking either a Moot Hall or its Marketplace exposes the same public inventory and exchange.
@@ -776,7 +800,8 @@ must never invent goods, erase liabilities or create money to rescue a tuning pr
 - Household income/property taxes, tariffs and inter-settlement fiscal transfers.
 - Debt issuance, banks, credit and treasury borrowing.
 - Guard patrols, crime, courts and military budgets.
-- Processed-food policy, imports, caravans and cross-settlement price arbitration.
+- Processed-food import policy, player-authored routes, merchant speculation and
+  cross-settlement price arbitration. The first contracted Stone import is implemented.
 - Player-authored wills, inheritance of company shares and estate share auctions. The first automatic
   succession path is live: a dead resident's cash and carried goods enter their
   household (then the hall if unclaimed), owned productive firms become takeover

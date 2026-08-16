@@ -12,10 +12,11 @@ use bevy::ui::{FocusPolicy, InteractionDisabled};
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
 use shared::components::{
-    BuildingId, BuildingOf, CivicHallLevel, CompanyId, CompanyLeadership, ConstructionSite,
-    Household, MootAdministration, OperatedBy, OwnedBy, PersonId, PlayerPosition, PlayerRotation,
-    Settlement, SettlementBuilding, SettlementBuildingKind, SettlementDevelopment, SettlementId,
-    SettlementOpportunityBoard, SettlementPolicies,
+    BuildingId, BuildingOf, CivicHallLevel, CivicHallUpgradeWorksite, CivicTradeContract,
+    CompanyId, CompanyLeadership, ConstructionSite, Household, MootAdministration, OperatedBy,
+    OwnedBy, PersonId, PlayerPosition, PlayerRotation, Settlement, SettlementBuilding,
+    SettlementBuildingKind, SettlementDevelopment, SettlementId, SettlementOpportunityBoard,
+    SettlementPolicies, TradeContractId,
 };
 use shared::economy::{
     business_working_capital, format_money, BusinessAccount, BusinessCondition, BusinessForSale,
@@ -406,6 +407,18 @@ fn progression_summary(
     if development.required_days == 0 {
         return development.next_gate.label().to_string();
     }
+    if matches!(
+        development.next_gate,
+        shared::components::SettlementProgressGate::CivicHallMaterials
+            | shared::components::SettlementProgressGate::CivicHallConstruction
+    ) {
+        return format!(
+            "{} — {} / {} units",
+            development.next_gate.label(),
+            development.progress_days,
+            development.required_days
+        );
+    }
     format!(
         "{} / {} of {} days",
         development.next_gate.label(),
@@ -437,11 +450,13 @@ fn sync_compact_panel(
         &ConstructionSite,
         Option<&BusinessForSale>,
         Option<&OwnedBy>,
+        Option<&CivicHallUpgradeWorksite>,
     )>,
     positions: Query<&PlayerPosition>,
     inventories: Query<&GoodsInventory>,
     households: Query<&Household>,
     markets: Query<&MootMarket>,
+    trade_contracts: Query<(&TradeContractId, &CivicTradeContract)>,
     business_economies: Query<
         (
             Option<&BuildingOf>,
@@ -484,6 +499,42 @@ fn sync_compact_panel(
             let inventory = inventories.get(entity).ok();
             let next = opportunity_summary(opportunities);
             let settlement_id = settlement_ids.get(entity).ok().map(|(_, id)| *id);
+            let import_contracts = settlement_id.map_or_else(
+                || "None".to_string(),
+                |settlement_id| {
+                    let mut imports: Vec<_> = trade_contracts
+                        .iter()
+                        .filter(|(_, contract)| {
+                            contract.destination == settlement_id && contract.status.is_active()
+                        })
+                        .map(|(id, contract)| {
+                            let status = if contract.origin.is_none()
+                                && contract.status
+                                    == shared::components::TradeContractStatus::Open
+                            {
+                                "Awaiting listed supply"
+                            } else {
+                                contract.status.label()
+                            };
+                            format!(
+                                "#{} {} {}/{} / {} / escrow {} coin",
+                                id.0,
+                                contract.good.label(),
+                                contract.delivered_units,
+                                contract.requested_units,
+                                status,
+                                format_money(contract.escrow_cash),
+                            )
+                        })
+                        .collect();
+                    imports.sort();
+                    if imports.is_empty() {
+                        "None".to_string()
+                    } else {
+                        imports.join(" / ")
+                    }
+                },
+            );
             let mut private_cash = 0u64;
             let mut private_wage_arrears = 0u64;
             let mut private_tax_arrears = 0u64;
@@ -514,7 +565,7 @@ fn sync_compact_panel(
                 .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
             return Some((
                 format!(
-                    "hall|{:?}|{:?}|{}|{}|{}|{:?}|{:?}",
+                    "hall|{:?}|{:?}|{}|{}|{}|{:?}|{:?}|{}",
                     settlement,
                     hall_level,
                     inventory_summary(inventory),
@@ -522,6 +573,7 @@ fn sync_compact_panel(
                     markets.get(entity).is_ok(),
                     (economy, administration, development),
                     policy,
+                    import_contracts,
                 ),
                 CompactModel {
                     title: settlement.name.to_uppercase(),
@@ -538,6 +590,7 @@ fn sync_compact_panel(
                         ),
                         ("COMMON STORE".into(), inventory_summary(inventory)),
                         ("PERMIT MARKET".into(), next),
+                        ("IMPORT CONTRACTS".into(), import_contracts),
                         (
                             "TO ADVANCE".into(),
                             progression_summary(settlement, development),
@@ -963,11 +1016,14 @@ fn sync_compact_panel(
                 },
             ));
         }
-        if let Ok((site, for_sale, site_owner)) = sites.get(entity) {
+        if let Ok((site, for_sale, site_owner, hall_upgrade)) = sites.get(entity) {
+            let (good, required) = hall_upgrade.map_or(
+                (Good::Wood, site.kind.construction_wood_required()),
+                |upgrade| (upgrade.material, upgrade.material_required),
+            );
             let delivered = inventories
                 .get(entity)
-                .map_or(0, |inventory| inventory.amount(Good::Wood));
-            let required = site.kind.construction_wood_required();
+                .map_or(0, |inventory| inventory.amount(good));
             let mut rows = vec![
                 (
                     "STATUS".into(),
@@ -980,8 +1036,27 @@ fn sync_compact_panel(
                     }
                     .into(),
                 ),
-                ("WOOD".into(), format!("{delivered} / {required}")),
+                (good.label().to_uppercase(), format!("{delivered} / {required}")),
             ];
+            if let Some(settlement_id) = building_of.get(entity).ok().map(|owner| owner.0) {
+                if let Some((id, contract)) = trade_contracts.iter().find(|(_, contract)| {
+                    contract.destination == settlement_id
+                        && contract.good == good
+                        && contract.status.is_active()
+                }) {
+                    rows.push((
+                        "INBOUND CONTRACT".into(),
+                        format!(
+                            "#{} / {} / {}/{} delivered / {} coin escrow",
+                            id.0,
+                            contract.status.label(),
+                            contract.delivered_units,
+                            contract.requested_units,
+                            format_money(contract.escrow_cash),
+                        ),
+                    ));
+                }
+            }
             if let Some(listing) = for_sale {
                 rows.push((
                     "TAKEOVER".into(),

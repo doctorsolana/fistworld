@@ -40,6 +40,10 @@ pub enum BuildingType {
     /// market blockout; keeping that box separate prevents them becoming
     /// walkable public plazas when the market receives authored art.
     PlaceholderStorageHall,
+    /// Temporary solid blockout for the first stone-extraction trade. The
+    /// semantic building remains `StoneQuarry`, so authored quarry art can
+    /// replace this without touching saves or economy code.
+    PlaceholderStoneQuarry,
 }
 
 /// All authored building types. Collider baking filters this list through
@@ -80,6 +84,7 @@ impl BuildingType {
             BuildingType::Bakery => "building_bakery",
             BuildingType::MarketPaved => "building_market_paved",
             BuildingType::PlaceholderStorageHall => "placeholder_storage_hall",
+            BuildingType::PlaceholderStoneQuarry => "placeholder_stone_quarry",
         }
     }
 
@@ -107,6 +112,7 @@ impl BuildingType {
             }
             BuildingType::PlaceholderTavern | BuildingType::PlaceholderChurch => None,
             BuildingType::PlaceholderStorageHall => None,
+            BuildingType::PlaceholderStoneQuarry => None,
         }
     }
 
@@ -247,6 +253,16 @@ impl BuildingType {
                 height: 3.2,
                 flatten_radius: 1.8,
                 color: Color::srgb(0.47, 0.34, 0.21),
+                model_path: None,
+            },
+            BuildingType::PlaceholderStoneQuarry => BuildingDef {
+                building_type: *self,
+                display_name: "Stone Quarry (blockout)",
+                footprint: Vec2::new(9.0, 8.0),
+                footprint_center: Vec2::ZERO,
+                height: 3.0,
+                flatten_radius: 2.0,
+                color: Color::srgb(0.43, 0.44, 0.42),
                 model_path: None,
             },
             BuildingType::PlaceholderTavern => BuildingDef {

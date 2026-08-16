@@ -17,9 +17,9 @@ use bevy::prelude::*;
 
 use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
 use shared::components::{
-    BuildingDoorDemand, CivicHallLevel, CloudSeed, ConstructionSite, FarmField, FishingPier,
-    Household, MarketLevel, PlayerPosition, PlayerRotation, Settlement, SettlementBuilding,
-    SettlementBuildingKind, TimeWarp, WorldTime,
+    BuildingDoorDemand, CivicHallLevel, CivicHallUpgradeWorksite, CloudSeed, ConstructionSite,
+    FarmField, FishingPier, Household, MarketLevel, PlayerPosition, PlayerRotation, Settlement,
+    SettlementBuilding, SettlementBuildingKind, TimeWarp, WorldTime,
 };
 use shared::debug::DebugGizmoMode;
 use shared::economy::{BusinessCondition, BusinessState, Good, GoodsInventory};
@@ -175,6 +175,7 @@ struct ConstructionSupplyVisual;
 struct ConstructionSupplyBundle {
     site: Entity,
     unit: u32,
+    good: Good,
 }
 
 #[derive(Component)]
@@ -304,20 +305,33 @@ const MAX_ACTIVE_HOUSE_POINT_LIGHTS: usize = 40;
 const HOUSE_POINT_LIGHT_RADIUS: f32 = 190.0;
 const HOUSE_LIGHT_BUDGET_INTERVAL_SECONDS: f64 = 0.25;
 
-/// Draw one small timber bundle per delivered wood unit while a site waits.
-/// The pile is deliberately literal: the player can watch four carried loads
-/// become ten physical bundles before the cabin starts rising.
+/// Draw one physical bundle or dressed-stone block per delivered material unit
+/// while a site waits. The Hall-upgrade marker switches the generic worksite
+/// from Wood to Stone without inventing a parallel client-only construction
+/// state.
 fn attach_construction_supply_visuals(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut assets: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+    mut assets: Local<
+        Option<(
+            Handle<Mesh>,
+            Handle<StandardMaterial>,
+            Handle<StandardMaterial>,
+        )>,
+    >,
     sites: Query<
-        (Entity, &ConstructionSite, &PlayerPosition, &GoodsInventory),
+        (
+            Entity,
+            &ConstructionSite,
+            &PlayerPosition,
+            &GoodsInventory,
+            Option<&CivicHallUpgradeWorksite>,
+        ),
         Without<ConstructionSupplyVisual>,
     >,
 ) {
-    let (mesh, material) = assets
+    let (mesh, wood_material, stone_material) = assets
         .get_or_insert_with(|| {
             (
                 meshes.add(Cuboid::new(0.52, 0.24, 0.28)),
@@ -326,21 +340,43 @@ fn attach_construction_supply_visuals(
                     perceptual_roughness: 0.92,
                     ..default()
                 }),
+                materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.38, 0.40, 0.42),
+                    perceptual_roughness: 0.96,
+                    ..default()
+                }),
             )
         })
         .clone();
 
-    for (entity, site, position, inventory) in sites.iter() {
-        let required = site.kind.construction_wood_required();
-        let delivered = inventory.amount(Good::Wood);
+    for (entity, site, position, inventory, hall_upgrade) in sites.iter() {
+        let (required, good, material, art) = hall_upgrade.map_or_else(
+            || {
+                (
+                    site.kind.construction_wood_required(),
+                    Good::Wood,
+                    wood_material.clone(),
+                    site.kind.art(),
+                )
+            },
+            |upgrade| {
+                (
+                    upgrade.material_required,
+                    upgrade.material,
+                    stone_material.clone(),
+                    upgrade.target.building_type(),
+                )
+            },
+        );
+        let delivered = inventory.amount(good);
         commands.entity(entity).insert((
             ConstructionSupplyVisual,
             Transform::from_translation(position.0)
                 .with_rotation(Quat::from_rotation_y(site.rotation)),
             Visibility::Inherited,
         ));
-        let front = -(site.kind.art().definition().footprint.y * 0.5 + 1.6);
-        let half = site.kind.art().definition().footprint * 0.5;
+        let front = -(art.definition().footprint.y * 0.5 + 1.6);
+        let half = art.definition().footprint * 0.5;
         commands.entity(entity).with_children(|parent| {
             for (index, corner) in [
                 Vec2::new(-half.x, -half.y),
@@ -354,7 +390,7 @@ fn attach_construction_supply_visuals(
                 parent.spawn((
                     Name::new(format!("Worksite stake {}", index + 1)),
                     Mesh3d(mesh.clone()),
-                    MeshMaterial3d(material.clone()),
+                    MeshMaterial3d(wood_material.clone()),
                     Transform::from_xyz(corner.x, 0.36, corner.y)
                         .with_scale(Vec3::new(0.18, 3.0, 0.30)),
                 ));
@@ -365,8 +401,12 @@ fn attach_construction_supply_visuals(
                 let row = (index / 3) % 2;
                 let layer = index / 6;
                 parent.spawn((
-                    Name::new(format!("Delivered wood {unit}")),
-                    ConstructionSupplyBundle { site: entity, unit },
+                    Name::new(format!("Delivered {} {unit}", good.label())),
+                    ConstructionSupplyBundle {
+                        site: entity,
+                        unit,
+                        good,
+                    },
                     Mesh3d(mesh.clone()),
                     MeshMaterial3d(material.clone()),
                     Transform::from_xyz(
@@ -393,7 +433,7 @@ fn sync_construction_supply_visuals(
         let Ok((site, inventory)) = sites.get(bundle.site) else {
             continue;
         };
-        let next = if !site.raising && bundle.unit <= inventory.amount(Good::Wood) {
+        let next = if !site.raising && bundle.unit <= inventory.amount(bundle.good) {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -474,6 +514,7 @@ fn raise_construction_visuals(
         Entity,
         &ConstructionSite,
         &PlayerPosition,
+        Option<&CivicHallUpgradeWorksite>,
         Option<&mut RaisingVisual>,
         Option<&BuildingVisual>,
     )>,
@@ -483,14 +524,16 @@ fn raise_construction_visuals(
         return;
     };
     let warp = warp.iter().next().map(|warp| warp.0).unwrap_or(1.0);
-    for (entity, site, position, raising, drawn) in sites.iter_mut() {
+    for (entity, site, position, hall_upgrade, raising, drawn) in sites.iter_mut() {
         if !site.raising {
             continue;
         }
         let ground = terrain.get_height(position.0.x, position.0.z);
         let Some(mut raising) = raising else {
             // First frame of the raise: put the model in, fully underground.
-            let art = site.kind.art();
+            let art = hall_upgrade
+                .map(|upgrade| upgrade.target.building_type())
+                .unwrap_or_else(|| site.kind.art());
             let definition = art.definition();
             let sunk = definition.height.max(1.0);
             if drawn.is_none() {
@@ -579,7 +622,15 @@ fn claim_building_ground(
         Option<&PlacedBuilding>,
         Option<&BuildingPosition>,
     )>,
-    sites: Query<(Entity, &ConstructionSite, &PlayerPosition), Without<PlacedBuilding>>,
+    sites: Query<
+        (
+            Entity,
+            &ConstructionSite,
+            &PlayerPosition,
+            Option<&CivicHallUpgradeWorksite>,
+        ),
+        Without<PlacedBuilding>,
+    >,
 ) {
     for (entity, settlement, position, rotation, level, placed, building_position) in halls.iter() {
         let level = level
@@ -612,10 +663,12 @@ fn claim_building_ground(
     }
     // Sites carry their rotation now, so the cleared patch is turned exactly
     // like the building that will stand on it.
-    for (entity, site, position) in sites.iter() {
+    for (entity, site, position, hall_upgrade) in sites.iter() {
         commands.entity(entity).insert((
             PlacedBuilding {
-                building_type: site.kind.art(),
+                building_type: hall_upgrade
+                    .map(|upgrade| upgrade.target.building_type())
+                    .unwrap_or_else(|| site.kind.art()),
                 rotation: site.rotation,
             },
             BuildingPosition(position.0),

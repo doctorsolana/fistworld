@@ -10,8 +10,9 @@ use bevy::prelude::*;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 use shared::components::{
     BuildingId, BuildingOf, CharacterName, Company, CompanyId, CompanyLeadership, CompanyOwnership,
-    CompanyShareMarket, Hero, OperatedBy, PersonId, SettlementBuilding, SettlementBuildingKind,
-    SettlementId,
+    CompanyShareMarket, CompanyTradeRoute, Hero, OperatedBy, PersonId, SettlementBuilding,
+    SettlementBuildingKind, SettlementId, SettlementSummary, TradeRouteHistory, TradeRouteId,
+    TradeRouteStatus, TradeRouteTrip,
 };
 use shared::economy::{
     format_money, BusinessAccount, BusinessCondition, BusinessProcurementPolicy,
@@ -83,6 +84,22 @@ pub struct CompanyBranchRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompanyRouteRecord {
+    pub id: TradeRouteId,
+    pub origin: String,
+    pub destination: String,
+    pub good: Good,
+    pub cargo_target: u32,
+    pub automatic: bool,
+    pub assigned_caravaner: Option<String>,
+    pub status: TradeRouteStatus,
+    pub completed_trips: u32,
+    pub lifetime_units: u32,
+    pub lifetime_delivery_revenue: u64,
+    pub latest_trip: Option<TradeRouteTrip>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompanyRecord {
     pub id: CompanyId,
     pub name: String,
@@ -96,6 +113,7 @@ pub struct CompanyRecord {
     pub decisions: Vec<CompanyDecisionRecord>,
     pub sites: Vec<CompanySiteRecord>,
     pub branches: Vec<CompanyBranchRecord>,
+    pub routes: Vec<CompanyRouteRecord>,
 }
 
 impl CompanyRecord {
@@ -247,6 +265,8 @@ pub(super) fn refresh_company_directory(
         Option<&BusinessSupplyPolicy>,
         Option<&BusinessStaffingPolicy>,
     )>,
+    routes: Query<(&TradeRouteId, &CompanyTradeRoute, &TradeRouteHistory)>,
+    settlements: Query<&SettlementSummary>,
     people: Query<(&PersonId, &CharacterName)>,
     heroes: Query<(&Hero, &PersonId, Option<&Wallet>)>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
@@ -281,6 +301,40 @@ pub(super) fn refresh_company_directory(
         .map(|record| (record.id, record.wallet));
     let (local_person, local_wallet) = replicated_local.or(roster_local).unzip();
     let local_wallet = local_wallet.flatten();
+
+    let settlement_names: HashMap<SettlementId, String> = settlements
+        .iter()
+        .map(|settlement| (settlement.id, settlement.name.clone()))
+        .collect();
+    let settlement_name = |settlement: SettlementId| {
+        settlement_names
+            .get(&settlement)
+            .cloned()
+            .unwrap_or_else(|| format!("Settlement #{}", settlement.0))
+    };
+    let mut routes_by_company: HashMap<CompanyId, Vec<CompanyRouteRecord>> = HashMap::new();
+    for (id, route, history) in routes.iter() {
+        routes_by_company
+            .entry(route.company)
+            .or_default()
+            .push(CompanyRouteRecord {
+                id: *id,
+                origin: settlement_name(route.origin),
+                destination: settlement_name(route.destination),
+                good: route.good,
+                cargo_target: route.cargo_target,
+                automatic: route.automatic,
+                assigned_caravaner: route.assigned_caravaner.map(&person_name),
+                status: route.status,
+                completed_trips: route.completed_trips,
+                lifetime_units: route.lifetime_units,
+                lifetime_delivery_revenue: route.lifetime_delivery_revenue,
+                latest_trip: history.trips().last().copied(),
+            });
+    }
+    for routes in routes_by_company.values_mut() {
+        routes.sort_by_key(|route| route.id);
+    }
 
     let mut sites_by_company: HashMap<CompanyId, Vec<CompanySiteRecord>> = HashMap::new();
     for (
@@ -449,6 +503,7 @@ pub(super) fn refresh_company_directory(
             decisions: decisions.entries().to_vec(),
             sites: company_sites,
             branches,
+            routes: routes_by_company.remove(id).unwrap_or_default(),
         });
     }
     records.sort_by(|a, b| {
@@ -1045,9 +1100,11 @@ fn spawn_company_row(
             });
             row.spawn((
                 Text::new(format!(
-                    "{} site{}  /  {} cash  /  today {}{}",
+                    "{} site{}  /  {} route{}  /  {} cash  /  today {}{}",
                     company.sites.len(),
                     if company.sites.len() == 1 { "" } else { "s" },
+                    company.routes.len(),
+                    if company.routes.len() == 1 { "" } else { "s" },
                     format_money(company.account.cash),
                     if company.account.current_day.profit() < 0 {
                         "-"
@@ -1347,6 +1404,50 @@ fn spawn_company_detail(
         let can_manage = directory.local_person == Some(company.master);
         for branch in &company.branches {
             spawn_branch_card(parent, company.id, branch, can_manage);
+        }
+    }
+
+    spawn_section_title(
+        parent,
+        "TRADE ROUTES",
+        "company assets; cargo remains physical for the whole journey",
+    );
+    if company.routes.is_empty() {
+        spawn_note(parent, "This company operates no inter-settlement route.");
+    } else {
+        for route in &company.routes {
+            let latest = route.latest_trip.map_or_else(
+                || "No completed trip yet".to_string(),
+                |trip| {
+                    format!(
+                        "last trip day {}: {} units, {} coin freight, {:.1} world min",
+                        trip.completed_day,
+                        trip.units,
+                        format_money(trip.delivery_revenue),
+                        trip.travel_world_seconds as f32 / 60.0,
+                    )
+                },
+            );
+            key_value(
+                parent,
+                &format!("ROUTE #{}", route.id.0),
+                format!(
+                    "{}  /  {} → {}\n{}  /  cargo target {}  /  {}\n{} trips, {} units, {} coin earned\n{}",
+                    route.good.label(),
+                    route.origin,
+                    route.destination,
+                    route.status.label(),
+                    route.cargo_target,
+                    route
+                        .assigned_caravaner
+                        .as_deref()
+                        .unwrap_or("no porter assigned"),
+                    route.completed_trips,
+                    route.lifetime_units,
+                    format_money(route.lifetime_delivery_revenue),
+                    latest,
+                ),
+            );
         }
     }
 
@@ -2091,6 +2192,7 @@ mod tests {
             decisions: Vec::new(),
             sites: Vec::new(),
             branches: Vec::new(),
+            routes: Vec::new(),
         }
     }
 

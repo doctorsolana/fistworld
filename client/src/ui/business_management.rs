@@ -943,6 +943,7 @@ fn output_good(kind: SettlementBuildingKind) -> Option<Good> {
     match kind {
         SettlementBuildingKind::Farmstead => Some(Good::Wheat),
         SettlementBuildingKind::LumberjackHut => Some(Good::Wood),
+        SettlementBuildingKind::StoneQuarry => Some(Good::Stone),
         SettlementBuildingKind::FishermansHut => Some(Good::Food),
         SettlementBuildingKind::Windmill => Some(Good::Flour),
         SettlementBuildingKind::Bakery => Some(Good::Bread),

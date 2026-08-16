@@ -13,8 +13,8 @@
 use bevy::prelude::*;
 
 use shared::components::{
-    CivicHallLevel, CompanyId, ConstructionSite, FarmField, FishingPier, Household,
-    MootAdministration, OperatedBy, PlayerPosition, Settlement, SettlementBuilding,
+    CivicHallLevel, CivicHallUpgradeWorksite, CompanyId, ConstructionSite, FarmField, FishingPier,
+    Household, MootAdministration, OperatedBy, PlayerPosition, Settlement, SettlementBuilding,
     SettlementBuildingKind, SettlementDevelopment, SettlementOpportunityBoard, SettlementPolicies,
     SettlementTier,
 };
@@ -99,8 +99,9 @@ pub struct PlaceBusinessRecord {
 pub struct PlacePermitRecord {
     pub kind: SettlementBuildingKind,
     pub raising: bool,
-    pub delivered_wood: u32,
-    pub required_wood: u32,
+    pub material: Good,
+    pub delivered_material: u32,
+    pub required_material: u32,
     pub for_sale: Option<BusinessForSale>,
 }
 
@@ -309,6 +310,7 @@ pub(super) fn learn_settlements(
         Option<&shared::components::BuildingOf>,
         Option<&GoodsInventory>,
         Option<&BusinessForSale>,
+        Option<&CivicHallUpgradeWorksite>,
     )>,
     mut places: ResMut<KnownPlaces>,
 ) {
@@ -404,18 +406,25 @@ pub(super) fn learn_settlements(
         |settlement: &Settlement, settlement_id: Option<&shared::components::SettlementId>| {
             let mut records: Vec<PlacePermitRecord> = sites
                 .iter()
-                .filter(|(site, owner, _, _)| {
+                .filter(|(site, owner, _, _, _)| {
                     settlement_id.map_or_else(
                         || site.settlement == settlement.name,
                         |id| owner.is_some_and(|owner| owner.0 == *id),
                     )
                 })
-                .map(|(site, _, inventory, for_sale)| PlacePermitRecord {
-                    kind: site.kind,
-                    raising: site.raising,
-                    delivered_wood: inventory.map_or(0, |store| store.amount(Good::Wood)),
-                    required_wood: site.kind.construction_wood_required(),
-                    for_sale: for_sale.copied(),
+                .map(|(site, _, inventory, for_sale, hall_upgrade)| {
+                    let (material, required_material) = hall_upgrade.map_or(
+                        (Good::Wood, site.kind.construction_wood_required()),
+                        |upgrade| (upgrade.material, upgrade.material_required),
+                    );
+                    PlacePermitRecord {
+                        kind: site.kind,
+                        raising: site.raising,
+                        material,
+                        delivered_material: inventory.map_or(0, |store| store.amount(material)),
+                        required_material,
+                        for_sale: for_sale.copied(),
+                    }
                 })
                 .collect();
             records.sort_by_key(|permit| permit.kind.label());
@@ -655,9 +664,10 @@ fn permit_queue_summary(place: &PlaceRecord) -> String {
                 } else {
                     "supplying"
                 },
-                permit.delivered_wood,
-                permit.required_wood
+                permit.delivered_material,
+                permit.required_material
             );
+            let state = format!("{state} {}", permit.material.label());
             permit.for_sale.map_or(state.clone(), |listing| {
                 format!(
                     "{state}, FOR SALE {} coin / {}",
@@ -1565,6 +1575,9 @@ fn place_detail_model(
                         }
                         SettlementBuildingKind::LumberjackHut => {
                             "Produces Wood / 1 work position".into()
+                        }
+                        SettlementBuildingKind::StoneQuarry => {
+                            "Extracts Stone / 2 work positions".into()
                         }
                         SettlementBuildingKind::FishermansHut => {
                             "Produces Food at its fishing pier / 2 work positions".into()

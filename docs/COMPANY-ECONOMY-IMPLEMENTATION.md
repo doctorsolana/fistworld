@@ -19,9 +19,9 @@ market rules remain in [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
 - Active company input requests have first claim on compatible owned output. The branch reserve comes next; only the uncommitted remainder may be collected for the public market.
 - A Moot Steward can carry an internal shipment for a company at the civic rate of one penny per carried bulk unit. The Hall is the employer/dispatcher, not a waypoint or buyer.
 - A private Storage Hall holds 2,400 bulk and opens up to four ordinary one-job Company Porter positions. Its porters move only their company's goods inside that settlement and charge no municipal delivery fee; their wages are the logistics cost.
-- NPCs treat a Storage Hall as established branch infrastructure, not a founding trade: an autonomous applicant needs at least two other local company sites and cannot add a second depot to that branch. The tier-unlocked player permit remains freely purchasable.
+- NPCs normally treat a Storage Hall as established branch infrastructure: an autonomous applicant needs at least two other local company sites and cannot add a second depot to that branch. A real export contract lowers the threshold to one productive site, allowing a quarry concern to build its own warehouse and transport arm. The tier-unlocked player permit remains freely purchasable.
 - Workshops near 80% capacity can send bounded excess loads to an owned local Storage Hall. Processors can draw requested inputs back from it, and branch surplus stored there can still reach the public market.
-- Cross-settlement transfers are deliberately not automatic. Later caravans and trade routes must name an origin, destination, cargo and physical carrier.
+- Cross-settlement transfers are explicit company assets. The first live route serves a buyer-funded civic tender. Destination, good, cargo target and price ceiling exist before supply; origin and seller bind only when a complete real listing appears, then the company route names its warehouse and assigned porter. A two-coin minimum call-out keeps a real partial load above the carrier's fixed wage cost while larger loads pay the normal per-bulk rate. No company is tagged as a special trade-company type.
 - Input sourcing modes are `PreferOwned`, `CheapestAvailable` and `OwnedOnly`.
 - Company and clan identities remain separate. Before a business permit is issued, an entrepreneur explicitly founds a company, contributes personal coin, receives all 1,000 shares and becomes its Company Master. The share model supports later co-ownership, inheritance and multiple companies.
 
@@ -29,7 +29,7 @@ market rules remain in [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
 
 1. Coin is never created or destroyed by a company transfer.
 2. Internal transfers move no cash. Their equal site credit/charge is eliminated from company profit.
-3. A successful municipal delivery debits company cash and credits the settlement treasury by exactly the same fee. A private Company Porter charges no municipal fee.
+3. A successful local municipal delivery debits company cash and credits the settlement treasury by exactly the same fee. A local private Company Porter charges no municipal fee. An inter-settlement contract instead escrows buyer cash, pays the source seller at collection and credits the carrier company's warehouse ledger only when cargo reaches the destination.
 4. Failed deliveries charge no fee. Collected goods are either delivered or returned; they never disappear.
 5. Company payroll expense is incurred once, paid once and attributed to exactly one workplace.
    Payroll closes at dawn and belongs to the shift which just ended, so it appears in the
@@ -267,7 +267,7 @@ than destroying money or guessing a recipient.
 
 - One owner, one business continues to behave like the present economy.
 - Farm, Windmill and Bakery owned by one company privately move Wheat and Flour, and only Bread reaches the public market when configured that way.
-- The same company operating in two settlements has one treasury but independent branch inventory, capacity and public-sale rules; no good crosses the boundary without a future physical trade route.
+- The same company operating in two settlements has one treasury but independent branch inventory, capacity and public-sale rules; goods cross the boundary only through an explicit physical trade route.
 - A Storage Hall accepts local overflow, its Company Porters supply local owned processors without a civic delivery fee, and closing a porter position cannot lose an in-flight load.
 - A workplace with no applicable porter can still buy inputs and consign output through bounded employee self-haul, with visibly and strategically equivalent lost production time.
 - A different owner's processor cannot consume privately committed stock.
@@ -295,12 +295,16 @@ than destroying money or guessing a recipient.
 - [x] Public-surplus reservation ordering
 - [x] Settlement-local company branches with absolute per-good retention and public-sale controls
 - [x] Finite Storage Hall inventory, private Company Porter employment and tactical/strategic local logistics
+- [x] Stable company-owned route assets and buyer-funded civic contracts
+- [x] Exact remote seller pickup, physical carried cargo, destination delivery and freight ledger
+- [x] Bounded route trip history and company/Hall inspection UI
 - [x] Per-site enabled-position controls with graceful worker release
 - [x] Pull-based cross-settlement company/site history archives and lab reports
 - [x] Company directory, multi-company player portfolio, share market and supply-chain UI
 - [x] NPC operational, dividend and capital controller
 - [x] Demand-led staffing, productive-site mothball and automatic reopening lifecycle
 - [ ] Voluntary branch sale/reallocation across settlements
+- [ ] Player-authored route editor, wagons/caravaner art and independent merchant speculation
 - [x] Unit and coin/share conservation tests
 - [ ] Multi-seed economic tuning
 - [x] Explicit marginal staffing, demand budget and mothball/reopen acceptance tests

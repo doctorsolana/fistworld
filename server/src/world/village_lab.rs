@@ -13,12 +13,13 @@ use std::time::Instant;
 use bevy::prelude::*;
 use shared::components::{
     BuildingDoorDemand, BuildingDoorUse, BuildingId, CharacterActivity, CharacterAffiliation,
-    CharacterAttributes, CharacterKind, CharacterName, CivicStrategy, Company, CompanyId,
-    CompanyLeadership, CompanyOwnership, EmployedAt, FarmField, FishingPier, Health, Household,
-    MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId, PlayerPosition,
-    PlayerRotation, Residence, Settlement, SettlementBuilding, SettlementBuildingKind,
-    SettlementId, SettlementOpportunityBoard, SettlementPolicies, SettlementTier, TimeWarp,
-    VillageRoad, WorkStatus, WorldTime, COMPANY_TOTAL_SHARES,
+    CharacterAttributes, CharacterKind, CharacterName, CivicStrategy, CivicTradeContract, Company,
+    CompanyId, CompanyLeadership, CompanyOwnership, CompanyTradeRoute, EmployedAt, FarmField,
+    FishingPier, Health, Household, MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy,
+    PersonId, PlayerPosition, PlayerRotation, Residence, Settlement, SettlementBuilding,
+    SettlementBuildingKind, SettlementId, SettlementOpportunityBoard, SettlementPolicies,
+    SettlementTier, TimeWarp, TradeContractId, TradeRouteHistory, TradeRouteId, VillageRoad,
+    WorkStatus, WorldTime, COMPANY_TOTAL_SHARES,
 };
 use shared::economy::{
     BusinessAccount, BusinessCondition, BusinessManagementPolicy, BusinessWagePolicy, CarriedLoad,
@@ -38,13 +39,14 @@ use crate::world::pathfinding::PathfindingBudgetSettings;
 use crate::world::village::{
     self, BuildStage, ConstructionMaterialRoutine, FarmerRoutine, FishingRoutine, HomeRoutine,
     InheritedBusinessCapital, LumberjackRoutine, MootQueueTicket, MootServiceKind,
-    PermitPickupRoutine, ProcessingRoutine, PublishedTerrainDeltas, SettlementEconomyRuntime,
-    UnderConstruction, VillageClock, VillagerIntent, WorkerOffDuty, WorkplaceDoorTransit,
+    PermitPickupRoutine, ProcessingRoutine, PublishedTerrainDeltas, QuarryRoutine,
+    SettlementEconomyRuntime, UnderConstruction, VillageClock, VillagerIntent, WorkerOffDuty,
+    WorkplaceDoorTransit,
 };
 use crate::world::village_lab_scenario::{
     choose_greenwood_site, choose_inland_meadow_site, choose_policy_comparison_sites,
-    choose_poor_site, choose_secure_site, lab_arrival_offset, lab_arrival_waves, LabArrivalTarget,
-    LabScenario,
+    choose_poor_site, choose_secure_site, choose_stone_site, lab_arrival_offset, lab_arrival_waves,
+    LabArrivalTarget, LabScenario,
 };
 use crate::world::village_roads::{
     self, NavigationRouteFailed, NavigationRoutePending, PlannedRoadAccess, RoadBuilderRoutine,
@@ -80,11 +82,14 @@ struct Evidence {
     saw_indoors: bool,
     saw_farming: bool,
     saw_fishing: bool,
+    saw_mining: bool,
     saw_sitting: bool,
     saw_wheat_carried: bool,
     saw_flour_present: bool,
     saw_bread_present: bool,
     saw_wood_carried: bool,
+    saw_stone_carried: bool,
+    saw_stone_present: bool,
     saw_food_carried: bool,
     saw_road_builder: bool,
     saw_partial_site: bool,
@@ -262,7 +267,7 @@ struct StructureMilestone {
     residents: u32,
     settlements: Vec<(String, SettlementTier, u32)>,
     sites: Vec<(SettlementBuildingKind, &'static str, u32, u32)>,
-    buildings: [usize; 11],
+    buildings: [usize; 12],
     roads: Vec<(u16, usize)>,
     fields: usize,
     piers: usize,
@@ -386,6 +391,7 @@ impl StressTaskLedger {
                     | CharacterActivity::Chopping
                     | CharacterActivity::Farming
                     | CharacterActivity::Fishing
+                    | CharacterActivity::Mining
                     | CharacterActivity::Indoors
             );
             let unexplained = on_shift
@@ -1184,6 +1190,7 @@ fn spawn_lab_village(
     strategy: CivicStrategy,
     hall_position: Vec3,
     resident_count: usize,
+    initial_tier: SettlementTier,
 ) {
     let hall_inventory = GoodsInventory::new_partitioned(shared::economy::capacity::HALL);
     let mut policies = shared::components::SettlementPolicies::poor_relief();
@@ -1191,7 +1198,7 @@ fn spawn_lab_village(
     world.spawn((
         Settlement {
             name: name.to_string(),
-            tier: SettlementTier::Hamlet,
+            tier: initial_tier,
             residents: 0,
             treasury: shared::economy::STARTING_TREASURY_MONEY,
         },
@@ -1323,7 +1330,7 @@ fn spawn_lab_arrivals(
 }
 
 fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
-    let (secure, inland_meadow, policy_comparison, poor, greenwood) = {
+    let (secure, inland_meadow, policy_comparison, poor, stonefield, greenwood) = {
         let terrain = world.resource::<WorldTerrain>();
         let secure = scenario
             .includes_secure()
@@ -1337,6 +1344,15 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
         let poor = scenario
             .includes_poor()
             .then(|| choose_poor_site(terrain, secure.map(|choice| choice.0)));
+        let stonefield = scenario.includes_stonefield().then(|| {
+            choose_stone_site(
+                terrain,
+                secure
+                    .map(|choice| choice.0)
+                    .or_else(|| inland_meadow.map(|choice| choice.0))
+                    .expect("stone comparison includes a meadow control"),
+            )
+        });
         let greenwood = scenario.includes_greenwood().then(|| {
             let mut occupied = Vec::new();
             if let Some(choice) = secure {
@@ -1347,9 +1363,24 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             }
             choose_greenwood_site(terrain, &occupied)
         });
-        (secure, inland_meadow, policy_comparison, poor, greenwood)
+        (
+            secure,
+            inland_meadow,
+            policy_comparison,
+            poor,
+            stonefield,
+            greenwood,
+        )
     };
     let residents_per_village = scenario.residents_per_village();
+    // The trade fixture isolates Village -> Town commerce. Its controls are
+    // established Villages so an unrelated Hamlet food-security oscillation
+    // cannot prevent the first Stone tender from ever existing.
+    let initial_tier = if scenario.is_trade_comparison() {
+        SettlementTier::Village
+    } else {
+        SettlementTier::Hamlet
+    };
 
     println!(
         "LAB map=village_lab scenario={scenario:?} villages={} warp={}x",
@@ -1357,6 +1388,7 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             + usize::from(inland_meadow.is_some())
             + if policy_comparison.is_some() { 2 } else { 0 }
             + usize::from(poor.is_some())
+            + usize::from(stonefield.is_some())
             + usize::from(greenwood.is_some()),
         warp,
     );
@@ -1382,6 +1414,7 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             CivicStrategy::Balanced,
             hall,
             residents_per_village,
+            initial_tier,
         );
     }
 
@@ -1401,6 +1434,7 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             CivicStrategy::Balanced,
             hall,
             residents_per_village,
+            initial_tier,
         );
     }
 
@@ -1425,6 +1459,7 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             CivicStrategy::Frugal,
             frugal.0,
             residents_per_village,
+            initial_tier,
         );
         spawn_lab_village(
             world,
@@ -1433,6 +1468,7 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             CivicStrategy::MutualAid,
             mutual.0,
             residents_per_village,
+            initial_tier,
         );
     }
 
@@ -1452,6 +1488,27 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             CivicStrategy::Balanced,
             hall,
             residents_per_village,
+            initial_tier,
+        );
+    }
+
+    if let Some((hall, stone, farmland, biome)) = stonefield {
+        println!(
+            "LAB stone='Lab Stonefield' hall=({:.1},{:.1},{:.1}) nearby_stone={:.0}% farmland={:.0}% biome={biome:?}",
+            hall.x,
+            hall.y,
+            hall.z,
+            stone * 100.0,
+            farmland * 100.0,
+        );
+        spawn_lab_village(
+            world,
+            "Lab Stonefield",
+            "StoneResident",
+            CivicStrategy::Balanced,
+            hall,
+            residents_per_village,
+            initial_tier,
         );
     }
 
@@ -1471,6 +1528,7 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             CivicStrategy::Balanced,
             hall,
             residents_per_village,
+            initial_tier,
         );
     }
 
@@ -1490,6 +1548,7 @@ fn building_index(kind: SettlementBuildingKind) -> usize {
         SettlementBuildingKind::Windmill => 8,
         SettlementBuildingKind::Bakery => 9,
         SettlementBuildingKind::StorageHall => 10,
+        SettlementBuildingKind::StoneQuarry => 11,
     }
 }
 
@@ -1526,7 +1585,7 @@ fn milestone(world: &mut World) -> StructureMilestone {
         .collect();
     sites.sort_by_key(|(kind, _, _, _)| building_index(*kind));
 
-    let mut buildings = [0usize; 11];
+    let mut buildings = [0usize; 12];
     for building in world.query::<&SettlementBuilding>().iter(world) {
         buildings[building_index(building.kind)] += 1;
     }
@@ -1788,6 +1847,7 @@ fn update_evidence(world: &mut World, evidence: &mut Evidence) {
                 | SettlementBuildingKind::LumberjackHut
                 | SettlementBuildingKind::Windmill
                 | SettlementBuildingKind::Bakery
+                | SettlementBuildingKind::StoneQuarry
         ) && !workers.is_empty()
         {
             evidence
@@ -1833,6 +1893,7 @@ fn update_evidence(world: &mut World, evidence: &mut Evidence) {
         evidence.saw_indoors |= *activity == CharacterActivity::Indoors;
         evidence.saw_farming |= *activity == CharacterActivity::Farming;
         evidence.saw_fishing |= *activity == CharacterActivity::Fishing;
+        evidence.saw_mining |= *activity == CharacterActivity::Mining;
         evidence.saw_sitting |= *activity == CharacterActivity::Sitting;
     }
     for (routine, activity) in world
@@ -1843,13 +1904,14 @@ fn update_evidence(world: &mut World, evidence: &mut Evidence) {
             evidence.farmed_workplaces.insert(routine.farmstead());
         }
     }
-    for (name, activity, farmer, fisher, lumberjack, processor) in world
+    for (name, activity, farmer, fisher, lumberjack, quarry, processor) in world
         .query::<(
             &CharacterName,
             &CharacterActivity,
             Option<&FarmerRoutine>,
             Option<&FishingRoutine>,
             Option<&LumberjackRoutine>,
+            Option<&QuarryRoutine>,
             Option<&ProcessingRoutine>,
         )>()
         .iter(world)
@@ -1857,6 +1919,7 @@ fn update_evidence(world: &mut World, evidence: &mut Evidence) {
         let performed_job = (farmer.is_some() && *activity == CharacterActivity::Farming)
             || (fisher.is_some() && *activity == CharacterActivity::Fishing)
             || (lumberjack.is_some() && *activity == CharacterActivity::Chopping)
+            || (quarry.is_some() && *activity == CharacterActivity::Mining)
             || (processor.is_some() && *activity == CharacterActivity::Indoors);
         if performed_job {
             evidence.productive_workers.insert(name.0.clone());
@@ -1870,11 +1933,13 @@ fn update_evidence(world: &mut World, evidence: &mut Evidence) {
     for load in world.query::<&CarriedLoad>().iter(world) {
         evidence.saw_wheat_carried |= load.good == Some(Good::Wheat) && load.amount > 0;
         evidence.saw_wood_carried |= load.good == Some(Good::Wood) && load.amount > 0;
+        evidence.saw_stone_carried |= load.good == Some(Good::Stone) && load.amount > 0;
         evidence.saw_food_carried |= load.good == Some(Good::Food) && load.amount > 0;
     }
     for inventory in world.query::<&GoodsInventory>().iter(world) {
         evidence.saw_flour_present |= inventory.amount(Good::Flour) > 0;
         evidence.saw_bread_present |= inventory.amount(Good::Bread) > 0;
+        evidence.saw_stone_present |= inventory.amount(Good::Stone) > 0;
     }
     for (site, inventory) in world
         .query::<(&UnderConstruction, &GoodsInventory)>()
@@ -1925,6 +1990,7 @@ struct MoneyBreakdown {
     companies: u64,
     households: u64,
     construction_escrow: u64,
+    trade_escrow: u64,
     clearing: u64,
 }
 
@@ -1935,6 +2001,7 @@ impl MoneyBreakdown {
             .saturating_add(self.companies)
             .saturating_add(self.households)
             .saturating_add(self.construction_escrow)
+            .saturating_add(self.trade_escrow)
             .saturating_add(self.clearing)
     }
 }
@@ -1974,6 +2041,11 @@ fn money_breakdown(world: &mut World) -> MoneyBreakdown {
         .iter(world)
         .map(|capital| capital.0)
         .sum::<u64>();
+    let trade_escrow = world
+        .query::<&shared::components::CivicTradeContract>()
+        .iter(world)
+        .map(|contract| contract.escrow_cash)
+        .sum::<u64>();
     let clearing = world
         .get_resource::<village::BusinessEventQueue>()
         .map_or(0, |queue| queue.pending_sale_gross());
@@ -1983,6 +2055,7 @@ fn money_breakdown(world: &mut World) -> MoneyBreakdown {
         companies: company_cash.saturating_add(unposted_site_cash),
         households: household_cash,
         construction_escrow,
+        trade_escrow,
         clearing,
     }
 }
@@ -2050,6 +2123,12 @@ fn money_trace(world: &mut World) -> HashMap<String, u64> {
         .iter(world)
     {
         trace.insert(format!("escrow:{entity:?}"), capital.0);
+    }
+    for (entity, contract) in world
+        .query::<(Entity, &shared::components::CivicTradeContract)>()
+        .iter(world)
+    {
+        trace.insert(format!("trade-escrow:{entity:?}"), contract.escrow_cash);
     }
     let clearing = world
         .get_resource::<village::BusinessEventQueue>()
@@ -2542,9 +2621,10 @@ fn print_civic_report(world: &mut World) {
                 .civic
                 .wage_expense
                 .saturating_add(day.civic.poor_relief_expense)
-                .saturating_add(day.civic.material_expense);
+                .saturating_add(day.civic.material_expense)
+                .saturating_add(day.civic.freight_expense);
             println!(
-                "  LAB civic history day={} observed={} treasury={} income={} [permit={} fee={} levy={} sale={}] spending={} [wage={} relief={} materials={}] positions={}/+{} staffing={} rates={:.1}%/{:.1}% subsidy={:.1}% relief={} targets=food{}d/payroll{}d change={} ({})",
+                "  LAB civic history day={} observed={} treasury={} income={} [permit={} fee={} levy={} sale={}] spending={} [wage={} relief={} materials={} freight={}] positions={}/+{} staffing={} rates={:.1}%/{:.1}% subsidy={:.1}% relief={} targets=food{}d/payroll{}d change={} ({})",
                 day.day,
                 day.civic.observed,
                 shared::economy::format_money(day.civic_treasury),
@@ -2557,6 +2637,7 @@ fn print_civic_report(world: &mut World) {
                 shared::economy::format_money(day.civic.wage_expense),
                 shared::economy::format_money(day.civic.poor_relief_expense),
                 shared::economy::format_money(day.civic.material_expense),
+                shared::economy::format_money(day.civic.freight_expense),
                 day.civic.filled_positions,
                 day.civic.vacant_positions,
                 day.civic.staffing_posture.label(),
@@ -2568,6 +2649,95 @@ fn print_civic_report(world: &mut World) {
                 day.civic.civic_payroll_reserve_days,
                 day.civic.adjustment.label(),
                 day.civic.reason.label(),
+            );
+        }
+    }
+}
+
+fn print_trade_report(world: &mut World) {
+    let settlements: HashMap<_, _> = world
+        .query::<(&SettlementId, &Settlement)>()
+        .iter(world)
+        .map(|(id, settlement)| (*id, settlement.name.clone()))
+        .collect();
+    let people: HashMap<_, _> = world
+        .query::<(&PersonId, &CharacterName)>()
+        .iter(world)
+        .map(|(id, name)| (*id, name.0.clone()))
+        .collect();
+    let contracts: Vec<_> = world
+        .query::<(&TradeContractId, &CivicTradeContract)>()
+        .iter(world)
+        .map(|(id, contract)| (*id, *contract))
+        .collect();
+    let routes: Vec<_> = world
+        .query::<(&TradeRouteId, &CompanyTradeRoute, &TradeRouteHistory)>()
+        .iter(world)
+        .map(|(id, route, history)| (*id, *route, history.clone()))
+        .collect();
+
+    println!(
+        "LAB inter-settlement trade contracts={} routes={}",
+        contracts.len(),
+        routes.len()
+    );
+    for (id, contract) in contracts {
+        println!(
+            "  LAB contract #{} {} {} -> {} status={} delivered={}/{} max_price={} reserved={} escrow={} goods_spend={} freight_spend={}",
+            id.0,
+            contract.good.label(),
+            contract
+                .origin
+                .and_then(|origin| settlements.get(&origin))
+                .map_or("unknown", String::as_str),
+            settlements
+                .get(&contract.destination)
+                .map_or("unknown", String::as_str),
+            contract.status.label(),
+            contract.delivered_units,
+            contract.requested_units,
+            shared::economy::format_money(contract.maximum_unit_price),
+            shared::economy::format_money(contract.reserved_cash),
+            shared::economy::format_money(contract.escrow_cash),
+            shared::economy::format_money(contract.spent_on_goods),
+            shared::economy::format_money(contract.spent_on_freight),
+        );
+    }
+    for (id, route, history) in routes {
+        println!(
+            "  LAB route #{} company=#{} warehouse=#{} {} {} -> {} status={} porter={} trips={} units={} freight={}",
+            id.0,
+            route.company.0,
+            route.warehouse.0,
+            route.good.label(),
+            settlements
+                .get(&route.origin)
+                .map_or("unknown", String::as_str),
+            settlements
+                .get(&route.destination)
+                .map_or("unknown", String::as_str),
+            route.status.label(),
+            route.assigned_caravaner.map_or_else(
+                || "none".to_string(),
+                |person| people
+                    .get(&person)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Person#{}", person.0)),
+            ),
+            route.completed_trips,
+            route.lifetime_units,
+            shared::economy::format_money(route.lifetime_delivery_revenue),
+        );
+        for trip in history.trips().iter().rev().take(5).rev() {
+            println!(
+                "    LAB route trip departed={} completed={} units={} source_cost={} source_fees={} freight={} travel={:.1}m",
+                trip.departed_day,
+                trip.completed_day,
+                trip.units,
+                shared::economy::format_money(trip.source_purchase_cost),
+                shared::economy::format_money(trip.source_market_fees),
+                shared::economy::format_money(trip.delivery_revenue),
+                trip.travel_world_seconds as f32 / 60.0,
             );
         }
     }
@@ -2881,7 +3051,7 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
         .count();
     let money = money_breakdown(world);
     println!(
-        "LAB t={:>5.1}m residents={} sites={:?} buildings=[farm:{} mill:{} bakery:{} lumber:{} fisher:{} house:{}] roads={}/{} fields={} piers={} housed={} goods=[wood:{} wheat:{} flour:{} bread:{} fish:{}] money={} [wallets={} households={} companies={} treasury={} escrow={} clearing={}]",
+        "LAB t={:>5.1}m residents={} sites={:?} buildings=[farm:{} mill:{} bakery:{} lumber:{} fisher:{} house:{}] roads={}/{} fields={} piers={} housed={} goods=[wood:{} wheat:{} flour:{} bread:{} fish:{}] money={} [wallets={} households={} companies={} treasury={} construction_escrow={} trade_escrow={} clearing={}]",
         sim_seconds / 60.0,
         snapshot.residents,
         snapshot.sites,
@@ -2907,6 +3077,7 @@ fn print_report(world: &mut World, sim_seconds: f32, verbose: bool) {
         shared::economy::format_money(money.companies),
         shared::economy::format_money(money.treasuries),
         shared::economy::format_money(money.construction_escrow),
+        shared::economy::format_money(money.trade_escrow),
         shared::economy::format_money(money.clearing),
     );
     if !economy_rows.is_empty() {
@@ -3179,6 +3350,20 @@ fn assert_lab_outcome(
             "the fertile meadow control went hungry: {evidence:#?}"
         );
     }
+    if scenario.includes_stonefield() {
+        assert!(
+            count("Lab Stonefield", SettlementBuildingKind::StoneQuarry) >= 1,
+            "the Stone-rich settlement never approved a Quarry: {built:#?}"
+        );
+        assert!(
+            evidence.saw_mining,
+            "a completed Stone Quarry never performed embodied quarry work"
+        );
+        assert!(
+            evidence.saw_stone_carried && evidence.saw_stone_present,
+            "Stone was not physically carried and deposited before civic procurement"
+        );
+    }
     let farm_count: usize = built
         .values()
         .map(|kinds| {
@@ -3323,6 +3508,99 @@ fn assert_lab_outcome(
     assert!(
         abandoned_supply_sites.is_empty(),
         "under-supplied worksites lost both their permit pickup and material routine: {abandoned_supply_sites:?}"
+    );
+}
+
+fn assert_trade_comparison_outcome(world: &mut World, expected_residents: usize) {
+    let snapshot = milestone(world);
+    let total_deaths = world.resource::<village::MortalityLedger>().total_deaths;
+    assert_eq!(
+        u64::from(snapshot.residents).saturating_add(total_deaths),
+        expected_residents as u64,
+        "the deterministic trade cohort was not fully accounted for"
+    );
+    let settlements: HashMap<_, _> = world
+        .query::<(&SettlementId, &Settlement)>()
+        .iter(world)
+        .map(|(id, settlement)| (settlement.name.clone(), (*id, settlement.tier)))
+        .collect();
+    let _meadow = settlements
+        .get("Lab Meadow")
+        .copied()
+        .expect("trade fixture lost Lab Meadow");
+    let stonefield = settlements
+        .get("Lab Stonefield")
+        .copied()
+        .expect("trade fixture lost Lab Stonefield");
+
+    let buildings: Vec<_> = world
+        .query::<(
+            &BuildingId,
+            &shared::components::BuildingOf,
+            &SettlementBuilding,
+        )>()
+        .iter(world)
+        .map(|(id, owner, building)| (*id, owner.0, building.kind))
+        .collect();
+    assert!(
+        buildings.iter().any(|(_, owner, kind)| {
+            *owner == stonefield.0 && *kind == SettlementBuildingKind::StoneQuarry
+        }),
+        "Stonefield never established its source Quarry: {buildings:?}"
+    );
+    let contracts: Vec<_> = world
+        .query::<&CivicTradeContract>()
+        .iter(world)
+        .copied()
+        .collect();
+    let fulfilled = contracts.iter().find(|contract| {
+        contract
+            .origin
+            .is_some_and(|origin| origin != contract.destination)
+            && contract.good == Good::Stone
+            && contract.status == shared::components::TradeContractStatus::Fulfilled
+            && contract.delivered_units >= contract.requested_units
+            && contract.spent_on_goods > 0
+            && contract.spent_on_freight > 0
+            && contract.escrow_cash == 0
+    });
+    let fulfilled = fulfilled.unwrap_or_else(|| {
+        panic!("no Town Works completed a paid remote Stone contract: {contracts:#?}")
+    });
+    let origin = fulfilled
+        .origin
+        .expect("fulfilled remote contract lost origin");
+    let destination_tier = settlements
+        .values()
+        .find_map(|(id, tier)| (*id == fulfilled.destination).then_some(*tier));
+    assert!(
+        destination_tier
+            .is_some_and(|tier| matches!(tier, SettlementTier::Town | SettlementTier::City)),
+        "the Stone buyer did not complete its physical Town Works: {settlements:?}"
+    );
+    assert!(
+        buildings.iter().any(|(_, owner, kind)| {
+            *owner == origin && *kind == SettlementBuildingKind::StorageHall
+        }),
+        "the exporting settlement never established a Storage Hall: {buildings:?}"
+    );
+
+    let routes: Vec<_> = world
+        .query::<(&CompanyTradeRoute, &TradeRouteHistory)>()
+        .iter(world)
+        .map(|(route, history)| (*route, history.clone()))
+        .collect();
+    assert!(
+        routes.iter().any(|(route, history)| {
+            route.origin == origin
+                && route.destination == fulfilled.destination
+                && route.good == Good::Stone
+                && route.completed_trips > 0
+                && route.lifetime_units > 0
+                && route.lifetime_delivery_revenue > 0
+                && !history.trips().is_empty()
+        }),
+        "no reusable company route retained the physical trip and freight history: {routes:#?}"
     );
 }
 
@@ -4391,6 +4669,9 @@ fn village_simulation_lab() {
                                 shared::building::BuildingType::PlaceholderStorageHall => {
                                     SettlementBuildingKind::StorageHall
                                 }
+                                shared::building::BuildingType::PlaceholderStoneQuarry => {
+                                    SettlementBuildingKind::StoneQuarry
+                                }
                             };
                             let door = kind.entrance_position(position.0, building.rotation);
                             (at.distance(point) <= 12.0).then_some((
@@ -4503,6 +4784,7 @@ fn village_simulation_lab() {
     print_civic_report(app.world_mut());
     print_business_report(app.world_mut());
     print_company_report(app.world_mut());
+    print_trade_report(app.world_mut());
     if scenario.is_crowd_stress() {
         stress_task_ledger.print_report(app.world_mut());
         stress_task_ledger.assert_no_currently_stuck_workers();
@@ -4602,6 +4884,8 @@ fn village_simulation_lab() {
         assert_economy_soak_outcome(app.world_mut(), &evidence);
     } else if scenario.is_crowd_stress() {
         assert_crowd_stress_outcome(app.world_mut(), &evidence, scenario, expected_residents);
+    } else if scenario.is_trade_comparison() {
+        assert_trade_comparison_outcome(app.world_mut(), expected_residents);
     } else if scenario.is_policy_comparison() {
         assert_policy_comparison_outcome(app.world_mut(), expected_residents);
     } else if arrival_count == 0 {

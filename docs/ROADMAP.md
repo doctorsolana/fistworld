@@ -309,19 +309,38 @@ answer "can a village run itself?" before any of the economy above exists):
       manual control freezes policy, and weekly autopilot changes at most one lever.
       The implemented formulas, money flows and review order are maintained in
       [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
-- [x] First tier advancement: a Hamlet with at least 12 residents becomes a
-      Village after three consecutive days with three reserve days, recent food
-      production covering population, no hunger and prosperity at least 65.
+- [x] First tier advancement: a Hamlet with at least 12 residents qualifies after
+      three consecutive days with three reserve days, recent food production covering
+      population, no hunger and prosperity at least 65. It then buys and visibly stages
+      12 Wood from real private consignments; a named civic worker physically raises the
+      Village Hall before the tier changes.
 - [x] Later tier advancement: a Village with at least 30 residents, a Marketplace,
       Tavern, sufficient Moot trade and prosperity 70 becomes a Town after three
       sustained days. A Town with at least a provisional 75 residents, a Church and prosperity 75
-      becomes a City after five sustained days. Civic buildings use placeholder art
-      but real plots, material supply, staffing, storage and road connections.
+      becomes a City after five sustained days. Village → Town additionally buys and stages
+      8 Stone and physically constructs the Town Hall. The current Town → City gate remains
+      direct until City Hall art and its material recipe are authored; the generic Hall
+      project seam is ready for that recipe. Civic buildings use placeholder art but real
+      plots, material supply, staffing, storage and road connections.
 - [x] Physical civic-hall ladder. The authoritative settlement entity retains its
       identity and state while its replicated Hall level changes Moot Hall → Village
       Hall → Town Hall. All three assets pin the door to one threshold. Foundations,
       permits and road surveys reserve the largest Town Hall shell from day one;
       level-specific colliders, panels and encyclopedia labels follow the current rung.
+- [x] Stone Quarry founding trade. A geography-aware permit seeks rocky ground, two
+      Quarriers perform visible outdoor extraction, each carries a bounded two-Stone load
+      back to finite business storage, and Moot Stewards consign output through the ordinary
+      private market. The current gray blockout deliberately preserves the semantic building
+      contract until authored quarry art arrives.
+- [x] First contracted inter-settlement cargo. An eligible Town Works becomes the first real
+      Stone buyer and escrows treasury cash before any supplier exists. Stone-rich investors
+      see the public tender; a complete listing binds its exact remote seller and waits for a source
+      company with a completed Storage Hall and employed Company Porter. The reusable stable
+      company route physically collects, carries and delivers the finite load; seller payment,
+      market fee, civic material/freight expense and carrier service revenue settle at their
+      actual milestones. A small minimum call-out covers the fixed carrier cost of partial loads.
+      Hall/company UI and bounded trip history expose the result. General
+      merchant speculation and strategic graph travel remain Phase 5.
 
 **Deliberately deferred:** a billboard/impostor/symbol renderer. Settlements read as
 screen-projected UI labels, using the world-to-panel projection the map already has. That
@@ -503,8 +522,8 @@ sell it dear. The M&B opening hour.
       equal internal site memoranda from company profit.
 - [x] Settlement-local company logistics: one global treasury but independent physical branch
       inventory, absolute per-good retain/sell rules, finite 2,400-bulk Storage Halls and up to
-      four private Company Porters. Private trips remain in-town and replace the civic fee with
-      ordinary company wages; cross-town stock still requires the future caravan phase.
+      four private Company Porters. Local trips replace the civic fee with ordinary company
+      wages; cross-town stock moves only through the explicit contracted route foundation above.
 - [x] Operator staffing targets: every private site exposes zero through its physical position
       maximum, vacancy matching obeys the target, and a porter finishes an active shipment before
       the closing position releases them.
@@ -537,6 +556,8 @@ wagons when you get close.
 Cargo rides the seam proven in Phase 2, so this phase adds economics, not architecture.
 
 - [ ] Settlement dispatch toward the best price in range
+- [x] Generic company route identity, buyer contract, finite cargo and milestone accounting
+      (proved first with civic Stone; Phase 5 adds merchant risk and the regional graph)
 - [ ] A TRAVERSABLE BASE GRAPH first: rough cross-country routes between
       settlements, so "roads emerge from traffic" is not circular -- traffic
       cannot wear a path along a route it cannot take.

@@ -9,10 +9,11 @@ use bevy::prelude::*;
 #[cfg(test)]
 use shared::components::CharacterKind;
 use shared::components::{
-    AttachedTo, BuildingId, BuildingOf, CharacterName, CivicEmployment, CivicRole, Company,
-    CompanyId, EmployedAt, FarmField, FishingPier, LivesAt, MootAdministration, OwnedBy, PersonId,
-    PlayerPosition, ResidentOf, RoadOf, Settlement, SettlementBuilding, SettlementBuildingKind,
-    SettlementId, VillageRoad,
+    AttachedTo, BuildingId, BuildingOf, CharacterName, CivicEmployment, CivicRole,
+    CivicTradeContract, Company, CompanyId, CompanyTradeRoute, EmployedAt, FarmField, FishingPier,
+    LivesAt, MootAdministration, OwnedBy, PersonId, PlayerPosition, ResidentOf, RoadOf, Settlement,
+    SettlementBuilding, SettlementBuildingKind, SettlementId, TradeContractId, TradeRouteId,
+    VillageRoad,
 };
 
 use super::village::{HomeAssignment, VillagerIntent};
@@ -23,6 +24,8 @@ pub struct WorldIdAllocator {
     next_settlement: u64,
     next_building: u64,
     next_company: u64,
+    next_trade_contract: u64,
+    next_trade_route: u64,
 }
 
 /// Migrate field and pier parent links from their old position join. New
@@ -179,6 +182,8 @@ impl Default for WorldIdAllocator {
             next_settlement: 1,
             next_building: 1,
             next_company: 1,
+            next_trade_contract: 1,
+            next_trade_route: 1,
         }
     }
 }
@@ -198,6 +203,14 @@ impl WorldIdAllocator {
 
     fn observe_company(&mut self, id: CompanyId) {
         self.next_company = self.next_company.max(id.0.saturating_add(1));
+    }
+
+    fn observe_trade_contract(&mut self, id: TradeContractId) {
+        self.next_trade_contract = self.next_trade_contract.max(id.0.saturating_add(1));
+    }
+
+    fn observe_trade_route(&mut self, id: TradeRouteId) {
+        self.next_trade_route = self.next_trade_route.max(id.0.saturating_add(1));
     }
 
     fn person(&mut self) -> PersonId {
@@ -223,6 +236,18 @@ impl WorldIdAllocator {
         self.next_company = self.next_company.saturating_add(1);
         id
     }
+
+    fn trade_contract(&mut self) -> TradeContractId {
+        let id = TradeContractId(self.next_trade_contract);
+        self.next_trade_contract = self.next_trade_contract.saturating_add(1);
+        id
+    }
+
+    fn trade_route(&mut self) -> TradeRouteId {
+        let id = TradeRouteId(self.next_trade_route);
+        self.next_trade_route = self.next_trade_route.saturating_add(1);
+        id
+    }
 }
 
 #[derive(Resource, Default, Debug)]
@@ -243,10 +268,14 @@ pub fn assign_stable_world_ids(
     existing_settlements: Query<&SettlementId, Added<SettlementId>>,
     existing_buildings: Query<&BuildingId, Added<BuildingId>>,
     existing_companies: Query<&CompanyId, Added<CompanyId>>,
+    existing_trade_contracts: Query<&TradeContractId, Added<TradeContractId>>,
+    existing_trade_routes: Query<&TradeRouteId, Added<TradeRouteId>>,
     new_people: Query<Entity, (With<CharacterName>, Without<PersonId>)>,
     new_settlements: Query<Entity, (With<Settlement>, Without<SettlementId>)>,
     new_buildings: Query<Entity, (With<SettlementBuilding>, Without<BuildingId>)>,
     new_companies: Query<Entity, (With<Company>, Without<CompanyId>)>,
+    new_trade_contracts: Query<Entity, (With<CivicTradeContract>, Without<TradeContractId>)>,
+    new_trade_routes: Query<Entity, (With<CompanyTradeRoute>, Without<TradeRouteId>)>,
 ) {
     for id in existing_people.iter() {
         allocator.observe_person(*id);
@@ -260,6 +289,12 @@ pub fn assign_stable_world_ids(
     for id in existing_companies.iter() {
         allocator.observe_company(*id);
     }
+    for id in existing_trade_contracts.iter() {
+        allocator.observe_trade_contract(*id);
+    }
+    for id in existing_trade_routes.iter() {
+        allocator.observe_trade_route(*id);
+    }
 
     for entity in new_people.iter() {
         commands.entity(entity).insert(allocator.person());
@@ -272,6 +307,12 @@ pub fn assign_stable_world_ids(
     }
     for entity in new_companies.iter() {
         commands.entity(entity).insert(allocator.company());
+    }
+    for entity in new_trade_contracts.iter() {
+        commands.entity(entity).insert(allocator.trade_contract());
+    }
+    for entity in new_trade_routes.iter() {
+        commands.entity(entity).insert(allocator.trade_route());
     }
 }
 

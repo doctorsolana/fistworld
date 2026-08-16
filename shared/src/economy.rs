@@ -233,6 +233,8 @@ pub struct CivicDayLedger {
     pub wage_expense: u64,
     pub poor_relief_expense: u64,
     pub material_expense: u64,
+    #[serde(default)]
+    pub freight_expense: u64,
 }
 
 impl CivicDayLedger {
@@ -247,6 +249,7 @@ impl CivicDayLedger {
             wage_expense: 0,
             poor_relief_expense: 0,
             material_expense: 0,
+            freight_expense: 0,
         }
     }
 
@@ -262,6 +265,7 @@ impl CivicDayLedger {
         self.wage_expense
             .saturating_add(self.poor_relief_expense)
             .saturating_add(self.material_expense)
+            .saturating_add(self.freight_expense)
     }
 }
 
@@ -368,6 +372,12 @@ impl CivicAccount {
         self.roll_to_day(day);
         self.current_day.poor_relief_expense =
             self.current_day.poor_relief_expense.saturating_add(pennies);
+        self.record_spending(pennies);
+    }
+
+    pub fn record_freight_expense(&mut self, day: u32, pennies: u64) {
+        self.roll_to_day(day);
+        self.current_day.freight_expense = self.current_day.freight_expense.saturating_add(pennies);
         self.record_spending(pennies);
     }
 
@@ -648,6 +658,14 @@ impl BusinessAccount {
         self.current_day.gross_revenue = self.current_day.gross_revenue.saturating_add(gross);
         self.current_day.market_fees = self.current_day.market_fees.saturating_add(fee);
         self.current_day.sold_units = self.current_day.sold_units.saturating_add(units);
+    }
+
+    /// Attribute external service income, such as a completed caravan
+    /// contract, without pretending the warehouse produced or sold the cargo.
+    pub fn record_service_revenue(&mut self, day: u32, pennies: u64) {
+        self.roll_to_day(day);
+        self.gross_revenue = self.gross_revenue.saturating_add(pennies);
+        self.current_day.gross_revenue = self.current_day.gross_revenue.saturating_add(pennies);
     }
 
     /// Attribute a company-funded external input purchase to this site.
@@ -2550,6 +2568,47 @@ impl MootMarket {
         maximum_unit_price: Option<u64>,
         excluded_seller: Option<MarketSeller>,
     ) -> MarketPurchase {
+        self.purchase_filtered(
+            good,
+            requested,
+            budget,
+            maximum_unit_price,
+            None,
+            excluded_seller,
+        )
+    }
+
+    /// Fill only one named seller's consignment. Buyer-funded caravan
+    /// contracts use this after reserving cash against a specific public
+    /// offer, so collection cannot silently switch ownership or price while
+    /// the carrier is standing at the source market.
+    pub fn purchase_from_seller(
+        &mut self,
+        seller: MarketSeller,
+        good: Good,
+        requested: u32,
+        budget: u64,
+        maximum_unit_price: Option<u64>,
+    ) -> MarketPurchase {
+        self.purchase_filtered(
+            good,
+            requested,
+            budget,
+            maximum_unit_price,
+            Some(seller),
+            None,
+        )
+    }
+
+    fn purchase_filtered(
+        &mut self,
+        good: Good,
+        requested: u32,
+        budget: u64,
+        maximum_unit_price: Option<u64>,
+        required_seller: Option<MarketSeller>,
+        excluded_seller: Option<MarketSeller>,
+    ) -> MarketPurchase {
         if !self.can_trade(good) {
             return MarketPurchase::default();
         }
@@ -2561,6 +2620,7 @@ impl MootMarket {
             }
             if listing.good != good
                 || listing.units == 0
+                || required_seller.is_some_and(|seller| seller != listing.seller)
                 || excluded_seller == Some(listing.seller)
                 || maximum_unit_price.is_some_and(|maximum| listing.unit_price > maximum)
             {
@@ -2919,6 +2979,8 @@ pub struct CivicHistoryDay {
     pub wage_expense: u64,
     pub poor_relief_expense: u64,
     pub material_expense: u64,
+    #[serde(default)]
+    pub freight_expense: u64,
     pub filled_positions: u16,
     pub vacant_positions: u16,
     pub market_fee_bps: u16,
@@ -3103,6 +3165,7 @@ pub fn permit_price_with_subsidy(
     let base: u64 = match kind {
         SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut => 300,
         SettlementBuildingKind::LumberjackHut => 250,
+        SettlementBuildingKind::StoneQuarry => 350,
         SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => 250,
         SettlementBuildingKind::StorageHall => 400,
         // Civic blockouts are settlement-requested progression infrastructure.
@@ -3416,10 +3479,17 @@ pub const FOOD_SECURITY_TARGET_DAYS: f32 = 3.0;
 pub const VILLAGE_MIN_RESIDENTS: u32 = 12;
 pub const VILLAGE_REQUIRED_SECURE_DAYS: u16 = 3;
 pub const VILLAGE_MIN_PROSPERITY: f32 = 65.0;
+/// Wood staged beside the founding Moot before its permanent Village Hall is
+/// raised. This uses the same paid civic-worksite pipeline as later upgrades.
+pub const VILLAGE_HALL_WOOD_REQUIRED: u32 = 12;
 pub const TOWN_MIN_RESIDENTS: u32 = 30;
 pub const TOWN_MIN_PROSPERITY: f32 = 70.0;
 pub const TOWN_MIN_MARKET_VOLUME: u64 = 5_000;
 pub const TOWN_REQUIRED_DAYS: u16 = 3;
+/// Dressed Stone staged beside the civic centre before a Village can raise
+/// its permanent Town Hall. The exchange buys this from real private offers;
+/// promotion never withdraws seller-owned stock for free.
+pub const TOWN_HALL_STONE_REQUIRED: u32 = 8;
 /// Provisional monotonic gate while City population balance remains open.
 /// Keeping it above the agreed 30-person Town gate prevents a prosperous
 /// small Village from skipping through two civic identities.
@@ -3453,6 +3523,7 @@ pub mod capacity {
     /// A dedicated private store is deliberately much larger than a workshop,
     /// but remains finite so logistics and additional buildings still matter.
     pub const STORAGE_HALL: u32 = 2_400;
+    pub const STONE_QUARRY: u32 = 360;
     pub const HALL: u32 = 1_200;
 }
 
@@ -3704,6 +3775,23 @@ mod tests {
         assert_eq!(purchase.fills[0].gross, 240);
         assert_eq!(purchase.fills[0].market_fee, 12);
         assert_eq!(market.seller_listed_units(seller, Good::Wheat), 3);
+    }
+
+    #[test]
+    fn contracted_purchase_never_substitutes_a_different_seller() {
+        let mut market = MootMarket::founding();
+        let contracted = MarketSeller::Business(crate::components::BuildingId(21));
+        let cheaper_rival = MarketSeller::Business(crate::components::BuildingId(22));
+        market.consign(contracted, Good::Stone, 8, 250);
+        market.consign(cheaper_rival, Good::Stone, 8, 100);
+
+        let purchase = market.purchase_from_seller(contracted, Good::Stone, 8, 2_000, Some(250));
+
+        assert_eq!(purchase.trade.units, 8);
+        assert_eq!(purchase.trade.pennies, 2_000);
+        assert!(purchase.fills.iter().all(|fill| fill.seller == contracted));
+        assert_eq!(market.seller_listed_units(contracted, Good::Stone), 0);
+        assert_eq!(market.seller_listed_units(cheaper_rival, Good::Stone), 8);
     }
 
     #[test]

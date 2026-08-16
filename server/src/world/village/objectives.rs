@@ -26,11 +26,14 @@ pub fn sync_character_objectives(
             Option<&HouseholdShoppingRoutine>,
             Option<&MarketCollectionRoutine>,
             Option<&InternalDeliveryRoutine>,
+            Option<&TradeRouteRoutine>,
+            Option<&crate::world::settlement_development::CivicHallBuilderRoutine>,
         ),
         (
             Option<&FarmerRoutine>,
             Option<&FishingRoutine>,
             Option<&LumberjackRoutine>,
+            Option<&QuarryRoutine>,
             Option<&ProcessingRoutine>,
             Option<&ambient::AmbientRoutine>,
             Option<&WorkerOffDuty>,
@@ -59,11 +62,14 @@ pub fn sync_character_objectives(
             shopping,
             market_collection,
             internal_delivery,
+            trade_route,
+            civic_hall_builder,
         ),
         (
             farmer,
             fisher,
             lumberjack,
+            quarry,
             processing,
             ambient,
             off_duty,
@@ -93,9 +99,12 @@ pub fn sync_character_objectives(
             shopping,
             market_collection,
             internal_delivery,
+            trade_route,
+            civic_hall_builder,
             farmer,
             fisher,
             lumberjack,
+            quarry,
             processing,
             ambient,
             off_duty,
@@ -133,9 +142,12 @@ fn objective_for(
     shopping: Option<&HouseholdShoppingRoutine>,
     market_collection: Option<&MarketCollectionRoutine>,
     internal_delivery: Option<&InternalDeliveryRoutine>,
+    trade_route: Option<&TradeRouteRoutine>,
+    civic_hall_builder: Option<&crate::world::settlement_development::CivicHallBuilderRoutine>,
     farmer: Option<&FarmerRoutine>,
     fisher: Option<&FishingRoutine>,
     lumberjack: Option<&LumberjackRoutine>,
+    quarry: Option<&QuarryRoutine>,
     processing: Option<&ProcessingRoutine>,
     ambient: Option<&ambient::AmbientRoutine>,
     off_duty: Option<&WorkerOffDuty>,
@@ -193,6 +205,9 @@ fn objective_for(
     if let Some(road) = road {
         return road.objective();
     }
+    if civic_hall_builder.is_some() {
+        return CharacterObjective::ConstructingBuilding;
+    }
     if let Some(home) = home {
         return match home.phase {
             HomePhase::LeavingWorkplace | HomePhase::GoingToDoor => CharacterObjective::GoingHome,
@@ -227,6 +242,9 @@ fn objective_for(
             InternalDeliveryPhase::Delivering => CharacterObjective::DeliveringCompanyInputs,
         };
     }
+    if let Some(route) = trade_route {
+        return route.objective();
+    }
     if let Some(farmer) = farmer {
         return match farmer.phase {
             FarmerPhase::GoingToFarmstead
@@ -259,6 +277,9 @@ fn objective_for(
             LumberjackPhase::ReturningToHut => CharacterObjective::ReturningTimber,
             LumberjackPhase::EndingShift => CharacterObjective::EndingWorkShift,
         };
+    }
+    if let Some(quarry) = quarry {
+        return quarry.objective();
     }
     if let Some(processing) = processing {
         return processing.objective();
