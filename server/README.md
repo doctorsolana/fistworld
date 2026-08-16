@@ -9,7 +9,7 @@ top-level modules and calls `app::run()`; runtime rules belong to their domain.
 |---|---|
 | `app` | Bootstrap, resources and ordered fixed-update wiring |
 | `net` | Connections, peer identity and client-message ingress |
-| `player` | Commander views, hero lifecycle, rosters, movement orders, nearby Hall trading, permit/company funding and placement, physical hero construction, Company Master policy commands, share trading and player indexes |
+| `player` | Commander views, hero lifecycle, rosters, movement orders, nearby Hall trading, permit/company funding and placement, physical hero construction, Company Master policy commands, share trading, authoritative caravan timetable orders and player indexes |
 | `collision` | Baked/derived building colliders, spatial indexes, raycasts and streamed static collision |
 | `world` | Time, identity, regions, settlements, village simulation, roads, development and lab fixtures |
 | `persistence` | Session profile snapshots plus legacy profile migration/IO tooling; the live server deliberately starts fresh |
@@ -51,7 +51,7 @@ rule more precisely.
     plus the shared Wheat → Flour → Bread recipes
   - `quarry`: embodied outdoor Stone extraction, bounded personal loads and workplace deposit
   - `trade_routes`: buyer-funded civic import contracts, company-owned route assets,
-    staffed Storage Hall dispatch, physical inter-settlement cargo and freight accounting
+    staffed Storage Hall dispatch, ordered merchant stops, physical inter-settlement cargo and freight/sale accounting
   - `processing`: embodied Windmill and Bakery shifts using bounded private inventories
   - `property_market`: compact Hall-published takeover listings for completed firms and worksites
   - `strategic`: off-screen person compression and aggregate settlement work
@@ -79,13 +79,13 @@ Processor input management exposes 0–7 days of physical coverage. Public outpu
 instead an absolute per-good retain amount on the company's settlement-local branch, followed
 by one `Sell excess`/`Hold all` choice. Sites expose a separate bounded enabled-position target.
 Storage Halls and Company Porters extend a local branch. Cross-settlement movement is legal
-only through an explicit `CompanyTradeRoute`: the first live use is a cash-backed civic Stone
-tender which exists before a supplier does. Once a complete real offer appears it binds that
-exact source consignment; the carrier is paid only at the destination, with a small minimum
-call-out fee for otherwise uneconomic partial loads. The first carrier implementation requires a
-completed Storage Hall and an employed Company Porter, uses a coarse-middle/fine-endpoint bounded
-overland route, and returns destination Hall -> origin Hall -> private warehouse. Do not add
-implicit shared stock between branches.
+only through an explicit `CompanyTradeRoute`. Cash-backed civic Stone tenders bind an exact
+seller and use locked pickup/delivery stops; the carrier is paid only at the destination, with a
+small minimum call-out fee for otherwise uneconomic partial loads. Player merchant routes use
+two to eight ordered `Buy`/`Load`/`Sell`/`Unload` stops. Buy spends company cash, Sell creates an
+ordinary seller-owned market consignment, and private Load/Unload is legal only at that company's
+Storage Hall. Both modes require an employed Company Porter and use the bounded
+coarse-middle/fine-endpoint overland planner. Do not add implicit shared stock between branches.
 Autonomous firms begin with one enabled position, then change by one position per day toward
 the marginally profitable roster supported by recent sales, unmet demand and existing stock.
 Their cached output budget is shared by tactical and strategic production. Solvent unwanted

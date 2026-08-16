@@ -312,6 +312,11 @@ fn fragment(
         }
         // Favor the single-layer path more aggressively to reduce texture fetch cost.
         let use_single_layer_fast_path = dominant_weight >= 0.70;
+        // Normal maps cannot switch at the albedo fast-path threshold: a 70/30
+        // material edge still needs both relief fields or grazing morning light
+        // exposes the threshold as a bright/dark outline. Almost-pure pixels
+        // retain the inexpensive one-sample path.
+        let use_single_normal_fast_path = dominant_weight >= 0.995;
 
         var albedo = vec3<f32>(0.0, 0.0, 0.0);
         if (use_single_layer_fast_path) {
@@ -458,7 +463,7 @@ fn fragment(
 #ifdef VERTEX_TANGENTS
         if (normal_strength > 0.001) {
             var blended_nt = vec3<f32>(0.5, 0.5, 1.0);
-            if (use_single_layer_fast_path) {
+            if (use_single_normal_fast_path) {
                 if (dominant_layer == 0u) {
                     blended_nt = textureSample(normal_array, normal_sampler, uv_grass, 0).xyz;
                 } else if (dominant_layer == 1u) {
@@ -469,16 +474,22 @@ fn fragment(
                     blended_nt = textureSample(normal_array, normal_sampler, uv_cobble, 3).xyz;
                 }
             } else {
-                let grass_nt = textureSample(normal_array, normal_sampler, uv_grass, 0).xyz;
-                let dirt_nt = textureSample(normal_array, normal_sampler, uv_dirt, 1).xyz;
-                let sand_nt = textureSample(normal_array, normal_sampler, uv_sand, 2).xyz;
-                let cobble_nt = textureSample(normal_array, normal_sampler, uv_cobble, 3).xyz;
-                blended_nt = normalize(
-                    grass_nt * weights.x
-                        + dirt_nt * weights.y
-                        + sand_nt * weights.z
-                        + cobble_nt * weights.w
+                // Texture samples are encoded in 0..1. The previous code
+                // normalized those encoded values before Bevy decoded them,
+                // biasing every mixed pixel toward +X/+Y and making a halo.
+                // Blend and normalize in signed tangent space, then encode once
+                // for `apply_normal_mapping`.
+                let grass_n = textureSample(normal_array, normal_sampler, uv_grass, 0).xyz * 2.0 - 1.0;
+                let dirt_n = textureSample(normal_array, normal_sampler, uv_dirt, 1).xyz * 2.0 - 1.0;
+                let sand_n = textureSample(normal_array, normal_sampler, uv_sand, 2).xyz * 2.0 - 1.0;
+                let cobble_n = textureSample(normal_array, normal_sampler, uv_cobble, 3).xyz * 2.0 - 1.0;
+                let mixed_n = normalize(
+                    grass_n * weights.x
+                        + dirt_n * weights.y
+                        + sand_n * weights.z
+                        + cobble_n * weights.w
                 );
+                blended_nt = mixed_n * 0.5 + 0.5;
             }
 
             let double_sided =

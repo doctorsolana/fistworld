@@ -211,7 +211,14 @@ pub(crate) fn review_automatic_price(
 pub fn review_business_management(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
-    halls: Query<(Entity, &shared::components::SettlementId), With<Settlement>>,
+    halls: Query<
+        (
+            Entity,
+            &shared::components::SettlementId,
+            Option<&SettlementEconomy>,
+        ),
+        With<Settlement>,
+    >,
     mut markets: Query<&mut MootMarket, With<Settlement>>,
     mut companies: ParamSet<(
         Query<(
@@ -259,7 +266,11 @@ pub fn review_business_management(
         return;
     };
     let hall_by_settlement: HashMap<shared::components::SettlementId, Entity> =
-        halls.iter().map(|(entity, id)| (*id, entity)).collect();
+        halls.iter().map(|(entity, id, _)| (*id, entity)).collect();
+    let unmet_food_by_settlement: HashMap<shared::components::SettlementId, u32> = halls
+        .iter()
+        .map(|(_, id, economy)| (*id, economy.map_or(0, |economy| economy.unmet_food)))
+        .collect();
     let people_by_id: HashMap<shared::components::PersonId, Entity> = villagers
         .iter()
         .map(|(entity, id, ..)| (*id, entity))
@@ -284,6 +295,15 @@ pub fn review_business_management(
                 .entry(employed.0)
                 .or_default()
                 .push(entity);
+        }
+    }
+    let mut responsive_food_businesses = HashMap::<shared::components::SettlementId, u64>::new();
+    for (_, _, building_of, building, _, _, _, _, _, _, condition, ..) in businesses.iter_mut() {
+        if super::super::business_output(building.kind).is_some_and(Good::is_edible)
+            && (condition.state.accepts_new_workers()
+                || condition.state == BusinessState::Mothballed)
+        {
+            *responsive_food_businesses.entry(building_of.0).or_default() += 1;
         }
     }
 
@@ -580,6 +600,23 @@ pub fn review_business_management(
         }
         let listed = market.seller_listed_units(seller, good);
         let pool = *market.pool(good);
+        let generic_food_shortage = if good.is_edible() {
+            u64::from(
+                unmet_food_by_settlement
+                    .get(&building_of.0)
+                    .copied()
+                    .unwrap_or_default(),
+            )
+            .div_ceil(
+                responsive_food_businesses
+                    .get(&building_of.0)
+                    .copied()
+                    .unwrap_or(1)
+                    .max(1),
+            )
+        } else {
+            0
+        };
         let market_signals = MarketPriceSignals {
             best_competitor: market.best_competing_price(seller, good),
             last_clearing_price: pool.bid,
@@ -590,7 +627,8 @@ pub fn review_business_management(
             unavailable_units: pool
                 .day
                 .unavailable_units
-                .saturating_add(pool.previous_day.unavailable_units),
+                .saturating_add(pool.previous_day.unavailable_units)
+                .max(generic_food_shortage),
             unaffordable_units: pool
                 .day
                 .unaffordable_units
@@ -604,6 +642,21 @@ pub fn review_business_management(
         let total_output_stock = inventory.amount(good).saturating_add(listed);
         let mut voluntary_closure = false;
         if management.autopilot {
+            // Until a site has real production history, the owner estimates
+            // costs from its actual land/water quality and opening roster.
+            // This is a private pricing decision, not a regulated floor:
+            // manual owners remain free to quote any price they choose.
+            if account.current_day.produced_units == 0 && account.previous_day.produced_units == 0 {
+                if let Some(estimated) = estimated_staffed_unit_cost(
+                    building.kind,
+                    building.quality,
+                    automatic_opening_positions(building.kind),
+                    wage.daily_wage,
+                    |input| market.suggested_price(input),
+                ) {
+                    account.estimated_unit_cost = estimated;
+                }
+            }
             sale.target_margin_bps = management.strategy.target_margin_bps();
             sale.max_daily_price_change_bps = management.strategy.daily_price_step_bps();
             // Active downstream requests are reserved before public collection,

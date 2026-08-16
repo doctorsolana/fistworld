@@ -25,5 +25,9 @@ pub struct TerrainPaintState {
 pub struct WeightMapData {
     pub handle: Handle<Image>,
     pub resolution: u32,
+    /// The generated + authored surface before transient village roads are
+    /// composited. Runtime overlays always restart here, so removing or
+    /// upgrading a road cannot leave stale paint behind.
+    pub base_weights: Vec<[u8; 4]>,
     pub weights: Vec<[u8; 4]>,
 }

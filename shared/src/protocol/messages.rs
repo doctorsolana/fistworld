@@ -222,6 +222,50 @@ pub struct HeroCompanyResult {
     pub message: String,
 }
 
+/// Create or edit a durable caravan timetable. Company ownership and the
+/// required staffed Storage Hall are revalidated by the server; the client
+/// draft is never authoritative.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub enum HeroTradeRouteAction {
+    Create {
+        warehouse: crate::components::BuildingId,
+        good: crate::economy::Good,
+        cargo_target: u32,
+        maximum_purchase_price: u64,
+        minimum_destination_price: u64,
+        automatic: bool,
+        stops: Vec<crate::components::TradeRouteStop>,
+    },
+    Update {
+        route: crate::components::TradeRouteId,
+        good: crate::economy::Good,
+        cargo_target: u32,
+        maximum_purchase_price: u64,
+        minimum_destination_price: u64,
+        automatic: bool,
+        stops: Vec<crate::components::TradeRouteStop>,
+    },
+    SetMothballed {
+        route: crate::components::TradeRouteId,
+        mothballed: bool,
+    },
+    DispatchOnce {
+        route: crate::components::TradeRouteId,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroTradeRouteOrder {
+    pub company: crate::components::CompanyId,
+    pub action: HeroTradeRouteAction,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct HeroTradeRouteResult {
+    pub success: bool,
+    pub message: String,
+}
+
 /// Establish a legal company at a settlement Hall before it owns a site.
 /// The founder receives all 1,000 shares and becomes Company Master.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
@@ -615,6 +659,40 @@ mod tests {
         let bytes = bincode::serialize(&message).unwrap();
         assert_eq!(
             bincode::deserialize::<HeroMarketOrder>(&bytes).unwrap(),
+            message
+        );
+    }
+
+    #[test]
+    fn multi_town_caravan_order_roundtrips_without_losing_stop_order() {
+        let message = HeroTradeRouteOrder {
+            company: crate::components::CompanyId(4),
+            action: HeroTradeRouteAction::Create {
+                warehouse: crate::components::BuildingId(8),
+                good: crate::economy::Good::Stone,
+                cargo_target: 12,
+                maximum_purchase_price: 225,
+                minimum_destination_price: 310,
+                automatic: true,
+                stops: vec![
+                    crate::components::TradeRouteStop {
+                        settlement: crate::components::SettlementId(1),
+                        action: crate::components::TradeRouteStopAction::Buy,
+                    },
+                    crate::components::TradeRouteStop {
+                        settlement: crate::components::SettlementId(2),
+                        action: crate::components::TradeRouteStopAction::Sell,
+                    },
+                    crate::components::TradeRouteStop {
+                        settlement: crate::components::SettlementId(3),
+                        action: crate::components::TradeRouteStopAction::Unload,
+                    },
+                ],
+            },
+        };
+        let bytes = bincode::serialize(&message).unwrap();
+        assert_eq!(
+            bincode::deserialize::<HeroTradeRouteOrder>(&bytes).unwrap(),
             message
         );
     }

@@ -7,7 +7,7 @@ mod debug;
 pub mod map_view;
 mod materials;
 mod mesh;
-mod paint;
+pub(crate) mod paint;
 mod streaming;
 
 use bevy::pbr::MaterialPlugin;

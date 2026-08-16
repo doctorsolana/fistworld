@@ -71,7 +71,9 @@ pub const TERRAIN_LAYERS: [TerrainLayerDef; 4] = [
         albedo_source: "Grass_Texture_02.png",
         normal_source: "Dirt_Normals_01.png",
         tile_metres: 7.0,
-        color: [0.42, 0.32, 0.22, 1.0],
+        // Dark enough to read as compacted earth in full daylight while the
+        // splat shoulder still has room to fade naturally into meadow grass.
+        color: [0.32, 0.23, 0.15, 1.0],
     },
     TerrainLayerDef {
         layer: TerrainLayer::Sand,

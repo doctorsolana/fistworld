@@ -208,6 +208,46 @@ pub(crate) fn rated_daily_production(
     })
 }
 
+/// Estimate the cost of one saleable unit for a particular enacted roster.
+///
+/// This deliberately uses the site's real quality and the same proportional
+/// capacity rule as the daily staffing planner. A new low-quality extractor
+/// must therefore quote enough to fund its first worker instead of pricing as
+/// though it occupied perfect land and then rationally hiring nobody.
+pub(crate) fn estimated_staffed_unit_cost(
+    kind: SettlementBuildingKind,
+    site_quality: f32,
+    staffed_positions: u8,
+    daily_wage: u64,
+    mut input_unit_price: impl FnMut(Good) -> u64,
+) -> Option<u64> {
+    let capacity = rated_daily_production(kind, site_quality)?;
+    let positions = kind.positions().max(1);
+    let staffed_positions = staffed_positions.clamp(1, positions);
+    let mut output_units = capacity
+        .output_units
+        .saturating_mul(u32::from(staffed_positions))
+        .div_ceil(u32::from(positions));
+    let input_cost = if let Some(recipe) = processing_recipe(kind) {
+        let cycles = output_units / recipe.output_units.max(1);
+        output_units = cycles.saturating_mul(recipe.output_units);
+        u64::from(cycles)
+            .saturating_mul(u64::from(recipe.input_units))
+            .saturating_mul(input_unit_price(recipe.input))
+    } else {
+        0
+    };
+    if output_units == 0 {
+        return None;
+    }
+    let payroll = u64::from(staffed_positions).saturating_mul(daily_wage);
+    Some(
+        payroll
+            .saturating_add(input_cost)
+            .div_ceil(u64::from(output_units)),
+    )
+}
+
 /// Productive seconds for one dressed Stone unit. Rocky highland sites expose
 /// workable faces and fractured material; meadow quarries remain possible but
 /// substantially less competitive rather than being prohibited by biome.
@@ -521,6 +561,36 @@ mod tests {
         assert_eq!(bakery.output, Good::Bread);
         assert_eq!(bakery.output_units, 60);
         assert_eq!(bakery.output_per_input(), 2);
+    }
+
+    #[test]
+    fn first_worker_cost_uses_real_site_quality() {
+        let perfect = estimated_staffed_unit_cost(
+            SettlementBuildingKind::FishermansHut,
+            1.0,
+            1,
+            shared::economy::FOUNDING_DAILY_WAGE,
+            Good::base_price,
+        )
+        .unwrap();
+        let poor = estimated_staffed_unit_cost(
+            SettlementBuildingKind::FishermansHut,
+            0.42,
+            1,
+            shared::economy::FOUNDING_DAILY_WAGE,
+            Good::base_price,
+        )
+        .unwrap();
+
+        assert!(poor > perfect);
+        let poor_capacity = rated_daily_production(SettlementBuildingKind::FishermansHut, 0.42)
+            .unwrap()
+            .output_units
+            .div_ceil(2);
+        assert_eq!(
+            poor,
+            shared::economy::FOUNDING_DAILY_WAGE.div_ceil(u64::from(poor_capacity))
+        );
     }
 
     #[test]

@@ -33,6 +33,7 @@ pub(crate) fn build_weightmap_from_weights(
     WeightMapData {
         handle,
         resolution,
+        base_weights: weights.clone(),
         weights,
     }
 }

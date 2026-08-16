@@ -109,6 +109,13 @@ but a real export contract lowers that threshold to one productive site. It will
 autonomously duplicate a depot in the same branch. Players remain free to buy the tier-unlocked
 permit as a speculative infrastructure investment.
 
+Independent player merchant routes use the same company asset and Company Porter but never
+borrow civic escrow. Their ordered timetable contains two to eight town stops. `Buy` spends the
+company treasury against real public offers up to its ceiling; `Sell` physically consigns cargo
+at its floor and produces no revenue until purchased. `Load` and `Unload` are cashless private
+transfers and therefore require an owned Storage Hall in that town. Public civic contracts remain
+locked two-stop pickup/delivery schedules so a carrier cannot redirect buyer-owned cargo.
+
 Local extractor permits count active and already-approved sites conservatively: one-third of
 uninterrupted rated output until the observed two-day flow proves a higher embodied rate. This
 prevents a permit burst while leaving room for commute and handling losses. It is not a
@@ -800,8 +807,8 @@ must never invent goods, erase liabilities or create money to rescue a tuning pr
 - Household income/property taxes, tariffs and inter-settlement fiscal transfers.
 - Debt issuance, banks, credit and treasury borrowing.
 - Guard patrols, crime, courts and military budgets.
-- Processed-food import policy, player-authored routes, merchant speculation and
-  cross-settlement price arbitration. The first contracted Stone import is implemented.
+- Processed-food import policy, NPC merchant speculation and autonomous cross-settlement price
+  arbitration. Contracted Stone imports and player-authored merchant timetables are implemented.
 - Player-authored wills, inheritance of company shares and estate share auctions. The first automatic
   succession path is live: a dead resident's cash and carried goods enter their
   household (then the hall if unclaimed), owned productive firms become takeover

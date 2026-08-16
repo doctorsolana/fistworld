@@ -617,8 +617,23 @@ pub fn consider_permits(
                 building.kind,
                 SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut
             ) {
+                // Completed shells are not food supply. Only the roster the
+                // owner is actually willing to fund counts as anticipated
+                // extractor capacity; otherwise several zero-worker farms can
+                // make a starving town believe it already has enough food.
                 let anticipated = super::rated_daily_production(building.kind, building.quality)
-                    .map_or(0, |capacity| capacity.output_units);
+                    .map_or(0, |capacity| {
+                        let enabled = staffing
+                            .copied()
+                            .unwrap_or_else(|| {
+                                BusinessStaffingPolicy::new(building.kind.positions())
+                            })
+                            .target_for(building.kind);
+                        capacity
+                            .output_units
+                            .saturating_mul(u32::from(enabled))
+                            .div_ceil(u32::from(building.kind.positions().max(1)))
+                    });
                 match building.kind {
                     SettlementBuildingKind::Farmstead => {
                         signals.anticipated_wheat_output =

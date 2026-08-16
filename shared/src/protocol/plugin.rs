@@ -12,8 +12,8 @@ use crate::components::{
     PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation, Residence, ResidentOf,
     Settlement, SettlementBuilding, SettlementDevelopment, SettlementId,
     SettlementOpportunityBoard, SettlementPolicies, SettlementPropertyBoard, SettlementSummary,
-    TimeWarp, TradeContractId, TradeRouteHistory, TradeRouteId, VillageRoad, WorkStatus,
-    WorkplaceOperation, WorldTime,
+    TimeWarp, TradeContractId, TradeRouteHistory, TradeRouteId, TradeRouteSchedule, VillageRoad,
+    WorkStatus, WorkplaceOperation, WorldTime,
 };
 use crate::economy::{
     BusinessAccount, BusinessCondition, BusinessForSale, BusinessLiquidation,
@@ -60,6 +60,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<CompanyShareMarket>().replicate();
         app.component::<CivicTradeContract>().replicate();
         app.component::<CompanyTradeRoute>().replicate();
+        app.component::<TradeRouteSchedule>().replicate();
         app.component::<TradeRouteHistory>().replicate();
         app.component::<ResidentOf>().replicate();
         app.component::<BuildingOf>().replicate();
@@ -168,6 +169,8 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<HeroCompanyOrder>()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<HeroTradeRouteOrder>()
+            .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<HeroCompanyFoundingOrder>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
@@ -201,6 +204,8 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<HeroBusinessResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroCompanyResult>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<HeroTradeRouteResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroCompanyFoundingResult>()
             .add_direction(NetworkDirection::ServerToClient);

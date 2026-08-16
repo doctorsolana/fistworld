@@ -12,7 +12,8 @@ use shared::components::{
     BuildingId, BuildingOf, CharacterName, Company, CompanyId, CompanyLeadership, CompanyOwnership,
     CompanyShareMarket, CompanyTradeRoute, Hero, OperatedBy, PersonId, SettlementBuilding,
     SettlementBuildingKind, SettlementId, SettlementSummary, TradeRouteHistory, TradeRouteId,
-    TradeRouteStatus, TradeRouteTrip,
+    TradeRouteMode, TradeRouteSchedule, TradeRouteStatus, TradeRouteStop, TradeRouteStopAction,
+    TradeRouteTrip, MAX_TRADE_ROUTE_STOPS,
 };
 use shared::economy::{
     format_money, BusinessAccount, BusinessCondition, BusinessProcurementPolicy,
@@ -21,7 +22,10 @@ use shared::economy::{
     CompanyDecisionRecord, CompanyManagementPolicy, CompanyResourcePolicy, Good, GoodsInventory,
     Wallet,
 };
-use shared::protocol::{HeroCompanyAction, HeroCompanyOrder, HeroCompanyResult, ReliableChannel};
+use shared::protocol::{
+    HeroCompanyAction, HeroCompanyOrder, HeroCompanyResult, HeroTradeRouteAction,
+    HeroTradeRouteOrder, HeroTradeRouteResult, ReliableChannel,
+};
 
 use super::*;
 use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant};
@@ -86,17 +90,41 @@ pub struct CompanyBranchRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompanyRouteRecord {
     pub id: TradeRouteId,
+    pub warehouse: BuildingId,
+    pub warehouse_name: String,
+    pub mode: TradeRouteMode,
     pub origin: String,
     pub destination: String,
     pub good: Good,
     pub cargo_target: u32,
+    pub cargo_onboard: u32,
+    pub maximum_purchase_price: u64,
+    pub minimum_destination_price: u64,
     pub automatic: bool,
     pub assigned_caravaner: Option<String>,
+    pub current_stop: u8,
     pub status: TradeRouteStatus,
     pub completed_trips: u32,
     pub lifetime_units: u32,
     pub lifetime_delivery_revenue: u64,
+    pub lifetime_purchase_cost: u64,
+    pub lifetime_consigned_value: u64,
+    pub stops: Vec<CompanyRouteStopRecord>,
+    pub trips: Vec<TradeRouteTrip>,
     pub latest_trip: Option<TradeRouteTrip>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompanyRouteStopRecord {
+    pub settlement: SettlementId,
+    pub settlement_name: String,
+    pub action: TradeRouteStopAction,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompanySettlementRecord {
+    pub id: SettlementId,
+    pub name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,6 +194,7 @@ impl CompanyRecord {
 #[derive(Resource, Default, Debug, PartialEq, Eq)]
 pub struct CompanyDirectory {
     pub records: Vec<CompanyRecord>,
+    pub settlements: Vec<CompanySettlementRecord>,
     pub local_person: Option<PersonId>,
     pub local_wallet: Option<u64>,
 }
@@ -228,6 +257,78 @@ pub struct CompanyBranchPolicyButton {
     pub action: HeroCompanyAction,
 }
 
+#[derive(Component, Clone, Copy)]
+pub struct NewTradeRouteButton(pub CompanyId);
+
+#[derive(Component, Clone, Copy)]
+pub struct EditTradeRouteButton {
+    pub company: CompanyId,
+    pub route: TradeRouteId,
+}
+
+#[derive(Component, Clone, Copy)]
+pub struct TradeRouteQuickActionButton {
+    pub company: CompanyId,
+    pub route: TradeRouteId,
+    pub action: TradeRouteQuickAction,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TradeRouteQuickAction {
+    DispatchOnce,
+    Mothball,
+    Reopen,
+}
+
+#[derive(Component, Clone, Copy)]
+pub struct TradeRouteEditorButton(pub TradeRouteEditorAction);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TradeRouteEditorAction {
+    Cancel,
+    Save,
+    PreviousWarehouse,
+    NextWarehouse,
+    PreviousGood,
+    NextGood,
+    CargoDown(u32),
+    CargoUp(u32),
+    BuyPriceDown(u64),
+    BuyPriceUp(u64),
+    SellPriceDown(u64),
+    SellPriceUp(u64),
+    ToggleAutomatic,
+    AddStop,
+    RemoveStop(usize),
+    MoveStopLeft(usize),
+    MoveStopRight(usize),
+    PreviousStopSettlement(usize),
+    NextStopSettlement(usize),
+    PreviousStopAction(usize),
+    NextStopAction(usize),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TradeRouteDraft {
+    pub company: CompanyId,
+    pub route: Option<TradeRouteId>,
+    pub warehouse: BuildingId,
+    pub good: Good,
+    pub cargo_target: u32,
+    pub maximum_purchase_price: u64,
+    pub minimum_destination_price: u64,
+    pub automatic: bool,
+    pub stops: Vec<TradeRouteStop>,
+    pub pending: bool,
+}
+
+#[derive(Resource, Default, Clone, Debug, PartialEq, Eq)]
+pub struct TradeRouteEditorState {
+    pub draft: Option<TradeRouteDraft>,
+    pub message: String,
+    pub success: bool,
+}
+
 #[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
 pub struct CompanyPolicyFeedback {
     pub message: String,
@@ -265,9 +366,14 @@ pub(super) fn refresh_company_directory(
         Option<&BusinessSupplyPolicy>,
         Option<&BusinessStaffingPolicy>,
     )>,
-    routes: Query<(&TradeRouteId, &CompanyTradeRoute, &TradeRouteHistory)>,
+    routes: Query<(
+        &TradeRouteId,
+        &CompanyTradeRoute,
+        &TradeRouteSchedule,
+        &TradeRouteHistory,
+    )>,
     settlements: Query<&SettlementSummary>,
-    people: Query<(&PersonId, &CharacterName)>,
+    people: Query<(&PersonId, &CharacterName, Option<&GoodsInventory>)>,
     heroes: Query<(&Hero, &PersonId, Option<&Wallet>)>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
     known_people: Res<KnownPeople>,
@@ -279,7 +385,7 @@ pub(super) fn refresh_company_directory(
         .filter(|record| record.id.is_assigned())
         .map(|record| (record.id, record.name.clone()))
         .collect();
-    for (id, name) in people.iter() {
+    for (id, name, _) in people.iter() {
         names.insert(*id, name.0.clone());
     }
     let person_name = |person: PersonId| {
@@ -312,23 +418,69 @@ pub(super) fn refresh_company_directory(
             .cloned()
             .unwrap_or_else(|| format!("Settlement #{}", settlement.0))
     };
+    let mut known_settlements: Vec<_> = settlement_names
+        .iter()
+        .map(|(id, name)| CompanySettlementRecord {
+            id: *id,
+            name: name.clone(),
+        })
+        .collect();
+    known_settlements.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    let warehouse_names: HashMap<BuildingId, String> = sites
+        .iter()
+        .filter_map(|(_, id, _, _, building, ..)| {
+            (building.kind == SettlementBuildingKind::StorageHall).then_some((
+                *id,
+                format!("Storage Hall #{} / {}", id.0, building.settlement),
+            ))
+        })
+        .collect();
     let mut routes_by_company: HashMap<CompanyId, Vec<CompanyRouteRecord>> = HashMap::new();
-    for (id, route, history) in routes.iter() {
+    for (id, route, schedule, history) in routes.iter() {
+        let cargo_onboard = route.assigned_caravaner.map_or(0, |assigned| {
+            people
+                .iter()
+                .find(|(person, ..)| **person == assigned)
+                .and_then(|(_, _, inventory)| inventory)
+                .map_or(0, |inventory| inventory.amount(route.good))
+        });
         routes_by_company
             .entry(route.company)
             .or_default()
             .push(CompanyRouteRecord {
                 id: *id,
+                warehouse: route.warehouse,
+                warehouse_name: warehouse_names
+                    .get(&route.warehouse)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Storage Hall #{}", route.warehouse.0)),
+                mode: route.mode,
                 origin: settlement_name(route.origin),
                 destination: settlement_name(route.destination),
                 good: route.good,
                 cargo_target: route.cargo_target,
+                cargo_onboard,
+                maximum_purchase_price: route.maximum_purchase_price,
+                minimum_destination_price: route.minimum_destination_price,
                 automatic: route.automatic,
                 assigned_caravaner: route.assigned_caravaner.map(&person_name),
+                current_stop: route.current_stop,
                 status: route.status,
                 completed_trips: route.completed_trips,
                 lifetime_units: route.lifetime_units,
                 lifetime_delivery_revenue: route.lifetime_delivery_revenue,
+                lifetime_purchase_cost: route.lifetime_purchase_cost,
+                lifetime_consigned_value: route.lifetime_consigned_value,
+                stops: schedule
+                    .stops()
+                    .iter()
+                    .map(|stop| CompanyRouteStopRecord {
+                        settlement: stop.settlement,
+                        settlement_name: settlement_name(stop.settlement),
+                        action: stop.action,
+                    })
+                    .collect(),
+                trips: history.trips().to_vec(),
                 latest_trip: history.trips().last().copied(),
             });
     }
@@ -515,6 +667,7 @@ pub(super) fn refresh_company_directory(
 
     let next = CompanyDirectory {
         records,
+        settlements: known_settlements,
         local_person,
         local_wallet,
     };
@@ -814,6 +967,378 @@ pub(super) fn receive_company_policy_results(
     }
 }
 
+pub(super) fn handle_trade_route_open_buttons(
+    guard: Res<ClickGuard>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    new_buttons: Query<(&Interaction, &NewTradeRouteButton), Changed<Interaction>>,
+    edit_buttons: Query<(&Interaction, &EditTradeRouteButton), Changed<Interaction>>,
+    directory: Res<CompanyDirectory>,
+    mut editor: ResMut<TradeRouteEditorState>,
+) {
+    if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    for (interaction, NewTradeRouteButton(company_id)) in new_buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let Some(company) = directory
+            .records
+            .iter()
+            .find(|company| company.id == *company_id)
+        else {
+            continue;
+        };
+        let Some(warehouse) = company
+            .sites
+            .iter()
+            .find(|site| site.kind == SettlementBuildingKind::StorageHall && site.workers > 0)
+        else {
+            editor.message =
+                "Build a Storage Hall and employ a Company Porter before creating a route."
+                    .to_string();
+            editor.success = false;
+            continue;
+        };
+        let Some(destination) = directory
+            .settlements
+            .iter()
+            .find(|settlement| settlement.id != warehouse.settlement_id)
+        else {
+            editor.message = "Discover a second settlement before creating a route.".to_string();
+            editor.success = false;
+            continue;
+        };
+        editor.draft = Some(TradeRouteDraft {
+            company: *company_id,
+            route: None,
+            warehouse: warehouse.id,
+            good: Good::Stone,
+            cargo_target: 4,
+            maximum_purchase_price: shared::economy::PENNIES_PER_COIN,
+            minimum_destination_price: shared::economy::PENNIES_PER_COIN + 25,
+            automatic: true,
+            stops: vec![
+                TradeRouteStop {
+                    settlement: warehouse.settlement_id,
+                    action: TradeRouteStopAction::Buy,
+                },
+                TradeRouteStop {
+                    settlement: destination.id,
+                    action: TradeRouteStopAction::Sell,
+                },
+            ],
+            pending: false,
+        });
+        editor.message.clear();
+    }
+    for (interaction, button) in edit_buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let Some(company) = directory
+            .records
+            .iter()
+            .find(|company| company.id == button.company)
+        else {
+            continue;
+        };
+        let Some(route) = company.routes.iter().find(|route| route.id == button.route) else {
+            continue;
+        };
+        if route.mode != TradeRouteMode::Merchant {
+            editor.message = "Civic contract stops are fixed by the buyer.".to_string();
+            editor.success = false;
+            continue;
+        }
+        editor.draft = Some(TradeRouteDraft {
+            company: button.company,
+            route: Some(button.route),
+            warehouse: route.warehouse,
+            good: route.good,
+            cargo_target: route.cargo_target,
+            maximum_purchase_price: route.maximum_purchase_price,
+            minimum_destination_price: route.minimum_destination_price,
+            automatic: route.automatic,
+            stops: route
+                .stops
+                .iter()
+                .map(|stop| TradeRouteStop {
+                    settlement: stop.settlement,
+                    action: stop.action,
+                })
+                .collect(),
+            pending: false,
+        });
+        editor.message.clear();
+    }
+}
+
+pub(super) fn handle_trade_route_quick_actions(
+    guard: Res<ClickGuard>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    buttons: Query<(&Interaction, &TradeRouteQuickActionButton), Changed<Interaction>>,
+    mut clients: Query<
+        &mut MessageSender<HeroTradeRouteOrder>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+) {
+    if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    for (interaction, button) in buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let Ok(mut sender) = clients.single_mut() else {
+            continue;
+        };
+        let action = match button.action {
+            TradeRouteQuickAction::DispatchOnce => HeroTradeRouteAction::DispatchOnce {
+                route: button.route,
+            },
+            TradeRouteQuickAction::Mothball => HeroTradeRouteAction::SetMothballed {
+                route: button.route,
+                mothballed: true,
+            },
+            TradeRouteQuickAction::Reopen => HeroTradeRouteAction::SetMothballed {
+                route: button.route,
+                mothballed: false,
+            },
+        };
+        sender.send::<ReliableChannel>(HeroTradeRouteOrder {
+            company: button.company,
+            action,
+        });
+    }
+}
+
+fn cycle_index<T: PartialEq>(items: &[T], current: &T, direction: isize) -> usize {
+    let index = items.iter().position(|item| item == current).unwrap_or(0);
+    (index as isize + direction).rem_euclid(items.len() as isize) as usize
+}
+
+pub(super) fn handle_trade_route_editor_buttons(
+    guard: Res<ClickGuard>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    buttons: Query<(&Interaction, &TradeRouteEditorButton), Changed<Interaction>>,
+    directory: Res<CompanyDirectory>,
+    mut editor: ResMut<TradeRouteEditorState>,
+    mut clients: Query<
+        &mut MessageSender<HeroTradeRouteOrder>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+) {
+    if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    for (interaction, TradeRouteEditorButton(action)) in buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        if *action == TradeRouteEditorAction::Cancel {
+            editor.draft = None;
+            editor.message.clear();
+            continue;
+        }
+        let Some(mut draft) = editor.draft.take() else {
+            continue;
+        };
+        if draft.pending {
+            editor.draft = Some(draft);
+            continue;
+        }
+        let company = directory
+            .records
+            .iter()
+            .find(|company| company.id == draft.company);
+        let warehouses: Vec<_> = company
+            .into_iter()
+            .flat_map(|company| company.sites.iter())
+            .filter(|site| site.kind == SettlementBuildingKind::StorageHall && site.workers > 0)
+            .collect();
+        match *action {
+            TradeRouteEditorAction::Cancel => unreachable!(),
+            TradeRouteEditorAction::Save => {
+                let action = if let Some(route) = draft.route {
+                    HeroTradeRouteAction::Update {
+                        route,
+                        good: draft.good,
+                        cargo_target: draft.cargo_target,
+                        maximum_purchase_price: draft.maximum_purchase_price,
+                        minimum_destination_price: draft.minimum_destination_price,
+                        automatic: draft.automatic,
+                        stops: draft.stops.clone(),
+                    }
+                } else {
+                    HeroTradeRouteAction::Create {
+                        warehouse: draft.warehouse,
+                        good: draft.good,
+                        cargo_target: draft.cargo_target,
+                        maximum_purchase_price: draft.maximum_purchase_price,
+                        minimum_destination_price: draft.minimum_destination_price,
+                        automatic: draft.automatic,
+                        stops: draft.stops.clone(),
+                    }
+                };
+                if let Ok(mut sender) = clients.single_mut() {
+                    sender.send::<ReliableChannel>(HeroTradeRouteOrder {
+                        company: draft.company,
+                        action,
+                    });
+                    draft.pending = true;
+                }
+            }
+            TradeRouteEditorAction::PreviousWarehouse | TradeRouteEditorAction::NextWarehouse => {
+                if !warehouses.is_empty() && draft.route.is_none() {
+                    let direction = if *action == TradeRouteEditorAction::PreviousWarehouse {
+                        -1
+                    } else {
+                        1
+                    };
+                    let ids: Vec<_> = warehouses.iter().map(|site| site.id).collect();
+                    let next = cycle_index(&ids, &draft.warehouse, direction);
+                    draft.warehouse = ids[next];
+                    if let Some(first) = draft.stops.first_mut() {
+                        first.settlement = warehouses[next].settlement_id;
+                    }
+                }
+            }
+            TradeRouteEditorAction::PreviousGood | TradeRouteEditorAction::NextGood => {
+                let direction = if *action == TradeRouteEditorAction::PreviousGood {
+                    -1
+                } else {
+                    1
+                };
+                let next = cycle_index(&Good::ALL, &draft.good, direction);
+                draft.good = Good::ALL[next];
+                let capacity =
+                    shared::economy::capacity::PORTER / draft.good.bulk_per_unit().max(1);
+                draft.cargo_target = draft.cargo_target.min(capacity.max(1));
+            }
+            TradeRouteEditorAction::CargoDown(amount) => {
+                draft.cargo_target = draft.cargo_target.saturating_sub(amount).max(1);
+            }
+            TradeRouteEditorAction::CargoUp(amount) => {
+                let capacity =
+                    shared::economy::capacity::PORTER / draft.good.bulk_per_unit().max(1);
+                draft.cargo_target = draft
+                    .cargo_target
+                    .saturating_add(amount)
+                    .min(capacity.max(1));
+            }
+            TradeRouteEditorAction::BuyPriceDown(amount) => {
+                draft.maximum_purchase_price =
+                    draft.maximum_purchase_price.saturating_sub(amount).max(1);
+            }
+            TradeRouteEditorAction::BuyPriceUp(amount) => {
+                draft.maximum_purchase_price = draft
+                    .maximum_purchase_price
+                    .saturating_add(amount)
+                    .min(1_000 * shared::economy::PENNIES_PER_COIN);
+            }
+            TradeRouteEditorAction::SellPriceDown(amount) => {
+                draft.minimum_destination_price = draft
+                    .minimum_destination_price
+                    .saturating_sub(amount)
+                    .max(1);
+            }
+            TradeRouteEditorAction::SellPriceUp(amount) => {
+                draft.minimum_destination_price = draft
+                    .minimum_destination_price
+                    .saturating_add(amount)
+                    .min(1_000 * shared::economy::PENNIES_PER_COIN);
+            }
+            TradeRouteEditorAction::ToggleAutomatic => draft.automatic = !draft.automatic,
+            TradeRouteEditorAction::AddStop => {
+                if draft.stops.len() < MAX_TRADE_ROUTE_STOPS {
+                    let last = draft.stops.last().map(|stop| stop.settlement);
+                    if let Some(settlement) = directory
+                        .settlements
+                        .iter()
+                        .find(|settlement| Some(settlement.id) != last)
+                    {
+                        draft.stops.push(TradeRouteStop {
+                            settlement: settlement.id,
+                            action: TradeRouteStopAction::Sell,
+                        });
+                    }
+                }
+            }
+            TradeRouteEditorAction::RemoveStop(index) => {
+                if index > 0 && draft.stops.len() > 2 && index < draft.stops.len() {
+                    draft.stops.remove(index);
+                }
+            }
+            TradeRouteEditorAction::MoveStopLeft(index) => {
+                if index > 1 && index < draft.stops.len() {
+                    draft.stops.swap(index, index - 1);
+                }
+            }
+            TradeRouteEditorAction::MoveStopRight(index) => {
+                if index > 0 && index + 1 < draft.stops.len() {
+                    draft.stops.swap(index, index + 1);
+                }
+            }
+            TradeRouteEditorAction::PreviousStopSettlement(index)
+            | TradeRouteEditorAction::NextStopSettlement(index) => {
+                if index > 0 && index < draft.stops.len() && !directory.settlements.is_empty() {
+                    let direction =
+                        if matches!(action, TradeRouteEditorAction::PreviousStopSettlement(_)) {
+                            -1
+                        } else {
+                            1
+                        };
+                    let ids: Vec<_> = directory
+                        .settlements
+                        .iter()
+                        .map(|settlement| settlement.id)
+                        .collect();
+                    let next = cycle_index(&ids, &draft.stops[index].settlement, direction);
+                    draft.stops[index].settlement = ids[next];
+                }
+            }
+            TradeRouteEditorAction::PreviousStopAction(index)
+            | TradeRouteEditorAction::NextStopAction(index) => {
+                if index < draft.stops.len() {
+                    const ACTIONS: [TradeRouteStopAction; 4] = [
+                        TradeRouteStopAction::Load,
+                        TradeRouteStopAction::Buy,
+                        TradeRouteStopAction::Unload,
+                        TradeRouteStopAction::Sell,
+                    ];
+                    let direction =
+                        if matches!(action, TradeRouteEditorAction::PreviousStopAction(_)) {
+                            -1
+                        } else {
+                            1
+                        };
+                    let next = cycle_index(&ACTIONS, &draft.stops[index].action, direction);
+                    draft.stops[index].action = ACTIONS[next];
+                }
+            }
+        }
+        editor.draft = Some(draft);
+    }
+}
+
+pub(super) fn receive_trade_route_results(
+    mut receivers: Query<&mut MessageReceiver<HeroTradeRouteResult>, With<crate::GameClient>>,
+    mut editor: ResMut<TradeRouteEditorState>,
+) {
+    for mut receiver in receivers.iter_mut() {
+        for result in receiver.receive() {
+            editor.message = result.message;
+            editor.success = result.success;
+            if result.success {
+                editor.draft = None;
+            } else if let Some(draft) = editor.draft.as_mut() {
+                draft.pending = false;
+            }
+        }
+    }
+}
+
 pub(super) fn rebuild_company_view(
     mut commands: Commands,
     directory: Res<CompanyDirectory>,
@@ -824,11 +1349,13 @@ pub(super) fn rebuild_company_view(
     detail: Query<(Entity, Option<&Children>), With<CompanyDetailContent>>,
     mut count_text: Query<&mut Text, With<CompanyCountText>>,
     feedback: Res<CompanyPolicyFeedback>,
+    editor: Res<TradeRouteEditorState>,
 ) {
     if !directory.is_changed()
         && !filter.is_changed()
         && !selected.is_changed()
         && !feedback.is_changed()
+        && !editor.is_changed()
     {
         return;
     }
@@ -883,7 +1410,15 @@ pub(super) fn rebuild_company_view(
                 .0
                 .and_then(|id| directory.records.iter().find(|company| company.id == id));
             if let Some(company) = company {
-                spawn_company_detail(parent, company, &directory, &feedback);
+                if let Some(draft) = editor
+                    .draft
+                    .as_ref()
+                    .filter(|draft| draft.company == company.id)
+                {
+                    spawn_trade_route_editor(parent, company, &directory, draft, &editor);
+                } else {
+                    spawn_company_detail(parent, company, &directory, &feedback, &editor);
+                }
             } else {
                 spawn_empty(
                     parent,
@@ -1146,6 +1681,7 @@ fn spawn_company_detail(
     company: &CompanyRecord,
     directory: &CompanyDirectory,
     feedback: &CompanyPolicyFeedback,
+    route_feedback: &TradeRouteEditorState,
 ) {
     parent
         .spawn(Node {
@@ -1228,6 +1764,20 @@ fn spawn_company_detail(
                     "NOT CHANGED"
                 },
                 feedback.message
+            ),
+        );
+    }
+    if !route_feedback.message.is_empty() {
+        spawn_note(
+            parent,
+            &format!(
+                "{}: {}",
+                if route_feedback.success {
+                    "ROUTE UPDATED"
+                } else {
+                    "ROUTE NOT CHANGED"
+                },
+                route_feedback.message
             ),
         );
     }
@@ -1410,44 +1960,47 @@ fn spawn_company_detail(
     spawn_section_title(
         parent,
         "TRADE ROUTES",
-        "company assets; cargo remains physical for the whole journey",
+        "mobile company assets with physical cargo and ordered town stops",
     );
+    let can_manage_routes = directory.local_person == Some(company.master);
+    let ready_warehouse = company
+        .sites
+        .iter()
+        .any(|site| site.kind == SettlementBuildingKind::StorageHall && site.workers > 0);
+    if can_manage_routes {
+        parent
+            .spawn(Node {
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|bar| {
+                bar.spawn((
+                    Text::new(if ready_warehouse {
+                        "Choose up to eight towns and tell the caravan what to do at each stop."
+                    } else {
+                        "A staffed Storage Hall is required before this company can open a route."
+                    }),
+                    TextFont {
+                        font_size: FontSize::Px(8.5),
+                        ..default()
+                    },
+                    TextColor(INK_MUTED),
+                ));
+                if ready_warehouse && directory.settlements.len() >= 2 {
+                    detail_button(bar, NewTradeRouteButton(company.id), "NEW CARAVAN ROUTE");
+                }
+            });
+    }
     if company.routes.is_empty() {
-        spawn_note(parent, "This company operates no inter-settlement route.");
+        spawn_note(
+            parent,
+            "This company operates no caravan route. Contract routes appear automatically when the company accepts funded public freight.",
+        );
     } else {
         for route in &company.routes {
-            let latest = route.latest_trip.map_or_else(
-                || "No completed trip yet".to_string(),
-                |trip| {
-                    format!(
-                        "last trip day {}: {} units, {} coin freight, {:.1} world min",
-                        trip.completed_day,
-                        trip.units,
-                        format_money(trip.delivery_revenue),
-                        trip.travel_world_seconds as f32 / 60.0,
-                    )
-                },
-            );
-            key_value(
-                parent,
-                &format!("ROUTE #{}", route.id.0),
-                format!(
-                    "{}  /  {} → {}\n{}  /  cargo target {}  /  {}\n{} trips, {} units, {} coin earned\n{}",
-                    route.good.label(),
-                    route.origin,
-                    route.destination,
-                    route.status.label(),
-                    route.cargo_target,
-                    route
-                        .assigned_caravaner
-                        .as_deref()
-                        .unwrap_or("no porter assigned"),
-                    route.completed_trips,
-                    route.lifetime_units,
-                    format_money(route.lifetime_delivery_revenue),
-                    latest,
-                ),
-            );
+            spawn_route_card(parent, company.id, route, can_manage_routes);
         }
     }
 
@@ -1817,6 +2370,758 @@ fn spawn_day_ledger(parent: &mut ChildSpawnerCommands<'_>, label: &str, day: Com
                 format_money(day.internal_revenue),
                 format_money(day.internal_input_expense),
             ),
+        );
+    }
+}
+
+fn spawn_route_card(
+    parent: &mut ChildSpawnerCommands<'_>,
+    company: CompanyId,
+    route: &CompanyRouteRecord,
+    can_manage: bool,
+) {
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Stretch,
+                row_gap: Val::Px(8.0),
+                padding: UiRect::all(Val::Px(12.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.88, 0.86, 0.81, 0.60)),
+            BorderColor::from(PLATE_RULE_SOFT),
+        ))
+        .with_children(|card| {
+            card.spawn(Node {
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::FlexStart,
+                column_gap: Val::Px(10.0),
+                ..default()
+            })
+            .with_children(|header| {
+                header
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(2.0),
+                        ..default()
+                    })
+                    .with_children(|copy| {
+                        copy.spawn((
+                            Text::new(format!(
+                                "CARAVAN ROUTE #{}  /  {}",
+                                route.id.0,
+                                route.good.label().to_uppercase()
+                            )),
+                            TextFont {
+                                font_size: FontSize::Px(12.0),
+                                ..default()
+                            },
+                            TextColor(INK),
+                        ));
+                        copy.spawn((
+                            Text::new(format!(
+                                "{}  /  HOME {}",
+                                route.mode.label().to_uppercase(),
+                                route.warehouse_name.to_uppercase()
+                            )),
+                            TextFont {
+                                font_size: FontSize::Px(8.0),
+                                ..default()
+                            },
+                            TextColor(INK_MUTED),
+                        ));
+                    });
+                header.spawn((
+                    Text::new(route.status.label().to_uppercase()),
+                    TextFont {
+                        font_size: FontSize::Px(8.5),
+                        ..default()
+                    },
+                    TextColor(if route.status == TradeRouteStatus::Mothballed {
+                        EMBER
+                    } else {
+                        INK_MUTED
+                    }),
+                ));
+            });
+
+            card.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(5.0),
+                row_gap: Val::Px(5.0),
+                ..default()
+            })
+            .with_children(|timeline| {
+                for (index, stop) in route.stops.iter().enumerate() {
+                    if index > 0 {
+                        timeline.spawn((
+                            Text::new("→"),
+                            TextFont {
+                                font_size: FontSize::Px(14.0),
+                                ..default()
+                            },
+                            TextColor(INK_MUTED),
+                        ));
+                    }
+                    timeline
+                        .spawn((
+                            Node {
+                                min_width: Val::Px(112.0),
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(2.0),
+                                padding: UiRect::axes(Val::Px(8.0), Val::Px(6.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                                ..default()
+                            },
+                            BackgroundColor(if usize::from(route.current_stop) == index
+                                && route.assigned_caravaner.is_some()
+                            {
+                                Color::srgba(0.78, 0.42, 0.22, 0.14)
+                            } else {
+                                Color::srgba(0.96, 0.95, 0.91, 0.70)
+                            }),
+                            BorderColor::from(if usize::from(route.current_stop) == index
+                                && route.assigned_caravaner.is_some()
+                            {
+                                EMBER
+                            } else {
+                                PLATE_RULE_SOFT
+                            }),
+                        ))
+                        .with_children(|stop_card| {
+                            stop_card.spawn((
+                                Text::new(format!(
+                                    "STOP {}  /  {}",
+                                    index + 1,
+                                    stop.settlement_name.to_uppercase()
+                                )),
+                                TextFont {
+                                    font_size: FontSize::Px(8.0),
+                                    ..default()
+                                },
+                                TextColor(INK),
+                            ));
+                            stop_card.spawn((
+                                Text::new(stop.action.label().to_uppercase()),
+                                TextFont {
+                                    font_size: FontSize::Px(7.5),
+                                    ..default()
+                                },
+                                TextColor(EMBER),
+                            ));
+                        });
+                }
+            });
+
+            card.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: Val::Px(14.0),
+                row_gap: Val::Px(4.0),
+                ..default()
+            })
+            .with_children(|facts| {
+                for text in [
+                    format!("CARGO  {} / {}", route.cargo_onboard, route.cargo_target),
+                    format!(
+                        "CARAVANER  {}",
+                        route
+                            .assigned_caravaner
+                            .as_deref()
+                            .unwrap_or("not assigned")
+                    ),
+                    format!("TRIPS  {}", route.completed_trips),
+                    format!("UNITS MOVED  {}", route.lifetime_units),
+                    if route.automatic {
+                        "SERVICE  REPEAT".to_string()
+                    } else {
+                        "SERVICE  ONE CIRCUIT".to_string()
+                    },
+                ] {
+                    facts.spawn((
+                        Text::new(text),
+                        TextFont {
+                            font_size: FontSize::Px(8.0),
+                            ..default()
+                        },
+                        TextColor(INK_MUTED),
+                    ));
+                }
+            });
+
+            match route.mode {
+                TradeRouteMode::ContractCarrier => card.spawn((
+                    Text::new(format!(
+                        "Buyer-funded cargo  /  {} coin freight earned  /  purchase ceiling {} coin. Stops are fixed by the public contract.",
+                        format_money(route.lifetime_delivery_revenue),
+                        format_money(route.maximum_purchase_price),
+                    )),
+                    TextFont {
+                        font_size: FontSize::Px(8.5),
+                        ..default()
+                    },
+                    TextColor(INK_MUTED),
+                )),
+                TradeRouteMode::Merchant => card.spawn((
+                    Text::new(format!(
+                        "Buy at or below {} coin  /  list sales at or above {} coin  /  {} coin spent  /  {} coin consigned at asking value. Consignment becomes revenue only when a real buyer purchases it.",
+                        format_money(route.maximum_purchase_price),
+                        format_money(route.minimum_destination_price),
+                        format_money(route.lifetime_purchase_cost),
+                        format_money(route.lifetime_consigned_value),
+                    )),
+                    TextFont {
+                        font_size: FontSize::Px(8.5),
+                        ..default()
+                    },
+                    TextColor(INK_MUTED),
+                )),
+            };
+
+            if route.trips.is_empty() {
+                card.spawn((
+                    Text::new("No completed circuit yet."),
+                    TextFont {
+                        font_size: FontSize::Px(8.0),
+                        ..default()
+                    },
+                    TextColor(INK_MUTED),
+                ));
+            } else {
+                for trip in route.trips.iter().rev().take(3) {
+                    card.spawn((
+                        Text::new(format!(
+                            "DAY {}  /  {} stops  /  {} units  /  bought {}  /  freight {}  /  consigned {}  /  {:.1} world min",
+                            trip.completed_day,
+                            trip.stops_visited,
+                            trip.units,
+                            format_money(trip.source_purchase_cost),
+                            format_money(trip.delivery_revenue),
+                            format_money(trip.consigned_value),
+                            trip.travel_world_seconds as f32 / 60.0,
+                        )),
+                        TextFont {
+                            font_size: FontSize::Px(7.8),
+                            ..default()
+                        },
+                        TextColor(INK_MUTED),
+                    ));
+                }
+            }
+
+            if can_manage && route.mode == TradeRouteMode::Merchant {
+                card.spawn(Node {
+                    justify_content: JustifyContent::FlexEnd,
+                    flex_wrap: FlexWrap::Wrap,
+                    column_gap: Val::Px(6.0),
+                    row_gap: Val::Px(6.0),
+                    ..default()
+                })
+                .with_children(|actions| {
+                    let at_home = route.assigned_caravaner.is_none()
+                        && matches!(
+                            route.status,
+                            TradeRouteStatus::Idle | TradeRouteStatus::Mothballed
+                        );
+                    if at_home {
+                        detail_button(
+                            actions,
+                            EditTradeRouteButton {
+                                company,
+                                route: route.id,
+                            },
+                            "EDIT TIMETABLE",
+                        );
+                    }
+                    if route.status == TradeRouteStatus::Idle && !route.automatic {
+                        detail_button(
+                            actions,
+                            TradeRouteQuickActionButton {
+                                company,
+                                route: route.id,
+                                action: TradeRouteQuickAction::DispatchOnce,
+                            },
+                            "RUN ONE CIRCUIT",
+                        );
+                    }
+                    if route.status == TradeRouteStatus::Idle {
+                        detail_button(
+                            actions,
+                            TradeRouteQuickActionButton {
+                                company,
+                                route: route.id,
+                                action: TradeRouteQuickAction::Mothball,
+                            },
+                            "MOTHBALL",
+                        );
+                    } else if route.status == TradeRouteStatus::Mothballed {
+                        detail_button(
+                            actions,
+                            TradeRouteQuickActionButton {
+                                company,
+                                route: route.id,
+                                action: TradeRouteQuickAction::Reopen,
+                            },
+                            "REOPEN & DISPATCH",
+                        );
+                    }
+                });
+            }
+        });
+}
+
+fn editor_button(
+    parent: &mut ChildSpawnerCommands<'_>,
+    action: TradeRouteEditorAction,
+    label: &str,
+) {
+    detail_button(parent, TradeRouteEditorButton(action), label);
+}
+
+fn spawn_trade_route_editor(
+    parent: &mut ChildSpawnerCommands<'_>,
+    company: &CompanyRecord,
+    directory: &CompanyDirectory,
+    draft: &TradeRouteDraft,
+    editor: &TradeRouteEditorState,
+) {
+    let warehouses: Vec<_> = company
+        .sites
+        .iter()
+        .filter(|site| site.kind == SettlementBuildingKind::StorageHall && site.workers > 0)
+        .collect();
+    let warehouse = warehouses
+        .iter()
+        .find(|site| site.id == draft.warehouse)
+        .copied();
+    let settlement_name = |id: SettlementId| {
+        directory
+            .settlements
+            .iter()
+            .find(|settlement| settlement.id == id)
+            .map_or_else(
+                || format!("Settlement #{}", id.0),
+                |settlement| settlement.name.clone(),
+            )
+    };
+
+    parent
+        .spawn(Node {
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(10.0),
+            ..default()
+        })
+        .with_children(|header| {
+            header
+                .spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(3.0),
+                    ..default()
+                })
+                .with_children(|copy| {
+                    copy.spawn((
+                        Text::new(if let Some(route) = draft.route {
+                            format!("EDIT CARAVAN ROUTE #{}", route.0)
+                        } else {
+                            "NEW CARAVAN ROUTE".to_string()
+                        }),
+                        TextFont {
+                            font_size: FontSize::Px(21.0),
+                            ..default()
+                        },
+                        TextColor(INK),
+                    ));
+                    copy.spawn((
+                        Text::new(format!(
+                            "{}  /  ORDERED MERCHANT TIMETABLE",
+                            company.name.to_uppercase()
+                        )),
+                        TextFont {
+                            font_size: FontSize::Px(8.5),
+                            ..default()
+                        },
+                        TextColor(EMBER),
+                    ));
+                });
+            header
+                .spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(6.0),
+                    ..default()
+                })
+                .with_children(|actions| {
+                    editor_button(actions, TradeRouteEditorAction::Cancel, "BACK");
+                    editor_button(
+                        actions,
+                        TradeRouteEditorAction::Save,
+                        if draft.pending {
+                            "SAVING..."
+                        } else {
+                            "SAVE ROUTE"
+                        },
+                    );
+                });
+        });
+    spawn_note(
+        parent,
+        "The caravan follows these stops from left to right, then loops back to stop one. Buy/Sell use public markets and real company cash. Load/Unload move owned stock through company Storage Halls without a sale.",
+    );
+    if !editor.message.is_empty() {
+        spawn_note(parent, &editor.message);
+    }
+
+    spawn_section_title(
+        parent,
+        "CARAVAN & CARGO",
+        "one porter cart and one good per route",
+    );
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Px(8.0),
+            row_gap: Val::Px(8.0),
+            ..default()
+        })
+        .with_children(|settings| {
+            settings
+                .spawn((
+                    Node {
+                        width: Val::Percent(48.0),
+                        min_width: Val::Px(220.0),
+                        flex_grow: 1.0,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(6.0),
+                        padding: UiRect::all(Val::Px(10.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::from(PLATE_RULE_SOFT),
+                ))
+                .with_children(|card| {
+                    card.spawn((
+                        Text::new("HOME STORAGE HALL"),
+                        TextFont {
+                            font_size: FontSize::Px(8.0),
+                            ..default()
+                        },
+                        TextColor(INK_MUTED),
+                    ));
+                    card.spawn((
+                        Text::new(warehouse.map_or_else(
+                            || format!("Storage Hall #{}", draft.warehouse.0),
+                            |site| {
+                                format!(
+                                    "Storage Hall #{} / {} / {} porter{}",
+                                    site.id.0,
+                                    site.settlement,
+                                    site.workers,
+                                    if site.workers == 1 { "" } else { "s" }
+                                )
+                            },
+                        )),
+                        TextFont {
+                            font_size: FontSize::Px(10.0),
+                            ..default()
+                        },
+                        TextColor(INK),
+                    ));
+                    if draft.route.is_none() && warehouses.len() > 1 {
+                        card.spawn(Node {
+                            column_gap: Val::Px(5.0),
+                            ..default()
+                        })
+                        .with_children(|buttons| {
+                            editor_button(
+                                buttons,
+                                TradeRouteEditorAction::PreviousWarehouse,
+                                "‹ PREVIOUS",
+                            );
+                            editor_button(buttons, TradeRouteEditorAction::NextWarehouse, "NEXT ›");
+                        });
+                    }
+                });
+            settings
+                .spawn((
+                    Node {
+                        width: Val::Percent(48.0),
+                        min_width: Val::Px(220.0),
+                        flex_grow: 1.0,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(6.0),
+                        padding: UiRect::all(Val::Px(10.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                        ..default()
+                    },
+                    BackgroundColor(BUTTON_NORMAL),
+                    BorderColor::from(PLATE_RULE_SOFT),
+                ))
+                .with_children(|card| {
+                    card.spawn((
+                        Text::new(format!(
+                            "CARGO  {}  /  TARGET {} UNIT{}",
+                            draft.good.label().to_uppercase(),
+                            draft.cargo_target,
+                            if draft.cargo_target == 1 { "" } else { "S" }
+                        )),
+                        TextFont {
+                            font_size: FontSize::Px(10.0),
+                            ..default()
+                        },
+                        TextColor(INK),
+                    ));
+                    card.spawn(Node {
+                        flex_wrap: FlexWrap::Wrap,
+                        column_gap: Val::Px(5.0),
+                        row_gap: Val::Px(5.0),
+                        ..default()
+                    })
+                    .with_children(|buttons| {
+                        editor_button(buttons, TradeRouteEditorAction::PreviousGood, "‹ GOOD");
+                        editor_button(buttons, TradeRouteEditorAction::NextGood, "GOOD ›");
+                        editor_button(buttons, TradeRouteEditorAction::CargoDown(1), "-1");
+                        editor_button(buttons, TradeRouteEditorAction::CargoUp(1), "+1");
+                        editor_button(buttons, TradeRouteEditorAction::CargoDown(5), "-5");
+                        editor_button(buttons, TradeRouteEditorAction::CargoUp(5), "+5");
+                    });
+                });
+        });
+
+    parent
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(7.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.88, 0.86, 0.81, 0.52)),
+            BorderColor::from(PLATE_RULE_SOFT),
+        ))
+        .with_children(|prices| {
+            prices.spawn((
+                Text::new(format!(
+                    "BUY CEILING  {} COIN  /  SALE FLOOR  {} COIN  /  {}",
+                    format_money(draft.maximum_purchase_price),
+                    format_money(draft.minimum_destination_price),
+                    if draft.automatic {
+                        "REPEAT CONTINUOUSLY"
+                    } else {
+                        "ONE CIRCUIT ON COMMAND"
+                    }
+                )),
+                TextFont {
+                    font_size: FontSize::Px(9.5),
+                    ..default()
+                },
+                TextColor(INK),
+            ));
+            prices
+                .spawn(Node {
+                    flex_wrap: FlexWrap::Wrap,
+                    column_gap: Val::Px(5.0),
+                    row_gap: Val::Px(5.0),
+                    ..default()
+                })
+                .with_children(|buttons| {
+                    editor_button(
+                        buttons,
+                        TradeRouteEditorAction::BuyPriceDown(25),
+                        "BUY -0.25",
+                    );
+                    editor_button(buttons, TradeRouteEditorAction::BuyPriceUp(25), "BUY +0.25");
+                    editor_button(
+                        buttons,
+                        TradeRouteEditorAction::SellPriceDown(25),
+                        "SELL -0.25",
+                    );
+                    editor_button(
+                        buttons,
+                        TradeRouteEditorAction::SellPriceUp(25),
+                        "SELL +0.25",
+                    );
+                    editor_button(
+                        buttons,
+                        TradeRouteEditorAction::ToggleAutomatic,
+                        if draft.automatic {
+                            "MAKE ONE-CIRCUIT"
+                        } else {
+                            "REPEAT ROUTE"
+                        },
+                    );
+                });
+        });
+
+    spawn_section_title(
+        parent,
+        "ORDERED STOPS",
+        "the highlighted instruction runs when the wagon reaches that town",
+    );
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            row_gap: Val::Px(8.0),
+            ..default()
+        })
+        .with_children(|lane| {
+            for (index, stop) in draft.stops.iter().enumerate() {
+                if index > 0 {
+                    lane.spawn((
+                        Text::new("→"),
+                        TextFont {
+                            font_size: FontSize::Px(16.0),
+                            ..default()
+                        },
+                        TextColor(INK_MUTED),
+                    ));
+                }
+                lane.spawn((
+                    Node {
+                        width: Val::Px(164.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(5.0),
+                        padding: UiRect::all(Val::Px(9.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.96, 0.95, 0.91, 0.82)),
+                    BorderColor::from(if index == 0 { EMBER } else { PLATE_RULE_SOFT }),
+                ))
+                .with_children(|stop_card| {
+                    stop_card.spawn((
+                        Text::new(format!(
+                            "STOP {}  /  {}",
+                            index + 1,
+                            if index == 0 { "HOME" } else { "TOWN" }
+                        )),
+                        TextFont {
+                            font_size: FontSize::Px(7.5),
+                            ..default()
+                        },
+                        TextColor(EMBER),
+                    ));
+                    stop_card.spawn((
+                        Text::new(settlement_name(stop.settlement).to_uppercase()),
+                        TextFont {
+                            font_size: FontSize::Px(10.0),
+                            ..default()
+                        },
+                        TextColor(INK),
+                    ));
+                    if index > 0 {
+                        stop_card
+                            .spawn(Node {
+                                column_gap: Val::Px(4.0),
+                                ..default()
+                            })
+                            .with_children(|buttons| {
+                                editor_button(
+                                    buttons,
+                                    TradeRouteEditorAction::PreviousStopSettlement(index),
+                                    "‹ TOWN",
+                                );
+                                editor_button(
+                                    buttons,
+                                    TradeRouteEditorAction::NextStopSettlement(index),
+                                    "TOWN ›",
+                                );
+                            });
+                    }
+                    stop_card.spawn((
+                        Text::new(stop.action.label().to_uppercase()),
+                        TextFont {
+                            font_size: FontSize::Px(8.0),
+                            ..default()
+                        },
+                        TextColor(INK_MUTED),
+                    ));
+                    stop_card
+                        .spawn(Node {
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: Val::Px(4.0),
+                            row_gap: Val::Px(4.0),
+                            ..default()
+                        })
+                        .with_children(|buttons| {
+                            editor_button(
+                                buttons,
+                                TradeRouteEditorAction::PreviousStopAction(index),
+                                "‹ ORDER",
+                            );
+                            editor_button(
+                                buttons,
+                                TradeRouteEditorAction::NextStopAction(index),
+                                "ORDER ›",
+                            );
+                            if index > 1 {
+                                editor_button(
+                                    buttons,
+                                    TradeRouteEditorAction::MoveStopLeft(index),
+                                    "←",
+                                );
+                            }
+                            if index > 0 && index + 1 < draft.stops.len() {
+                                editor_button(
+                                    buttons,
+                                    TradeRouteEditorAction::MoveStopRight(index),
+                                    "→",
+                                );
+                            }
+                            if index > 0 && draft.stops.len() > 2 {
+                                editor_button(
+                                    buttons,
+                                    TradeRouteEditorAction::RemoveStop(index),
+                                    "REMOVE",
+                                );
+                            }
+                        });
+                });
+            }
+            if draft.stops.len() < MAX_TRADE_ROUTE_STOPS {
+                editor_button(lane, TradeRouteEditorAction::AddStop, "+ ADD TOWN");
+            }
+        });
+
+    let storage_settlements: Vec<_> = company
+        .sites
+        .iter()
+        .filter(|site| site.kind == SettlementBuildingKind::StorageHall)
+        .map(|site| site.settlement_id)
+        .collect();
+    let has_invalid_private_stop = draft.stops.iter().any(|stop| {
+        matches!(
+            stop.action,
+            TradeRouteStopAction::Load | TradeRouteStopAction::Unload
+        ) && !storage_settlements.contains(&stop.settlement)
+    });
+    let repeats_town = draft
+        .stops
+        .windows(2)
+        .any(|pair| pair[0].settlement == pair[1].settlement);
+    if has_invalid_private_stop || repeats_town {
+        spawn_note(
+            parent,
+            if has_invalid_private_stop {
+                "Load and Unload require this company to own a Storage Hall in that town. Use Buy or Sell for a public market stop."
+            } else {
+                "The same town cannot appear in two consecutive stops. Returning to the home town as the final stop is allowed."
+            },
         );
     }
 }
@@ -2217,6 +3522,7 @@ mod tests {
                 company(2, owner, 0, 0, 0),
                 company(3, outsider, 0, 0, 0),
             ],
+            settlements: Vec::new(),
             local_person: Some(owner),
             local_wallet: Some(2_000),
         };
@@ -2268,5 +3574,171 @@ mod tests {
         assert_eq!(details.single(&world).unwrap().0, site.id);
         assert_eq!(management.single(&world).unwrap().site, site.entity);
         assert_eq!(management.single(&world).unwrap().company, CompanyId(43));
+    }
+
+    fn storage_site(id: u64, settlement: SettlementId, name: &str) -> CompanySiteRecord {
+        CompanySiteRecord {
+            entity: Entity::from_bits(id + 100),
+            id: BuildingId(id),
+            settlement: name.into(),
+            settlement_id: settlement,
+            kind: SettlementBuildingKind::StorageHall,
+            workers: 1,
+            positions: 1,
+            enabled_positions: 1,
+            state: BusinessState::Operating,
+            wage_arrears: 0,
+            tax_arrears: 0,
+            current_day: default(),
+            previous_day: default(),
+            output: None,
+            output_stock: 0,
+            asking_price: None,
+            input: None,
+            input_stock: 0,
+            input_target: 0,
+            input_coverage_days: 0,
+            sourcing: None,
+            preferred_supplier: None,
+            goods: Vec::new(),
+            used_bulk: 0,
+            bulk_capacity: shared::economy::capacity::STORAGE_HALL,
+        }
+    }
+
+    fn merchant_route() -> CompanyRouteRecord {
+        CompanyRouteRecord {
+            id: TradeRouteId(50),
+            warehouse: BuildingId(40),
+            warehouse_name: "Oakfell Storage Hall #40".into(),
+            mode: TradeRouteMode::Merchant,
+            origin: "Oakfell".into(),
+            destination: "Stonefield".into(),
+            good: Good::Stone,
+            cargo_target: 12,
+            cargo_onboard: 0,
+            maximum_purchase_price: 250,
+            minimum_destination_price: 325,
+            automatic: false,
+            assigned_caravaner: None,
+            current_stop: 0,
+            status: TradeRouteStatus::Idle,
+            completed_trips: 0,
+            lifetime_units: 0,
+            lifetime_delivery_revenue: 0,
+            lifetime_purchase_cost: 0,
+            lifetime_consigned_value: 0,
+            stops: vec![
+                CompanyRouteStopRecord {
+                    settlement: SettlementId(1),
+                    settlement_name: "Oakfell".into(),
+                    action: TradeRouteStopAction::Buy,
+                },
+                CompanyRouteStopRecord {
+                    settlement: SettlementId(2),
+                    settlement_name: "Stonefield".into(),
+                    action: TradeRouteStopAction::Sell,
+                },
+                CompanyRouteStopRecord {
+                    settlement: SettlementId(3),
+                    settlement_name: "Meadowford".into(),
+                    action: TradeRouteStopAction::Unload,
+                },
+            ],
+            trips: Vec::new(),
+            latest_trip: None,
+        }
+    }
+
+    #[test]
+    fn idle_merchant_route_card_exposes_building_style_management_actions() {
+        let mut world = World::new();
+        let parent = world.spawn_empty().id();
+        world.commands().entity(parent).with_children(|children| {
+            spawn_route_card(children, CompanyId(43), &merchant_route(), true)
+        });
+        world.flush();
+
+        let edit_count = world.query::<&EditTradeRouteButton>().iter(&world).count();
+        let actions: Vec<_> = world
+            .query::<&TradeRouteQuickActionButton>()
+            .iter(&world)
+            .map(|button| button.action)
+            .collect();
+        assert_eq!(edit_count, 1);
+        assert!(actions.contains(&TradeRouteQuickAction::DispatchOnce));
+        assert!(actions.contains(&TradeRouteQuickAction::Mothball));
+    }
+
+    #[test]
+    fn route_editor_exposes_ordered_three_town_timetable_controls() {
+        let owner = PersonId(8);
+        let mut firm = company(43, owner, 5_000, 0, 0);
+        firm.sites = vec![
+            storage_site(40, SettlementId(1), "Oakfell"),
+            storage_site(41, SettlementId(3), "Meadowford"),
+        ];
+        let directory = CompanyDirectory {
+            records: vec![firm.clone()],
+            settlements: vec![
+                CompanySettlementRecord {
+                    id: SettlementId(1),
+                    name: "Oakfell".into(),
+                },
+                CompanySettlementRecord {
+                    id: SettlementId(2),
+                    name: "Stonefield".into(),
+                },
+                CompanySettlementRecord {
+                    id: SettlementId(3),
+                    name: "Meadowford".into(),
+                },
+            ],
+            local_person: Some(owner),
+            local_wallet: Some(1_000),
+        };
+        let route = merchant_route();
+        let draft = TradeRouteDraft {
+            company: firm.id,
+            route: Some(route.id),
+            warehouse: route.warehouse,
+            good: route.good,
+            cargo_target: route.cargo_target,
+            maximum_purchase_price: route.maximum_purchase_price,
+            minimum_destination_price: route.minimum_destination_price,
+            automatic: route.automatic,
+            stops: route
+                .stops
+                .iter()
+                .map(|stop| TradeRouteStop {
+                    settlement: stop.settlement,
+                    action: stop.action,
+                })
+                .collect(),
+            pending: false,
+        };
+
+        let mut world = World::new();
+        let parent = world.spawn_empty().id();
+        world.commands().entity(parent).with_children(|children| {
+            spawn_trade_route_editor(
+                children,
+                &firm,
+                &directory,
+                &draft,
+                &TradeRouteEditorState::default(),
+            )
+        });
+        world.flush();
+        let actions: Vec<_> = world
+            .query::<&TradeRouteEditorButton>()
+            .iter(&world)
+            .map(|button| button.0)
+            .collect();
+        assert!(actions.contains(&TradeRouteEditorAction::Save));
+        assert!(actions.contains(&TradeRouteEditorAction::AddStop));
+        assert!(actions.contains(&TradeRouteEditorAction::MoveStopLeft(2)));
+        assert!(actions.contains(&TradeRouteEditorAction::PreviousStopSettlement(2)));
+        assert!(actions.contains(&TradeRouteEditorAction::NextStopAction(2)));
     }
 }

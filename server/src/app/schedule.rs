@@ -100,6 +100,7 @@ fn configure_server_fixed_schedule(app: &mut App) {
             player::companies::handle_hero_company_founding,
             player::business::handle_hero_business_orders,
             player::business::handle_hero_company_orders,
+            player::trade_routes::handle_hero_trade_route_orders,
             player::market::handle_hero_market_orders,
             player::hero::ensure_player_permit_ledgers,
             player::permits::handle_hero_permit_orders,

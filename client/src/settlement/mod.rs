@@ -26,6 +26,7 @@ use shared::economy::{BusinessCondition, BusinessState, Good, GoodsInventory};
 use shared::terrain::WorldTerrain;
 
 use crate::states::GameState;
+use crate::terrain::TerrainUpdateSet;
 
 pub struct SettlementPlugin;
 
@@ -33,7 +34,7 @@ impl Plugin for SettlementPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(smoke::BakerySmokePlugin);
         app.init_resource::<BuildingDoorAssets>();
-        app.init_resource::<roads::VillageRoadAssets>();
+        app.init_resource::<roads::VillageRoadPaintState>();
         app.add_systems(
             Update,
             (
@@ -41,7 +42,7 @@ impl Plugin for SettlementPlugin {
                 attach_building_visuals,
                 attach_farm_field_visuals,
                 attach_fishing_pier_visuals,
-                roads::update_village_road_visuals,
+                roads::paint_village_roads_into_terrain.after(TerrainUpdateSet),
                 attach_construction_supply_visuals,
                 sync_construction_supply_visuals,
                 claim_building_ground,

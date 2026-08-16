@@ -306,6 +306,7 @@ pub fn ensure_business_economies(
                 sale.max_daily_price_change_bps = strategy.daily_price_step_bps();
                 sale.asking_unit_price = owner_opening_asking_price(
                     building.kind,
+                    building.quality,
                     output,
                     sale.minimum_unit_price,
                     strategy,
@@ -351,22 +352,24 @@ struct OpeningMarketSnapshot {
 
 fn owner_opening_asking_price(
     kind: SettlementBuildingKind,
+    site_quality: f32,
     output: Good,
     minimum_price: u64,
     strategy: BusinessStrategy,
     market: Option<&OpeningMarketSnapshot>,
 ) -> u64 {
-    let sustainable = rated_daily_production(kind, 1.0).map_or(minimum_price, |capacity| {
-        let input_cost = capacity.input.map_or(0, |(input, units)| {
-            let input_price = market.map_or(input.base_price(), |market| {
+    let sustainable = estimated_staffed_unit_cost(
+        kind,
+        site_quality,
+        automatic_opening_positions(kind),
+        FOUNDING_DAILY_WAGE,
+        |input| {
+            market.map_or(input.base_price(), |market| {
                 market.prices[input.index()].max(1)
-            });
-            u64::from(units).saturating_mul(input_price)
-        });
-        let payroll = u64::from(kind.positions()).saturating_mul(FOUNDING_DAILY_WAGE);
-        let unit_cost = input_cost
-            .saturating_add(payroll)
-            .div_ceil(u64::from(capacity.output_units.max(1)));
+            })
+        },
+    )
+    .map_or(minimum_price, |unit_cost| {
         shared::economy::sustainable_unit_price(
             unit_cost,
             market.map_or(0, |market| market.market_fee_bps),
@@ -441,6 +444,7 @@ mod policy_tests {
         let price = |strategy| {
             owner_opening_asking_price(
                 SettlementBuildingKind::Windmill,
+                1.0,
                 Good::Flour,
                 1,
                 strategy,
@@ -459,6 +463,7 @@ mod policy_tests {
     fn first_extractor_quotes_cost_instead_of_the_authored_reference_price() {
         let price = owner_opening_asking_price(
             SettlementBuildingKind::Farmstead,
+            1.0,
             Good::Wheat,
             1,
             BusinessStrategy::Balanced,
@@ -467,6 +472,42 @@ mod policy_tests {
 
         assert!(price > 1);
         assert!(price < Good::Wheat.base_price());
+    }
+
+    #[test]
+    fn poor_extractors_quote_for_the_output_their_first_worker_can_make() {
+        let market = OpeningMarketSnapshot {
+            prices: [0; Good::COUNT],
+            observed: [false; Good::COUNT],
+            scarce: [true; Good::COUNT],
+            market_fee_bps: shared::economy::DEFAULT_MARKET_FEE_BPS,
+        };
+        let perfect = owner_opening_asking_price(
+            SettlementBuildingKind::FishermansHut,
+            1.0,
+            Good::Food,
+            1,
+            BusinessStrategy::Balanced,
+            Some(&market),
+        );
+        let poor = owner_opening_asking_price(
+            SettlementBuildingKind::FishermansHut,
+            0.42,
+            Good::Food,
+            1,
+            BusinessStrategy::Balanced,
+            Some(&market),
+        );
+
+        assert!(poor > perfect);
+        let capacity = rated_daily_production(SettlementBuildingKind::FishermansHut, 0.42)
+            .expect("fishery has rated output");
+        let first_worker_output = capacity.output_units.div_ceil(2);
+        let net_revenue = u64::from(first_worker_output)
+            .saturating_mul(poor)
+            .saturating_mul(BASIS_POINTS - u64::from(shared::economy::DEFAULT_MARKET_FEE_BPS))
+            / BASIS_POINTS;
+        assert!(net_revenue >= FOUNDING_DAILY_WAGE);
     }
 }
 

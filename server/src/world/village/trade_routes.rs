@@ -13,7 +13,8 @@ use lightyear::prelude::{NetworkTarget, Replicate};
 use shared::components::{
     CharacterObjective, CivicHallUpgradeWorksite, CivicTradeContract, CompanyTradeRoute,
     ConstructionSite, TradeContractId, TradeContractStatus, TradeRouteHistory, TradeRouteId,
-    TradeRouteStatus, TradeRouteTrip,
+    TradeRouteMode, TradeRouteSchedule, TradeRouteStatus, TradeRouteStop, TradeRouteStopAction,
+    TradeRouteTrip,
 };
 use shared::economy::{MarketSeller, FOUNDING_DAILY_WAGE};
 
@@ -34,12 +35,16 @@ const ROUTE_MANAGEMENT_INTERVAL_WORLD_SECONDS: f64 = 5.0;
 #[derive(Component, Debug, Clone, Copy)]
 pub struct TradeRouteRoutine {
     pub route: TradeRouteId,
+    mode: TradeRouteMode,
     phase: TradeRoutePhase,
+    stop_index: u8,
+    stops_visited: u8,
     departed_day: u32,
     departed_world_seconds: f64,
     source_purchase_cost: u64,
     source_market_fees: u64,
     cargo_units: u32,
+    consigned_value: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +53,9 @@ pub(crate) enum TradeRoutePhase {
     InTransit,
     ReturningToOrigin,
     ReturningToWarehouse,
+    MerchantTravellingToStop,
+    MerchantReturningToOrigin,
+    MerchantReturningToWarehouse,
 }
 
 impl TradeRouteRoutine {
@@ -55,7 +63,13 @@ impl TradeRouteRoutine {
         match self.phase {
             TradeRoutePhase::GoingToOrigin => CharacterObjective::GoingToTradeRoutePickup,
             TradeRoutePhase::InTransit => CharacterObjective::HaulingInterSettlementCargo,
-            TradeRoutePhase::ReturningToOrigin | TradeRoutePhase::ReturningToWarehouse => {
+            TradeRoutePhase::MerchantTravellingToStop => {
+                CharacterObjective::HaulingInterSettlementCargo
+            }
+            TradeRoutePhase::ReturningToOrigin
+            | TradeRoutePhase::ReturningToWarehouse
+            | TradeRoutePhase::MerchantReturningToOrigin
+            | TradeRoutePhase::MerchantReturningToWarehouse => {
                 CharacterObjective::ReturningFromTradeRoute
             }
         }
@@ -80,6 +94,31 @@ struct WarehouseSnapshot {
 
 fn hall_entrance(hall: HallSnapshot) -> Vec3 {
     SettlementBuildingKind::Hall.entrance_position(hall.position, hall.rotation)
+}
+
+fn merchant_stop_target(
+    stop: TradeRouteStop,
+    company: shared::components::CompanyId,
+    halls: &HashMap<shared::components::SettlementId, HallSnapshot>,
+    warehouses: &[WarehouseSnapshot],
+) -> Option<Vec3> {
+    match stop.action {
+        TradeRouteStopAction::Load | TradeRouteStopAction::Unload => warehouses
+            .iter()
+            .find(|warehouse| {
+                warehouse.company == company
+                    && warehouse.settlement == stop.settlement
+                    && warehouse.can_operate
+            })
+            .map(|warehouse| {
+                SettlementBuildingKind::StorageHall
+                    .entrance_position(warehouse.position, warehouse.rotation)
+            }),
+        TradeRouteStopAction::Buy | TradeRouteStopAction::Sell => {
+            halls.get(&stop.settlement).copied().map(hall_entrance)
+        }
+        TradeRouteStopAction::ContractPickup | TradeRouteStopAction::ContractDelivery => None,
+    }
 }
 
 fn absolute_world_seconds(clock: &WorldTime) -> f64 {
@@ -275,7 +314,12 @@ pub fn manage_company_trade_routes(
         Option<&BusinessCondition>,
     )>,
     mut contracts: Query<(Entity, &TradeContractId, &mut CivicTradeContract)>,
-    mut routes: Query<(Entity, &TradeRouteId, &mut CompanyTradeRoute)>,
+    mut routes: Query<(
+        Entity,
+        &TradeRouteId,
+        &mut CompanyTradeRoute,
+        Option<&TradeRouteSchedule>,
+    )>,
     porters: Query<
         (
             Entity,
@@ -358,7 +402,7 @@ pub fn manage_company_trade_routes(
         .iter()
         .filter_map(|(_, _, _, _, routine, ..)| routine.map(|routine| routine.route))
         .collect();
-    for (_, route_id, mut route) in routes.iter_mut() {
+    for (_, route_id, mut route, _) in routes.iter_mut() {
         if route.assigned_caravaner.is_some() && !active_route_ids.contains(route_id) {
             route.assigned_caravaner = None;
             if let Some(contract_id) = route.active_contract {
@@ -399,7 +443,7 @@ pub fn manage_company_trade_routes(
 
     let route_contracts: HashSet<_> = routes
         .iter()
-        .filter_map(|(_, _, route)| route.active_contract)
+        .filter_map(|(_, _, route, _)| route.active_contract)
         .collect();
     for (_, contract_id, mut contract) in contracts.iter_mut() {
         if contract.status != TradeContractStatus::Open
@@ -472,8 +516,9 @@ pub fn manage_company_trade_routes(
 
         let reusable = routes
             .iter_mut()
-            .find(|(_, _, route)| {
-                route.company == warehouse.company
+            .find(|(_, _, route, _)| {
+                route.mode == TradeRouteMode::ContractCarrier
+                    && route.company == warehouse.company
                     && route.warehouse == warehouse.id
                     && route.origin == origin_id
                     && route.destination == contract.destination
@@ -484,7 +529,7 @@ pub fn manage_company_trade_routes(
                         TradeRouteStatus::Idle | TradeRouteStatus::Mothballed
                     )
             })
-            .map(|(_, _, route)| route);
+            .map(|(_, _, route, _)| route);
         if let Some(mut route) = reusable {
             route.cargo_target = contract.remaining_units();
             route.maximum_purchase_price = contract.maximum_unit_price;
@@ -495,6 +540,7 @@ pub fn manage_company_trade_routes(
                 CompanyTradeRoute {
                     company: warehouse.company,
                     warehouse: warehouse.id,
+                    mode: TradeRouteMode::ContractCarrier,
                     origin: origin_id,
                     destination: contract.destination,
                     good: contract.good,
@@ -504,11 +550,15 @@ pub fn manage_company_trade_routes(
                     automatic: true,
                     active_contract: Some(*contract_id),
                     assigned_caravaner: None,
+                    current_stop: 0,
                     status: TradeRouteStatus::WaitingForPorter,
                     completed_trips: 0,
                     lifetime_units: 0,
                     lifetime_delivery_revenue: 0,
+                    lifetime_purchase_cost: 0,
+                    lifetime_consigned_value: 0,
                 },
+                TradeRouteSchedule::contract(origin_id, contract.destination),
                 TradeRouteHistory::default(),
                 Replicate::to_clients(NetworkTarget::All),
             ));
@@ -519,10 +569,11 @@ pub fn manage_company_trade_routes(
     // Dispatch only after a route has received its stable id (normally the
     // update after creation). The same porter remains an ordinary employee of
     // the warehouse and therefore continues through normal payroll.
-    for (_, route_id, mut route) in routes.iter_mut() {
+    for (_, route_id, mut route, _) in routes.iter_mut() {
         if route.status != TradeRouteStatus::WaitingForPorter
             || route.assigned_caravaner.is_some()
             || route.active_contract.is_none()
+            || route.mode != TradeRouteMode::ContractCarrier
         {
             continue;
         }
@@ -573,18 +624,131 @@ pub fn manage_company_trade_routes(
             .insert((
                 TradeRouteRoutine {
                     route: *route_id,
+                    mode: TradeRouteMode::ContractCarrier,
                     phase: TradeRoutePhase::GoingToOrigin,
+                    stop_index: 0,
+                    stops_visited: 0,
                     departed_day: day,
                     departed_world_seconds: now,
                     source_purchase_cost: 0,
                     source_market_fees: 0,
                     cargo_units: 0,
+                    consigned_value: 0,
                 },
                 MoveTarget(hall_entrance(origin)),
             ));
         info!(
             "Company #{} dispatched porter #{} on route #{} from settlement #{} to #{}",
             route.company.0, person.0, route_id.0, route.origin.0, route.destination.0,
+        );
+    }
+
+    // Player-authored merchant routes use the same Storage Hall employees and
+    // physical carts, but execute an ordered timetable rather than borrowing
+    // civic escrow. `automatic=false` still permits one explicit dispatch;
+    // after that circuit the porter returns home and the route remains idle.
+    for (_, route_id, mut route, schedule) in routes.iter_mut() {
+        if route.mode != TradeRouteMode::Merchant
+            || route.status != TradeRouteStatus::WaitingForPorter
+            || route.assigned_caravaner.is_some()
+            || route.active_contract.is_some()
+        {
+            continue;
+        }
+        let Some(first_stop) = schedule
+            .and_then(|schedule| schedule.stops().first())
+            .copied()
+        else {
+            route.status = TradeRouteStatus::Mothballed;
+            continue;
+        };
+        let first_target = if matches!(
+            first_stop.action,
+            shared::components::TradeRouteStopAction::Load
+                | shared::components::TradeRouteStopAction::Unload
+        ) {
+            let Some(warehouse) = warehouse_snapshots.iter().find(|warehouse| {
+                warehouse.id == route.warehouse
+                    && warehouse.company == route.company
+                    && warehouse.settlement == first_stop.settlement
+                    && warehouse.can_operate
+            }) else {
+                route.status = TradeRouteStatus::Mothballed;
+                continue;
+            };
+            SettlementBuildingKind::StorageHall
+                .entrance_position(warehouse.position, warehouse.rotation)
+        } else {
+            let Some(hall) = hall_snapshots.get(&first_stop.settlement).copied() else {
+                route.status = TradeRouteStatus::Mothballed;
+                continue;
+            };
+            hall_entrance(hall)
+        };
+        let candidate = porters
+            .iter()
+            .filter(
+                |(
+                    _,
+                    _,
+                    porter,
+                    inventory,
+                    routine,
+                    internal,
+                    market,
+                    home,
+                    road,
+                    queue,
+                    meal,
+                    _,
+                    strategic_travel,
+                )| {
+                    porter.company == route.company
+                        && porter.storage_hall == route.warehouse
+                        && inventory.is_empty()
+                        && routine.is_none()
+                        && internal.is_none()
+                        && market.is_none()
+                        && home.is_none()
+                        && road.is_none()
+                        && queue.is_none()
+                        && meal.is_none()
+                        && strategic_travel.is_none()
+                },
+            )
+            .min_by_key(|(_, person, ..)| **person);
+        let Some((porter_entity, person, ..)) = candidate else {
+            continue;
+        };
+        route.assigned_caravaner = Some(*person);
+        route.current_stop = 0;
+        route.status = TradeRouteStatus::GoingToOrigin;
+        commands
+            .entity(porter_entity)
+            .remove::<strategic::StrategicPerson>()
+            .remove::<strategic::PendingStrategicDemotion>()
+            .insert((
+                TradeRouteRoutine {
+                    route: *route_id,
+                    mode: TradeRouteMode::Merchant,
+                    phase: TradeRoutePhase::MerchantTravellingToStop,
+                    stop_index: 0,
+                    stops_visited: 0,
+                    departed_day: day,
+                    departed_world_seconds: now,
+                    source_purchase_cost: 0,
+                    source_market_fees: 0,
+                    cargo_units: 0,
+                    consigned_value: 0,
+                },
+                MoveTarget(first_target),
+            ));
+        info!(
+            "Company #{} dispatched porter #{} on merchant route #{} with {} stops",
+            route.company.0,
+            person.0,
+            route_id.0,
+            schedule.map_or(0, |schedule| schedule.stops().len()),
         );
     }
 }
@@ -682,6 +846,9 @@ pub fn run_company_trade_routes(
             commands.entity(porter_entity).remove::<TradeRouteRoutine>();
             continue;
         };
+        if routine.mode != TradeRouteMode::ContractCarrier {
+            continue;
+        }
 
         // Returning is deliberately independent of the contract entity. A
         // fulfilled/cancelled contract may be archived or removed while the
@@ -801,6 +968,7 @@ pub fn run_company_trade_routes(
                 }
                 commands.entity(porter_entity).remove::<MoveTarget>();
                 route.status = TradeRouteStatus::Loading;
+                route.current_stop = 0;
                 let wanted = contract
                     .remaining_units()
                     .min(route.cargo_target)
@@ -873,6 +1041,7 @@ pub fn run_company_trade_routes(
                     civic.record_material_expense(day.saturating_add(1), purchase.trade.pennies);
                 }
                 route.status = TradeRouteStatus::InTransit;
+                route.current_stop = 1;
                 routine.phase = TradeRoutePhase::InTransit;
                 *activity = CharacterActivity::Idle;
                 let target = projects
@@ -970,6 +1139,8 @@ pub fn run_company_trade_routes(
                     source_purchase_cost: routine.source_purchase_cost,
                     source_market_fees: routine.source_market_fees,
                     delivery_revenue: freight,
+                    consigned_value: 0,
+                    stops_visited: 2,
                     travel_world_seconds: (now - routine.departed_world_seconds)
                         .max(0.0)
                         .min(f64::from(u32::MAX)) as u32,
@@ -995,6 +1166,434 @@ pub fn run_company_trade_routes(
             }
             TradeRoutePhase::ReturningToOrigin | TradeRoutePhase::ReturningToWarehouse => {
                 unreachable!("returning routes are handled above")
+            }
+            TradeRoutePhase::MerchantTravellingToStop
+            | TradeRoutePhase::MerchantReturningToOrigin
+            | TradeRoutePhase::MerchantReturningToWarehouse => {
+                unreachable!("merchant routes are handled by run_merchant_trade_routes")
+            }
+        }
+    }
+}
+
+/// Execute one player-authored merchant timetable. The company risks its own
+/// cash at Buy stops, while Sell stops create ordinary public consignments
+/// which pay only when a real local buyer clears them. Load/Unload stops are
+/// private branch transfers and therefore require company Storage Halls.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn run_merchant_trade_routes(
+    _simulation_time: crate::world::simulation_time::SimulationTime,
+    mut commands: Commands,
+    world_time: Query<&WorldTime>,
+    mut business_events: ResMut<BusinessEventQueue>,
+    mut halls: Query<
+        (
+            &shared::components::SettlementId,
+            &PlayerPosition,
+            Option<&PlayerRotation>,
+            &mut GoodsInventory,
+            &mut MootMarket,
+        ),
+        (With<Settlement>, Without<CharacterKind>),
+    >,
+    mut warehouses: Query<
+        (
+            &shared::components::BuildingId,
+            &shared::components::OperatedBy,
+            &shared::components::BuildingOf,
+            &SettlementBuilding,
+            &PlayerPosition,
+            &PlayerRotation,
+            &mut GoodsInventory,
+            &mut BusinessAccount,
+        ),
+        (Without<CharacterKind>, Without<Settlement>),
+    >,
+    company_entities: Query<(Entity, &shared::components::CompanyId)>,
+    mut company_accounts: Query<&mut shared::economy::CompanyAccount>,
+    mut routes: Query<(
+        &TradeRouteId,
+        &mut CompanyTradeRoute,
+        &TradeRouteSchedule,
+        &mut TradeRouteHistory,
+    )>,
+    mut porters: Query<
+        (
+            Entity,
+            &shared::components::PersonId,
+            &PlayerPosition,
+            &mut CharacterActivity,
+            &mut GoodsInventory,
+            Option<&MoveTarget>,
+            &mut TradeRouteRoutine,
+            Option<&NavigationRouteFailed>,
+        ),
+        (With<CharacterKind>, Without<strategic::StrategicPerson>),
+    >,
+) {
+    let Some(clock) = world_time.iter().next() else {
+        return;
+    };
+    let day = clock.day;
+    let now = absolute_world_seconds(clock);
+    let hall_snapshots: HashMap<_, _> = halls
+        .iter_mut()
+        .map(|(id, position, rotation, ..)| {
+            (
+                *id,
+                HallSnapshot {
+                    position: position.0,
+                    rotation: rotation.map_or(0.0, |rotation| rotation.0),
+                },
+            )
+        })
+        .collect();
+    let warehouse_snapshots: Vec<_> = warehouses
+        .iter_mut()
+        .filter(|(_, _, _, building, ..)| building.kind == SettlementBuildingKind::StorageHall)
+        .map(
+            |(id, operated_by, building_of, _, position, rotation, ..)| WarehouseSnapshot {
+                id: *id,
+                settlement: building_of.0,
+                company: operated_by.0,
+                position: position.0,
+                rotation: rotation.0,
+                can_operate: true,
+            },
+        )
+        .collect();
+    let company_entities: HashMap<_, _> = company_entities
+        .iter()
+        .map(|(entity, company)| (*company, entity))
+        .collect();
+
+    for (
+        porter_entity,
+        person,
+        position,
+        mut activity,
+        mut carrier,
+        move_target,
+        mut routine,
+        route_failed,
+    ) in porters.iter_mut()
+    {
+        if routine.mode != TradeRouteMode::Merchant {
+            continue;
+        }
+        let Some((_, mut route, schedule, mut history)) = routes
+            .iter_mut()
+            .find(|(route_id, ..)| **route_id == routine.route)
+        else {
+            commands.entity(porter_entity).remove::<TradeRouteRoutine>();
+            continue;
+        };
+        let Some(home) = warehouse_snapshots
+            .iter()
+            .find(|warehouse| warehouse.id == route.warehouse && warehouse.company == route.company)
+            .copied()
+        else {
+            route.status = TradeRouteStatus::Mothballed;
+            route.assigned_caravaner = None;
+            *activity = CharacterActivity::Idle;
+            commands
+                .entity(porter_entity)
+                .remove::<TradeRouteRoutine>()
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>();
+            warn!(
+                "Company #{} merchant route #{} mothballed because its home Storage Hall is unavailable",
+                route.company.0, routine.route.0,
+            );
+            continue;
+        };
+
+        if routine.phase == TradeRoutePhase::MerchantReturningToOrigin {
+            let Some(origin) = hall_snapshots.get(&route.origin).copied() else {
+                continue;
+            };
+            let target = hall_entrance(origin);
+            if ground_distance(position.0, target) > ROUTE_REACH {
+                ensure_move_target(&mut commands, porter_entity, move_target, target);
+                continue;
+            }
+            routine.phase = TradeRoutePhase::MerchantReturningToWarehouse;
+            commands
+                .entity(porter_entity)
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>();
+            continue;
+        }
+        if routine.phase == TradeRoutePhase::MerchantReturningToWarehouse {
+            let target =
+                SettlementBuildingKind::StorageHall.entrance_position(home.position, home.rotation);
+            if ground_distance(position.0, target) > ROUTE_REACH {
+                ensure_move_target(&mut commands, porter_entity, move_target, target);
+                continue;
+            }
+            // A manual circuit may intentionally finish with cargo aboard.
+            // Returning it to the home store prevents pausing a route from
+            // trapping company property on an otherwise idle employee.
+            let carried = carrier.amount(route.good);
+            if carried > 0 {
+                let Some((_, _, _, _, _, _, mut store, _)) = warehouses
+                    .iter_mut()
+                    .find(|(id, ..)| **id == route.warehouse)
+                else {
+                    continue;
+                };
+                let deposited = store.add(route.good, carried);
+                carrier.remove(route.good, deposited);
+                if carrier.amount(route.good) > 0 {
+                    continue;
+                }
+            }
+            route.assigned_caravaner = None;
+            route.current_stop = 0;
+            route.status = TradeRouteStatus::Idle;
+            *activity = CharacterActivity::Idle;
+            commands
+                .entity(porter_entity)
+                .remove::<TradeRouteRoutine>()
+                .remove::<MoveTarget>()
+                .remove::<TravelRoute>()
+                .remove::<NavigationRoutePending>()
+                .remove::<NavigationRouteFailed>();
+            debug!(
+                "Company #{} merchant route #{} porter #{} returned home",
+                route.company.0, routine.route.0, person.0,
+            );
+            continue;
+        }
+        if routine.phase != TradeRoutePhase::MerchantTravellingToStop {
+            continue;
+        }
+        let Some(stop) = schedule
+            .stops()
+            .get(usize::from(routine.stop_index))
+            .copied()
+        else {
+            route.automatic = false;
+            route.status = TradeRouteStatus::Returning;
+            routine.phase = TradeRoutePhase::MerchantReturningToOrigin;
+            continue;
+        };
+        let Some(target) =
+            merchant_stop_target(stop, route.company, &hall_snapshots, &warehouse_snapshots)
+        else {
+            // A sold/destroyed destination warehouse invalidates a private
+            // stop. Finish safely at home and leave the route idle for edits.
+            route.automatic = false;
+            route.status = TradeRouteStatus::Returning;
+            routine.phase = TradeRoutePhase::MerchantReturningToOrigin;
+            continue;
+        };
+        if route_failed.is_some() {
+            continue;
+        }
+        if ground_distance(position.0, target) > ROUTE_REACH {
+            ensure_move_target(&mut commands, porter_entity, move_target, target);
+            continue;
+        }
+        commands.entity(porter_entity).remove::<MoveTarget>();
+        route.status = TradeRouteStatus::Loading;
+        route.current_stop = routine.stop_index;
+
+        let mut stop_complete = true;
+        match stop.action {
+            TradeRouteStopAction::Load => {
+                let wanted = route
+                    .cargo_target
+                    .saturating_sub(carrier.amount(route.good))
+                    .min(carrier.free_bulk() / route.good.bulk_per_unit().max(1));
+                if wanted > 0 {
+                    let Some((_, _, _, _, _, _, mut store, _)) = warehouses.iter_mut().find(
+                        |(_, operated_by, building_of, building, ..)| {
+                            operated_by.0 == route.company
+                                && building_of.0 == stop.settlement
+                                && building.kind == SettlementBuildingKind::StorageHall
+                        },
+                    ) else {
+                        continue;
+                    };
+                    let removed = store.remove(route.good, wanted);
+                    let loaded = carrier.add(route.good, removed);
+                    debug_assert_eq!(loaded, removed);
+                    routine.cargo_units = routine.cargo_units.saturating_add(loaded);
+                }
+            }
+            TradeRouteStopAction::Buy => {
+                let wanted = route
+                    .cargo_target
+                    .saturating_sub(carrier.amount(route.good))
+                    .min(carrier.free_bulk() / route.good.bulk_per_unit().max(1));
+                if wanted > 0 {
+                    let Some(company_entity) = company_entities.get(&route.company).copied() else {
+                        continue;
+                    };
+                    let Ok(mut company_account) = company_accounts.get_mut(company_entity) else {
+                        continue;
+                    };
+                    let Some((market_id, _, _, mut source_store, mut source_market)) =
+                        halls.iter_mut().find(|(id, ..)| **id == stop.settlement)
+                    else {
+                        continue;
+                    };
+                    let requested = wanted.min(source_store.amount(route.good));
+                    let purchase = source_market.purchase(
+                        route.good,
+                        requested,
+                        company_account.cash,
+                        Some(route.maximum_purchase_price),
+                        Some(MarketSeller::Business(route.warehouse)),
+                    );
+                    if purchase.trade.units > 0 && company_account.debit(purchase.trade.pennies) {
+                        let removed = source_store.remove(route.good, purchase.trade.units);
+                        let loaded = carrier.add(route.good, removed);
+                        debug_assert_eq!(loaded, purchase.trade.units);
+                        let fees = purchase
+                            .fills
+                            .iter()
+                            .map(|fill| fill.market_fee)
+                            .fold(0u64, u64::saturating_add);
+                        routine.source_purchase_cost = routine
+                            .source_purchase_cost
+                            .saturating_add(purchase.trade.pennies);
+                        routine.source_market_fees =
+                            routine.source_market_fees.saturating_add(fees);
+                        routine.cargo_units = routine.cargo_units.saturating_add(loaded);
+                        route.lifetime_purchase_cost = route
+                            .lifetime_purchase_cost
+                            .saturating_add(purchase.trade.pennies);
+                        if let Some((_, _, _, _, _, _, _, mut account)) = warehouses
+                            .iter_mut()
+                            .find(|(id, ..)| **id == route.warehouse)
+                        {
+                            account.record_input_purchase(day, purchase.trade.pennies, loaded);
+                        }
+                        business_events.record_market_purchase(day, *market_id, purchase.fills);
+                    }
+                }
+            }
+            TradeRouteStopAction::Unload => {
+                let carried = carrier.amount(route.good);
+                if carried > 0 {
+                    let Some((_, _, _, _, _, _, mut store, _)) = warehouses.iter_mut().find(
+                        |(_, operated_by, building_of, building, ..)| {
+                            operated_by.0 == route.company
+                                && building_of.0 == stop.settlement
+                                && building.kind == SettlementBuildingKind::StorageHall
+                        },
+                    ) else {
+                        continue;
+                    };
+                    let deposited = store.add(route.good, carried);
+                    carrier.remove(route.good, deposited);
+                    stop_complete = carrier.amount(route.good) == 0;
+                }
+            }
+            TradeRouteStopAction::Sell => {
+                let carried = carrier.amount(route.good);
+                if carried > 0 {
+                    let Some((_, _, _, mut destination_store, mut destination_market)) =
+                        halls.iter_mut().find(|(id, ..)| **id == stop.settlement)
+                    else {
+                        continue;
+                    };
+                    let deposited = destination_store.add(route.good, carried);
+                    if deposited > 0 {
+                        carrier.remove(route.good, deposited);
+                        destination_market.consign(
+                            MarketSeller::Business(route.warehouse),
+                            route.good,
+                            deposited,
+                            route.minimum_destination_price,
+                        );
+                        let value = route
+                            .minimum_destination_price
+                            .saturating_mul(u64::from(deposited));
+                        routine.consigned_value = routine.consigned_value.saturating_add(value);
+                        route.lifetime_consigned_value =
+                            route.lifetime_consigned_value.saturating_add(value);
+                    }
+                    stop_complete = carrier.amount(route.good) == 0;
+                }
+            }
+            TradeRouteStopAction::ContractPickup | TradeRouteStopAction::ContractDelivery => {
+                route.automatic = false;
+                route.status = TradeRouteStatus::Returning;
+                routine.phase = TradeRoutePhase::MerchantReturningToOrigin;
+                continue;
+            }
+        }
+        if !stop_complete {
+            continue;
+        }
+
+        routine.stops_visited = routine.stops_visited.saturating_add(1);
+        let next_index = usize::from(routine.stop_index).saturating_add(1);
+        if next_index < schedule.stops().len() {
+            routine.stop_index = next_index as u8;
+            route.current_stop = routine.stop_index;
+            route.status = TradeRouteStatus::InTransit;
+            let next_stop = schedule.stops()[next_index];
+            if let Some(next_target) = merchant_stop_target(
+                next_stop,
+                route.company,
+                &hall_snapshots,
+                &warehouse_snapshots,
+            ) {
+                ensure_move_target(&mut commands, porter_entity, None, next_target);
+            }
+            continue;
+        }
+
+        route.completed_trips = route.completed_trips.saturating_add(1);
+        route.lifetime_units = route.lifetime_units.saturating_add(routine.cargo_units);
+        history.record(TradeRouteTrip {
+            departed_day: routine.departed_day,
+            completed_day: day,
+            units: routine.cargo_units,
+            source_purchase_cost: routine.source_purchase_cost,
+            source_market_fees: routine.source_market_fees,
+            delivery_revenue: 0,
+            consigned_value: routine.consigned_value,
+            stops_visited: routine.stops_visited,
+            travel_world_seconds: (now - routine.departed_world_seconds)
+                .max(0.0)
+                .min(f64::from(u32::MAX)) as u32,
+        });
+
+        if route.automatic {
+            routine.stop_index = 0;
+            routine.stops_visited = 0;
+            routine.departed_day = day;
+            routine.departed_world_seconds = now;
+            routine.source_purchase_cost = 0;
+            routine.source_market_fees = 0;
+            routine.cargo_units = 0;
+            routine.consigned_value = 0;
+            route.current_stop = 0;
+            route.status = TradeRouteStatus::InTransit;
+            if let Some(next_target) = schedule.stops().first().copied().and_then(|next_stop| {
+                merchant_stop_target(
+                    next_stop,
+                    route.company,
+                    &hall_snapshots,
+                    &warehouse_snapshots,
+                )
+            }) {
+                ensure_move_target(&mut commands, porter_entity, None, next_target);
+            }
+        } else {
+            route.status = TradeRouteStatus::Returning;
+            routine.phase = TradeRoutePhase::MerchantReturningToOrigin;
+            if let Some(origin) = hall_snapshots.get(&route.origin).copied() {
+                ensure_move_target(&mut commands, porter_entity, None, hall_entrance(origin));
             }
         }
     }
@@ -1420,6 +2019,7 @@ mod tests {
                 CompanyTradeRoute {
                     company: CARRIER_COMPANY,
                     warehouse: WAREHOUSE,
+                    mode: TradeRouteMode::ContractCarrier,
                     origin: SOURCE,
                     destination: DESTINATION,
                     good: Good::Stone,
@@ -1429,11 +2029,15 @@ mod tests {
                     automatic: true,
                     active_contract: Some(CONTRACT),
                     assigned_caravaner: Some(PORTER),
+                    current_stop: 0,
                     status: TradeRouteStatus::GoingToOrigin,
                     completed_trips: 0,
                     lifetime_units: 0,
                     lifetime_delivery_revenue: 0,
+                    lifetime_purchase_cost: 0,
+                    lifetime_consigned_value: 0,
                 },
+                TradeRouteSchedule::contract(SOURCE, DESTINATION),
                 TradeRouteHistory::default(),
             ))
             .id();
@@ -1447,12 +2051,16 @@ mod tests {
                 GoodsInventory::new(shared::economy::capacity::PORTER),
                 TradeRouteRoutine {
                     route: ROUTE,
+                    mode: TradeRouteMode::ContractCarrier,
                     phase: TradeRoutePhase::GoingToOrigin,
+                    stop_index: 0,
+                    stops_visited: 0,
                     departed_day: 0,
                     departed_world_seconds: 0.0,
                     source_purchase_cost: 0,
                     source_market_fees: 0,
                     cargo_units: 0,
+                    consigned_value: 0,
                 },
             ))
             .id();
@@ -1551,5 +2159,226 @@ mod tests {
         assert_eq!(route_state.status, TradeRouteStatus::Idle);
         assert_eq!(route_state.active_contract, None);
         assert_eq!(route_state.assigned_caravaner, None);
+    }
+
+    #[test]
+    fn merchant_timetable_buys_carries_and_consigns_at_its_ordered_stops() {
+        let mut app = App::new();
+        app.init_resource::<BusinessEventQueue>().add_systems(
+            Update,
+            (run_merchant_trade_routes, apply_business_events).chain(),
+        );
+        app.world_mut().spawn(WorldTime::new_default());
+
+        let source_at = Vec3::ZERO;
+        let destination_at = Vec3::new(40.0, 0.0, 0.0);
+        let warehouse_at = Vec3::new(-12.0, 0.0, 0.0);
+        let source_entrance = SettlementBuildingKind::Hall.entrance_position(source_at, 0.0);
+        let destination_entrance =
+            SettlementBuildingKind::Hall.entrance_position(destination_at, 0.0);
+
+        let mut source_market = MootMarket::founding();
+        source_market.consign(MarketSeller::Business(QUARRY), Good::Stone, 8, 250);
+        let mut source_stock = GoodsInventory::new(shared::economy::capacity::HALL);
+        source_stock.add(Good::Stone, 8);
+        let source_hall = app
+            .world_mut()
+            .spawn(hall(
+                SOURCE,
+                "Stonefield",
+                source_at,
+                0,
+                source_market,
+                source_stock,
+            ))
+            .id();
+        let destination_hall = app
+            .world_mut()
+            .spawn(hall(
+                DESTINATION,
+                "Meadowford",
+                destination_at,
+                0,
+                MootMarket::founding(),
+                GoodsInventory::new(shared::economy::capacity::HALL),
+            ))
+            .id();
+
+        let seller_company = app
+            .world_mut()
+            .spawn((SELLER_COMPANY, CompanyAccount::default()))
+            .id();
+        let carrier_company = app
+            .world_mut()
+            .spawn((
+                CARRIER_COMPANY,
+                CompanyAccount {
+                    cash: 5_000,
+                    ..default()
+                },
+            ))
+            .id();
+        app.world_mut().spawn((
+            QUARRY,
+            OperatedBy(SELLER_COMPANY),
+            BusinessAccount::default(),
+        ));
+        let warehouse = app
+            .world_mut()
+            .spawn((
+                WAREHOUSE,
+                BuildingOf(SOURCE),
+                OperatedBy(CARRIER_COMPANY),
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::StorageHall,
+                    settlement: "Stonefield".to_string(),
+                    owner: Some("Carrier".to_string()),
+                    quality: 1.0,
+                    workers: vec!["Caravaner".to_string()],
+                },
+                PlayerPosition(warehouse_at),
+                PlayerRotation(0.0),
+                GoodsInventory::new(shared::economy::capacity::STORAGE_HALL),
+                BusinessAccount::default(),
+            ))
+            .id();
+        let schedule = TradeRouteSchedule::new([
+            TradeRouteStop {
+                settlement: SOURCE,
+                action: TradeRouteStopAction::Buy,
+            },
+            TradeRouteStop {
+                settlement: DESTINATION,
+                action: TradeRouteStopAction::Sell,
+            },
+        ])
+        .unwrap();
+        let route = app
+            .world_mut()
+            .spawn((
+                ROUTE,
+                CompanyTradeRoute {
+                    company: CARRIER_COMPANY,
+                    warehouse: WAREHOUSE,
+                    mode: TradeRouteMode::Merchant,
+                    origin: SOURCE,
+                    destination: DESTINATION,
+                    good: Good::Stone,
+                    cargo_target: 8,
+                    maximum_purchase_price: 250,
+                    minimum_destination_price: 310,
+                    automatic: false,
+                    active_contract: None,
+                    assigned_caravaner: Some(PORTER),
+                    current_stop: 0,
+                    status: TradeRouteStatus::GoingToOrigin,
+                    completed_trips: 0,
+                    lifetime_units: 0,
+                    lifetime_delivery_revenue: 0,
+                    lifetime_purchase_cost: 0,
+                    lifetime_consigned_value: 0,
+                },
+                schedule,
+                TradeRouteHistory::default(),
+            ))
+            .id();
+        let porter = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                PORTER,
+                PlayerPosition(source_entrance),
+                CharacterActivity::Idle,
+                GoodsInventory::new(shared::economy::capacity::PORTER),
+                TradeRouteRoutine {
+                    route: ROUTE,
+                    mode: TradeRouteMode::Merchant,
+                    phase: TradeRoutePhase::MerchantTravellingToStop,
+                    stop_index: 0,
+                    stops_visited: 0,
+                    departed_day: 0,
+                    departed_world_seconds: 0.0,
+                    source_purchase_cost: 0,
+                    source_market_fees: 0,
+                    cargo_units: 0,
+                    consigned_value: 0,
+                },
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(source_hall)
+                .unwrap()
+                .amount(Good::Stone),
+            0
+        );
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(porter)
+                .unwrap()
+                .amount(Good::Stone),
+            8
+        );
+        assert_eq!(
+            app.world()
+                .get::<CompanyAccount>(carrier_company)
+                .unwrap()
+                .cash,
+            3_000
+        );
+        assert_eq!(
+            app.world()
+                .get::<CompanyAccount>(seller_company)
+                .unwrap()
+                .cash,
+            1_900
+        );
+
+        app.world_mut().get_mut::<PlayerPosition>(porter).unwrap().0 = destination_entrance;
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(destination_hall)
+                .unwrap()
+                .amount(Good::Stone),
+            8,
+            "the destination Hall must physically hold every consigned unit"
+        );
+        assert_eq!(
+            app.world()
+                .get::<GoodsInventory>(porter)
+                .unwrap()
+                .amount(Good::Stone),
+            0
+        );
+        let destination_market = app.world().get::<MootMarket>(destination_hall).unwrap();
+        assert!(destination_market.listings().iter().any(|listing| {
+            listing.seller == MarketSeller::Business(WAREHOUSE)
+                && listing.good == Good::Stone
+                && listing.units == 8
+                && listing.unit_price == 310
+        }));
+        let route_state = app.world().get::<CompanyTradeRoute>(route).unwrap();
+        assert_eq!(route_state.completed_trips, 1);
+        assert_eq!(route_state.lifetime_purchase_cost, 2_000);
+        assert_eq!(route_state.lifetime_consigned_value, 2_480);
+        assert_eq!(route_state.status, TradeRouteStatus::Returning);
+        let trip = app.world().get::<TradeRouteHistory>(route).unwrap().trips()[0];
+        assert_eq!(trip.units, 8);
+        assert_eq!(trip.stops_visited, 2);
+        assert_eq!(trip.consigned_value, 2_480);
+        assert_eq!(
+            app.world()
+                .get::<BusinessAccount>(warehouse)
+                .unwrap()
+                .current_day
+                .input_expense,
+            2_000,
+            "merchant cargo purchases remain visible in the route base cost centre"
+        );
     }
 }

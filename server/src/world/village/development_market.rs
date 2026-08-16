@@ -378,9 +378,19 @@ fn opportunity_score(
     let residents = signals.residents.max(1) as usize;
     let pressure = food_pressure(signals, economy, policies);
     let shelter_pressure = housing_pressure(signals);
-    if kind != SettlementBuildingKind::House && signals.recoverable(kind) > 0 {
+    let emergency_food_entry = matches!(
+        kind,
+        SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut
+    ) && pressure >= 0.5;
+    if kind != SettlementBuildingKind::House
+        && signals.recoverable(kind) > 0
+        && !emergency_food_entry
+    {
         // Reopen or buy the existing structure before consuming land, Wood
-        // and builder time on an economically identical duplicate.
+        // and builder time on an economically identical duplicate. Acute food
+        // failure is the exception: a mothballed or liquidating extractor has
+        // already shown that it cannot answer current demand, so competitors
+        // may seek a permit rather than waiting indefinitely.
         return 4.0;
     }
     let raw = match kind {
@@ -1424,6 +1434,34 @@ mod tests {
             .find(|opportunity| opportunity.kind == SettlementBuildingKind::FishermansHut)
             .unwrap();
         assert!(fishing.score >= 60.0);
+    }
+
+    #[test]
+    fn mothballed_food_site_does_not_block_emergency_competition() {
+        let signals = DevelopmentMarketSignals {
+            residents: 30,
+            houses: 8,
+            recoverable_fishers: 1,
+            ..Default::default()
+        };
+        let economy = SettlementEconomy {
+            observed_days: 3,
+            reserve_days: 0.0,
+            recent_food_production: 0.0,
+            unmet_food: 30,
+            ..Default::default()
+        };
+        let fishing = private_opportunities(
+            signals,
+            Some(&economy),
+            None,
+            &SettlementPolicies::default(),
+        )
+        .into_iter()
+        .find(|opportunity| opportunity.kind == SettlementBuildingKind::FishermansHut)
+        .unwrap();
+
+        assert!(fishing.score >= 100.0, "score was {}", fishing.score);
     }
 
     #[test]

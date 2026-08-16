@@ -278,6 +278,20 @@ use the shared navigation backoff instead of being resubmitted every tick. After
 empty wagon returns Hall-to-Hall over the same inter-settlement corridor and then takes an ordinary
 local route from its origin Hall to its private Storage Hall.
 
+The same physical executor now supports player-authored merchant timetables with up to eight
+ordered stops. Focused route tests cover a real company-funded `Buy` at Stonefield followed by
+physical carriage and a seller-owned `Sell` consignment at Meadowford; separate authority tests
+cover a three-town `Buy -> Sell -> Unload` schedule and reject private stops without an owned
+Storage Hall. `trade-comparison` remains the long 10x regression for the locked civic-contract
+path; NPC speculative route creation is deliberately not injected into that fixture.
+
+The 2026-08-16 post-editor regression ran `trade-comparison` for 900 simulated minutes at an
+exact 10x. All 70 residents were accounted for, Meadow completed its paid remote Stone contract
+and became a Town, the reusable carrier retained its physical trip/freight history, and the loop
+finished with 57/57 roads complete. Across 324,000 updates the server averaged 1.242 ms, p99 was
+3.948 ms, the maximum was 43.738 ms, and no update exceeded 50 ms. The focused merchant test is
+kept separate because it needs a player-authored schedule rather than fabricated NPC speculation.
+
 Both halls begin with empty stores and no fictional Moot buying fund, with Poor
 Relief enabled. Builders must personally chop their first construction Wood, and later
 purchase only stock that a real owner has physically consigned. Both still

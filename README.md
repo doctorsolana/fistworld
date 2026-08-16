@@ -67,6 +67,13 @@ for shares, pooled finance and vertical integration,
   settlements, and earns freight only after delivery. A small minimum call-out keeps a valid
   partial load above the carrier's fixed wage cost. There is no hardcoded trade-company
   category, and active contracts/routes are visible in Hall and company UI.
+- Company Masters can also author merchant caravan timetables from the Companies encyclopedia.
+  A route is a building-like operating asset based at a staffed Storage Hall, with two to eight
+  ordered town stops. Each stop buys from the public market, loads owned warehouse stock, sells
+  by real consignment or unloads into an owned destination warehouse. The panel exposes a
+  left-to-right stop lane, cart target, buy ceiling, sale floor, one-circuit/repeating service,
+  current caravaner and bounded trip economics. Merchant firms risk their own cash; posting cargo
+  at a destination records asking value only and pays nothing until a real buyer purchases it.
 - Door traversal, designated homes, night routines, occupied-window lighting, ambient
   walking/sitting, character attributes and bounded life histories.
 - Shared 100-point Health for heroes and villagers, staged hunger ceilings, gradual fed recovery, safe offline-Hero dormancy, bounded
@@ -113,9 +120,9 @@ constructs it. Those values remain prototype balance, not final design.
 
 - Versioned world-state persistence, migrations, backups and hosted durable storage.
 - Births, aging, non-starvation mortality, decline and persistent tree depletion/regrowth.
-- Player-authored trade orders/routes, merchant speculation, wagon art, route scaling and
-  general inter-settlement markets. The first automatic buyer-funded Stone contract and
-  physical warehouse-porter route are live. Players can now
+- NPC merchant speculation, wagon art, multi-wagon route scaling and general regional price
+  discovery remain ahead. Buyer-funded Stone contracts and player-authored physical multi-town
+  merchant routes are live. Players can now
   commission and physically build an ordinary business, then manage strategy, wages, prices,
   collection, input procurement, company shares, private supply and profit retention through
   the same policies as NPC owners. Company-funded purchases of existing listed firms and

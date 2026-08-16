@@ -144,8 +144,10 @@ fn marginal_operating_plan(
     let mut best_profit = 0i64;
     let mut best_units = 0u32;
     for candidate in 1..=positions {
-        let mut possible = capacity.output_units.saturating_mul(u32::from(candidate))
-            / u32::from(positions.max(1));
+        let mut possible = capacity
+            .output_units
+            .saturating_mul(u32::from(candidate))
+            .div_ceil(u32::from(positions.max(1)));
         possible = possible.min(output_gap);
         let input_cost = if let Some(recipe) = processing_recipe(building.kind) {
             let cycles = possible / recipe.output_units;
@@ -286,7 +288,8 @@ pub fn review_automatic_staffing(
         ) in read.iter()
         {
             let responds_to_demand = condition.is_some_and(|condition| {
-                condition.state.can_operate() || condition.state == BusinessState::Mothballed
+                condition.state.accepts_new_workers()
+                    || condition.state == BusinessState::Mothballed
             });
             if responds_to_demand {
                 if building.kind == SettlementBuildingKind::StorageHall {
@@ -1707,6 +1710,80 @@ mod tests {
         assert_eq!(
             app.world()
                 .get::<BusinessStaffingPolicy>(business)
+                .unwrap()
+                .enabled_positions,
+            1
+        );
+    }
+
+    #[test]
+    fn insolvent_food_shell_cannot_capture_the_only_hunger_restart_order() {
+        let mut app = App::new();
+        app.add_systems(Update, review_automatic_staffing);
+        let mut clock = WorldTime::new_default();
+        clock.day = 8;
+        app.world_mut().spawn(clock);
+        let settlement_id = shared::components::SettlementId(7);
+        app.world_mut().spawn((
+            settlement_id,
+            Settlement {
+                name: "Workford".into(),
+                tier: shared::components::SettlementTier::Hamlet,
+                residents: 10,
+                treasury: 0,
+            },
+            MootMarket::founding(),
+            SettlementEconomy {
+                unmet_food: 10,
+                observed_days: 2,
+                ..default()
+            },
+        ));
+        let spawn_fishery = |world: &mut World, id: u64, state: BusinessState| -> Entity {
+            let mut sale = BusinessSalePolicy::for_good(Good::Food);
+            sale.asking_unit_price = PENNIES_PER_COIN;
+            world
+                .spawn((
+                    shared::components::BuildingId(id),
+                    shared::components::BuildingOf(settlement_id),
+                    SettlementBuilding {
+                        kind: SettlementBuildingKind::FishermansHut,
+                        settlement: "Workford".into(),
+                        owner: None,
+                        quality: 1.0,
+                        workers: Vec::new(),
+                    },
+                    GoodsInventory::new(
+                        SettlementBuildingKind::FishermansHut.storage_bulk_capacity(),
+                    ),
+                    BusinessManagementPolicy::default(),
+                    BusinessCondition { state, ..default() },
+                    BusinessAccount::default(),
+                    sale,
+                    BusinessWagePolicy::default(),
+                    BusinessStaffingPolicy::new(0),
+                ))
+                .id()
+        };
+        let insolvent = spawn_fishery(app.world_mut(), 69, BusinessState::Insolvent);
+        let viable = spawn_fishery(app.world_mut(), 70, BusinessState::Mothballed);
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<BusinessStaffingPolicy>(insolvent)
+                .unwrap()
+                .enabled_positions,
+            0
+        );
+        assert_eq!(
+            app.world().get::<BusinessCondition>(viable).unwrap().state,
+            BusinessState::Operating
+        );
+        assert_eq!(
+            app.world()
+                .get::<BusinessStaffingPolicy>(viable)
                 .unwrap()
                 .enabled_positions,
             1

@@ -339,8 +339,8 @@ answer "can a village run itself?" before any of the economy above exists):
       company route physically collects, carries and delivers the finite load; seller payment,
       market fee, civic material/freight expense and carrier service revenue settle at their
       actual milestones. A small minimum call-out covers the fixed carrier cost of partial loads.
-      Hall/company UI and bounded trip history expose the result. General
-      merchant speculation and strategic graph travel remain Phase 5.
+      Hall/company UI and bounded trip history expose the result. Player-authored physical
+      merchant timetables are also live; NPC speculation and strategic graph travel remain Phase 5.
 
 **Deliberately deferred:** a billboard/impostor/symbol renderer. Settlements read as
 screen-projected UI labels, using the world-to-panel projection the map already has. That
@@ -558,6 +558,8 @@ Cargo rides the seam proven in Phase 2, so this phase adds economics, not archit
 - [ ] Settlement dispatch toward the best price in range
 - [x] Generic company route identity, buyer contract, finite cargo and milestone accounting
       (proved first with civic Stone; Phase 5 adds merchant risk and the regional graph)
+- [x] Player-authored two-to-eight-stop merchant timetable with physical Buy/Load/Sell/Unload,
+      company cash risk, public consignment settlement and manual/repeating service
 - [ ] A TRAVERSABLE BASE GRAPH first: rough cross-country routes between
       settlements, so "roads emerge from traffic" is not circular -- traffic
       cannot wear a path along a route it cannot take.

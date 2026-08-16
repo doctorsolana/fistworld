@@ -1,6 +1,6 @@
 # Company Economy
 
-Status: implemented foundation and permanent design reference, audited 2026-08-15. This document
+Status: implemented foundation and permanent design reference, audited 2026-08-16. This document
 defines the boundary between people, companies and operating sites; the civic
 market rules remain in [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
 
@@ -21,7 +21,7 @@ market rules remain in [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
 - A private Storage Hall holds 2,400 bulk and opens up to four ordinary one-job Company Porter positions. Its porters move only their company's goods inside that settlement and charge no municipal delivery fee; their wages are the logistics cost.
 - NPCs normally treat a Storage Hall as established branch infrastructure: an autonomous applicant needs at least two other local company sites and cannot add a second depot to that branch. A real export contract lowers the threshold to one productive site, allowing a quarry concern to build its own warehouse and transport arm. The tier-unlocked player permit remains freely purchasable.
 - Workshops near 80% capacity can send bounded excess loads to an owned local Storage Hall. Processors can draw requested inputs back from it, and branch surplus stored there can still reach the public market.
-- Cross-settlement transfers are explicit company assets. The first live route serves a buyer-funded civic tender. Destination, good, cargo target and price ceiling exist before supply; origin and seller bind only when a complete real listing appears, then the company route names its warehouse and assigned porter. A two-coin minimum call-out keeps a real partial load above the carrier's fixed wage cost while larger loads pay the normal per-bulk rate. No company is tagged as a special trade-company type.
+- Cross-settlement transfers are explicit company assets. Buyer-funded civic contracts use locked pickup/delivery stops; player-authored merchant routes use two to eight ordered town stops with `Buy`, `Load owned stock`, `Sell` or `Unload to storage` instructions. Every route names one home Storage Hall, one good, a finite cart target and an employed Company Porter. No company is tagged as a special trade-company type.
 - Input sourcing modes are `PreferOwned`, `CheapestAvailable` and `OwnedOnly`.
 - Company and clan identities remain separate. Before a business permit is issued, an entrepreneur explicitly founds a company, contributes personal coin, receives all 1,000 shares and becomes its Company Master. The share model supports later co-ownership, inheritance and multiple companies.
 
@@ -39,6 +39,7 @@ market rules remain in [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md).
    distribution memo; spendable cash still moves only from `CompanyAccount`.
 7. Taxes are assessed against real company operating profit, never internal bookkeeping turnover.
 8. A site's reported result and the consolidated company result are explainable from retained bounded history.
+9. A merchant `Buy` stop debits real company cash and pays the exact public sellers. A `Sell` stop creates a seller-owned consignment; asking value is not revenue and the company is paid only when a real later buyer clears it. `Load` and `Unload` move owned stock without cash or public listings.
 
 ## How money enters and leaves a company
 
@@ -225,6 +226,15 @@ than destroying money or guessing a recipient.
 - Current controls expose sourcing preference, preferred supplier, stock, target, local
   capacity and whether civic or private logistics is available. A replicated live-shipment
   inspector with carrier phase and route-failure detail remains future debugging UI.
+- Caravan routes appear beside operating sites as first-class company assets. Their cards show
+  the home warehouse, assigned caravaner, cargo, current stop, ordered timetable, repeat/manual
+  service, completed trips, cash spent, freight earned and merchant asking-value consigned.
+  A Company Master can create or edit an idle merchant route through the same company panel:
+  choose two to eight ordered towns, cycle each town's instruction, move or remove stops, set
+  cargo target, buy ceiling, sale floor and continuous/one-circuit service, then dispatch,
+  mothball or reopen it. Contract routes use the same presentation but their civic stops stay locked.
+  The final stop may return to the home town, so one circuit can buy elsewhere and finish by
+  selling at the home market or unloading into the home Storage Hall.
 - Company sites link into their settlement/building records; shareholders link into People. Each site exposes separate `View Details` and `Manage Site` actions. Both drill-down paths provide `Back to Company`, and repeated management clicks preserve scroll position. `Company Controls` opens the existing authoritative management surface instead of duplicating mutation controls in a read-oriented directory.
 - **Full Ledger** pulls up to 365 completed days on demand by stable `CompanyId`. It consolidates sites across every settlement, eliminates internal supplier credits/buyer charges from profit, and retains those equal amounts as an audit memo. Charts cover P&L, cash/debt/assets, dividends/capital spending and internal flow; tables retain per-site contribution and recent daily records.
 
@@ -268,6 +278,7 @@ than destroying money or guessing a recipient.
 - One owner, one business continues to behave like the present economy.
 - Farm, Windmill and Bakery owned by one company privately move Wheat and Flour, and only Bread reaches the public market when configured that way.
 - The same company operating in two settlements has one treasury but independent branch inventory, capacity and public-sale rules; goods cross the boundary only through an explicit physical trade route.
+- A three-town merchant timetable follows its stop order exactly. Public `Buy`/`Sell` works in any known settlement; private `Load`/`Unload` is accepted only where that company owns a completed Storage Hall.
 - A Storage Hall accepts local overflow, its Company Porters supply local owned processors without a civic delivery fee, and closing a porter position cannot lose an in-flight load.
 - A workplace with no applicable porter can still buy inputs and consign output through bounded employee self-haul, with visibly and strategically equivalent lost production time.
 - A different owner's processor cannot consume privately committed stock.
@@ -298,13 +309,15 @@ than destroying money or guessing a recipient.
 - [x] Stable company-owned route assets and buyer-funded civic contracts
 - [x] Exact remote seller pickup, physical carried cargo, destination delivery and freight ledger
 - [x] Bounded route trip history and company/Hall inspection UI
+- [x] Player-authored two-to-eight-stop merchant route editor and manual/continuous dispatch
+- [x] Physical merchant Buy/Load/Unload/Sell execution with real company cash and consignments
 - [x] Per-site enabled-position controls with graceful worker release
 - [x] Pull-based cross-settlement company/site history archives and lab reports
 - [x] Company directory, multi-company player portfolio, share market and supply-chain UI
 - [x] NPC operational, dividend and capital controller
 - [x] Demand-led staffing, productive-site mothball and automatic reopening lifecycle
 - [ ] Voluntary branch sale/reallocation across settlements
-- [ ] Player-authored route editor, wagons/caravaner art and independent merchant speculation
+- [ ] NPC independent merchant speculation, wagon/cart art and multi-wagon route scaling
 - [x] Unit and coin/share conservation tests
 - [ ] Multi-seed economic tuning
 - [x] Explicit marginal staffing, demand budget and mothball/reopen acceptance tests

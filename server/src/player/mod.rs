@@ -18,3 +18,4 @@ pub mod market;
 pub mod permits;
 pub mod roster;
 pub mod spawn;
+pub mod trade_routes;

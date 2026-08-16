@@ -249,6 +249,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                     (
                         super::manage_company_trade_routes,
                         super::run_company_trade_routes,
+                        super::run_merchant_trade_routes,
                         super::run_internal_deliveries,
                         super::run_market_collections,
                     )

@@ -106,11 +106,11 @@ pub use processing::{
 };
 pub use production::sync_business_stock_targets;
 pub(crate) use production::{
-    automatic_opening_positions, farmer_seconds_per_wheat, fisher_seconds_per_food,
-    lumber_seconds_per_tree, lumber_tree_yield, maximum_viable_input_unit_price,
-    process_available_cycles, processing_recipe, quarry_seconds_per_stone, rated_daily_production,
-    viable_processing_input_purchase, BusinessOperatingPlan, ProcessingRecipe,
-    SELF_SUPPLY_TREE_YIELD,
+    automatic_opening_positions, estimated_staffed_unit_cost, farmer_seconds_per_wheat,
+    fisher_seconds_per_food, lumber_seconds_per_tree, lumber_tree_yield,
+    maximum_viable_input_unit_price, process_available_cycles, processing_recipe,
+    quarry_seconds_per_stone, rated_daily_production, viable_processing_input_purchase,
+    BusinessOperatingPlan, ProcessingRecipe, SELF_SUPPLY_TREE_YIELD,
 };
 pub use property_market::{publish_property_boards, remove_abandoned_businesses};
 pub(crate) use quarry::QuarryWorkProgress;
@@ -122,7 +122,7 @@ pub use settlement_economy::{
 };
 pub use trade_routes::{
     manage_company_trade_routes, post_civic_import_contracts, run_company_trade_routes,
-    TradeRouteRoutine,
+    run_merchant_trade_routes, TradeRouteRoutine,
 };
 pub(crate) use trades::lumber_plot_has_reachable_tree;
 #[cfg(test)]

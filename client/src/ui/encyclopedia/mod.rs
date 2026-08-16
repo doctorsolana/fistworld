@@ -40,6 +40,7 @@ impl Plugin for EncyclopediaPlugin {
         app.init_resource::<companies::SelectedCompany>();
         app.init_resource::<companies::CompanyDrilldownReturn>();
         app.init_resource::<companies::CompanyPolicyFeedback>();
+        app.init_resource::<companies::TradeRouteEditorState>();
         app.init_resource::<ClickGuard>();
         app.add_systems(
             Update,
@@ -116,7 +117,11 @@ impl Plugin for EncyclopediaPlugin {
                 companies::handle_company_person_buttons,
                 companies::handle_company_management_buttons,
                 companies::handle_company_branch_policy_buttons,
+                companies::handle_trade_route_open_buttons,
+                companies::handle_trade_route_quick_actions,
+                companies::handle_trade_route_editor_buttons,
                 companies::receive_company_policy_results,
+                companies::receive_trade_route_results,
                 companies::rebuild_company_view,
                 companies::style_company_controls,
             )

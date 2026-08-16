@@ -345,6 +345,55 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         }
     }
 
+    // FISTFORCE_CAPTURE_ROADS=compare stages the same completed main road
+    // before and after its real Dirt -> Stone upgrade. It deliberately spawns
+    // only replicated road data: the ordinary terrain compositor must produce
+    // the image, so this remains a regression fixture for the shipping path.
+    if std::env::var("FISTFORCE_CAPTURE_ROADS").is_ok_and(|value| value == "compare") {
+        commands.queue(|world: &mut World| {
+            let focus = world
+                .get_resource::<CaptureConfig>()
+                .and_then(|config| config.shots.first().map(|shot| shot.focus))
+                .unwrap_or_default();
+            let relative = [
+                Vec2::new(-34.0, 0.0),
+                Vec2::new(-12.0, -2.0),
+                Vec2::new(8.0, 1.0),
+                Vec2::new(34.0, 0.0),
+            ];
+            let points_at = |z: f32| {
+                relative
+                    .iter()
+                    .map(|point| Vec2::new(focus.x + point.x, focus.z + point.y + z))
+                    .collect::<Vec<_>>()
+            };
+            world.spawn(shared::components::VillageRoad {
+                settlement: "Capture Roads".into(),
+                builder: "Capture Road Steward".into(),
+                points: points_at(-7.0),
+                built_through: relative.len() as u16,
+                width: 2.6,
+                reserved_width: shared::components::RoadClass::Main.initial_reserved_width(),
+                surface: shared::components::RoadSurface::Dirt,
+                class: shared::components::RoadClass::Main,
+                stone_committed: 0,
+            });
+            let mut stone = shared::components::VillageRoad {
+                settlement: "Capture Roads".into(),
+                builder: "Capture Road Steward".into(),
+                points: points_at(7.0),
+                built_through: relative.len() as u16,
+                width: 4.0,
+                reserved_width: shared::components::RoadClass::Main.initial_reserved_width(),
+                surface: shared::components::RoadSurface::Stone,
+                class: shared::components::RoadClass::Main,
+                stone_committed: 0,
+            };
+            stone.stone_committed = stone.stone_required();
+            world.spawn(stone);
+        });
+    }
+
     // FISTFORCE_CAPTURE_PAUSE=main|graphics|controls photographs the real ESC
     // menu and its expanded settings wells without needing keyboard input.
     if let Ok(panel) = std::env::var("FISTFORCE_CAPTURE_PAUSE") {

@@ -1694,7 +1694,11 @@ impl BusinessState {
     }
 
     pub const fn counts_as_active_capacity(self) -> bool {
-        self.can_operate()
+        // An insolvent firm may finish or liquidate stock during its grace
+        // period, but it cannot hire a worker to answer new demand. Treating
+        // it as capacity makes planning and restart selection hide a genuine
+        // vacancy behind an unusable shell.
+        self.accepts_new_workers()
     }
 
     /// Existing physical capacity which can answer future demand without a
