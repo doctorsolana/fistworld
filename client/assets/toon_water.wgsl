@@ -199,11 +199,26 @@ fn shore_lap_height(world_xz: vec2<f32>, shore_dist: f32, signed_depth: f32, tim
     return (primary * 0.085 + sin(secondary_phase) * 0.024) * shoaling * shore_zone;
 }
 
-fn wave_height(world_xz: vec2<f32>, depth: f32, shore_dist: f32, signed_depth: f32, time: f32) -> f32 {
+fn wave_height(
+    world_xz: vec2<f32>,
+    depth: f32,
+    shore_dist: f32,
+    signed_depth: f32,
+    ocean_factor: f32,
+    time: f32,
+) -> f32 {
     let broad = swell_field(world_xz, time)
         * material.wave_params.x
         * swell_motion_scale(depth, shore_dist);
-    return broad + shore_lap_height(world_xz, shore_dist, signed_depth, time);
+    let river_wave = broad + shore_lap_height(world_xz, shore_dist, signed_depth, time);
+    // The old depth-phased lap works well in narrow channels, but along a long
+    // ocean coast its independent spatial phases make neighbouring pieces of
+    // the water edge rise and fall against each other. Keep the ocean's final
+    // few metres physically calm; its run-up is represented by coherent foam
+    // contours below rather than by folding the mesh itself.
+    let ocean_shore_fade = smoothstep(0.10, 0.42, shore_dist);
+    let ocean_wave = broad * ocean_shore_fade;
+    return mix(river_wave, ocean_wave, ocean_factor);
 }
 
 @vertex
@@ -228,20 +243,32 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     );
 
 #ifdef VERTEX_COLORS
+    let ocean_factor = clamp(vertex.color.r, 0.0, 1.0);
     let depth = clamp(vertex.color.a, 0.0, 1.0);
     let shore_dist = clamp(vertex.color.g, 0.0, 1.0);
     let signed_depth = vertex.color.b;
 #else
+    let ocean_factor = 0.0;
     let depth = 1.0;
     let shore_dist = 1.0;
     let signed_depth = 1.0;
 #endif
     let wave_time = globals.time + material.wave_params.w;
-    world_pos.y += wave_height(world_pos.xz, depth, shore_dist, signed_depth, wave_time);
+    world_pos.y += wave_height(
+        world_pos.xz,
+        depth,
+        shore_dist,
+        signed_depth,
+        ocean_factor,
+        wave_time,
+    );
 #ifdef VERTEX_NORMALS
+    let ocean_shore_fade = smoothstep(0.10, 0.42, shore_dist);
+    let normal_motion_scale = mix(1.0, ocean_shore_fade, ocean_factor);
     let swell_slope = swell_gradient(world_pos.xz, wave_time)
         * material.wave_params.x
-        * swell_motion_scale(depth, shore_dist);
+        * swell_motion_scale(depth, shore_dist)
+        * normal_motion_scale;
     out.world_normal = normalize(vec3<f32>(-swell_slope.x, 1.0, -swell_slope.y));
 #endif
     out.world_position = world_pos;
@@ -281,6 +308,9 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+    // R is an ocean/river blend baked by the mesh. It lets this pass fix the
+    // long-coast folding without disturbing the river look.
+    let ocean_factor = clamp(in.color.r, 0.0, 1.0);
     let depth = clamp(in.color.a, 0.0, 1.0);
     // Horizontal distance to the nearest shoreline, 0 at the waterline and
     // 1 at ~28m out (baked by the mesh builder). Depth alone can't zone
@@ -291,10 +321,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let signed_depth = in.color.b;
     let wave_time = globals.time + material.wave_params.w;
     let swell_value = swell_field(in.world_position.xz, wave_time);
-    let surface_displacement = swell_value
-        * material.wave_params.x
-        * swell_motion_scale(depth, shore_dist)
-        + shore_lap_height(in.world_position.xz, shore_dist, signed_depth, wave_time);
+    let surface_displacement = wave_height(
+        in.world_position.xz,
+        depth,
+        shore_dist,
+        signed_depth,
+        ocean_factor,
+        wave_time,
+    );
 
     // Soft-banded depth gradient: quantize a third of the way toward 3 bands
     // for the stylized "painted shelves of color" read.
@@ -322,10 +356,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let crest_foam = smoothstep(crest_threshold - edge_smooth, crest_threshold + edge_smooth, crest01)
         * open_water;
 
-    // --- Shoreline (BotW-style): a solid contact line at the waterline,
-    // crisp thin foam lines traveling in toward the coast, and a soft wash
-    // underneath. All in shoreline space, wobbled so lines undulate along
-    // the coast instead of tracing perfect contours.
+    // --- Shoreline: rivers retain the authored depth-phased lap below. Ocean
+    // foam instead uses one stable distance field for contact, traveling lines
+    // and wash. Noise modulates opacity only, never the line position, so a
+    // diagonal coast cannot fold back across itself while the wave advances.
     let line_wobble = wave_field(in.world_position.xz * 0.22, globals.time * 1.4, 1.0, 1.0);
     let shore_zone = 1.0 - smoothstep(0.0, 0.5, shore_dist);
 
@@ -338,7 +372,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // least a pixel at distance. Without derivative AA the otherwise smooth
     // contour stair-steps as it crosses the screen's pixel grid.
     let contact_half_width = min(max(0.056, fwidth(shore_submersion) * 0.75), 0.10);
-    let contact = (1.0 - smoothstep(
+    let river_contact = (1.0 - smoothstep(
         max(0.074 - contact_half_width, 0.0),
         0.074 + contact_half_width,
         abs(shore_submersion),
@@ -364,17 +398,63 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         0.8,
         0.5 + 0.5 * sin(dot(in.world_position.xz, vec2<f32>(0.13, 0.11)) + globals.time * 0.7 + line_wobble * 1.7)
     );
-    let travel_lines = line_core * breakup * shore_zone * shore_zone;
+    let river_travel_lines = line_core * breakup * shore_zone * shore_zone;
 
     // Soft wash under the lines, kept close to the waterline. The border is
     // wobbled by the SMOOTH wave field — the old floor()+time hash re-rolled
     // a new random value whenever the scrolling cell grid crossed a
     // boundary, which made the fade edge flicker.
     let wash_border = line_wobble * 0.035;
-    let wash =
+    let river_wash =
         (1.0 - smoothstep(0.03 + wash_border, 0.16 + wash_border * 1.6, shore_dist)) * 0.55;
 
-    let shore_foam = clamp(contact + travel_lines * 0.95 + wash, 0.0, 1.0);
+    let river_shore_foam = clamp(
+        river_contact + river_travel_lines * 0.95 + river_wash,
+        0.0,
+        1.0,
+    );
+
+    // About 0.5-1.2m of soft contact foam at the visible water edge.
+    let ocean_contact_width = max(0.018, fwidth(shore_dist) * 1.25);
+    let ocean_contact = 1.0 - smoothstep(
+        0.010 + ocean_contact_width,
+        0.035 + ocean_contact_width,
+        shore_dist,
+    );
+
+    // A coherent family of fronts, roughly 5m apart, traveling shoreward.
+    // The distance field follows the smoothed coast contour, so diagonal
+    // beaches receive the same shore-normal motion as cardinal beaches.
+    let ocean_band_phase = shore_dist * 5.6 + globals.time * 0.115;
+    let ocean_band = fract(ocean_band_phase);
+    let ocean_band_half_width = min(max(0.055, fwidth(ocean_band_phase) * 0.75), 0.11);
+    let ocean_line_core = smoothstep(
+        0.42 - ocean_band_half_width,
+        0.42 + ocean_band_half_width,
+        ocean_band,
+    ) * (1.0 - smoothstep(
+        0.58 - ocean_band_half_width,
+        0.58 + ocean_band_half_width,
+        ocean_band,
+    ));
+    let ocean_opacity_noise = mix(0.72, 1.0, smoothstep(
+        0.15,
+        0.85,
+        0.5 + 0.5 * sin(
+            dot(in.world_position.xz, vec2<f32>(0.075, 0.061)) + globals.time * 0.42
+        ),
+    ));
+    let ocean_travel_lines = ocean_line_core
+        * ocean_opacity_noise
+        * shore_zone
+        * shore_zone;
+    let ocean_wash = (1.0 - smoothstep(0.018, 0.145, shore_dist)) * 0.42;
+    let ocean_shore_foam = clamp(
+        ocean_contact * 0.95 + ocean_travel_lines * 0.92 + ocean_wash,
+        0.0,
+        1.0,
+    );
+    let shore_foam = mix(river_shore_foam, ocean_shore_foam, ocean_factor);
 
     // Interaction ripples: expanding foam rings around wading players.
     const RIPPLE_LIFE: f32 = 1.5;
@@ -419,10 +499,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 #endif
     let ndv = clamp(abs(dot(broad_normal, view_vec)), 0.02, 1.0);
     let fresnel = pow(1.0 - ndv, 3.0);
-    // A proper sky BLUE, weakly mixed — a strong whitish tint washes the
-    // whole lake milky at grazing angles.
+    // A proper sky BLUE, weakly mixed. Deep ocean retains its authored navy
+    // at grazing RTS angles; shallows keep more of the bright reflection.
     let sky_tint = vec3<f32>(0.45, 0.68, 0.90);
-    base_rgb = mix(base_rgb, sky_tint, fresnel * 0.35);
+    let reflection_strength = mix(0.30, 0.14, depth);
+    base_rgb = mix(base_rgb, sky_tint, fresnel * reflection_strength);
     var alpha = clamp(base.a + fresnel * 0.22, 0.0, 0.97);
 
     var color_rgb = mix(base_rgb, material.foam_color.rgb, foam_mask);

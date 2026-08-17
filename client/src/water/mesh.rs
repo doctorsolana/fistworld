@@ -42,6 +42,9 @@ struct Corner {
 struct WaterVertex {
     pos: [f32; 3],
     uv: [f32; 2],
+    /// 1 for ocean, 0 for the river core. Stored in vertex color R so the
+    /// ocean shoreline can be calmed without changing the river treatment.
+    ocean_factor: f32,
     depth_norm: f32,
     signed_depth_norm: f32,
     shore_dist: f32,
@@ -258,9 +261,24 @@ fn add_triangle(
     uvs.push(a.uv);
     uvs.push(b.uv);
     uvs.push(c.uv);
-    colors.push([1.0, a.shore_dist, a.signed_depth_norm, a.depth_norm]);
-    colors.push([1.0, b.shore_dist, b.signed_depth_norm, b.depth_norm]);
-    colors.push([1.0, c.shore_dist, c.signed_depth_norm, c.depth_norm]);
+    colors.push([
+        a.ocean_factor,
+        a.shore_dist,
+        a.signed_depth_norm,
+        a.depth_norm,
+    ]);
+    colors.push([
+        b.ocean_factor,
+        b.shore_dist,
+        b.signed_depth_norm,
+        b.depth_norm,
+    ]);
+    colors.push([
+        c.ocean_factor,
+        c.shore_dist,
+        c.signed_depth_norm,
+        c.depth_norm,
+    ]);
     // The a/b/c layout below is clockwise seen from above (+Y); emit reversed
     // so the front face points up — otherwise back-face culling hides the
     // whole surface from above water.
@@ -287,6 +305,13 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
             water_level
         } else {
             rivers.level_at(Vec2::new(wx, wz), water_level)
+        }
+    };
+    let ocean_factor_at = |wx: f32, wz: f32| -> f32 {
+        if rivers.is_empty() {
+            1.0
+        } else {
+            1.0 - rivers.weight_at(Vec2::new(wx, wz))
         }
     };
     let waterline_at = |wx: f32, wz: f32| level_at(wx, wz) + WATER_SHORE_OVERLAP;
@@ -331,8 +356,8 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
 
     let (smoothed_shore_points, shore_neighbours) = smooth_shore_segments(&shore_segments);
     // Distance queries follow a rounded version of the terrain contour. The
-    // rendered cut stays exact, while this smoother field keeps diagonal foam
-    // fronts parallel to the bank instead of snapping to X/Z depth bands.
+    // rendered cut remains on the exact terrain crossing so smoothing cannot
+    // uncover dry triangular wedges along a bank.
     let mut curved_shore_segments = Vec::with_capacity(shore_segments.len() * 3);
     for &(a, b) in &shore_segments {
         let curve = shore_curve_points(a, b, &smoothed_shore_points, &shore_neighbours);
@@ -368,6 +393,7 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
             depth_norm: signed_depth_norm.max(0.0),
             signed_depth_norm,
             shore_dist: shore_dist_norm(world_x, world_z),
+            ocean_factor: ocean_factor_at(world_x, world_z),
         }
     };
 
@@ -385,19 +411,9 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
         a_world.lerp(b_world, t)
     };
 
-    let boundary_vertex = |raw_world: Vec2| {
-        // Keep geometry on the terrain's exact marching-squares crossing.
-        // Moving this cut exposes dry triangular wedges at some wave phases.
-        let world = raw_world;
-        let local_x = world.x - origin_x;
-        let local_z = world.y - origin_z;
-        let line = waterline_at(origin_x + local_x, origin_z + local_z);
-        make_vertex(local_x, local_z, line)
-    };
-
-    // Keep the cut on the exact terrain crossing, but sample its animated
-    // displacement more finely than the 2m source grid.
-    let subdivided_boundary = |raw_a: Vec2, raw_b: Vec2| {
+    // Keep the cut on the exact terrain crossing, but sample its shader data
+    // more finely than the 2m source grid.
+    let subdivided_boundary = |raw_a: Vec2, raw_b: Vec2| -> [WaterVertex; 4] {
         [
             raw_a,
             raw_a.lerp(raw_b, 1.0 / 3.0),
@@ -481,14 +497,9 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
             } else {
                 None
             };
-            let e0 = r0.map(boundary_vertex);
-            let e1 = r1.map(boundary_vertex);
-            let e2 = r2.map(boundary_vertex);
-            let e3 = r3.map(boundary_vertex);
-
-            // Boundary cells get two extra points along their exact terrain
-            // crossing. Fully wet cells keep the original two triangles, so
-            // ocean rendering cost is unchanged away from the bank.
+            // Boundary cells get two extra samples on their exact crossing.
+            // The ocean's visual smoothing happens in the coherent foam field;
+            // keeping the cut exact prevents terrain gaps.
             if mask != 15 {
                 let mut polygon = |vertices: &[WaterVertex]| {
                     add_polygon(
@@ -566,331 +577,26 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
                 continue;
             }
 
-            match mask {
-                1 => add_triangle(
-                    &mut positions,
-                    &mut normals,
-                    &mut uvs,
-                    &mut colors,
-                    &mut indices,
-                    v0,
-                    e0.unwrap(),
-                    e3.unwrap(),
-                ),
-                2 => add_triangle(
-                    &mut positions,
-                    &mut normals,
-                    &mut uvs,
-                    &mut colors,
-                    &mut indices,
-                    v1,
-                    e1.unwrap(),
-                    e0.unwrap(),
-                ),
-                3 => {
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        v1,
-                        e1.unwrap(),
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        e1.unwrap(),
-                        e3.unwrap(),
-                    );
-                }
-                4 => add_triangle(
-                    &mut positions,
-                    &mut normals,
-                    &mut uvs,
-                    &mut colors,
-                    &mut indices,
-                    v2,
-                    e2.unwrap(),
-                    e1.unwrap(),
-                ),
-                5 => {
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        e0.unwrap(),
-                        e3.unwrap(),
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v2,
-                        e2.unwrap(),
-                        e1.unwrap(),
-                    );
-                }
-                6 => {
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v1,
-                        v2,
-                        e2.unwrap(),
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v1,
-                        e2.unwrap(),
-                        e0.unwrap(),
-                    );
-                }
-                7 => {
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        v1,
-                        v2,
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        v2,
-                        e2.unwrap(),
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        e2.unwrap(),
-                        e3.unwrap(),
-                    );
-                }
-                8 => add_triangle(
-                    &mut positions,
-                    &mut normals,
-                    &mut uvs,
-                    &mut colors,
-                    &mut indices,
-                    v3,
-                    e3.unwrap(),
-                    e2.unwrap(),
-                ),
-                9 => {
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        e0.unwrap(),
-                        e2.unwrap(),
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        e2.unwrap(),
-                        v3,
-                    );
-                }
-                10 => {
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v1,
-                        e1.unwrap(),
-                        e0.unwrap(),
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v3,
-                        e3.unwrap(),
-                        e2.unwrap(),
-                    );
-                }
-                11 => {
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        v1,
-                        e1.unwrap(),
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        e1.unwrap(),
-                        e2.unwrap(),
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        e2.unwrap(),
-                        v3,
-                    );
-                }
-                12 => {
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v2,
-                        v3,
-                        e3.unwrap(),
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v2,
-                        e3.unwrap(),
-                        e1.unwrap(),
-                    );
-                }
-                13 => {
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        e0.unwrap(),
-                        e1.unwrap(),
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        e1.unwrap(),
-                        v2,
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        v2,
-                        v3,
-                    );
-                }
-                14 => {
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v1,
-                        v2,
-                        v3,
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v1,
-                        v3,
-                        e3.unwrap(),
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v1,
-                        e3.unwrap(),
-                        e0.unwrap(),
-                    );
-                }
-                15 => {
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        v1,
-                        v2,
-                    );
-                    add_triangle(
-                        &mut positions,
-                        &mut normals,
-                        &mut uvs,
-                        &mut colors,
-                        &mut indices,
-                        v0,
-                        v2,
-                        v3,
-                    );
-                }
-                _ => {}
-            }
+            add_triangle(
+                &mut positions,
+                &mut normals,
+                &mut uvs,
+                &mut colors,
+                &mut indices,
+                v0,
+                v1,
+                v2,
+            );
+            add_triangle(
+                &mut positions,
+                &mut normals,
+                &mut uvs,
+                &mut colors,
+                &mut indices,
+                v0,
+                v2,
+                v3,
+            );
         }
     }
 
@@ -989,6 +695,23 @@ impl RiverSurface {
         self.segments.is_empty()
     }
 
+    /// Smooth 0..1 mask for keeping the established river shader behavior.
+    /// The fade occupies only the outer fifth of the river's reach, avoiding
+    /// a visible material seam where river water joins the ocean.
+    fn weight_at(&self, p: Vec2) -> f32 {
+        let mut weight: f32 = 0.0;
+        for (a, b, _, _, reach_a, reach_b) in &self.segments {
+            let seg = *b - *a;
+            let t = ((p - *a).dot(seg) / seg.length_squared().max(1e-6)).clamp(0.0, 1.0);
+            let reach = reach_a + (reach_b - reach_a) * t;
+            let distance = p.distance(*a + seg * t);
+            let edge = ((reach - distance) / (reach * 0.2).max(0.001)).clamp(0.0, 1.0);
+            let smooth_edge = edge * edge * (3.0 - 2.0 * edge);
+            weight = weight.max(smooth_edge);
+        }
+        weight
+    }
+
     /// Water level at a world point: the ocean, raised wherever a river runs.
     fn level_at(&self, p: Vec2, ocean: f32) -> f32 {
         let mut level = ocean;
@@ -1085,5 +808,24 @@ mod tests {
         assert_eq!(curve[0], positions[&shore_key(segments[1].0)]);
         assert_eq!(curve[3], positions[&shore_key(segments[1].1)]);
         assert!(curve[1].is_finite() && curve[2].is_finite());
+    }
+
+    #[test]
+    fn river_mask_has_a_solid_core_and_smooth_edge() {
+        let river = RiverSurface {
+            segments: vec![(
+                Vec2::new(0.0, 0.0),
+                Vec2::new(10.0, 0.0),
+                1.0,
+                0.0,
+                5.0,
+                5.0,
+            )],
+        };
+
+        assert_eq!(river.weight_at(Vec2::new(5.0, 0.0)), 1.0);
+        assert_eq!(river.weight_at(Vec2::new(5.0, 5.0)), 0.0);
+        let edge = river.weight_at(Vec2::new(5.0, 4.5));
+        assert!(edge > 0.0 && edge < 1.0);
     }
 }

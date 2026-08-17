@@ -96,8 +96,8 @@ pub(super) fn setup_water_assets(
 ) {
     let material = materials.add(ToonWaterMaterial {
         uniform: ToonWaterUniform {
-            shallow_color: LinearRgba::new(0.12, 0.62, 0.92, 0.70),
-            deep_color: LinearRgba::new(0.02, 0.16, 0.40, 0.84),
+            shallow_color: LinearRgba::from_f32_array(WATER_SHALLOW_RGBA),
+            deep_color: LinearRgba::from_f32_array(WATER_DEEP_RGBA),
             foam_color: LinearRgba::new(0.96, 0.98, 1.00, 1.0),
             // x: foam edge width, y: foam smoothness, z: fleck density, w: flow speed
             foam_params: Vec4::new(0.16, 0.055, 1.0, 0.16),

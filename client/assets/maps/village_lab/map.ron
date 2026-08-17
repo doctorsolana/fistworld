@@ -16,7 +16,7 @@
   generated: Some((
     style: Mainland,
     seed: 3,
-    generator_version: 8,
+    generator_version: 9,
     half_extent: 560.0,
   )),
   player_spawn: Some((0.0, 8.0, 0.0)),

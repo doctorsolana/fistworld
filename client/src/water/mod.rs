@@ -33,6 +33,10 @@ use crate::render::systems::{ClientWorldRoot, SunLight};
 use crate::states::GameState;
 use crate::terrain::{LoadedChunks, TerrainUpdateSet};
 
+/// Linear palette for the detailed animated water surface.
+pub(crate) const WATER_SHALLOW_RGBA: [f32; 4] = [0.12, 0.62, 0.92, 0.70];
+pub(crate) const WATER_DEEP_RGBA: [f32; 4] = [0.012, 0.09, 0.26, 0.92];
+
 pub struct WaterPlugin;
 
 impl Plugin for WaterPlugin {
