@@ -28,10 +28,14 @@ use crate::world::village_roads::{
     ROAD_SPEED_MULTIPLIER,
 };
 
-use super::commerce::{internal_transfer_unit_value, MUNICIPAL_DELIVERY_PENNIES_PER_BULK};
+use super::commerce::{
+    business_asking_price, business_outputs, internal_transfer_unit_value,
+    MUNICIPAL_DELIVERY_PENNIES_PER_BULK,
+};
 use super::{
     ambient, business_output, farmer_seconds_per_wheat, fisher_seconds_per_food, ground_distance,
-    lumber_seconds_per_tree, lumber_tree_yield, process_available_cycles, processing_recipe,
+    livestock_seconds_per_meat, lumber_seconds_per_tree, lumber_tree_yield,
+    process_available_cycles, processing_recipe, produce_livestock_cycles,
     quarry_seconds_per_stone, viable_processing_input_purchase, BusinessEventQueue,
     BusinessOperatingPlan, CompanyPorter, ConstructionMaterialRoutine, FarmerHarvestProgress,
     FarmerRoutine, FishingRoutine, FishingWorkProgress, HomeRoutine, HouseholdShoppingRoutine,
@@ -299,7 +303,7 @@ pub fn advance_strategic_company_deliveries(
                 if supplier.entity == receiver.entity
                     || supplier.settlement != receiver.settlement
                     || supplier.company != receiver.company
-                    || (super::business_output(supplier.kind) != Some(good)
+                    || (!business_outputs(supplier.kind).contains(&good)
                         && !(supplier.kind == SettlementBuildingKind::StorageHall
                             && supplier.store.amount(good) > 0))
                     || !supplier.can_operate
@@ -1040,8 +1044,8 @@ pub fn advance_strategic_villages(
                 .entry((operated_by.0, building_of.0, good))
                 .or_default() += inventory.amount(good);
         }
-        if let Some(good) = business_output(building.kind) {
-            let ask = sale.asking_unit_price.max(sale.minimum_unit_price).max(1);
+        for &good in business_outputs(building.kind) {
+            let ask = business_asking_price(building.kind, good, sale);
             branch_asks
                 .entry((operated_by.0, building_of.0, good))
                 .and_modify(|current| *current = (*current).min(ask))
@@ -1076,9 +1080,6 @@ pub fn advance_strategic_villages(
         if worker_count == 0 {
             continue;
         }
-        let Some(good) = business_output(building.kind) else {
-            continue;
-        };
         let hall_entity = halls_by_id.get(&building_of.0).copied();
         let specialist_logistics = strategic_porters.contains(&building_of.0)
             || strategic_private_porters.contains(&(building_of.0, operated_by.0));
@@ -1205,6 +1206,15 @@ pub fn advance_strategic_villages(
             }
         }
 
+        // A service site such as a Tavern has no produced inventory good, but
+        // still needs the exact same physical procurement above while it is
+        // simulated strategically. Once its pantry is stocked, patronage is
+        // settled by the dedicated Tavern service pass rather than by this
+        // production loop.
+        let Some(good) = business_output(building.kind) else {
+            continue;
+        };
+
         if let Some(recipe) = processing_recipe(building.kind) {
             let accumulated = progress.seconds.entry(*id).or_default();
             let remaining = operating_plan
@@ -1255,6 +1265,9 @@ pub fn advance_strategic_villages(
                 SettlementBuildingKind::FishermansHut => fisher_seconds_per_food(building.quality),
                 SettlementBuildingKind::LumberjackHut => lumber_seconds_per_tree(building.quality),
                 SettlementBuildingKind::StoneQuarry => quarry_seconds_per_stone(building.quality),
+                SettlementBuildingKind::LivestockFarm => {
+                    livestock_seconds_per_meat(building.quality)
+                }
                 _ => continue,
             } as f64;
             let accumulated = progress.seconds.entry(*id).or_default();
@@ -1271,12 +1284,21 @@ pub fn advance_strategic_villages(
             } else {
                 1
             };
-            let cycles = ((*accumulated / seconds_per_unit).floor() as u32)
+            let mut cycles = ((*accumulated / seconds_per_unit).floor() as u32)
                 .min(remaining.div_ceil(yield_per_cycle));
+            if building.kind == SettlementBuildingKind::LivestockFarm {
+                cycles = cycles.min(
+                    store.free_bulk() / (Good::Meat.bulk_per_unit() + Good::Wool.bulk_per_unit()),
+                );
+            }
             if cycles > 0 {
                 *accumulated -= f64::from(cycles) * seconds_per_unit;
                 let units = cycles.saturating_mul(yield_per_cycle).min(remaining);
-                let produced = store.add(good, units);
+                let produced = if building.kind == SettlementBuildingKind::LivestockFarm {
+                    produce_livestock_cycles(&mut store, units)
+                } else {
+                    store.add(good, units)
+                };
                 business_events.record_production(clock.day, *id, produced);
                 if let Some(plan) = operating_plan.as_deref_mut() {
                     plan.record(clock.day, produced);
@@ -1297,43 +1319,45 @@ pub fn advance_strategic_villages(
         };
         // A porter finishing a real delivery is transition-critical and has
         // not demoted yet. Do not simultaneously execute its abstract haul.
-        if !policy.collection_enabled || !market.can_trade(good) {
+        if !policy.collection_enabled {
             continue;
         }
-        let branch_key = (operated_by.0, building_of.0, good);
-        let offered = store
-            .amount(good)
-            .min(
-                branch_public_remaining
-                    .get(&branch_key)
-                    .copied()
-                    .unwrap_or_default(),
-            )
-            .min(policy.max_units_per_collection)
-            .min(
-                (if specialist_logistics {
-                    shared::economy::capacity::PORTER
-                } else {
-                    shared::economy::capacity::VILLAGER
-                }) / good.bulk_per_unit(),
-            )
-            .min(hall_store.free_units(good));
-        let moved = store.transfer_to(&mut hall_store, good, offered);
-        if moved > 0 {
-            if let Some(remaining) = branch_public_remaining.get_mut(&branch_key) {
-                *remaining = remaining.saturating_sub(moved);
+        for &product in business_outputs(building.kind) {
+            if !market.can_trade(product) {
+                continue;
             }
-            market.consign(
-                shared::economy::MarketSeller::Business(*id),
-                good,
-                moved,
-                policy
-                    .asking_unit_price
-                    .max(policy.minimum_unit_price)
-                    .max(1),
-            );
-            if !specialist_logistics {
-                let bulk = moved.saturating_mul(good.bulk_per_unit());
+            let branch_key = (operated_by.0, building_of.0, product);
+            let offered = store
+                .amount(product)
+                .min(
+                    branch_public_remaining
+                        .get(&branch_key)
+                        .copied()
+                        .unwrap_or_default(),
+                )
+                .min(policy.max_units_per_collection)
+                .min(
+                    (if specialist_logistics {
+                        shared::economy::capacity::PORTER
+                    } else {
+                        shared::economy::capacity::VILLAGER
+                    }) / product.bulk_per_unit(),
+                )
+                .min(hall_store.free_units(product));
+            let moved = store.transfer_to(&mut hall_store, product, offered);
+            if moved > 0 {
+                if let Some(remaining) = branch_public_remaining.get_mut(&branch_key) {
+                    *remaining = remaining.saturating_sub(moved);
+                }
+                market.consign(
+                    shared::economy::MarketSeller::Business(*id),
+                    product,
+                    moved,
+                    business_asking_price(building.kind, product, policy),
+                );
+            }
+            if moved > 0 && !specialist_logistics {
+                let bulk = moved.saturating_mul(product.bulk_per_unit());
                 let trips = bulk.div_ceil(shared::economy::capacity::VILLAGER).max(1);
                 let distance = hall_positions.get(&building_of.0).map_or(0.0, |hall| {
                     building_position.map_or(0.0, |building_position| {
@@ -1375,7 +1399,7 @@ pub fn advance_strategic_villages(
             if !market.can_trade(good) {
                 continue;
             }
-            if mothballed && business_output(building.kind) != Some(good) {
+            if mothballed && !business_outputs(building.kind).contains(&good) {
                 continue;
             }
             let key = (operated_by.0, building_of.0, good);

@@ -76,8 +76,10 @@ impl WorldTime {
     pub const DEFAULT_DAY_DURATION: f32 = 24.0 * 60.0;
     /// 4 minutes of night — a moonlit interlude, not a second shift.
     pub const DEFAULT_NIGHT_DURATION: f32 = 4.0 * 60.0;
-    /// Start early morning (near sunrise).
-    pub const DEFAULT_START_SECONDS_IN_DAY: f32 = 30.0;
+    /// Start at 07:30 on the display clock: the sun is about 17 degrees above
+    /// the horizon, giving the first player a warm sunrise that is still bright
+    /// enough to read the character, sail and coastline clearly.
+    pub const DEFAULT_START_SECONDS_IN_DAY: f32 = 135.0;
     /// Displayed clock hour of sunrise. The display clock is deliberately
     /// asymmetric (long summer days): daylight owns 06:00-22:00 so dusk lands
     /// late in the evening instead of mid-afternoon.
@@ -231,7 +233,13 @@ mod tests {
 
     #[test]
     fn world_starts_on_day_zero() {
-        assert_eq!(WorldTime::new_default().day, 0);
+        let wt = WorldTime::new_default();
+        assert_eq!(wt.day, 0);
+        assert!((wt.normalized_time() - 7.5 / 24.0).abs() < 1.0e-4);
+        assert!(
+            -wt.sun_phase().cos() > 0.25,
+            "the default sunrise should already light the opening voyage"
+        );
     }
 
     #[test]

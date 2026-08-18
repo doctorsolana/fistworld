@@ -34,12 +34,16 @@ pub(super) fn handle_mode_toggle_key(
     input_state: Res<InputState>,
     capability: Res<GodCapability>,
     mut mode: ResMut<HudMode>,
+    mut opening: ResMut<crate::boat::OpeningCinematic>,
 ) {
     if !capability.0 || input_state.ui_blocking() {
         return;
     }
     if keyboard.just_pressed(KeyCode::KeyG) {
         *mode = mode.toggled();
+        if *mode == HudMode::God {
+            opening.cancel();
+        }
     }
 }
 
@@ -75,6 +79,7 @@ pub(super) fn handle_warp_buttons(
 /// arms placement on PLACE). Dead while a hero exists — one per player.
 pub(super) fn handle_spawn_hero_button(
     mut creator: ResMut<crate::ui::hero_creator::HeroCreatorOpen>,
+    mut creator_purpose: ResMut<crate::ui::hero_creator::HeroCreatorPurpose>,
     mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
     heroes: Query<(
@@ -113,6 +118,7 @@ pub(super) fn handle_spawn_hero_button(
         }
         // An armed placement reopens the creator instead of toggling blind.
         *placement = crate::hero::control::WorldPlacementMode::None;
+        *creator_purpose = crate::ui::hero_creator::HeroCreatorPurpose::GodPlacement;
         creator.0 = true;
     }
 }

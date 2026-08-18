@@ -17,7 +17,7 @@ const LIST_WIDTH: f32 = 320.0;
 // Civic and workplace records are intentionally deeper than the compact map
 // card. The pane scrolls, so a real permit/market/staffing record should not be
 // squeezed into six generic rows.
-const PLACE_DETAIL_LINES: usize = 28;
+const PLACE_DETAIL_LINES: usize = 34;
 
 pub(super) fn spawn_encyclopedia(
     mut commands: Commands,

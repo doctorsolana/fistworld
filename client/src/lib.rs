@@ -5,6 +5,7 @@
 
 pub mod app_wiring;
 pub mod audio;
+pub mod boat;
 pub mod camera_rts;
 pub mod capture;
 pub mod city;
@@ -32,6 +33,17 @@ pub struct GameClient;
 
 /// Get the asset path - for bundled macOS apps, use path relative to executable.
 pub fn get_asset_path() -> String {
+    // Development and capture harnesses can explicitly select the source asset
+    // tree. This also avoids accidentally preferring a stale partial bundle
+    // beside an optimized executable.
+    if let Ok(asset_root) = std::env::var("BEVY_ASSET_ROOT") {
+        let asset_root = asset_root.trim();
+        if !asset_root.is_empty() {
+            info!("Using assets from BEVY_ASSET_ROOT: {asset_root}");
+            return asset_root.to_owned();
+        }
+    }
+
     // Try to find assets relative to executable (for .app bundles)
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run script for Fistworld
-# Usage: ./run.sh [server|client|both|testworld|stoneworld|tradeworld|economyworld|stressworld|denseworld|realworld|multi] [--release|--dev]
+# Usage: ./run.sh [server|client|both|testworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|multi] [--release|--dev]
 #
 # BUILD PROFILE. This used to build --release every time, which meant a ten
 # minute wait for a one line change: release turns on thin LTO, which re-links
@@ -53,7 +53,7 @@ STREAM_VILLAGE_LOGS="${FISTWORLD_STREAM_LOGS:-1}"
 
 # The rendered Village Lab is explicit rather than tied to the map id. This
 # preserves `CITYSIM_MAP_ID=village_lab ./run.sh` as an empty god-mode sandbox.
-if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
+if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
     export CITYSIM_MAP_ID="village_lab"
     export FISTWORLD_VILLAGE_LAB_RUNTIME="${FISTWORLD_VILLAGE_LAB_RUNTIME:-1}"
     if [[ "$MODE" == "economyworld" ]]; then
@@ -61,6 +61,19 @@ if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "stoneworld" 
         export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-10}"
         export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:--95,-120}"
         export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-720}"
+        export FISTFORCE_SERVER_PERF="${FISTFORCE_SERVER_PERF:-1}"
+        export FISTFORCE_CLIENT_PERF="${FISTFORCE_CLIENT_PERF:-1}"
+    elif [[ "$MODE" == "merchantworld" ]]; then
+        # Lab Meadow remains an ordinary growing destination. Its zero-resident
+        # sister is a controlled Village market with a bounded Treasury shelf
+        # of 192 Bread at 0.10 coin each day. Meadow companies must discover,
+        # finance and physically operate the profitable import route with their
+        # own Storage Hall and Company Porter.
+        export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-merchant-beacon}"
+        export FISTWORLD_LAB_FOUNDERS="${FISTWORLD_LAB_FOUNDERS:-12}"
+        export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-10}"
+        export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:--40,52}"
+        export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-650}"
         export FISTFORCE_SERVER_PERF="${FISTFORCE_SERVER_PERF:-1}"
         export FISTFORCE_CLIENT_PERF="${FISTFORCE_CLIENT_PERF:-1}"
     elif [[ "$MODE" == "tradeworld" ]]; then
@@ -218,6 +231,48 @@ stop_spawned_process() {
     wait "$pid" 2>/dev/null || true
 }
 
+# Do not open a client against a server that is still compiling, generating its
+# map, or has already crashed. A fixed sleep made startup timing-dependent and
+# turned a server panic into ten seconds of blue water followed by the join
+# screen. The server always binds the shared protocol's UDP port 5000 once its
+# Bevy startup schedule has initialized successfully.
+wait_for_local_server() {
+    local attempt
+    local max_attempts=1800 # 15 minutes at 0.5s; enough for a clean release build.
+    echo -e "${YELLOW}Waiting for server readiness on UDP 5000...${NC}"
+    for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+        if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+            wait "$SERVER_PID" 2>/dev/null || true
+            echo -e "${YELLOW}Server exited before opening UDP 5000; client was not started.${NC}" >&2
+            return 1
+        fi
+
+        if command -v lsof >/dev/null 2>&1; then
+            if lsof -nP -iUDP:5000 -t 2>/dev/null | grep -q .; then
+                echo -e "${GREEN}Server is ready.${NC}"
+                return 0
+            fi
+        elif command -v ss >/dev/null 2>&1; then
+            if ss -H -uln 2>/dev/null | grep -Eq '(^|[[:space:]])[^[:space:]]*:5000([[:space:]]|$)'; then
+                echo -e "${GREEN}Server is ready.${NC}"
+                return 0
+            fi
+        else
+            # Very small environments may provide neither socket inspector.
+            # Still guard against an immediate crash, then preserve the old
+            # behaviour with a clearly bounded fallback.
+            if ((attempt >= 4)); then
+                echo -e "${YELLOW}No lsof/ss available; continuing after server survived two seconds.${NC}"
+                return 0
+            fi
+        fi
+        sleep 0.5
+    done
+
+    echo -e "${YELLOW}Server did not become ready on UDP 5000; client was not started.${NC}" >&2
+    return 1
+}
+
 cleanup_all() {
     if [[ "$CLEANED_UP" -eq 1 ]]; then
         return
@@ -260,9 +315,9 @@ case $MODE in
         echo -e "${BLUE}Starting client...${NC}"
         cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
         ;;
-    both|testworld|testlab|stoneworld|tradeworld|economyworld|stressworld|denseworld|realworld|reallab)
+    both|testworld|testlab|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|reallab)
         cleanup_server
-        if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
+        if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
             echo -e "${YELLOW}Village Lab: ${FISTWORLD_LAB_SCENARIO}, seed 3, starting at ${FISTWORLD_LAB_WARP}x (HUD: pause / 1x / 10x / 25x / 100x)${NC}"
             echo -e "${YELLOW}Logs: ${VILLAGE_LOG_DIR}${NC}"
         fi
@@ -283,8 +338,7 @@ case $MODE in
         SERVER_PID=$!
         STARTED_SERVER=1
         
-        # Wait for server to start
-        sleep 2
+        wait_for_local_server
         
         echo -e "${BLUE}Starting client...${NC}"
         if [[ "$CAPTURE_VILLAGE_LOGS" -eq 1 ]]; then
@@ -308,7 +362,7 @@ case $MODE in
         STARTED_SERVER=1
         
         # Wait for server to start
-        sleep 2
+        wait_for_local_server
         
         echo -e "${BLUE}Starting client 1...${NC}"
         cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client &
@@ -340,7 +394,7 @@ case $MODE in
         SERVER_PID=$!
         STARTED_SERVER=1
 
-        sleep 2
+        wait_for_local_server
 
         echo -e "${BLUE}Launching Windows client (GPU accelerated)...${NC}"
         WIN_EXE=$(get_windows_path "$WIN_TARGET/client.exe")
@@ -349,13 +403,14 @@ case $MODE in
         echo -e "${GREEN}Client closed. Stopping server...${NC}"
         ;;
     *)
-        echo "Usage: ./run.sh [server|client|both|testworld|stoneworld|tradeworld|economyworld|stressworld|denseworld|realworld|multi|windows] [--release|--dev]"
+        echo "Usage: ./run.sh [server|client|both|testworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|multi|windows] [--release|--dev]"
         echo "  server  - Start only the server"
         echo "  client  - Start only the client"
         echo "  both    - Start server then client (default)"
         echo "  testworld - Watch one deterministic logged Village Lab settlement (starts at 1x)"
         echo "  stoneworld - Watch Meadow and Stone-rich settlements develop together (starts at 1x)"
         echo "  tradeworld - Watch two villages grow to 35 and create a physical Stone import route (10x)"
+        echo "  merchantworld - Watch NPC firms discover a controlled cheap-Bread trade opportunity (10x)"
         echo "  economyworld - Watch the three-village 50-day economy schedule (starts at 10x)"
         echo "  stressworld - Watch three logged 200-person villages together (starts at 10x)"
         echo "  denseworld - Watch one logged 1,000-person village at 10x"

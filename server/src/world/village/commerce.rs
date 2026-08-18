@@ -37,8 +37,48 @@ pub(crate) fn business_output(kind: SettlementBuildingKind) -> Option<Good> {
         SettlementBuildingKind::StoneQuarry => Some(Good::Stone),
         SettlementBuildingKind::Windmill => Some(Good::Flour),
         SettlementBuildingKind::Bakery => Some(Good::Bread),
+        SettlementBuildingKind::LivestockFarm => Some(Good::Meat),
         _ => None,
     }
+}
+
+/// Saleable products made at one site. Most firms have one product; livestock
+/// deliberately proves that logistics and markets can carry a real by-product
+/// without inventing a special second business.
+pub(crate) const fn business_outputs(kind: SettlementBuildingKind) -> &'static [Good] {
+    const NONE: &[Good] = &[];
+    const WHEAT: &[Good] = &[Good::Wheat];
+    const FISH: &[Good] = &[Good::Food];
+    const WOOD: &[Good] = &[Good::Wood];
+    const STONE: &[Good] = &[Good::Stone];
+    const FLOUR: &[Good] = &[Good::Flour];
+    const BREAD: &[Good] = &[Good::Bread];
+    const LIVESTOCK: &[Good] = &[Good::Meat, Good::Wool];
+    match kind {
+        SettlementBuildingKind::Farmstead => WHEAT,
+        SettlementBuildingKind::FishermansHut => FISH,
+        SettlementBuildingKind::LumberjackHut => WOOD,
+        SettlementBuildingKind::StoneQuarry => STONE,
+        SettlementBuildingKind::Windmill => FLOUR,
+        SettlementBuildingKind::Bakery => BREAD,
+        SettlementBuildingKind::LivestockFarm => LIVESTOCK,
+        _ => NONE,
+    }
+}
+
+pub(crate) fn business_asking_price(
+    kind: SettlementBuildingKind,
+    good: Good,
+    policy: &BusinessSalePolicy,
+) -> u64 {
+    let primary = business_output(kind).unwrap_or(good);
+    policy
+        .asking_unit_price
+        .max(policy.minimum_unit_price)
+        .max(1)
+        .saturating_mul(good.base_price())
+        .div_ceil(primary.base_price().max(1))
+        .max(1)
 }
 
 pub(crate) const fn is_private_business(kind: SettlementBuildingKind) -> bool {
@@ -51,6 +91,8 @@ pub(crate) const fn is_private_business(kind: SettlementBuildingKind) -> bool {
             | SettlementBuildingKind::Bakery
             | SettlementBuildingKind::StorageHall
             | SettlementBuildingKind::StoneQuarry
+            | SettlementBuildingKind::LivestockFarm
+            | SettlementBuildingKind::Tavern
     )
 }
 
@@ -113,6 +155,21 @@ fn procurement_for(kind: SettlementBuildingKind) -> BusinessProcurementPolicy {
                 reorder_below: 0,
                 target_units: 0,
                 maximum_unit_price: Good::Flour.base_price().saturating_mul(175) / 100,
+            },
+        ),
+        SettlementBuildingKind::Tavern => Good::TAVERN_INPUTS.into_iter().fold(
+            BusinessProcurementPolicy::none(),
+            |policy, good| {
+                policy.with_rule(
+                    good,
+                    BusinessInputRule {
+                        enabled: true,
+                        coverage_days: shared::economy::DEFAULT_INPUT_COVERAGE_DAYS,
+                        reorder_below: 0,
+                        target_units: 0,
+                        maximum_unit_price: good.base_price().saturating_mul(175) / 100,
+                    },
+                )
             },
         ),
         _ => BusinessProcurementPolicy::none(),
@@ -316,6 +373,19 @@ pub fn ensure_business_economies(
             });
             if output.is_none() {
                 sale.collection_enabled = false;
+            }
+            if building.kind == SettlementBuildingKind::Tavern {
+                // Direct service has no Moot listing. This is only an opening
+                // quote: autonomous owners change it from actual patronage and
+                // player-run companies remain free to set any positive price.
+                sale.asking_unit_price = Good::Bread
+                    .base_price()
+                    .min(Good::Meat.base_price())
+                    .saturating_add(
+                        FOUNDING_DAILY_WAGE
+                            .div_ceil(shared::economy::TAVERN_MEALS_PER_INNKEEPER_DAY as u64),
+                    );
+                sale.minimum_unit_price = 1;
             }
             entity_commands.insert(sale);
         }
@@ -868,7 +938,7 @@ pub fn run_internal_deliveries(
             .entry(site.settlement)
             .or_default()
             .push(index);
-        if let Some(good) = business_output(site.kind) {
+        for &good in business_outputs(site.kind) {
             suppliers_by_key
                 .entry((site.settlement, site.company, good))
                 .or_default()
@@ -1110,66 +1180,65 @@ pub fn run_internal_deliveries(
                         && site.company == warehouse.company
                         && site.entity != warehouse.entity
                         && site.can_operate
-                        && business_output(site.kind).is_some()
+                        && !business_outputs(site.kind).is_empty()
                         && site.inventory.used_bulk().saturating_mul(100)
                             >= site.inventory.bulk_capacity().saturating_mul(80)
                 }) {
-                    let Some(good) = business_output(supplier.kind) else {
-                        continue;
-                    };
-                    let committed = reserved_output
-                        .get(&(supplier.entity, good))
-                        .copied()
-                        .unwrap_or_default();
-                    let local_floor =
-                        (supplier.inventory.bulk_capacity() / good.bulk_per_unit().max(1)) / 2;
-                    let available = supplier
-                        .inventory
-                        .amount(good)
-                        .saturating_sub(committed)
-                        .saturating_sub(local_floor);
-                    let room = warehouse.inventory.free_bulk().saturating_sub(
-                        reserved_input
-                            .iter()
-                            .filter(|((entity, _), _)| *entity == warehouse.entity)
-                            .map(|((_, reserved_good), units)| {
-                                units.saturating_mul(reserved_good.bulk_per_unit())
-                            })
-                            .fold(0u32, u32::saturating_add),
-                    ) / good.bulk_per_unit();
-                    let units = available
-                        .min(room)
-                        .min(carrier_bulk / good.bulk_per_unit())
-                        .min(16);
-                    if units == 0 {
-                        continue;
-                    }
-                    candidates.push(InternalDeliveryCandidate {
-                        supplier: supplier.entity,
-                        supplier_id: supplier.id,
-                        receiver: warehouse.entity,
-                        receiver_id: warehouse.id,
-                        company: warehouse.company,
-                        good,
-                        units,
-                        unit_value: internal_transfer_unit_value(
+                    for &good in business_outputs(supplier.kind) {
+                        let committed = reserved_output
+                            .get(&(supplier.entity, good))
+                            .copied()
+                            .unwrap_or_default();
+                        let local_floor =
+                            (supplier.inventory.bulk_capacity() / good.bulk_per_unit().max(1)) / 2;
+                        let available = supplier
+                            .inventory
+                            .amount(good)
+                            .saturating_sub(committed)
+                            .saturating_sub(local_floor);
+                        let room = warehouse.inventory.free_bulk().saturating_sub(
+                            reserved_input
+                                .iter()
+                                .filter(|((entity, _), _)| *entity == warehouse.entity)
+                                .map(|((_, reserved_good), units)| {
+                                    units.saturating_mul(reserved_good.bulk_per_unit())
+                                })
+                                .fold(0u32, u32::saturating_add),
+                        ) / good.bulk_per_unit();
+                        let units = available
+                            .min(room)
+                            .min(carrier_bulk / good.bulk_per_unit())
+                            .min(16);
+                        if units == 0 {
+                            continue;
+                        }
+                        candidates.push(InternalDeliveryCandidate {
+                            supplier: supplier.entity,
+                            supplier_id: supplier.id,
+                            receiver: warehouse.entity,
+                            receiver_id: warehouse.id,
+                            company: warehouse.company,
                             good,
-                            &supplier.account,
-                            &supplier.management,
-                        ),
-                        supplier_entrance: supplier
-                            .kind
-                            .entrance_position(supplier.position, supplier.rotation),
-                        shortage: 0,
-                        preferred: false,
-                        distance_millimetres: (ground_distance(
-                            warehouse.position,
-                            supplier.position,
-                        ) * 1_000.0)
-                            .max(0.0)
-                            .min(u32::MAX as f32)
-                            as u32,
-                    });
+                            units,
+                            unit_value: internal_transfer_unit_value(
+                                good,
+                                &supplier.account,
+                                &supplier.management,
+                            ),
+                            supplier_entrance: supplier
+                                .kind
+                                .entrance_position(supplier.position, supplier.rotation),
+                            shortage: 0,
+                            preferred: false,
+                            distance_millimetres: (ground_distance(
+                                warehouse.position,
+                                supplier.position,
+                            ) * 1_000.0)
+                                .max(0.0)
+                                .min(u32::MAX as f32)
+                                as u32,
+                        });
+                    }
                 }
             }
             candidates.sort_unstable_by_key(|candidate| {
@@ -1371,6 +1440,7 @@ pub fn run_internal_deliveries(
 pub fn run_market_collections(
     mut commands: Commands,
     mut collection_cursors: Local<HashMap<shared::components::SettlementId, u64>>,
+    mut procurement_cursors: Local<HashMap<shared::components::SettlementId, u64>>,
     world_time: Query<&WorldTime>,
     road_requests: Query<&RoadRequest>,
     mut business_events: ResMut<BusinessEventQueue>,
@@ -1604,14 +1674,13 @@ pub fn run_market_collections(
     for (_, building, building_of, _, _, _, sale, _, _, _, _, _, _, operated_by) in
         businesses.iter()
     {
-        let Some(good) = business_output(building.kind) else {
-            continue;
-        };
-        let ask = sale.asking_unit_price.max(sale.minimum_unit_price).max(1);
-        branch_asks
-            .entry((operated_by.0, building_of.0, good))
-            .and_modify(|current| *current = (*current).min(ask))
-            .or_insert(ask);
+        for &good in business_outputs(building.kind) {
+            let ask = business_asking_price(building.kind, good, sale);
+            branch_asks
+                .entry((operated_by.0, building_of.0, good))
+                .and_modify(|current| *current = (*current).min(ask))
+                .or_insert(ask);
+        }
     }
     for (
         porter_entity,
@@ -2008,8 +2077,9 @@ pub fn run_market_collections(
                     if units == 0 {
                         continue;
                     }
+                    let urgency_bps = procurement_urgency_bps(rule.target_units, held);
                     input_orders.push((
-                        rule.reorder_below.saturating_sub(held),
+                        urgency_bps,
                         entity,
                         *building_id,
                         good,
@@ -2020,11 +2090,25 @@ pub fn run_market_collections(
                     ));
                 }
             }
-            input_orders.sort_unstable_by_key(|(shortage, entity, ..)| {
-                (std::cmp::Reverse(*shortage), entity.to_bits())
+            input_orders.sort_unstable_by_key(|(urgency, entity, _, good, ..)| {
+                (std::cmp::Reverse(*urgency), entity.to_bits(), good.index())
             });
+            let equally_urgent = input_orders.first().map_or(0, |(urgency, ..)| {
+                input_orders
+                    .iter()
+                    .take_while(|(candidate, ..)| candidate == urgency)
+                    .count()
+            });
+            let selected = if equally_urgent == 0 {
+                0
+            } else {
+                let cursor = procurement_cursors.entry(*settlement_id).or_default();
+                let selected = (*cursor as usize) % equally_urgent;
+                *cursor = cursor.wrapping_add(1);
+                selected
+            };
             if let Some((_, buyer_entity, buyer_id, good, wanted, max_price, budget, entrance)) =
-                input_orders.into_iter().next()
+                input_orders.into_iter().nth(selected)
             {
                 if ground_distance(position.0, available_counter) > WORK_REACH {
                     ensure_move_target(
@@ -2159,7 +2243,7 @@ pub fn run_market_collections(
                     }
                     if !liquidating
                         && building.kind != SettlementBuildingKind::StorageHall
-                        && business_output(building.kind) != Some(good)
+                        && !business_outputs(building.kind).contains(&good)
                     {
                         continue;
                     }
@@ -2210,10 +2294,7 @@ pub fn run_market_collections(
                                 .copied()
                                 .unwrap_or_else(|| good.base_price())
                         } else {
-                            policy
-                                .asking_unit_price
-                                .max(policy.minimum_unit_price)
-                                .max(1)
+                            business_asking_price(building.kind, good, policy)
                         }
                     };
                     offers.push((
@@ -2732,5 +2813,67 @@ pub fn run_business_payroll_and_owner_leisure(
             *replacements = replacements.saturating_sub(1);
         }
         let _ = business_entity;
+    }
+}
+
+fn procurement_urgency_bps(target_units: u32, held_units: u32) -> u32 {
+    u64::from(target_units.saturating_sub(held_units))
+        .saturating_mul(BASIS_POINTS)
+        .div_ceil(u64::from(target_units.max(1)))
+        .min(BASIS_POINTS) as u32
+}
+
+#[cfg(test)]
+mod product_tests {
+    use super::*;
+    use crate::world::village::production::rated_input_stock_targets;
+
+    #[test]
+    fn livestock_is_one_business_with_two_market_products() {
+        assert_eq!(
+            business_outputs(SettlementBuildingKind::LivestockFarm),
+            &[Good::Meat, Good::Wool],
+        );
+        let policy = BusinessSalePolicy {
+            asking_unit_price: Good::Meat.base_price() * 2,
+            ..BusinessSalePolicy::for_good(Good::Meat)
+        };
+        assert_eq!(
+            business_asking_price(SettlementBuildingKind::LivestockFarm, Good::Wool, &policy),
+            Good::Wool.base_price() * 2,
+        );
+    }
+
+    #[test]
+    fn tavern_is_a_private_employer_with_three_physical_pantry_inputs() {
+        assert!(is_private_business(SettlementBuildingKind::Tavern));
+        assert!(!is_private_business(SettlementBuildingKind::Market));
+        let procurement = procurement_for(SettlementBuildingKind::Tavern);
+        for good in Good::TAVERN_INPUTS {
+            assert!(
+                procurement.rule(good).enabled,
+                "missing Tavern input {good:?}"
+            );
+            assert!(
+                rated_input_stock_targets(
+                    SettlementBuildingKind::Tavern,
+                    good,
+                    1,
+                    shared::economy::DEFAULT_INPUT_COVERAGE_DAYS,
+                )
+                .is_some(),
+                "Tavern input {good:?} has no stock target"
+            );
+        }
+    }
+
+    #[test]
+    fn procurement_compares_relative_shortage_instead_of_order_size() {
+        assert_eq!(
+            procurement_urgency_bps(4, 0),
+            procurement_urgency_bps(36, 0),
+            "a small empty pantry must be as urgent as a large empty processor"
+        );
+        assert!(procurement_urgency_bps(4, 0) > procurement_urgency_bps(36, 18));
     }
 }

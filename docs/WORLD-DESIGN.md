@@ -6,14 +6,15 @@ sword and ends up running a realm. Companion to [ARCHITECTURE.md](ARCHITECTURE.m
 which says how the engine carries this; this document says what the world *is*.
 The build order for both lives in [ROADMAP.md](ROADMAP.md).
 
-> **Status, updated 2026-08-15.** The autonomous village slice in §1b is live:
+> **Status, updated 2026-08-17.** The autonomous village slice in §1b is live:
 > stable identities, named residents, seeded layouts, permits, physical construction,
 > builder-made roads, occupations, bounded inventories, farming/fishing/lumber work,
 > households, local prices, payroll, daily consumption and civic jobs. The positive tier
 > ladder reaches City with placeholder civic art. Ordinary off-screen residents now use
 > aggregate production and commerce. Player Hall trading, physical permit construction,
 > company treasuries, 1,000-share ownership, vertical integration, Storage Halls, local
-> private porters and the first buyer-funded inter-settlement Stone routes are also live.
+> private porters, the first buyer-funded inter-settlement Stone routes, compact resident day
+> plans and private Tavern meal service are also live.
 > World-state persistence, independent merchant caravans, travelling-party
 > promotion, physical walls, clans and combat remain future work. Read §1b as the report of
 > current code and the rest as design unless it explicitly says otherwise.
@@ -85,7 +86,8 @@ one persistent, always-simulating multiplayer world.
    generates it (30,000 people = 0.69 MB), and 10,000 people advancing along
    cached routes costs 13 microseconds per tick. What does NOT scale, and is
    therefore forbidden, is per-person pathfinding over the heightfield,
-   per-person needs and schedules, and replicating people to clients.
+   continuously evaluated need trees and frame-rate schedules, and global detailed replication.
+   Compact once-daily plans and statistical off-screen outcomes are intentionally bounded.
 4. **Society persists, terrain regenerates.** The map is a seed recipe;
    settlements, clans, stocks, and claims are server state. Wiping
    `server_data` gives a fresh society on the same land.
@@ -626,9 +628,10 @@ with a player who does nothing but found the hall and put people on the map.
    closes the signal until the market has had time to respond.
 
    An embodied player may take the other side of this same permit market. Standing within
-   12 metres of the Hall makes every tier-unlocked private permit visible: low demand means full
-   price, not a prohibition. Hamlet uses include housing, extractors, Windmills and Bakeries;
-   Marketplace and Tavern unlock at Village, and Church unlocks at Town. Missing upstream goods,
+   12 metres of the Hall makes every tier-unlocked permit visible: low demand means full
+   price, not a prohibition. Hamlet uses include housing, Farmsteads, Fisherman's Huts,
+   Livestock Farms, Lumberjack Huts, Stone Quarries, Storage Halls, Windmills and Bakeries;
+   Marketplace and the private Tavern unlock at Village, and Church unlocks at Town. Missing upstream goods,
    an unprofitable idea, existing holdings or a distressed firm may make the purchase foolish,
    but the Hall does not forbid it. A hero must first found and capitalise a company at the
    Hall; formation issues all 1,000 shares and appoints that hero Company Master. If the hero
@@ -670,14 +673,16 @@ with a player who does nothing but found the hall and put people on the map.
    avenue or neighbourhood clusters plus a civic-centre form. Those grammars bias
    frontage and preserve centre space; demand and geography still choose the building
    count and winning plot. Candidate scoring rejects excessive earthworks, wet ground, overlaps,
-   road reservations and adjunct fields/piers, rewards appropriate farmland/forest,
+   road reservations and adjunct fields/piers/pastures, rewards appropriate farmland/forest,
    and faces completed roads when one is close. Completed buildings never relocate.
    Farmsteads may cut and fill a modest terrace: the yard may move by at most
    1.75 metres and either field by at most 2.25 metres. Naturally flat land still
    wins the score. Both authored fields, their two-metre graded verge and the
    farmyard are reserved as one land claim; ordinary trees/dead trunks in that
    claim are cleared, while permanent rocks and genuinely steep ground still
-   reject the permit.
+   reject the permit. A Livestock Farm applies the same bounded earthwork principle
+   to its yard and fenced pasture, reserves the full grazing claim from approval,
+   clears ordinary vegetation and rejects excessive cuts, water or permanent props.
    Determinism makes the same settlement state reproduce the same choice and bug.
    A coastal food search is geometry-led: it keeps the whole Fisherman's Hut
    and its side route dry, rotates the authored `Anchor_Pier` side seaward, and
@@ -764,7 +769,16 @@ with a player who does nothing but found the hall and put people on the map.
     60 Bread output for a Bakery), rather than maintaining a second hand-tuned output
     table. Their temporary blockout buildings are replaced
     by authored assets without changing these economic identities.
-14b. The selected-person UI separates visible animation from intent. The compact
+14b. A Hamlet-tier Livestock Farm employs two Herders and reserves one fenced pasture.
+    At perfect quality and full staffing it produces about six Meat and six Wool per
+    ordinary workday; poor pasture is closer to four paired units. A Herder walks to
+    the pasture, tends the animals, carries a two-Meat batch and its paired Wool to the
+    farm store, then repeats until the shift ends. Meat is ready-to-eat household food
+    and eligible for Poor Relief. Wool is non-edible stock for the later cloth chain.
+    Sheep are deterministic client-side presentation attached to the replicated pasture,
+    so they do not become networked pathfinding agents. The business owns both outputs;
+    porters, warehouses, markets and strategic simulation handle both generically.
+14c. The selected-person UI separates visible animation from intent. The compact
     `CharacterActivity` still drives animation, while a replicated
     `CharacterObjective` says why the person is moving or waiting and an independent
     `CharacterNavigationStatus` reports walking, route planning or a blocked route.
@@ -935,8 +949,11 @@ with a player who does nothing but found the hall and put people on the map.
     employment coverage 10, while hunger can subtract 30. A Hamlet with at
     least 12 residents advances to Village after three consecutive days with
     at least three reserve days, recent production covering its population, no
-    hunger, and prosperity of at least 65, then purchasing/staging 12 Wood and
-    completing an embodied Village Hall project. The following rules extend that
+    hunger, and prosperity of at least 65. Daily accounting runs immediately
+    after breakfast, so one physical Bakery batch (four rations) may still be
+    in delivery without resetting the streak; this allowance is fixed rather
+    than population-scaled. The Hamlet then purchases/stages 12 Wood and
+    completes an embodied Village Hall project. The following rules extend that
     live ladder; decline remains design-only.
 20. Each foundation now receives a deterministic, replicated development
     charter derived from its name and position. The charter chooses one of five
@@ -949,7 +966,7 @@ with a player who does nothing but found the hall and put people on the map.
     the occupied envelope. Wall forms are reserved
     planning metadata in this slice, not yet physical fortifications.
 21. Village and Town progression is authoritative and inspectable. A Village
-    requests a placeholder Marketplace and Tavern after survival shortages are
+    requests a placeholder Marketplace; its private opportunity board advertises a Tavern after survival shortages are
     met, then becomes a Town with at least 30 residents, 50 coin of lifetime
     Moot trade, prosperity 70 and all requirements sustained for three days. A
     Town requests a placeholder Church and becomes a City with at least 75
@@ -997,7 +1014,7 @@ with a player who does nothing but found the hall and put people on the map.
     poor ground to three on perfect ground. An ordinary worker carries two Stone at a time
     to the quarry's finite store. Company policy and the Moot Steward then decide what is
     consigned, at whose asking price, through the same private order book as every other good.
-25. The first regional cargo loop is a real company-owned contract route rather than shared
+25. Regional cargo uses real company-owned routes rather than shared
     global inventory. A Meadow Town Works which cannot buy its eight Stone locally escrows an
     open purchase-and-freight tender before a supplier exists; enough real listed Stone later
     binds its exact seller. Any ordinary company with a completed Storage Hall and employed
@@ -1005,8 +1022,23 @@ with a player who does nothing but found the hall and put people on the map.
     vertically integrate naturally. The porter collects from the source Hall, carries a finite
     cart load, delivers to the destination worksite and returns to the warehouse. Seller payment
     happens at collection, freight income at delivery, and both route history and civic expense
-    lines remain inspectable. Player-authored policies and risk-bearing merchant speculation are
-    the next layer, not a separate `TradeCompany` class.
+    lines remain inspectable. Player-authored multi-stop timetables and autonomous risk-bearing
+    merchant trials use the same asset, not a separate `TradeCompany` class. A founding Moot is
+    deliberately local: both route endpoints must first complete a Marketplace. NPC companies
+    act on bounded, stale reports plus their own branches and recent caravan visits; they protect
+    working capital, subtract inbound cargo, try one finite load, and pause after repeated empty or
+    stranded trips. This allows imperfect competition and player opportunity without a global
+    omniscient arbitrage pass.
+26. Unrest is one cheap settlement-level reading, not another continuously ticking
+    per-person need. Its daily pressure is deliberately transparent: hunger contributes
+    up to 55 points, homelessness up to 25, and the share of current workers attached to
+    employers owing wages up to 20. The public score rises by at most 10 points per world
+    day and recovers by at most 5, preserving memory without allowing a single bad meal to
+    flip a town instantly. Job seeking remains visible but is not itself unrest: an
+    unemployed resident may be supported, between jobs, or choosing leisure. Crime,
+    policing and guard effects remain future systems rather than hidden terms in this score.
+    The public bands are Calm (0-19), Uneasy (20-39), Tense (40-59), Volatile
+    (60-79) and Rebellious (80-100).
 
 Door traversal uses the same threshold choreography at Farmsteads, Fisherman's
 Huts and Lumberjack Huts: open, cross to the shallow interior point, become hidden, then open and walk
@@ -1015,7 +1047,8 @@ at the full world speed. At extreme warp the 0.667-second clip may collapse
 between client frames; presentation never delays authoritative simulation.
 
 **Clicking the hall opens the settlement panel** — name, tier, residents and
-their wallets, treasury, Moot inventory and capacity, each good's stock target,
+their wallets, current unrest and its three causes, food security, hunger,
+homelessness, work seekers, unpaid workers, treasury, Moot inventory and capacity, each good's stock target,
 last sale, cheapest owner offer, listing count, Poor Relief policy, edible stock, reserve days,
 recent production/consumption, hunger, the prosperity breakdown and Hamlet →
 Village secure-day progress, what stands (with each building's
@@ -1030,7 +1063,10 @@ profit/loss. The same
 building, household and inventory snapshot is retained in the encyclopedia as
 an expandable settlement tree: selecting the village shows its overview, while
 selecting the hall, cabin or workplace opens that building's own structured sheet.
-The encyclopedia also retains the consignment model, listed stock and traded volume. The
+The encyclopedia overview carries the same welfare block even when only the
+global settlement summary is in range, and its history view charts unrest against
+daily pressure alongside food, population and hardship. The encyclopedia also
+retains the consignment model, listed stock and traded volume. The
 panel is a window onto decisions already made; direct player trading controls
 remain deferred.
 
@@ -1115,13 +1151,18 @@ workplace/household passes. Re-observation rebuilds those routines from durable 
 economic/social state. Phase 2 still owns derived-route `Travelling` records and the
 lossless traveller/army promotion contract.
 
-**Deliberately not in this slice:** births, boats, player-authored/merchant routes,
+**Deliberately not in this slice:** births, route escorts and bandit risk,
 recipes beyond Flour and Bread, tree
 depletion/regrowth, decline, physical walls and guard patrol/combat behaviour.
+The first boat slice is now live: a new Hero arrives by one-use Dinghy, follows a distinct
+server-authoritative water route, responds physically and visually to shared wind, and
+disembarks onto nearby dry shore. This proves the generic `Vessel` navigation seam; docks,
+draft, cargo ships, boarding and naval combat remain future work.
 The implemented local Moot is a private consignment exchange with physical stock,
 seller-owned listings, last-sale/best-offer quotes and a civic transaction fee; it
-now has a nearby on-foot player exchange and a first cash-backed Stone delivery route, but not
-general merchant arbitrage or a complete regional economy. Wheat must be milled,
+now has a nearby on-foot player exchange. A completed Marketplace is the explicit regional
+gateway for contracted deliveries, player-authored routes and bounded autonomous merchant trials;
+that is a functioning early regional market, not yet a complete regional economy. Wheat must be milled,
 households can finish Flour at home, Bakeries add efficient Bread, fishing lands
 ready-to-eat Fish, and the shortage response can repeat cabins, Farmsteads and their
 processors when individual owners accept the current signals, but this is not yet a complete regional economy. The seeded
@@ -1188,8 +1229,9 @@ threshold crossing and the same world-time accounting.
 
 ## 2. Goods and markets
 
-Start with **seven physical goods + coin**: Wheat, Flour, Bread, Food (currently
-fish), Wood, Stone and Iron. Wheat is a raw crop and can never satisfy hunger.
+The current foundation has **nine physical goods + coin**: Wheat, Flour, Bread,
+Fish (`Good::Food` in the protocol), Meat, Wool, Wood, Stone and Iron. Wheat is
+a raw crop and can never satisfy hunger.
 A Windmill turns one Wheat into one household-edible Flour; that Flour represents
 the household baking its ordinary ration at home. A Bakery turns two Flour into
 four ready-to-eat Bread, making Bread the first tier-two food. Tools and luxuries
@@ -1212,7 +1254,9 @@ clears that listing, minus the enacted fee. The personal-consignment UI currentl
 the exchange's current ask; custom personal asks and quantities remain future merchant
 controls. Company Masters already set their business sites' asking prices and collection policy.
 The first ownership verb is live too: the same Hall exposes exact permit quotes and lets the
-hero place a House, Farmstead, Fisherman's Hut, Lumberjack Hut, Windmill, Bakery or Storage Hall through the
+hero place any tier-unlocked entry from one shared permit catalogue, including a House,
+Farmstead, Fisherman's Hut, Livestock Farm, Lumberjack Hut, Stone Quarry, Windmill,
+Bakery or Storage Hall through the
 authoritative construction pipeline. Completed firms already expose manual price, wage,
 staffing, procurement, private sourcing, branch stock and dividend controls to their Company Master.
 The next transport step is to buy where it is cheap and cart it somewhere it is not. The map
@@ -1279,9 +1323,9 @@ when the settlement later requests another business. Every firm retains a bounde
 pull-based 365-day history of site P&L, company treasury context, liabilities,
 prices, wages, physical flow, stock, owner decisions and solvency changes; it is
 sent only when its history view or settlement archive is requested rather than
-added to ordinary replication. Storage Halls, local Company Porters and contracted remote Stone
-delivery are live within the running world; restart persistence and risk-bearing merchant
-logistics remain later work. Company
+added to ordinary replication. Storage Halls, local Company Porters, contracted remote Stone
+delivery and autonomous merchant logistics are live within the running world; restart
+persistence, route danger and transport upgrades remain later work. Company
 identities, cap tables and share ownership are already
 authoritative.
 
@@ -1606,7 +1650,7 @@ Two smaller corrections to this section's assumptions, both verified against the
 
 ## 9. Deliberately NOT building (yet)
 
-- Per-villager BEHAVIOUR simulation — needs, schedules, daily routines. Note
+- Deep per-villager BEHAVIOUR simulation — many needs and continuously evaluated schedules. Note
   this is not the same as saying villagers are anonymous: §1a makes every person
   a specific named individual with a trade and a workplace, permanently. What is
   deferred is simulating what they DO minute to minute. Identity is ~24 bytes;
@@ -1617,7 +1661,9 @@ Two smaller corrections to this section's assumptions, both verified against the
   ground. What §1a forbids is per-person pathfinding at strategic scale, for
   people who are `AtPlace` or `Travelling`. A handful of villagers standing in
   a village you are looking at is not that population. The farmer and lumberjack
-  observed work loops are also live; broad daily schedules and per-person needs remain deferred.
+  observed work loops are also live. A compact once-daily wake/work/meal/leisure/sleep calendar
+  and physical private Tavern visit now form the bounded scheduling seam; continuously evaluated
+  happiness, comfort and other Sims-style needs remain deliberately deferred.
 - A goods graph beyond the current seven physical goods + coin — tools/luxury/cloth wait until cities exist
   and need demand sinks.
 - Diplomacy UI — relations are consequences of actions until proven boring.

@@ -11,9 +11,9 @@ use shared::components::CharacterKind;
 use shared::components::{
     AttachedTo, BuildingId, BuildingOf, CharacterName, CivicEmployment, CivicRole,
     CivicTradeContract, Company, CompanyId, CompanyTradeRoute, EmployedAt, FarmField, FishingPier,
-    LivesAt, MootAdministration, OwnedBy, PersonId, PlayerPosition, ResidentOf, RoadOf, Settlement,
-    SettlementBuilding, SettlementBuildingKind, SettlementId, TradeContractId, TradeRouteId,
-    VillageRoad,
+    LivesAt, LivestockPasture, MootAdministration, OwnedBy, PersonId, PlayerPosition, ResidentOf,
+    RoadOf, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId, TradeContractId,
+    TradeRouteId, VillageRoad,
 };
 
 use super::village::{HomeAssignment, VillagerIntent};
@@ -36,6 +36,7 @@ pub fn reconcile_stable_adjunct_relationships(
     buildings: Query<(&BuildingId, &SettlementBuilding, &PlayerPosition)>,
     fields: Query<(Entity, &FarmField), Without<AttachedTo>>,
     piers: Query<(Entity, &FishingPier), Without<AttachedTo>>,
+    pastures: Query<(Entity, &LivestockPasture), Without<AttachedTo>>,
 ) {
     for (entity, field) in fields.iter() {
         let mut matches = buildings.iter().filter(|(_, building, position)| {
@@ -52,6 +53,16 @@ pub fn reconcile_stable_adjunct_relationships(
             building.kind == SettlementBuildingKind::FishermansHut
                 && building.settlement == pier.settlement
                 && position.0 == pier.fishermans_hut
+        });
+        if let (Some(first), None) = (matches.next().map(|(id, ..)| *id), matches.next()) {
+            commands.entity(entity).insert(AttachedTo(first));
+        }
+    }
+    for (entity, pasture) in pastures.iter() {
+        let mut matches = buildings.iter().filter(|(_, building, position)| {
+            building.kind == SettlementBuildingKind::LivestockFarm
+                && building.settlement == pasture.settlement
+                && position.0 == pasture.livestock_farm
         });
         if let (Some(first), None) = (matches.next().map(|(id, ..)| *id), matches.next()) {
             commands.entity(entity).insert(AttachedTo(first));

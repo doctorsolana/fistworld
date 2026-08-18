@@ -18,8 +18,8 @@ use bevy::prelude::*;
 use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
 use shared::components::{
     BuildingDoorDemand, CivicHallLevel, CivicHallUpgradeWorksite, CloudSeed, ConstructionSite,
-    FarmField, FishingPier, Household, MarketLevel, PlayerPosition, PlayerRotation, Settlement,
-    SettlementBuilding, SettlementBuildingKind, TimeWarp, WorldTime,
+    FarmField, FishingPier, Household, LivestockPasture, MarketLevel, PlayerPosition,
+    PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind, TimeWarp, WorldTime,
 };
 use shared::debug::DebugGizmoMode;
 use shared::economy::{BusinessCondition, BusinessState, Good, GoodsInventory};
@@ -42,6 +42,8 @@ impl Plugin for SettlementPlugin {
                 attach_building_visuals,
                 attach_farm_field_visuals,
                 attach_fishing_pier_visuals,
+                attach_livestock_pasture_visuals,
+                animate_pasture_animals,
                 roads::paint_village_roads_into_terrain.after(TerrainUpdateSet),
                 attach_construction_supply_visuals,
                 sync_construction_supply_visuals,
@@ -168,6 +170,17 @@ pub struct FarmFieldVisual;
 
 #[derive(Component)]
 pub struct FishingPierVisual;
+
+#[derive(Component)]
+pub struct LivestockPastureVisual;
+
+#[derive(Component)]
+struct PastureAnimal {
+    angle: f32,
+    radius: Vec2,
+    speed: f32,
+    height: f32,
+}
 
 #[derive(Component)]
 struct ConstructionSupplyVisual;
@@ -483,6 +496,160 @@ fn attach_fishing_pier_visuals(
                 .with_rotation(Quat::from_rotation_y(rotation.0)),
             Visibility::Inherited,
         ));
+    }
+}
+
+/// Draw a cheap fenced pasture with deterministic placeholder sheep.
+///
+/// Only the pasture itself is replicated. These animals do not navigate,
+/// collide, think, or consume server bandwidth; their slow independent loops
+/// make the industry readable even in a town with many farms.
+fn attach_livestock_pasture_visuals(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut assets: Local<
+        Option<(
+            Handle<Mesh>,
+            Handle<Mesh>,
+            Handle<Mesh>,
+            Handle<StandardMaterial>,
+            Handle<StandardMaterial>,
+            Handle<StandardMaterial>,
+        )>,
+    >,
+    pastures: Query<
+        (Entity, &LivestockPasture, &PlayerPosition, &PlayerRotation),
+        Without<LivestockPastureVisual>,
+    >,
+) {
+    let (post_mesh, rail_mesh, sheep_mesh, wood, fleece, face) = assets
+        .get_or_insert_with(|| {
+            (
+                meshes.add(Cuboid::new(0.16, 1.25, 0.16)),
+                meshes.add(Cuboid::new(1.0, 0.12, 0.12)),
+                meshes.add(Sphere::new(0.52)),
+                materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.31, 0.19, 0.09),
+                    perceptual_roughness: 0.96,
+                    ..default()
+                }),
+                materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.84, 0.81, 0.70),
+                    perceptual_roughness: 1.0,
+                    ..default()
+                }),
+                materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.20, 0.17, 0.14),
+                    perceptual_roughness: 1.0,
+                    ..default()
+                }),
+            )
+        })
+        .clone();
+
+    for (entity, pasture, position, rotation) in pastures.iter() {
+        commands.entity(entity).insert((
+            LivestockPastureVisual,
+            Name::new(format!("Livestock pasture ({})", pasture.settlement)),
+            Transform::from_translation(position.0)
+                .with_rotation(Quat::from_rotation_y(rotation.0)),
+            Visibility::Inherited,
+        ));
+        commands.entity(entity).with_children(|parent| {
+            let half = SettlementBuildingKind::LivestockFarm
+                .pasture_half_extents()
+                .unwrap_or(Vec2::new(8.0, 7.0));
+            for x in [-half.x, half.x] {
+                for step in 0..=7 {
+                    let z = -half.y + half.y * 2.0 * step as f32 / 7.0;
+                    parent.spawn((
+                        Mesh3d(post_mesh.clone()),
+                        MeshMaterial3d(wood.clone()),
+                        Transform::from_xyz(x, 0.62, z),
+                    ));
+                }
+            }
+            for z in [-half.y, half.y] {
+                for step in 0..=8 {
+                    // Leave a modest gate in the front fence for the herders.
+                    if z < 0.0 && (3..=5).contains(&step) {
+                        continue;
+                    }
+                    let x = -half.x + half.x * 2.0 * step as f32 / 8.0;
+                    parent.spawn((
+                        Mesh3d(post_mesh.clone()),
+                        MeshMaterial3d(wood.clone()),
+                        Transform::from_xyz(x, 0.62, z),
+                    ));
+                }
+            }
+            for (length, x, z, yaw) in [
+                (half.y * 2.0, -half.x, 0.0, std::f32::consts::FRAC_PI_2),
+                (half.y * 2.0, half.x, 0.0, std::f32::consts::FRAC_PI_2),
+                (half.x * 2.0, 0.0, half.y, 0.0),
+                (half.x - 2.0, -(half.x + 2.0) * 0.5, -half.y, 0.0),
+                (half.x - 2.0, (half.x + 2.0) * 0.5, -half.y, 0.0),
+            ] {
+                for height in [0.42, 0.92] {
+                    parent.spawn((
+                        Mesh3d(rail_mesh.clone()),
+                        MeshMaterial3d(wood.clone()),
+                        Transform::from_xyz(x, height, z)
+                            .with_rotation(Quat::from_rotation_y(yaw))
+                            .with_scale(Vec3::new(length, 1.0, 1.0)),
+                    ));
+                }
+            }
+            for index in 0..6 {
+                let angle = index as f32 * std::f32::consts::TAU / 6.0;
+                parent
+                    .spawn((
+                        Name::new(format!("Pasture sheep {}", index + 1)),
+                        PastureAnimal {
+                            angle,
+                            radius: Vec2::new(2.1 + index as f32 * 0.52, 1.8 + index as f32 * 0.38),
+                            speed: 0.10 + index as f32 * 0.009,
+                            height: 0.58,
+                        },
+                        Mesh3d(sheep_mesh.clone()),
+                        MeshMaterial3d(fleece.clone()),
+                        Transform::from_xyz(angle.cos() * 3.0, 0.58, angle.sin() * 2.5)
+                            .with_scale(Vec3::new(1.15, 0.82, 0.72)),
+                    ))
+                    .with_children(|sheep| {
+                        sheep.spawn((
+                            Mesh3d(post_mesh.clone()),
+                            MeshMaterial3d(face.clone()),
+                            Transform::from_xyz(0.0, 0.12, -0.62)
+                                .with_scale(Vec3::new(1.5, 0.55, 1.7)),
+                        ));
+                    });
+            }
+        });
+    }
+}
+
+fn animate_pasture_animals(
+    time: Res<Time>,
+    warp: Query<&TimeWarp>,
+    mut animals: Query<(&mut PastureAnimal, &mut Transform)>,
+) {
+    let speed = warp.iter().next().map_or(1.0, |warp| warp.0.max(0.0));
+    let dt = time.delta_secs() * speed;
+    for (mut animal, mut transform) in animals.iter_mut() {
+        animal.angle = (animal.angle + animal.speed * dt).rem_euclid(std::f32::consts::TAU);
+        transform.translation = Vec3::new(
+            animal.angle.cos() * animal.radius.x,
+            animal.height + (animal.angle * 2.3).sin() * 0.025,
+            animal.angle.sin() * animal.radius.y,
+        );
+        let tangent = Vec2::new(
+            -animal.angle.sin() * animal.radius.x,
+            animal.angle.cos() * animal.radius.y,
+        );
+        transform.rotation = Quat::from_rotation_y(f32::atan2(-tangent.x, -tangent.y));
+        transform.scale = Vec3::new(1.15, 0.82, 0.72);
     }
 }
 

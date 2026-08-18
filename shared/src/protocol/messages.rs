@@ -101,6 +101,30 @@ impl bevy::ecs::entity::MapEntities for DevCommand {
     fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, _mapper: &mut M) {}
 }
 
+/// Normal gameplay hero creation. Unlike [`DevCommand::SpawnHero`], this does
+/// not accept a position: the server chooses and validates a coastal starting
+/// voyage, so a modified client cannot spawn inland or skip the boat.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+pub struct CreateHero {
+    pub outfit: crate::components::HeroOutfit,
+}
+
+/// Leave the starter boat at a nearby dry point.
+///
+/// The boat id is mapped by Lightyear and every spatial/ownership condition is
+/// revalidated server-side. `landing` is intent, not trusted position data.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+pub struct DisembarkBoat {
+    pub boat: Entity,
+    pub landing: Vec3,
+}
+
+impl bevy::ecs::entity::MapEntities for DisembarkBoat {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        self.boat = mapper.get_mapped(self.boat);
+    }
+}
+
 /// Client -> Server: walk these specific units to these specific points.
 ///
 /// Replaces the old `HeroMoveTo`, which carried NO unit identity -- the server
@@ -472,6 +496,9 @@ pub enum NameSubmissionResult {
     Accepted {
         /// Whether this account was resumed in the current server session.
         profile_loaded: bool,
+        /// Whether play must begin in the character creator. Existing live or
+        /// restored heroes skip it and resume exactly where they were.
+        needs_hero_creation: bool,
     },
     /// Name rejected, must try again
     Rejected {

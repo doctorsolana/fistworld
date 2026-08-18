@@ -77,8 +77,11 @@ stock is migrated into that ledger, then the local shell is held at zero capacit
 can silently split the goods.
 
 Public trade has an explicit infrastructure tier, separate from physical storage. A founding
-Moot can list every current good except Iron: Fish, Wheat, Wood, Stone, Flour and Bread. An
-earthen Marketplace is trade level 1 and is the extension point for the next crafted goods.
+Moot is a **local exchange only**: residents, local businesses, public buyers and nearby heroes
+may list and buy every current good except Iron there, but it is never a caravan stop and never
+exposes that settlement to regional trade. A completed earthen Marketplace is trade level 1,
+opens the settlement to every inter-settlement route action, and is the extension point for the
+next crafted goods.
 The paved Marketplace is trade level 2 and unlocks Iron. A locked good can still exist in a
 person, workplace or private company inventory, but cannot be consigned, purchased, collected
 by a public porter or counted as unmet public demand. The exchange panel shows its current tier
@@ -110,11 +113,31 @@ autonomously duplicate a depot in the same branch. Players remain free to buy th
 permit as a speculative infrastructure investment.
 
 Independent player merchant routes use the same company asset and Company Porter but never
-borrow civic escrow. Their ordered timetable contains two to eight town stops. `Buy` spends the
+borrow civic escrow. Their ordered timetable contains two to eight Marketplace towns. `Buy` spends the
 company treasury against real public offers up to its ceiling; `Sell` physically consigns cargo
 at its floor and produces no revenue until purchased. `Load` and `Unload` are cashless private
-transfers and therefore require an owned Storage Hall in that town. Public civic contracts remain
+transfers and therefore require both a completed Marketplace and an owned Storage Hall in that
+town. Public civic contracts remain
 locked two-stop pickup/delivery schedules so a carrier cannot redirect buyer-owned cargo.
+
+Autonomous Company Masters use that same physical route type. There is no privileged
+`TradeCompany` class and no global price oracle. A company knows its own branch markets exactly,
+receives at most one delayed and deliberately imprecise remote report during its staggered
+three-day review, and remembers no more than 192 settlement/good observations for twelve days.
+Intelligence and Charm improve confidence; completed caravan visits provide a fresher report.
+The Master reviews only a small trait-bounded set of opportunities, protects payroll and
+liabilities, accounts for purchase price, both market fees, wages, distance and uncertainty,
+and may send one finite-cart trial. Different business strategies demand different confidence
+and return. Existing inbound cargo reduces the apparent shortage, repeated empty or stranded
+trips mothball the route, and a seven-day pause is required before another trial. This permits
+mistakes, missed opportunities and player arbitrage without making NPC decisions random.
+
+Regional investment signals are incentives, not orders. A cash-backed civic tender or a merchant
+opportunity can encourage a producer-town company to build its first Storage Hall after one
+productive site, then hire a Company Porter. The permit board sees remaining external units only
+after active inbound cargo is deducted. Hunger alone is not guaranteed revenue: autonomous
+merchants require funded unmet demand or demonstrated sales, so an impoverished starving town
+does not attract endless wagons it cannot pay for.
 
 Local extractor permits count active and already-approved sites conservatively: one-third of
 uninterrupted rated output until the observed two-day flow proves a higher embodied rate. This
@@ -163,14 +186,16 @@ All arrows move existing coin. Neither the market nor policy review creates mone
 The market also records the part of a once-per-day request which did not clear. `Unavailable`
 means there was no eligible physical listing; `unaffordable` means stock existed but the
 buyer's cash or maximum bid rejected it. Successful, unavailable and unaffordable demand are
-separate daily history series. Substitute foods do not each claim the same wholly empty pantry
+separate daily history series. `Funded unmet` additionally records how many missing units the
+buyer could have purchased at the good's stable reference price; this is the conservative demand
+signal available to regional merchants. Substitute foods do not each claim the same wholly empty pantry
 request: a household records product-specific rejection only for a good actually offered to it,
 while settlement food pressure records a market with no food at all.
 
 Household preference is not permission to ignore price. The shopper orders the
-currently listed foods by price per ration and uses Bread → Fish → Flour only to
+currently listed foods by price per ration and uses Bread → Meat → Fish → Flour only to
 break equal-price ties. Bread can command a premium, but a household will buy
-affordable Fish or Flour before exhausting its necessities purse on luxury loaves.
+affordable Meat, Fish or Flour before exhausting its necessities purse on luxury loaves.
 
 The authored `Good::base_price` values are founding references for an unobserved
 market, not price controls. A first autonomous producer quotes its estimated labour
@@ -303,8 +328,10 @@ empty.
 ### Permits and growth subsidy
 
 Needed houses are free for residents. Civic progression buildings are currently public
-projects. Private Farmstead, Fisherman's Hut, Windmill, Bakery, Lumberjack Hut and Storage Hall permits
-have a positive base price that rises by 50% for each building the applicant already owns.
+projects. Private Farmstead, Fisherman's Hut, Livestock Farm, Windmill, Bakery,
+Lumberjack Hut, Storage Hall and Stone Quarry permits have a positive base price that rises
+by 50% for each building the applicant already owns. The permit UI is generated from one
+shared catalogue, so a newly unlocked use cannot silently vanish from one board.
 
 The Moot does not choose a mandatory next business. Every permit review publishes a ranked
 opportunity board derived from current beds, reserve days, recent production, physical and
@@ -491,14 +518,14 @@ Villagers without an active hall service still use the cheap ambient system, and
 services remain aggregate.
 
 The food reserve target informs the permit-market food signal. Low reserve days and weak
-recent production raise both farming and fishing opportunities, but neither is a civic
-order. Existing farms, fishers and already-approved sites reduce the next signal, but at
+recent production raise farming, fishing and livestock opportunities, but none is a civic
+order. Existing farms, fishers, livestock farms and already-approved sites reduce the next signal, but at
 only one-third of uninterrupted nameplate output until their physically observed two-day
 throughput proves a higher rate. Commutes, carrying and market hand-offs are real capacity
 costs. Fishing is displaced only by Wheat which the local chain has actually turned into
 Flour or Bread; a field full of raw Wheat cannot claim that residents are fed. A raw
 Wheat backlog suppresses another Farmstead and raises Windmill investment; Flour flow and
-Bread scarcity similarly attract Bakeries. Fishing competes directly with farming and can
+Bread scarcity similarly attract Bakeries. Fishing and livestock compete directly with grain food and can
 repeat wherever another complete shoreline plot exists. Site ranking excludes the old failure mode
 where high-quality soil across a river filled the shortlist ahead of reachable land. The
 target does not multiply a field's production or change daily consumption.
@@ -510,6 +537,45 @@ Bakery purchases two Flour and produces four Bread, adding two net rations and c
 first higher-efficiency food. Both businesses remain legal at Hamlet tier. Neither is
 guaranteed at a population threshold: owners can build ahead speculatively, but actual
 upstream stock and profitable throughput make investment much more likely.
+
+A Livestock Farm is a Hamlet-tier private extractor with two Herder positions. One work
+cycle creates one Meat ration and one Wool by-product; neither half can be created if the
+bounded carrier or workplace lacks room for the complete pair. Full staffing on perfect
+pasture rates about six paired units per ordinary day. Meat is ready-to-eat and may satisfy
+households or Surplus Only relief; Wool is non-edible input for the later textile chain.
+A private Tavern unlocks at Village and uses the ordinary company, payroll and procurement
+model. Its pantry buys Meat, Bread and Wheat, preserving Wheat as the future ale input. An
+Innkeeper opens from 12:00 to 21:30 and supplies eight paid meals per worker-day. Residents
+with discretionary time may schedule one visit, walk through the Tavern door, pay the firm's
+own quoted meal price from their personal wallet, consume one physical Bread or Meat, dine
+inside and leave. The payment goes directly to the operating company and site ledger without
+a Moot market fee; ordinary positive-profit levy still applies later. Wheat is stocked but is
+not yet consumed because ale and morale are not implemented.
+
+Tavern demand is deliberately not another continuously ticking Sims-style need. Each resident
+gets one compact deterministic day plan with wake, work, meal, discretionary and sleep times.
+Employment, hunger, cash after a protected personal floor and a small person/day preference
+roll determine whether discretionary time becomes a Tavern meal or free local time. Job
+seekers protect more cash than employed residents; hunger loosens, but does not remove, the
+floor. The same decision settles statistically off-screen without a route. The person panel
+shows the plan and its completed, unaffordable, unavailable or unreachable result; the Tavern
+panel shows visits, meals, direct revenue, turnaways, staffing and occupancy.
+
+Automatic Tavern owners adjust the quote once per day from ingredient replacement cost,
+payroll, actual sales, capacity turnaways and unaffordable customers. Changes remain bounded by
+the owner's strategy. Manual owners can quote any positive price: there is no civic price cap.
+Taverns are advertised private opportunities, not public construction, and duplicate capacity
+responds to population rather than being forced at a tier threshold. The Hall does not subsidise
+the first Tavern until real Bread/Meat stock or recent output exists, although a player remains
+free to buy a speculative full-price permit. One opening Innkeeper proves the market; attempted
+visits then expand staffing toward one position per eight meals of daily demand. Small pantry
+orders compete fairly with high-volume processor orders by proportional shortage rather than raw
+unit count, so Windmill Wheat demand cannot starve Tavern procurement forever.
+
+A Tavern uses the same cash discipline as every private branch. Company cash funds ingredients
+and payroll, the site may become cash-tight or insolvent, and five unfunded claim days begin the
+ordinary physical liquidation/property-sale path. Remaining Bread, Meat and Wheat are collected
+and sold to settle claims instead of remaining trapped in a closed dining room.
 
 ## Civic staffing
 
@@ -562,9 +628,9 @@ business lifecycle decides whether that branch closes.
 
 Civic contracts follow the same principle. An idle public worker resigns after three unpaid
 days while their durable payroll claim remains payable; a Moot Steward first completes any
-promised cart or road task. Marketplaces, Taverns, Churches and other public architecture do
-not advertise fictional private `EmployedAt` slots. A future service role must be introduced
-with an explicit civic staffing target and a real treasury payroll.
+promised cart or road task. Marketplaces, Churches and other public architecture do not
+advertise fictional private `EmployedAt` slots. Taverns are the deliberate exception: they
+are private companies with real Innkeeper jobs, company wages and pantry procurement.
 
 Every replicated `SettlementEconomy` reading exposes private and civic positions, filled and
 vacant counts, residents looking for work, and the highest wage among open private positions.
@@ -650,7 +716,9 @@ Promotion also has a real public-works bill. Once the social gates qualify, the 
 bounded upgrade worksite: Moot → Village Hall requires 12 Wood and Village Hall → Town Hall
 requires 8 Stone. Once per world day the treasury first tries to clear a personal-load-sized
 batch from the cheapest local private public offers, but only from discretionary cash left after
-wage arrears and the enacted payroll reserve. If the local exchange cannot cover a Town Works
+wage arrears and the enacted payroll reserve. An empty local shelf still records the requested
+demand so a closed but viable producer can reopen; an isolated one-settlement world does not
+escrow treasury cash into an impossible unbound import. If the local exchange cannot cover a Town Works
 Stone shortage, the project becomes the real remote buyer: it reserves treasury cash in an
 open `CivicTradeContract` tender with a price ceiling before a supplier exists. A complete real
 listing later binds the origin and exact seller. A source company must own a completed Storage
@@ -685,9 +753,9 @@ The Hall's **Permits & Property** action opens a dedicated, scrollable land ledg
 column lists every tier-unlocked private permit, with demand band, indicative first-owner price,
 enacted discount, Wood requirement and housing/job capacity. A nearby hero can request the exact
 fee and processor cash recommendation, purchase it for the visible acting company, and immediately choose a plot. Hamlet uses are
-open regardless of demand or upstream supply; Marketplace and Tavern unlock at Village, while
-Church unlocks at Town. Those amenities may still be commissioned as public progression works,
-but a player may pay a real permit fee to own one. Its property column is driven by the compact
+open regardless of demand or upstream supply; Marketplace and private Tavern unlock at Village,
+while Church unlocks at Town. Marketplace and Church may still be commissioned as public
+progression works; a Tavern is company-owned. Its property column is driven by the compact
 replicated `SettlementPropertyBoard`, so completed businesses and inherited unfinished worksites
 remain visible even beyond detailed building replication. Listings show asking price, reason,
 listing age and whether they are still inside the one-day public exposure window or open to
@@ -807,8 +875,9 @@ must never invent goods, erase liabilities or create money to rescue a tuning pr
 - Household income/property taxes, tariffs and inter-settlement fiscal transfers.
 - Debt issuance, banks, credit and treasury borrowing.
 - Guard patrols, crime, courts and military budgets.
-- Processed-food import policy, NPC merchant speculation and autonomous cross-settlement price
-  arbitration. Contracted Stone imports and player-authored merchant timetables are implemented.
+- Processed-food import policy, tariffs, route escorts, bandit risk, seasonal transport costs and
+  a dedicated warehouse trading floor. Contracted imports, player-authored timetables and bounded
+  autonomous merchant trials are implemented through the same company route asset.
 - Player-authored wills, inheritance of company shares and estate share auctions. The first automatic
   succession path is live: a dead resident's cash and carried goods enter their
   household (then the hall if unclaimed), owned productive firms become takeover

@@ -43,6 +43,8 @@ client_data/
 
 # Asset-creation working files: renders are regenerable Blender output (~21MB+).
 asset_creation/renders/
+/asset_creation/boats/.orbit/
+/asset_creation/boats/.sail_states/
 
 # Blender auto-backups
 *.blend1

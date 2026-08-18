@@ -6,6 +6,8 @@ use shared::water::{
     OCEAN_LOOP_SECONDS, WATER_DEEP_SWELL_AMPLITUDE, WATER_SWELL_DEPTH_FULL, WATER_SWELL_DEPTH_START,
 };
 
+use crate::terrain::map_view::{WATER_FADE_END, WATER_FADE_START};
+
 const TOON_WATER_SHADER: &str = "toon_water.wgsl";
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -60,6 +62,11 @@ pub struct ToonWaterUniform {
     /// THE storm system: xy = center at the wind anchor, z = storminess
     /// (0 while clouds are disabled), w: reserved.
     pub storm: Vec4,
+    /// xy: per-pixel detail fade start/end; zw reserved.
+    pub distance_fade: Vec4,
+    /// min xz, max xz of the playable rectangle. The visual edge-ocean patch
+    /// uses this to remain strictly outside gameplay terrain.
+    pub map_bounds: Vec4,
 }
 
 impl Material for ToonWaterMaterial {
@@ -119,12 +126,37 @@ pub(super) fn setup_water_assets(
             clouds_c: Vec4::ZERO,
             climate: Vec4::ZERO,
             storm: Vec4::new(1.0e8, 1.0e8, 0.0, 0.0),
+            distance_fade: Vec4::new(WATER_FADE_START, WATER_FADE_END, 0.0, 0.0),
+            map_bounds: Vec4::ZERO,
         },
         alpha_mode: AlphaMode::Blend,
         double_sided: false,
     });
 
     commands.insert_resource(WaterRenderAssets { material });
+}
+
+/// Synchronize the playable rectangle used only to clip the visual ocean-edge
+/// continuation. Ordinary water vertices never take this branch.
+pub(super) fn sync_water_map_bounds(
+    terrain: Res<WorldTerrain>,
+    render_assets: Option<Res<WaterRenderAssets>>,
+    mut materials: ResMut<Assets<ToonWaterMaterial>>,
+) {
+    let Some(render_assets) = render_assets else {
+        return;
+    };
+    let bounds = terrain.generator.active_map_bounds();
+    let target = Vec4::new(bounds.min[0], bounds.min[1], bounds.max[0], bounds.max[1]);
+    let Some(material) = materials.get(&render_assets.material) else {
+        return;
+    };
+    if material.uniform.map_bounds == target {
+        return;
+    }
+    if let Some(mut material) = materials.get_mut(&render_assets.material) {
+        material.uniform.map_bounds = target;
+    }
 }
 
 #[derive(Default)]

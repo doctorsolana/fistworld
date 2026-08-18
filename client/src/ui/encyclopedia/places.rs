@@ -138,6 +138,56 @@ impl KnownPlaces {
 #[derive(Resource, Default)]
 pub struct SelectedPlace(pub Option<String>);
 
+fn economy_from_summary(summary: &shared::components::SettlementSummary) -> SettlementEconomy {
+    let mut economy = SettlementEconomy::default();
+    apply_summary_economy(&mut economy, summary);
+    economy
+}
+
+fn apply_summary_economy(
+    economy: &mut SettlementEconomy,
+    summary: &shared::components::SettlementSummary,
+) {
+    economy.prosperity = summary.prosperity;
+    economy.reserve_days = summary.reserve_days;
+    economy.recent_food_production = summary.recent_food_production;
+    economy.recent_food_consumption = summary.recent_food_consumption;
+    economy.unmet_food = summary.hungry;
+    economy.housing_capacity = summary.housing_capacity;
+    economy.homeless_residents = summary.homeless;
+    economy.job_seekers = summary.job_seekers;
+    economy.unpaid_workers = summary.unpaid_workers;
+    economy.unrest = summary.unrest;
+    economy.unrest_change = summary.unrest_change;
+    economy.unrest_target = summary.unrest_target;
+    economy.unrest_hunger_pressure = summary.unrest_hunger_pressure;
+    economy.unrest_housing_pressure = summary.unrest_housing_pressure;
+    economy.unrest_wage_pressure = summary.unrest_wage_pressure;
+}
+
+fn economy_matches_summary(
+    economy: Option<&SettlementEconomy>,
+    summary: &shared::components::SettlementSummary,
+) -> bool {
+    economy.is_some_and(|economy| {
+        economy.prosperity == summary.prosperity
+            && economy.reserve_days == summary.reserve_days
+            && economy.recent_food_production == summary.recent_food_production
+            && economy.recent_food_consumption == summary.recent_food_consumption
+            && economy.unmet_food == summary.hungry
+            && economy.housing_capacity == summary.housing_capacity
+            && economy.homeless_residents == summary.homeless
+            && economy.job_seekers == summary.job_seekers
+            && economy.unpaid_workers == summary.unpaid_workers
+            && economy.unrest == summary.unrest
+            && economy.unrest_change == summary.unrest_change
+            && economy.unrest_target == summary.unrest_target
+            && economy.unrest_hunger_pressure == summary.unrest_hunger_pressure
+            && economy.unrest_housing_pressure == summary.unrest_housing_pressure
+            && economy.unrest_wage_pressure == summary.unrest_wage_pressure
+    })
+}
+
 pub(super) fn learn_settlement_summaries(
     summaries: Query<(&shared::components::SettlementSummary, &PlayerPosition)>,
     mut places: ResMut<KnownPlaces>,
@@ -162,6 +212,7 @@ pub(super) fn learn_settlement_summaries(
                 && record.residents == summary.residents
                 && record.treasury == summary.treasury
                 && record.summary_buildings == counts
+                && economy_matches_summary(record.economy.as_ref(), summary)
         });
         if unchanged {
             continue;
@@ -174,6 +225,7 @@ pub(super) fn learn_settlement_summaries(
             record.residents = summary.residents;
             record.treasury = summary.treasury;
             record.summary_buildings = counts;
+            apply_summary_economy(record.economy.get_or_insert_default(), summary);
         } else {
             places.records.push(PlaceRecord {
                 id: summary.id,
@@ -184,7 +236,7 @@ pub(super) fn learn_settlement_summaries(
                 residents: summary.residents,
                 treasury: summary.treasury,
                 market: None,
-                economy: None,
+                economy: Some(economy_from_summary(summary)),
                 administration: None,
                 development: None,
                 policies: None,
@@ -1177,6 +1229,134 @@ struct PlaceDetailModel {
     rows: Vec<(String, String)>,
 }
 
+fn resident_share(count: u32, residents: u32) -> f32 {
+    if residents == 0 {
+        0.0
+    } else {
+        count as f32 / residents as f32 * 100.0
+    }
+}
+
+fn unrest_summary(economy: Option<&SettlementEconomy>) -> String {
+    economy.map_or_else(
+        || "Awaiting first daily reading".to_string(),
+        |economy| {
+            let trend = if economy.unrest_change.abs() <= 0.05 {
+                "steady last day".to_string()
+            } else {
+                format!(
+                    "{} {:+.1} last day",
+                    economy.unrest_trend_label(),
+                    economy.unrest_change,
+                )
+            };
+            format!(
+                "{:.0} / 100 / {} / {} / pressure {:.0}",
+                economy.unrest,
+                economy.unrest_label(),
+                trend,
+                economy.unrest_target,
+            )
+        },
+    )
+}
+
+fn unrest_pressure_summary(economy: Option<&SettlementEconomy>) -> String {
+    economy.map_or_else(
+        || "No causes recorded".to_string(),
+        |economy| {
+            format!(
+                "Hunger +{:.1} / homelessness +{:.1} / unpaid workers +{:.1}",
+                economy.unrest_hunger_pressure,
+                economy.unrest_housing_pressure,
+                economy.unrest_wage_pressure,
+            )
+        },
+    )
+}
+
+fn food_security_summary(economy: Option<&SettlementEconomy>) -> String {
+    economy.map_or_else(
+        || "Awaiting first daily reading".to_string(),
+        |economy| {
+            let state = if economy.unmet_food > 0 {
+                "CRISIS"
+            } else if economy.reserve_days < 1.0 {
+                "SHORTAGE RISK"
+            } else if economy.reserve_days < shared::economy::FOOD_SECURITY_TARGET_DAYS {
+                "FRAGILE"
+            } else {
+                "SECURE"
+            };
+            format!(
+                "{state} / {:.1} reserve days / {:.1} produced vs {:.1} consumed daily",
+                economy.reserve_days,
+                economy.recent_food_production,
+                economy.recent_food_consumption,
+            )
+        },
+    )
+}
+
+fn hunger_summary(economy: Option<&SettlementEconomy>, residents: u32) -> String {
+    economy.map_or_else(
+        || "Awaiting first daily reading".to_string(),
+        |economy| {
+            if economy.unmet_food == 0 {
+                "Everyone ate after the last daily settlement".to_string()
+            } else {
+                format!(
+                    "{} of {} residents unfed after the last meal ({:.0}%)",
+                    economy.unmet_food,
+                    residents,
+                    resident_share(economy.unmet_food, residents),
+                )
+            }
+        },
+    )
+}
+
+fn housing_summary(economy: Option<&SettlementEconomy>, residents: u32) -> String {
+    economy.map_or_else(
+        || "Awaiting first housing audit".to_string(),
+        |economy| {
+            let housed = residents.saturating_sub(economy.homeless_residents);
+            format!(
+                "{housed} housed / {} homeless ({:.0}%) / {} completed beds",
+                economy.homeless_residents,
+                resident_share(economy.homeless_residents, residents),
+                economy.housing_capacity,
+            )
+        },
+    )
+}
+
+fn work_seekers_summary(economy: Option<&SettlementEconomy>, residents: u32) -> String {
+    economy.map_or_else(
+        || "Awaiting first labour reading".to_string(),
+        |economy| {
+            format!(
+                "{} actively seeking work ({:.0}%) / {} private + {} civic vacancies",
+                economy.job_seekers,
+                resident_share(u32::from(economy.job_seekers), residents),
+                economy.private_vacant_jobs,
+                economy.civic_vacant_jobs,
+            )
+        },
+    )
+}
+
+fn unpaid_workers_summary(economy: Option<&SettlementEconomy>) -> String {
+    economy.map_or_else(
+        || "Awaiting first payroll audit".to_string(),
+        |economy| match economy.unpaid_workers {
+            0 => "No current workers at an employer owing wages".to_string(),
+            1 => "1 current worker at an employer owing wages".to_string(),
+            count => format!("{count} current workers at employers owing wages"),
+        },
+    )
+}
+
 fn place_detail_model(
     place: &PlaceRecord,
     entry: SelectedPlaceEntry,
@@ -1237,6 +1417,31 @@ fn place_detail_model(
                 subtitle: format!("{status} / SETTLEMENT OVERVIEW"),
                 rows: vec![
                     ("RESIDENTS".into(), residents),
+                    ("UNREST".into(), unrest_summary(place.economy.as_ref())),
+                    (
+                        "UNREST PRESSURES".into(),
+                        unrest_pressure_summary(place.economy.as_ref()),
+                    ),
+                    (
+                        "FOOD SECURITY".into(),
+                        food_security_summary(place.economy.as_ref()),
+                    ),
+                    (
+                        "HUNGER".into(),
+                        hunger_summary(place.economy.as_ref(), place.residents),
+                    ),
+                    (
+                        "UNEMPLOYMENT".into(),
+                        work_seekers_summary(place.economy.as_ref(), place.residents),
+                    ),
+                    (
+                        "HOUSING".into(),
+                        housing_summary(place.economy.as_ref(), place.residents),
+                    ),
+                    (
+                        "UNPAID WORKERS".into(),
+                        unpaid_workers_summary(place.economy.as_ref()),
+                    ),
                     ("STRUCTURES".into(), structures),
                     (
                         "COMMON STORE".into(),
@@ -1390,15 +1595,6 @@ fn place_detail_model(
                     }
                 },
             );
-            let food = place.economy.as_ref().map_or_else(
-                || "Awaiting first daily reading".to_string(),
-                |economy| {
-                    format!(
-                        "{:.1} reserve days / {} unfed last meal",
-                        economy.reserve_days, economy.unmet_food
-                    )
-                },
-            );
             let labour = place.economy.as_ref().map_or_else(
                 || "Awaiting first reading".to_string(),
                 |economy| {
@@ -1473,6 +1669,31 @@ fn place_detail_model(
                         "SERVICES".into(),
                         "Permits / market / common storage".into(),
                     ),
+                    ("UNREST".into(), unrest_summary(place.economy.as_ref())),
+                    (
+                        "UNREST PRESSURES".into(),
+                        unrest_pressure_summary(place.economy.as_ref()),
+                    ),
+                    (
+                        "FOOD SECURITY".into(),
+                        food_security_summary(place.economy.as_ref()),
+                    ),
+                    (
+                        "HUNGER".into(),
+                        hunger_summary(place.economy.as_ref(), place.residents),
+                    ),
+                    (
+                        "HOUSING".into(),
+                        housing_summary(place.economy.as_ref(), place.residents),
+                    ),
+                    (
+                        "UNEMPLOYMENT".into(),
+                        work_seekers_summary(place.economy.as_ref(), place.residents),
+                    ),
+                    (
+                        "UNPAID WORKERS".into(),
+                        unpaid_workers_summary(place.economy.as_ref()),
+                    ),
                     ("MOOT STEWARDS".into(), moot_stewards),
                     ("REEVE".into(), reeve),
                     ("PUBLIC POSITIONS".into(), public_jobs),
@@ -1514,7 +1735,6 @@ fn place_detail_model(
                     ),
                     ("MARKET MODEL".into(), market_model),
                     ("LIFETIME TRADE".into(), volume),
-                    ("FOOD SECURITY".into(), food),
                     ("LABOUR MARKET".into(), labour),
                     (
                         "PURCHASABLE / AT BUSINESSES".into(),
@@ -1581,6 +1801,9 @@ fn place_detail_model(
                         }
                         SettlementBuildingKind::FishermansHut => {
                             "Produces Food at its fishing pier / 2 work positions".into()
+                        }
+                        SettlementBuildingKind::LivestockFarm => {
+                            "Produces Meat and Wool from its pasture / 2 work positions".into()
                         }
                         SettlementBuildingKind::House => {
                             format!("Housing / {} beds", building.kind.housing_capacity())
@@ -2014,6 +2237,54 @@ mod tests {
             Some("2 completed / 1 wheat field / 0 fishing piers")
         );
         assert!(model.rows.iter().all(|(_, value)| !value.contains("Ada")));
+    }
+
+    #[test]
+    fn place_overview_makes_each_public_hardship_a_visible_fact() {
+        let mut place = explorer_place();
+        place.residents = 20;
+        place.economy = Some(SettlementEconomy {
+            reserve_days: 0.6,
+            recent_food_production: 12.0,
+            recent_food_consumption: 20.0,
+            unmet_food: 10,
+            housing_capacity: 18,
+            homeless_residents: 4,
+            job_seekers: 5,
+            private_vacant_jobs: 2,
+            civic_vacant_jobs: 1,
+            unpaid_workers: 2,
+            unrest: 34.5,
+            unrest_target: 34.5,
+            unrest_change: 10.0,
+            unrest_hunger_pressure: 27.5,
+            unrest_housing_pressure: 5.0,
+            unrest_wage_pressure: 2.0,
+            ..default()
+        });
+
+        let model = place_detail_model(&place, SelectedPlaceEntry::Overview, true);
+        for label in [
+            "UNREST",
+            "UNREST PRESSURES",
+            "FOOD SECURITY",
+            "HUNGER",
+            "UNEMPLOYMENT",
+            "HOUSING",
+            "UNPAID WORKERS",
+        ] {
+            assert!(
+                model.rows.iter().any(|(actual, _)| actual == label),
+                "missing {label}"
+            );
+        }
+        assert!(model.rows.iter().any(|(label, value)| {
+            label == "UNREST" && value.contains("Uneasy") && value.contains("rising")
+        }));
+        assert!(model
+            .rows
+            .iter()
+            .any(|(label, value)| label == "HUNGER" && value.contains("50%")));
     }
 
     #[test]

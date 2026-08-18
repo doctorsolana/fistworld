@@ -45,6 +45,234 @@ pub(crate) enum LiveLabCaptureState {
     Done,
 }
 
+#[derive(Resource, Default)]
+pub(crate) struct LiveVoyageCaptureState {
+    initialized: bool,
+    enabled: bool,
+    out_dir: PathBuf,
+    stage: u8,
+    awaiting: Option<(PathBuf, u32)>,
+    sail_origin: Option<Vec3>,
+    click_phase: u8,
+}
+
+/// Drive a real press/release through the ordinary right-click order system.
+/// This is intentionally separate from the screenshot state machine so the
+/// input lands before `issue_order_on_right_click` in the same Update frame.
+pub(crate) fn drive_live_voyage_click_input(
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
+    mut state: ResMut<LiveVoyageCaptureState>,
+) {
+    if !state.enabled || state.stage != 3 {
+        return;
+    }
+    match state.click_phase {
+        1 => {
+            // Let the deferred CursorTerrainOverride become visible to the
+            // picker before the synthetic gesture begins.
+            state.click_phase = 2;
+        }
+        2 => {
+            mouse.press(MouseButton::Right);
+            state.click_phase = 3;
+            info!("live voyage capture: pressed ordinary right-click");
+        }
+        3 => {
+            mouse.release(MouseButton::Right);
+            state.click_phase = 4;
+            info!("live voyage capture: released ordinary right-click");
+        }
+        _ => {}
+    }
+}
+
+/// Capture the real connected new-player voyage at four points: face hold,
+/// camera travel, final RTS framing, and authoritative sailing. Unlike
+/// `FISTFORCE_CAPTURE_DINGHY`,
+/// this hook creates no local fixtures; every photographed hero and vessel has
+/// travelled through name submission, CreateHero, server spawning, interest
+/// management and network replication.
+///
+/// Enable with `FISTWORLD_VOYAGE_CAPTURE_DIR=/absolute/output/directory`.
+/// `FISTWORLD_VOYAGE_CAPTURE_EXIT=1` exits after all four PNGs reach disk.
+pub(crate) fn drive_live_voyage_capture(
+    mut commands: Commands,
+    scene_target: Option<Res<crate::render::systems::scaled_target::SceneRenderTarget>>,
+    opening: Res<crate::boat::OpeningCinematic>,
+    local: Option<Res<crate::camera_rts::LocalPeerId>>,
+    account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
+    boats: Query<
+        (
+            Entity,
+            &shared::components::CommandedBy,
+            &shared::components::PlayerPosition,
+            &shared::components::PlayerRotation,
+        ),
+        With<shared::components::PlayerBoat>,
+    >,
+    terrain: Res<shared::terrain::WorldTerrain>,
+    selection: Res<crate::selection::Selection>,
+    heroes: Query<
+        (
+            &shared::components::Hero,
+            &shared::components::PlayerPosition,
+        ),
+        (
+            With<shared::components::Hero>,
+            With<shared::components::AboardBoat>,
+        ),
+    >,
+    mut state: ResMut<LiveVoyageCaptureState>,
+    mut app_exit: MessageWriter<AppExit>,
+) {
+    if !state.initialized {
+        state.initialized = true;
+        let Ok(raw) = std::env::var("FISTWORLD_VOYAGE_CAPTURE_DIR") else {
+            return;
+        };
+        let out_dir = PathBuf::from(raw);
+        if let Err(error) = std::fs::create_dir_all(&out_dir) {
+            error!(
+                "live voyage capture: cannot create {}: {error}",
+                out_dir.display()
+            );
+            return;
+        }
+        state.enabled = true;
+        state.out_dir = out_dir;
+        info!("live voyage capture: armed for {}", state.out_dir.display());
+    }
+    if !state.enabled {
+        return;
+    }
+
+    if let Some((path, frames_waited)) = state.awaiting.as_mut() {
+        let written = std::fs::metadata(&*path).is_ok_and(|metadata| metadata.len() > 0);
+        *frames_waited += 1;
+        if !written && *frames_waited <= 600 {
+            return;
+        }
+        if !written {
+            error!("live voyage capture: {} never reached disk", path.display());
+            state.enabled = false;
+            app_exit.write(AppExit::error());
+            return;
+        }
+        info!("live voyage capture: wrote {}", path.display());
+        state.awaiting = None;
+        state.stage += 1;
+        if state.stage >= 4 {
+            state.enabled = false;
+            commands.remove_resource::<crate::camera_rts::CursorTerrainOverride>();
+            if std::env::var("FISTWORLD_VOYAGE_CAPTURE_EXIT")
+                .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
+            {
+                app_exit.write(AppExit::Success);
+            }
+            return;
+        }
+    }
+
+    let local_id = local.as_ref().map(|local| local.0);
+    let account = account
+        .as_ref()
+        .map(|account| account.name.trim().to_lowercase());
+    let local_boat = boats
+        .iter()
+        .find_map(|(entity, owner, position, rotation)| {
+            (account.as_deref() == Some(owner.0.as_str()))
+                .then_some((entity, position.0, rotation.0))
+        });
+    let boat_position = local_boat.map(|(_, position, _)| position);
+    let hero_position = heroes.iter().find_map(|(hero, position)| {
+        (local_id == Some(shared::player::peer_id_to_u64(hero.owner))).then_some(position.0)
+    });
+    let running = opening.running_elapsed_secs();
+    let ready = match state.stage {
+        0 => running.is_some_and(|elapsed| elapsed >= 2.25),
+        1 => running.is_some_and(|elapsed| elapsed >= 5.70),
+        2 => !opening.is_active() && boat_position.is_some() && hero_position.is_some(),
+        3 => {
+            let Some((boat, position, rotation)) = local_boat else {
+                return;
+            };
+            if state.sail_origin.is_none() {
+                // Exercise ordinary right-click movement without making the
+                // photographed voyage perform an artificial U-turn. The
+                // starter hull is already aimed down its certified approach
+                // corridor, so test progressively nearer points straight off
+                // the authored -Z bow.
+                let forward = (Quat::from_rotation_y(rotation) * Vec3::NEG_Z)
+                    .xz()
+                    .normalize_or_zero();
+                let Some(goal) = [30.0_f32, 24.0, 18.0, 12.0]
+                    .into_iter()
+                    .find_map(|distance| {
+                        let xz = position.xz() + forward * distance;
+                        terrain
+                            .get_water_height(xz.x, xz.y)
+                            .map(|water| Vec3::new(xz.x, water, xz.y))
+                    })
+                else {
+                    error!("live voyage capture: no nearby water goal for sailing check");
+                    state.enabled = false;
+                    app_exit.write(AppExit::error());
+                    return;
+                };
+                if !selection.is_selected(boat) {
+                    error!(
+                        "live voyage capture: opening cinematic did not leave the Dinghy selected"
+                    );
+                    state.enabled = false;
+                    app_exit.write(AppExit::error());
+                    return;
+                }
+                state.sail_origin = Some(position);
+                state.click_phase = 1;
+                commands.insert_resource(crate::camera_rts::CursorTerrainOverride(goal.xz()));
+                info!(
+                    "live voyage capture: armed ordinary water right-click boat={boat:?} from={position:?} to={goal:?}"
+                );
+                return;
+            }
+            state
+                .sail_origin
+                .is_some_and(|origin| origin.distance(position) >= 7.0)
+        }
+        _ => false,
+    };
+    if !ready {
+        return;
+    }
+    let Some(scene_target) = scene_target else {
+        return;
+    };
+
+    let filename = match state.stage {
+        0 => "01_face.png",
+        1 => "02_transition.png",
+        2 => "03_rts.png",
+        3 => "04_sailing.png",
+        _ => return,
+    };
+    let path = state.out_dir.join(filename);
+    let _ = std::fs::remove_file(&path);
+    info!(
+        "live voyage capture: shooting stage={} boat={boat_position:?} hero={hero_position:?} -> {}",
+        state.stage,
+        path.display()
+    );
+    // Capture the actual 3D scene target. The primary-window screenshot can
+    // be an all-black swapchain image on macOS while entering fullscreen or
+    // changing physical resolution, even though the presented scene is fine.
+    // The cinematic itself lives in this offscreen target, so photographing it
+    // is both deterministic and independent of the player's display mode.
+    commands
+        .spawn(Screenshot::image(scene_target.image.clone()))
+        .observe(save_to_disk(path.clone()));
+    state.awaiting = Some((path, 0));
+}
+
 /// Capture the connected, fully simulated Village Lab on a requested HUD day.
 ///
 /// Environment variables:
@@ -259,6 +487,7 @@ pub fn run(config: CaptureConfig) {
     app.add_systems(
         Update,
         (
+            spawn_capture_dinghy,
             spawn_capture_heroes,
             stage_capture_permit_placement,
             exercise_capture_door,
@@ -273,6 +502,83 @@ pub fn run(config: CaptureConfig) {
     );
 
     app.run();
+}
+
+/// `FISTFORCE_CAPTURE_DINGHY=underway|wreck` stages the real runtime scene on
+/// water at the first shot's focus. This is presentation-only—the live server
+/// remains the authority for navigation and disembarkation—but it exercises
+/// the identical named sail nodes, morph and wreck state without a login.
+fn spawn_capture_dinghy(
+    mut commands: Commands,
+    mut config: ResMut<CaptureConfig>,
+    terrain: Option<Res<shared::terrain::WorldTerrain>>,
+    mut spawned: Local<bool>,
+) {
+    if *spawned {
+        return;
+    }
+    let Ok(mode) = std::env::var("FISTFORCE_CAPTURE_DINGHY") else {
+        *spawned = true;
+        return;
+    };
+    let Some(terrain) = terrain else { return };
+    let focus = config.shots.first().map_or(Vec3::ZERO, |shot| shot.focus);
+    let Some(water) = terrain.get_water_height(focus.x, focus.z) else {
+        error!(
+            "capture: FISTFORCE_CAPTURE_DINGHY needs water at ({:.1}, {:.1})",
+            focus.x, focus.z
+        );
+        *spawned = true;
+        return;
+    };
+    let position = Vec3::new(focus.x, water, focus.z);
+    // CLI captures commonly specify only X,Z and therefore default Y to zero.
+    // Ocean height is map-authored, so that can put the review camera below
+    // the surface. Keep every requested angle centred on the actual hull
+    // waterline while preserving its XZ composition.
+    for shot in config.shots.iter_mut() {
+        shot.focus.y = water + 0.55;
+    }
+    let wrecked = mode.trim().eq_ignore_ascii_case("wreck");
+    let mut vessel = commands.spawn((
+        shared::components::PlayerBoat,
+        shared::components::Vessel,
+        shared::components::CommandedBy("capture-sailor".into()),
+        shared::components::PlayerPosition(position),
+        shared::components::PlayerRotation(-0.45),
+        shared::components::CharacterMotion::new(Vec3::new(2.0, 0.0, -1.0)),
+    ));
+    if wrecked {
+        vessel.insert(shared::components::WreckedVessel);
+    }
+    if !wrecked {
+        let manifest = match shared::character::CharacterManifest::load() {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                error!("capture: character manifest unavailable: {error}");
+                *spawned = true;
+                return;
+            }
+        };
+        let helm = position + Quat::from_rotation_y(-0.45) * Vec3::new(0.0, 0.35, 1.24);
+        commands.spawn((
+            shared::components::Hero {
+                owner: lightyear::prelude::PeerId::Netcode(9_999),
+            },
+            shared::components::CharacterName("Capture Sailor".into()),
+            shared::components::CharacterKind::Hero,
+            shared::components::CharacterAffiliation::default(),
+            shared::components::PersonId(99_999),
+            shared::components::HeroOutfit::from_manifest(&manifest),
+            shared::components::CommandedBy("capture-sailor".into()),
+            shared::components::AboardBoat,
+            shared::components::CharacterActivity::Sitting,
+            shared::components::PlayerPosition(helm),
+            shared::components::PlayerRotation(-0.45),
+            shared::components::CharacterMotion::new(Vec3::new(2.0, 0.0, -1.0)),
+        ));
+    }
+    *spawned = true;
 }
 
 /// `FISTFORCE_CAPTURE_DOOR=open` holds the offline settlement's town-hall
@@ -581,6 +887,15 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                             civic_vacant_jobs: 1,
                             job_seekers: 1,
                             best_open_private_wage: 120,
+                            housing_capacity: 8,
+                            homeless_residents: 0,
+                            unpaid_workers: 0,
+                            unrest: 8.0,
+                            unrest_target: 0.0,
+                            unrest_change: -5.0,
+                            unrest_hunger_pressure: 0.0,
+                            unrest_housing_pressure: 0.0,
+                            unrest_wage_pressure: 0.0,
                         },
                     ));
                 }
@@ -980,6 +1295,7 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                 nutrition: None,
                 activity: None,
                 objective: None,
+                day_plan: None,
                 navigation: None,
                 attributes: Some(shared::components::CharacterAttributes::default()),
                 work_status: Some(shared::components::WorkStatus::LookingForWork),
@@ -2111,10 +2427,10 @@ fn synthetic_settlement_history(name: &str) -> shared::economy::SettlementHistor
             let consumer_price = midpoint.saturating_mul(108).div_ceil(100);
             let stock = 5 + ((day * (good.index() as u32 + 2)) % 24);
             let target = match good {
-                Good::Food | Good::Flour | Good::Bread => 14,
+                Good::Food | Good::Flour | Good::Bread | Good::Meat => 14,
                 Good::Wheat => 10,
                 Good::Wood => 20,
-                Good::Stone | Good::Iron => 5,
+                Good::Stone | Good::Iron | Good::Wool => 5,
             };
             market[good.index()] = MarketGoodHistoryDay {
                 opening_bid: producer_price.saturating_sub(3),
@@ -2131,6 +2447,7 @@ fn synthetic_settlement_history(name: &str) -> shared::economy::SettlementHistor
                 consumer_coin: consumer_price.saturating_mul(consumer_units),
                 unavailable_units: u64::from((day + good.index() as u32) % 3),
                 unaffordable_units: u64::from((day + good.index() as u32 + 1) % 2),
+                funded_unmet_units: u64::from((day + good.index() as u32) % 2),
                 closing_stock: stock,
                 target_stock: target,
                 listed_units: stock.saturating_sub(2),
@@ -2167,6 +2484,11 @@ fn synthetic_settlement_history(name: &str) -> shared::economy::SettlementHistor
             population,
             employed,
             hungry,
+            job_seekers: population.saturating_sub(employed),
+            homeless: u32::from(day % 71 < 4),
+            unpaid_workers: u32::from(day % 29 == 0),
+            unrest: (18.0 + (day as f32 * 0.07).sin() * 10.0).clamp(0.0, 100.0),
+            unrest_target: (20.0 + (day as f32 * 0.05).sin() * 12.0).clamp(0.0, 100.0),
             food_reserves: physical_stock[Good::Food.index()]
                 + physical_stock[Good::Flour.index()]
                 + physical_stock[Good::Bread.index()],

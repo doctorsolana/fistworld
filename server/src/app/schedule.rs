@@ -113,6 +113,31 @@ fn configure_server_fixed_schedule(app: &mut App) {
             .run_if(server_is_started),
     );
 
+    // Opening-voyage systems are kept out of the already-large ingress tuple
+    // so adding future vessel classes does not hit Bevy's tuple arity ceiling.
+    app.add_systems(
+        FixedUpdate,
+        player::boat::handle_create_hero_requests
+            .after(player::spawn::handle_player_name_submission)
+            .before(world::regions::update_client_interest)
+            .in_set(ServerSet::NetIngress)
+            .run_if(server_is_started),
+    );
+    app.add_systems(
+        FixedUpdate,
+        (
+            player::boat::handle_disembark_requests,
+            player::boat::plan_vessel_routes,
+            player::boat::step_boats,
+            player::boat::sync_aboard_heroes,
+        )
+            .chain()
+            .after(player::hero::handle_unit_move_orders)
+            .before(world::regions::update_client_interest)
+            .in_set(ServerSet::NetIngress)
+            .run_if(server_is_started),
+    );
+
     app.add_systems(
         FixedUpdate,
         (player::index::sync_player_entity_index,)
@@ -161,4 +186,22 @@ fn configure_server_fixed_schedule(app: &mut App) {
             .before(LinkSystems::Send)
             .run_if(server_is_started),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authoritative_schedules_initialize_without_query_conflicts() {
+        // Query alias validation happens while Bevy initializes a schedule,
+        // not during `cargo check`. With no GameServer entity, the shared
+        // server_is_started condition prevents world logic from executing;
+        // running the schedules still initializes every registered system and
+        // catches B0001-style startup crashes before a playtest.
+        let mut app = App::new();
+        configure_fixed_schedule(&mut app);
+        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut().run_schedule(PostUpdate);
+    }
 }

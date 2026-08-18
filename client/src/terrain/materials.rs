@@ -1,10 +1,13 @@
 use bevy::image::ImageLoaderSettings;
+use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
-use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
+use bevy::render::render_resource::{AsBindGroup, TextureViewDescriptor, TextureViewDimension};
+use bevy::shader::ShaderRef;
 use shared::components::WorldTime;
 use shared::water::{OCEAN_LOOP_SECONDS, WATER_SURFACE_OFFSET};
 
 use super::chunks::TerrainChunk;
+use crate::render::systems::SunLight;
 
 // The material, palette and samplers live in `shared` so every renderer uses one
 // binding contract for the same shader. See shared/src/terrain/material.rs.
@@ -15,6 +18,26 @@ pub use shared::terrain::{
     layer_tiling, repeat_sampler, stylized_palette, weightmap_sampler, TerrainSplatExtension,
     TerrainSplatMaterial, TERRAIN_ALBEDO_ARRAY, TERRAIN_NORMAL_ARRAY,
 };
+
+/// The low-resolution world mesh still uses StandardMaterial lighting for
+/// land, but its ocean vertices are blended to an unlit water color in the
+/// extension fragment. This avoids trying to match an unlit close-water
+/// shader by tuning the RGB of normally-lit seabed.
+pub type FarTerrainMaterial = ExtendedMaterial<StandardMaterial, FarTerrainExtension>;
+
+#[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
+pub struct FarTerrainExtension {
+    /// x: height of the sun direction. The far water mirrors the detailed
+    /// water's compact night tint without inheriting terrain lighting.
+    #[uniform(100)]
+    pub water_params: Vec4,
+}
+
+impl MaterialExtension for FarTerrainExtension {
+    fn fragment_shader() -> ShaderRef {
+        "shaders/far_terrain.wgsl".into()
+    }
+}
 
 /// Terrain water uniform from a generator's loaded map.
 pub fn water_params_for_generator(generator: &shared::terrain::TerrainGenerator) -> Vec4 {
@@ -30,7 +53,7 @@ pub struct TerrainRenderAssets {
     pub albedo_array: Handle<Image>,
     pub normal_array: Handle<Image>,
     pub layer_tiling: Vec4,
-    pub far_mesh_material: Handle<StandardMaterial>,
+    pub far_mesh_material: Handle<FarTerrainMaterial>,
 }
 
 #[derive(Resource)]
@@ -38,14 +61,14 @@ pub struct TerrainTextureSources {
     pub albedo_array: Handle<Image>,
     pub normal_array: Handle<Image>,
     pub layer_tiling: Vec4,
-    pub far_mesh_material: Handle<StandardMaterial>,
+    pub far_mesh_material: Handle<FarTerrainMaterial>,
 }
 
 /// Create shared terrain material once.
 pub(super) fn setup_terrain_render_assets(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<FarTerrainMaterial>>,
 ) {
     let albedo_array: Handle<Image> = asset_server
         .load_builder()
@@ -62,13 +85,18 @@ pub(super) fn setup_terrain_render_assets(
         })
         .load(TERRAIN_NORMAL_ARRAY);
 
-    let far_mesh_material = materials.add(StandardMaterial {
-        // Far mesh uses vertex colors for biome tinting; keep base color white.
-        base_color: Color::WHITE,
-        perceptual_roughness: 0.98,
-        metallic: 0.0,
-        reflectance: 0.08,
-        ..default()
+    let far_mesh_material = materials.add(FarTerrainMaterial {
+        base: StandardMaterial {
+            // Far mesh uses vertex colors for biome tinting; keep base color white.
+            base_color: Color::WHITE,
+            perceptual_roughness: 0.98,
+            metallic: 0.0,
+            reflectance: 0.08,
+            ..default()
+        },
+        extension: FarTerrainExtension {
+            water_params: Vec4::new(0.75, 0.0, 0.0, 0.0),
+        },
     });
 
     let layer_tiling = layer_tiling();
@@ -81,6 +109,31 @@ pub(super) fn setup_terrain_render_assets(
     });
 
     info!("Queued terrain KTX2 arrays (albedo + normal)");
+}
+
+/// Keep the far ocean's dawn/night response aligned with the detailed water.
+/// Land stays on StandardMaterial lighting inside the same shader.
+pub(super) fn sync_far_terrain_water_sun(
+    render_assets: Option<Res<TerrainRenderAssets>>,
+    sun: Query<&GlobalTransform, With<SunLight>>,
+    mut materials: ResMut<Assets<FarTerrainMaterial>>,
+) {
+    let Some(render_assets) = render_assets else {
+        return;
+    };
+    let Ok(sun_tf) = sun.single() else {
+        return;
+    };
+    let sun_height = Vec3::from(sun_tf.back()).y;
+    let Some(material) = materials.get(&render_assets.far_mesh_material) else {
+        return;
+    };
+    if (material.extension.water_params.x - sun_height).abs() < 0.002 {
+        return;
+    }
+    if let Some(mut material) = materials.get_mut(&render_assets.far_mesh_material) {
+        material.extension.water_params.x = sun_height;
+    }
 }
 
 pub(super) fn build_terrain_texture_arrays(

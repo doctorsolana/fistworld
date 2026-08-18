@@ -7,15 +7,15 @@ use super::*;
 
 /// Choose real food offers by price per ration, retaining the authored food
 /// preference only as a tie-breaker. A household may prefer Bread, but it
-/// should not spend its entire purse on one luxury loaf while affordable Fish
-/// or Flour is sitting on the next market table.
+/// should not spend its entire purse on one luxury loaf while affordable Meat,
+/// Fish or Flour is sitting on the next market table.
 ///
 /// The first absent preference is retained after all physical offers. If the
 /// available substitutes cannot fill the pantry, the caller records the
 /// remaining request against exactly that one good. This is how a completely
 /// empty market still tells a bakery that residents want bread without also
-/// claiming that the same rations were independently demanded as fish and
-/// flour.
+/// claiming that the same rations were independently demanded as meat, fish
+/// and flour.
 fn household_food_purchase_order(hall_store: &GoodsInventory, market: &MootMarket) -> Vec<Good> {
     let mut foods: Vec<(usize, Good)> = Good::HOUSEHOLD_FOOD_PRIORITY
         .into_iter()
@@ -751,6 +751,8 @@ pub fn run_household_schedules(
             With<MootMealRoutine>,
             With<HouseholdShoppingRoutine>,
             With<TradeRouteRoutine>,
+            With<TavernVisitRoutine>,
+            With<TavernWorkerRoutine>,
             With<crate::world::settlement_development::CivicHallBuilderRoutine>,
         )>,
     >,
@@ -1212,7 +1214,7 @@ mod tests {
 
         assert_eq!(
             household_food_purchase_order(&hall, &market),
-            vec![Good::Flour, Good::Bread, Good::Food]
+            vec![Good::Flour, Good::Bread, Good::Meat]
         );
     }
 

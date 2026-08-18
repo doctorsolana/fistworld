@@ -28,6 +28,7 @@ pub struct TerrainPlugin;
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<materials::TerrainSplatMaterial>::default());
+        app.add_plugins(MaterialPlugin::<materials::FarTerrainMaterial>::default());
         app.init_resource::<chunks::LoadedChunks>();
         app.init_resource::<WorldTerrain>();
         app.init_resource::<streaming::TerrainStreamingState>();
@@ -35,7 +36,6 @@ impl Plugin for TerrainPlugin {
         app.init_resource::<paint::TerrainPaintState>();
         app.init_resource::<streaming::TerrainChunkTasks>();
         app.init_resource::<streaming::TerrainTaskScratch>();
-        app.init_resource::<streaming::far_terrain::FarTerrainHoleTask>();
         app.init_resource::<debug::TerrainDebugSettings>();
         app.init_resource::<debug::PerfHitchStats>();
         app.init_resource::<debug::TerrainPerfLogConfig>();
@@ -68,7 +68,10 @@ impl Plugin for TerrainPlugin {
         );
         app.add_systems(
             Update,
-            materials::sync_terrain_water_clock
+            (
+                materials::sync_terrain_water_clock,
+                materials::sync_far_terrain_water_sun,
+            )
                 .after(chunks::TerrainUpdateSet)
                 .run_if(in_state(GameState::Playing)),
         );

@@ -421,6 +421,8 @@ pub fn capture_settlement_history(
                 | SettlementBuildingKind::Windmill
                 | SettlementBuildingKind::Bakery
                 | SettlementBuildingKind::StorageHall
+                | SettlementBuildingKind::StoneQuarry
+                | SettlementBuildingKind::LivestockFarm
         ) {
             aggregate.productive_buildings = aggregate.productive_buildings.saturating_add(1);
         }
@@ -567,6 +569,7 @@ pub fn capture_settlement_history(
                     consumer_coin: flow.consumer_coin,
                     unavailable_units: flow.unavailable_units,
                     unaffordable_units: flow.unaffordable_units,
+                    funded_unmet_units: flow.funded_unmet_units,
                     closing_stock: hall_inventory.amount(good),
                     target_stock: pool.target_stock,
                     listed_units: market.listed_units(good),
@@ -648,6 +651,11 @@ pub fn capture_settlement_history(
                     population: settlement.residents,
                     employed: aggregate.employed,
                     hungry: aggregate.hungry,
+                    job_seekers: u32::from(economy.job_seekers),
+                    homeless: economy.homeless_residents,
+                    unpaid_workers: u32::from(economy.unpaid_workers),
+                    unrest: economy.unrest,
+                    unrest_target: economy.unrest_target,
                     food_reserves: economy.edible_stock,
                     purchasable_food: market.listed_edible_units(),
                     unlisted_business_food: aggregate.unlisted_business_food,
@@ -868,6 +876,11 @@ mod tests {
             population: 0,
             employed: 0,
             hungry: 0,
+            job_seekers: 0,
+            homeless: 0,
+            unpaid_workers: 0,
+            unrest: 0.0,
+            unrest_target: 0.0,
             food_reserves: 0,
             purchasable_food: 0,
             unlisted_business_food: 0,

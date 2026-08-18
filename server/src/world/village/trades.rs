@@ -97,6 +97,101 @@ pub fn ensure_farm_fields(
     }
 }
 
+/// Establish the one separately replicated, walkable pasture behind every
+/// completed Livestock Farm. Sheep are cheap client-side presentation; this
+/// record is the authoritative land claim and worker destination.
+pub fn ensure_livestock_pastures(
+    mut commands: Commands,
+    terrain: Option<Res<WorldTerrain>>,
+    farms: Query<(
+        &SettlementBuilding,
+        &PlayerPosition,
+        &PlayerRotation,
+        &shared::components::BuildingId,
+    )>,
+    pastures: Query<&shared::components::AttachedTo, With<LivestockPasture>>,
+) {
+    let Some(terrain) = terrain else {
+        return;
+    };
+    let existing: HashSet<_> = pastures.iter().map(|attached| attached.0).collect();
+    for (farm, position, rotation, building_id) in farms.iter() {
+        if farm.kind != SettlementBuildingKind::LivestockFarm || existing.contains(building_id) {
+            continue;
+        }
+        let Some(mut pasture_position) = farm.kind.pasture_position(position.0, rotation.0) else {
+            continue;
+        };
+        pasture_position.y = terrain.get_height(pasture_position.x, pasture_position.z);
+        let pasture = commands
+            .spawn((
+                LivestockPasture {
+                    settlement: farm.settlement.clone(),
+                    livestock_farm: position.0,
+                    quality: farm.quality,
+                },
+                PlayerPosition(pasture_position),
+                PlayerRotation(rotation.0),
+                Replicate::to_clients(NetworkTarget::All),
+            ))
+            .id();
+        commands
+            .entity(pasture)
+            .insert(shared::components::AttachedTo(*building_id));
+        info!(
+            "Village '{}': fenced a grazing pasture beside its Livestock Farm",
+            farm.settlement
+        );
+    }
+}
+
+#[cfg(test)]
+mod livestock_pasture_tests {
+    use super::*;
+
+    #[test]
+    fn each_completed_livestock_farm_gets_one_stable_pasture() {
+        let mut app = App::new();
+        app.insert_resource(WorldTerrain::default());
+        app.add_systems(Update, ensure_livestock_pastures);
+        let building_id = shared::components::BuildingId(8_001);
+        let origin = Vec3::new(120.0, 0.0, -80.0);
+        app.world_mut().spawn((
+            building_id,
+            SettlementBuilding {
+                kind: SettlementBuildingKind::LivestockFarm,
+                settlement: "Pasture Test".into(),
+                owner: Some("Ada".into()),
+                quality: 0.82,
+                workers: vec![],
+            },
+            PlayerPosition(origin),
+            PlayerRotation(0.0),
+        ));
+
+        app.update();
+        app.update();
+
+        let world = app.world_mut();
+        let pastures: Vec<_> = world
+            .query::<(
+                &LivestockPasture,
+                &shared::components::AttachedTo,
+                &PlayerPosition,
+            )>()
+            .iter(world)
+            .collect();
+        assert_eq!(pastures.len(), 1, "the ensure pass must be idempotent");
+        assert_eq!(pastures[0].1 .0, building_id);
+        assert_eq!(pastures[0].0.quality, 0.82);
+        let expected = SettlementBuildingKind::LivestockFarm
+            .pasture_position(origin, 0.0)
+            .unwrap();
+        assert_eq!(pastures[0].2 .0.x, expected.x);
+        assert_eq!(pastures[0].2 .0.z, expected.z);
+    }
+}
+
 /// Place the separate collider-free pier behind every completed Fisherman's
 /// Hut. The asset origin is its landward end; the authored piles extend below
 /// that origin, so water level is the stable placement plane on every coast.

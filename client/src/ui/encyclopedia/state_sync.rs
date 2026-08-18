@@ -25,7 +25,10 @@ type VisiblePersonFacts<'a> = (
         Option<&'a shared::components::Nutrition>,
         Option<&'a shared::components::Health>,
     ),
-    Option<&'a shared::components::CharacterActivity>,
+    (
+        Option<&'a shared::components::CharacterActivity>,
+        Option<&'a shared::components::CharacterDayPlan>,
+    ),
     (
         Option<&'a shared::components::CharacterObjective>,
         Option<&'a shared::components::CharacterNavigationStatus>,
@@ -106,6 +109,7 @@ pub(super) fn receive_character_roster(
                         nutrition: None,
                         activity: None,
                         objective: None,
+                        day_plan: None,
                         navigation: None,
                         attributes: Some(entry.attributes),
                         work_status: None,
@@ -185,6 +189,7 @@ pub(super) fn learn_visible_characters(
                 nutrition: None,
                 activity: None,
                 objective: None,
+                day_plan: None,
                 navigation: None,
                 attributes: None,
                 work_status: None,
@@ -229,7 +234,7 @@ pub(super) fn refresh_visible_person_facts(
         work_status,
         wallet,
         (nutrition, health),
-        activity,
+        (activity, day_plan),
         (objective, navigation),
         attributes,
         inventory,
@@ -331,6 +336,7 @@ pub(super) fn refresh_visible_person_facts(
         let next_alive = !health.is_some_and(|health| health.is_dead());
         let next_activity = activity.copied();
         let next_objective = objective.copied();
+        let next_day_plan = day_plan.copied();
         let next_navigation = navigation.copied();
         let next_attributes = attributes.copied();
         let next_work_status = work_status.copied();
@@ -353,6 +359,7 @@ pub(super) fn refresh_visible_person_facts(
             || current.alive != next_alive
             || current.activity != next_activity
             || current.objective != next_objective
+            || current.day_plan != next_day_plan
             || current.navigation != next_navigation
             || current.attributes != next_attributes
             || current.work_status != next_work_status
@@ -380,6 +387,7 @@ pub(super) fn refresh_visible_person_facts(
             record.alive = next_alive;
             record.activity = next_activity;
             record.objective = next_objective;
+            record.day_plan = next_day_plan;
             record.navigation = next_navigation;
             record.attributes = next_attributes;
             record.work_status = next_work_status;
@@ -618,6 +626,35 @@ pub(super) fn style_person_rows(
     }
 }
 
+fn format_plan_minute(minute: u16) -> String {
+    format!("{:02}:{:02}", minute / 60, minute % 60)
+}
+
+fn format_day_plan(plan: shared::components::CharacterDayPlan) -> String {
+    let work = plan.work_minutes.map_or_else(
+        || plan.planned_work_status.label().to_string(),
+        |(start, end)| {
+            format!(
+                "work {}–{}",
+                format_plan_minute(start),
+                format_plan_minute(end)
+            )
+        },
+    );
+    format!(
+        "Day {} · wake {} · {} · meal {} · {} {}–{} ({}) · sleep {}",
+        plan.day,
+        format_plan_minute(plan.wake_minute),
+        work,
+        format_plan_minute(plan.meal_minute),
+        plan.leisure.label(),
+        format_plan_minute(plan.leisure_minutes.0),
+        format_plan_minute(plan.leisure_minutes.1),
+        plan.leisure_status.label(),
+        format_plan_minute(plan.sleep_minute),
+    )
+}
+
 pub(super) fn sync_detail_panel(
     people: Res<KnownPeople>,
     selected: Res<SelectedPerson>,
@@ -812,6 +849,9 @@ pub(super) fn sync_detail_panel(
                         )
                 },
             ),
+            DetailField::Schedule => record
+                .day_plan
+                .map_or_else(|| "No current calendar".to_string(), format_day_plan),
             DetailField::Affiliation => {
                 if record.known {
                     record.affiliation.label().to_string()

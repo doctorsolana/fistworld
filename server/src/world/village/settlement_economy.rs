@@ -5,6 +5,81 @@
 
 use super::*;
 
+/// Daily food accounting occurs immediately after breakfast, while embodied
+/// producers and porters refill the exchange during the following minutes.
+/// One Bakery cycle creates four Bread, so allow at most that single embodied
+/// delivery batch to be on the wrong side of the day boundary. Keeping this in
+/// ration units rather than a fraction of population prevents the tolerance
+/// growing into hundreds of free meals in a large town. The visible reserve
+/// target remains three full days, and production plus zero unmet meals remain
+/// independent requirements.
+const FOOD_SECURITY_BOUNDARY_TOLERANCE_RATIONS: u32 = 4;
+
+fn has_secure_food_day(residents: u32, economy: &SettlementEconomy) -> bool {
+    let target_stock = (residents as f32 * FOOD_SECURITY_TARGET_DAYS).ceil() as u32;
+    residents > 0
+        && economy
+            .edible_stock
+            .saturating_add(FOOD_SECURITY_BOUNDARY_TOLERANCE_RATIONS)
+            >= target_stock
+        && economy.recent_food_production >= residents as f32
+        && economy.unmet_food == 0
+}
+
+const UNREST_HUNGER_WEIGHT: f32 = 55.0;
+const UNREST_HOMELESSNESS_WEIGHT: f32 = 25.0;
+const UNREST_UNPAID_WAGE_WEIGHT: f32 = 20.0;
+const MAX_DAILY_UNREST_INCREASE: f32 = 10.0;
+const MAX_DAILY_UNREST_RECOVERY: f32 = 5.0;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct UnrestPressures {
+    hunger: f32,
+    housing: f32,
+    wages: f32,
+}
+
+impl UnrestPressures {
+    fn target(self) -> f32 {
+        (self.hunger + self.housing + self.wages).clamp(0.0, 100.0)
+    }
+}
+
+fn unrest_pressures(
+    residents: u32,
+    hungry: u32,
+    homeless: u32,
+    unpaid_workers: u16,
+) -> UnrestPressures {
+    if residents == 0 {
+        return UnrestPressures::default();
+    }
+    let residents = residents as f32;
+    UnrestPressures {
+        hunger: (hungry as f32 / residents).clamp(0.0, 1.0) * UNREST_HUNGER_WEIGHT,
+        housing: (homeless as f32 / residents).clamp(0.0, 1.0) * UNREST_HOMELESSNESS_WEIGHT,
+        wages: (f32::from(unpaid_workers) / residents).clamp(0.0, 1.0) * UNREST_UNPAID_WAGE_WEIGHT,
+    }
+}
+
+fn advance_unrest(current: f32, target: f32) -> f32 {
+    let current = if current.is_finite() {
+        current.clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    let target = if target.is_finite() {
+        target.clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    if target >= current {
+        current + (target - current).min(MAX_DAILY_UNREST_INCREASE)
+    } else {
+        current - (current - target).min(MAX_DAILY_UNREST_RECOVERY)
+    }
+}
+
 const FOOD_HISTORY_DAYS: usize = 3;
 
 #[derive(Debug)]
@@ -296,6 +371,7 @@ pub fn update_settlement_economies(
         &mut SettlementEconomy,
         Option<&mut MootMarket>,
         Option<&SettlementPolicies>,
+        Option<&MootAdministration>,
         Option<&mut shared::economy::CivicAccount>,
     )>,
     buildings: Query<(
@@ -306,6 +382,7 @@ pub fn update_settlement_economies(
         Option<&BusinessStaffingPolicy>,
         Option<&BusinessWagePolicy>,
         Option<&BusinessCondition>,
+        Option<&BusinessAccount>,
     )>,
     employment: Query<
         (
@@ -313,6 +390,7 @@ pub fn update_settlement_economies(
             Option<&shared::components::EmployedAt>,
             Option<&shared::components::CivicEmployment>,
             Option<&WorkStatus>,
+            Option<&HomeAssignment>,
         ),
         With<CharacterKind>,
     >,
@@ -357,7 +435,8 @@ pub fn update_settlement_economies(
     let mut filled_by_building = HashMap::<shared::components::BuildingId, u16>::new();
     let mut civic_filled = HashMap::<shared::components::SettlementId, u16>::new();
     let mut job_seekers = HashMap::<shared::components::SettlementId, u16>::new();
-    for (resident_of, employed_at, civic_job, status) in employment.iter() {
+    let mut homeless = HashMap::<shared::components::SettlementId, u32>::new();
+    for (resident_of, employed_at, civic_job, status, home) in employment.iter() {
         if employed_at.is_some() || civic_job.is_some() {
             *employed.entry(resident_of.0).or_default() += 1;
         }
@@ -376,22 +455,34 @@ pub fn update_settlement_economies(
             let seeking = job_seekers.entry(resident_of.0).or_default();
             *seeking = seeking.saturating_add(1);
         }
+        if home.is_none() {
+            let count = homeless.entry(resident_of.0).or_default();
+            *count = count.saturating_add(1);
+        }
     }
     let mut private_positions = HashMap::<shared::components::SettlementId, u16>::new();
     let mut private_filled = HashMap::<shared::components::SettlementId, u16>::new();
     let mut private_vacancies = HashMap::<shared::components::SettlementId, u16>::new();
     let mut best_open_wage = HashMap::<shared::components::SettlementId, u64>::new();
-    for (_, building, building_of, building_id, staffing, wage, condition) in buildings.iter() {
-        if !is_private_business(building.kind)
-            || condition.is_some_and(|condition| !condition.state.accepts_new_workers())
-        {
+    let mut unpaid_private_workers = HashMap::<shared::components::SettlementId, u16>::new();
+    for (_, building, building_of, building_id, staffing, wage, condition, account) in
+        buildings.iter()
+    {
+        if !is_private_business(building.kind) {
+            continue;
+        }
+        let filled = filled_by_building.get(building_id).copied().unwrap_or(0);
+        if account.is_some_and(|account| account.wage_arrears > 0) {
+            let unpaid = unpaid_private_workers.entry(building_of.0).or_default();
+            *unpaid = unpaid.saturating_add(filled);
+        }
+        if condition.is_some_and(|condition| !condition.state.accepts_new_workers()) {
             continue;
         }
         let target = staffing.map_or_else(
             || building.kind.positions(),
             |staffing| staffing.target_for(building.kind),
         );
-        let filled = filled_by_building.get(building_id).copied().unwrap_or(0);
         let vacant = u16::from(target).saturating_sub(filled);
         let positions = private_positions.entry(building_of.0).or_default();
         *positions = positions.saturating_add(u16::from(target));
@@ -419,9 +510,25 @@ pub fn update_settlement_economies(
         mut economy,
         mut market,
         policies,
+        administration,
         mut civic_account,
     ) in settlements.iter_mut()
     {
+        economy.housing_capacity = housing.get(settlement_id).copied().unwrap_or(0);
+        economy.homeless_residents = homeless.get(settlement_id).copied().unwrap_or(0);
+        let unpaid_civic = administration.map_or(0, |administration| {
+            administration
+                .payroll
+                .iter()
+                .filter(|entry| entry.active && entry.arrears > 0)
+                .count()
+                .min(usize::from(u16::MAX)) as u16
+        });
+        economy.unpaid_workers = unpaid_private_workers
+            .get(settlement_id)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(unpaid_civic);
         let day_state = runtime
             .by_settlement
             .entry(entity)
@@ -445,6 +552,16 @@ pub fn update_settlement_economies(
                 // Moot because they have no household budget or storage.
                 for (resident, intent, _, nutrition, home) in residents.iter_mut() {
                     if intent.settlement() != Some(entity) {
+                        continue;
+                    }
+                    // A direct Tavern meal is a real ration for this same meal
+                    // boundary. Do not also empty the household pantry or
+                    // charge the resident again at midnight.
+                    if nutrition
+                        .as_deref()
+                        .is_some_and(|nutrition| nutrition.last_meal_day == Some(meal_day))
+                    {
+                        consumed = consumed.saturating_add(1);
                         continue;
                     }
                     let fed = home.is_some_and(|home| {
@@ -672,6 +789,9 @@ pub fn update_settlement_economies(
                 local_residents.sort_unstable_by_key(|resident| resident.to_bits());
                 for (index, resident) in local_residents.into_iter().enumerate() {
                     if let Ok((_, _, _, Some(mut nutrition), _)) = residents.get_mut(resident) {
+                        if nutrition.last_meal_day == Some(meal_day) {
+                            continue;
+                        }
                         if index < consumed as usize {
                             nutrition.record_meal(meal_day);
                         } else {
@@ -682,6 +802,19 @@ pub fn update_settlement_economies(
                 consumed
             };
             economy.unmet_food = demand.saturating_sub(consumed);
+            let pressures = unrest_pressures(
+                demand,
+                economy.unmet_food,
+                economy.homeless_residents,
+                economy.unpaid_workers,
+            );
+            economy.unrest_hunger_pressure = pressures.hunger;
+            economy.unrest_housing_pressure = pressures.housing;
+            economy.unrest_wage_pressure = pressures.wages;
+            economy.unrest_target = pressures.target();
+            let before = economy.unrest;
+            economy.unrest = advance_unrest(economy.unrest, economy.unrest_target);
+            economy.unrest_change = economy.unrest - before;
             day_state.finish_day(consumed);
             day_state.last_world_day = day_state.last_world_day.saturating_add(1);
             advanced_day = true;
@@ -770,12 +903,19 @@ pub fn update_settlement_economies(
             .saturating_sub(economy.civic_filled_jobs);
         economy.job_seekers = job_seekers.get(settlement_id).copied().unwrap_or(0);
         economy.best_open_private_wage = best_open_wage.get(settlement_id).copied().unwrap_or(0);
+        let pressures = unrest_pressures(
+            residents,
+            economy.unmet_food,
+            economy.homeless_residents,
+            economy.unpaid_workers,
+        );
+        economy.unrest_hunger_pressure = pressures.hunger;
+        economy.unrest_housing_pressure = pressures.housing;
+        economy.unrest_wage_pressure = pressures.wages;
+        economy.unrest_target = pressures.target();
 
         if advanced_day {
-            let secure = residents > 0
-                && economy.reserve_days >= FOOD_SECURITY_TARGET_DAYS
-                && economy.recent_food_production >= residents as f32
-                && economy.unmet_food == 0;
+            let secure = has_secure_food_day(residents, &economy);
             economy.food_secure_days = if secure {
                 economy.food_secure_days.saturating_add(1)
             } else {
@@ -786,5 +926,56 @@ pub fn update_settlement_economies(
             // the economic evidence only; settlement development purchases,
             // stages and constructs the required materials before promotion.
         }
+    }
+}
+
+#[cfg(test)]
+mod unrest_tests {
+    use super::*;
+
+    #[test]
+    fn unrest_uses_only_the_three_visible_hardships() {
+        let pressures = unrest_pressures(20, 10, 4, 2);
+        assert!((pressures.hunger - 27.5).abs() < f32::EPSILON);
+        assert!((pressures.housing - 5.0).abs() < f32::EPSILON);
+        assert!((pressures.wages - 2.0).abs() < f32::EPSILON);
+        assert!((pressures.target() - 34.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn unrest_rises_and_recovers_at_readable_daily_limits() {
+        assert_eq!(advance_unrest(0.0, 100.0), 10.0);
+        assert_eq!(advance_unrest(70.0, 0.0), 65.0);
+        assert_eq!(advance_unrest(32.0, 34.5), 34.5);
+    }
+
+    #[test]
+    fn an_empty_foundation_is_calm() {
+        assert_eq!(unrest_pressures(0, 10, 10, 10), UnrestPressures::default());
+    }
+
+    #[test]
+    fn food_security_ignores_a_sub_delivery_boundary_rounding_gap() {
+        let almost_three_days = SettlementEconomy {
+            edible_stock: 57,
+            reserve_days: 2.85,
+            recent_food_production: 20.0,
+            unmet_food: 0,
+            ..default()
+        };
+        assert!(has_secure_food_day(20, &almost_three_days));
+
+        let real_shortage = SettlementEconomy {
+            edible_stock: 55,
+            reserve_days: 2.75,
+            ..almost_three_days
+        };
+        assert!(!has_secure_food_day(20, &real_shortage));
+
+        let hungry = SettlementEconomy {
+            unmet_food: 1,
+            ..almost_three_days
+        };
+        assert!(!has_secure_food_day(20, &hungry));
     }
 }

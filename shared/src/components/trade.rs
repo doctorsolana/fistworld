@@ -225,6 +225,18 @@ pub struct CompanyTradeRoute {
     pub maximum_purchase_price: u64,
     pub minimum_destination_price: u64,
     pub automatic: bool,
+    /// The appointed Company Master created and reviews this route through
+    /// bounded commercial AI. Player-authored timetables and fixed civic
+    /// contracts leave it false.
+    #[serde(default)]
+    pub autonomous_management: bool,
+    /// Forecast retained for explanation and later comparison with realised
+    /// results. It is not guaranteed income and may be negative after arrival.
+    #[serde(default)]
+    pub expected_trip_profit: i64,
+    /// Confidence in the possibly stale market report used at founding.
+    #[serde(default)]
+    pub decision_confidence: u8,
     pub active_contract: Option<TradeContractId>,
     pub assigned_caravaner: Option<PersonId>,
     /// Index into `TradeRouteSchedule`; replicated for map/company UI only.

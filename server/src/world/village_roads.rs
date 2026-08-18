@@ -2116,6 +2116,7 @@ fn settlement_kind_for_art(building_type: BuildingType) -> SettlementBuildingKin
         BuildingType::Bakery => SettlementBuildingKind::Bakery,
         BuildingType::PlaceholderStorageHall => SettlementBuildingKind::StorageHall,
         BuildingType::PlaceholderStoneQuarry => SettlementBuildingKind::StoneQuarry,
+        BuildingType::PlaceholderLivestockFarm => SettlementBuildingKind::LivestockFarm,
     }
 }
 

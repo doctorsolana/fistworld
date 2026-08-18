@@ -37,7 +37,27 @@ pub struct PermitPlanningDiagnostics {
 #[derive(Debug, Default)]
 struct CompanyExpansionFunds {
     available: u64,
+    /// Existing liabilities and payroll runway not presently backed by cash.
+    /// A sole owner must repair this before new-site capital is truly free.
+    reserve_shortfall: u64,
     entity: Option<Entity>,
+}
+
+impl CompanyExpansionFunds {
+    fn personal_contribution_required(&self, planned_cash: u64) -> u64 {
+        planned_cash
+            .saturating_sub(self.available)
+            .saturating_add(self.reserve_shortfall)
+    }
+
+    fn record_personal_contribution(&mut self, contribution: u64, permit_fee: u64) {
+        let repaired = contribution.min(self.reserve_shortfall);
+        self.reserve_shortfall -= repaired;
+        self.available = self
+            .available
+            .saturating_add(contribution.saturating_sub(repaired))
+            .saturating_sub(permit_fee);
+    }
 }
 
 fn debit_company_expansion(
@@ -85,6 +105,7 @@ mod company_funding_tests {
             .id();
         let mut funds = CompanyExpansionFunds {
             available: 800,
+            reserve_shortfall: 0,
             entity: Some(company_entity),
         };
         let mut state = SystemState::<
@@ -110,6 +131,22 @@ mod company_funding_tests {
                 .cash,
             850
         );
+    }
+
+    #[test]
+    fn owner_repairs_missing_payroll_before_funding_expansion() {
+        let mut funds = CompanyExpansionFunds {
+            available: 0,
+            reserve_shortfall: 300,
+            entity: None,
+        };
+        let planned_cash = 220 + 400;
+        let contribution = funds.personal_contribution_required(planned_cash);
+        assert_eq!(contribution, 920);
+
+        funds.record_personal_contribution(contribution, 220);
+        assert_eq!(funds.reserve_shortfall, 0);
+        assert_eq!(funds.available, 400);
     }
 }
 
@@ -200,8 +237,6 @@ fn next_civic_need(
         shared::components::SettlementTier::Village => {
             if !has(SettlementBuildingKind::Market) {
                 Some(SettlementBuildingKind::Market)
-            } else if !has(SettlementBuildingKind::Tavern) {
-                Some(SettlementBuildingKind::Tavern)
             } else {
                 None
             }
@@ -397,6 +432,15 @@ pub fn consider_permits(
     {
         let mut accounts = buildings.p1();
         for (entity, company_id, account) in accounts.iter_mut() {
+            let reserve_requirement = account
+                .wage_arrears
+                .saturating_add(account.tax_arrears)
+                .saturating_add(
+                    protected_payroll
+                        .get(company_id)
+                        .copied()
+                        .unwrap_or_default(),
+                );
             company_funds.insert(
                 *company_id,
                 CompanyExpansionFunds {
@@ -407,6 +451,7 @@ pub fn consider_permits(
                             .copied()
                             .unwrap_or_default(),
                     ),
+                    reserve_shortfall: reserve_requirement.saturating_sub(account.cash),
                     entity: Some(entity),
                 },
             );
@@ -478,6 +523,7 @@ pub fn consider_permits(
             residents: settlement.residents,
             farms: count(SettlementBuildingKind::Farmstead),
             fishers: count(SettlementBuildingKind::FishermansHut),
+            livestock_farms: count(SettlementBuildingKind::LivestockFarm),
             windmills: count(SettlementBuildingKind::Windmill),
             bakeries: count(SettlementBuildingKind::Bakery),
             storage_halls: count(SettlementBuildingKind::StorageHall),
@@ -491,6 +537,7 @@ pub fn consider_permits(
                 .unwrap_or(0),
             lumber_huts: count(SettlementBuildingKind::LumberjackHut),
             stone_quarries: count(SettlementBuildingKind::StoneQuarry),
+            taverns: count(SettlementBuildingKind::Tavern),
             houses: count(SettlementBuildingKind::House),
             // A Village does not create a speculative Stone shortage merely
             // because Town is its eventual next tier. Demand begins when its
@@ -521,6 +568,13 @@ pub fn consider_permits(
                     .saturating_mul(contract.good.bulk_per_unit())
             })
             .fold(0u32, u32::saturating_add);
+        if let Some(merchant_demand) = planning.merchant_demand.as_deref() {
+            signals.merchant_export_bulk = merchant_demand.bulk(*settlement_id);
+            signals.merchant_export_units = std::array::from_fn(|index| {
+                merchant_demand.units(*settlement_id, Good::ALL[index])
+            });
+            signals.recent_wheat_export_demand = merchant_demand.units(*settlement_id, Good::Wheat);
+        }
         for (_, building, building_of, _, condition, inventory, account, _, _, _, staffing) in
             business_read.iter()
         {
@@ -540,6 +594,9 @@ pub fn consider_permits(
                 signals.bread_stock = signals
                     .bread_stock
                     .saturating_add(inventory.amount(Good::Bread));
+                signals.meat_stock = signals
+                    .meat_stock
+                    .saturating_add(inventory.amount(Good::Meat));
                 signals.wood_stock = signals
                     .wood_stock
                     .saturating_add(inventory.amount(Good::Wood));
@@ -552,16 +609,18 @@ pub fn consider_permits(
                             .active_storage_free_bulk
                             .saturating_add(inventory.free_bulk());
                     }
-                } else if let Some(output) = super::business_output(building.kind) {
-                    let units = inventory.amount(output);
-                    let bulk = units.saturating_mul(output.bulk_per_unit());
-                    signals.stranded_output_bulk =
-                        signals.stranded_output_bulk.saturating_add(bulk);
-                    let quote =
-                        market.map_or(output.base_price(), |market| market.suggested_price(output));
-                    signals.stranded_output_value = signals
-                        .stranded_output_value
-                        .saturating_add(u64::from(units).saturating_mul(quote));
+                } else {
+                    for &output in super::commerce::business_outputs(building.kind) {
+                        let units = inventory.amount(output);
+                        let bulk = units.saturating_mul(output.bulk_per_unit());
+                        signals.stranded_output_bulk =
+                            signals.stranded_output_bulk.saturating_add(bulk);
+                        let quote = market
+                            .map_or(output.base_price(), |market| market.suggested_price(output));
+                        signals.stranded_output_value = signals
+                            .stranded_output_value
+                            .saturating_add(u64::from(units).saturating_mul(quote));
+                    }
                 }
             }
             if condition.is_some_and(|condition| !condition.state.counts_as_active_capacity()) {
@@ -571,6 +630,9 @@ pub fn consider_permits(
                     match building.kind {
                         SettlementBuildingKind::Farmstead => signals.recoverable_farms += 1,
                         SettlementBuildingKind::FishermansHut => signals.recoverable_fishers += 1,
+                        SettlementBuildingKind::LivestockFarm => {
+                            signals.recoverable_livestock_farms += 1
+                        }
                         SettlementBuildingKind::Windmill => signals.recoverable_windmills += 1,
                         SettlementBuildingKind::Bakery => signals.recoverable_bakeries += 1,
                         SettlementBuildingKind::LumberjackHut => {
@@ -615,7 +677,9 @@ pub fn consider_permits(
             }
             if matches!(
                 building.kind,
-                SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut
+                SettlementBuildingKind::Farmstead
+                    | SettlementBuildingKind::FishermansHut
+                    | SettlementBuildingKind::LivestockFarm
             ) {
                 // Completed shells are not food supply. Only the roster the
                 // owner is actually willing to fund counts as anticipated
@@ -642,6 +706,10 @@ pub fn consider_permits(
                     SettlementBuildingKind::FishermansHut => {
                         signals.anticipated_fish_output =
                             signals.anticipated_fish_output.saturating_add(anticipated);
+                    }
+                    SettlementBuildingKind::LivestockFarm => {
+                        signals.anticipated_meat_output =
+                            signals.anticipated_meat_output.saturating_add(anticipated);
                     }
                     _ => {}
                 }
@@ -676,9 +744,19 @@ pub fn consider_permits(
                         signals.recent_fish_output =
                             signals.recent_fish_output.saturating_add(recent);
                     }
+                    SettlementBuildingKind::LivestockFarm => {
+                        signals.recent_meat_output =
+                            signals.recent_meat_output.saturating_add(recent);
+                    }
                     SettlementBuildingKind::Windmill => {
+                        // A management label may leave `New` during the
+                        // opening day. Capacity is not proven until one full
+                        // trading day has actually closed; otherwise several
+                        // permit reviews can approve successors before the
+                        // first mill has an auditable result.
                         signals.unproven_windmill |= condition
-                            .is_some_and(|condition| condition.state == BusinessState::New);
+                            .is_some_and(|condition| condition.state == BusinessState::New)
+                            || account.previous_day.day == u32::MAX;
                         signals.recent_flour_output =
                             signals.recent_flour_output.saturating_add(recent);
                         signals.recent_windmill_input =
@@ -713,7 +791,8 @@ pub fn consider_permits(
                     }
                     SettlementBuildingKind::Bakery => {
                         signals.unproven_bakery |= condition
-                            .is_some_and(|condition| condition.state == BusinessState::New);
+                            .is_some_and(|condition| condition.state == BusinessState::New)
+                            || account.previous_day.day == u32::MAX;
                         signals.recent_bread_output =
                             signals.recent_bread_output.saturating_add(recent);
                         signals.recent_bakery_input = signals.recent_bakery_input.saturating_add(
@@ -758,6 +837,9 @@ pub fn consider_permits(
             signals.bread_stock = signals
                 .bread_stock
                 .saturating_add(market.listed_units(Good::Bread));
+            signals.meat_stock = signals
+                .meat_stock
+                .saturating_add(market.listed_units(Good::Meat));
             signals.wood_stock = signals
                 .wood_stock
                 .saturating_add(market.listed_units(Good::Wood));
@@ -769,7 +851,9 @@ pub fn consider_permits(
             if under.settlement == settlement_entity {
                 if matches!(
                     under.kind,
-                    SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut
+                    SettlementBuildingKind::Farmstead
+                        | SettlementBuildingKind::FishermansHut
+                        | SettlementBuildingKind::LivestockFarm
                 ) {
                     let anticipated = super::rated_daily_production(under.kind, under.quality)
                         .map_or(0, |capacity| capacity.output_units);
@@ -785,6 +869,12 @@ pub fn consider_permits(
                                 signals.anticipated_fish_output.saturating_add(anticipated);
                             signals.pending_fish_output =
                                 signals.pending_fish_output.saturating_add(anticipated);
+                        }
+                        SettlementBuildingKind::LivestockFarm => {
+                            signals.anticipated_meat_output =
+                                signals.anticipated_meat_output.saturating_add(anticipated);
+                            signals.pending_meat_output =
+                                signals.pending_meat_output.saturating_add(anticipated);
                         }
                         _ => {}
                     }
@@ -854,15 +944,16 @@ pub fn consider_permits(
         let holdings = |who: shared::components::PersonId| -> usize {
             holding_counts.get(&who).copied().unwrap_or(0)
         };
-        // NPC depots must belong to an established local branch. A player is
-        // still free to buy the tier-unlocked permit from the public board,
-        // but autonomous founders do not create a 2,400-bulk warehouse as
-        // their first or only business.
-        let export_warehouse_needed = signals.export_contract_bulk > 0;
+        // Local-overflow depots belong to established branches. A real
+        // regional opportunity may instead support a standalone merchant:
+        // its Storage Hall, porter and route are the whole young company.
+        // Empty speculative depots remain unattractive in isolated towns.
+        let export_warehouse_needed =
+            signals.export_contract_bulk > 0 || signals.merchant_export_bulk > 0;
         let may_found_storage = |who: shared::components::PersonId| -> bool {
-            company_by_master.contains_key(&who)
-                && private_site_counts.get(&who).copied().unwrap_or(0)
-                    >= if export_warehouse_needed { 1 } else { 2 }
+            (export_warehouse_needed
+                || (company_by_master.contains_key(&who)
+                    && private_site_counts.get(&who).copied().unwrap_or(0) >= 2))
                 && !storage_holders.contains(&who)
         };
         let mut blocked_portfolios = HashSet::<shared::components::PersonId>::new();
@@ -931,7 +1022,10 @@ pub fn consider_permits(
                 .get(company)
                 .map_or(0, |funds| funds.available);
             if personal_capital_companies.contains(company) {
-                personal.saturating_add(retained)
+                let repair = company_funds
+                    .get(company)
+                    .map_or(0, |funds| funds.reserve_shortfall);
+                personal.saturating_sub(repair).saturating_add(retained)
             } else {
                 retained
             }
@@ -951,6 +1045,11 @@ pub fn consider_permits(
             market,
             &policies,
         );
+        opportunities.retain(|opportunity| {
+            opportunity
+                .kind
+                .is_player_permit_available_at(settlement.tier)
+        });
         if clock
             .failed_fishing_terrain_versions
             .get(&settlement_entity)
@@ -1199,6 +1298,33 @@ pub fn consider_permits(
                         .filter_map(move |field| radius.map(|radius| (field, radius)))
                 }),
         );
+        // The fenced pasture is a permanent land use even though it is not a
+        // solid building. Reserve it from permits and roads from approval day.
+        occupied.extend(
+            placed
+                .iter()
+                .filter_map(|(building, building_of, position, rotation)| {
+                    if building_of.0 != *settlement_id {
+                        return None;
+                    }
+                    let rotation = rotation.map_or(0.0, |rotation| rotation.0);
+                    Some((
+                        building.kind.pasture_position(position.0, rotation)?,
+                        building.kind.pasture_half_extents()?.length() + 2.0,
+                    ))
+                }),
+        );
+        occupied.extend(pending.iter().filter_map(|(under, _)| {
+            if under.settlement != settlement_entity {
+                return None;
+            }
+            Some((
+                under
+                    .kind
+                    .pasture_position(under.position, under.rotation)?,
+                under.kind.pasture_half_extents()?.length() + 2.0,
+            ))
+        }));
 
         let village_roads: Vec<_> = roads
             .iter()
@@ -1748,7 +1874,7 @@ pub fn consider_permits(
                 let Some(funds) = company_funds.get_mut(&company) else {
                     continue;
                 };
-                let shortfall = prudent_company_cash.saturating_sub(funds.available);
+                let shortfall = funds.personal_contribution_required(prudent_company_cash);
                 if let Ok(mut wallet) = wallets.get_mut(builder) {
                     if wallet
                         .balance()
@@ -1775,10 +1901,7 @@ pub fn consider_permits(
                     continue;
                 }
                 account.contributed_capital = account.contributed_capital.saturating_add(shortfall);
-                funds.available = funds
-                    .available
-                    .saturating_add(shortfall)
-                    .saturating_sub(fee);
+                funds.record_personal_contribution(shortfall, fee);
                 contributed_capital = shortfall;
             } else {
                 if let Ok(mut wallet) = wallets.get_mut(builder) {
@@ -2028,6 +2151,10 @@ pub(crate) fn validate_manual_plot(
         if farmstead_earthwork_effort(terrain, position, rotation).is_none() {
             return Err("The farmyard or one of its fields needs excessive earthworks.".into());
         }
+    } else if kind == SettlementBuildingKind::LivestockFarm {
+        if livestock_earthwork_effort(terrain, position, rotation).is_none() {
+            return Err("The livestock yard or pasture needs excessive earthworks.".into());
+        }
     } else if slope_at(terrain, position.x, position.z) > MAX_BUILD_SLOPE {
         return Err("The ground is too steep for this building.".into());
     }
@@ -2109,6 +2236,44 @@ pub(crate) fn validate_manual_plot(
             }) {
                 return Err("Another building's access lane crosses a wheat field.".into());
             }
+        }
+    }
+    if let (Some(pasture), Some(half)) = (
+        kind.pasture_position(position, rotation),
+        kind.pasture_half_extents(),
+    ) {
+        if shared::components::minimum_rotated_rect_water_clearance(
+            terrain,
+            pasture,
+            half + Vec2::splat(2.0),
+            rotation,
+        ) < FREEBOARD
+        {
+            return Err("The livestock pasture reaches wet ground.".into());
+        }
+        let pasture_clearance = half.length() + 2.0;
+        if occupied.iter().any(|(other, other_clearance)| {
+            Vec2::new(pasture.x - other.x, pasture.z - other.z).length()
+                < pasture_clearance + other_clearance
+        }) {
+            return Err("The livestock pasture overlaps reserved land.".into());
+        }
+        if colliders.zip(derived).is_some_and(|(colliders, derived)| {
+            !crate::world::village_roads::rotated_rect_is_clear_of_permanent_props(
+                Vec2::new(pasture.x, pasture.z),
+                half,
+                rotation,
+                1.0,
+                colliders,
+                derived,
+            )
+        }) {
+            return Err("A permanent object blocks the livestock pasture.".into());
+        }
+        if roads.iter().any(|road| {
+            road.intersects_rotated_rect(Vec2::new(pasture.x, pasture.z), half, rotation, 1.0)
+        }) {
+            return Err("A road reservation crosses the livestock pasture.".into());
         }
     }
 
@@ -2292,6 +2457,27 @@ pub(super) fn farmstead_earthwork_effort(
     Some(total / 3.0)
 }
 
+fn livestock_earthwork_effort(
+    terrain: &WorldTerrain,
+    candidate: Vec3,
+    rotation: f32,
+) -> Option<f32> {
+    let kind = SettlementBuildingKind::LivestockFarm;
+    let definition = kind.art().definition();
+    let yard_center = definition.world_footprint_center(candidate, rotation);
+    let yard = rect_max_cut_fill(terrain, yard_center, definition.footprint * 0.5, rotation);
+    let pasture = kind.pasture_position(candidate, rotation)?;
+    let pasture_half = kind.pasture_half_extents()?;
+    let grazing = rect_max_cut_fill(
+        terrain,
+        Vec2::new(pasture.x, pasture.z),
+        pasture_half,
+        rotation,
+    );
+    (yard <= FARMYARD_MAX_CUT_FILL && grazing <= FARM_FIELD_MAX_CUT_FILL)
+        .then_some((yard / FARMYARD_MAX_CUT_FILL + grazing / FARM_FIELD_MAX_CUT_FILL) * 0.5)
+}
+
 /// How far above the waterline anything a settlement builds must stand, in metres.
 ///
 /// Not zero: ground exactly at the waterline is shoreline, and a farmstead with
@@ -2369,6 +2555,14 @@ fn plot_fits_navigation_bounds(
             .into_iter()
             .any(|field| !rect_is_inside(field, reserved_half))
         {
+            return false;
+        }
+    }
+    if let (Some(pasture), Some(half)) = (
+        kind.pasture_position(candidate, rotation),
+        kind.pasture_half_extents(),
+    ) {
+        if !rect_is_inside(pasture, half + Vec2::splat(2.0)) {
             return false;
         }
     }
@@ -2918,6 +3112,16 @@ pub(crate) fn road_access_blockers_for_plot(
                 + Vec2::splat(road_margin + shared::components::FARM_FIELD_TERRACE_MARGIN),
             rotation,
         }));
+    }
+    if let (Some(pasture), Some(half)) = (
+        kind.pasture_position(position, rotation),
+        kind.pasture_half_extents(),
+    ) {
+        blockers.push(RoadAccessBlocker {
+            center: Vec2::new(pasture.x, pasture.z),
+            half: half + Vec2::splat(road_margin + 1.0),
+            rotation,
+        });
     }
     blockers
 }
@@ -3656,6 +3860,7 @@ fn find_site_with_plan_diagnostics(
         | SettlementBuildingKind::Bakery
         | SettlementBuildingKind::StorageHall => 18.0,
         SettlementBuildingKind::Farmstead
+        | SettlementBuildingKind::LivestockFarm
         | SettlementBuildingKind::LumberjackHut
         | SettlementBuildingKind::FishermansHut
         | SettlementBuildingKind::Windmill
@@ -3687,6 +3892,7 @@ fn find_site_with_plan_diagnostics(
     let resource_scored = matches!(
         kind,
         SettlementBuildingKind::Farmstead
+            | SettlementBuildingKind::LivestockFarm
             | SettlementBuildingKind::LumberjackHut
             | SettlementBuildingKind::Windmill
             | SettlementBuildingKind::StoneQuarry
@@ -3761,6 +3967,12 @@ fn find_site_with_plan_diagnostics(
             let rotation = rotation_facing_frontage(candidate2, frontage);
             let earthwork_effort = if kind == SettlementBuildingKind::Farmstead {
                 let Some(effort) = farmstead_earthwork_effort(terrain, candidate, rotation) else {
+                    reject!(earthworks);
+                    continue;
+                };
+                effort
+            } else if kind == SettlementBuildingKind::LivestockFarm {
+                let Some(effort) = livestock_earthwork_effort(terrain, candidate, rotation) else {
                     reject!(earthworks);
                     continue;
                 };
@@ -3847,6 +4059,42 @@ fn find_site_with_plan_diagnostics(
                     }
                 }
             }
+            if let (Some(pasture), Some(half)) = (
+                kind.pasture_position(candidate, rotation),
+                kind.pasture_half_extents(),
+            ) {
+                if shared::components::minimum_rotated_rect_water_clearance(
+                    terrain,
+                    pasture,
+                    half + Vec2::splat(2.0),
+                    rotation,
+                ) < FREEBOARD
+                {
+                    reject!(water);
+                    continue 'candidate;
+                }
+                if colliders.zip(derived).is_some_and(|(colliders, derived)| {
+                    !crate::world::village_roads::rotated_rect_is_clear_of_permanent_props(
+                        Vec2::new(pasture.x, pasture.z),
+                        half,
+                        rotation,
+                        1.0,
+                        colliders,
+                        derived,
+                    )
+                }) {
+                    reject!(props);
+                    continue 'candidate;
+                }
+                let pasture_clearance = half.length() + 2.0;
+                if occupied.iter().any(|(other, other_clearance)| {
+                    Vec2::new(pasture.x - other.x, pasture.z - other.z).length()
+                        < pasture_clearance + other_clearance
+                }) {
+                    reject!(occupied);
+                    continue 'candidate;
+                }
+            }
             let footprint_radius = kind.art().definition().root_footprint_radius() + 0.45;
             if roads.iter().any(|road| {
                 road.contains_reserved_point(Vec2::new(candidate.x, candidate.z), footprint_radius)
@@ -3887,6 +4135,22 @@ fn find_site_with_plan_diagnostics(
                         reject!(roads);
                         continue 'candidate;
                     }
+                }
+            }
+            if let (Some(pasture), Some(half)) = (
+                kind.pasture_position(candidate, rotation),
+                kind.pasture_half_extents(),
+            ) {
+                let center = Vec2::new(pasture.x, pasture.z);
+                if roads
+                    .iter()
+                    .any(|road| road.intersects_rotated_rect(center, half, rotation, 1.0))
+                    || planned_accesses
+                        .iter()
+                        .any(|access| access.intersects_circle(center, half.length() + 1.0))
+                {
+                    reject!(roads);
+                    continue 'candidate;
                 }
             }
             if resource_scored {

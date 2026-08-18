@@ -351,7 +351,9 @@ pub fn review_business_management(
             continue;
         }
 
-        let Some(good) = super::super::business_output(building.kind) else {
+        let Some(good) = super::super::business_output(building.kind)
+            .or_else(|| (building.kind == SettlementBuildingKind::Tavern).then_some(Good::Bread))
+        else {
             if building.kind == SettlementBuildingKind::StorageHall {
                 // A depot is company infrastructure: its wages are visible in
                 // the site ledger and consolidated company profit, but the
@@ -412,6 +414,8 @@ pub fn review_business_management(
                         .remove::<LumberjackRoutine>()
                         .remove::<QuarryRoutine>()
                         .remove::<ProcessingRoutine>()
+                        .remove::<TavernWorkerRoutine>()
+                        .remove::<TavernVisitRoutine>()
                         .remove::<WorkplaceDoorTransit>()
                         .remove::<BuildingDoorUse>()
                         .remove::<PierTraversal>()
@@ -840,6 +844,8 @@ pub fn review_business_management(
                     .remove::<LumberjackRoutine>()
                     .remove::<QuarryRoutine>()
                     .remove::<ProcessingRoutine>()
+                    .remove::<TavernWorkerRoutine>()
+                    .remove::<TavernVisitRoutine>()
                     .remove::<WorkplaceDoorTransit>()
                     .remove::<BuildingDoorUse>()
                     .remove::<PierTraversal>()
@@ -866,6 +872,82 @@ pub fn review_business_management(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn liquidating_tavern_releases_its_real_pantry_to_the_market_path() {
+        let mut app = App::new();
+        app.add_systems(Update, review_business_management);
+        let mut clock = WorldTime::new_default();
+        clock.day = 8;
+        app.world_mut().spawn(clock);
+
+        let settlement_id = shared::components::SettlementId(501);
+        app.world_mut().spawn((
+            settlement_id,
+            Settlement {
+                name: "Meadow".into(),
+                tier: shared::components::SettlementTier::Village,
+                residents: 20,
+                treasury: 0,
+            },
+            MootMarket::founding(),
+        ));
+        let company_id = shared::components::CompanyId(502);
+        app.world_mut()
+            .spawn((company_id, shared::economy::CompanyAccount::default()));
+
+        let mut pantry = GoodsInventory::new(100);
+        assert_eq!(pantry.add(Good::Meat, 2), 2);
+        let tavern = app
+            .world_mut()
+            .spawn((
+                shared::components::BuildingId(503),
+                shared::components::BuildingOf(settlement_id),
+                shared::components::OperatedBy(company_id),
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::Tavern,
+                    settlement: "Meadow".into(),
+                    owner: None,
+                    quality: 1.0,
+                    workers: Vec::new(),
+                },
+                pantry,
+                BusinessAccount::default(),
+                BusinessSalePolicy {
+                    collection_enabled: false,
+                    ..default()
+                },
+                BusinessWagePolicy::default(),
+                BusinessManagementPolicy::default(),
+                BusinessCondition {
+                    state: BusinessState::Liquidating,
+                    opened_day: 1,
+                    ..default()
+                },
+                BusinessLiquidation::insolvency(7, Vec::new()),
+            ))
+            .id();
+
+        app.update();
+
+        let entity = app.world().entity(tavern);
+        assert!(
+            entity
+                .get::<BusinessSalePolicy>()
+                .unwrap()
+                .collection_enabled
+        );
+        assert_eq!(
+            entity.get::<BusinessCondition>().unwrap().state,
+            BusinessState::Liquidating
+        );
+        assert_eq!(
+            entity.get::<GoodsInventory>().unwrap().amount(Good::Meat),
+            2,
+            "management exposes the pantry; the physical porter moves it later"
+        );
+        assert!(entity.contains::<BusinessLiquidation>());
+    }
 
     #[test]
     fn selling_out_raises_price_but_stale_stock_lowers_it() {

@@ -190,6 +190,17 @@ pub(crate) fn rated_daily_production(
         });
     }
 
+    if kind == SettlementBuildingKind::LivestockFarm {
+        let worker_seconds = RATED_SHIFT_SECONDS * f32::from(kind.positions());
+        let output_units =
+            ((worker_seconds / livestock_seconds_per_meat(site_quality)).floor() as u32).max(1);
+        return Some(DailyProductionEstimate {
+            output: Good::Meat,
+            output_units,
+            input: None,
+        });
+    }
+
     let seconds_per_unit = match kind {
         SettlementBuildingKind::Farmstead => farmer_seconds_per_wheat(site_quality),
         SettlementBuildingKind::FishermansHut => fisher_seconds_per_food(site_quality),
@@ -255,6 +266,27 @@ pub(crate) fn quarry_seconds_per_stone(site_quality: f32) -> f32 {
     300.0 - 120.0 * site_quality.clamp(0.0, 1.0)
 }
 
+/// Productive tending time for one Meat ration and its paired Wool by-product.
+/// A fully staffed perfect pasture rates six Meat per ordinary day; poor land
+/// remains viable at roughly four, while fish and grain keep distinct niches.
+pub(crate) fn livestock_seconds_per_meat(site_quality: f32) -> f32 {
+    540.0 - 180.0 * site_quality.clamp(0.0, 1.0)
+}
+
+/// Materialise paired livestock products atomically. A full store must never
+/// create Meat while silently dropping its Wool by-product (or vice versa).
+pub(crate) fn produce_livestock_cycles(
+    inventory: &mut shared::economy::GoodsInventory,
+    requested: u32,
+) -> u32 {
+    let cycle_bulk = Good::Meat.bulk_per_unit() + Good::Wool.bulk_per_unit();
+    let cycles = requested.min(inventory.free_bulk() / cycle_bulk.max(1));
+    let meat = inventory.add(Good::Meat, cycles);
+    let wool = inventory.add(Good::Wool, meat);
+    debug_assert_eq!(wool, meat);
+    meat
+}
+
 fn staffed_daily_units(full_staffed_units: u32, workers: usize, positions: u8) -> u32 {
     let positions = u32::from(positions.max(1));
     // A new processor stocks for its first hire instead of remaining empty
@@ -278,6 +310,20 @@ pub(crate) fn rated_input_stock_targets(
     coverage_days: u8,
 ) -> Option<InputStockTargets> {
     let coverage_days = coverage_days.min(MAXIMUM_STOCK_COVERAGE_DAYS);
+    if kind == SettlementBuildingKind::Tavern && Good::TAVERN_INPUTS.contains(&good) {
+        let full_staffed_units = match good {
+            Good::Bread => 4,
+            Good::Meat | Good::Wheat => 2,
+            _ => return None,
+        };
+        let daily_units = staffed_daily_units(full_staffed_units, workers, kind.positions()).max(1);
+        let target_units = daily_units.saturating_mul(u32::from(coverage_days));
+        return Some(InputStockTargets {
+            daily_units,
+            reorder_below: target_units.div_ceil(2).min(target_units),
+            target_units,
+        });
+    }
     let capacity = rated_daily_production(kind, 1.0)?;
     let (input, full_staffed_units) = capacity.input?;
     if input != good {
@@ -547,6 +593,7 @@ mod tests {
         let lumber = rated_daily_production(SettlementBuildingKind::LumberjackHut, 1.0).unwrap();
         let mill = rated_daily_production(SettlementBuildingKind::Windmill, 0.1).unwrap();
         let bakery = rated_daily_production(SettlementBuildingKind::Bakery, 0.9).unwrap();
+        let livestock = rated_daily_production(SettlementBuildingKind::LivestockFarm, 1.0).unwrap();
 
         assert_eq!(farm.output, Good::Wheat);
         assert_eq!(farm.output_units, 12);
@@ -561,6 +608,24 @@ mod tests {
         assert_eq!(bakery.output, Good::Bread);
         assert_eq!(bakery.output_units, 60);
         assert_eq!(bakery.output_per_input(), 2);
+        assert_eq!(livestock.output, Good::Meat);
+        assert_eq!(livestock.output_units, 6);
+        assert_eq!(livestock.input, None);
+        assert_eq!(
+            rated_daily_production(SettlementBuildingKind::LivestockFarm, 0.0)
+                .unwrap()
+                .output_units,
+            4,
+        );
+    }
+
+    #[test]
+    fn livestock_cycles_create_paired_meat_and_wool_without_overfilling() {
+        let mut inventory = shared::economy::GoodsInventory::new(7);
+        assert_eq!(produce_livestock_cycles(&mut inventory, 10), 2);
+        assert_eq!(inventory.amount(Good::Meat), 2);
+        assert_eq!(inventory.amount(Good::Wool), 2);
+        assert_eq!(inventory.used_bulk(), 6);
     }
 
     #[test]

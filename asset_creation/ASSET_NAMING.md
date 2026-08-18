@@ -92,6 +92,7 @@ are compatibility input, not registered props.
 | Town Hall | `houses/town_hall.blend` | `buildings/village/TownHall.glb` | `BuildingType::TownHall` |
 | Carried goods | `resources/carried_resources.blend` | `resources/carried/*.glb` | item manifest |
 | Work tools | `resources/work_tools.blend` | `tools/*.glb` | item manifest |
+| Starter dinghy | `boats/dinghy.blend` | `vehicles/boats/Dinghy.glb` | boat mechanics entity |
 
 The three civic levels have distinct runtime identities because each GLB has
 its own footprint and baked collider. `SettlementBuildingKind::Hall` remains

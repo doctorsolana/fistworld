@@ -11,10 +11,10 @@ use lightyear::prelude::{NetworkTarget, Replicate};
 
 use shared::components::{
     CharacterActivity, CharacterName, CivicStrategy, MootAdministration, PlayerPosition,
-    PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementTier,
-    TimeWarp, VillageRoad, WorldTime,
+    PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
+    SettlementTier, TimeWarp, VillageRoad, WorldTime,
 };
-use shared::economy::{Good, GoodsInventory, MootMarket, SettlementEconomy};
+use shared::economy::{Good, GoodsInventory, MarketSeller, MootMarket, SettlementEconomy};
 use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
 use shared::worldgen::WorldBiome;
 
@@ -26,6 +26,12 @@ pub(crate) const TRIPLE_STRESS_VILLAGERS_PER_VILLAGE: usize = 200;
 pub(crate) const DENSE_STRESS_VILLAGERS: usize = 1_000;
 pub(crate) const TRADE_FOUNDERS_PER_VILLAGE: usize = 12;
 pub(crate) const TRADE_TARGET_RESIDENTS_PER_VILLAGE: usize = 35;
+/// A bounded shelf which is restored once per lab day. It behaves like an
+/// effectively inexhaustible producer over a long run without creating an
+/// unbounded inventory or bypassing physical market purchases.
+pub(crate) const MERCHANT_BEACON_BREAD_TARGET: u32 = 192;
+/// Ten pennies is displayed as 0.10 coin in the market UI.
+pub(crate) const MERCHANT_BEACON_BREAD_PRICE: u64 = 10;
 const DEFAULT_LAB_WARP: f32 = 1.0;
 // The normal lab crosses the real Hamlet -> Village population threshold and
 // also exercises the late-immigration recovery path every run.
@@ -49,6 +55,172 @@ const LAB_COLDBARROW_ANCHOR: Vec2 = Vec2::new(-278.0, -428.0);
 const LAB_GREENWOOD_ANCHOR: Vec2 = Vec2::new(-108.0, 220.0);
 const LAB_STONE_ANCHOR: Vec2 = Vec2::new(-390.0, 102.0);
 
+/// Server-only marker for the controlled regional-commerce fixture. Ordinary
+/// settlements can never acquire this component, so the artificial supply is
+/// structurally unable to leak into a normal world or another lab scenario.
+#[derive(Component, Debug, Default)]
+pub(crate) struct MerchantTradeBeacon {
+    last_refill_day: Option<u32>,
+    marketplace_spawned: bool,
+    pub(crate) injected_units: u64,
+}
+
+fn merchant_beacon_market_plot(
+    terrain: &WorldTerrain,
+    hall: Vec3,
+    colliders: Option<&crate::collision::library::StaticColliders>,
+    derived: Option<&crate::collision::library::DerivedColliderLibrary>,
+) -> Option<village::ManualPlotApproval> {
+    let occupied = [(hall, SettlementBuildingKind::Hall.clearance())];
+    for radius in [30.0_f32, 38.0, 46.0, 54.0] {
+        for step in 0..16 {
+            let angle = std::f32::consts::TAU * step as f32 / 16.0;
+            let x = hall.x + angle.cos() * radius;
+            let z = hall.z + angle.sin() * radius;
+            let position = Vec3::new(x, terrain.get_height(x, z), z);
+            let toward_hall = Vec2::new(hall.x - x, hall.z - z).normalize_or_zero();
+            // Authored doors face local -Z. Point that face back toward the
+            // Hall so the artificial endpoint remains visually coherent.
+            let rotation = (-toward_hall.x).atan2(-toward_hall.y);
+            if let Ok(approval) = village::validate_manual_plot(
+                terrain,
+                hall,
+                SettlementBuildingKind::Market,
+                position,
+                rotation,
+                &occupied,
+                &[],
+                &[],
+                &[],
+                colliders,
+                derived,
+            ) {
+                return Some(approval);
+            }
+        }
+    }
+    None
+}
+
+/// Give the controlled source its one piece of artificial infrastructure.
+/// The beacon has no residents who could build it, so the fixture places a
+/// real completed Marketplace on valid reachable ground. Nothing here grants
+/// a company, warehouse, employee, route or commercial knowledge.
+pub(crate) fn ensure_merchant_beacon_marketplace(
+    mut commands: Commands,
+    terrain: Res<WorldTerrain>,
+    colliders: Option<Res<crate::collision::library::StaticColliders>>,
+    derived: Option<Res<crate::collision::library::DerivedColliderLibrary>>,
+    mut beacons: Query<(
+        &SettlementId,
+        &Settlement,
+        &PlayerPosition,
+        &mut MootMarket,
+        &mut MerchantTradeBeacon,
+    )>,
+    buildings: Query<(&shared::components::BuildingOf, &SettlementBuilding)>,
+) {
+    for (settlement_id, settlement, hall, mut market, mut beacon) in &mut beacons {
+        if beacon.marketplace_spawned
+            || buildings.iter().any(|(building_of, building)| {
+                building_of.0 == *settlement_id && building.kind == SettlementBuildingKind::Market
+            })
+        {
+            beacon.marketplace_spawned = true;
+            continue;
+        }
+        let Some(plot) =
+            merchant_beacon_market_plot(&terrain, hall.0, colliders.as_deref(), derived.as_deref())
+        else {
+            warn!(
+                "Merchant Beacon could not place its controlled Marketplace near {:.1},{:.1}",
+                hall.0.x, hall.0.z,
+            );
+            continue;
+        };
+        let kind = SettlementBuildingKind::Market;
+        commands.spawn((
+            SettlementBuilding {
+                kind,
+                settlement: settlement.name.clone(),
+                owner: None,
+                quality: plot.quality,
+                workers: Vec::new(),
+            },
+            shared::components::BuildingOf(*settlement_id),
+            shared::components::MarketLevel::Earthen,
+            GoodsInventory::new(kind.storage_bulk_capacity()),
+            PlayerPosition(plot.position),
+            PlayerRotation(plot.rotation),
+            shared::building::PlacedBuilding {
+                building_type: kind.art(),
+                rotation: plot.rotation,
+            },
+            shared::building::BuildingPosition(plot.position),
+            Replicate::to_clients(NetworkTarget::All),
+        ));
+        market.unlock_trade_tier(shared::economy::MarketTradeTier::Marketplace);
+        beacon.marketplace_spawned = true;
+        info!(
+            "Merchant Beacon staged its controlled Marketplace at {:.1},{:.1}",
+            plot.position.x, plot.position.z,
+        );
+    }
+}
+
+fn replenish_merchant_beacon_shelf(
+    settlement_id: SettlementId,
+    inventory: &mut GoodsInventory,
+    market: &mut MootMarket,
+) -> u32 {
+    if !market.supports_regional_trade() {
+        return 0;
+    }
+    let seller = MarketSeller::Treasury(settlement_id);
+    let listed = market.seller_listed_units(seller, Good::Bread);
+    let requested = MERCHANT_BEACON_BREAD_TARGET.saturating_sub(listed);
+    let accepted = inventory.add(Good::Bread, requested);
+    market.consign(seller, Good::Bread, accepted, MERCHANT_BEACON_BREAD_PRICE);
+    market.refresh_all(inventory);
+    accepted
+}
+
+/// Restore the controlled Bread shelf once per world day through the beacon's
+/// real prebuilt Marketplace. Purchases still spend real
+/// company money, remove physical stock, pay the named Treasury seller and
+/// require an embodied caravan; only the source production is artificial.
+pub(crate) fn maintain_merchant_beacon_supply(
+    world_time: Query<&WorldTime>,
+    mut beacons: Query<(
+        &SettlementId,
+        &mut GoodsInventory,
+        &mut MootMarket,
+        &mut MerchantTradeBeacon,
+    )>,
+) {
+    let day = world_time.iter().next().map_or(0, |clock| clock.day);
+    for (settlement_id, mut inventory, mut market, mut beacon) in &mut beacons {
+        if beacon.last_refill_day == Some(day) || !market.supports_regional_trade() {
+            continue;
+        }
+        let supplied = replenish_merchant_beacon_shelf(*settlement_id, &mut inventory, &mut market);
+        beacon.last_refill_day = Some(day);
+        beacon.injected_units = beacon.injected_units.saturating_add(u64::from(supplied));
+        info!(
+            "Merchant Beacon day {}: restored {} Bread at {} coin; shelf={}/{} lifetime_injected={}",
+            day.saturating_add(1),
+            supplied,
+            shared::economy::format_money(MERCHANT_BEACON_BREAD_PRICE),
+            market.seller_listed_units(
+                MarketSeller::Treasury(*settlement_id),
+                Good::Bread
+            ),
+            MERCHANT_BEACON_BREAD_TARGET,
+            beacon.injected_units,
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LabScenario {
     Secure,
@@ -59,6 +231,7 @@ pub(crate) enum LabScenario {
     EconomySoak,
     StoneComparison,
     TradeComparison,
+    MerchantBeacon,
     TripleStress,
     DenseStress,
 }
@@ -84,10 +257,13 @@ impl LabScenario {
             "trade" | "trade-comparison" | "stone-trade" | "caravan" => {
                 Self::TradeComparison
             }
+            "merchant-beacon" | "bread-trade" | "merchant-test" | "trade-beacon" => {
+                Self::MerchantBeacon
+            }
             "triple" | "triple-stress" | "stress" | "three" => Self::TripleStress,
             "dense" | "dense-stress" | "thousand" | "1000" => Self::DenseStress,
             value => panic!(
-                "unknown FISTWORLD_LAB_SCENARIO '{value}'; use secure, inland-meadow, policy-comparison, poor, dual, economy-soak, stone-comparison, trade-comparison, triple-stress, or dense-stress"
+                "unknown FISTWORLD_LAB_SCENARIO '{value}'; use secure, inland-meadow, policy-comparison, poor, dual, economy-soak, stone-comparison, trade-comparison, merchant-beacon, triple-stress, or dense-stress"
             ),
         }
     }
@@ -131,6 +307,10 @@ impl LabScenario {
         self == Self::TradeComparison
     }
 
+    pub(crate) fn is_merchant_beacon(self) -> bool {
+        self == Self::MerchantBeacon
+    }
+
     pub(crate) fn is_triple_stress(self) -> bool {
         self == Self::TripleStress
     }
@@ -148,7 +328,8 @@ impl LabScenario {
             && (self.includes_secure()
                 || self.includes_inland_meadow()
                 || self.is_policy_comparison()
-                || self.is_trade_comparison())
+                || self.is_trade_comparison()
+                || self.is_merchant_beacon())
     }
 
     pub(crate) fn residents_per_village(self) -> usize {
@@ -156,7 +337,7 @@ impl LabScenario {
             Self::EconomySoak => 0,
             Self::TripleStress => TRIPLE_STRESS_VILLAGERS_PER_VILLAGE,
             Self::DenseStress => DENSE_STRESS_VILLAGERS,
-            Self::TradeComparison => TRADE_FOUNDERS_PER_VILLAGE,
+            Self::TradeComparison | Self::MerchantBeacon => TRADE_FOUNDERS_PER_VILLAGE,
             Self::Poor => POOR_VILLAGERS,
             Self::Secure
             | Self::InlandMeadow
@@ -171,6 +352,7 @@ impl LabScenario {
                 | Self::PolicyComparison
                 | Self::StoneComparison
                 | Self::TradeComparison
+                | Self::MerchantBeacon
                 | Self::Poor
                 | Self::Dual
         ) {
@@ -192,6 +374,7 @@ impl LabScenario {
             Self::PolicyComparison => self.residents_per_village().saturating_mul(2),
             Self::StoneComparison => self.residents_per_village().saturating_mul(2),
             Self::TradeComparison => self.residents_per_village().saturating_mul(2),
+            Self::MerchantBeacon => self.residents_per_village(),
             _ => {
                 (usize::from(self.includes_secure())
                     + usize::from(self.includes_inland_meadow())
@@ -549,6 +732,11 @@ pub(crate) fn choose_policy_comparison_sites(
     for (_, hall, trees, farmland) in candidates.into_iter().take(160) {
         if village::find_fishing_site(terrain, hall, &[], &[]).is_some()
             || !village::lumber_plot_has_reachable_tree(terrain, hall)
+            || !crate::world::village_roads::overland_trade_corridor_exists(
+                terrain,
+                first_point,
+                Vec2::new(hall.x, hall.z),
+            )
         {
             continue;
         }
@@ -1075,6 +1263,27 @@ fn trade_comparison_arrival_waves(founders_per_village: usize) -> Vec<LabArrival
     waves
 }
 
+/// Grow only the ordinary Meadow economy at a measured pace. The remote beacon
+/// is deliberately a zero-population market fixture: it supplies the price
+/// signal, while every entrepreneur and logistics worker must come from the
+/// town whose import behaviour the scenario is testing.
+fn merchant_beacon_arrival_waves(founders_per_village: usize) -> Vec<LabArrivalWave> {
+    let mut waves = Vec::new();
+    let mut remaining = TRADE_TARGET_RESIDENTS_PER_VILLAGE.saturating_sub(founders_per_village);
+    let mut day = 13;
+    while remaining > 0 {
+        let count = remaining.min(2);
+        waves.push(LabArrivalWave {
+            day,
+            count,
+            target: LabArrivalTarget::Meadow,
+        });
+        remaining -= count;
+        day += 1;
+    }
+    waves
+}
+
 /// All configured migration waves, shared by the rendered fixture and the
 /// headless evidence run. The daily schedule is additive; set the legacy
 /// one-shot count to zero when only recurring arrivals are wanted.
@@ -1085,6 +1294,9 @@ pub(crate) fn lab_arrival_waves() -> Vec<LabArrivalWave> {
     }
     if scenario.is_trade_comparison() {
         return trade_comparison_arrival_waves(scenario.residents_per_village());
+    }
+    if scenario.is_merchant_beacon() {
+        return merchant_beacon_arrival_waves(scenario.residents_per_village());
     }
     let daily_count = std::env::var("FISTWORLD_LAB_DAILY_ARRIVALS")
         .ok()
@@ -1162,24 +1374,26 @@ fn spawn_runtime_village(
     hall_position: Vec3,
     resident_count: usize,
     initial_tier: SettlementTier,
-) {
+) -> Entity {
     let hall_inventory = GoodsInventory::new_partitioned(shared::economy::capacity::HALL);
     let mut policies = shared::components::SettlementPolicies::default();
     policies.strategy = strategy;
-    commands.spawn((
-        Settlement {
-            name: name.to_string(),
-            tier: initial_tier,
-            residents: 0,
-            treasury: shared::economy::STARTING_TREASURY_MONEY,
-        },
-        hall_inventory,
-        shared::economy::MootMarket::founding(),
-        policies,
-        PlayerPosition(hall_position),
-        PlayerRotation(0.0),
-        Replicate::to_clients(NetworkTarget::All),
-    ));
+    let settlement_entity = commands
+        .spawn((
+            Settlement {
+                name: name.to_string(),
+                tier: initial_tier,
+                residents: 0,
+                treasury: shared::economy::STARTING_TREASURY_MONEY,
+            },
+            hall_inventory,
+            shared::economy::MootMarket::founding(),
+            policies,
+            PlayerPosition(hall_position),
+            PlayerRotation(0.0),
+            Replicate::to_clients(NetworkTarget::All),
+        ))
+        .id();
 
     spawn_runtime_villagers(
         commands,
@@ -1192,6 +1406,7 @@ fn spawn_runtime_village(
         None,
         None,
     );
+    settlement_entity
 }
 
 fn spawn_runtime_villagers(
@@ -1431,6 +1646,57 @@ mod tests {
         }
         assert!(waves.iter().all(|wave| wave.count <= 2));
     }
+
+    #[test]
+    fn merchant_beacon_grows_only_the_real_meadow_economy() {
+        assert!(
+            LabScenario::MerchantBeacon.runs_arrival_waves(),
+            "changing the Beacon's terrain category must not disable its real immigration schedule"
+        );
+        let waves = merchant_beacon_arrival_waves(TRADE_FOUNDERS_PER_VILLAGE);
+        assert_eq!(waves.iter().map(|wave| wave.count).sum::<usize>(), 23);
+        assert_eq!(waves.iter().map(|wave| wave.day).min(), Some(13));
+        assert_eq!(waves.iter().map(|wave| wave.day).max(), Some(24));
+        assert!(waves
+            .iter()
+            .all(|wave| wave.target == LabArrivalTarget::Meadow));
+        assert_eq!(
+            TRADE_FOUNDERS_PER_VILLAGE + waves.iter().map(|wave| wave.count).sum::<usize>(),
+            TRADE_TARGET_RESIDENTS_PER_VILLAGE
+        );
+        assert!(waves.iter().all(|wave| wave.count <= 2));
+    }
+
+    #[test]
+    fn merchant_beacon_is_bounded_physical_and_marketplace_gated() {
+        let settlement = SettlementId(42);
+        let mut inventory = GoodsInventory::new_partitioned(shared::economy::capacity::HALL);
+        let mut market = MootMarket::founding();
+
+        assert_eq!(
+            replenish_merchant_beacon_shelf(settlement, &mut inventory, &mut market),
+            0
+        );
+        assert_eq!(inventory.amount(Good::Bread), 0);
+        assert_eq!(market.listed_units(Good::Bread), 0);
+
+        market.unlock_trade_tier(shared::economy::MarketTradeTier::Marketplace);
+        assert_eq!(
+            replenish_merchant_beacon_shelf(settlement, &mut inventory, &mut market),
+            MERCHANT_BEACON_BREAD_TARGET
+        );
+        assert_eq!(inventory.amount(Good::Bread), MERCHANT_BEACON_BREAD_TARGET);
+        assert_eq!(
+            market.seller_listed_units(MarketSeller::Treasury(settlement), Good::Bread),
+            MERCHANT_BEACON_BREAD_TARGET
+        );
+        assert_eq!(market.suggested_price(Good::Bread), 10);
+        assert_eq!(
+            replenish_merchant_beacon_shelf(settlement, &mut inventory, &mut market),
+            0,
+            "a second pass must not grow an already-full controlled shelf"
+        );
+    }
 }
 
 /// Stage the visible lab once when `./run.sh testworld` opts into it.
@@ -1536,6 +1802,7 @@ pub(crate) fn stage_rendered_lab_once(
             settlement.name.as_str(),
             "Lab Meadow"
                 | "Lab Stonefield"
+                | "Lab Bread Beacon"
                 | "Lab Frugal"
                 | "Lab Mutual Aid"
                 | "Lab Coldbarrow"
@@ -1556,6 +1823,9 @@ pub(crate) fn stage_rendered_lab_once(
         .then(|| choose_inland_meadow_site(&terrain));
     let policy_comparison = scenario
         .is_policy_comparison()
+        .then(|| choose_policy_comparison_sites(&terrain));
+    let merchant_beacon = scenario
+        .is_merchant_beacon()
         .then(|| choose_policy_comparison_sites(&terrain));
     let poor = scenario
         .includes_poor()
@@ -1583,7 +1853,7 @@ pub(crate) fn stage_rendered_lab_once(
     // The focused trade controls begin at the Village rung. They still build
     // every economic site autonomously; this merely removes the unrelated
     // Hamlet food-security gate from a Village -> Town cargo acceptance run.
-    let initial_tier = if scenario.is_trade_comparison() {
+    let initial_tier = if scenario.is_trade_comparison() || scenario.is_merchant_beacon() {
         SettlementTier::Village
     } else {
         SettlementTier::Hamlet
@@ -1658,6 +1928,38 @@ pub(crate) fn stage_rendered_lab_once(
             frugal.1,
             mutual.2 * 100.0,
             mutual.1,
+        );
+    }
+    if let Some((meadow, beacon)) = merchant_beacon {
+        spawn_runtime_village(
+            &mut commands,
+            &terrain,
+            &mut villager_seed,
+            "Lab Meadow",
+            CivicStrategy::Balanced,
+            meadow.0,
+            residents_per_village,
+            initial_tier,
+        );
+        let settlement_entity = spawn_runtime_village(
+            &mut commands,
+            &terrain,
+            &mut villager_seed,
+            "Lab Bread Beacon",
+            CivicStrategy::Balanced,
+            beacon.0,
+            0,
+            initial_tier,
+        );
+        commands
+            .entity(settlement_entity)
+            .insert(MerchantTradeBeacon::default());
+        info!(
+            "Rendered merchant beacon staged Lab Meadow ({:.0}% farmland, {} trees) plus a zero-population Village market fixture ({:.0}% farmland, {} trees); the Beacon receives only a Marketplace and a bounded 192-Bread Treasury listing at 0.10 coin",
+            meadow.2 * 100.0,
+            meadow.1,
+            beacon.2 * 100.0,
+            beacon.1,
         );
     }
     if let Some((hall, trees, farmland)) = poor {

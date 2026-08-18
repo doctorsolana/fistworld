@@ -90,6 +90,12 @@ fn wire_common_systems(app: &mut App) {
     );
     app.add_systems(
         Update,
+        crate::capture::drive_live_voyage_capture
+            .after(crate::boat::drive_opening_cinematic)
+            .run_if(in_state(GameState::Playing)),
+    );
+    app.add_systems(
+        Update,
         (
             game_systems::apply_cloud_texture_sampler,
             game_systems::update_cloud_cover,

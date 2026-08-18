@@ -51,6 +51,18 @@ cargo village-lab
 # artificial day-one population shock.
 ./run.sh tradeworld
 
+# Controlled merchant-discovery run: one normal Meadow population grows while
+# a zero-resident sister Village exposes a prebuilt Marketplace with a bounded
+# 192-Bread listing at 0.10 coin. No company, warehouse, porter or route is granted.
+./run.sh merchantworld
+
+# Run the same acceptance test headlessly at gameplay-faithful 10x. The long
+# window allows infrastructure, market observation and a physical round trip.
+FISTWORLD_LAB_SCENARIO=merchant-beacon \
+FISTWORLD_LAB_WARP=10 \
+FISTWORLD_LAB_MINUTES=900 \
+cargo village-lab
+
 # Canonical long economy experiment: 10 arrivals on day 1, 5 on day 5,
 # then 3 per day on days 6-30, evenly divided between three settlements.
 # Migration stops at 30 residents each and the economy runs undisturbed through
@@ -202,9 +214,11 @@ The long three-village economy fixture accepts `economy-soak`, `economy`,
 
 `Lab Meadow` starts with eight residents on fertile Meadows ground beside a
 geometrically valid shore. Its environment supports a Farmstead, Fisherman's
-Hut, and Lumberjack Hut. A compact mixed grove sits southwest of the hall on
+Hut, Livestock Farm and Lumberjack Hut. A compact mixed grove sits southwest of the hall on
 the same walkable landmass, so chopping and construction timber are visible and
-physically reachable rather than only present inside a nominal radius. The
+physically reachable rather than only present inside a nominal radius. A Livestock Farm's
+replicated pasture reserves real land while its cheap deterministic sheep stay client-side;
+the lab can therefore inspect physical Meat/Wool work without simulating animal agents. The
 default run adds eight uncommitted migrants on day 2. The settlement should
 visibly harvest non-edible Wheat, mill it into household-edible Flour, bake efficient
 Bread and land ready-to-eat Fish. It must cover one daily portion per resident, hold
@@ -215,7 +229,10 @@ Hamlet to Village.
 anchor with no legal fishing site. It is the deterministic control for the complete
 Wheat → Flour → Bread chain: fish cannot conceal a stalled mill, a broken delivery or
 an insolvent bakery. Arrival overrides and the exact 5 → 5 → 5 cohort experiment work
-the same way as in the coastal scenario.
+the same way as in the coastal scenario. Runs of 400 minutes or longer additionally
+require this abundant control to complete its Wood-funded Village Hall and finish
+without hunger. Compact timeline rows show in-place civic projects separately from
+ordinary building sites, including staged/required material and waiting/raising state.
 
 `policy-comparison` runs two separated versions of that inland control. Candidate sites
 are ranked together for matching farmland and nearby timber, and both must independently
@@ -279,18 +296,67 @@ empty wagon returns Hall-to-Hall over the same inter-settlement corridor and the
 local route from its origin Hall to its private Storage Hall.
 
 The same physical executor now supports player-authored merchant timetables with up to eight
-ordered stops. Focused route tests cover a real company-funded `Buy` at Stonefield followed by
-physical carriage and a seller-owned `Sell` consignment at Meadowford; separate authority tests
-cover a three-town `Buy -> Sell -> Unload` schedule and reject private stops without an owned
-Storage Hall. `trade-comparison` remains the long 10x regression for the locked civic-contract
-path; NPC speculative route creation is deliberately not injected into that fixture.
+ordered stops and NPC-authored one-circuit trials. Every stop requires a completed Marketplace;
+`Load` and `Unload` additionally require that company's Storage Hall. Focused route tests cover a
+real company-funded `Buy`, physical carriage and a seller-owned `Sell` consignment, reject Moot-only
+endpoints, and prove that a company can react to delayed funded food demand. NPC Masters see their
+own branches exactly, receive only one stale/noisy remote report per staggered review, learn from
+completed visits, protect payroll and mothball repeatedly disappointing routes. `trade-comparison`
+remains the long 10x regression for the locked civic-contract path while the focused systems tests
+isolate autonomous merchant founding deterministically.
 
 The 2026-08-16 post-editor regression ran `trade-comparison` for 900 simulated minutes at an
 exact 10x. All 70 residents were accounted for, Meadow completed its paid remote Stone contract
 and became a Town, the reusable carrier retained its physical trip/freight history, and the loop
 finished with 57/57 roads complete. Across 324,000 updates the server averaged 1.242 ms, p99 was
 3.948 ms, the maximum was 43.738 ms, and no update exceeded 50 ms. The focused merchant test is
-kept separate because it needs a player-authored schedule rather than fabricated NPC speculation.
+kept separate because that baseline predates autonomous NPC route founding and exercises a
+player-authored schedule.
+
+The 2026-08-17 Marketplace-gate/autonomous-merchant regression repeated the full 900 simulated
+minutes at exact 10x with no free Marketplace, warehouse, porter, quarry stock or route. Both local
+economies grew to 35 residents, built Marketplace access, created real Quarry/Storage Hall capacity,
+completed a paid remote Stone contract and promoted its buyer to Town; all 70 residents, 18 occupied
+cabins and the physical trip history were retained. Across 324,000 updates the server averaged
+1.089 ms, p99 was 3.475 ms, the maximum was 32.241 ms, and no update exceeded 50 ms. Focused tests
+separately prove that funded food scarcity can produce an NPC one-cart trial while an unfunded
+starving market does not.
+
+`merchant-beacon`/`./run.sh merchantworld` is the controlled acceptance test for natural merchant
+discovery. It uses two closely matched, overland-connected inland Meadows so quarry, shoreline and
+poor-land failures cannot decide the result. `Lab Meadow` begins as an ordinary 12-person Village,
+builds its own economy and Marketplace, and receives two immigrants per day from day 13 until it
+reaches 35 residents. The remote `Lab Bread Beacon` begins as a zero-population Village with one
+prebuilt physical Marketplace. A lab-only marker restores its Treasury-owned Bread shelf to 192
+units once per world day at 0.10 coin. The cap prevents unbounded stock or memory growth, while
+daily restoration makes the source effectively inexhaustible over a long experiment.
+
+Everything after source production remains real: the listing occupies Hall inventory, purchases
+spend company cash and pay the Beacon treasury, cargo sits in the caravan, and the destination
+receives a seller-owned consignment rather than free food. The fixture grants no company, Storage
+Hall, Company Porter, market knowledge or route. The Beacon has no NPC capable of supplying any of
+those things. Acceptance requires a Meadow NPC Master to learn the remote price imperfectly,
+establish a home import depot, send its porter to buy Bread at the Beacon, return, consign it in
+Meadow, and retain the purchase/consignment history. Because the controller exists only on a
+server-only lab marker, neither normal worlds nor other Village Lab scenarios can receive its goods.
+Regional demand can justify a standalone merchant Storage Hall as well as a depot added to an
+existing producer. Its founder must provide a real three-day opening payroll runway and trial-cargo
+cash. Expansion contributions first repair any missing company payroll/tax reserve, so a new permit
+cannot hide an already undercapitalised firm. No money is escrowed or created for the merchant.
+Stale intelligence produces a small bounded limit-price cushion only while the Master's required
+profit and return survive at that limit; completed porters report every market they physically
+visited. Wholesale collections pay the source seller and market fee but do not masquerade as local
+household consumption or create a false substitute-food import signal.
+
+The 2026-08-18 exact-10x acceptance ran all 900 simulated minutes successfully. All 35 Meadow
+residents were accounted for and the Beacon remained at zero population. A normal Meadow company
+built and staffed Storage Hall #18, learned the 0.10 Bread offer through delayed noisy reports and
+opened the route on day 12. Its retained history finished with four circuits, 12 Bread physically
+purchased for 1.20 coin and consigned in Meadow for 21.60 coin. Once later prices and demand weakened,
+the NPC correctly mothballed the speculative route instead of assuming permanent perfect arbitrage.
+The same run also guards route reuse: a completed idle civic-contract lane releases its porter for
+merchant work, and a caravan whose exact doorway approach becomes blocked tries only a bounded set
+of nearby, normally pathfound loading bays rather than freezing or teleporting its cargo.
 
 Both halls begin with empty stores and no fictional Moot buying fund, with Poor
 Relief enabled. Builders must personally chop their first construction Wood, and later
@@ -371,10 +437,15 @@ owner's strategy. They stop after filling that budget, retain partial progress t
 the next unit overnight, and yield to ambient, household and home behaviour until the
 next shift. This same budget is consumed by the strategic off-screen path.
 
-Once a settlement reaches Village, the Reeve supplies and raises Marketplace and
-Tavern projects one at a time; a Town later requests its Church. Essential farmers,
+Once a settlement reaches Village, the Reeve supplies and raises its Marketplace while a
+private investor can answer the advertised Tavern opportunity; a Town later requests its Church. Essential farmers,
 fishers and woodcutters therefore keep producing, and a tiny settlement cannot deadlock
 its own timber supply by assigning every trade worker to simultaneous civic construction.
+
+The compact economy row reports each Tavern's site count, physical Bread/Meat pantry, on-duty
+Innkeepers, planned and served visits, quoted meal price, direct revenue, unaffordable visits and
+other turnaways. These facts distinguish weak leisure demand from failed procurement, missing
+staff, capacity pressure and route failures during an ordinary 10x evidence run.
 
 Stewards are unavailable for private permits and workplace vacancies. The road audit runs
 once per world minute, prefers an idle steward over one already hauling, and can keep both

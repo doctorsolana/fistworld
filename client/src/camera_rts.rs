@@ -30,7 +30,8 @@ const TILT_FAR: f32 = 1.45;
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct LocalPeerId(pub u64);
 
-/// World-space point currently under the mouse cursor, if it hits terrain.
+/// World-space point currently under the mouse cursor, if it hits the visible
+/// terrain or water surface.
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct CursorTerrainHit(pub Option<Vec3>);
 
@@ -177,6 +178,7 @@ pub fn update_commander_camera(
     keys: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     input_state: Res<crate::input::InputState>,
+    opening: Option<Res<crate::boat::OpeningCinematic>>,
     mut mouse_motion: MessageReader<MouseMotion>,
     mut mouse_wheel: MessageReader<MouseWheel>,
     terrain: Option<Res<WorldTerrain>>,
@@ -191,7 +193,10 @@ pub fn update_commander_camera(
         look_delta += event.delta;
     }
 
-    let accepts_world_input = commander_accepts_world_input(&input_state);
+    let accepts_world_input = commander_accepts_world_input(&input_state)
+        && opening
+            .as_deref()
+            .is_none_or(|opening| !opening.is_active());
 
     if accepts_world_input && mouse_buttons.pressed(MouseButton::Right) {
         controller.yaw_target -= look_delta.x * controller.look_sensitivity;
@@ -276,12 +281,17 @@ pub fn update_commander_camera(
 
     // Ease toward straight-down as the camera pulls back. A shallow angle is fine for
     // watching a fight but turns into an unreadable smear of terrain at map scale.
-    let zoom_t = ((controller.zoom - controller.zoom_min)
-        / (controller.zoom_max - controller.zoom_min))
-        .clamp(0.0, 1.0);
-    controller.tilt = TILT_CLOSE + (TILT_FAR - TILT_CLOSE) * zoom_t.powf(0.45);
+    controller.tilt =
+        commander_tilt_for_zoom(controller.zoom, controller.zoom_min, controller.zoom_max);
 
     apply_commander_transform(&mut transform, &controller, terrain.as_deref());
+}
+
+/// Canonical zoom-to-tilt curve. Presentation cameras use this too so handing
+/// control back to the normal RTS camera cannot cause a one-frame angle snap.
+pub(crate) fn commander_tilt_for_zoom(zoom: f32, zoom_min: f32, zoom_max: f32) -> f32 {
+    let zoom_t = ((zoom - zoom_min) / (zoom_max - zoom_min)).clamp(0.0, 1.0);
+    TILT_CLOSE + (TILT_FAR - TILT_CLOSE) * zoom_t.powf(0.45)
 }
 
 fn commander_accepts_world_input(input_state: &crate::input::InputState) -> bool {
@@ -312,11 +322,8 @@ pub fn update_cursor_terrain_hit(
     mut last_inputs: Local<Option<(Vec2, Vec2, Vec2, Vec3, Quat)>>,
 ) {
     if let Some(forced) = forced {
-        hit.0 = Some(Vec3::new(
-            forced.0.x,
-            terrain.get_height(forced.0.x, forced.0.y),
-            forced.0.y,
-        ));
+        let y = visible_surface_height(&terrain, forced.0.x, forced.0.y);
+        hit.0 = Some(Vec3::new(forced.0.x, y, forced.0.y));
         cursor_ray.0 = None;
         return;
     }
@@ -378,14 +385,21 @@ pub fn update_cursor_terrain_hit(
     hit.0 = intersect_terrain(ray, &terrain);
 }
 
-fn apply_commander_transform(
+pub(crate) fn apply_commander_transform(
     transform: &mut Transform,
     controller: &CommanderCamera,
     terrain: Option<&WorldTerrain>,
 ) {
     let mut focus = controller.focus;
     if let Some(terrain) = terrain {
-        focus.y = terrain.get_height(focus.x, focus.z);
+        // Over water the heightfield is the seabed. Anchoring a close RTS zoom
+        // to that value puts the camera underwater—the exact opposite of what
+        // boat control needs. Rivers can have a local surface above global sea
+        // level, so use the terrain's complete water query rather than a fixed
+        // ocean constant.
+        focus.y = terrain
+            .get_water_height(focus.x, focus.z)
+            .unwrap_or_else(|| terrain.get_height(focus.x, focus.z));
     }
     let rotation = Quat::from_axis_angle(Vec3::Y, controller.yaw)
         * Quat::from_axis_angle(Vec3::X, -controller.tilt);
@@ -394,7 +408,16 @@ fn apply_commander_transform(
     transform.rotation = rotation;
 }
 
-/// March a ray against the heightfield, then binary-search the crossing.
+fn visible_surface_height(terrain: &WorldTerrain, x: f32, z: f32) -> f32 {
+    terrain
+        .get_water_height(x, z)
+        .unwrap_or_else(|| terrain.get_height(x, z))
+}
+
+/// March a ray against the visible terrain/water surface, then binary-search
+/// the crossing. Using the seabed here made a water click project much farther
+/// away than the point the player could see; near a map edge it frequently
+/// projected outside the world and silently produced no order at all.
 pub fn intersect_terrain(ray: Ray3d, terrain: &WorldTerrain) -> Option<Vec3> {
     // Must cover the camera at max zoom (12km) or clicks silently die in
     // the upper zoom range. The step grows with distance (binary refinement
@@ -407,20 +430,20 @@ pub fn intersect_terrain(ray: Ray3d, terrain: &WorldTerrain) -> Option<Vec3> {
     let dir = ray.direction.as_vec3();
     let bounds = terrain.generator.active_map_bounds();
     let mut prev_t = 0.0;
-    let mut prev_f = origin.y - terrain.get_height(origin.x, origin.z);
+    let mut prev_f = origin.y - visible_surface_height(terrain, origin.x, origin.z);
 
     let mut t = RAY_STEP;
     while t <= RAY_MAX_DISTANCE {
         let pos = origin + dir * t;
         if bounds.contains_xz(pos.x, pos.z) {
-            let f = pos.y - terrain.get_height(pos.x, pos.z);
+            let f = pos.y - visible_surface_height(terrain, pos.x, pos.z);
             if prev_f > 0.0 && f <= 0.0 {
                 let mut lo = prev_t;
                 let mut hi = t;
                 for _ in 0..RAY_BINARY_STEPS {
                     let mid = (lo + hi) * 0.5;
                     let mid_pos = origin + dir * mid;
-                    let mid_f = mid_pos.y - terrain.get_height(mid_pos.x, mid_pos.z);
+                    let mid_f = mid_pos.y - visible_surface_height(terrain, mid_pos.x, mid_pos.z);
                     if mid_f > 0.0 {
                         lo = mid;
                     } else {
@@ -428,7 +451,11 @@ pub fn intersect_terrain(ray: Ray3d, terrain: &WorldTerrain) -> Option<Vec3> {
                     }
                 }
                 let hit = origin + dir * ((lo + hi) * 0.5);
-                return Some(Vec3::new(hit.x, terrain.get_height(hit.x, hit.z), hit.z));
+                return Some(Vec3::new(
+                    hit.x,
+                    visible_surface_height(terrain, hit.x, hit.z),
+                    hit.z,
+                ));
             }
             prev_f = f;
         }
@@ -487,5 +514,69 @@ mod tests {
 
         input.encyclopedia_open = true;
         assert!(!commander_accepts_world_input(&input));
+    }
+
+    #[test]
+    fn a_close_camera_over_water_tracks_the_surface_not_the_seabed() {
+        let terrain = WorldTerrain::default();
+        let bounds = terrain.generator.active_map_bounds();
+        let water_point = (0..=32)
+            .flat_map(|x| (0..=32).map(move |z| (x, z)))
+            .map(|(x, z)| {
+                Vec2::new(
+                    bounds.min[0] + bounds.width() * x as f32 / 32.0,
+                    bounds.min[1] + bounds.depth() * z as f32 / 32.0,
+                )
+            })
+            .find(|point| {
+                terrain
+                    .get_water_height(point.x, point.y)
+                    .is_some_and(|water| (water - terrain.get_height(point.x, point.y)).abs() > 0.5)
+            })
+            .expect("the active gameplay map must contain water above its seabed");
+
+        let mut controller = CommanderCamera::default();
+        controller.focus = water_point.extend(0.0).xzy();
+        controller.zoom = controller.zoom_min;
+        let mut transform = Transform::default();
+        apply_commander_transform(&mut transform, &controller, Some(&terrain));
+
+        let rotation = Quat::from_axis_angle(Vec3::Y, controller.yaw)
+            * Quat::from_axis_angle(Vec3::X, -controller.tilt);
+        let camera_height_above_focus = (rotation * Vec3::Z * controller.zoom).y;
+        let water = terrain
+            .get_water_height(water_point.x, water_point.y)
+            .expect("selected point should remain water");
+        let expected = water + camera_height_above_focus;
+        assert!((transform.translation.y - expected).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn cursor_ray_hits_visible_water_instead_of_the_seabed() {
+        let terrain = WorldTerrain::default();
+        let bounds = terrain.generator.active_map_bounds();
+        let point = (0..=48)
+            .flat_map(|x| (0..=48).map(move |z| (x, z)))
+            .map(|(x, z)| {
+                Vec2::new(
+                    bounds.min[0] + bounds.width() * x as f32 / 48.0,
+                    bounds.min[1] + bounds.depth() * z as f32 / 48.0,
+                )
+            })
+            .find(|point| {
+                terrain
+                    .get_water_height(point.x, point.y)
+                    .is_some_and(|water| water - terrain.get_height(point.x, point.y) > 1.0)
+            })
+            .expect("the active gameplay map must expose water above its seabed");
+        let water = terrain.get_water_height(point.x, point.y).unwrap();
+        let ray = Ray3d::new(Vec3::new(point.x, water + 40.0, point.y), Dir3::NEG_Y);
+        let hit = intersect_terrain(ray, &terrain).expect("visible water should be clickable");
+
+        assert!((hit.y - water).abs() < 0.01);
+        assert!(
+            hit.y - terrain.get_height(hit.x, hit.z) > 1.0,
+            "cursor fell through the water to the seabed"
+        );
     }
 }

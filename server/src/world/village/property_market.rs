@@ -103,7 +103,7 @@ pub fn remove_abandoned_businesses(
     markets: Query<(&shared::components::SettlementId, &MootMarket), With<Settlement>>,
     adjuncts: Query<
         (Entity, &shared::components::AttachedTo),
-        Or<(With<FarmField>, With<FishingPier>)>,
+        Or<(With<FarmField>, With<FishingPier>, With<LivestockPasture>)>,
     >,
     workers: Query<&shared::components::EmployedAt>,
     collections: Query<&MarketCollectionRoutine>,

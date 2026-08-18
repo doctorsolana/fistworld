@@ -41,6 +41,7 @@ mod scale_lab;
 pub mod schedule;
 mod settlement_economy;
 pub mod strategic;
+mod tavern;
 mod trade_routes;
 mod trades;
 
@@ -107,10 +108,11 @@ pub use processing::{
 pub use production::sync_business_stock_targets;
 pub(crate) use production::{
     automatic_opening_positions, estimated_staffed_unit_cost, farmer_seconds_per_wheat,
-    fisher_seconds_per_food, lumber_seconds_per_tree, lumber_tree_yield,
-    maximum_viable_input_unit_price, process_available_cycles, processing_recipe,
-    quarry_seconds_per_stone, rated_daily_production, viable_processing_input_purchase,
-    BusinessOperatingPlan, ProcessingRecipe, SELF_SUPPLY_TREE_YIELD,
+    fisher_seconds_per_food, livestock_seconds_per_meat, lumber_seconds_per_tree,
+    lumber_tree_yield, maximum_viable_input_unit_price, process_available_cycles,
+    processing_recipe, produce_livestock_cycles, quarry_seconds_per_stone, rated_daily_production,
+    viable_processing_input_purchase, BusinessOperatingPlan, ProcessingRecipe,
+    SELF_SUPPLY_TREE_YIELD,
 };
 pub use property_market::{publish_property_boards, remove_abandoned_businesses};
 pub(crate) use quarry::QuarryWorkProgress;
@@ -120,9 +122,15 @@ pub use settlement_economy::{
     ensure_settlement_economies, ensure_village_finances, sync_public_market_storage,
     update_moot_market_targets, update_settlement_economies, SettlementEconomyRuntime,
 };
+pub use tavern::{
+    assign_tavern_routines, ensure_tavern_services, refresh_character_day_plans,
+    review_tavern_businesses, run_strategic_tavern_visits, run_tavern_routines, TavernVisitRoutine,
+    TavernWorkerRoutine,
+};
 pub use trade_routes::{
-    manage_company_trade_routes, post_civic_import_contracts, run_company_trade_routes,
-    run_merchant_trade_routes, TradeRouteRoutine,
+    manage_company_trade_routes, post_civic_import_contracts, review_autonomous_merchant_trade,
+    run_company_trade_routes, run_merchant_trade_routes, RegionalTradeIntelligence,
+    TradeRouteRoutine,
 };
 pub(crate) use trades::lumber_plot_has_reachable_tree;
 #[cfg(test)]
@@ -131,8 +139,8 @@ use trades::{
 };
 pub use trades::{
     assign_farmer_routines, assign_fishing_routines, assign_lumberjack_routines,
-    ensure_farm_fields, ensure_fishing_piers, run_farmer_routines, run_fishing_routines,
-    run_lumberjack_routines, sync_carried_load, sync_porter_cart_state,
+    ensure_farm_fields, ensure_fishing_piers, ensure_livestock_pastures, run_farmer_routines,
+    run_fishing_routines, run_lumberjack_routines, sync_carried_load, sync_porter_cart_state,
 };
 use trades::{
     build_clip_facing, exterior_door_clearance_position, find_tree_for_cycle_cached,
@@ -146,8 +154,9 @@ use bevy::prelude::*;
 use lightyear::prelude::{NetworkTarget, Replicate};
 
 use shared::components::{
-    BuildingDoorDemand, BuildingDoorUse, CharacterActivity, CharacterAttributes, CharacterKind,
-    CharacterName, FarmField, FishingPier, Household, MootAdministration, Nutrition, Occupation,
+    BuildingDoorDemand, BuildingDoorUse, CharacterActivity, CharacterAttributes, CharacterDayPlan,
+    CharacterKind, CharacterName, FarmField, FishingPier, Household, LivestockPasture,
+    MootAdministration, Nutrition, Occupation, PlannedLeisure, PlannedLeisureStatus,
     PlayerPosition, PlayerRotation, Residence, RoadClass, Settlement, SettlementBuilding,
     SettlementBuildingKind, SettlementPolicies, VillageRoad, WorkStatus, WorkplaceOperation,
     WorldTime,
@@ -157,8 +166,8 @@ use shared::economy::{
     BusinessInputRule, BusinessLiquidation, BusinessManagementPolicy, BusinessPrivateInputRule,
     BusinessProcurementPolicy, BusinessSalePolicy, BusinessSourcingMode, BusinessStaffingPolicy,
     BusinessState, BusinessSupplyPolicy, BusinessWageClaim, BusinessWagePolicy, CarriedLoad, Good,
-    GoodsInventory, HouseholdEconomy, MarketSeller, MootMarket, SettlementEconomy, Wallet,
-    WorkforceRequirements, BASIS_POINTS, FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE,
+    GoodsInventory, HouseholdEconomy, MarketSeller, MootMarket, SettlementEconomy, TavernService,
+    Wallet, WorkforceRequirements, BASIS_POINTS, FOOD_SECURITY_TARGET_DAYS, FOUNDING_DAILY_WAGE,
     MAXIMUM_BUSINESS_DAILY_WAGE, MINIMUM_BUSINESS_DAILY_WAGE, PENNIES_PER_COIN,
     PROPERTY_MARKET_EXPOSURE_DAYS, STARTING_TREASURY_MONEY,
 };
@@ -196,6 +205,7 @@ pub struct PermitPlanningResources<'w, 's> {
         ),
     >,
     trade_contracts: Query<'w, 's, &'static shared::components::CivicTradeContract>,
+    merchant_demand: Option<Res<'w, trade_routes::RegionalMerchantDemand>>,
     permit_busy: Query<
         'w,
         's,
@@ -212,6 +222,8 @@ pub struct PermitPlanningResources<'w, 's> {
             With<HouseholdShoppingRoutine>,
             With<MootQueueTicket>,
             With<MootMealRoutine>,
+            With<TavernVisitRoutine>,
+            With<TavernWorkerRoutine>,
             With<WorkplaceDoorTransit>,
             With<PierTraversal>,
         )>,

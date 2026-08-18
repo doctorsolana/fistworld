@@ -4,7 +4,7 @@ The single build order. [ARCHITECTURE.md](ARCHITECTURE.md) says how the engine c
 game; [WORLD-DESIGN.md](WORLD-DESIGN.md) says what the world *is*. Both used to carry their
 own phase list, and the two disagreed — this file replaces both.
 
-Written 2026-07-30 and re-audited against the code on 2026-08-15. Where a doc claim and
+Written 2026-07-30 and re-audited against the code on 2026-08-18. Where a doc claim and
 the code disagree, the executable state wins and the doc is corrected.
 
 **Ordering principle: risk first.** Phases are ordered by which unknown, discovered late,
@@ -39,9 +39,10 @@ infrastructure is a phase that cannot be tested.
 **Playable:** a stranger joins the hosted server with `FISTWORLD_DEV` unset, gets a body,
 and walks it around a world that is still there tomorrow.
 
-Today none of that is true. The only path to a body is a god command, and the hosted server
-cannot boot — so every "playable" claim in the old build order was really a dev-mode claim
-on a local binary.
+The normal non-dev body path is now live: a new account creates one Hero, arrives by
+server-positioned Dinghy and can sail ashore, while a returning account re-adopts its live
+body. Durable cross-process world storage and hosted redeployment verification remain the
+Phase 0 exit blockers.
 
 - [x] Clamp client-supplied `view_radius` (was a one-message remote OOM)
 - [x] Keep Docker workspace stubs aligned with non-server workspace members
@@ -60,8 +61,11 @@ on a local binary.
 - [ ] Decide whether a future hosted world is seasonal/resetting or durable before adding a
       storage volume. Durable account state must share the world save's version and lifetime;
       loading a hero into a freshly reset society would create orphan ownership.
-- [ ] A non-dev spawn path: move hero creation out of the god panel and out of `DevCommand`
-- [ ] Decide and document what a player sees before they have a hero
+- [x] A non-dev spawn path: character creation sends `CreateHero`; the server owns coastal
+      placement and creates exactly one Hero plus starter Dinghy without `DevCommand`.
+- [x] New-player presentation: mandatory character creator, dressed Hero/boat readiness
+      gate, face-to-RTS opening camera, selected water-only boat and shore disembark. See
+      [PLAYER-START-AND-VESSELS.md](PLAYER-START-AND-VESSELS.md).
 - [ ] Redeploy and verify a real client can join, get a body, disconnect, and return
 
 **Exit:** a non-dev client spawns a hero, walks and trades, disconnects, and finds the exact

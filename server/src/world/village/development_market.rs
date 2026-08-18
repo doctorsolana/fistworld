@@ -21,15 +21,18 @@ pub struct DevelopmentMarketSignals {
     pub residents: u32,
     pub farms: usize,
     pub fishers: usize,
+    pub livestock_farms: usize,
     pub windmills: usize,
     pub bakeries: usize,
     pub storage_halls: usize,
     pub stone_quarries: usize,
+    pub taverns: usize,
     /// Completed capacity which is temporarily idle, liquidating or offered
     /// for takeover. It suppresses duplicate construction while remaining
     /// distinct from currently productive capacity.
     pub recoverable_farms: usize,
     pub recoverable_fishers: usize,
+    pub recoverable_livestock_farms: usize,
     pub recoverable_windmills: usize,
     pub recoverable_bakeries: usize,
     pub recoverable_lumber_huts: usize,
@@ -44,28 +47,36 @@ pub struct DevelopmentMarketSignals {
     pub wheat_stock: u32,
     pub flour_stock: u32,
     pub bread_stock: u32,
+    pub meat_stock: u32,
     pub wood_stock: u32,
     pub stone_stock: u32,
     /// Physical Stone the civic centre still needs for its Town Hall project.
     pub town_hall_stone_demand: u32,
     pub recent_wheat_output: u32,
     pub recent_fish_output: u32,
+    pub recent_meat_output: u32,
     /// Rated daily output from active and already-approved farms. Unlike
     /// `recent_wheat_output`, this closes the permit signal during startup,
     /// before the first field has completed a physical harvest.
     pub anticipated_wheat_output: u32,
     /// Rated daily output from active and already-approved fishing huts.
     pub anticipated_fish_output: u32,
+    pub anticipated_meat_output: u32,
     /// Rated output from not-yet-completed extractors. Pending capacity is
     /// counted conservatively so one permit has time to become embodied, but
     /// it cannot masquerade as a proven full shift.
     pub pending_wheat_output: u32,
     pub pending_fish_output: u32,
+    pub pending_meat_output: u32,
     /// Demonstrated daily Wheat demand committed outside this settlement.
     /// This remains zero until physical caravan contracts are introduced; it
     /// is deliberately separate from local mill purchases so a future grain-
     /// exporting town can expand without weakening local oversupply control.
     pub recent_wheat_export_demand: u32,
+    /// Funded demand advertised by other completed Marketplaces, indexed by
+    /// good. This remains opportunity rather than guaranteed sales; active
+    /// and incoming capacity are already deducted by the route evaluator.
+    pub merchant_export_units: [u32; Good::COUNT],
     pub recent_flour_output: u32,
     pub recent_bread_output: u32,
     pub recent_windmill_input: u32,
@@ -94,6 +105,10 @@ pub struct DevelopmentMarketSignals {
     /// settlement. A live contract can justify branch warehouse capacity even
     /// before local output becomes stranded.
     pub export_contract_bulk: u32,
+    /// Publicly observed, funded merchant demand in other Marketplace towns.
+    /// This is an opportunity rather than a reservation: speculative cargo
+    /// remains at the company's risk until a real buyer clears it.
+    pub merchant_export_bulk: u32,
     pub construction_wood_demand: u32,
 }
 
@@ -107,6 +122,7 @@ impl DevelopmentMarketSignals {
         match kind {
             SettlementBuildingKind::Farmstead => self.recoverable_farms,
             SettlementBuildingKind::FishermansHut => self.recoverable_fishers,
+            SettlementBuildingKind::LivestockFarm => self.recoverable_livestock_farms,
             SettlementBuildingKind::Windmill => self.recoverable_windmills,
             SettlementBuildingKind::Bakery => self.recoverable_bakeries,
             SettlementBuildingKind::LumberjackHut => self.recoverable_lumber_huts,
@@ -114,6 +130,10 @@ impl DevelopmentMarketSignals {
             SettlementBuildingKind::StoneQuarry => self.recoverable_stone_quarries,
             _ => 0,
         }
+    }
+
+    pub const fn merchant_export_demand(self, good: Good) -> u32 {
+        self.merchant_export_units[good.index()]
     }
 }
 
@@ -129,15 +149,17 @@ pub struct DevelopmentOpportunity {
     pub requires_independent_owner: bool,
 }
 
-const FOUNDING_PRIVATE_KINDS: [SettlementBuildingKind; 8] = [
+const FOUNDING_PRIVATE_KINDS: [SettlementBuildingKind; 10] = [
     SettlementBuildingKind::House,
     SettlementBuildingKind::Farmstead,
     SettlementBuildingKind::FishermansHut,
+    SettlementBuildingKind::LivestockFarm,
     SettlementBuildingKind::Windmill,
     SettlementBuildingKind::Bakery,
     SettlementBuildingKind::LumberjackHut,
     SettlementBuildingKind::StorageHall,
     SettlementBuildingKind::StoneQuarry,
+    SettlementBuildingKind::Tavern,
 ];
 
 /// A processor may reasonably invest against an existing stockpile, but that
@@ -189,7 +211,7 @@ fn processor_expansion_proven(
 fn processor_market_facts(
     kind: SettlementBuildingKind,
     signals: DevelopmentMarketSignals,
-) -> Option<(usize, usize, bool, u32, u32, i64)> {
+) -> Option<(usize, usize, bool, u32, u32, i64, usize, usize)> {
     match kind {
         SettlementBuildingKind::Windmill => Some((
             signals.windmills,
@@ -198,6 +220,8 @@ fn processor_market_facts(
             signals.recent_windmill_sales,
             sustainable_daily_input(signals.recent_wheat_output, signals.wheat_stock),
             signals.recent_windmill_profit,
+            signals.recoverable_windmills,
+            signals.lossmaking_windmills,
         )),
         SettlementBuildingKind::Bakery => Some((
             signals.bakeries,
@@ -206,6 +230,8 @@ fn processor_market_facts(
             signals.recent_bakery_sales,
             sustainable_daily_input(signals.recent_flour_output, signals.flour_stock),
             signals.recent_bakery_profit,
+            signals.recoverable_bakeries,
+            signals.lossmaking_bakeries,
         )),
         _ => None,
     }
@@ -237,15 +263,29 @@ fn processor_competition_proven(
     let Some(market) = market else {
         return false;
     };
-    let Some((existing, completed, unproven, recent_sales, sustainable_input, recent_profit)) =
-        processor_market_facts(kind, signals)
+    let Some((
+        existing,
+        completed,
+        unproven,
+        recent_sales,
+        sustainable_input,
+        recent_profit,
+        recoverable,
+        lossmaking,
+    )) = processor_market_facts(kind, signals)
     else {
         return false;
     };
     // `existing` includes approved worksites. Only one challenger may be under
     // review, and a newly opened challenger gets several days to reveal its
     // effect before the same old monopoly evidence can approve a third plant.
-    if existing == 0 || completed < existing || unproven || sustainable_input == 0 {
+    if existing == 0
+        || completed < existing
+        || unproven
+        || sustainable_input == 0
+        || recoverable > 0
+        || lossmaking > 0
+    {
         return false;
     }
     let Some(capacity) = super::rated_daily_production(kind, 1.0) else {
@@ -300,7 +340,7 @@ fn food_pressure(
     policies: &SettlementPolicies,
 ) -> f32 {
     let Some(economy) = economy.filter(|economy| economy.observed_days > 0) else {
-        return if signals.farms + signals.fishers == 0 {
+        return if signals.farms + signals.fishers + signals.livestock_farms == 0 {
             1.0
         } else {
             // One completed extractor is enough evidence for a founding day.
@@ -346,6 +386,11 @@ fn extractor_capacity_pressure(
         signals.pending_fish_output,
         signals.recent_fish_output,
     );
+    let meat = conservative_output(
+        signals.anticipated_meat_output,
+        signals.pending_meat_output,
+        signals.recent_meat_output,
+    );
     // Raw Wheat is not a ration. For fishing investment, only the grain which
     // the local chain recently turned into Flour/Bread can displace Fish.
     // Bakery output contributes only its net gain over the Flour it consumed.
@@ -354,8 +399,25 @@ fn extractor_capacity_pressure(
         .saturating_add(signals.recent_bread_output / 2)
         .div_ceil(RECENT_OUTPUT_WINDOW_DAYS);
     let (anticipated, competing_local, export_demand) = match kind {
-        SettlementBuildingKind::Farmstead => (wheat, fish, signals.recent_wheat_export_demand),
-        SettlementBuildingKind::FishermansHut => (fish, grain_food, 0),
+        SettlementBuildingKind::Farmstead => (
+            wheat,
+            fish.saturating_add(meat),
+            signals
+                .recent_wheat_export_demand
+                .max(signals.merchant_export_demand(Good::Wheat)),
+        ),
+        SettlementBuildingKind::FishermansHut => (
+            fish,
+            grain_food.saturating_add(meat),
+            signals.merchant_export_demand(Good::Food),
+        ),
+        SettlementBuildingKind::LivestockFarm => (
+            meat,
+            grain_food.saturating_add(fish),
+            signals
+                .merchant_export_demand(Good::Meat)
+                .saturating_add(signals.merchant_export_demand(Good::Wool).div_ceil(2)),
+        ),
         _ => return 0.0,
     };
     let target = signals
@@ -380,7 +442,9 @@ fn opportunity_score(
     let shelter_pressure = housing_pressure(signals);
     let emergency_food_entry = matches!(
         kind,
-        SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut
+        SettlementBuildingKind::Farmstead
+            | SettlementBuildingKind::FishermansHut
+            | SettlementBuildingKind::LivestockFarm
     ) && pressure >= 0.5;
     if kind != SettlementBuildingKind::House
         && signals.recoverable(kind) > 0
@@ -405,7 +469,7 @@ fn opportunity_score(
             82.0 + 38.0 * shelter_pressure
         }
         SettlementBuildingKind::Farmstead => {
-            if signals.farms + signals.fishers == 0
+            if signals.farms + signals.fishers + signals.livestock_farms == 0
                 && pressure >= 0.5
                 && signals
                     .wheat_stock
@@ -438,7 +502,7 @@ fn opportunity_score(
                 .max(5.0)
         }
         SettlementBuildingKind::FishermansHut => {
-            if signals.farms + signals.fishers == 0 && pressure >= 0.5 {
+            if signals.farms + signals.fishers + signals.livestock_farms == 0 && pressure >= 0.5 {
                 return 128.0;
             }
             let capacity_pressure =
@@ -448,6 +512,21 @@ fn opportunity_score(
             // the next shoreline claim less compelling. Geography makes the
             // final decision: inland applicants simply cannot secure a plot.
             (14.0 + pressure.min(capacity_pressure) * 70.0 - signals.fishers as f32 * 8.0).max(5.0)
+        }
+        SettlementBuildingKind::LivestockFarm => {
+            if signals.farms + signals.fishers + signals.livestock_farms == 0 && pressure >= 0.5 {
+                return 126.0;
+            }
+            let capacity_pressure =
+                extractor_capacity_pressure(SettlementBuildingKind::LivestockFarm, signals);
+            let wool_value = market.map_or(Good::Wool.base_price(), |market| {
+                market.suggested_price(Good::Wool)
+            });
+            let byproduct_bonus =
+                ((wool_value as f32 / Good::Wool.base_price() as f32) - 1.0).clamp(0.0, 1.0) * 12.0;
+            (12.0 + pressure.min(capacity_pressure) * 66.0 + byproduct_bonus
+                - signals.livestock_farms as f32 * 7.0)
+                .max(5.0)
         }
         SettlementBuildingKind::Windmill => {
             let upstream_exists = signals.farms > 0 || signals.wheat_stock > 0;
@@ -471,13 +550,15 @@ fn opportunity_score(
             }
             let capacity = super::rated_daily_production(kind, 1.0)
                 .expect("windmill opportunity requires rated capacity");
-            let output_demand = market.map_or(0, |market| {
-                let pool = market.pool(capacity.output);
-                pool.day
-                    .requested_units()
-                    .max(pool.previous_day.requested_units())
-                    .min(u64::from(u32::MAX)) as u32
-            });
+            let output_demand = market
+                .map_or(0, |market| {
+                    let pool = market.pool(capacity.output);
+                    pool.day
+                        .requested_units()
+                        .max(pool.previous_day.requested_units())
+                        .min(u64::from(u32::MAX)) as u32
+                })
+                .saturating_add(signals.merchant_export_demand(Good::Flour));
             let sales_demand = signals
                 .recent_windmill_sales
                 .div_ceil(RECENT_OUTPUT_WINDOW_DAYS);
@@ -527,13 +608,15 @@ fn opportunity_score(
             }
             let capacity = super::rated_daily_production(kind, 1.0)
                 .expect("bakery opportunity requires rated capacity");
-            let output_demand = market.map_or(u64::from(signals.residents), |market| {
-                let pool = market.pool(capacity.output);
-                pool.day
-                    .requested_units()
-                    .max(pool.previous_day.requested_units())
-                    .max(u64::from(signals.residents))
-            });
+            let output_demand = market
+                .map_or(u64::from(signals.residents), |market| {
+                    let pool = market.pool(capacity.output);
+                    pool.day
+                        .requested_units()
+                        .max(pool.previous_day.requested_units())
+                        .max(u64::from(signals.residents))
+                })
+                .saturating_add(u64::from(signals.merchant_export_demand(Good::Bread)));
             let supported_output = daily_flour
                 .saturating_mul(capacity.output_per_input())
                 .min(output_demand.min(u64::from(u32::MAX)) as u32);
@@ -572,6 +655,7 @@ fn opportunity_score(
         SettlementBuildingKind::LumberjackHut => {
             let shortage = signals
                 .construction_wood_demand
+                .saturating_add(signals.merchant_export_demand(Good::Wood))
                 .saturating_sub(signals.wood_stock);
             if shortage == 0 {
                 return 5.0;
@@ -594,6 +678,7 @@ fn opportunity_score(
         SettlementBuildingKind::StoneQuarry => {
             let shortage = signals
                 .town_hall_stone_demand
+                .saturating_add(signals.merchant_export_demand(Good::Stone))
                 .saturating_sub(signals.stone_stock);
             if shortage == 0 {
                 return 5.0;
@@ -607,8 +692,11 @@ fn opportunity_score(
             58.0 + (shortage as f32 * 4.0).min(42.0)
         }
         SettlementBuildingKind::StorageHall => {
-            if signals.export_contract_bulk > 0 && signals.storage_halls == 0 {
-                return 78.0 + (signals.export_contract_bulk as f32 * 0.15).min(18.0);
+            let regional_bulk = signals
+                .export_contract_bulk
+                .saturating_add(signals.merchant_export_bulk);
+            if regional_bulk > 0 && signals.storage_halls == 0 {
+                return 78.0 + (regional_bulk as f32 * 0.15).min(18.0);
             }
             let unhandled_bulk = signals
                 .stranded_output_bulk
@@ -631,9 +719,32 @@ fn opportunity_score(
             let return_multiple = value_at_risk as f32 / expected_cost.max(1) as f32;
             48.0 + (return_multiple.ln_1p() * 18.0).min(50.0)
         }
+        SettlementBuildingKind::Tavern => {
+            let meal_supply = signals
+                .bread_stock
+                .saturating_add(signals.meat_stock)
+                .saturating_add(signals.recent_bread_output)
+                .saturating_add(signals.recent_meat_output);
+            if meal_supply == 0 {
+                // A private player may still speculate at full permit price,
+                // but the Hall must not subsidise an empty dining room before
+                // any meal supply exists for it to purchase.
+                return 5.0;
+            }
+            let useful_capacity = signals
+                .taverns
+                .saturating_mul(shared::economy::TAVERN_MEALS_PER_INNKEEPER_DAY as usize);
+            let affluent_demand = (signals.residents as usize).div_ceil(5);
+            if signals.residents < 12 || useful_capacity >= affluent_demand.max(1) {
+                5.0
+            } else if signals.taverns == 0 {
+                74.0 + (signals.residents as f32 * 0.35).min(16.0)
+            } else {
+                46.0 + ((affluent_demand - useful_capacity) as f32 * 2.0).min(32.0)
+            }
+        }
         SettlementBuildingKind::Hall
         | SettlementBuildingKind::Market
-        | SettlementBuildingKind::Tavern
         | SettlementBuildingKind::Church => 0.0,
     };
 
@@ -644,10 +755,12 @@ fn opportunity_score(
     // subsidising rows of businesses while a large share of residents sleeps
     // rough. The first food extractor is exempt because shelter without any
     // food source is not a viable founding sequence.
-    let first_food_source = signals.farms + signals.fishers == 0
+    let first_food_source = signals.farms + signals.fishers + signals.livestock_farms == 0
         && matches!(
             kind,
-            SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut
+            SettlementBuildingKind::Farmstead
+                | SettlementBuildingKind::FishermansHut
+                | SettlementBuildingKind::LivestockFarm
         );
     let shelter_penalty = if first_food_source {
         0.0
@@ -709,19 +822,7 @@ pub fn replicated_opportunity_board(
     // apply. Keep every tier-unlocked permit visible at full price even when
     // the Hall is not encouraging it. Only the settlement rung, payment and
     // the bounded unused-permit ledger constrain a valid quote.
-    for kind in [
-        SettlementBuildingKind::House,
-        SettlementBuildingKind::Farmstead,
-        SettlementBuildingKind::FishermansHut,
-        SettlementBuildingKind::Windmill,
-        SettlementBuildingKind::Bakery,
-        SettlementBuildingKind::StorageHall,
-        SettlementBuildingKind::LumberjackHut,
-        SettlementBuildingKind::StoneQuarry,
-        SettlementBuildingKind::Market,
-        SettlementBuildingKind::Tavern,
-        SettlementBuildingKind::Church,
-    ] {
+    for kind in SettlementBuildingKind::PLAYER_PERMIT_KINDS {
         if !kind.is_player_permit_available_at(tier) {
             continue;
         }
@@ -752,15 +853,16 @@ fn kind_order(kind: SettlementBuildingKind) -> u8 {
         SettlementBuildingKind::House => 0,
         SettlementBuildingKind::Farmstead => 1,
         SettlementBuildingKind::FishermansHut => 2,
-        SettlementBuildingKind::Windmill => 3,
-        SettlementBuildingKind::Bakery => 4,
-        SettlementBuildingKind::LumberjackHut => 5,
-        SettlementBuildingKind::StoneQuarry => 6,
-        SettlementBuildingKind::StorageHall => 7,
-        SettlementBuildingKind::Market => 8,
-        SettlementBuildingKind::Tavern => 9,
-        SettlementBuildingKind::Church => 10,
-        SettlementBuildingKind::Hall => 11,
+        SettlementBuildingKind::LivestockFarm => 3,
+        SettlementBuildingKind::Windmill => 4,
+        SettlementBuildingKind::Bakery => 5,
+        SettlementBuildingKind::LumberjackHut => 6,
+        SettlementBuildingKind::StoneQuarry => 7,
+        SettlementBuildingKind::StorageHall => 8,
+        SettlementBuildingKind::Market => 9,
+        SettlementBuildingKind::Tavern => 10,
+        SettlementBuildingKind::Church => 11,
+        SettlementBuildingKind::Hall => 12,
     }
 }
 
@@ -788,6 +890,28 @@ fn expected_daily_business(
 /// 2.6x supply shock rather than assuming base price; this is risk assessment,
 /// not a market price cap.
 pub fn minimum_startup_capital(kind: SettlementBuildingKind, market: Option<&MootMarket>) -> u64 {
+    if kind == SettlementBuildingKind::StorageHall {
+        // A depot cannot earn before its porter completes a first trip. Fund
+        // a Balanced three-day payroll runway plus one coin of real risk
+        // capital for a cash-sized trial cargo. This is ordinary founder or
+        // retained company money, never escrow or a civic grant.
+        return 4 * FOUNDING_DAILY_WAGE;
+    }
+    if kind == SettlementBuildingKind::Tavern {
+        // A private inn must be able to open with one worker and one ordinary
+        // service day's pantry. This is spendable company cash, not a public
+        // grant or a second fee. Customer meal/ale recipes may refine these
+        // quantities later without changing the ownership/procurement seam.
+        let pantry = [(Good::Bread, 2u32), (Good::Meat, 1), (Good::Wheat, 1)]
+            .into_iter()
+            .map(|(good, units)| {
+                let quoted =
+                    market.map_or(good.base_price(), |market| market.suggested_price(good));
+                u64::from(units).saturating_mul(quoted.max(good.base_price()))
+            })
+            .fold(0u64, u64::saturating_add);
+        return pantry.saturating_add(FOUNDING_DAILY_WAGE);
+    }
     let Some(recipe) = super::processing_recipe(kind) else {
         return 0;
     };
@@ -854,7 +978,9 @@ pub fn investor_score(
     if opportunity.score <= 15.0
         && matches!(
             opportunity.kind,
-            SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut
+            SettlementBuildingKind::Farmstead
+                | SettlementBuildingKind::FishermansHut
+                | SettlementBuildingKind::LivestockFarm
         )
     {
         // Good terrain is valuable only when somebody can use the output.
@@ -866,7 +992,7 @@ pub fn investor_score(
     let profit = expected_daily_profit(opportunity.kind, site_quality, market).unwrap_or(0);
     let mut profit_signal =
         (profit as f32 / FOUNDING_DAILY_WAGE.max(1) as f32 * 12.0).clamp(-32.0, 32.0);
-    if opportunity.score <= 5.0
+    if opportunity.score <= 15.0
         && matches!(
             opportunity.kind,
             SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery
@@ -895,6 +1021,7 @@ pub fn investor_score(
         opportunity.kind,
         SettlementBuildingKind::Farmstead
             | SettlementBuildingKind::FishermansHut
+            | SettlementBuildingKind::LivestockFarm
             | SettlementBuildingKind::LumberjackHut
             | SettlementBuildingKind::StoneQuarry
     ) {
@@ -1013,6 +1140,39 @@ mod tests {
     }
 
     #[test]
+    fn livestock_is_a_real_food_opportunity_and_existing_capacity_closes_the_signal() {
+        let policies = SettlementPolicies::default();
+        let economy = SettlementEconomy {
+            observed_days: 2,
+            reserve_days: 0.0,
+            recent_food_production: 0.0,
+            ..Default::default()
+        };
+        let hungry = DevelopmentMarketSignals {
+            residents: 12,
+            houses: 3,
+            ..Default::default()
+        };
+        let initial = private_opportunities(hungry, Some(&economy), None, &policies)
+            .into_iter()
+            .find(|opportunity| opportunity.kind == SettlementBuildingKind::LivestockFarm)
+            .unwrap();
+        assert!(initial.score >= 100.0);
+
+        let supplied = DevelopmentMarketSignals {
+            livestock_farms: 2,
+            anticipated_meat_output: 12,
+            recent_meat_output: 24,
+            ..hungry
+        };
+        let covered = private_opportunities(supplied, Some(&economy), None, &policies)
+            .into_iter()
+            .find(|opportunity| opportunity.kind == SettlementBuildingKind::LivestockFarm)
+            .unwrap();
+        assert!(covered.score <= 15.0);
+    }
+
+    #[test]
     fn anticipated_lumber_capacity_closes_a_construction_boom_signal() {
         let mut signals = DevelopmentMarketSignals {
             residents: 200,
@@ -1106,6 +1266,31 @@ mod tests {
         assert_eq!(next.score, 5.0);
         assert!((0..100).all(|seed| {
             investor_score(next, BusinessStrategy::Opportunistic, 0.5, None, 0, seed)
+                < investor_threshold(BusinessStrategy::Opportunistic)
+        }));
+    }
+
+    #[test]
+    fn pending_mill_without_wheat_flow_cannot_sell_hypothetical_full_throughput() {
+        let signals = DevelopmentMarketSignals {
+            residents: 20,
+            farms: 1,
+            windmills: 1,
+            houses: 5,
+            ..Default::default()
+        };
+        let mill = private_opportunities(
+            signals,
+            None,
+            Some(&MootMarket::founding()),
+            &SettlementPolicies::default(),
+        )
+        .into_iter()
+        .find(|opportunity| opportunity.kind == SettlementBuildingKind::Windmill)
+        .unwrap();
+        assert_eq!(mill.score, 8.0);
+        assert!((0..100).all(|seed| {
+            investor_score(mill, BusinessStrategy::Opportunistic, 0.5, None, 0, seed)
                 < investor_threshold(BusinessStrategy::Opportunistic)
         }));
     }
@@ -1315,6 +1500,39 @@ mod tests {
     }
 
     #[test]
+    fn lossmaking_processor_blocks_another_competitive_copy() {
+        let mut market = MootMarket::founding();
+        market.consign(
+            shared::economy::MarketSeller::Business(shared::components::BuildingId(701)),
+            Good::Flour,
+            1,
+            Good::Flour.base_price().saturating_mul(3),
+        );
+        market.purchase_recording_demand(Good::Flour, 8, u64::MAX, None, None);
+        market.begin_new_day();
+        market.purchase_recording_demand(Good::Flour, 8, u64::MAX, None, None);
+        let signals = DevelopmentMarketSignals {
+            residents: 20,
+            farms: 3,
+            windmills: 2,
+            completed_windmills: 2,
+            recent_wheat_output: 24,
+            recent_windmill_sales: 2,
+            recent_windmill_profit: 100,
+            lossmaking_windmills: 1,
+            houses: 5,
+            ..Default::default()
+        };
+
+        let mill =
+            private_opportunities(signals, None, Some(&market), &SettlementPolicies::default())
+                .into_iter()
+                .find(|opportunity| opportunity.kind == SettlementBuildingKind::Windmill)
+                .unwrap();
+        assert_eq!(mill.score, 5.0);
+    }
+
+    #[test]
     fn player_board_keeps_every_private_permit_visible_without_inventing_subsidies() {
         let board = replicated_opportunity_board(
             &[],
@@ -1364,6 +1582,62 @@ mod tests {
                 | SettlementBuildingKind::Tavern
                 | SettlementBuildingKind::Church
         )));
+
+        let town = replicated_opportunity_board(&[], None, SettlementTier::Town);
+        for kind in SettlementBuildingKind::PLAYER_PERMIT_KINDS {
+            assert!(
+                town.opportunities.iter().any(|offer| offer.kind == kind),
+                "the Town permit board omitted {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_private_tavern_opens_with_a_real_pantry_budget() {
+        let capital = minimum_startup_capital(SettlementBuildingKind::Tavern, None);
+        let expected = FOUNDING_DAILY_WAGE
+            + Good::Bread.base_price() * 2
+            + Good::Meat.base_price()
+            + Good::Wheat.base_price();
+        assert_eq!(capital, expected);
+        assert!(capital > FOUNDING_DAILY_WAGE);
+    }
+
+    #[test]
+    fn a_storage_hall_opens_with_porter_runway_and_trial_cargo_cash() {
+        assert_eq!(
+            minimum_startup_capital(SettlementBuildingKind::StorageHall, None),
+            4 * FOUNDING_DAILY_WAGE
+        );
+    }
+
+    #[test]
+    fn a_tavern_is_not_subsidised_before_meal_supply_exists() {
+        let policies = SettlementPolicies::default();
+        let empty = DevelopmentMarketSignals {
+            residents: 40,
+            houses: 10,
+            farms: 2,
+            windmills: 1,
+            ..Default::default()
+        };
+        let premature = private_opportunities(empty, None, None, &policies)
+            .into_iter()
+            .find(|opportunity| opportunity.kind == SettlementBuildingKind::Tavern)
+            .unwrap();
+        assert_eq!(premature.score, 5.0);
+        assert!(!premature.civic_priority);
+
+        let supplied = DevelopmentMarketSignals {
+            bread_stock: 8,
+            ..empty
+        };
+        let useful = private_opportunities(supplied, None, None, &policies)
+            .into_iter()
+            .find(|opportunity| opportunity.kind == SettlementBuildingKind::Tavern)
+            .unwrap();
+        assert!(useful.score >= 60.0);
+        assert!(useful.civic_priority);
     }
 
     #[test]

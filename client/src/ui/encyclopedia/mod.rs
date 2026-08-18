@@ -284,6 +284,7 @@ pub struct PersonRecord {
     pub nutrition: Option<shared::components::Nutrition>,
     pub activity: Option<shared::components::CharacterActivity>,
     pub objective: Option<shared::components::CharacterObjective>,
+    pub day_plan: Option<shared::components::CharacterDayPlan>,
     pub navigation: Option<shared::components::CharacterNavigationStatus>,
     pub attributes: Option<shared::components::CharacterAttributes>,
     pub work_status: Option<shared::components::WorkStatus>,
@@ -397,6 +398,7 @@ pub enum DetailField {
     Wealth,
     Inventory,
     Activity,
+    Schedule,
     Affiliation,
     Standing,
     Status,
@@ -404,7 +406,7 @@ pub enum DetailField {
 }
 
 impl DetailField {
-    pub const ALL: [DetailField; 13] = [
+    pub const ALL: [DetailField; 14] = [
         DetailField::Attributes,
         DetailField::Health,
         DetailField::Home,
@@ -414,6 +416,7 @@ impl DetailField {
         DetailField::Wealth,
         DetailField::Inventory,
         DetailField::Activity,
+        DetailField::Schedule,
         DetailField::Affiliation,
         DetailField::Standing,
         DetailField::Status,
@@ -431,6 +434,7 @@ impl DetailField {
             DetailField::Wealth => "MONEY",
             DetailField::Inventory => "INVENTORY",
             DetailField::Activity => "NOW",
+            DetailField::Schedule => "TODAY",
             DetailField::Affiliation => "AFFILIATION",
             DetailField::Standing => "STANDING",
             DetailField::Status => "STATUS",
@@ -450,6 +454,7 @@ impl DetailField {
             | DetailField::Work
             | DetailField::Employment
             | DetailField::Hunger => kind == PersonKind::Villager,
+            DetailField::Schedule => kind == PersonKind::Villager,
             DetailField::Attributes
             | DetailField::Health
             | DetailField::Wealth

@@ -286,6 +286,32 @@ pub struct SettlementSummary {
     pub treasury: u64,
     pub prosperity: f32,
     pub reserve_days: f32,
+    #[serde(default)]
+    pub recent_food_production: f32,
+    #[serde(default)]
+    pub recent_food_consumption: f32,
+    #[serde(default)]
+    pub hungry: u32,
+    #[serde(default)]
+    pub housing_capacity: u32,
+    #[serde(default)]
+    pub homeless: u32,
+    #[serde(default)]
+    pub job_seekers: u16,
+    #[serde(default)]
+    pub unpaid_workers: u16,
+    #[serde(default)]
+    pub unrest: f32,
+    #[serde(default)]
+    pub unrest_change: f32,
+    #[serde(default)]
+    pub unrest_target: f32,
+    #[serde(default)]
+    pub unrest_hunger_pressure: f32,
+    #[serde(default)]
+    pub unrest_housing_pressure: f32,
+    #[serde(default)]
+    pub unrest_wage_pressure: f32,
     pub houses: u16,
     pub farmsteads: u16,
     pub fishing_huts: u16,
@@ -294,6 +320,10 @@ pub struct SettlementSummary {
     pub windmills: u16,
     #[serde(default)]
     pub bakeries: u16,
+    /// A completed physical Marketplace connects this settlement to formal
+    /// caravan trade. Its founding Moot exchange remains local when false.
+    #[serde(default)]
+    pub has_marketplace: bool,
 }
 
 /// Durable settlement membership. Runtime AI may still hold a session-local

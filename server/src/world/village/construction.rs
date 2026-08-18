@@ -1461,6 +1461,18 @@ fn level_construction_ground(
             ));
         }
     }
+    if let (Some(pasture), Some(half)) = (
+        under.kind.pasture_position(under.position, under.rotation),
+        under.kind.pasture_half_extents(),
+    ) {
+        let target = terrain.get_height(pasture.x, pasture.z);
+        affected.extend(terrain.apply_flatten_rect(
+            Vec3::new(pasture.x, target, pasture.z),
+            half + Vec2::splat(1.0),
+            under.rotation,
+            2.0,
+        ));
+    }
 
     affected.sort_unstable_by_key(|coord| (coord.x, coord.z));
     affected.dedup();

@@ -2,26 +2,27 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::components::{
-    ActiveMapState, AttachedTo, BuildingDoorDemand, BuildingId, BuildingOf, CharacterActivity,
-    CharacterAffiliation, CharacterAttributes, CharacterKind, CharacterMotion, CharacterName,
-    CharacterNavigationStatus, CharacterObjective, CivicEmployment, CivicHallLevel,
-    CivicHallUpgradeWorksite, CivicTradeContract, CloudSeed, CommandedBy, Company, CompanyId,
-    CompanyLeadership, CompanyOwnership, CompanyShareMarket, CompanyTradeRoute, ConstructionSite,
-    EmployedAt, FarmField, FishingPier, Health, Hero, HeroOutfit, Household, LivesAt, MarketLevel,
-    MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId, Player,
-    PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation, Residence, ResidentOf,
-    Settlement, SettlementBuilding, SettlementDevelopment, SettlementId,
-    SettlementOpportunityBoard, SettlementPolicies, SettlementPropertyBoard, SettlementSummary,
-    TimeWarp, TradeContractId, TradeRouteHistory, TradeRouteId, TradeRouteSchedule, VillageRoad,
-    WorkStatus, WorkplaceOperation, WorldTime,
+    AboardBoat, ActiveMapState, AttachedTo, BuildingDoorDemand, BuildingId, BuildingOf,
+    CharacterActivity, CharacterAffiliation, CharacterAttributes, CharacterDayPlan, CharacterKind,
+    CharacterMotion, CharacterName, CharacterNavigationStatus, CharacterObjective, CivicEmployment,
+    CivicHallLevel, CivicHallUpgradeWorksite, CivicTradeContract, CloudSeed, CommandedBy, Company,
+    CompanyId, CompanyLeadership, CompanyOwnership, CompanyShareMarket, CompanyTradeRoute,
+    ConstructionSite, EmployedAt, FarmField, FishingPier, Health, Hero, HeroOutfit, Household,
+    LivesAt, LivestockPasture, MarketLevel, MootAdministration, Nutrition, Occupation, OperatedBy,
+    OwnedBy, PersonId, Player, PlayerBoat, PlayerPermitLedger, PlayerPosition, PlayerProgression,
+    PlayerRotation, Residence, ResidentOf, Settlement, SettlementBuilding, SettlementDevelopment,
+    SettlementId, SettlementOpportunityBoard, SettlementPolicies, SettlementPropertyBoard,
+    SettlementSummary, TimeWarp, TradeContractId, TradeRouteHistory, TradeRouteId,
+    TradeRouteSchedule, Vessel, VillageRoad, WorkStatus, WorkplaceOperation, WorldTime,
+    WreckedVessel,
 };
 use crate::economy::{
     BusinessAccount, BusinessCondition, BusinessForSale, BusinessLiquidation,
     BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy,
     BusinessStaffingPolicy, BusinessSupplyPolicy, BusinessWagePolicy, CarriedLoad, CivicAccount,
     CompanyAccount, CompanyBranchPolicies, CompanyDecisionHistory, CompanyManagementPolicy,
-    GoodsInventory, HouseholdEconomy, MootMarket, PorterCartState, SettlementEconomy, Wallet,
-    WorkforceRequirements,
+    GoodsInventory, HouseholdEconomy, MootMarket, PorterCartState, SettlementEconomy,
+    TavernService, Wallet, WorkforceRequirements,
 };
 use crate::terrain::TerrainDeltaChunk;
 
@@ -42,6 +43,10 @@ impl Plugin for ProtocolPlugin {
 
         // === HERO (embodied character; server-authoritative position) ===
         app.component::<Hero>().replicate();
+        app.component::<PlayerBoat>().replicate();
+        app.component::<Vessel>().replicate();
+        app.component::<WreckedVessel>().replicate();
+        app.component::<AboardBoat>().replicate();
         app.component::<HeroOutfit>().replicate();
         app.component::<PlayerPermitLedger>().replicate();
 
@@ -75,6 +80,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<CharacterMotion>().replicate();
         app.component::<CharacterActivity>().replicate();
         app.component::<CharacterObjective>().replicate();
+        app.component::<CharacterDayPlan>().replicate();
         app.component::<CharacterNavigationStatus>().replicate();
         app.component::<Occupation>().replicate();
         app.component::<WorkStatus>().replicate();
@@ -102,6 +108,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<ConstructionSite>().replicate();
         app.component::<FarmField>().replicate();
         app.component::<FishingPier>().replicate();
+        app.component::<LivestockPasture>().replicate();
         app.component::<Household>().replicate();
         app.component::<HouseholdEconomy>().replicate();
         app.component::<BusinessAccount>().replicate();
@@ -114,6 +121,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<BusinessSalePolicy>().replicate();
         app.component::<BusinessStaffingPolicy>().replicate();
         app.component::<BusinessWagePolicy>().replicate();
+        app.component::<TavernService>().replicate();
         app.component::<CompanyAccount>().replicate();
         app.component::<CompanyManagementPolicy>().replicate();
         app.component::<CompanyBranchPolicies>().replicate();
@@ -142,6 +150,11 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<SetTimeOfDay>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<SubmitPlayerName>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<CreateHero>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<DisembarkBoat>()
+            .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<RequestCharacterRoster>()
             .add_direction(NetworkDirection::ClientToServer);

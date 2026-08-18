@@ -19,4 +19,5 @@ pub mod spatial;
 pub mod structures;
 pub mod terrain;
 pub mod water;
+pub mod wind;
 pub mod worldgen;

@@ -95,6 +95,17 @@ fn marginal_operating_plan(
                 input_quote,
             )
         });
+    // An empty shelf has no live ask from which a closed producer can value
+    // reopening. Failed purchases are nevertheless real demand: use the
+    // exchange's current scarcity/last-sale quote when buyers requested units
+    // which no listing could supply. This remains a price signal rather than a
+    // production order; the owner still rejects the shift when that revenue
+    // cannot cover inputs and wages.
+    if unavailable > 0 {
+        if let Some(market) = market {
+            output_quote = output_quote.max(market.suggested_price(output));
+        }
+    }
     // A funded inter-settlement tender is a real bid, not merely an abstract
     // quantity shortage. The seller remains free to choose any ask at or
     // below the buyer's ceiling; this price is used only to answer whether a
@@ -215,6 +226,7 @@ pub fn review_automatic_staffing(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
     mut last_day: Local<Option<u32>>,
+    merchant_demand: Option<Res<super::trade_routes::RegionalMerchantDemand>>,
     trade_contracts: Query<&shared::components::CivicTradeContract>,
     halls: Query<
         (
@@ -248,6 +260,7 @@ pub fn review_automatic_staffing(
             &BusinessWagePolicy,
             &mut BusinessStaffingPolicy,
             Option<&shared::components::OperatedBy>,
+            Option<&shared::economy::TavernService>,
         )>,
     )>,
 ) {
@@ -388,6 +401,24 @@ pub fn review_automatic_staffing(
             demand.1 = demand.1.max(contract.maximum_unit_price);
         }
     }
+    // A demonstrated speculative export opportunity needs one available
+    // porter before an autonomous company can launch its first route. Feed
+    // the aggregate, already-funded market signal to only the stable
+    // lowest-id Storage Hall in that settlement. Without this seam a new
+    // warehouse dismisses its founding porter after one quiet day, while the
+    // route manager refuses to create a route until a porter exists: a
+    // permanent route-before-worker deadlock.
+    if let Some(merchant_demand) = merchant_demand.as_deref() {
+        for (settlement, storage) in &carrier_restart_leaders {
+            let bulk = merchant_demand.bulk(*settlement);
+            if bulk > 0 {
+                external_carrier_bulk
+                    .entry(*storage)
+                    .and_modify(|current| *current = (*current).max(bulk))
+                    .or_insert(bulk);
+            }
+        }
+    }
     // When every edible listing is gone, route the settlement's generic
     // missed-ration signal to one cheapest viable staple and one deterministic
     // site. Concentrating the restart order lets a worker cover the fixed
@@ -423,6 +454,7 @@ pub fn review_automatic_staffing(
         wage,
         mut staffing,
         operated_by,
+        tavern_service,
     ) in buildings.p1().iter_mut()
     {
         let state = condition
@@ -517,6 +549,60 @@ pub fn review_automatic_staffing(
                 target_output_units: 0,
                 produced_output_units: 0,
                 optimal_positions: optimal,
+                marginal_daily_profit: 0,
+            });
+            continue;
+        }
+
+        if building.kind == SettlementBuildingKind::Tavern {
+            let observed_visits = tavern_service.map_or(0, |service| {
+                service
+                    .current_day
+                    .planned_visits
+                    .max(service.previous_day.planned_visits)
+                    .max(
+                        service
+                            .current_day
+                            .served_meals
+                            .saturating_add(service.current_day.unmet_visits()),
+                    )
+                    .max(
+                        service
+                            .previous_day
+                            .served_meals
+                            .saturating_add(service.previous_day.unmet_visits()),
+                    )
+            });
+            // A new dining room needs one Innkeeper before demand can be
+            // observed at all. Thereafter real attempted patronage determines
+            // whether a second physical position is worth advertising.
+            let desired = if observed_visits == 0 {
+                1
+            } else {
+                u8::try_from(
+                    observed_visits.div_ceil(shared::economy::TAVERN_MEALS_PER_INNKEEPER_DAY),
+                )
+                .unwrap_or(u8::MAX)
+                .clamp(1, building.kind.positions())
+            };
+            let desired = if matches!(state, BusinessState::CashTight | BusinessState::Distressed) {
+                desired.min(1)
+            } else {
+                desired
+            };
+            let current = staffing.enabled_positions.min(building.kind.positions());
+            staffing.enabled_positions = if current < desired {
+                current.saturating_add(1)
+            } else if current > desired {
+                current.saturating_sub(1)
+            } else {
+                current
+            };
+            commands.entity(entity).insert(BusinessOperatingPlan {
+                day,
+                target_output_units: 0,
+                produced_output_units: 0,
+                optimal_positions: desired,
                 marginal_daily_profit: 0,
             });
             continue;
@@ -696,12 +782,12 @@ pub fn fill_vacancies(
                 .is_some_and(|kind| !is_private_business(*kind))
         });
         if invalid_public_assignment {
-            // Market, Tavern and Church are civic service buildings, but they
-            // do not yet have a funded municipal workplace contract. Earlier
+            // Market and Church are civic service buildings, but they do not
+            // yet have a funded municipal workplace contract. Earlier
             // builds advertised their architectural positions as if they were
             // private paid jobs, leaving residents employed without any
-            // payroll path. Release those false assignments; future service
-            // jobs must enter through explicit civic staffing and payroll.
+            // payroll path. Taverns are real private firms and therefore do
+            // not enter this cleanup path.
             occupation.0 = None;
             commands
                 .entity(entity)
@@ -1717,6 +1803,42 @@ mod tests {
     }
 
     #[test]
+    fn empty_civic_material_shelf_values_reopening_at_the_market_quote() {
+        let lumber = SettlementBuilding {
+            kind: SettlementBuildingKind::LumberjackHut,
+            settlement: "Timbermoot".into(),
+            owner: None,
+            quality: 1.0,
+            workers: Vec::new(),
+        };
+        let mut sale = BusinessSalePolicy::for_good(Good::Wood);
+        sale.asking_unit_price = 1;
+        sale.minimum_unit_price = 1;
+        let mut market = MootMarket::founding();
+        market.purchase_recording_demand(Good::Wood, 4, u64::MAX, None, None);
+
+        let plan = marginal_operating_plan(
+            8,
+            &lumber,
+            &GoodsInventory::new(lumber.kind.storage_bulk_capacity()),
+            &BusinessAccount::default(),
+            &sale,
+            &BusinessWagePolicy::default(),
+            &BusinessManagementPolicy::default(),
+            Some(&market),
+            Some(MarketSeller::Business(shared::components::BuildingId(70))),
+            1,
+            0,
+            None,
+            false,
+        );
+
+        assert_eq!(plan.optimal_positions, 1);
+        assert!(plan.target_output_units > 0);
+        assert!(plan.marginal_daily_profit > 0);
+    }
+
+    #[test]
     fn insolvent_food_shell_cannot_capture_the_only_hunger_restart_order() {
         let mut app = App::new();
         app.add_systems(Update, review_automatic_staffing);
@@ -1885,7 +2007,7 @@ mod tests {
         app.add_systems(Update, review_automatic_staffing);
         let mut clock = WorldTime::new_default();
         clock.day = 12;
-        app.world_mut().spawn(clock);
+        let clock_entity = app.world_mut().spawn(clock).id();
 
         let source = shared::components::SettlementId(7);
         let destination = shared::components::SettlementId(8);
@@ -1929,7 +2051,8 @@ mod tests {
         };
         let first = spawn_warehouse(app.world_mut(), 70, 20);
         let second = spawn_warehouse(app.world_mut(), 71, 21);
-        app.world_mut()
+        let contract = app
+            .world_mut()
             .spawn(shared::components::CivicTradeContract {
                 origin: Some(source),
                 destination,
@@ -1946,7 +2069,8 @@ mod tests {
                 created_day: 11,
                 last_attempt_day: u32::MAX,
                 status: shared::components::TradeContractStatus::Open,
-            });
+            })
+            .id();
 
         app.update();
 
@@ -1963,6 +2087,111 @@ mod tests {
                 .unwrap()
                 .enabled_positions,
             0
+        );
+
+        app.world_mut().despawn(contract);
+        for warehouse in [first, second] {
+            app.world_mut()
+                .get_mut::<BusinessStaffingPolicy>(warehouse)
+                .unwrap()
+                .enabled_positions = 0;
+        }
+        let mut merchant_demand = super::trade_routes::RegionalMerchantDemand::default();
+        merchant_demand.advertise(source, Good::Bread, 24);
+        app.world_mut().insert_resource(merchant_demand);
+        app.world_mut()
+            .get_mut::<WorldTime>(clock_entity)
+            .unwrap()
+            .day = 13;
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<BusinessStaffingPolicy>(first)
+                .unwrap()
+                .enabled_positions,
+            1,
+            "a funded merchant opportunity must keep one real porter position open before the route exists"
+        );
+        assert_eq!(
+            app.world()
+                .get::<BusinessStaffingPolicy>(second)
+                .unwrap()
+                .enabled_positions,
+            0,
+            "one export opportunity must not wake every warehouse in the settlement"
+        );
+    }
+
+    #[test]
+    fn tavern_staffing_follows_attempted_service_demand() {
+        let mut app = App::new();
+        app.add_systems(Update, review_automatic_staffing);
+        let mut clock = WorldTime::new_default();
+        clock.day = 2;
+        let clock_entity = app.world_mut().spawn(clock).id();
+
+        let settlement = shared::components::SettlementId(81);
+        app.world_mut().spawn((
+            settlement,
+            Settlement {
+                name: "Meadow".into(),
+                tier: shared::components::SettlementTier::Village,
+                residents: 35,
+                treasury: 0,
+            },
+            MootMarket::founding(),
+        ));
+        let mut service = shared::economy::TavernService::default();
+        service.previous_day.planned_visits = 12;
+        let tavern = app
+            .world_mut()
+            .spawn((
+                shared::components::BuildingId(82),
+                shared::components::BuildingOf(settlement),
+                shared::components::OperatedBy(shared::components::CompanyId(83)),
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::Tavern,
+                    settlement: "Meadow".into(),
+                    owner: None,
+                    quality: 1.0,
+                    workers: Vec::new(),
+                },
+                GoodsInventory::new(SettlementBuildingKind::Tavern.storage_bulk_capacity()),
+                BusinessManagementPolicy::default(),
+                BusinessCondition {
+                    state: BusinessState::Operating,
+                    ..default()
+                },
+                BusinessAccount::default(),
+                BusinessSalePolicy::default(),
+                BusinessWagePolicy::default(),
+                BusinessStaffingPolicy::new(0),
+                service,
+            ))
+            .id();
+
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<BusinessStaffingPolicy>(tavern)
+                .unwrap()
+                .enabled_positions,
+            1
+        );
+
+        app.world_mut()
+            .get_mut::<WorldTime>(clock_entity)
+            .unwrap()
+            .day = 3;
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<BusinessStaffingPolicy>(tavern)
+                .unwrap()
+                .enabled_positions,
+            2
         );
     }
 }

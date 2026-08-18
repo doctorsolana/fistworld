@@ -38,7 +38,7 @@ pub fn sync_settlement_directory(
     // Count physical detail once. The previous nested hall/building scan grew
     // as settlements × buildings and made the global directory unnecessarily
     // expensive in large worlds.
-    let mut building_counts: HashMap<SettlementId, [u16; 6]> = HashMap::new();
+    let mut building_counts: HashMap<SettlementId, [u16; 7]> = HashMap::new();
     for (owner, building) in buildings.iter() {
         let index = match building.kind {
             SettlementBuildingKind::House => 0,
@@ -47,6 +47,7 @@ pub fn sync_settlement_directory(
             SettlementBuildingKind::LumberjackHut => 3,
             SettlementBuildingKind::Windmill => 4,
             SettlementBuildingKind::Bakery => 5,
+            SettlementBuildingKind::Market => 6,
             _ => continue,
         };
         let counts = building_counts.entry(owner.0).or_default();
@@ -56,7 +57,7 @@ pub fn sync_settlement_directory(
     let mut live = HashSet::new();
     for (id, settlement, position, economy) in halls.iter() {
         live.insert(*id);
-        let [houses, farmsteads, fishing_huts, lumber_huts, windmills, bakeries] =
+        let [houses, farmsteads, fishing_huts, lumber_huts, windmills, bakeries, marketplaces] =
             building_counts.get(id).copied().unwrap_or_default();
         let summary = SettlementSummary {
             id: *id,
@@ -66,12 +67,26 @@ pub fn sync_settlement_directory(
             treasury: settlement.treasury,
             prosperity: economy.map_or(0.0, |economy| economy.prosperity),
             reserve_days: economy.map_or(0.0, |economy| economy.reserve_days),
+            recent_food_production: economy.map_or(0.0, |economy| economy.recent_food_production),
+            recent_food_consumption: economy.map_or(0.0, |economy| economy.recent_food_consumption),
+            hungry: economy.map_or(0, |economy| economy.unmet_food),
+            housing_capacity: economy.map_or(0, |economy| economy.housing_capacity),
+            homeless: economy.map_or(0, |economy| economy.homeless_residents),
+            job_seekers: economy.map_or(0, |economy| economy.job_seekers),
+            unpaid_workers: economy.map_or(0, |economy| economy.unpaid_workers),
+            unrest: economy.map_or(0.0, |economy| economy.unrest),
+            unrest_change: economy.map_or(0.0, |economy| economy.unrest_change),
+            unrest_target: economy.map_or(0.0, |economy| economy.unrest_target),
+            unrest_hunger_pressure: economy.map_or(0.0, |economy| economy.unrest_hunger_pressure),
+            unrest_housing_pressure: economy.map_or(0.0, |economy| economy.unrest_housing_pressure),
+            unrest_wage_pressure: economy.map_or(0.0, |economy| economy.unrest_wage_pressure),
             houses,
             farmsteads,
             fishing_huts,
             lumber_huts,
             windmills,
             bakeries,
+            has_marketplace: marketplaces > 0,
         };
         if let Some(entity) = directory
             .entries

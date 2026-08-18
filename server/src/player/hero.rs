@@ -11,9 +11,10 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::{MessageReceiver, NetworkTarget, PeerId, RemoteId, Replicate};
 
 use shared::components::{
-    BuildingDoorUse, CharacterActivity, CharacterAffiliation, CharacterAttributes, CharacterKind,
-    CharacterMotion, CharacterName, CommandedBy, Health, Hero, HeroOutfit, Nutrition, Player,
-    PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation,
+    AboardBoat, BuildingDoorUse, CharacterActivity, CharacterAffiliation, CharacterAttributes,
+    CharacterKind, CharacterMotion, CharacterName, CommandedBy, Health, Hero, HeroOutfit,
+    Nutrition, Player, PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation,
+    Vessel,
 };
 use shared::player::{HERO_ARRIVE_EPSILON, HERO_MOVE_SPEED};
 use shared::player_profile::HeroSave;
@@ -311,11 +312,17 @@ pub fn hero_save(
 pub fn handle_unit_move_orders(
     mut commands: Commands,
     profiles: Res<crate::persistence::profiles::PlayerProfiles>,
+    mut vessel_navigation: ResMut<crate::player::boat::VesselNavigationQueue>,
     mut client_links: Query<(&RemoteId, &mut MessageReceiver<UnitMoveOrder>), With<ClientOf>>,
     units: Query<
         (&CommandedBy, Option<&PlayerConstructionAssignment>),
-        (With<CharacterKind>, Without<OfflineHero>),
+        (
+            With<CharacterKind>,
+            Without<OfflineHero>,
+            Without<AboardBoat>,
+        ),
     >,
+    boats: Query<&CommandedBy, With<Vessel>>,
     mut sites: Query<&mut UnderConstruction>,
 ) {
     for (remote_id, mut receiver) in client_links.iter_mut() {
@@ -339,28 +346,40 @@ pub fn handle_unit_move_orders(
                 if *unit == Entity::PLACEHOLDER {
                     continue;
                 }
-                let Ok((commanded, construction)) = units.get(*unit) else {
+                if let Ok((commanded, construction)) = units.get(*unit) {
+                    if commanded.0 != account {
+                        continue;
+                    }
+                    if let Some(construction) = construction {
+                        if let Ok(mut site) = sites.get_mut(construction.site) {
+                            if site.builder == Some(*unit) {
+                                site.builder = None;
+                            }
+                        }
+                        commands
+                            .entity(*unit)
+                            .remove::<PlayerConstructionAssignment>()
+                            .remove::<ConstructionMaterialRoutine>()
+                            .remove::<TravelRoute>()
+                            .remove::<NavigationRoutePending>()
+                            .remove::<NavigationRouteFailed>()
+                            .insert(CharacterActivity::Idle);
+                    }
+                    commands.entity(*unit).insert(MoveTarget(*point));
+                    continue;
+                }
+
+                let Ok(commanded) = boats.get(*unit) else {
                     continue;
                 };
                 if commanded.0 != account {
                     continue;
                 }
-                if let Some(construction) = construction {
-                    if let Ok(mut site) = sites.get_mut(construction.site) {
-                        if site.builder == Some(*unit) {
-                            site.builder = None;
-                        }
-                    }
-                    commands
-                        .entity(*unit)
-                        .remove::<PlayerConstructionAssignment>()
-                        .remove::<ConstructionMaterialRoutine>()
-                        .remove::<TravelRoute>()
-                        .remove::<NavigationRoutePending>()
-                        .remove::<NavigationRouteFailed>()
-                        .insert(CharacterActivity::Idle);
-                }
-                commands.entity(*unit).insert(MoveTarget(*point));
+                let goal = Vec2::new(point.x, point.z);
+                commands
+                    .entity(*unit)
+                    .remove::<crate::player::boat::VesselRoute>();
+                vessel_navigation.request(*unit, goal);
             }
         }
     }

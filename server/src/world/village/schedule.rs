@@ -55,6 +55,8 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
     app.init_resource::<super::CompanyEscrowRefundQueue>();
     app.init_resource::<super::MootQueueClock>();
     app.init_resource::<super::MortalityLedger>();
+    app.init_resource::<super::RegionalTradeIntelligence>();
+    app.init_resource::<super::trade_routes::RegionalMerchantDemand>();
     app.configure_sets(
         schedule.clone(),
         (
@@ -117,6 +119,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 ),
                 world::identity::assign_stable_world_ids,
                 world::identity::rebuild_world_identity_index,
+                world::village_lab_scenario::ensure_merchant_beacon_marketplace,
                 super::tag_villager_intent,
                 super::seek_settlement,
                 super::arrive_at_settlement,
@@ -129,6 +132,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 super::ensure_settlement_economies,
                 super::ensure_companies,
                 super::ensure_business_economies,
+                super::ensure_tavern_services,
                 super::post_site_capital_to_company,
                 super::ensure_company_branches,
                 super::cleanup_empty_companies,
@@ -159,6 +163,9 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                     super::run_business_payroll_and_owner_leisure,
                     super::collect_business_profit_taxes,
                     super::review_company_strategies,
+                    world::village_lab_scenario::maintain_merchant_beacon_supply,
+                    super::review_autonomous_merchant_trade,
+                    super::review_tavern_businesses,
                     super::review_business_management,
                     super::review_company_finance,
                     super::acquire_businesses_for_sale,
@@ -205,7 +212,8 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                     .chain()
                     .in_set(VillageConstructionSet::MaterialLogistics),
                 super::advance_construction.in_set(VillageConstructionSet::BuildingProgress),
-                super::ensure_farm_fields.in_set(VillageConstructionSet::Fields),
+                (super::ensure_farm_fields, super::ensure_livestock_pastures)
+                    .in_set(VillageConstructionSet::Fields),
                 world::village_roads::plan_requested_roads
                     .in_set(VillageConstructionSet::RoadPlanning),
                 (
@@ -221,6 +229,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 .in_set(VillageCoreSet::Construction),
             (
                 super::sync_porter_cargo_capacity,
+                super::refresh_character_day_plans,
                 super::run_household_schedules,
                 super::run_workplace_door_transits,
                 world::village_roads::build_village_roads,
@@ -232,20 +241,29 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 world::settlement_development::sync_market_levels,
                 super::ensure_market_ground_is_level,
                 (
-                    super::ensure_fishing_piers,
-                    super::assign_farmer_routines,
-                    super::assign_fishing_routines,
-                    super::assign_lumberjack_routines,
-                    super::assign_quarry_routines,
-                    super::assign_processing_routines,
-                    super::run_household_shopping,
-                    super::run_farmer_routines,
-                    super::run_fishing_routines,
-                    super::run_lumberjack_routines,
-                    super::run_quarry_routines,
-                    super::run_processing_routines,
-                    super::sync_workplace_operations,
-                    super::sync_business_stock_targets,
+                    (
+                        super::ensure_fishing_piers,
+                        super::assign_farmer_routines,
+                        super::assign_fishing_routines,
+                        super::assign_lumberjack_routines,
+                        super::assign_quarry_routines,
+                        super::assign_processing_routines,
+                        super::assign_tavern_routines,
+                    )
+                        .chain(),
+                    (
+                        super::run_household_shopping,
+                        super::run_farmer_routines,
+                        super::run_fishing_routines,
+                        super::run_lumberjack_routines,
+                        super::run_quarry_routines,
+                        super::run_processing_routines,
+                        super::run_tavern_routines,
+                        super::run_strategic_tavern_visits,
+                        super::sync_workplace_operations,
+                        super::sync_business_stock_targets,
+                    )
+                        .chain(),
                     (
                         super::manage_company_trade_routes,
                         super::run_company_trade_routes,

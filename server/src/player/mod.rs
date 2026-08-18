@@ -9,6 +9,7 @@
 //! - May depend on `shared`, `net`, and persistence resources.
 //! - Should avoid direct dependency on combat/collision internals.
 
+pub mod boat;
 pub mod business;
 pub mod commander;
 pub mod companies;

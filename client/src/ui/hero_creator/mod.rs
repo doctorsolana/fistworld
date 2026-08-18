@@ -9,8 +9,10 @@
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
+use lightyear::prelude::{Connected, MessageSender};
 
 use shared::components::HeroOutfit;
+use shared::protocol::{CreateHero, ReliableChannel};
 
 use crate::hero::control::{SelectedOutfit, WorldPlacementMode};
 use crate::hero::{spawn_character_scene_child, HeroFullRig, HeroPreviewRig, HeroVisual};
@@ -41,6 +43,7 @@ pub struct HeroCreatorPlugin;
 impl Plugin for HeroCreatorPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HeroCreatorOpen>();
+        app.init_resource::<HeroCreatorPurpose>();
         app.init_resource::<PreviewEntities>();
         app.init_resource::<CreatorClickGuard>();
         app.add_systems(
@@ -70,6 +73,16 @@ impl Plugin for HeroCreatorPlugin {
 
 #[derive(Resource, Default)]
 pub struct HeroCreatorOpen(pub bool);
+
+/// Why the creator is open. God placement preserves the existing developer
+/// workflow; a new account must commit a look before its server-authoritative
+/// coastal voyage is created.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeroCreatorPurpose {
+    #[default]
+    GodPlacement,
+    NewPlayerVoyage,
+}
 
 /// Armed once the left button has been released since the modal opened, so a
 /// button already under the cursor cannot action itself on open.
@@ -272,6 +285,7 @@ fn follow_camera_with_diorama(
 fn spawn_creator(
     mut commands: Commands,
     manifest: Res<crate::hero::HeroManifest>,
+    purpose: Res<HeroCreatorPurpose>,
     roots: Query<(), With<CreatorRoot>>,
 ) {
     if !roots.is_empty() {
@@ -317,7 +331,11 @@ fn spawn_creator(
                     ))
                     .with_children(|bar| {
                         bar.spawn((
-                            Text::new("CREATE HERO"),
+                            Text::new(if *purpose == HeroCreatorPurpose::NewPlayerVoyage {
+                                "CREATE YOUR HERO"
+                            } else {
+                                "CREATE HERO"
+                            }),
                             TextFont {
                                 font_size: FontSize::Px(15.0),
                                 ..default()
@@ -364,15 +382,21 @@ fn spawn_creator(
                                 ..default()
                             })
                             .with_children(|row| {
+                                if *purpose == HeroCreatorPurpose::GodPlacement {
+                                    spawn_action_button(
+                                        row,
+                                        "CANCEL",
+                                        UiButtonVariant::Ghost,
+                                        CancelButton,
+                                    );
+                                }
                                 spawn_action_button(
                                     row,
-                                    "CANCEL",
-                                    UiButtonVariant::Ghost,
-                                    CancelButton,
-                                );
-                                spawn_action_button(
-                                    row,
-                                    "PLACE",
+                                    if *purpose == HeroCreatorPurpose::NewPlayerVoyage {
+                                        "BEGIN JOURNEY"
+                                    } else {
+                                        "PLACE"
+                                    },
                                     UiButtonVariant::Primary,
                                     PlaceButton,
                                 );
@@ -547,9 +571,15 @@ fn handle_confirm_buttons(
     guard: Res<CreatorClickGuard>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut open: ResMut<HeroCreatorOpen>,
+    purpose: Res<HeroCreatorPurpose>,
+    selected: Res<SelectedOutfit>,
     mut placement: ResMut<WorldPlacementMode>,
     place: Query<&Interaction, (With<PlaceButton>, Changed<Interaction>)>,
     cancel: Query<&Interaction, (With<CancelButton>, Changed<Interaction>)>,
+    mut create_sender: Query<
+        &mut MessageSender<CreateHero>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
 ) {
     // Same guard as the arrows: without it a click that opened the modal
     // could land on PLACE or CANCEL the instant they appear.
@@ -558,12 +588,24 @@ fn handle_confirm_buttons(
     }
     for interaction in place.iter() {
         if *interaction == Interaction::Pressed {
-            open.0 = false;
-            *placement = WorldPlacementMode::SpawnHero;
+            match *purpose {
+                HeroCreatorPurpose::GodPlacement => {
+                    open.0 = false;
+                    *placement = WorldPlacementMode::SpawnHero;
+                }
+                HeroCreatorPurpose::NewPlayerVoyage => {
+                    let Ok(mut sender) = create_sender.single_mut() else {
+                        continue;
+                    };
+                    sender.send::<ReliableChannel>(CreateHero { outfit: selected.0 });
+                    open.0 = false;
+                    *placement = WorldPlacementMode::None;
+                }
+            }
         }
     }
     for interaction in cancel.iter() {
-        if *interaction == Interaction::Pressed {
+        if *interaction == Interaction::Pressed && *purpose == HeroCreatorPurpose::GodPlacement {
             open.0 = false;
         }
     }
@@ -575,7 +617,22 @@ fn close_on_escape_or_backdrop(
     mouse: Res<ButtonInput<MouseButton>>,
     backdrop: Query<&Interaction, (With<CreatorBackdrop>, Changed<Interaction>)>,
     mut open: ResMut<HeroCreatorOpen>,
+    purpose: Res<HeroCreatorPurpose>,
+    capability: Res<crate::ui::hud::GodCapability>,
+    mut hud_mode: ResMut<crate::ui::hud::HudMode>,
+    mut cinematic: ResMut<crate::boat::OpeningCinematic>,
 ) {
+    if *purpose == HeroCreatorPurpose::NewPlayerVoyage {
+        // Development escape hatch: the normal start is intentionally
+        // mandatory, but a God-capable client must remain able to inspect an
+        // empty/new world without creating its player character first.
+        if capability.0 && keyboard.just_pressed(KeyCode::KeyG) {
+            *hud_mode = crate::ui::hud::HudMode::God;
+            open.0 = false;
+            cinematic.cancel();
+        }
+        return;
+    }
     // The backdrop covers the whole screen, so an un-guarded press would
     // close the modal on the very click that opened it.
     let clicked_out =

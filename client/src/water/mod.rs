@@ -1,6 +1,7 @@
 //! Client-side water rendering (rivers + ocean)
 
 pub mod chunks;
+mod edge;
 pub mod material;
 pub mod mesh;
 pub mod overlay;
@@ -8,9 +9,10 @@ pub mod overlay;
 pub use chunks::WaterChunk;
 
 use chunks::{cleanup_water_chunks, spawn_water_chunks, LoadedWaterChunks, WaterRenderAssets};
+use edge::{ensure_ocean_edge_extension, update_ocean_edge_extension};
 use material::{
-    setup_water_assets, sync_water_wave_clock, update_water_cull_mode, update_water_sun_dir,
-    ToonWaterMaterial,
+    setup_water_assets, sync_water_map_bounds, sync_water_wave_clock, update_water_cull_mode,
+    update_water_sun_dir, ToonWaterMaterial,
 };
 use overlay::{despawn_underwater_overlay, spawn_underwater_overlay, update_underwater_overlay};
 
@@ -48,7 +50,12 @@ impl Plugin for WaterPlugin {
         app.add_systems(OnExit(GameState::Playing), despawn_underwater_overlay);
         app.add_systems(
             Update,
-            (cleanup_water_chunks, spawn_water_chunks)
+            (
+                cleanup_water_chunks,
+                spawn_water_chunks,
+                ensure_ocean_edge_extension,
+                update_ocean_edge_extension,
+            )
                 .chain()
                 .after(TerrainUpdateSet)
                 .run_if(in_state(GameState::Playing)),
@@ -60,6 +67,7 @@ impl Plugin for WaterPlugin {
                 update_water_cull_mode,
                 update_water_sun_dir,
                 sync_water_wave_clock,
+                sync_water_map_bounds,
             )
                 .run_if(in_state(GameState::Playing)),
         );

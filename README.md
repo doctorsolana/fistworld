@@ -12,7 +12,9 @@ game, [CIVIC-ECONOMY.md](docs/CIVIC-ECONOMY.md) for the executable market and po
 rules, [COMPANY-ECONOMY-IMPLEMENTATION.md](docs/COMPANY-ECONOMY-IMPLEMENTATION.md)
 for shares, pooled finance and vertical integration,
 [ARCHITECTURE.md](docs/ARCHITECTURE.md) for technical boundaries, and
-[ROADMAP.md](docs/ROADMAP.md) for implemented and future work.
+[ROADMAP.md](docs/ROADMAP.md) for implemented and future work. The executable coastal
+arrival and reusable ship-navigation contract are documented in
+[PLAYER-START-AND-VESSELS.md](docs/PLAYER-START-AND-VESSELS.md).
 
 ## Current playable foundation
 
@@ -98,6 +100,13 @@ for shares, pooled finance and vertical integration,
   posting an offer deposits cargo into a person-owned consignment and pays nothing until a
   real buyer clears it. A newly created hero begins with 20 coin; reconnecting to that same
   live hero preserves the existing wallet instead of granting the endowment again.
+- A new account now creates its Hero outside God Mode and begins aboard an authored Dinghy
+  at a server-chosen map edge. The opening camera moves from the dressed Hero's face into
+  the RTS view; the selected boat follows water-only routes, sails faster or slower with
+  the shared wind and turns/fills its sail from apparent wind. Right-clicking nearby dry
+  shore disembarks and selects the Hero while the one-use starter boat becomes a visible
+  wreck. Bounded vessel-route planning is shared infrastructure for later merchant and war
+  ships. Returning to the same running server re-adopts the live Hero and skips creation.
 - The Hall's property ledger is actionable for an embodied hero. It returns an exact
   company-specific business-permit quote, charges only its refundable permit fee, and opens a
   world placement ghost. Road frontage snaps magnetically while free placement remains

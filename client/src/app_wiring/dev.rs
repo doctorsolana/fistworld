@@ -38,6 +38,7 @@ pub(super) fn autoconnect_from_main_menu(
 
 pub(super) fn autoconnect_submit_name(
     mut commands: Commands,
+    mut player_name: ResMut<crate::ui::name_entry::PlayerNameInput>,
     client_query: Query<
         (Entity, &MessageSender<SubmitPlayerName>),
         (With<crate::GameClient>, Without<PlayerNameSubmitted>),
@@ -49,6 +50,11 @@ pub(super) fn autoconnect_submit_name(
     let Ok((client_entity, _)) = client_query.single() else {
         return;
     };
+    // Keep the same client-side account state as the real name-entry form.
+    // Opening-voyage presentation uses it to match the replicated stable
+    // CommandedBy account on the player's boat.
+    player_name.name.clone_from(&name);
+    player_name.submitted = true;
     info!("FISTFORCE_AUTOCONNECT: submitting player name '{name}'");
     commands.queue(move |world: &mut World| {
         if let Some(mut sender) = world.get_mut::<MessageSender<SubmitPlayerName>>(client_entity) {

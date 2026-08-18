@@ -37,6 +37,12 @@ struct ToonWaterUniform {
     climate: vec4<f32>,
     // xy: storm center at the wind anchor, z: storminess, w: reserved.
     storm: vec4<f32>,
+    // xy: clean per-pixel distance fade start/end. This replaces Bevy's
+    // 4x4 visibility dither, which reads as a dark checkerboard on water.
+    distance_fade: vec4<f32>,
+    // xy: playable min xz, zw: playable max xz. Only the visual map-edge
+    // continuation uses this; ordinary water has signed depth <= 1.
+    map_bounds: vec4<f32>,
 };
 
 @group(3) @binding(0) var<uniform> material: ToonWaterUniform;
@@ -298,16 +304,20 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
     out.instance_index = vertex_no_morph.instance_index;
 #endif
 
-#ifdef VISIBILITY_RANGE_DITHER
-    out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
-        vertex_no_morph.instance_index, mesh_world_from_local[3]);
-#endif
-
     return out;
 }
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+    // One camera-local square covers sides and corners without gaps. Its
+    // private B > 1 vertex tag keeps it strictly outside gameplay terrain.
+    if (in.color.b > 1.5
+        && in.world_position.x >= material.map_bounds.x
+        && in.world_position.z >= material.map_bounds.y
+        && in.world_position.x <= material.map_bounds.z
+        && in.world_position.z <= material.map_bounds.w) {
+        discard;
+    }
     // R is an ocean/river blend baked by the mesh. It lets this pass fix the
     // long-coast folding without disturbing the river look.
     let ocean_factor = clamp(in.color.r, 0.0, 1.0);
@@ -486,6 +496,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Fresnel: grazing views pick up a pale sky tint and turn more opaque;
     // looking straight down stays clear. Sells the surface as reflective
     // without any actual reflection rendering.
+    let view_dist = distance(view.world_position.xyz, in.world_position.xyz);
     let view_vec = normalize(view.world_position.xyz - in.world_position.xyz);
 #ifdef VERTEX_NORMALS
     let broad_normal = normalize(in.world_normal);
@@ -524,7 +535,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let ripple_normal = normalize(vec3<f32>(-grad.x, 1.0, -grad.y));
     let sun_dir = normalize(material.sun_params.xyz);
     let sparkle = 0.25 + 0.75 * hash12(floor(in.world_position.xz * 1.7));
-    let view_dist = distance(view.world_position.xyz, in.world_position.xyz);
     let dist_fade = mix(0.2, 1.0, 1.0 - smoothstep(50.0, 150.0, view_dist));
     let glint = min(
         pow(max(dot(reflect(-view_vec, ripple_normal), sun_dir), 0.0), 130.0)
@@ -582,6 +592,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let day_w = smoothstep(-0.08, 0.12, material.sun_params.y);
     color_rgb = mix(color_rgb * vec3<f32>(0.20, 0.26, 0.45), color_rgb, day_w);
     color_rgb *= cloud_shade;
+
+    // Smoothly reveal the matching far-ocean surface. Alpha blending is
+    // continuous, so there is no screen-door pattern and no chunk-shaped box.
+    let water_detail = 1.0 - smoothstep(
+        material.distance_fade.x,
+        material.distance_fade.y,
+        view_dist,
+    );
+    alpha *= water_detail;
 
     return vec4<f32>(color_rgb, alpha);
 }

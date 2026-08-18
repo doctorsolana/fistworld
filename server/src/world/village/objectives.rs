@@ -28,6 +28,8 @@ pub fn sync_character_objectives(
             Option<&InternalDeliveryRoutine>,
             Option<&TradeRouteRoutine>,
             Option<&crate::world::settlement_development::CivicHallBuilderRoutine>,
+            Option<&TavernVisitRoutine>,
+            Option<&TavernWorkerRoutine>,
         ),
         (
             Option<&FarmerRoutine>,
@@ -64,6 +66,8 @@ pub fn sync_character_objectives(
             internal_delivery,
             trade_route,
             civic_hall_builder,
+            tavern_visit,
+            tavern_worker,
         ),
         (
             farmer,
@@ -101,6 +105,8 @@ pub fn sync_character_objectives(
             internal_delivery,
             trade_route,
             civic_hall_builder,
+            tavern_visit,
+            tavern_worker,
             farmer,
             fisher,
             lumberjack,
@@ -144,6 +150,8 @@ fn objective_for(
     internal_delivery: Option<&InternalDeliveryRoutine>,
     trade_route: Option<&TradeRouteRoutine>,
     civic_hall_builder: Option<&crate::world::settlement_development::CivicHallBuilderRoutine>,
+    tavern_visit: Option<&TavernVisitRoutine>,
+    tavern_worker: Option<&TavernWorkerRoutine>,
     farmer: Option<&FarmerRoutine>,
     fisher: Option<&FishingRoutine>,
     lumberjack: Option<&LumberjackRoutine>,
@@ -159,6 +167,12 @@ fn objective_for(
     }
     if let Some(meal) = meal.copied() {
         return meal.objective();
+    }
+    if let Some(visit) = tavern_visit.copied() {
+        return visit.objective();
+    }
+    if let Some(worker) = tavern_worker.copied() {
+        return worker.objective();
     }
     if let Some(intent) = intent {
         match intent {

@@ -16,6 +16,10 @@ pub(super) const fn good_icon_path(good: Good) -> &'static str {
         Good::Iron => "ui/goods/iron.png",
         Good::Flour => "ui/goods/flour.png",
         Good::Bread => "ui/goods/bread.png",
+        // Temporary readable placeholders until dedicated authored inventory
+        // icons ship with the livestock art pass.
+        Good::Meat => "ui/goods/fish.png",
+        Good::Wool => "ui/goods/flour.png",
     }
 }
 

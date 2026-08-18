@@ -31,9 +31,7 @@ use super::debug::{PerfHitchStats, TerrainDebugSettings};
 use super::materials::{
     water_params_for_generator, TerrainRenderAssets, TerrainSplatExtension, TerrainSplatMaterial,
 };
-use super::mesh::{
-    build_far_terrain_indices, build_far_terrain_mesh, build_terrain_mesh, compute_chunk_tangents,
-};
+use super::mesh::{build_far_terrain_mesh, build_terrain_mesh, compute_chunk_tangents};
 use super::paint::{
     build_weightmap_from_weights, log_weightmap_stats, TerrainPaintState, WEIGHTMAP_RESOLUTION,
 };

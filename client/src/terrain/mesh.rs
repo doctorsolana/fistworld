@@ -391,9 +391,23 @@ pub(crate) fn build_far_terrain_mesh(
             let height = terrain.get_height(world_x, world_z);
             let normal = terrain.get_normal(world_x, world_z);
             let biome = terrain.get_biome(world_x, world_z);
+            let water_level = terrain.generator.loaded_map().heightmap.water_level;
+            let is_ocean = matches!(water_level, Some(level) if height <= level);
 
-            positions.push([local_x, height, local_z]);
-            normals.push([normal.x, normal.y, normal.z]);
+            // The far ocean represents the water surface, not the normally-lit
+            // seabed. Keep it just below the animated surface so the detailed
+            // mesh always wins where the dynamic far-terrain hole meets it.
+            let rendered_height = if is_ocean {
+                water_level.unwrap_or(height) - 0.35
+            } else {
+                height
+            };
+            positions.push([local_x, rendered_height, local_z]);
+            normals.push(if is_ocean {
+                [0.0, 1.0, 0.0]
+            } else {
+                [normal.x, normal.y, normal.z]
+            });
             uvs.push([world_x / CHUNK_SIZE, world_z / CHUNK_SIZE]);
 
             // Colour the far mesh the way the close-up terrain reads, so zooming out
@@ -404,7 +418,6 @@ pub(crate) fn build_far_terrain_mesh(
             // map scale. Shading it into the terrain itself is what makes a zoomed-out
             // view legible as coastline.
             let palette = crate::terrain::materials::stylized_palette();
-            let water_level = terrain.generator.loaded_map().heightmap.water_level;
             let slope = 1.0 - normal.y.clamp(0.0, 1.0);
 
             // Rivers first: they sit above sea level, so every branch below
@@ -422,7 +435,12 @@ pub(crate) fn build_far_terrain_mesh(
                 Some(level) if height <= level => {
                     // Depth shading gives shallows and deep ocean distinct reads, which is
                     // most of what makes a coastline legible from far away.
-                    let depth = (level - height).clamp(0.0, 40.0) / 40.0;
+                    // Match the detailed water shader's depth scale. It reaches
+                    // the authored deep color after 2.5m; the former 40m far-
+                    // terrain ramp made ordinary ocean look pale right outside
+                    // the detailed chunk boundary.
+                    let depth =
+                        ((level - height) / shared::water::WATER_DEPTH_FADE_METERS).clamp(0.0, 1.0);
                     // Force full deep in the outer rim so the mesh's edge lands
                     // exactly on the infinite-ocean skirt color — otherwise the
                     // map boundary ghosts as a lighter square in the endless sea.
@@ -433,9 +451,20 @@ pub(crate) fn build_far_terrain_mesh(
                         .min(bounds.max[1] - world_z);
                     let rim = 1.0 - (dist_to_edge / 600.0).clamp(0.0, 1.0);
                     let depth = depth.max(rim);
-                    let shallow = Vec3::new(0.52, 0.72, 0.80);
-                    let deep = Vec3::new(0.14, 0.26, 0.45);
-                    shallow.lerp(deep, depth.powf(0.55))
+                    // Same deliberately soft three-band quantization as
+                    // toon_water.wgsl.
+                    let depth_banded = depth.lerp((depth * 3.0 + 0.5).floor() / 3.0, 0.35);
+                    let shallow = Vec3::from_array([
+                        crate::water::WATER_SHALLOW_RGBA[0],
+                        crate::water::WATER_SHALLOW_RGBA[1],
+                        crate::water::WATER_SHALLOW_RGBA[2],
+                    ]);
+                    // The detailed surface is translucent over the seabed, so
+                    // its observed deep color is a touch less blue than its
+                    // material constant alone. Bake that composite into the
+                    // opaque far continuation.
+                    let deep = Vec3::new(0.035, 0.105, 0.25);
+                    shallow.lerp(deep, depth_banded)
                 }
                 Some(level) if height < level + 1.2 => {
                     Vec3::new(palette.sand.x, palette.sand.y, palette.sand.z)
@@ -509,7 +538,10 @@ pub(crate) fn build_far_terrain_mesh(
                 }
             };
 
-            colors.push([color.x, color.y, color.z, 1.0]);
+            // Alpha is a material marker on this opaque mesh: the far shader
+            // shades ocean as unlit water and everything else as ordinary PBR
+            // terrain. Interpolation across triangles softens the handoff.
+            colors.push([color.x, color.y, color.z, if is_ocean { 0.0 } else { 1.0 }]);
         }
     }
 
@@ -553,7 +585,8 @@ pub(crate) fn build_far_terrain_indices(
             let world_x = origin.x + (x as f32 + 0.5) * spacing;
             let world_z = origin.y + (z as f32 + 0.5) * spacing;
 
-            if world_x >= inner_min.x
+            if inner_half > 0.0
+                && world_x >= inner_min.x
                 && world_x <= inner_max.x
                 && world_z >= inner_min.y
                 && world_z <= inner_max.y

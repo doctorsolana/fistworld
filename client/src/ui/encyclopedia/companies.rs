@@ -101,6 +101,9 @@ pub struct CompanyRouteRecord {
     pub maximum_purchase_price: u64,
     pub minimum_destination_price: u64,
     pub automatic: bool,
+    pub autonomous_management: bool,
+    pub expected_trip_profit: i64,
+    pub decision_confidence: u8,
     pub assigned_caravaner: Option<String>,
     pub current_stop: u8,
     pub status: TradeRouteStatus,
@@ -125,6 +128,7 @@ pub struct CompanyRouteStopRecord {
 pub struct CompanySettlementRecord {
     pub id: SettlementId,
     pub name: String,
+    pub has_marketplace: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -408,21 +412,27 @@ pub(super) fn refresh_company_directory(
     let (local_person, local_wallet) = replicated_local.or(roster_local).unzip();
     let local_wallet = local_wallet.flatten();
 
-    let settlement_names: HashMap<SettlementId, String> = settlements
+    let settlement_names: HashMap<SettlementId, (String, bool)> = settlements
         .iter()
-        .map(|settlement| (settlement.id, settlement.name.clone()))
+        .map(|settlement| {
+            (
+                settlement.id,
+                (settlement.name.clone(), settlement.has_marketplace),
+            )
+        })
         .collect();
     let settlement_name = |settlement: SettlementId| {
         settlement_names
             .get(&settlement)
-            .cloned()
+            .map(|(name, _)| name.clone())
             .unwrap_or_else(|| format!("Settlement #{}", settlement.0))
     };
     let mut known_settlements: Vec<_> = settlement_names
         .iter()
-        .map(|(id, name)| CompanySettlementRecord {
+        .map(|(id, (name, has_marketplace))| CompanySettlementRecord {
             id: *id,
             name: name.clone(),
+            has_marketplace: *has_marketplace,
         })
         .collect();
     known_settlements.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
@@ -463,6 +473,9 @@ pub(super) fn refresh_company_directory(
                 maximum_purchase_price: route.maximum_purchase_price,
                 minimum_destination_price: route.minimum_destination_price,
                 automatic: route.automatic,
+                autonomous_management: route.autonomous_management,
+                expected_trip_profit: route.expected_trip_profit,
+                decision_confidence: route.decision_confidence,
                 assigned_caravaner: route.assigned_caravaner.map(&person_name),
                 current_stop: route.current_stop,
                 status: route.status,
@@ -1000,12 +1013,21 @@ pub(super) fn handle_trade_route_open_buttons(
             editor.success = false;
             continue;
         };
-        let Some(destination) = directory
-            .settlements
-            .iter()
-            .find(|settlement| settlement.id != warehouse.settlement_id)
-        else {
-            editor.message = "Discover a second settlement before creating a route.".to_string();
+        if !directory.settlements.iter().any(|settlement| {
+            settlement.id == warehouse.settlement_id && settlement.has_marketplace
+        }) {
+            editor.message =
+                "This Storage Hall's settlement needs a completed Marketplace before public caravan trade can begin."
+                    .to_string();
+            editor.success = false;
+            continue;
+        }
+        let Some(destination) = directory.settlements.iter().find(|settlement| {
+            settlement.id != warehouse.settlement_id && settlement.has_marketplace
+        }) else {
+            editor.message =
+                "A second settlement must complete its Marketplace before this route can trade."
+                    .to_string();
             editor.success = false;
             continue;
         };
@@ -1253,11 +1275,9 @@ pub(super) fn handle_trade_route_editor_buttons(
             TradeRouteEditorAction::AddStop => {
                 if draft.stops.len() < MAX_TRADE_ROUTE_STOPS {
                     let last = draft.stops.last().map(|stop| stop.settlement);
-                    if let Some(settlement) = directory
-                        .settlements
-                        .iter()
-                        .find(|settlement| Some(settlement.id) != last)
-                    {
+                    if let Some(settlement) = directory.settlements.iter().find(|settlement| {
+                        Some(settlement.id) != last && settlement.has_marketplace
+                    }) {
                         draft.stops.push(TradeRouteStop {
                             settlement: settlement.id,
                             action: TradeRouteStopAction::Sell,
@@ -1292,8 +1312,12 @@ pub(super) fn handle_trade_route_editor_buttons(
                     let ids: Vec<_> = directory
                         .settlements
                         .iter()
+                        .filter(|settlement| settlement.has_marketplace)
                         .map(|settlement| settlement.id)
                         .collect();
+                    if ids.is_empty() {
+                        continue;
+                    }
                     let next = cycle_index(&ids, &draft.stops[index].settlement, direction);
                     draft.stops[index].settlement = ids[next];
                 }
@@ -1315,6 +1339,17 @@ pub(super) fn handle_trade_route_editor_buttons(
                         };
                     let next = cycle_index(&ACTIONS, &draft.stops[index].action, direction);
                     draft.stops[index].action = ACTIONS[next];
+                    if !directory.settlements.iter().any(|settlement| {
+                        settlement.id == draft.stops[index].settlement && settlement.has_marketplace
+                    }) {
+                        if let Some(market) = directory
+                            .settlements
+                            .iter()
+                            .find(|settlement| settlement.has_marketplace)
+                        {
+                            draft.stops[index].settlement = market.id;
+                        }
+                    }
                 }
             }
         }
@@ -2538,7 +2573,9 @@ fn spawn_route_card(
                     ),
                     format!("TRIPS  {}", route.completed_trips),
                     format!("UNITS MOVED  {}", route.lifetime_units),
-                    if route.automatic {
+                    if route.autonomous_management {
+                        "SERVICE  MASTER-REVIEWED TRIAL".to_string()
+                    } else if route.automatic {
                         "SERVICE  REPEAT".to_string()
                     } else {
                         "SERVICE  ONE CIRCUIT".to_string()
@@ -2570,11 +2607,24 @@ fn spawn_route_card(
                 )),
                 TradeRouteMode::Merchant => card.spawn((
                     Text::new(format!(
-                        "Buy at or below {} coin  /  list sales at or above {} coin  /  {} coin spent  /  {} coin consigned at asking value. Consignment becomes revenue only when a real buyer purchases it.",
+                        "Buy at or below {} coin  /  list sales at or above {} coin  /  {} coin spent  /  {} coin consigned at asking value.{} Consignment becomes revenue only when a real buyer purchases it.",
                         format_money(route.maximum_purchase_price),
                         format_money(route.minimum_destination_price),
                         format_money(route.lifetime_purchase_cost),
                         format_money(route.lifetime_consigned_value),
+                        if route.autonomous_management {
+                            format!(
+                                " Company Master forecast: {} coin/trip at {}% confidence; the route pauses when cargo repeatedly remains unsold.",
+                                if route.expected_trip_profit >= 0 {
+                                    format_money(route.expected_trip_profit as u64)
+                                } else {
+                                    format!("-{}", format_money(route.expected_trip_profit.unsigned_abs()))
+                                },
+                                route.decision_confidence,
+                            )
+                        } else {
+                            String::new()
+                        },
                     )),
                     TextFont {
                         font_size: FontSize::Px(8.5),
@@ -3024,6 +3074,19 @@ fn spawn_trade_route_editor(
                         },
                         TextColor(INK),
                     ));
+                    let has_marketplace = directory.settlements.iter().any(|settlement| {
+                        settlement.id == stop.settlement && settlement.has_marketplace
+                    });
+                    if !has_marketplace {
+                        stop_card.spawn((
+                            Text::new("LOCAL MOOT — BUILD A MARKETPLACE"),
+                            TextFont {
+                                font_size: FontSize::Px(7.0),
+                                ..default()
+                            },
+                            TextColor(EMBER),
+                        ));
+                    }
                     if index > 0 {
                         stop_card
                             .spawn(Node {
@@ -3450,6 +3513,8 @@ fn output_good(kind: SettlementBuildingKind) -> Option<Good> {
         SettlementBuildingKind::FishermansHut => Some(Good::Food),
         SettlementBuildingKind::Windmill => Some(Good::Flour),
         SettlementBuildingKind::Bakery => Some(Good::Bread),
+        SettlementBuildingKind::StoneQuarry => Some(Good::Stone),
+        SettlementBuildingKind::LivestockFarm => Some(Good::Meat),
         _ => None,
     }
 }
@@ -3620,6 +3685,9 @@ mod tests {
             maximum_purchase_price: 250,
             minimum_destination_price: 325,
             automatic: false,
+            autonomous_management: false,
+            expected_trip_profit: 0,
+            decision_confidence: 100,
             assigned_caravaner: None,
             current_stop: 0,
             status: TradeRouteStatus::Idle,
@@ -3684,14 +3752,17 @@ mod tests {
                 CompanySettlementRecord {
                     id: SettlementId(1),
                     name: "Oakfell".into(),
+                    has_marketplace: true,
                 },
                 CompanySettlementRecord {
                     id: SettlementId(2),
                     name: "Stonefield".into(),
+                    has_marketplace: true,
                 },
                 CompanySettlementRecord {
                     id: SettlementId(3),
                     name: "Meadowford".into(),
+                    has_marketplace: true,
                 },
             ],
             local_person: Some(owner),

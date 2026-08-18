@@ -155,6 +155,7 @@ pub fn handle_player_name_submission(
                 },
                 None => false,
             };
+            let mut has_hero = readopted;
             if !readopted {
                 if let Some(saved) = profile.hero.clone() {
                     let entity = crate::player::hero::spawn_hero(
@@ -171,6 +172,7 @@ pub fn handle_player_name_submission(
                         saved.health(),
                     );
                     info!("Restored hero {entity:?} for '{}' from profile", name_lower);
+                    has_hero = true;
                 }
             }
 
@@ -178,7 +180,10 @@ pub fn handle_player_name_submission(
             profiles.name_to_peer.insert(name_lower.clone(), peer_id);
             profiles.profiles.insert(name_lower, profile);
 
-            sender.send::<ReliableChannel>(NameSubmissionResult::Accepted { profile_loaded });
+            sender.send::<ReliableChannel>(NameSubmissionResult::Accepted {
+                profile_loaded,
+                needs_hero_creation: !has_hero,
+            });
             dev_sender.send::<ReliableChannel>(DevStatus { god: dev.0 });
             info!("Player '{}' spawned successfully for {:?}", name, peer_id);
             // This connection is now named. The outer `peer_to_name` guard is

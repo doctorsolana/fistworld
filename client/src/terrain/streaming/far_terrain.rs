@@ -1,11 +1,13 @@
 //! far terrain systems.
 
 use super::*;
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, VertexAttributeValues};
+use bevy::render::render_resource::PrimitiveTopology;
 
 pub(crate) fn ensure_far_terrain_mesh(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     render_assets: Option<Res<TerrainRenderAssets>>,
     world_root_query: Query<Entity, With<ClientWorldRoot>>,
     terrain: Res<WorldTerrain>,
@@ -59,33 +61,24 @@ pub(crate) fn ensure_far_terrain_mesh(
 
     commands.entity(world_root).add_child(entity);
 
-    // Infinite-ocean skirt: a flat deep-water sheet far past the map bounds so
-    // the square world reads as an island in an endless sea instead of a tile
-    // floating on the backdrop. Sits below the far mesh's deepest ocean floor,
-    // so inside the map it is always occluded; only the beyond-the-edge ring
-    // shows. Deep color matches build_far_terrain_mesh's depth ramp.
+    // Infinite-ocean skirt: continue the far ocean horizontally past the map
+    // bounds. The old version was one plane 50m below sea level, which exposed
+    // a literal cliff at the boundary in the opening boat shot. This frame has
+    // a hole exactly the size of the map, meets its far-water surface at the
+    // same height, and uses the same material/day-night response.
     let water_level = terrain
         .generator
         .loaded_map()
         .heightmap
         .water_level
         .unwrap_or(0.0);
-    // linear_rgb, not srgb: build_far_terrain_mesh writes these numbers as raw
-    // vertex floats (linear), so the skirt must run the same numeric path or
-    // the seam shows as a color-space mismatch.
-    let skirt_material = materials.add(StandardMaterial {
-        base_color: Color::linear_rgb(0.14, 0.26, 0.45),
-        perceptual_roughness: 0.98,
-        metallic: 0.0,
-        reflectance: 0.08,
-        ..default()
-    });
+    let bounds = terrain.generator.active_map_bounds();
     let skirt = commands
         .spawn((
             OceanSkirt,
-            Mesh3d(meshes.add(Plane3d::default().mesh().size(100_000.0, 100_000.0))),
-            MeshMaterial3d(skirt_material),
-            Transform::from_translation(Vec3::new(0.0, water_level - 50.0, 0.0)),
+            Mesh3d(meshes.add(build_ocean_skirt_mesh(bounds, water_level))),
+            MeshMaterial3d(render_assets.far_mesh_material.clone()),
+            Transform::default(),
             Visibility::Visible,
             NotShadowCaster,
         ))
@@ -97,33 +90,83 @@ pub(crate) fn ensure_far_terrain_mesh(
 #[derive(Component)]
 pub struct OceanSkirt;
 
-/// In-flight async rebuild of the far-terrain hole index buffer.
-///
-/// The hole is recut every time the streaming anchor crosses a chunk boundary,
-/// and building ~131k triangles of indices (a ~3MB Vec) is too expensive to do
-/// on the main thread; the actual index generation runs on the compute pool
-/// and only the (unavoidable) mesh upload happens here.
-#[derive(Resource, Default)]
-pub(crate) struct FarTerrainHoleTask {
-    pending: Option<PendingHoleRebuild>,
-}
+const OCEAN_SKIRT_MARGIN: f32 = 50_000.0;
 
-pub(crate) struct PendingHoleRebuild {
-    center_cell: IVec2,
-    view_distance: i32,
-    hole_filled: bool,
-    task: Task<Vec<u32>>,
+/// Four quads surrounding (but never covering) the playable rectangle.
+///
+/// East/west own the corner quadrants while north/south stop at the map's X
+/// bounds. Keeping the quads disjoint avoids double-shaded seams at corners.
+fn build_ocean_skirt_mesh(bounds: shared::map::MapBounds, water_level: f32) -> Mesh {
+    let min_x = bounds.min[0];
+    let min_z = bounds.min[1];
+    let max_x = bounds.max[0];
+    let max_z = bounds.max[1];
+    let outer_min_x = min_x - OCEAN_SKIRT_MARGIN;
+    let outer_min_z = min_z - OCEAN_SKIRT_MARGIN;
+    let outer_max_x = max_x + OCEAN_SKIRT_MARGIN;
+    let outer_max_z = max_z + OCEAN_SKIRT_MARGIN;
+    // Far-ocean vertices are authored at water - 0.35 and their entity is
+    // lowered another 0.05m. Match that final world height exactly.
+    let y = water_level - 0.40;
+
+    let mut positions = Vec::with_capacity(16);
+    let mut normals = Vec::with_capacity(16);
+    let mut uvs = Vec::with_capacity(16);
+    let mut colors = Vec::with_capacity(16);
+    let mut indices = Vec::with_capacity(24);
+
+    let mut add_quad = |x0: f32, z0: f32, x1: f32, z1: f32| {
+        let base = positions.len() as u32;
+        positions.extend_from_slice(&[[x0, y, z0], [x1, y, z0], [x0, y, z1], [x1, y, z1]]);
+        normals.extend_from_slice(&[[0.0, 1.0, 0.0]; 4]);
+        uvs.extend_from_slice(&[
+            [x0 / CHUNK_SIZE, z0 / CHUNK_SIZE],
+            [x1 / CHUNK_SIZE, z0 / CHUNK_SIZE],
+            [x0 / CHUNK_SIZE, z1 / CHUNK_SIZE],
+            [x1 / CHUNK_SIZE, z1 / CHUNK_SIZE],
+        ]);
+        // RGB is the same fully-deep ramp endpoint as the far map mesh;
+        // alpha=0 marks these vertices as ocean in far_terrain.wgsl.
+        colors.extend_from_slice(&[[0.035, 0.105, 0.25, 0.0]; 4]);
+        indices.extend_from_slice(&[base, base + 2, base + 1, base + 1, base + 2, base + 3]);
+    };
+
+    add_quad(outer_min_x, outer_min_z, min_x, outer_max_z);
+    add_quad(max_x, outer_min_z, outer_max_x, outer_max_z);
+    add_quad(min_x, outer_min_z, max_x, min_z);
+    add_quad(min_x, max_z, max_x, outer_max_z);
+
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        VertexAttributeValues::Float32x3(positions),
+    );
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_NORMAL,
+        VertexAttributeValues::Float32x3(normals),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, VertexAttributeValues::Float32x2(uvs));
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_COLOR,
+        VertexAttributeValues::Float32x4(colors),
+    );
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
 }
 
 pub(crate) fn update_far_terrain_hole(
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut far_query: Query<(&Mesh3d, &mut FarTerrainState), With<FarTerrain>>,
+    mut far_query: Query<&mut FarTerrainState, With<FarTerrain>>,
     player_query: AnchorPlayer,
     camera_query: AnchorCamera,
-    terrain: Res<WorldTerrain>,
     streaming: Res<TerrainStreamingState>,
+    loaded_chunks: Res<LoadedChunks>,
+    loaded_water: Option<Res<crate::water::chunks::LoadedWaterChunks>>,
     settings: Res<GraphicsSettings>,
-    mut hole_task: ResMut<FarTerrainHoleTask>,
+    render_assets: Option<Res<TerrainRenderAssets>>,
+    mut materials: ResMut<Assets<crate::terrain::materials::FarTerrainMaterial>>,
 ) {
     if !settings.far_terrain_enabled {
         return;
@@ -132,7 +175,10 @@ pub(crate) fn update_far_terrain_hole(
     let Some(anchor_pos) = streaming_anchor(&player_query, &camera_query) else {
         return;
     };
-    let Ok((mesh_handle, mut state)) = far_query.single_mut() else {
+    let Ok(mut state) = far_query.single_mut() else {
+        return;
+    };
+    let Some(render_assets) = render_assets else {
         return;
     };
 
@@ -144,36 +190,25 @@ pub(crate) fn update_far_terrain_hole(
     let center_chunk = ChunkCoord::from_world_pos(anchor_pos);
     let center_cell = IVec2::new(center_chunk.x, center_chunk.z);
 
-    // Apply a finished rebuild (or drop it if the target moved meanwhile).
-    if let Some(pending) = hole_task.pending.as_mut() {
-        let Some(indices) = block_on(poll_once(&mut pending.task)) else {
-            return;
-        };
-        let (done_cell, done_view, done_filled) = (
-            pending.center_cell,
-            pending.view_distance,
-            pending.hole_filled,
-        );
-        hole_task.pending = None;
-        if let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) {
-            mesh.insert_indices(bevy::mesh::Indices::U32(indices));
-        }
-        state.center_cell = done_cell;
-        state.view_distance = done_view;
-        state.hole_filled = done_filled;
-        // Fall through: if the anchor moved while the task ran, queue the next
-        // rebuild immediately below.
-    }
-
     // Fill the hole before the chunks start their dither-out, or the fade would reveal
-    // void instead of map underneath. Part of the change check: zooming in place has to
-    // trigger a recut just like panning does.
+    // void instead of map underneath. Also keep it filled while detail is streaming:
+    // terrain arrives asynchronously and water is built over several later frames, so
+    // cutting the full desired square immediately exposes a gray, stair-stepped void at
+    // the edge of the water. The far mesh sits 5 cm below detail and is the intended
+    // fallback; remove it only after every desired terrain chunk exists and every water
+    // chunk has either produced a mesh or been confirmed dry.
     let zoom = camera_query
         .iter()
         .next()
         .and_then(|(_, controller)| controller.map(|c| c.zoom))
         .unwrap_or(0.0);
-    let hole_filled = zoom > crate::terrain::map_view::HOLE_FILL_ZOOM;
+    let detail_ready = loaded_water.as_ref().is_some_and(|water| {
+        streaming
+            .desired_order
+            .iter()
+            .all(|coord| loaded_chunks.chunks.contains(coord) && water.entries.contains_key(coord))
+    });
+    let hole_filled = zoom > crate::terrain::map_view::HOLE_FILL_ZOOM || !detail_ready;
 
     if state.center_cell == center_cell
         && state.view_distance == view_distance
@@ -192,23 +227,16 @@ pub(crate) fn update_far_terrain_hole(
     } else {
         (view_distance as f32 + 0.5) * CHUNK_SIZE + FAR_TERRAIN_INNER_BUFFER
     };
-    let origin = far_terrain_origin(&terrain);
-    let spacing = far_terrain_spacing(&terrain);
+    let Some(mut material) = materials.get_mut(&render_assets.far_mesh_material) else {
+        return;
+    };
+    material.extension.water_params.y = inner_center.x;
+    material.extension.water_params.z = inner_center.y;
+    material.extension.water_params.w = inner_half;
 
-    hole_task.pending = Some(PendingHoleRebuild {
-        center_cell,
-        view_distance,
-        hole_filled,
-        task: AsyncComputeTaskPool::get().spawn(async move {
-            build_far_terrain_indices(
-                origin,
-                spacing,
-                inner_center,
-                inner_half,
-                FAR_TERRAIN_RESOLUTION,
-            )
-        }),
-    });
+    state.center_cell = center_cell;
+    state.view_distance = view_distance;
+    state.hole_filled = hole_filled;
 }
 
 /// Far-terrain extent follows the *actual* map bounds.

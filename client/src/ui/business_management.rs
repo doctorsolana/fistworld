@@ -144,6 +144,7 @@ fn ensure_panel(
         &BusinessProcurementPolicy,
         &BusinessSupplyPolicy,
         &GoodsInventory,
+        Option<&shared::economy::TavernService>,
     )>,
     companies: Query<(
         &CompanyId,
@@ -180,6 +181,7 @@ fn ensure_panel(
         procurement,
         supply,
         inventory,
+        tavern_service,
     )) = businesses.get(entity)
     else {
         target.0 = None;
@@ -208,7 +210,7 @@ fn ensure_panel(
         }
     }
     let signature = format!(
-        "{entity:?}|{building:?}|{building_id:?}|{operated_by:?}|{account:?}|{management:?}|{wage:?}|{sale:?}|{staffing:?}|{procurement:?}|{supply:?}|{inventory:?}|{company:?}|{local_person:?}|{local_balance:?}|{share_draft:?}|{}|{}|{:?}",
+        "{entity:?}|{building:?}|{building_id:?}|{operated_by:?}|{account:?}|{management:?}|{wage:?}|{sale:?}|{staffing:?}|{procurement:?}|{supply:?}|{inventory:?}|{tavern_service:?}|{company:?}|{local_person:?}|{local_balance:?}|{share_draft:?}|{}|{}|{:?}",
         feedback.success, feedback.message, return_to.0
     );
     if roots.iter().any(|(_, root, _)| root.signature == signature) {
@@ -696,7 +698,11 @@ fn ensure_panel(
                 );
                 control_row(
                     body,
-                    "ASKING PRICE",
+                    if building.kind == SettlementBuildingKind::Tavern {
+                        "MEAL PRICE"
+                    } else {
+                        "ASKING PRICE"
+                    },
                     &format!(
                         "{} coin / {}",
                         format_money(sale.asking_unit_price),
@@ -732,6 +738,38 @@ fn ensure_panel(
                         );
                     },
                 );
+                if let Some(service) = tavern_service {
+                    section_caption(body, "TAVERN SERVICE");
+                    let day = service.current_day;
+                    spawn_meter(
+                        body,
+                        "GUEST SERVICE".to_string(),
+                        format!(
+                            "{} of {} planned visits served today · {} coin direct revenue · {} unaffordable · {} unavailable · {} route failures",
+                            day.served_meals,
+                            day.planned_visits,
+                            format_money(day.revenue),
+                            day.unaffordable_visits,
+                            day.unavailable_visits,
+                            day.route_failures,
+                        ),
+                        day.served_meals,
+                        0,
+                        service.daily_capacity().max(1),
+                    );
+                    control_row(
+                        body,
+                        "OPEN FLOOR",
+                        &format!(
+                            "{} Innkeeper{} on duty · {} of {} guest places occupied. Customers pay this company at the Tavern; no Moot market fee is charged.",
+                            service.innkeepers_on_duty,
+                            if service.innkeepers_on_duty == 1 { "" } else { "s" },
+                            service.current_guests,
+                            service.guest_capacity,
+                        ),
+                        |_| {},
+                    );
+                }
                 section_caption(body, "GOODS FLOW");
                 if let Some(output) = output_good(building.kind) {
                     let held = inventory.amount(output);
@@ -754,6 +792,26 @@ fn ensure_panel(
                         "Set once per good and settlement under Company > Local Goods & Storage. This site contributes stock while it is operating; downstream company requests are protected first.",
                         |_| {},
                     );
+                    if building.kind == SettlementBuildingKind::LivestockFarm {
+                        let wool = inventory.amount(Good::Wool);
+                        spawn_meter(
+                            body,
+                            "WOOL BY-PRODUCT STOCK".to_string(),
+                            format!(
+                                "{} units held here. Each completed livestock cycle creates one Meat and one Wool; Wool is non-food and reserved for the future textile chain.",
+                                wool,
+                            ),
+                            wool,
+                            0,
+                            (inventory.bulk_capacity() / Good::Wool.bulk_per_unit()).max(1),
+                        );
+                        control_row(
+                            body,
+                            "BY-PRODUCT PRICING",
+                            "Wool follows this site's chosen margin, scaled from the Meat ask by each good's reference value. It remains a free market offer, not a fixed civic price.",
+                            |_| {},
+                        );
+                    }
                 }
                 if company.is_none() {
                     control_row(
@@ -947,6 +1005,7 @@ fn output_good(kind: SettlementBuildingKind) -> Option<Good> {
         SettlementBuildingKind::FishermansHut => Some(Good::Food),
         SettlementBuildingKind::Windmill => Some(Good::Flour),
         SettlementBuildingKind::Bakery => Some(Good::Bread),
+        SettlementBuildingKind::LivestockFarm => Some(Good::Meat),
         _ => None,
     }
 }

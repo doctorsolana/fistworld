@@ -369,6 +369,98 @@ fn inventory_summary(inventory: Option<&GoodsInventory>) -> String {
     }
 }
 
+fn compact_unrest(economy: Option<&SettlementEconomy>) -> String {
+    economy.map_or_else(
+        || "Awaiting first daily reading".to_string(),
+        |economy| {
+            let trend = if economy.unrest_change.abs() <= 0.05 {
+                "steady".to_string()
+            } else {
+                format!(
+                    "{} {:+.1}",
+                    economy.unrest_trend_label(),
+                    economy.unrest_change,
+                )
+            };
+            format!(
+                "{:.0}/100 {} / {trend} / pressure {:.0} (hunger {:.1}, homes {:.1}, wages {:.1})",
+                economy.unrest,
+                economy.unrest_label(),
+                economy.unrest_target,
+                economy.unrest_hunger_pressure,
+                economy.unrest_housing_pressure,
+                economy.unrest_wage_pressure,
+            )
+        },
+    )
+}
+
+fn compact_food_security(economy: Option<&SettlementEconomy>) -> String {
+    economy.map_or_else(
+        || "Awaiting first daily reading".to_string(),
+        |economy| {
+            let state = if economy.unmet_food > 0 {
+                "CRISIS"
+            } else if economy.reserve_days < 1.0 {
+                "SHORTAGE RISK"
+            } else if economy.reserve_days < shared::economy::FOOD_SECURITY_TARGET_DAYS {
+                "FRAGILE"
+            } else {
+                "SECURE"
+            };
+            format!(
+                "{state} / {:.1} days / {:.1} produced vs {:.1} consumed",
+                economy.reserve_days,
+                economy.recent_food_production,
+                economy.recent_food_consumption,
+            )
+        },
+    )
+}
+
+fn compact_hardship(
+    economy: Option<&SettlementEconomy>,
+    residents: u32,
+) -> (String, String, String, String) {
+    economy.map_or_else(
+        || {
+            let waiting = "Awaiting first daily reading".to_string();
+            (waiting.clone(), waiting.clone(), waiting.clone(), waiting)
+        },
+        |economy| {
+            let percent = |count: u32| {
+                if residents == 0 {
+                    0.0
+                } else {
+                    count as f32 / residents as f32 * 100.0
+                }
+            };
+            (
+                format!(
+                    "{} of {residents} unfed ({:.0}%)",
+                    economy.unmet_food,
+                    percent(economy.unmet_food),
+                ),
+                format!(
+                    "{} homeless ({:.0}%) / {} beds",
+                    economy.homeless_residents,
+                    percent(economy.homeless_residents),
+                    economy.housing_capacity,
+                ),
+                format!(
+                    "{} actively seeking ({:.0}%) / {} vacancies",
+                    economy.job_seekers,
+                    percent(u32::from(economy.job_seekers)),
+                    economy
+                        .private_vacant_jobs
+                        .saturating_add(economy.civic_vacant_jobs),
+                ),
+                format!("{} current workers", economy.unpaid_workers),
+            )
+        },
+    )
+}
+
 fn opportunity_summary(board: Option<&SettlementOpportunityBoard>) -> String {
     let Some(board) = board.filter(|board| !board.opportunities.is_empty()) else {
         return "No active opportunity signals".to_string();
@@ -563,6 +655,8 @@ fn sync_compact_panel(
             let hall_level = hall_level
                 .copied()
                 .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
+            let (hunger, housing, work_seekers, unpaid_workers) =
+                compact_hardship(economy, settlement.residents);
             return Some((
                 format!(
                     "hall|{:?}|{:?}|{}|{}|{}|{:?}|{:?}|{}",
@@ -584,6 +678,12 @@ fn sync_compact_panel(
                     ),
                     rows: vec![
                         ("RESIDENTS".into(), settlement.residents.to_string()),
+                        ("UNREST".into(), compact_unrest(economy)),
+                        ("FOOD SECURITY".into(), compact_food_security(economy)),
+                        ("HUNGER".into(), hunger),
+                        ("HOUSING".into(), housing),
+                        ("UNEMPLOYMENT".into(), work_seekers),
+                        ("UNPAID WORKERS".into(), unpaid_workers),
                         (
                             "TREASURY".into(),
                             format!("{} coin", format_money(settlement.treasury)),

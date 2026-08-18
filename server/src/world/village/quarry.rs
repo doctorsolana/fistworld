@@ -1,9 +1,9 @@
-//! Embodied Stone extraction for the Hamlet quarry.
+//! Embodied outdoor extraction for quarries and livestock farms.
 //!
-//! Stone enters the economy only after an employed quarrier reaches the
-//! outdoor face, performs real work, carries a bounded load, and deposits it
-//! in the quarry store. Off-screen settlements use the matching rated
-//! production model in `strategic`.
+//! Stone, Meat and Wool enter the economy only after an employed worker reaches
+//! the outdoor work area, performs real work, carries a bounded load, and
+//! deposits it in the workplace store. Off-screen settlements use the matching
+//! rated production model in `strategic`.
 
 use super::*;
 
@@ -15,6 +15,7 @@ const MAX_QUARRY_ROUTE_FAILURES: u8 = 3;
 pub struct QuarryRoutine {
     workplace: Entity,
     hall: Entity,
+    kind: SettlementBuildingKind,
     work_seconds: f32,
     failed_routes: u8,
     production_day: u32,
@@ -33,11 +34,20 @@ impl QuarryRoutine {
 
     pub(crate) const fn objective(&self) -> shared::components::CharacterObjective {
         use shared::components::CharacterObjective;
-        match self.phase {
-            QuarryPhase::GoingToFace => CharacterObjective::GoingToQuarryWork,
-            QuarryPhase::Mining => CharacterObjective::QuarryingStone,
-            QuarryPhase::ReturningToStore => CharacterObjective::ReturningStone,
-            QuarryPhase::EndingShift => CharacterObjective::EndingWorkShift,
+        match (self.kind, self.phase) {
+            (SettlementBuildingKind::LivestockFarm, QuarryPhase::GoingToFace) => {
+                CharacterObjective::GoingToLivestockWork
+            }
+            (SettlementBuildingKind::LivestockFarm, QuarryPhase::Mining) => {
+                CharacterObjective::TendingLivestock
+            }
+            (SettlementBuildingKind::LivestockFarm, QuarryPhase::ReturningToStore) => {
+                CharacterObjective::ReturningLivestockProducts
+            }
+            (_, QuarryPhase::GoingToFace) => CharacterObjective::GoingToQuarryWork,
+            (_, QuarryPhase::Mining) => CharacterObjective::QuarryingStone,
+            (_, QuarryPhase::ReturningToStore) => CharacterObjective::ReturningStone,
+            (_, QuarryPhase::EndingShift) => CharacterObjective::EndingWorkShift,
         }
     }
 
@@ -61,13 +71,24 @@ pub(crate) struct QuarryWorkProgress {
     seconds: f32,
 }
 
-fn quarry_face(position: Vec3, rotation: f32, terrain: Option<&WorldTerrain>) -> Vec3 {
+fn outdoor_work_point(
+    kind: SettlementBuildingKind,
+    position: Vec3,
+    rotation: f32,
+    terrain: Option<&WorldTerrain>,
+) -> Vec3 {
     // The entrance remains on local -Z beside the road. The deposit face sits
     // beside the blockout so the worker is visibly outdoors and can walk
     // around the building rather than mining inside its shell.
-    let offset = shared::rotation::local_to_world_xz(Vec2::new(5.9, 0.8), rotation);
-    let x = position.x + offset.x;
-    let z = position.z + offset.y;
+    let point = if kind == SettlementBuildingKind::LivestockFarm {
+        kind.pasture_position(position, rotation)
+            .unwrap_or(position)
+    } else {
+        let offset = shared::rotation::local_to_world_xz(Vec2::new(5.9, 0.8), rotation);
+        Vec3::new(position.x + offset.x, position.y, position.z + offset.y)
+    };
+    let x = point.x;
+    let z = point.z;
     Vec3::new(
         x,
         terrain.map_or(position.y, |terrain| terrain.get_height(x, z)),
@@ -163,8 +184,10 @@ pub fn assign_quarry_routines(
     for (workplace, building, at, rotation, building_id, building_of, condition, plan) in
         workplaces.iter()
     {
-        if building.kind != SettlementBuildingKind::StoneQuarry
-            || condition.is_some_and(|condition| !condition.state.can_operate())
+        if !matches!(
+            building.kind,
+            SettlementBuildingKind::StoneQuarry | SettlementBuildingKind::LivestockFarm
+        ) || condition.is_some_and(|condition| !condition.state.can_operate())
             || plan.is_some_and(|plan| plan.remaining(clock.day) == 0)
         {
             continue;
@@ -197,7 +220,7 @@ pub fn assign_quarry_routines(
             continue;
         }
 
-        let face = quarry_face(at.0, rotation.0, terrain.as_deref());
+        let face = outdoor_work_point(building.kind, at.0, rotation.0, terrain.as_deref());
         for worker in roster.iter().take(building.kind.positions() as usize) {
             let Ok((_, intent, off_duty, progress, employment)) = villagers.get(*worker) else {
                 continue;
@@ -223,6 +246,7 @@ pub fn assign_quarry_routines(
                     QuarryRoutine {
                         workplace,
                         hall,
+                        kind: building.kind,
                         work_seconds,
                         failed_routes: 0,
                         production_day: u32::MAX,
@@ -243,6 +267,7 @@ pub fn run_quarry_routines(
     world_time: Query<&WorldTime>,
     mut commands: Commands,
     mut business_events: ResMut<BusinessEventQueue>,
+    mut economy_runtime: ResMut<SettlementEconomyRuntime>,
     workplaces: Query<
         (
             &SettlementBuilding,
@@ -308,7 +333,11 @@ pub fn run_quarry_routines(
             *activity = CharacterActivity::Idle;
             continue;
         };
-        if building.kind != SettlementBuildingKind::StoneQuarry
+        if building.kind != routine.kind
+            || !matches!(
+                building.kind,
+                SettlementBuildingKind::StoneQuarry | SettlementBuildingKind::LivestockFarm
+            )
             || employment.0 != *building_id
             || condition.is_some_and(|condition| !condition.state.can_operate())
             || !intent.is_settled()
@@ -324,11 +353,18 @@ pub fn run_quarry_routines(
             routine.production_day = clock.day;
             routine.produced_today = 0;
         }
-        let face = quarry_face(at.0, rotation.0, terrain.as_deref());
+        let face = outdoor_work_point(building.kind, at.0, rotation.0, terrain.as_deref());
         let store = building.kind.entrance_position(at.0, rotation.0);
-        let carrying_stone = inventories
-            .get_mut(worker)
-            .is_ok_and(|inventory| inventory.amount(Good::Stone) > 0);
+        let output = if building.kind == SettlementBuildingKind::LivestockFarm {
+            Good::Meat
+        } else {
+            Good::Stone
+        };
+        let carrying_output = inventories.get_mut(worker).is_ok_and(|inventory| {
+            inventory.amount(output) > 0
+                || (building.kind == SettlementBuildingKind::LivestockFarm
+                    && inventory.amount(Good::Wool) > 0)
+        });
 
         if failed_route.is_some() {
             routine.failed_routes = routine.failed_routes.saturating_add(1);
@@ -337,7 +373,7 @@ pub fn run_quarry_routines(
                 .remove::<NavigationRouteFailed>()
                 .remove::<NavigationRoutePending>()
                 .remove::<TravelRoute>();
-            if carrying_stone {
+            if carrying_output {
                 routine.phase = QuarryPhase::ReturningToStore;
                 commands.entity(worker).insert(MoveTarget(store));
             } else if routine.failed_routes >= MAX_QUARRY_ROUTE_FAILURES || !workday {
@@ -350,7 +386,7 @@ pub fn run_quarry_routines(
         }
 
         if !workday {
-            if carrying_stone {
+            if carrying_output {
                 routine.phase = QuarryPhase::ReturningToStore;
                 if ground_distance(position.0, store) > STORE_REACH {
                     ensure_move_target(&mut commands, worker, move_target, store);
@@ -372,7 +408,11 @@ pub fn run_quarry_routines(
                     if to_face.length_squared() > 1e-4 {
                         facing.0 = f32::atan2(-to_face.x, -to_face.z);
                     }
-                    *activity = CharacterActivity::Mining;
+                    *activity = if building.kind == SettlementBuildingKind::LivestockFarm {
+                        CharacterActivity::Farming
+                    } else {
+                        CharacterActivity::Mining
+                    };
                     routine.phase = QuarryPhase::Mining;
                 } else {
                     ensure_move_target(&mut commands, worker, move_target, face);
@@ -384,13 +424,23 @@ pub fn run_quarry_routines(
                     routine.phase = QuarryPhase::EndingShift;
                     continue;
                 }
-                *activity = CharacterActivity::Mining;
+                *activity = if building.kind == SettlementBuildingKind::LivestockFarm {
+                    CharacterActivity::Farming
+                } else {
+                    CharacterActivity::Mining
+                };
                 let remaining = operating_plans
                     .get(routine.workplace)
                     .map_or(u32::MAX, |plan| plan.remaining(clock.day));
+                let cycle_bulk = output.bulk_per_unit()
+                    + if building.kind == SettlementBuildingKind::LivestockFarm {
+                        Good::Wool.bulk_per_unit()
+                    } else {
+                        0
+                    };
                 let can_carry = inventories
                     .get_mut(worker)
-                    .is_ok_and(|inventory| inventory.free_bulk() >= Good::Stone.bulk_per_unit());
+                    .is_ok_and(|inventory| inventory.free_bulk() >= cycle_bulk);
                 if remaining == 0 || !can_carry {
                     *activity = CharacterActivity::Idle;
                     routine.phase = QuarryPhase::ReturningToStore;
@@ -398,30 +448,50 @@ pub fn run_quarry_routines(
                     continue;
                 }
                 routine.work_seconds += dt;
-                let seconds_per_stone = quarry_seconds_per_stone(building.quality);
+                let seconds_per_unit = if building.kind == SettlementBuildingKind::LivestockFarm {
+                    livestock_seconds_per_meat(building.quality)
+                } else {
+                    quarry_seconds_per_stone(building.quality)
+                };
                 let requested =
-                    ((routine.work_seconds / seconds_per_stone).floor() as u32).min(remaining);
+                    ((routine.work_seconds / seconds_per_unit).floor() as u32).min(remaining);
                 if requested == 0 {
                     continue;
                 }
-                let produced = inventories
-                    .get_mut(worker)
-                    .map_or(0, |mut inventory| inventory.add(Good::Stone, requested));
+                let produced = inventories.get_mut(worker).map_or(0, |mut inventory| {
+                    if building.kind == SettlementBuildingKind::LivestockFarm {
+                        produce_livestock_cycles(&mut inventory, requested)
+                    } else {
+                        inventory.add(output, requested)
+                    }
+                });
                 if produced == 0 {
                     continue;
                 }
                 routine.work_seconds =
-                    (routine.work_seconds - seconds_per_stone * produced as f32).max(0.0);
+                    (routine.work_seconds - seconds_per_unit * produced as f32).max(0.0);
                 let first_output_today = routine.produced_today == 0;
                 routine.produced_today = routine.produced_today.saturating_add(produced);
                 if let Ok(mut plan) = operating_plans.get_mut(routine.workplace) {
                     plan.record(clock.day, produced);
                 }
                 business_events.record_production(clock.day, *building_id, produced);
+                if building.kind == SettlementBuildingKind::LivestockFarm {
+                    economy_runtime.record_food_production(routine.hall, produced);
+                }
                 if first_output_today {
                     if let Some(attributes) = attributes.as_deref_mut() {
                         attributes.train_physique(1);
                     }
+                }
+                if building.kind == SettlementBuildingKind::LivestockFarm
+                    && inventories
+                        .get_mut(worker)
+                        .is_ok_and(|inventory| inventory.amount(Good::Meat) >= 2)
+                {
+                    *activity = CharacterActivity::Idle;
+                    routine.phase = QuarryPhase::ReturningToStore;
+                    commands.entity(worker).insert(MoveTarget(store));
                 }
             }
             QuarryPhase::ReturningToStore => {
@@ -435,8 +505,14 @@ pub fn run_quarry_routines(
                 else {
                     continue;
                 };
-                carrier.transfer_to(&mut workplace, Good::Stone, u32::MAX);
-                if carrier.amount(Good::Stone) > 0 {
+                carrier.transfer_to(&mut workplace, output, u32::MAX);
+                if building.kind == SettlementBuildingKind::LivestockFarm {
+                    carrier.transfer_to(&mut workplace, Good::Wool, u32::MAX);
+                }
+                if carrier.amount(output) > 0
+                    || (building.kind == SettlementBuildingKind::LivestockFarm
+                        && carrier.amount(Good::Wool) > 0)
+                {
                     continue;
                 }
                 drop(carrier);

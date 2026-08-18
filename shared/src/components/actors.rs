@@ -119,6 +119,38 @@ pub struct Hero {
     pub owner: PeerId,
 }
 
+/// The small vessel that carries a newly created hero into the world.
+///
+/// Ownership and command authority live in the accompanying [`CommandedBy`]
+/// component, exactly as they do for a hero or retinue.  Keeping this marker
+/// data-free means reconnecting only has to repair the hero's session-local
+/// [`PeerId`]; the boat remains attached to the stable account name.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct PlayerBoat;
+
+/// Any water-going vehicle using the shared vessel navigation/sailing stack.
+/// Starter dinghies, merchant ships and warships differ in their additional
+/// components and hull parameters, not in whether water is navigable.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct Vessel;
+
+/// A vessel that can no longer receive movement orders.
+///
+/// The opening dinghy becomes a small shoreline wreck when its hero lands.
+/// Keeping wreckage as an explicit state, rather than pretending it is still
+/// navigable or deleting it instantly, also gives future ships one shared seam
+/// for sinking, salvage and repair presentation.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct WreckedVessel;
+
+/// Marks a hero who is currently riding their starter boat.
+///
+/// While present, the server pins the hero to the helm and rejects ordinary
+/// walking orders.  Removing it is the single authoritative transition from
+/// the opening voyage to normal on-foot play.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct AboardBoat;
+
 /// A person in the world, with a name.
 ///
 /// Every character carries one -- a player's hero and a villager alike -- so the
@@ -238,6 +270,15 @@ pub enum CharacterObjective {
     GoingToQuarryWork,
     QuarryingStone,
     ReturningStone,
+    GoingToLivestockWork,
+    TendingLivestock,
+    ReturningLivestockProducts,
+    GoingToTavern,
+    WaitingForTavernService,
+    EatingAtTavern,
+    LeavingTavern,
+    OpeningTavern,
+    ServingAtTavern,
     EndingWorkShift,
     WalkingAroundTown,
     Resting,
@@ -296,6 +337,15 @@ impl CharacterObjective {
             Self::GoingToQuarryWork => "Going to quarry work",
             Self::QuarryingStone => "Quarrying Stone",
             Self::ReturningStone => "Taking Stone to the quarry store",
+            Self::GoingToLivestockWork => "Going to the livestock pasture",
+            Self::TendingLivestock => "Tending livestock",
+            Self::ReturningLivestockProducts => "Taking Meat and Wool to the livestock farm",
+            Self::GoingToTavern => "Going to the tavern",
+            Self::WaitingForTavernService => "Waiting to order at the tavern",
+            Self::EatingAtTavern => "Eating at the tavern",
+            Self::LeavingTavern => "Leaving the tavern",
+            Self::OpeningTavern => "Going to open the tavern",
+            Self::ServingAtTavern => "Serving guests at the tavern",
             Self::EndingWorkShift => "Finishing the work shift",
             Self::WalkingAroundTown => "Walking around town",
             Self::Resting => "Resting",
@@ -599,15 +649,37 @@ pub enum SettlementBuildingKind {
     /// Extracts Stone from rocky ground. Appended to keep existing replicated
     /// enum discriminants stable.
     StoneQuarry,
+    /// Raises grazing animals for edible Meat and Wool. Appended so existing
+    /// replicated building discriminants remain stable.
+    LivestockFarm,
 }
 
 impl SettlementBuildingKind {
+    /// Complete player-facing permit catalogue in notice-board order.
+    ///
+    /// Keep this as the single source for permit menus. Tier rules below hide
+    /// entries which are not yet legal; economic demand only changes their
+    /// score and price. The Hall is deliberately absent because it is civic.
+    pub const PLAYER_PERMIT_KINDS: [Self; 12] = [
+        Self::House,
+        Self::Farmstead,
+        Self::FishermansHut,
+        Self::LivestockFarm,
+        Self::Windmill,
+        Self::Bakery,
+        Self::StorageHall,
+        Self::LumberjackHut,
+        Self::StoneQuarry,
+        Self::Market,
+        Self::Tavern,
+        Self::Church,
+    ];
+
     pub const fn is_civic(self) -> bool {
         matches!(
             self,
             SettlementBuildingKind::Hall
                 | SettlementBuildingKind::Market
-                | SettlementBuildingKind::Tavern
                 | SettlementBuildingKind::Church
         )
     }
@@ -625,8 +697,9 @@ impl SettlementBuildingKind {
             | SettlementBuildingKind::FishermansHut
             | SettlementBuildingKind::Windmill
             | SettlementBuildingKind::Bakery
-            | SettlementBuildingKind::StorageHall => Some(SettlementTier::Hamlet),
-            SettlementBuildingKind::StoneQuarry => Some(SettlementTier::Hamlet),
+            | SettlementBuildingKind::StorageHall
+            | SettlementBuildingKind::StoneQuarry
+            | SettlementBuildingKind::LivestockFarm => Some(SettlementTier::Hamlet),
             SettlementBuildingKind::Market | SettlementBuildingKind::Tavern => {
                 Some(SettlementTier::Village)
             }
@@ -653,6 +726,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Bakery => "BAKERY",
             SettlementBuildingKind::StorageHall => "STORAGE HALL",
             SettlementBuildingKind::StoneQuarry => "STONE QUARRY",
+            SettlementBuildingKind::LivestockFarm => "LIVESTOCK FARM",
         }
     }
 
@@ -676,6 +750,7 @@ impl SettlementBuildingKind {
             // walkable open-air marketplace.
             SettlementBuildingKind::StorageHall => Art::PlaceholderStorageHall,
             SettlementBuildingKind::StoneQuarry => Art::PlaceholderStoneQuarry,
+            SettlementBuildingKind::LivestockFarm => Art::PlaceholderLivestockFarm,
         }
     }
 
@@ -689,6 +764,7 @@ impl SettlementBuildingKind {
     pub fn yield_quality(self, profile: &crate::worldgen::ResourceProfile) -> f32 {
         match self {
             SettlementBuildingKind::Farmstead => profile.farmland,
+            SettlementBuildingKind::LivestockFarm => profile.farmland,
             SettlementBuildingKind::LumberjackHut => profile.wood,
             SettlementBuildingKind::StoneQuarry => profile.stone,
             // Fishing quality is geometry rather than a land resource: the
@@ -715,6 +791,9 @@ impl SettlementBuildingKind {
     pub fn placement_suitability(self, profile: &crate::worldgen::ResourceProfile) -> f32 {
         match self {
             SettlementBuildingKind::Farmstead => profile.farmland,
+            SettlementBuildingKind::LivestockFarm => {
+                (profile.farmland * (1.0 - profile.wood * 0.55)).clamp(0.0, 1.0)
+            }
             SettlementBuildingKind::LumberjackHut => profile.wood,
             SettlementBuildingKind::StoneQuarry => profile.stone,
             SettlementBuildingKind::Windmill => (1.0 - profile.wood * 0.75).clamp(0.0, 1.0),
@@ -735,6 +814,7 @@ impl SettlementBuildingKind {
     pub const fn site_quality_label(self) -> Option<&'static str> {
         match self {
             SettlementBuildingKind::Farmstead => Some("FARMLAND QUALITY"),
+            SettlementBuildingKind::LivestockFarm => Some("PASTURE QUALITY"),
             SettlementBuildingKind::LumberjackHut => Some("TIMBER QUALITY"),
             SettlementBuildingKind::StoneQuarry => Some("STONE QUALITY"),
             SettlementBuildingKind::FishermansHut => Some("FISHING QUALITY"),
@@ -767,6 +847,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Bakery => Some("Baker"),
             SettlementBuildingKind::StorageHall => Some("Company Porter"),
             SettlementBuildingKind::StoneQuarry => Some("Quarrier"),
+            SettlementBuildingKind::LivestockFarm => Some("Herder"),
         }
     }
 
@@ -791,6 +872,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => 2,
             SettlementBuildingKind::StorageHall => 4,
             SettlementBuildingKind::StoneQuarry => 2,
+            SettlementBuildingKind::LivestockFarm => 2,
         }
     }
 
@@ -815,6 +897,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Bakery => crate::economy::capacity::BAKERY,
             SettlementBuildingKind::StorageHall => crate::economy::capacity::STORAGE_HALL,
             SettlementBuildingKind::StoneQuarry => crate::economy::capacity::STONE_QUARRY,
+            SettlementBuildingKind::LivestockFarm => crate::economy::capacity::LIVESTOCK_FARM,
         }
     }
 
@@ -835,7 +918,7 @@ impl SettlementBuildingKind {
             | SettlementBuildingKind::Windmill
             | SettlementBuildingKind::Bakery
             | SettlementBuildingKind::StorageHall => 0,
-            SettlementBuildingKind::StoneQuarry => 0,
+            SettlementBuildingKind::StoneQuarry | SettlementBuildingKind::LivestockFarm => 0,
         }
     }
 
@@ -860,6 +943,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => 8,
             SettlementBuildingKind::StorageHall => 14,
             SettlementBuildingKind::StoneQuarry => 12,
+            SettlementBuildingKind::LivestockFarm => 12,
         }
     }
 
@@ -888,6 +972,7 @@ impl SettlementBuildingKind {
             }
             SettlementBuildingKind::StorageHall => Vec2::new(0.0, -4.0),
             SettlementBuildingKind::StoneQuarry => Vec2::new(0.0, -4.8),
+            SettlementBuildingKind::LivestockFarm => Vec2::new(0.0, -3.8),
         }
     }
 
@@ -939,6 +1024,22 @@ impl SettlementBuildingKind {
     /// representative Farmstead field location.
     pub fn field_position(self, plot: Vec3, rotation_y: f32) -> Option<Vec3> {
         self.field_position_at(plot, rotation_y, 0)
+    }
+
+    /// Centre of the fenced grazing plot behind a Livestock Farm.
+    pub fn pasture_position(self, plot: Vec3, rotation_y: f32) -> Option<Vec3> {
+        (self == SettlementBuildingKind::LivestockFarm).then(|| {
+            let offset = crate::rotation::local_to_world_xz(Vec2::new(0.0, 12.0), rotation_y);
+            Vec3::new(plot.x + offset.x, plot.y, plot.z + offset.y)
+        })
+    }
+
+    /// Half-size of the separate walkable livestock pasture.
+    pub const fn pasture_half_extents(self) -> Option<Vec2> {
+        match self {
+            SettlementBuildingKind::LivestockFarm => Some(Vec2::new(8.0, 7.0)),
+            _ => None,
+        }
     }
 
     /// Half-size of the separate wheat plot in its rendered local X/Z frame.
@@ -1010,6 +1111,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Bakery => (18.0, 60.0),
             SettlementBuildingKind::StorageHall => (22.0, 78.0),
             SettlementBuildingKind::StoneQuarry => (36.0, 150.0),
+            SettlementBuildingKind::LivestockFarm => (32.0, 120.0),
         }
     }
 
@@ -1038,6 +1140,7 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::Bakery => 9.0,
             SettlementBuildingKind::StorageHall => 12.0,
             SettlementBuildingKind::StoneQuarry => 12.0,
+            SettlementBuildingKind::LivestockFarm => 14.0,
         }
     }
 }
@@ -1597,6 +1700,85 @@ pub enum WorkStatus {
     Chilling,
 }
 
+/// Broad use of a resident's discretionary time in one inspectable day plan.
+///
+/// This is deliberately not a happiness need. It tells the simulation and UI
+/// where an otherwise-free person intends to spend part of the day, while the
+/// actual visit still depends on a route, an open business, stock and money.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PlannedLeisure {
+    /// Household errands, roadside conversation or an unstructured walk.
+    #[default]
+    LocalFreeTime,
+    /// One paid meal at a private Tavern if the quoted price remains sensible.
+    TavernMeal,
+}
+
+impl PlannedLeisure {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::LocalFreeTime => "Free time in town",
+            Self::TavernMeal => "Tavern meal",
+        }
+    }
+}
+
+/// Progress of the discretionary entry on [`CharacterDayPlan`].
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PlannedLeisureStatus {
+    #[default]
+    Planned,
+    InProgress,
+    Completed,
+    CouldNotAfford,
+    TavernUnavailable,
+    CouldNotReach,
+}
+
+impl PlannedLeisureStatus {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Planned => "planned",
+            Self::InProgress => "happening now",
+            Self::Completed => "completed",
+            Self::CouldNotAfford => "skipped: price too high",
+            Self::TavernUnavailable => "skipped: tavern unavailable",
+            Self::CouldNotReach => "skipped: no route",
+        }
+    }
+}
+
+/// A compact, server-authored calendar for one resident's current world day.
+///
+/// Times are display-clock minutes after midnight. The plan is regenerated at
+/// most once per person per day (or when their employment state changes), so
+/// thousands of NPCs do not need continuously evaluated behaviour trees.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CharacterDayPlan {
+    pub day: u32,
+    pub wake_minute: u16,
+    /// `None` means job seeking, household tasks or owner leisure replaces a
+    /// formal shift today.
+    pub work_minutes: Option<(u16, u16)>,
+    pub meal_minute: u16,
+    pub leisure_minutes: (u16, u16),
+    pub sleep_minute: u16,
+    pub leisure: PlannedLeisure,
+    pub leisure_status: PlannedLeisureStatus,
+    /// Employment snapshot which caused this plan. It lets a same-day hire or
+    /// resignation refresh the calendar without polling more mutable facts.
+    pub planned_work_status: WorkStatus,
+}
+
+impl CharacterDayPlan {
+    pub fn has_due_leisure(self, display_minute: u16) -> bool {
+        self.leisure == PlannedLeisure::TavernMeal
+            && self.leisure_status == PlannedLeisureStatus::Planned
+            && display_minute >= self.leisure_minutes.0
+            && display_minute < self.leisure_minutes.1
+    }
+}
+
 impl WorkStatus {
     pub const fn label(self) -> &'static str {
         match self {
@@ -1849,6 +2031,18 @@ pub struct FarmField {
     /// Zero-based position in the Farmstead's two-field layout.
     #[serde(default)]
     pub plot_index: u8,
+    pub quality: f32,
+}
+
+/// One fenced grazing plot belonging to a completed Livestock Farm.
+///
+/// Animals are deterministic client-side presentation children, not replicated
+/// pathfinding people. The server owns this one plot record and all physical
+/// production, inventory and worker behaviour.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LivestockPasture {
+    pub settlement: String,
+    pub livestock_farm: Vec3,
     pub quality: f32,
 }
 

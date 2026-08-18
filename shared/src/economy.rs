@@ -27,6 +27,12 @@ pub enum Good {
     /// Prepared bakery bread. Two Flour become four Bread, making this the
     /// first higher-efficiency (tier-two) food rather than a cosmetic rename.
     Bread,
+    /// Ready-to-cook livestock food. One unit is one household ration; taverns
+    /// may later turn it into a higher-value prepared meal.
+    Meat,
+    /// Raw fleece from livestock. It is deliberately not edible and is the
+    /// first input reserved for the future spinner/weaver clothing chain.
+    Wool,
 }
 
 /// Civic infrastructure required before a good may enter a settlement's
@@ -666,6 +672,14 @@ impl BusinessAccount {
         self.roll_to_day(day);
         self.gross_revenue = self.gross_revenue.saturating_add(pennies);
         self.current_day.gross_revenue = self.current_day.gross_revenue.saturating_add(pennies);
+    }
+
+    /// Attribute a direct service sale at this site. Unlike a market
+    /// consignment there is no municipal fee, but the served unit remains
+    /// visible in the site's sales history and automatic management evidence.
+    pub fn record_service_sale(&mut self, day: u32, pennies: u64, units: u32) {
+        self.record_service_revenue(day, pennies);
+        self.current_day.sold_units = self.current_day.sold_units.saturating_add(units);
     }
 
     /// Attribute a company-funded external input purchase to this site.
@@ -1356,6 +1370,112 @@ impl BusinessSalePolicy {
     }
 }
 
+/// Simultaneous guest places in the founding Tavern blockout. Throughput is
+/// separately limited by Innkeepers and ingredients, so this is a physical
+/// presentation bound rather than free production capacity.
+pub const TAVERN_GUEST_CAPACITY: u8 = 8;
+/// One Innkeeper can serve this many paid meals in an ordinary day. The value
+/// is deliberately modest: another busy Tavern or another hired position can
+/// emerge from demand instead of one counter serving an entire Town.
+pub const TAVERN_MEALS_PER_INNKEEPER_DAY: u32 = 8;
+
+/// Inspectable demand and sales evidence for one Tavern day.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TavernServiceDay {
+    pub day: u32,
+    pub planned_visits: u32,
+    pub served_meals: u32,
+    pub bread_used: u32,
+    pub meat_used: u32,
+    pub unaffordable_visits: u32,
+    pub unavailable_visits: u32,
+    pub route_failures: u32,
+    pub revenue: u64,
+}
+
+impl TavernServiceDay {
+    pub const fn empty(day: u32) -> Self {
+        Self {
+            day,
+            planned_visits: 0,
+            served_meals: 0,
+            bread_used: 0,
+            meat_used: 0,
+            unaffordable_visits: 0,
+            unavailable_visits: 0,
+            route_failures: 0,
+            revenue: 0,
+        }
+    }
+
+    pub const fn unmet_visits(self) -> u32 {
+        self.unaffordable_visits
+            .saturating_add(self.unavailable_visits)
+            .saturating_add(self.route_failures)
+    }
+}
+
+/// The small replicated service board for a private Tavern.
+///
+/// Meal price remains in [`BusinessSalePolicy`], meaning player and NPC
+/// Company Masters use the same manual/automatic pricing path. This component
+/// records capacity and evidence; it never mints goods or money.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TavernService {
+    pub guest_capacity: u8,
+    pub innkeepers_on_duty: u8,
+    pub current_guests: u8,
+    pub current_day: TavernServiceDay,
+    pub previous_day: TavernServiceDay,
+}
+
+impl Default for TavernService {
+    fn default() -> Self {
+        Self {
+            guest_capacity: TAVERN_GUEST_CAPACITY,
+            innkeepers_on_duty: 0,
+            current_guests: 0,
+            current_day: TavernServiceDay::empty(u32::MAX),
+            previous_day: TavernServiceDay::empty(u32::MAX),
+        }
+    }
+}
+
+impl TavernService {
+    pub fn roll_to_day(&mut self, day: u32) {
+        if self.current_day.day == day {
+            return;
+        }
+        if self.current_day.day != u32::MAX {
+            self.previous_day = self.current_day;
+        }
+        self.current_day = TavernServiceDay::empty(day);
+        self.current_guests = 0;
+    }
+
+    pub fn record_planned_visit(&mut self, day: u32) {
+        self.roll_to_day(day);
+        self.current_day.planned_visits = self.current_day.planned_visits.saturating_add(1);
+    }
+
+    pub fn record_meal(&mut self, day: u32, ingredient: Good, price: u64) {
+        self.roll_to_day(day);
+        self.current_day.served_meals = self.current_day.served_meals.saturating_add(1);
+        self.current_day.revenue = self.current_day.revenue.saturating_add(price);
+        match ingredient {
+            Good::Bread => {
+                self.current_day.bread_used = self.current_day.bread_used.saturating_add(1)
+            }
+            Good::Meat => self.current_day.meat_used = self.current_day.meat_used.saturating_add(1),
+            _ => {}
+        }
+    }
+
+    pub const fn daily_capacity(self) -> u32 {
+        self.innkeepers_on_duty as u32 * TAVERN_MEALS_PER_INNKEEPER_DAY
+    }
+}
+
 /// One input which automatic management may purchase from the local market.
 /// The rule is deliberately about stock and price rather than a named building
 /// kind: a tavern, bakery, brewery or smithy can all use the same decision path.
@@ -1884,6 +2004,10 @@ impl CarriedAppearance {
             Good::Iron => Self::IronBundle,
             Good::Flour => Self::FlourSack,
             Good::Bread => Self::BreadBasket,
+            // Dedicated carried art can replace these founding placeholders
+            // without changing the inventory or trade contract.
+            Good::Meat => Self::FishBasket,
+            Good::Wool => Self::FlourSack,
         }
     }
 
@@ -1972,7 +2096,7 @@ impl PorterCartState {
 impl Good {
     /// Existing discriminants stay in their original order for replicated and
     /// saved data; new goods are appended.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::Food,
         Self::Wheat,
         Self::Wood,
@@ -1980,16 +2104,23 @@ impl Good {
         Self::Iron,
         Self::Flour,
         Self::Bread,
+        Self::Meat,
+        Self::Wool,
     ];
     pub const COUNT: usize = Self::ALL.len();
 
     /// Household pantries consume better prepared food first. Flour is last:
     /// it becomes an ordinary ration only through home baking.
-    pub const HOUSEHOLD_FOOD_PRIORITY: [Self; 3] = [Self::Bread, Self::Food, Self::Flour];
+    pub const HOUSEHOLD_FOOD_PRIORITY: [Self; 4] =
+        [Self::Bread, Self::Meat, Self::Food, Self::Flour];
 
     /// Food which can be handed to an unhoused resident and eaten in the Moot
     /// commons. Flour deliberately is not on this list.
-    pub const READY_TO_EAT_PRIORITY: [Self; 2] = [Self::Bread, Self::Food];
+    pub const READY_TO_EAT_PRIORITY: [Self; 3] = [Self::Bread, Self::Meat, Self::Food];
+
+    /// Physical inputs a future Tavern may procure. Wheat remains the founding
+    /// ale grain even though raw Wheat is not a household ration.
+    pub const TAVERN_INPUTS: [Self; 3] = [Self::Meat, Self::Bread, Self::Wheat];
 
     /// Minimum public exchange able to list and clear this good. All current
     /// founding resources remain Moot-tradeable; Iron is the first specialist
@@ -1997,9 +2128,14 @@ impl Good {
     pub const fn minimum_market_tier(self) -> MarketTradeTier {
         match self {
             Self::Iron => MarketTradeTier::PavedMarketplace,
-            Self::Food | Self::Wheat | Self::Wood | Self::Stone | Self::Flour | Self::Bread => {
-                MarketTradeTier::Moot
-            }
+            Self::Food
+            | Self::Wheat
+            | Self::Wood
+            | Self::Stone
+            | Self::Flour
+            | Self::Bread
+            | Self::Meat
+            | Self::Wool => MarketTradeTier::Moot,
         }
     }
 
@@ -2014,6 +2150,8 @@ impl Good {
             Self::Iron => "Iron",
             Self::Flour => "Flour",
             Self::Bread => "Bread",
+            Self::Meat => "Meat",
+            Self::Wool => "Wool",
         }
     }
 
@@ -2023,11 +2161,11 @@ impl Good {
     /// must additionally require [`Self::is_ready_to_eat`]. Raw Wheat is never
     /// food after the milling chain was introduced.
     pub const fn is_edible(self) -> bool {
-        matches!(self, Self::Food | Self::Flour | Self::Bread)
+        matches!(self, Self::Food | Self::Flour | Self::Bread | Self::Meat)
     }
 
     pub const fn is_ready_to_eat(self) -> bool {
-        matches!(self, Self::Food | Self::Bread)
+        matches!(self, Self::Food | Self::Bread | Self::Meat)
     }
 
     /// Bread is the first tier-two food. The tier is inspectable now and can
@@ -2035,9 +2173,9 @@ impl Good {
     /// by display string.
     pub const fn food_tier(self) -> u8 {
         match self {
-            Self::Food | Self::Flour => 1,
+            Self::Food | Self::Flour | Self::Meat => 1,
             Self::Bread => 2,
-            Self::Wheat | Self::Wood | Self::Stone | Self::Iron => 0,
+            Self::Wheat | Self::Wood | Self::Stone | Self::Iron | Self::Wool => 0,
         }
     }
 
@@ -2054,6 +2192,8 @@ impl Good {
             Self::Stone => 6,
             Self::Iron => 3,
             Self::Flour | Self::Bread => 1,
+            Self::Meat => 1,
+            Self::Wool => 2,
         }
     }
 
@@ -2070,6 +2210,8 @@ impl Good {
             Self::Iron => 400,
             Self::Flour => 120,
             Self::Bread => 180,
+            Self::Meat => 140,
+            Self::Wool => 90,
         }
     }
 
@@ -2082,6 +2224,8 @@ impl Good {
             Self::Iron => 4,
             Self::Flour => 5,
             Self::Bread => 6,
+            Self::Meat => 7,
+            Self::Wool => 8,
         }
     }
 }
@@ -2115,6 +2259,12 @@ pub struct MarketDayFlow {
     /// Units which existed, but the buyer's cash or maximum bid could not buy.
     #[serde(default)]
     pub unaffordable_units: u64,
+    /// Unfilled units for which the buyer demonstrably had enough cash at the
+    /// market's observed reference price. This is deliberately narrower than
+    /// `unavailable_units`: hunger without purchasing power is a social need,
+    /// not guaranteed merchant revenue.
+    #[serde(default)]
+    pub funded_unmet_units: u64,
 }
 
 impl MarketDayFlow {
@@ -2132,6 +2282,7 @@ impl MarketDayFlow {
             consumer_coin: 0,
             unavailable_units: 0,
             unaffordable_units: 0,
+            funded_unmet_units: 0,
         }
     }
 
@@ -2142,20 +2293,31 @@ impl MarketDayFlow {
         self.low_ask = self.low_ask.min(ask);
     }
 
-    fn record_consignment_sale(&mut self, units: u32, gross: u64, seller_net: u64) {
+    fn record_consignment_sale(
+        &mut self,
+        units: u32,
+        gross: u64,
+        seller_net: u64,
+        records_end_demand: bool,
+    ) {
         self.producer_units = self.producer_units.saturating_add(u64::from(units));
         self.producer_coin = self.producer_coin.saturating_add(seller_net);
-        self.consumer_units = self.consumer_units.saturating_add(u64::from(units));
-        self.consumer_coin = self.consumer_coin.saturating_add(gross);
+        if records_end_demand {
+            self.consumer_units = self.consumer_units.saturating_add(u64::from(units));
+            self.consumer_coin = self.consumer_coin.saturating_add(gross);
+        }
     }
 
-    fn record_unmet_demand(&mut self, unavailable: u32, unaffordable: u32) {
+    fn record_unmet_demand(&mut self, unavailable: u32, unaffordable: u32, funded_unmet: u32) {
         self.unavailable_units = self
             .unavailable_units
             .saturating_add(u64::from(unavailable));
         self.unaffordable_units = self
             .unaffordable_units
             .saturating_add(u64::from(unaffordable));
+        self.funded_unmet_units = self
+            .funded_unmet_units
+            .saturating_add(u64::from(funded_unmet));
     }
 
     pub const fn unmet_units(self) -> u64 {
@@ -2290,6 +2452,8 @@ impl MootMarket {
                 MarketPool::new(0, Good::Iron.base_price()),
                 MarketPool::new(4, Good::Flour.base_price()),
                 MarketPool::new(4, Good::Bread.base_price()),
+                MarketPool::new(4, Good::Meat.base_price()),
+                MarketPool::new(6, Good::Wool.base_price()),
             ],
             listings: Vec::new(),
             market_fee_bps: DEFAULT_MARKET_FEE_BPS,
@@ -2299,6 +2463,14 @@ impl MootMarket {
 
     pub const fn trade_tier(&self) -> MarketTradeTier {
         self.trade_tier
+    }
+
+    /// Formal inter-settlement commerce begins only after the settlement has
+    /// built a physical Marketplace. The founding Moot exchange remains a
+    /// local order book for residents and businesses, but caravans cannot use
+    /// it as a regional endpoint.
+    pub const fn supports_regional_trade(&self) -> bool {
+        self.trade_tier as u8 >= MarketTradeTier::Marketplace as u8
     }
 
     /// Settlement development is monotonic, so a temporarily missing streamed
@@ -2579,6 +2751,31 @@ impl MootMarket {
             maximum_unit_price,
             None,
             excluded_seller,
+            true,
+        )
+    }
+
+    /// Buy inventory for resale elsewhere. The source producer still records
+    /// a real sale and receives real cash, but this wholesale collection is
+    /// not end demand from source-town households or processors. Keeping the
+    /// two flows distinct prevents one caravan from making its supplier town
+    /// look hungry for substitute goods.
+    pub fn purchase_for_resale(
+        &mut self,
+        good: Good,
+        requested: u32,
+        budget: u64,
+        maximum_unit_price: Option<u64>,
+        excluded_seller: Option<MarketSeller>,
+    ) -> MarketPurchase {
+        self.purchase_filtered(
+            good,
+            requested,
+            budget,
+            maximum_unit_price,
+            None,
+            excluded_seller,
+            false,
         )
     }
 
@@ -2601,6 +2798,28 @@ impl MootMarket {
             maximum_unit_price,
             Some(seller),
             None,
+            true,
+        )
+    }
+
+    /// Named-seller version of [`Self::purchase_for_resale`] used by a
+    /// buyer-funded inter-settlement contract.
+    pub fn purchase_from_seller_for_resale(
+        &mut self,
+        seller: MarketSeller,
+        good: Good,
+        requested: u32,
+        budget: u64,
+        maximum_unit_price: Option<u64>,
+    ) -> MarketPurchase {
+        self.purchase_filtered(
+            good,
+            requested,
+            budget,
+            maximum_unit_price,
+            Some(seller),
+            None,
+            false,
         )
     }
 
@@ -2612,6 +2831,7 @@ impl MootMarket {
         maximum_unit_price: Option<u64>,
         required_seller: Option<MarketSeller>,
         excluded_seller: Option<MarketSeller>,
+        records_end_demand: bool,
     ) -> MarketPurchase {
         if !self.can_trade(good) {
             return MarketPurchase::default();
@@ -2673,6 +2893,7 @@ impl MootMarket {
                 purchase.trade.units,
                 purchase.trade.pennies,
                 purchase.trade.pennies.saturating_sub(fee),
+                records_end_demand,
             );
         }
         self.sort_listings();
@@ -2727,11 +2948,22 @@ impl MootMarket {
         let unaffordable = physically_possible
             .saturating_sub(price_possible)
             .saturating_add(price_possible.saturating_sub(preview.units));
+        // A remote merchant needs to distinguish an empty shelf from a buyer
+        // who can actually pay. Use the caller's explicit ceiling when one
+        // exists; ordinary household demand uses the stable reference price.
+        // That lets a cheaper entrant recognize funded demand hidden behind
+        // an incumbent's unaffordable asking price.
+        let reference_price = maximum_unit_price
+            .unwrap_or_else(|| good.base_price())
+            .max(1);
+        let funded_request =
+            requested.min((budget / reference_price).min(u64::from(u32::MAX)) as u32);
+        let funded_unmet = funded_request.saturating_sub(preview.units.min(funded_request));
         let purchase = self.purchase(good, requested, budget, maximum_unit_price, excluded_seller);
         debug_assert_eq!(purchase.trade, preview);
         self.pool_mut(good)
             .day
-            .record_unmet_demand(unavailable, unaffordable);
+            .record_unmet_demand(unavailable, unaffordable, funded_unmet);
         purchase
     }
 
@@ -2899,6 +3131,8 @@ pub struct MarketGoodHistoryDay {
     pub unavailable_units: u64,
     #[serde(default)]
     pub unaffordable_units: u64,
+    #[serde(default)]
+    pub funded_unmet_units: u64,
     pub closing_stock: u32,
     pub target_stock: u32,
     pub listed_units: u32,
@@ -2951,6 +3185,16 @@ pub struct SettlementHistoryDay {
     pub population: u32,
     pub employed: u32,
     pub hungry: u32,
+    #[serde(default)]
+    pub job_seekers: u32,
+    #[serde(default)]
+    pub homeless: u32,
+    #[serde(default)]
+    pub unpaid_workers: u32,
+    #[serde(default)]
+    pub unrest: f32,
+    #[serde(default)]
+    pub unrest_target: f32,
     pub food_reserves: u32,
     #[serde(default)]
     pub purchasable_food: u32,
@@ -3167,7 +3411,9 @@ pub fn permit_price_with_subsidy(
         return 0;
     }
     let base: u64 = match kind {
-        SettlementBuildingKind::Farmstead | SettlementBuildingKind::FishermansHut => 300,
+        SettlementBuildingKind::Farmstead
+        | SettlementBuildingKind::FishermansHut
+        | SettlementBuildingKind::LivestockFarm => 300,
         SettlementBuildingKind::LumberjackHut => 250,
         SettlementBuildingKind::StoneQuarry => 350,
         SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery => 250,
@@ -3447,6 +3693,32 @@ pub struct SettlementEconomy {
     pub job_seekers: u16,
     #[serde(default)]
     pub best_open_private_wage: u64,
+    /// Completed beds currently available across the settlement.
+    #[serde(default)]
+    pub housing_capacity: u32,
+    /// Residents without a real [`crate::components::HomeAssignment`].
+    #[serde(default)]
+    pub homeless_residents: u32,
+    /// Current public or private workers attached to a workplace which owes
+    /// wage arrears. Historical claimants are not counted here.
+    #[serde(default)]
+    pub unpaid_workers: u16,
+    /// Slow-moving public instability. This is a settlement reading, not a
+    /// new need or continuously ticking state on every character.
+    #[serde(default)]
+    pub unrest: f32,
+    /// Today's pressure before persistence is applied.
+    #[serde(default)]
+    pub unrest_target: f32,
+    /// Signed change made on the most recently completed world day.
+    #[serde(default)]
+    pub unrest_change: f32,
+    #[serde(default)]
+    pub unrest_hunger_pressure: f32,
+    #[serde(default)]
+    pub unrest_housing_pressure: f32,
+    #[serde(default)]
+    pub unrest_wage_pressure: f32,
 }
 
 impl Default for SettlementEconomy {
@@ -3473,6 +3745,41 @@ impl Default for SettlementEconomy {
             civic_vacant_jobs: 0,
             job_seekers: 0,
             best_open_private_wage: 0,
+            housing_capacity: 0,
+            homeless_residents: 0,
+            unpaid_workers: 0,
+            unrest: 0.0,
+            unrest_target: 0.0,
+            unrest_change: 0.0,
+            unrest_hunger_pressure: 0.0,
+            unrest_housing_pressure: 0.0,
+            unrest_wage_pressure: 0.0,
+        }
+    }
+}
+
+impl SettlementEconomy {
+    pub const fn unrest_label(&self) -> &'static str {
+        if self.unrest < 20.0 {
+            "Calm"
+        } else if self.unrest < 40.0 {
+            "Uneasy"
+        } else if self.unrest < 60.0 {
+            "Tense"
+        } else if self.unrest < 80.0 {
+            "Volatile"
+        } else {
+            "Rebellious"
+        }
+    }
+
+    pub const fn unrest_trend_label(&self) -> &'static str {
+        if self.unrest_change > 0.05 {
+            "rising"
+        } else if self.unrest_change < -0.05 {
+            "falling"
+        } else {
+            "steady"
         }
     }
 }
@@ -3517,6 +3824,7 @@ pub mod capacity {
     pub const PORTER: u32 = 96;
     pub const HOUSE: u32 = 80;
     pub const FARMSTEAD: u32 = 240;
+    pub const LIVESTOCK_FARM: u32 = 300;
     pub const LUMBERJACK_HUT: u32 = 240;
     pub const FISHERMANS_HUT: u32 = 240;
     pub const MARKET: u32 = 600;
@@ -3711,24 +4019,31 @@ mod tests {
     }
 
     #[test]
-    fn flour_and_bread_are_food_but_raw_wheat_is_not() {
+    fn meat_flour_and_bread_are_food_but_wheat_and_wool_are_not() {
         let mut inventory = GoodsInventory::new(40);
         inventory.add(Good::Food, 2);
         inventory.add(Good::Wheat, 3);
         inventory.add(Good::Flour, 2);
         inventory.add(Good::Bread, 1);
+        inventory.add(Good::Meat, 2);
+        inventory.add(Good::Wool, 2);
         inventory.add(Good::Wood, 2);
 
-        assert_eq!(inventory.edible_amount(), 5);
+        assert_eq!(inventory.edible_amount(), 7);
         assert_eq!(inventory.remove_edible(4), 4);
-        assert_eq!(inventory.amount(Good::Food), 0);
-        assert_eq!(inventory.amount(Good::Flour), 1);
+        assert_eq!(inventory.amount(Good::Bread), 0);
+        assert_eq!(inventory.amount(Good::Meat), 0);
+        assert_eq!(inventory.amount(Good::Food), 1);
+        assert_eq!(inventory.amount(Good::Flour), 2);
         assert_eq!(inventory.amount(Good::Wheat), 3);
         assert_eq!(inventory.amount(Good::Wood), 2);
         assert!(!Good::Wheat.is_edible());
+        assert!(!Good::Wool.is_edible());
+        assert!(Good::Meat.is_ready_to_eat());
         assert!(Good::Flour.is_edible());
         assert!(!Good::Flour.is_ready_to_eat());
         assert_eq!(Good::Bread.food_tier(), 2);
+        assert_eq!(Good::TAVERN_INPUTS, [Good::Meat, Good::Bread, Good::Wheat]);
     }
 
     #[test]
@@ -3833,6 +4148,20 @@ mod tests {
     }
 
     #[test]
+    fn wholesale_collection_pays_producer_without_inventing_local_consumption() {
+        let mut market = MootMarket::founding();
+        let seller = MarketSeller::Business(crate::components::BuildingId(18));
+        market.consign(seller, Good::Bread, 6, 10);
+
+        let purchase = market.purchase_for_resale(Good::Bread, 4, 40, Some(10), None);
+        assert_eq!(purchase.trade.units, 4);
+        let flow = market.pool(Good::Bread).day;
+        assert_eq!(flow.producer_units, 4);
+        assert_eq!(flow.consumer_units, 0);
+        assert_eq!(flow.consumer_coin, 0);
+    }
+
+    #[test]
     fn market_distinguishes_missing_stock_from_rejected_prices() {
         let mut market = MootMarket::founding();
         let seller = MarketSeller::Business(crate::components::BuildingId(81));
@@ -3844,6 +4173,7 @@ mod tests {
         assert_eq!(flow.consumer_units, 1);
         assert_eq!(flow.unavailable_units, 2);
         assert_eq!(flow.unaffordable_units, 3);
+        assert_eq!(flow.funded_unmet_units, 4);
         assert_eq!(flow.requested_units(), 6);
     }
 

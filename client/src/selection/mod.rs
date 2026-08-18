@@ -30,6 +30,8 @@ impl Plugin for SelectionPlugin {
                 // Order matters: drop a dead selection before anything reads it,
                 // then pick, then let the ring follow what is now selected.
                 tag_characters_selectable,
+                tag_player_boats_selectable,
+                retire_wrecked_boats,
                 tag_settlements_selectable,
                 tag_settlement_buildings_selectable,
                 tag_construction_sites_selectable,
@@ -37,6 +39,7 @@ impl Plugin for SelectionPlugin {
                 pick::pick_on_left_click
                     .after(crate::camera_rts::update_cursor_terrain_hit)
                     .after(crate::hero::sync_hero_transforms),
+                crate::capture::drive_live_voyage_click_input,
                 order::issue_order_on_right_click,
                 ring::sync_selection_ring,
             )
@@ -102,6 +105,22 @@ impl Selectable {
             radius: 0.55,
             height: 1.7,
             shape: SelectableShape::Person,
+        }
+    }
+
+    /// Authored dinghy footprint: 1.80 m beam by 4.27 m length, rooted at the
+    /// waterline. Future vessel assets can expose their own dimensions through
+    /// the same footprint constructor.
+    pub fn dinghy(rotation: f32) -> Self {
+        let half_extents = Vec2::new(0.9, 2.135);
+        Self {
+            radius: half_extents.length(),
+            height: 4.1,
+            shape: SelectableShape::Footprint {
+                half_extents,
+                centre_offset: Vec2::ZERO,
+                rotation,
+            },
         }
     }
 
@@ -399,6 +418,38 @@ fn tag_characters_selectable(
 ) {
     for entity in characters.iter() {
         commands.entity(entity).insert(Selectable::person());
+    }
+}
+
+fn tag_player_boats_selectable(
+    mut commands: Commands,
+    boats: Query<
+        (
+            Entity,
+            Option<&shared::components::PlayerRotation>,
+            Option<&Selectable>,
+        ),
+        (
+            With<shared::components::PlayerBoat>,
+            With<shared::components::PlayerPosition>,
+            Without<shared::components::WreckedVessel>,
+        ),
+    >,
+) {
+    for (entity, rotation, selectable) in boats.iter() {
+        let desired = Selectable::dinghy(rotation.map_or(0.0, |rotation| rotation.0));
+        if selectable != Some(&desired) {
+            commands.entity(entity).insert(desired);
+        }
+    }
+}
+
+fn retire_wrecked_boats(
+    mut commands: Commands,
+    wrecks: Query<Entity, (Added<shared::components::WreckedVessel>, With<Selectable>)>,
+) {
+    for entity in wrecks.iter() {
+        commands.entity(entity).remove::<Selectable>();
     }
 }
 

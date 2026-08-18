@@ -31,6 +31,7 @@ fn validate_schedule(
     stops: &[TradeRouteStop],
     origin: SettlementId,
     known_settlements: &HashSet<SettlementId>,
+    regional_markets: &HashSet<SettlementId>,
     storage_settlements: &HashSet<SettlementId>,
 ) -> Result<(), &'static str> {
     if stops.len() < 2 {
@@ -71,6 +72,12 @@ fn validate_schedule(
     }) {
         return Err("Load and Unload stops require a company Storage Hall in that settlement.");
     }
+    if stops
+        .iter()
+        .any(|stop| !regional_markets.contains(&stop.settlement))
+    {
+        return Err("Every caravan stop requires a completed Marketplace.");
+    }
     Ok(())
 }
 
@@ -106,7 +113,7 @@ pub fn handle_hero_trade_route_orders(
     >,
     heroes: Query<(&Hero, &PersonId), Without<OfflineHero>>,
     companies: Query<(&CompanyId, &CompanyLeadership)>,
-    settlements: Query<&SettlementId>,
+    settlements: Query<(&SettlementId, &shared::economy::MootMarket)>,
     warehouses: Query<(
         &BuildingId,
         &OperatedBy,
@@ -122,7 +129,11 @@ pub fn handle_hero_trade_route_orders(
         &mut TradeRouteSchedule,
     )>,
 ) {
-    let known_settlements: HashSet<_> = settlements.iter().copied().collect();
+    let known_settlements: HashSet<_> = settlements.iter().map(|(id, _)| *id).collect();
+    let regional_markets: HashSet<_> = settlements
+        .iter()
+        .filter_map(|(id, market)| market.supports_regional_trade().then_some(*id))
+        .collect();
     for (remote, mut receiver, mut sender) in links.iter_mut() {
         for order in receiver.receive() {
             let response = (|| -> Result<String, &'static str> {
@@ -187,6 +198,7 @@ pub fn handle_hero_trade_route_orders(
                             &stops,
                             building_of.0,
                             &known_settlements,
+                            &regional_markets,
                             &storage_settlements,
                         )?;
                         let cargo_target = validate_trade_values(
@@ -210,6 +222,9 @@ pub fn handle_hero_trade_route_orders(
                                 maximum_purchase_price,
                                 minimum_destination_price,
                                 automatic,
+                                autonomous_management: false,
+                                expected_trip_profit: 0,
+                                decision_confidence: 100,
                                 active_contract: None,
                                 assigned_caravaner: None,
                                 current_stop: 0,
@@ -265,6 +280,7 @@ pub fn handle_hero_trade_route_orders(
                             &stops,
                             route_state.origin,
                             &known_settlements,
+                            &regional_markets,
                             &storage_settlements,
                         )?;
                         let cargo_target = validate_trade_values(
@@ -376,14 +392,23 @@ mod tests {
                 action: TradeRouteStopAction::Sell,
             },
         ];
-        assert!(validate_schedule(&stops, HOME, &known(), &HashSet::new()).is_err());
-        assert!(validate_schedule(&stops, HOME, &known(), &[HOME].into_iter().collect()).is_ok());
+        let markets: HashSet<_> = [HOME, AWAY].into_iter().collect();
+        assert!(validate_schedule(&stops, HOME, &known(), &markets, &HashSet::new()).is_err());
+        assert!(validate_schedule(
+            &stops,
+            HOME,
+            &known(),
+            &markets,
+            &[HOME].into_iter().collect()
+        )
+        .is_ok());
     }
 
     #[test]
     fn multi_town_schedule_accepts_buy_sell_and_private_unload() {
         let third = SettlementId(3);
         let known: HashSet<_> = [HOME, AWAY, third].into_iter().collect();
+        let markets: HashSet<_> = [HOME, AWAY, third].into_iter().collect();
         let storage: HashSet<_> = [HOME, third].into_iter().collect();
         let stops = [
             TradeRouteStop {
@@ -399,7 +424,7 @@ mod tests {
                 action: TradeRouteStopAction::Unload,
             },
         ];
-        assert!(validate_schedule(&stops, HOME, &known, &storage).is_ok());
+        assert!(validate_schedule(&stops, HOME, &known, &markets, &storage).is_ok());
     }
 
     #[test]
@@ -418,6 +443,33 @@ mod tests {
                 action: TradeRouteStopAction::Unload,
             },
         ];
-        assert!(validate_schedule(&stops, HOME, &known(), &[HOME].into_iter().collect()).is_ok());
+        let markets: HashSet<_> = [HOME, AWAY].into_iter().collect();
+        assert!(validate_schedule(
+            &stops,
+            HOME,
+            &known(),
+            &markets,
+            &[HOME].into_iter().collect()
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn public_caravan_stops_reject_moot_only_settlements() {
+        let stops = [
+            TradeRouteStop {
+                settlement: HOME,
+                action: TradeRouteStopAction::Buy,
+            },
+            TradeRouteStop {
+                settlement: AWAY,
+                action: TradeRouteStopAction::Sell,
+            },
+        ];
+        let only_home_market: HashSet<_> = [HOME].into_iter().collect();
+        assert_eq!(
+            validate_schedule(&stops, HOME, &known(), &only_home_market, &HashSet::new()),
+            Err("Every caravan stop requires a completed Marketplace.")
+        );
     }
 }

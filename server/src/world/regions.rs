@@ -11,7 +11,7 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
-use shared::components::{Player, PlayerPosition};
+use shared::components::{CommandedBy, Hero, Player, PlayerBoat, PlayerPosition};
 use shared::region::{view_radius_to_rings, RegionCoord, SimLevel, REGION_SIZE};
 use shared::terrain::WorldTerrain;
 
@@ -236,10 +236,35 @@ pub fn update_client_interest(
 /// spawned, or client just connected — visibility is set explicitly in both directions,
 /// otherwise an uninterested client would receive the entity until it first crossed an
 /// interest boundary.
+fn entity_is_owned_by_peer(
+    peer: PeerId,
+    account: Option<&str>,
+    hero: Option<&Hero>,
+    commanded_by: Option<&CommandedBy>,
+    player_boat: bool,
+) -> bool {
+    hero.is_some_and(|hero| hero.owner == peer)
+        || (player_boat
+            && account
+                .zip(commanded_by)
+                .is_some_and(|(account, owner)| account == owner.0.as_str()))
+}
+
 pub fn apply_region_visibility(
     mut commands: Commands,
     interest: Res<ClientInterest>,
-    replicated: Query<(Entity, &RegionCoord), With<Replicate>>,
+    profiles: Res<crate::persistence::profiles::PlayerProfiles>,
+    links: Query<&RemoteId, With<lightyear::prelude::server::ClientOf>>,
+    replicated: Query<
+        (
+            Entity,
+            &RegionCoord,
+            Option<&Hero>,
+            Option<&CommandedBy>,
+            Has<PlayerBoat>,
+        ),
+        With<Replicate>,
+    >,
     mut applied: Local<HashMap<Entity, HashMap<Entity, bool>>>,
 ) {
     // Drop state for despawned entities and disconnected clients so the record cannot
@@ -249,11 +274,25 @@ pub fn apply_region_visibility(
         senders.retain(|sender, _| interest.by_client.contains_key(sender));
     }
 
-    for (entity, coord) in replicated.iter() {
+    for (entity, coord, hero, commanded_by, player_boat) in replicated.iter() {
         let entity_state = applied.entry(entity).or_default();
 
         for (client, regions) in interest.by_client.iter() {
-            let inside = regions.contains(coord);
+            // Camera interest must never hide a player's own embodied character
+            // or starter vessel from them. In particular, a new voyage begins
+            // at the map edge while the pre-cinematic camera is still at the
+            // map spawn. Requiring the camera to move before replicating the
+            // entities that move it creates a permanent bootstrap deadlock.
+            let owned_by_client = links.get(*client).is_ok_and(|remote| {
+                entity_is_owned_by_peer(
+                    remote.0,
+                    profiles.peer_to_name.get(&remote.0).map(String::as_str),
+                    hero,
+                    commanded_by,
+                    player_boat,
+                )
+            });
+            let inside = owned_by_client || regions.contains(coord);
 
             let should_be_visible = match entity_state.get(client) {
                 // First sighting of this (entity, sender) pair: set both states
@@ -261,9 +300,12 @@ pub fn apply_region_visibility(
                 None => inside,
                 // Widen the boundary for entities already visible so a camera hovering
                 // on a region edge does not thrash spawn/despawn on the client.
-                Some(true) => regions
-                    .iter()
-                    .any(|r| r.ring_distance(*coord) <= INTEREST_EXIT_MARGIN_RINGS),
+                Some(true) => {
+                    owned_by_client
+                        || regions
+                            .iter()
+                            .any(|r| r.ring_distance(*coord) <= INTEREST_EXIT_MARGIN_RINGS)
+                }
                 Some(false) => inside,
             };
 
@@ -566,5 +608,42 @@ mod tests {
 
         assert!(within_margin(just_outside));
         assert!(!within_margin(far));
+    }
+
+    #[test]
+    fn owned_hero_and_boat_bypass_camera_region_interest() {
+        let peer = PeerId::Netcode(77);
+        let other = PeerId::Netcode(88);
+        let hero = Hero { owner: peer };
+        let owner = CommandedBy("hilda".to_string());
+
+        assert!(entity_is_owned_by_peer(
+            peer,
+            Some("hilda"),
+            Some(&hero),
+            None,
+            false,
+        ));
+        assert!(!entity_is_owned_by_peer(
+            other,
+            Some("alwin"),
+            Some(&hero),
+            None,
+            false,
+        ));
+        assert!(entity_is_owned_by_peer(
+            peer,
+            Some("hilda"),
+            None,
+            Some(&owner),
+            true,
+        ));
+        assert!(!entity_is_owned_by_peer(
+            peer,
+            Some("alwin"),
+            None,
+            Some(&owner),
+            true,
+        ));
     }
 }

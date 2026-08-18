@@ -1132,11 +1132,16 @@ mod tests {
 
     #[test]
     fn only_private_buildings_are_player_permits() {
-        assert!(private_permit_kind(SettlementBuildingKind::House));
-        assert!(private_permit_kind(SettlementBuildingKind::Bakery));
-        assert!(private_permit_kind(SettlementBuildingKind::Market));
-        assert!(private_permit_kind(SettlementBuildingKind::Tavern));
-        assert!(private_permit_kind(SettlementBuildingKind::Church));
+        for kind in SettlementBuildingKind::PLAYER_PERMIT_KINDS {
+            assert!(
+                private_permit_kind(kind),
+                "missing player permit for {kind:?}"
+            );
+        }
+        // The raw-stone business added to the game is currently named Stone
+        // Quarry. A future stone mill/mason's yard should be a distinct
+        // processor rather than silently sharing this permit.
+        assert!(private_permit_kind(SettlementBuildingKind::StoneQuarry));
         assert!(!private_permit_kind(SettlementBuildingKind::Hall));
     }
 
@@ -1149,6 +1154,10 @@ mod tests {
         assert!(
             SettlementBuildingKind::Bakery.is_player_permit_available_at(SettlementTier::Hamlet)
         );
+        assert!(SettlementBuildingKind::LivestockFarm
+            .is_player_permit_available_at(SettlementTier::Hamlet));
+        assert!(SettlementBuildingKind::StoneQuarry
+            .is_player_permit_available_at(SettlementTier::Hamlet));
         assert!(
             !SettlementBuildingKind::Market.is_player_permit_available_at(SettlementTier::Hamlet)
         );

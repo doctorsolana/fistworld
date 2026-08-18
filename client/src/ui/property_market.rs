@@ -181,6 +181,9 @@ fn permit_description(kind: SettlementBuildingKind) -> &'static str {
         SettlementBuildingKind::FishermansHut => "Produces fish from a reachable shoreline.",
         SettlementBuildingKind::LumberjackHut => "Harvests Wood efficiently from nearby forest.",
         SettlementBuildingKind::StoneQuarry => "Extracts Stone from rocky ground.",
+        SettlementBuildingKind::LivestockFarm => {
+            "Raises grazing animals for edible Meat and textile-ready Wool."
+        }
         SettlementBuildingKind::Windmill => "Purchases Wheat and mills it into Flour.",
         SettlementBuildingKind::Bakery => "Purchases Flour and bakes filling Bread.",
         SettlementBuildingKind::StorageHall => {

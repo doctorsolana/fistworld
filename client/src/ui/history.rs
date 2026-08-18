@@ -1782,8 +1782,8 @@ fn spawn_market_history(
             (
                 "UNMET DEMAND",
                 format!(
-                    "{} unavailable / {} unaffordable",
-                    market.unavailable_units, market.unaffordable_units
+                    "{} unavailable / {} unaffordable / {} funded",
+                    market.unavailable_units, market.unaffordable_units, market.funded_unmet_units,
                 ),
             ),
         ],
@@ -1866,6 +1866,13 @@ fn spawn_market_history(
                         .map(|day| Some(day.market[good.index()].unaffordable_units as f64))
                         .collect(),
                 ),
+                Series::new(
+                    "funded unmet",
+                    SAGE,
+                    days.iter()
+                        .map(|day| Some(day.market[good.index()].funded_unmet_units as f64))
+                        .collect(),
+                ),
             ],
         );
         spawn_chart(
@@ -1882,6 +1889,20 @@ fn spawn_market_history(
         );
     });
     spawn_market_daily_table(parent, good, days);
+}
+
+fn history_unrest_label(unrest: f32) -> &'static str {
+    if unrest < 20.0 {
+        "Calm"
+    } else if unrest < 40.0 {
+        "Uneasy"
+    } else if unrest < 60.0 {
+        "Tense"
+    } else if unrest < 80.0 {
+        "Volatile"
+    } else {
+        "Rebellious"
+    }
 }
 
 fn spawn_village_history(parent: &mut ChildSpawnerCommands<'_>, days: &[SettlementHistoryDay]) {
@@ -1945,6 +1966,22 @@ fn spawn_village_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Settleme
                 format!("{} / {}", latest.population, latest.employed),
             ),
             ("HUNGRY", latest.hungry.to_string()),
+            (
+                "SEEKING / HOMELESS / UNPAID",
+                format!(
+                    "{} / {} / {}",
+                    latest.job_seekers, latest.homeless, latest.unpaid_workers,
+                ),
+            ),
+            (
+                "UNREST",
+                format!(
+                    "{:.0} / 100 {} / pressure {:.0}",
+                    latest.unrest,
+                    history_unrest_label(latest.unrest),
+                    latest.unrest_target,
+                ),
+            ),
             ("PROSPERITY", format!("{:.0} / 100", latest.prosperity)),
         ],
     );
@@ -2029,6 +2066,37 @@ fn spawn_village_history(parent: &mut ChildSpawnerCommands<'_>, days: &[Settleme
                     "hungry",
                     BRONZE,
                     days.iter().map(|day| Some(day.hungry as f64)).collect(),
+                ),
+                Series::new(
+                    "seeking work",
+                    BLUE_GREY,
+                    days.iter()
+                        .map(|day| Some(day.job_seekers as f64))
+                        .collect(),
+                ),
+                Series::new(
+                    "homeless",
+                    Color::srgb(0.55, 0.25, 0.20),
+                    days.iter().map(|day| Some(day.homeless as f64)).collect(),
+                ),
+            ],
+        );
+        spawn_chart(
+            grid,
+            "UNREST",
+            "score / 100",
+            &[
+                Series::new(
+                    "unrest",
+                    BRONZE,
+                    days.iter().map(|day| Some(day.unrest as f64)).collect(),
+                ),
+                Series::new(
+                    "daily pressure",
+                    BLUE_GREY,
+                    days.iter()
+                        .map(|day| Some(day.unrest_target as f64))
+                        .collect(),
                 ),
             ],
         );
@@ -2782,8 +2850,8 @@ fn spawn_village_daily_table(parent: &mut ChildSpawnerCommands<'_>, days: &[Sett
             "DAY",
             "LOCAL COIN",
             "GOODS VALUE",
-            "PEOPLE / JOBS",
-            "HUNGRY",
+            "POP / EMP / SEEK / HOMELESS",
+            "HUNGRY / UNPAID / UNREST",
             "PROSPERITY",
         ],
     );
@@ -2794,8 +2862,14 @@ fn spawn_village_daily_table(parent: &mut ChildSpawnerCommands<'_>, days: &[Sett
                 day.day.to_string(),
                 format_money(day.total_local_coin),
                 format_money(day.stock_liquidation_value),
-                format!("{} / {}", day.population, day.employed),
-                day.hungry.to_string(),
+                format!(
+                    "{} / {} / {} / {}",
+                    day.population, day.employed, day.job_seekers, day.homeless,
+                ),
+                format!(
+                    "{} / {} / {:.0}",
+                    day.hungry, day.unpaid_workers, day.unrest
+                ),
                 format!("{:.0}", day.prosperity),
             ],
         );

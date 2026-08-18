@@ -221,15 +221,18 @@ pub fn run_civic_hall_upgrade_projects(
                     let carry_batch = (shared::economy::capacity::VILLAGER
                         / project.material.bulk_per_unit())
                     .max(1);
-                    let requested = remaining
-                        .min(carry_batch)
-                        .min(hall_store.amount(project.material));
+                    // Request the physical carry batch even when the shelf is
+                    // empty. The order book is backed by Hall stock when a
+                    // seller exists; clamping the request to today's zero
+                    // stock made a stockout record zero demand, so no local
+                    // producer could ever discover the civic buyer.
+                    let requested = remaining.min(carry_batch);
                     let budget = crate::world::village::civic::civic_discretionary_budget(
                         &settlement,
                         administration,
                         policies,
                     );
-                    let purchase = market.purchase(
+                    let purchase = market.purchase_recording_demand(
                         project.material,
                         requested,
                         budget,
@@ -1513,6 +1516,64 @@ mod tests {
             SettlementTier::Town
         );
         assert!(app.world().get_entity(project).is_err());
+    }
+
+    #[test]
+    fn empty_hall_material_shelf_records_real_local_demand() {
+        let mut app = development_test_app();
+        app.init_resource::<crate::world::village::BusinessEventQueue>()
+            .add_systems(Update, run_civic_hall_upgrade_projects);
+        app.world_mut().spawn(WorldTime::new_default());
+        let settlement_id = SettlementId(75);
+        let mut policies = SettlementPolicies::from_foundation("Timbermoot", Vec3::ZERO);
+        policies.civic_payroll_reserve_days = 0;
+        app.world_mut().spawn((
+            settlement_id,
+            Settlement {
+                name: "Timbermoot".into(),
+                tier: SettlementTier::Hamlet,
+                residents: 12,
+                treasury: 10_000,
+            },
+            MootMarket::founding(),
+            GoodsInventory::new(shared::economy::capacity::HALL),
+            MootAdministration::default(),
+            policies,
+            CivicAccount::default(),
+            SettlementDevelopment::from_foundation("Timbermoot", Vec3::ZERO, 0),
+        ));
+        app.world_mut().spawn((
+            CivicHallUpgradeWorksite {
+                target: CivicHallLevel::Village,
+                material: Good::Wood,
+                material_required: 12,
+            },
+            CivicHallUpgradeRuntime {
+                last_procurement_day: u32::MAX,
+                raise_seconds_left: shared::components::SETTLEMENT_RAISE_SECONDS,
+                builder: None,
+            },
+            ConstructionSite {
+                kind: SettlementBuildingKind::Hall,
+                settlement: "Timbermoot".into(),
+                raising: false,
+                stand: Vec3::new(0.0, 0.0, -5.2),
+                rotation: 0.0,
+            },
+            GoodsInventory::new(12 * Good::Wood.bulk_per_unit()),
+            BuildingOf(settlement_id),
+            PlayerPosition(Vec3::ZERO),
+        ));
+
+        app.update();
+
+        let market = app
+            .world_mut()
+            .query::<(&SettlementId, &MootMarket)>()
+            .iter(app.world())
+            .find_map(|(id, market)| (*id == settlement_id).then_some(market))
+            .unwrap();
+        assert_eq!(market.pool(Good::Wood).day.unavailable_units, 4);
     }
 
     #[test]

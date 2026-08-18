@@ -67,6 +67,7 @@ impl Plugin for HeroPlugin {
                 (
                     tag_carry_attachments,
                     tag_tool_attachments,
+                    tag_character_heads,
                     sync_indoor_visibility,
                     sync_porter_cart_visuals,
                     sync_carried_load_visuals,
@@ -197,7 +198,7 @@ pub struct HeroPreviewRig;
 
 /// Marks a hero whose wardrobe matches its replicated outfit.
 #[derive(Component)]
-struct HeroDressed;
+pub(crate) struct HeroDressed;
 
 /// The direct child carrying the character scene. Spawned hidden; revealed
 /// only once the wardrobe is applied, so the full closet never flashes for
@@ -311,6 +312,17 @@ struct CarryAttachment;
 /// and carried-load check on every frame.
 #[derive(Component)]
 struct CharacterAttachmentOwner(Entity);
+
+/// Exact authored head joint and the character root that owns it.
+///
+/// Camera presentation must follow the dressed/animated rig rather than guess
+/// a face height from the replicated character root. The latter is especially
+/// visible in seated poses, where a standing-height estimate can put a close
+/// camera inside hair, clothing, or the boat.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct CharacterHead {
+    pub(crate) owner: Entity,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ToolKind {
@@ -961,6 +973,32 @@ fn tag_tool_attachments(
     }
 }
 
+/// Resolve the canonical `head` bone after the asynchronous glTF hierarchy is
+/// instantiated. Like tools and carried loads, this pays the ancestry walk
+/// once and leaves a direct owner link for cheap per-frame camera queries.
+fn tag_character_heads(
+    mut commands: Commands,
+    named: Query<(Entity, &Name), (Added<Name>, Without<CharacterHead>)>,
+    parents: Query<&ChildOf>,
+    characters: Query<(), With<CharacterKind>>,
+) {
+    for (entity, name) in named.iter() {
+        if name.as_str() != "head" {
+            continue;
+        }
+        let mut ancestor = entity;
+        while let Ok(parent) = parents.get(ancestor) {
+            ancestor = parent.parent();
+            if characters.get(ancestor).is_ok() {
+                commands
+                    .entity(entity)
+                    .insert(CharacterHead { owner: ancestor });
+                break;
+            }
+        }
+    }
+}
+
 /// Add and remove the cart as a direct child of the replicated character.
 /// Its authored root is already in the character's final game-space frame, so
 /// no corrective offset, rotation or scale belongs here.
@@ -1502,6 +1540,13 @@ fn desired_body_animation(
     carrying: bool,
     carting: bool,
 ) -> (Option<AnimationNodeIndex>, f32, bool) {
+    // A seated character can be translated by a moving parent such as a
+    // vessel. That world-space speed is not locomotion: the feet must remain
+    // in the authored seated pose while the boat moves beneath them.
+    if activity == Some(CharacterActivity::Sitting) {
+        return (anim.sit_idle.or(anim.idle), 1.0, false);
+    }
+
     // Different start/stop thresholds keep small replicated speed noise from
     // continually restarting idle and walk.
     let was_walking = anim.current_body.is_some() && anim.current_body == anim.walk;
@@ -1527,7 +1572,6 @@ fn desired_body_animation(
     }
 
     let clip = match activity {
-        Some(CharacterActivity::Sitting) => anim.sit_idle,
         Some(CharacterActivity::Chopping) => anim.chop,
         Some(CharacterActivity::Farming) => anim.harvest,
         Some(
@@ -1899,6 +1943,42 @@ mod carried_tests {
         assert_eq!(desired_tool(None, false), None);
         assert_eq!(desired_tool(Some(CharacterActivity::Chopping), true), None);
         assert_eq!(desired_tool(Some(CharacterActivity::Fishing), false), None);
+    }
+
+    #[test]
+    fn a_seated_passenger_does_not_walk_when_the_vessel_moves() {
+        let idle = AnimationNodeIndex::new(0);
+        let walk = AnimationNodeIndex::new(1);
+        let sit = AnimationNodeIndex::new(2);
+        let anim = HeroAnim {
+            player: Entity::from_bits(1),
+            idle: Some(idle),
+            walk: Some(walk),
+            build: None,
+            chop: None,
+            harvest: None,
+            carry: None,
+            pull: None,
+            sit_idle: Some(sit),
+            current_body: Some(walk),
+            fading_body: None,
+            body_fade_seconds: 0.0,
+            paused: false,
+        };
+
+        let (clip, speed, frozen) = desired_body_animation(
+            &HeroVisual {
+                speed: HERO_MOVE_SPEED,
+            },
+            &anim,
+            Some(CharacterActivity::Sitting),
+            false,
+            false,
+        );
+
+        assert_eq!(clip, Some(sit));
+        assert_eq!(speed, 1.0);
+        assert!(!frozen);
     }
 
     #[test]

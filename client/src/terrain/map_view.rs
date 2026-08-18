@@ -6,15 +6,14 @@
 //! stream in *after* the flip get missed, which showed up as a square of high-detail
 //! water floating in the map), and it snaps the entire view at once.
 //!
-//! Instead every detail chunk carries a [`VisibilityRange`], Bevy's per-entity distance
-//! fade with built-in dithered crossfade. Each chunk fades out individually as *its own*
-//! distance to the camera crosses the band, so the detail boundary is a soft radial
-//! gradient that tracks the camera — the Google Maps feel — and freshly streamed chunks
-//! are handled automatically because the range rides on the entity itself.
+//! Terrain chunks use Bevy's per-entity dithered [`VisibilityRange`]. Water is a broad,
+//! translucent surface where that 4x4 discard pattern is conspicuous, so its shader uses
+//! a continuous alpha fade and its range only performs an abrupt, already-transparent
+//! CPU cull.
 //!
-//! The far mesh sits ~5cm below the detail chunks. Its cut-out hole must be filled
-//! *before* the chunks start fading (see `HOLE_FILL_ZOOM`), otherwise the dither
-//! reveals void instead of map.
+//! The far mesh sits ~5cm below the detail chunks. Detailed land retains a cut-out hole
+//! to prevent coarse geometry poking through, while far ocean remains beneath the water
+//! fade at every zoom.
 
 use bevy::camera::visibility::VisibilityRange;
 use bevy::prelude::*;
@@ -27,13 +26,25 @@ pub const DETAIL_FADE_START: f32 = 1_050.0;
 /// Camera distance at which detail chunks are fully gone and only the map remains.
 pub const DETAIL_FADE_END: f32 = 1_550.0;
 
+/// Water starts handing off sooner than terrain because its animated foam and
+/// glints make a whole-chunk streaming edge much easier to see. At the usual
+/// RTS camera height this leaves the centre fully detailed while the outer
+/// water ring dissolves continuously into the matching far surface.
+pub const WATER_FADE_START: f32 = 650.0;
+pub const WATER_FADE_END: f32 = 1_000.0;
+
+/// Abrupt CPU cull after the shader has already reached zero alpha. The extra
+/// margin covers a 64m chunk's diagonal, preventing a chunk-center cull from
+/// cutting off a still-visible edge.
+pub const WATER_CULL_DISTANCE: f32 = 1_100.0;
+
 /// Zoom past which the far mesh stops cutting a hole under the streamed chunks.
 ///
 /// Deliberately below [`DETAIL_FADE_START`]: the far mesh must already be solid
 /// underneath before any chunk starts to dither out.
-pub const HOLE_FILL_ZOOM: f32 = 950.0;
+pub const HOLE_FILL_ZOOM: f32 = 600.0;
 
-/// Distance fade for a streamed detail chunk (terrain or water).
+/// Distance fade for a streamed terrain chunk.
 ///
 /// `use_aabb` matters here: chunks are 64m slabs, and fading on the centre point would
 /// make a chunk under the screen edge pop earlier than one under the cursor.
@@ -47,18 +58,14 @@ pub fn detail_visibility_range() -> VisibilityRange {
 
 /// Distance fade for the water surface.
 ///
-/// The SAME band as the terrain chunks, deliberately: the detail terrain includes
-/// the sea floor, so if the water melts away earlier there is a zoom band where
-/// bare sand floor dithers against the far mesh's baked ocean — every coastal
-/// chunk becomes a square patch flickering between "land" and "water" as the
-/// camera moves. Fading water and floor together keeps the coast reading as
-/// water on both sides of the crossfade. (Water rides the terrain chunk set —
-/// `LoadedChunks` — so their footprints already match; an earlier version had
-/// its own smaller radius, which is why this band used to be earlier.)
+/// Water performs its visible transition with ordinary alpha in toon_water.wgsl.
+/// This range is deliberately abrupt and begins only after that fade is fully
+/// transparent: enabling Bevy's crossfade here adds a conspicuous 4x4 checker
+/// pattern to broad water surfaces.
 pub fn water_visibility_range() -> VisibilityRange {
     VisibilityRange {
         start_margin: 0.0..0.0,
-        end_margin: DETAIL_FADE_START..DETAIL_FADE_END,
+        end_margin: WATER_CULL_DISTANCE..WATER_CULL_DISTANCE,
         use_aabb: true,
     }
 }
@@ -79,5 +86,18 @@ pub fn update_map_view_state(cameras: Query<&CommanderCamera>, mut blend: ResMut
         ((camera.zoom - DETAIL_FADE_START) / (DETAIL_FADE_END - DETAIL_FADE_START)).clamp(0.0, 1.0);
     if blend.0 != next {
         blend.0 = next;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn water_range_culls_only_after_shader_fade_without_dithering() {
+        let range = water_visibility_range();
+        assert!(range.is_abrupt());
+        assert!(WATER_CULL_DISTANCE > WATER_FADE_END);
+        assert_eq!(range.end_margin, WATER_CULL_DISTANCE..WATER_CULL_DISTANCE);
     }
 }

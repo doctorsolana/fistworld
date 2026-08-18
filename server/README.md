@@ -45,11 +45,14 @@ rule more precisely.
     dividends, executive review and company-permit fee recovery
   - `civic`: municipal hiring budgets, unified payroll/arrears, profit levies, staffing posture,
     growth subsidies and bounded policy review
-  - `settlement_economy`: Moot transactions, food security and prosperity
+  - `settlement_economy`: Moot transactions, food security, prosperity and the daily
+    hunger/homelessness/unpaid-work unrest reading
   - `households`: homes, pantry funding, shopping, meals and daily schedules
-  - `trades` / `production`: physical and aggregate farming, fishing, lumber and Stone work,
-    plus the shared Wheat → Flour → Bread recipes
-  - `quarry`: embodied outdoor Stone extraction, bounded personal loads and workplace deposit
+  - `tavern`: compact per-person day plans, private meal pricing, embodied Tavern visits,
+    Innkeeper shifts and equivalent cheap off-screen service
+  - `trades` / `production`: physical and aggregate farming, fishing, livestock, lumber and Stone work,
+    plus the shared Wheat → Flour → Bread recipes and paired Meat/Wool output
+  - `quarry`: embodied outdoor Stone extraction and livestock tending, bounded personal loads and workplace deposit
   - `trade_routes`: buyer-funded civic import contracts, company-owned route assets,
     staffed Storage Hall dispatch, ordered merchant stops, physical inter-settlement cargo and freight/sale accounting
   - `processing`: embodied Windmill and Bakery shifts using bounded private inventories
@@ -132,6 +135,11 @@ inside the new system, and do not add lab-only ordering to make a test pass.
   door timer, seat or animation progress. World-wide work belongs in aggregate passes.
 - Embodied routes must remain bounded, cached and shared where possible. Future army/group
   command requires flow fields rather than multiplying local A*.
+- Watercraft use the separate `player::boat` stack. `Vessel` is the generic navigation
+  opt-in; road/character routes must never move a vessel. Direct water lines are the fast
+  path, obstructed searches are water-certified A*, and `VesselNavigationQueue` admits at
+  most four searches per fixed tick so a fleet order cannot monopolize network ingress.
+  Server movement rechecks water and derives speed from the shared deterministic wind.
 - Avoid per-tick full-population scans, string joins and allocations. Reconcile on changed
   state or slow world boundaries.
 - The live server does not load player or world state after restart. Legacy player-profile

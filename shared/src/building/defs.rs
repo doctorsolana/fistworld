@@ -44,6 +44,8 @@ pub enum BuildingType {
     /// semantic building remains `StoneQuarry`, so authored quarry art can
     /// replace this without touching saves or economy code.
     PlaceholderStoneQuarry,
+    /// Temporary barn blockout paired with a separately rendered pasture.
+    PlaceholderLivestockFarm,
 }
 
 /// All authored building types. Collider baking filters this list through
@@ -85,6 +87,7 @@ impl BuildingType {
             BuildingType::MarketPaved => "building_market_paved",
             BuildingType::PlaceholderStorageHall => "placeholder_storage_hall",
             BuildingType::PlaceholderStoneQuarry => "placeholder_stone_quarry",
+            BuildingType::PlaceholderLivestockFarm => "placeholder_livestock_farm",
         }
     }
 
@@ -113,6 +116,7 @@ impl BuildingType {
             BuildingType::PlaceholderTavern | BuildingType::PlaceholderChurch => None,
             BuildingType::PlaceholderStorageHall => None,
             BuildingType::PlaceholderStoneQuarry => None,
+            BuildingType::PlaceholderLivestockFarm => None,
         }
     }
 
@@ -263,6 +267,16 @@ impl BuildingType {
                 height: 3.0,
                 flatten_radius: 2.0,
                 color: Color::srgb(0.43, 0.44, 0.42),
+                model_path: None,
+            },
+            BuildingType::PlaceholderLivestockFarm => BuildingDef {
+                building_type: *self,
+                display_name: "Livestock Farm (blockout)",
+                footprint: Vec2::new(8.0, 7.0),
+                footprint_center: Vec2::ZERO,
+                height: 4.2,
+                flatten_radius: 1.8,
+                color: Color::srgb(0.46, 0.30, 0.18),
                 model_path: None,
             },
             BuildingType::PlaceholderTavern => BuildingDef {
