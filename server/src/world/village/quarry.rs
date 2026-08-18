@@ -500,23 +500,23 @@ pub fn run_quarry_routines(
                     continue;
                 }
                 commands.entity(worker).remove::<MoveTarget>();
-                let Ok([mut carrier, mut workplace]) =
-                    inventories.get_many_mut([worker, routine.workplace])
-                else {
-                    continue;
+                let fully_deposited = {
+                    let Ok([mut carrier, mut workplace]) =
+                        inventories.get_many_mut([worker, routine.workplace])
+                    else {
+                        continue;
+                    };
+                    carrier.transfer_to(&mut workplace, output, u32::MAX);
+                    if building.kind == SettlementBuildingKind::LivestockFarm {
+                        carrier.transfer_to(&mut workplace, Good::Wool, u32::MAX);
+                    }
+                    carrier.amount(output) == 0
+                        && (building.kind != SettlementBuildingKind::LivestockFarm
+                            || carrier.amount(Good::Wool) == 0)
                 };
-                carrier.transfer_to(&mut workplace, output, u32::MAX);
-                if building.kind == SettlementBuildingKind::LivestockFarm {
-                    carrier.transfer_to(&mut workplace, Good::Wool, u32::MAX);
-                }
-                if carrier.amount(output) > 0
-                    || (building.kind == SettlementBuildingKind::LivestockFarm
-                        && carrier.amount(Good::Wool) > 0)
-                {
+                if !fully_deposited {
                     continue;
                 }
-                drop(carrier);
-                drop(workplace);
                 if workday
                     && operating_plans
                         .get(routine.workplace)

@@ -188,8 +188,7 @@ pub fn suggested_plot_half_extents(kind: CityBuildingKind) -> Vec2 {
 }
 
 pub fn plot_building_rotation_y(plot: &MapPlot) -> f32 {
-    let rotation_y = plot.rotation_degrees.to_radians();
-    rotation_y
+    plot.rotation_degrees.to_radians()
 }
 
 pub fn plot_toward_road_direction(plot: &MapPlot) -> Vec2 {

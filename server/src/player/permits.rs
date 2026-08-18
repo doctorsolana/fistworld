@@ -361,7 +361,7 @@ fn player_plot_snapshot(
         .buildings
         .iter()
         .filter(|(_, building_of, ..)| building_of.0 == settlement_id)
-        .map(|(building, _, position, _, ..)| (position.0, building.kind.clearance()))
+        .map(|(building, _, position, ..)| (position.0, building.kind.clearance()))
         .chain(std::iter::once((
             hall,
             SettlementBuildingKind::Hall.clearance(),
@@ -974,45 +974,48 @@ pub fn handle_hero_construction_orders(
                 continue;
             };
 
-            let Ok((project, owned_by, site)) = sites.get_mut(order.site) else {
-                reply(
-                    &mut sender,
-                    false,
-                    "That is not an unfinished player worksite.".into(),
-                );
-                continue;
+            // Keep the first mutable site borrow in this scope. It must end
+            // before an earlier assignment and then this target are queried
+            // mutably again below.
+            let (target_settlement, target_kind) = {
+                let Ok((project, owned_by, site)) = sites.get_mut(order.site) else {
+                    reply(
+                        &mut sender,
+                        false,
+                        "That is not an unfinished player worksite.".into(),
+                    );
+                    continue;
+                };
+                if project.owner != *person_id
+                    || owned_by.0 != *person_id
+                    || site.owner_id != Some(*person_id)
+                {
+                    reply(&mut sender, false, "You do not own that worksite.".into());
+                    continue;
+                }
+                if current.is_some_and(|current| current.site == order.site)
+                    && site.builder == Some(hero_entity)
+                {
+                    reply(
+                        &mut sender,
+                        true,
+                        format!("Your hero is already working on the {}.", site.kind.label()),
+                    );
+                    continue;
+                }
+                if site.builder.is_some_and(|builder| builder != hero_entity) {
+                    reply(
+                        &mut sender,
+                        false,
+                        "Someone else is already working at that site.".into(),
+                    );
+                    continue;
+                }
+                (site.settlement, site.kind)
             };
-            if project.owner != *person_id
-                || owned_by.0 != *person_id
-                || site.owner_id != Some(*person_id)
-            {
-                reply(&mut sender, false, "You do not own that worksite.".into());
-                continue;
-            }
-            if current.is_some_and(|current| current.site == order.site)
-                && site.builder == Some(hero_entity)
-            {
-                reply(
-                    &mut sender,
-                    true,
-                    format!("Your hero is already working on the {}.", site.kind.label()),
-                );
-                continue;
-            }
-            if site.builder.is_some_and(|builder| builder != hero_entity) {
-                reply(
-                    &mut sender,
-                    false,
-                    "Someone else is already working at that site.".into(),
-                );
-                continue;
-            }
 
             // Validate the requested target before releasing an earlier site.
             // A stale or malicious packet must not silently cancel valid work.
-            let target_settlement = site.settlement;
-            let target_kind = site.kind;
-            drop(site);
             if let Some(current) = current.filter(|current| current.site != order.site) {
                 if let Ok((_, _, mut previous)) = sites.get_mut(current.site) {
                     if previous.builder == Some(hero_entity) {

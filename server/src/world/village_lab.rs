@@ -3319,7 +3319,7 @@ fn assert_lab_outcome(
     );
     for (settlement, administration) in administrations {
         assert!(
-            administration.road_steward.is_some(),
+            administration.lead_steward.is_some(),
             "{settlement} never staffed its Road Steward position"
         );
         assert!(
@@ -4073,7 +4073,7 @@ fn assert_crowd_stress_outcome(
     }
     for (building, _) in world.query::<(Entity, &RoadRepairBacklog)>().iter(world) {
         assert!(
-            connector_states.get(&building).is_none(),
+            !connector_states.contains_key(&building),
             "audited road backlog {:?} also owns an active connector",
             building,
         );
@@ -5142,10 +5142,6 @@ fn village_simulation_lab() {
     print_optional_update_timing(
         "permit primary site",
         &permit_timing.primary_site_milliseconds,
-    );
-    print_optional_update_timing(
-        "permit alternative site",
-        &permit_timing.alternative_site_milliseconds,
     );
     print_optional_update_timing(
         "permit fishing site",

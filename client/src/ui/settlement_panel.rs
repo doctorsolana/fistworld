@@ -709,7 +709,7 @@ fn sync_compact_panel(
                                     );
                                     let stewards = if office.city_workers.is_empty() {
                                         office
-                                            .road_steward
+                                            .lead_steward
                                             .as_deref()
                                             .unwrap_or("vacant")
                                             .to_string()

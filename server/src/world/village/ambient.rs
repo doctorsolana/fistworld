@@ -28,7 +28,7 @@ use crate::world::village_roads::{
 
 use super::{
     ConstructionMaterialRoutine, FarmerRoutine, FishingRoutine, HomeAssignment, HomeRoutine,
-    HouseholdShoppingRoutine, LumberjackRoutine, MarketPorter, MootMealRoutine, MootQueueTicket,
+    HouseholdShoppingRoutine, LumberjackRoutine, MootMealRoutine, MootQueueTicket, MootSteward,
     PierTraversal, TavernVisitRoutine, TavernWorkerRoutine, TradeRouteRoutine, VillagerIntent,
     WorkerOffDuty, WorkplaceDoorTransit,
 };
@@ -456,7 +456,7 @@ pub fn run_ambient_routines(
             // collections. An unhoused founding steward is still on duty and
             // must not receive an ambient roadside order that fights the
             // market system's stable Indoors state.
-            With<MarketPorter>,
+            With<MootSteward>,
         )>,
     >,
     mut villagers: Query<
@@ -612,7 +612,7 @@ pub fn run_ambient_routines(
             if !already_heading_to_shelter {
                 let identity_seed = person_id.map_or(entity.to_bits(), |person_id| person_id.0);
                 let delay = duration(
-                    stable_hash(&name.0) ^ identity_seed ^ 0x6e69_6768_74,
+                    stable_hash(&name.0) ^ identity_seed ^ 0x006e_6967_6874,
                     0.0,
                     5.0,
                 );
@@ -1106,7 +1106,7 @@ mod tests {
     }
 
     #[test]
-    fn unhoused_market_porter_stays_indoors_instead_of_flickering_ambiently() {
+    fn unhoused_moot_steward_stays_indoors_instead_of_flickering_ambiently() {
         let mut app = App::new();
         app.init_resource::<Time>();
         app.init_resource::<AmbientClock>();
@@ -1142,7 +1142,7 @@ mod tests {
                 VillagerIntent::Resident { settlement: hall },
                 Occupation(Some("Moot Steward".to_string())),
                 CharacterActivity::Indoors,
-                MarketPorter { settlement: hall },
+                MootSteward { settlement: hall },
             ))
             .id();
 

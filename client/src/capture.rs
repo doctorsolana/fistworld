@@ -642,13 +642,9 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
     // FISTFORCE_CAPTURE_HUD=play|god draws the persistent HUD, which is
     // otherwise suppressed so world shots stay clean. `god` also grants the god
     // capability and switches mode, so the god plate is visible.
-    if let Ok(mode) = std::env::var("FISTFORCE_CAPTURE_HUD") {
-        if !mode.is_empty() {
-            if mode == "god" {
-                commands.insert_resource(crate::ui::hud::GodCapability(true));
-                commands.insert_resource(crate::ui::hud::HudMode::God);
-            }
-        }
+    if std::env::var("FISTFORCE_CAPTURE_HUD").is_ok_and(|mode| mode == "god") {
+        commands.insert_resource(crate::ui::hud::GodCapability(true));
+        commands.insert_resource(crate::ui::hud::HudMode::God);
     }
 
     // FISTFORCE_CAPTURE_ROADS=compare stages the same completed main road
@@ -810,7 +806,7 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                         store,
                         market,
                         shared::components::MootAdministration {
-                            road_steward: Some(shared::names::person_name(7_002)),
+                            lead_steward: Some(shared::names::person_name(7_002)),
                             roadless_buildings: 1,
                             disconnected_buildings: 0,
                             last_road_audit_day: 12,
@@ -2417,7 +2413,7 @@ fn synthetic_settlement_history(name: &str) -> shared::economy::SettlementHistor
             let wave =
                 ((day as f32 * 0.071 + good.index() as f32).sin() * 0.18 + 1.0).clamp(0.6, 1.4);
             let midpoint = (good.base_price() as f32 * wave) as u64;
-            let producer_units = if (day + good.index() as u32) % 3 == 0 {
+            let producer_units = if (day + good.index() as u32).is_multiple_of(3) {
                 0
             } else {
                 2 + u64::from(day % 5)

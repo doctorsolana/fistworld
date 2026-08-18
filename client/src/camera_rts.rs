@@ -23,10 +23,8 @@ const VIEW_HEARTBEAT_SECS: f32 = 0.25;
 const TILT_CLOSE: f32 = 0.55;
 const TILT_FAR: f32 = 1.45;
 
-/// Network peer id of the local client, published on connect.
-///
-/// Not read yet — it is the hook for "which units are mine" once unit ownership exists.
-#[allow(dead_code)]
+/// Network peer id of the local client, published on connect and used to find
+/// the hero, vessel, permits, companies, and other player-owned state.
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct LocalPeerId(pub u64);
 

@@ -221,7 +221,7 @@ pub fn decode_weightmap_rle(runs: &[(u16, [u8; 4])]) -> Vec<[u8; 4]> {
     let total: usize = runs.iter().map(|(count, _)| *count as usize).sum();
     let mut weights = Vec::with_capacity(total);
     for (count, value) in runs {
-        weights.extend(std::iter::repeat(*value).take(*count as usize));
+        weights.extend(std::iter::repeat_n(*value, *count as usize));
     }
     weights
 }
@@ -258,6 +258,16 @@ pub struct MapSpawnMarker {
     pub rotation_degrees: f32,
     #[serde(default = "default_spawn_radius")]
     pub radius: f32,
+}
+
+#[inline]
+fn default_edits_version() -> u32 {
+    MAP_EDITS_VERSION
+}
+
+#[inline]
+fn default_spawn_radius() -> f32 {
+    2.0
 }
 
 #[cfg(test)]
@@ -325,14 +335,4 @@ mod tests {
 
         assert!(edits.validate().is_err());
     }
-}
-
-#[inline]
-fn default_edits_version() -> u32 {
-    MAP_EDITS_VERSION
-}
-
-#[inline]
-fn default_spawn_radius() -> f32 {
-    2.0
 }

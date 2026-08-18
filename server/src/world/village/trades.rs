@@ -1914,13 +1914,12 @@ pub fn run_lumberjack_routines(
             continue;
         }
 
-        if route_failed.is_some()
-            && matches!(
+        if let Some(failed) = route_failed.filter(|_| {
+            matches!(
                 routine.phase,
                 LumberjackPhase::GoingToHut | LumberjackPhase::ReturningToHut
             )
-        {
-            let failed = route_failed.expect("checked above");
+        }) {
             // A failed route used to be handled only while walking to a tree.
             // A woodcutter carrying Wood home could therefore retain the
             // terminal failure forever and silently disable the business.

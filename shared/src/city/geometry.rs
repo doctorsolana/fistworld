@@ -334,34 +334,6 @@ pub fn chunk_coords_in_bounds(bounds: (i32, i32, i32, i32)) -> Vec<ChunkCoord> {
     coords
 }
 
-pub fn sample_strip(segment: &RoadSegment, half_width: f32, max_step: f32) -> Vec<StripSample> {
-    sample_strip_extended(segment, half_width, max_step, 0.0, 0.0)
-}
-
-pub fn sample_strip_extended(
-    segment: &RoadSegment,
-    half_width: f32,
-    max_step: f32,
-    start_extension: f32,
-    end_extension: f32,
-) -> Vec<StripSample> {
-    let start = segment.start - segment.tangent * start_extension.max(0.0);
-    let end = segment.end + segment.tangent * end_extension.max(0.0);
-    let length = start.distance(end);
-    let steps = ((length / max_step.max(0.5)).ceil() as usize).max(1);
-    let mut out = Vec::with_capacity(steps + 1);
-    for step in 0..=steps {
-        let t = step as f32 / steps as f32;
-        let center = start.lerp(end, t);
-        out.push(StripSample {
-            left: center + segment.normal * half_width,
-            right: center - segment.normal * half_width,
-            distance: length * t,
-        });
-    }
-    out
-}
-
 pub fn road_polyline_points(road: &MapRoad) -> (Vec<Vec2>, bool) {
     let mut points = road
         .points
@@ -418,8 +390,7 @@ pub fn sample_polyline_strip(
     let mut joints = Vec::with_capacity(if closed { count + 1 } else { count });
     let mut distance = 0.0;
 
-    for index in 0..count {
-        let point = points[index];
+    for (index, point) in points.iter().copied().enumerate().take(count) {
         let (center, left, right) = if closed {
             let prev_segment = (index + segment_count - 1) % segment_count;
             let next_segment = index % segment_count;

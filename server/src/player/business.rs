@@ -411,15 +411,14 @@ pub fn handle_hero_business_orders(
                         "Bought {shares} shares for {} coin; the cap table still contains exactly 1,000 shares.",
                         format_money(total_price)
                     )
-                } else if order.action == HeroBusinessAction::WithdrawAvailableProfit
-                    && company_id.is_some()
-                {
-                    dividend_requests.request(company_id.unwrap());
-                    "Requested the maximum dividend available after company-wide liabilities and working-capital reserves. It will be distributed to all shareholders by share count.".to_string()
                 } else if order.action == HeroBusinessAction::WithdrawAvailableProfit {
-                    return Err(
-                        "That site is not attached to a company treasury yet; no money moved.",
-                    );
+                    let Some(company_id) = company_id else {
+                        return Err(
+                            "That site is not attached to a company treasury yet; no money moved.",
+                        );
+                    };
+                    dividend_requests.request(company_id);
+                    "Requested the maximum dividend available after company-wide liabilities and working-capital reserves. It will be distributed to all shareholders by share count.".to_string()
                 } else {
                     let message = apply_owner_action(
                         order.action,

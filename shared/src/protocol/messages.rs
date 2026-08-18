@@ -23,10 +23,6 @@ pub struct PlayerInput {
     pub view_radius: f32,
 }
 
-/// Message sent from client when they want to spawn.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
-pub struct SpawnPlayer;
-
 /// Message sent from client to request firing a weapon.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 pub enum TimeOfDayPreset {

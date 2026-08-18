@@ -290,8 +290,10 @@ mod tests {
             let mut inventory =
                 GoodsInventory::new(SettlementBuildingKind::Farmstead.storage_bulk_capacity());
             inventory.add(Good::Wheat, stock);
-            let mut condition = BusinessCondition::default();
-            condition.state = BusinessState::ForSale;
+            let condition = BusinessCondition {
+                state: BusinessState::ForSale,
+                ..Default::default()
+            };
             app.world_mut()
                 .spawn((
                     id,

@@ -269,14 +269,6 @@ pub(super) fn refresh_visible_person_facts(
                     shared::components::CivicRole::Reeve => {
                         ("Reeve", Some(shared::economy::FOUNDING_DAILY_WAGE))
                     }
-                    shared::components::CivicRole::MarketPorter => (
-                        "Market Porter (legacy)",
-                        Some(shared::economy::FOUNDING_DAILY_WAGE),
-                    ),
-                    shared::components::CivicRole::RoadSteward => (
-                        "Road Steward (legacy)",
-                        Some(office.road_steward_daily_salary),
-                    ),
                     shared::components::CivicRole::CityWorker => {
                         ("City Worker", Some(shared::economy::FOUNDING_DAILY_WAGE))
                     }
@@ -284,18 +276,13 @@ pub(super) fn refresh_visible_person_facts(
                         ("Guard", Some(shared::economy::FOUNDING_DAILY_WAGE))
                     }
                     shared::components::CivicRole::MootSteward => {
-                        ("Moot Steward", Some(office.road_steward_daily_salary))
+                        ("Moot Steward", Some(office.steward_daily_salary))
                     }
                 }
             } else if office.reeve.as_deref() == Some(name.0.as_str()) {
                 ("Reeve", Some(shared::economy::FOUNDING_DAILY_WAGE))
-            } else if office.road_steward.as_deref() == Some(name.0.as_str()) {
-                ("Moot Steward", Some(office.road_steward_daily_salary))
-            } else if office.market_porter.as_deref() == Some(name.0.as_str()) {
-                (
-                    "Market Porter (legacy)",
-                    Some(shared::economy::FOUNDING_DAILY_WAGE),
-                )
+            } else if office.lead_steward.as_deref() == Some(name.0.as_str()) {
+                ("Moot Steward", Some(office.steward_daily_salary))
             } else if office.guards.iter().any(|guard| guard == &name.0) {
                 ("Guard", Some(shared::economy::FOUNDING_DAILY_WAGE))
             } else if office.city_workers.iter().any(|worker| worker == &name.0) {

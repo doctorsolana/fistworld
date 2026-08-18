@@ -5,13 +5,10 @@ use bevy::prelude::*;
 
 use crate::states::GameState;
 
-use super::ground_cover::{
-    GroundCoverIndex, GroundCoverStressDensity, LoadedGroundCoverChunks, PendingGroundCover,
-};
-use super::ground_cover_chunked::ChunkedGroundCoverState;
+use super::ground_cover_chunked::{ChunkedGroundCoverState, GroundCoverStressDensity};
 use super::PropLodDebugMode;
 use super::{
-    assets, debug, foliage, ground_cover, lod, spawn, BuildZoneChunkIndex, FoliageMaterialCache,
+    assets, debug, foliage, lod, spawn, BuildZoneChunkIndex, FoliageMaterialCache,
     LoadedPropChunks, PendingPropSpawns, PropChunkIndex, SimplePropMeshCache,
 };
 
@@ -29,12 +26,8 @@ impl Plugin for PropsPlugin {
         app.init_resource::<FoliageMaterialCache>();
         app.init_resource::<PropLodDebugMode>();
         app.init_resource::<SimplePropMeshCache>();
-        app.init_resource::<LoadedGroundCoverChunks>();
-        app.init_resource::<PendingGroundCover>();
-        app.init_resource::<GroundCoverIndex>();
         app.init_resource::<GroundCoverStressDensity>();
         app.init_resource::<ChunkedGroundCoverState>();
-        app.add_systems(OnExit(GameState::Playing), ground_cover::clear_ground_cover);
         app.add_systems(
             OnExit(GameState::Playing),
             super::ground_cover_chunked::clear_chunked_ground_cover,
@@ -55,10 +48,6 @@ impl Plugin for PropsPlugin {
                 (
                     super::ground_cover_chunked::mark_chunked_grass_dirty_for_buildings,
                     super::ground_cover_chunked::mark_chunked_grass_dirty_for_roads,
-                    ground_cover::clear_ground_cover_for_new_buildings,
-                    ground_cover::clear_ground_cover_for_built_village_roads,
-                    ground_cover::sync_legacy_ground_cover_mode,
-                    ground_cover::stream_ground_cover,
                     super::ground_cover_chunked::stream_chunked_ground_cover,
                 )
                     .chain(),
@@ -70,7 +59,6 @@ impl Plugin for PropsPlugin {
                 foliage::apply_foliage_materials,
                 lod::update_prop_visibility_ranges,
                 spawn::cleanup_chunk_props,
-                ground_cover::cleanup_ground_cover,
                 debug::debug_draw_prop_colliders,
             )
                 .chain()

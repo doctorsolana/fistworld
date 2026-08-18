@@ -214,7 +214,7 @@ pub fn plan_requested_roads(
             &CharacterName,
             &mut VillagerIntent,
             &mut CharacterActivity,
-            Option<&RoadSteward>,
+            Option<&MootSteward>,
             Has<shared::components::EmployedAt>,
             Has<FarmerRoutine>,
             Has<FishingRoutine>,

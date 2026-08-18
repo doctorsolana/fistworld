@@ -185,34 +185,6 @@ pub enum ShadowQuality {
     High,
 }
 
-/// Ground-cover implementation. `Chunked` is the production default: it stores
-/// deterministic tufts in compact GPU instance buffers grouped into
-/// camera-cullable terrain sectors. `Legacy` retains one entity per patch as a
-/// reversible compatibility/debug path.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum GroundCoverRenderer {
-    Legacy,
-    #[default]
-    Chunked,
-}
-
-impl GroundCoverRenderer {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Legacy => "Legacy",
-            Self::Chunked => "Chunked",
-        }
-    }
-
-    pub const fn next(self) -> Self {
-        Self::Chunked
-    }
-
-    pub const fn prev(self) -> Self {
-        Self::Legacy
-    }
-}
-
 impl ShadowQuality {
     pub fn label(self) -> &'static str {
         match self {
@@ -304,9 +276,6 @@ pub struct GraphicsSettings {
     pub shadow_quality: ShadowQuality,
     /// Use alpha cutout for foliage instead of alpha blending.
     pub foliage_cutout_enabled: bool,
-    /// Selects the production entity-light GPU-instanced renderer or the
-    /// retained compatibility renderer. Default: Chunked.
-    pub ground_cover_renderer: GroundCoverRenderer,
     pub bloom_enabled: bool,
     pub shadows_enabled: bool,
     pub atmosphere_enabled: bool,
@@ -403,7 +372,6 @@ impl Default for GraphicsSettings {
             ssao_enabled: false,
             shadow_quality: ShadowQuality::Medium,
             foliage_cutout_enabled: true,
-            ground_cover_renderer: GroundCoverRenderer::Chunked,
             bloom_enabled: true,
             shadows_enabled: true,
             atmosphere_enabled: true,
@@ -495,16 +463,6 @@ impl GraphicsSettings {
         self.atmosphere_enabled = env_bool("FISTFORCE_ATMOSPHERE", self.atmosphere_enabled);
         self.clouds_enabled = env_bool("FISTFORCE_CLOUDS", self.clouds_enabled);
         self.props_enabled = env_bool("FISTFORCE_PROPS", self.props_enabled);
-        if let Ok(raw) = std::env::var("FISTFORCE_GRASS_RENDERER") {
-            self.ground_cover_renderer = match raw.trim().to_ascii_lowercase().as_str() {
-                "legacy" | "patches" => GroundCoverRenderer::Legacy,
-                "chunked" | "batched" => GroundCoverRenderer::Chunked,
-                _ => {
-                    warn!("Ignoring invalid FISTFORCE_GRASS_RENDERER='{raw}'");
-                    self.ground_cover_renderer
-                }
-            };
-        }
         self.vsync_enabled = env_bool("FISTFORCE_VSYNC", self.vsync_enabled);
         self.fullscreen_enabled = env_bool("FISTFORCE_FULLSCREEN", self.fullscreen_enabled);
         self.exclusive_fullscreen_enabled = env_bool(
@@ -687,12 +645,11 @@ pub fn apply_graphics_settings(
     }
 
     info!(
-        "Applying graphics settings: render_scale={:.2} ssao={} shadow_quality={:?} foliage_cutout={} grass_renderer={:?} bloom={}, shadows={}, atmosphere={}, clouds={}, far_terrain={}, vsync={}, display_mode={:?}, resolution={}, tonemapping={:?}, exposure={:.2}",
+        "Applying graphics settings: render_scale={:.2} ssao={} shadow_quality={:?} foliage_cutout={} bloom={}, shadows={}, atmosphere={}, clouds={}, far_terrain={}, vsync={}, display_mode={:?}, resolution={}, tonemapping={:?}, exposure={:.2}",
         settings.render_scale,
         settings.ssao_enabled,
         settings.shadow_quality,
         settings.foliage_cutout_enabled,
-        settings.ground_cover_renderer,
         settings.bloom_enabled,
         settings.shadows_enabled,
         settings.atmosphere_enabled,
@@ -817,8 +774,8 @@ pub fn apply_graphics_settings(
 const SHADOW_DISTANCE_PER_ZOOM: f32 = 2.5;
 /// Caps the span at "whole map from max zoom" (8 km world seen from 12 km).
 /// Far-zoom texels get coarse (metres) — acceptable for terrain relief, while
-/// prop casters are culled by zoom instead (see `render::shadow_cull`), which
-/// is also what keeps the shadow passes affordable at map scale.
+/// prop casters are culled by the prop LOD system, which also keeps the shadow
+/// passes affordable at map scale.
 const SHADOW_DISTANCE_MAX: f32 = 16_000.0;
 /// Geometric ratio between zoom bands. Cascades are only rebuilt when the zoom
 /// crosses into a new band.
@@ -901,21 +858,11 @@ mod tests {
         let parsed: GraphicsSettings = ron::from_str("(render_scale: 0.55)").expect("parse");
         assert_eq!(parsed.render_scale, 0.55);
         assert!(parsed.shadows_enabled);
-        // Files written before the grass setting existed migrate to the new
-        // production renderer; an explicit saved Legacy choice still wins.
-        assert_eq!(parsed.ground_cover_renderer, GroundCoverRenderer::Chunked);
         assert_eq!(parsed.display_mode(), DisplayMode::Borderless);
         assert_eq!(
             parsed.display_resolution,
             DisplayResolution::new(LAUNCHER_RESOLUTION.0, LAUNCHER_RESOLUTION.1)
         );
-    }
-
-    #[test]
-    fn explicit_legacy_grass_choice_survives_loading() {
-        let parsed: GraphicsSettings =
-            ron::from_str("(ground_cover_renderer: Legacy)").expect("parse explicit fallback");
-        assert_eq!(parsed.ground_cover_renderer, GroundCoverRenderer::Legacy);
     }
 
     #[test]

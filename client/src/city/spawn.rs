@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use shared::{
     city::{
         build_road_render_segments, plot_rect, road_polyline_points, sample_polyline_strip,
-        AuthoredCityLayout, OrientedRect, RoadClass, RoadRenderSegment, RoadSegment,
+        AuthoredCityLayout, OrientedRect, RoadClass, RoadRenderSegment,
     },
     terrain::{stylized_palette, ChunkCoord, WorldTerrain},
 };
@@ -25,7 +25,6 @@ const SIDEWALK_UV_SCALE: f32 = 0.24;
 
 pub fn spawn_city_layout_visuals(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     world: Res<WorldTerrain>,
@@ -252,11 +251,6 @@ struct MeshBuffers {
     indices: Vec<u32>,
 }
 
-fn sector_coord_for_segment(segment: &RoadSegment) -> ChunkCoord {
-    let center = (segment.start + segment.end) * 0.5;
-    ChunkCoord::from_world_pos(Vec3::new(center.x, 0.0, center.y))
-}
-
 fn sector_coord_for_points(points: &[Vec2]) -> ChunkCoord {
     let center = points.iter().copied().sum::<Vec2>() / points.len() as f32;
     ChunkCoord::from_world_pos(Vec3::new(center.x, 0.0, center.y))
@@ -453,82 +447,6 @@ fn append_rect_mesh(
         base_index + 2,
         base_index + 3,
     ]);
-}
-
-fn append_extruded_rect_mesh(
-    buffers: &mut MeshBuffers,
-    terrain: &WorldTerrain,
-    rect: OrientedRect,
-    top_offset: f32,
-    bottom_offset: f32,
-    uv_scale: f32,
-) {
-    let corners = rect.corners();
-    let top_positions = corners.map(|corner| {
-        [
-            corner.x,
-            terrain.get_height(corner.x, corner.y) + top_offset,
-            corner.y,
-        ]
-    });
-    let bottom_positions = corners.map(|corner| {
-        [
-            corner.x,
-            terrain.get_height(corner.x, corner.y) + bottom_offset,
-            corner.y,
-        ]
-    });
-
-    let top_base = buffers.positions.len() as u32;
-    buffers.positions.extend_from_slice(&top_positions);
-    buffers.normals.extend_from_slice(&[[0.0, 1.0, 0.0]; 4]);
-    buffers.uvs.extend_from_slice(&[
-        [
-            rect.half_extents.x * 2.0 * uv_scale,
-            rect.half_extents.y * 2.0 * uv_scale,
-        ],
-        [0.0, rect.half_extents.y * 2.0 * uv_scale],
-        [0.0, 0.0],
-        [rect.half_extents.x * 2.0 * uv_scale, 0.0],
-    ]);
-    buffers.indices.extend_from_slice(&[
-        top_base,
-        top_base + 1,
-        top_base + 2,
-        top_base,
-        top_base + 2,
-        top_base + 3,
-    ]);
-
-    for edge_index in 0..4 {
-        let next = (edge_index + 1) % 4;
-        let top_a = Vec3::from(top_positions[edge_index]);
-        let top_b = Vec3::from(top_positions[next]);
-        let bottom_b = Vec3::from(bottom_positions[next]);
-        let bottom_a = Vec3::from(bottom_positions[edge_index]);
-        let edge = top_b - top_a;
-        let edge_length = edge.xz().length().max(0.001);
-        let height = (top_a.y - bottom_a.y).abs().max(0.001);
-        let normal = Vec3::new(edge.z, 0.0, -edge.x).normalize_or_zero();
-        let base = buffers.positions.len() as u32;
-
-        buffers.positions.extend_from_slice(&[
-            top_a.to_array(),
-            top_b.to_array(),
-            bottom_b.to_array(),
-            bottom_a.to_array(),
-        ]);
-        buffers.normals.extend_from_slice(&[normal.to_array(); 4]);
-        buffers.uvs.extend_from_slice(&[
-            [0.0, 0.0],
-            [edge_length * uv_scale, 0.0],
-            [edge_length * uv_scale, height * 4.0],
-            [0.0, height * 4.0],
-        ]);
-        buffers
-            .indices
-            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-    }
 }
 
 fn spawn_sector_visual(

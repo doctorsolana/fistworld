@@ -217,7 +217,7 @@ fn local_queue_slot(lane: MootServiceLane, index: usize) -> Vec2 {
     let offset = index - 1;
     let row = offset / QUEUE_ROW_LENGTH;
     let column = offset % QUEUE_ROW_LENGTH;
-    let x_index = if row % 2 == 0 {
+    let x_index = if row.is_multiple_of(2) {
         column + 1
     } else {
         QUEUE_ROW_LENGTH - column

@@ -133,10 +133,8 @@ pub fn reconcile_stable_civic_employment(
             continue;
         }
         let role_for_name = |name: &str| {
-            if administration.road_steward.as_deref() == Some(name) {
+            if administration.lead_steward.as_deref() == Some(name) {
                 Some(CivicRole::MootSteward)
-            } else if administration.market_porter.as_deref() == Some(name) {
-                Some(CivicRole::MarketPorter)
             } else if administration.reeve.as_deref() == Some(name) {
                 Some(CivicRole::Reeve)
             } else if administration.guards.iter().any(|guard| guard == name) {

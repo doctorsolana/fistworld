@@ -90,10 +90,9 @@ impl DailyProductionEstimate {
 
     pub const fn output_per_input(self) -> u32 {
         let input = self.input_units();
-        if input == 0 {
-            0
-        } else {
-            self.output_units / input
+        match self.output_units.checked_div(input) {
+            Some(output) => output,
+            None => 0,
         }
     }
 }
@@ -472,10 +471,8 @@ pub(crate) fn process_available_cycles(
         if inventory.free_bulk().saturating_add(reclaimed_bulk) < output_bulk {
             break;
         }
-        debug_assert_eq!(
-            inventory.remove(recipe.input, recipe.input_units),
-            recipe.input_units
-        );
+        let consumed = inventory.remove(recipe.input, recipe.input_units);
+        debug_assert_eq!(consumed, recipe.input_units);
         let produced = inventory.add(recipe.output, recipe.output_units);
         debug_assert_eq!(produced, recipe.output_units);
         cycles = cycles.saturating_add(1);

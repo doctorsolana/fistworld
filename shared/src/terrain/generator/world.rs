@@ -9,28 +9,23 @@ use crate::worldgen::{river_surface_height, river_water_reach_at};
 
 use super::map_access::load_active_map;
 use super::sampling::sample_delta_from_map;
-use super::{
-    Biome, ChunkCoord, ChunkMeshData, CHUNK_RESOLUTION, CHUNK_SIZE, VERTEX_SPACING, WORLD_SEED,
-};
+use super::{Biome, ChunkCoord, ChunkMeshData, CHUNK_RESOLUTION, CHUNK_SIZE, VERTEX_SPACING};
 
 /// Terrain generator backed by authored map data.
 #[derive(Clone)]
 pub struct TerrainGenerator {
     loaded_map: Arc<LoadedMap>,
-    #[allow(dead_code)]
-    seed: u32,
 }
 
 impl TerrainGenerator {
-    pub fn new(seed: u32) -> Self {
+    pub fn new() -> Self {
         let loaded_map = load_active_map();
-        Self { loaded_map, seed }
+        Self { loaded_map }
     }
 
-    pub fn from_loaded_map(loaded_map: LoadedMap, seed: u32) -> Self {
+    pub fn from_loaded_map(loaded_map: LoadedMap) -> Self {
         Self {
             loaded_map: Arc::new(loaded_map),
-            seed,
         }
     }
 
@@ -146,6 +141,12 @@ impl TerrainGenerator {
     }
 }
 
+impl Default for TerrainGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// One rendered river-water segment in ground-plane coordinates.
 #[derive(Clone, Copy, Debug)]
 struct RiverWaterSegment {
@@ -244,7 +245,7 @@ pub struct WorldTerrain {
 
 impl Default for WorldTerrain {
     fn default() -> Self {
-        let generator = TerrainGenerator::new(WORLD_SEED);
+        let generator = TerrainGenerator::new();
         let river_water = RiverWaterIndex::from_loaded_map(generator.loaded_map());
         let delta_chunks = generator.loaded_map().terrain_deltas_by_chunk.clone();
 
@@ -264,7 +265,7 @@ impl WorldTerrain {
         super::map_access::set_active_map_bounds(loaded_map.definition.bounds);
         self.river_water = RiverWaterIndex::from_loaded_map(&loaded_map);
         let delta_chunks = loaded_map.terrain_deltas_by_chunk.clone();
-        self.generator = TerrainGenerator::from_loaded_map(loaded_map, WORLD_SEED);
+        self.generator = TerrainGenerator::from_loaded_map(loaded_map);
         self.delta_chunks = delta_chunks;
         self.version = self.version.wrapping_add(1);
         self.chunk_versions.clear();

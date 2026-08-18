@@ -553,18 +553,16 @@ pub struct MootAdministration {
     /// public purse while the other two founding positions have physical jobs.
     #[serde(default)]
     pub reeve: Option<String>,
-    /// Early-market porter who collects saleable output from businesses. This
-    /// keeps farmers, fishers and woodcutters at their actual trades.
-    #[serde(default)]
-    pub market_porter: Option<String>,
-    pub road_steward: Option<String>,
+    /// Readable alias for the first combined Moot Steward. Durable employment
+    /// remains authoritative and supports more than one steward.
+    pub lead_steward: Option<String>,
     /// Public safety positions. Guards are real named jobs even before guard
     /// patrol/combat behaviour is implemented.
     #[serde(default)]
     pub guards: Vec<String>,
     /// Public works positions. Founding worker slots are combined Moot
     /// Stewards: both haul goods and either can accept road repairs. The
-    /// singular fields above remain the readable primary steward aliases.
+    /// lead alias above remains the readable primary steward.
     #[serde(default)]
     pub city_workers: Vec<String>,
     /// One payable per present or former public employee. Inactive entries
@@ -572,7 +570,7 @@ pub struct MootAdministration {
     /// erase a municipal debt.
     #[serde(default)]
     pub payroll: Vec<CivicPayrollEntry>,
-    pub road_steward_daily_salary: u64,
+    pub steward_daily_salary: u64,
     pub wage_arrears: u64,
     pub roadless_buildings: u16,
     pub disconnected_buildings: u16,
@@ -586,12 +584,11 @@ impl Default for MootAdministration {
     fn default() -> Self {
         Self {
             reeve: None,
-            market_porter: None,
-            road_steward: None,
+            lead_steward: None,
             guards: Vec::new(),
             city_workers: Vec::new(),
             payroll: Vec::new(),
-            road_steward_daily_salary: crate::economy::ROAD_STEWARD_DAILY_SALARY,
+            steward_daily_salary: crate::economy::MOOT_STEWARD_DAILY_SALARY,
             wage_arrears: 0,
             roadless_buildings: 0,
             disconnected_buildings: 0,
@@ -1502,32 +1499,6 @@ impl SettlementDevelopment {
             stone_needed: 0,
         }
     }
-}
-
-/// Lowest terrain sample beneath a building footprint, including a small
-/// apron. Founding uses this instead of the centre height: a dry centre with a
-/// wet corner is still a drowned building.
-pub fn minimum_building_ground(
-    terrain: &crate::terrain::WorldTerrain,
-    centre: Vec3,
-    kind: SettlementBuildingKind,
-    rotation_y: f32,
-) -> f32 {
-    const GRID: usize = 5;
-    let definition = kind.art().definition();
-    let half = definition.footprint * 0.5 + Vec2::splat(0.25);
-    let mut lowest = f32::INFINITY;
-    for x_step in 0..GRID {
-        for z_step in 0..GRID {
-            let t_x = x_step as f32 / (GRID - 1) as f32;
-            let t_z = z_step as f32 / (GRID - 1) as f32;
-            let local = definition.footprint_center
-                + Vec2::new(-half.x + half.x * 2.0 * t_x, -half.y + half.y * 2.0 * t_z);
-            let offset = crate::rotation::local_to_world_xz(local, rotation_y);
-            lowest = lowest.min(terrain.get_height(centre.x + offset.x, centre.z + offset.y));
-        }
-    }
-    lowest
 }
 
 /// Lowest vertical gap between a rotated ground rectangle and the local water

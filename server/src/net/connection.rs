@@ -9,7 +9,7 @@ use shared::components::{
     CharacterActivity, CharacterAttributes, CharacterMotion, Health, Player, PlayerPosition,
     PlayerProgression, PlayerRotation,
 };
-use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
+use shared::player_profile::PlayerProfile;
 
 use crate::net::input::ClientInputs;
 use crate::persistence::profiles::PlayerProfiles;
@@ -165,7 +165,6 @@ pub fn handle_disconnections(
     }
 
     let profile = PlayerProfile {
-        version: PROFILE_VERSION,
         player_name: display_name,
         hero: hero_state,
         position: [pos.0.x, pos.0.y, pos.0.z],

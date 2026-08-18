@@ -11,5 +11,4 @@
 
 pub mod building_index;
 pub mod library;
-pub mod raycast;
 pub mod streaming;

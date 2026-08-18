@@ -170,7 +170,7 @@ pub(super) fn default_bloom_settings() -> Bloom {
 /// strips the camera's AtmosphereSettings, removing the sky/LUT cost entirely
 /// (the old toggle only zeroed the IBL, darkening the scene while still paying
 /// full price). ON restores both from the stored presets.
-pub fn sync_atmosphere_enabled(
+pub(crate) fn sync_atmosphere_enabled(
     mut commands: Commands,
     settings: Res<GraphicsSettings>,
     media: Res<AtmosphereMedia>,
@@ -214,7 +214,7 @@ pub fn sync_atmosphere_enabled(
 }
 
 /// Blend atmosphere for clear midday skies and dusty sunsets.
-pub fn update_atmosphere(
+pub(crate) fn update_atmosphere(
     world_time_query: Query<&shared::components::WorldTime>,
     // The atmosphere is its own entity since bevy 0.19, no longer on the camera.
     mut atmosphere_query: Query<&mut Atmosphere>,

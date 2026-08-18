@@ -386,8 +386,8 @@ fn field_quality_controls_continuous_wheat_rate() {
 
     let ordinary_shift_seconds = WorldTime::DEFAULT_DAY_DURATION * WORKDAY_END_DAY_T
         - WorldTime::DEFAULT_START_SECONDS_IN_DAY;
-    assert!((ordinary_shift_seconds / farmer_seconds_per_wheat(1.0) - 6.0).abs() < 0.2);
-    assert!((ordinary_shift_seconds / farmer_seconds_per_wheat(2.0 / 3.0) - 4.0).abs() < 0.2);
+    assert!((ordinary_shift_seconds / farmer_seconds_per_wheat(1.0) - 5.6).abs() < 0.2);
+    assert!((ordinary_shift_seconds / farmer_seconds_per_wheat(2.0 / 3.0) - 3.7).abs() < 0.2);
 }
 
 #[test]
@@ -4224,7 +4224,7 @@ fn porter_roles_apply_cart_capacity_and_restore_personal_capacity_afterward() {
         .spawn((
             CharacterKind::Villager,
             GoodsInventory::new(shared::economy::capacity::VILLAGER),
-            MarketPorter { settlement },
+            MootSteward { settlement },
         ))
         .id();
 
@@ -4237,7 +4237,7 @@ fn porter_roles_apply_cart_capacity_and_restore_personal_capacity_afterward() {
         shared::economy::capacity::PORTER
     );
 
-    app.world_mut().entity_mut(porter).remove::<MarketPorter>();
+    app.world_mut().entity_mut(porter).remove::<MootSteward>();
     app.world_mut().entity_mut(porter).insert(CompanyPorter {
         settlement,
         settlement_id: shared::components::SettlementId(1),
@@ -4329,7 +4329,7 @@ fn marketplace_expands_one_shared_store_and_migrates_legacy_stock() {
 }
 
 #[test]
-fn a_market_porter_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
+fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
     let mut app = village_test_app();
     app.init_resource::<Time>();
     app.insert_resource(WorldTerrain::default());
@@ -4409,7 +4409,7 @@ fn a_market_porter_collects_a_bounded_load_while_the_woodcutter_keeps_working() 
         .world_mut()
         .spawn((
             CharacterKind::Villager,
-            MarketPorter { settlement: hall },
+            MootSteward { settlement: hall },
             PlayerPosition(hall_position),
             PlayerRotation(0.0),
             CharacterActivity::Indoors,
@@ -4615,7 +4615,7 @@ fn a_market_porter_collects_a_bounded_load_while_the_woodcutter_keeps_working() 
     // specialist role removed, the woodcutter interrupts work, takes one
     // personal-capacity load, and uses the same ownership-preserving market
     // collection routine.
-    app.world_mut().entity_mut(porter).remove::<MarketPorter>();
+    app.world_mut().entity_mut(porter).remove::<MootSteward>();
     let mut returning_job_load = GoodsInventory::new(shared::economy::capacity::VILLAGER);
     assert_eq!(returning_job_load.add(Good::Wood, 2), 2);
     let worker = app
@@ -4817,7 +4817,7 @@ fn run_owned_farm_supply_test(private_porter: bool) {
             storage_hall: shared::components::BuildingId(7_005),
         });
     } else {
-        porter_commands.insert(MarketPorter { settlement: hall });
+        porter_commands.insert(MootSteward { settlement: hall });
     }
     let porter = porter_commands.id();
 
@@ -4972,7 +4972,7 @@ fn a_liquidating_business_consigns_inputs_instead_of_trapping_food() {
         .world_mut()
         .spawn((
             CharacterKind::Villager,
-            MarketPorter { settlement: hall },
+            MootSteward { settlement: hall },
             PlayerPosition(hall_position),
             CharacterActivity::Indoors,
             GoodsInventory::new(shared::economy::capacity::VILLAGER),
@@ -5074,7 +5074,7 @@ fn a_full_wood_compartment_does_not_block_bread_collection() {
         .world_mut()
         .spawn((
             CharacterKind::Villager,
-            MarketPorter { settlement: hall },
+            MootSteward { settlement: hall },
             PlayerPosition(hall_position),
             CharacterActivity::Indoors,
             GoodsInventory::new(shared::economy::capacity::VILLAGER),
@@ -5151,7 +5151,7 @@ fn two_moot_stewards_reserve_distinct_collection_work() {
             app.world_mut()
                 .spawn((
                     CharacterKind::Villager,
-                    MarketPorter { settlement: hall },
+                    MootSteward { settlement: hall },
                     PlayerPosition(hall_position),
                     CharacterActivity::Indoors,
                     GoodsInventory::new(shared::economy::capacity::VILLAGER),
@@ -5223,7 +5223,7 @@ fn a_backed_off_road_repair_still_takes_priority_over_the_porters_next_market_tr
         .world_mut()
         .spawn((
             CharacterKind::Villager,
-            MarketPorter { settlement: hall },
+            MootSteward { settlement: hall },
             PlayerPosition(hall_position),
             CharacterActivity::Indoors,
             GoodsInventory::new(shared::economy::capacity::VILLAGER),
@@ -5250,7 +5250,7 @@ fn a_backed_off_road_repair_still_takes_priority_over_the_porters_next_market_tr
 }
 
 #[test]
-fn the_market_porter_buys_inputs_for_any_business_policy() {
+fn the_moot_steward_buys_inputs_for_any_business_policy() {
     let mut app = village_test_app();
     app.add_systems(
         Update,
@@ -5328,7 +5328,7 @@ fn the_market_porter_buys_inputs_for_any_business_policy() {
         .world_mut()
         .spawn((
             CharacterKind::Villager,
-            MarketPorter { settlement: hall },
+            MootSteward { settlement: hall },
             PlayerPosition(SettlementBuildingKind::Hall.entrance_position(hall_position, 0.0)),
             CharacterActivity::Indoors,
             GoodsInventory::new(shared::economy::capacity::VILLAGER),
@@ -6765,7 +6765,7 @@ fn hundred_x_world_runs_complete_visible_supply_loops() {
     );
     assert!(built.contains(&SettlementBuildingKind::House), "{built:?}");
     let field_count = world.query::<&FarmField>().iter(&world).count();
-    assert!(field_count >= 2 && field_count % 2 == 0);
+    assert!(field_count >= 2 && field_count.is_multiple_of(2));
     let households: Vec<_> = world.query::<&Household>().iter(&world).collect();
     assert_eq!(households.len(), 1);
     assert_eq!(households[0].residents.len(), 3);

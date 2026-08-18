@@ -251,7 +251,7 @@ fn install_alpha_mask_draw_function(
 fn clone_material_properties(properties: &MaterialProperties) -> MaterialProperties {
     MaterialProperties {
         render_method: properties.render_method,
-        alpha_mode: properties.alpha_mode.clone(),
+        alpha_mode: properties.alpha_mode,
         mesh_pipeline_key_bits: properties.mesh_pipeline_key_bits,
         depth_bias: properties.depth_bias,
         reads_view_transmission_texture: properties.reads_view_transmission_texture,

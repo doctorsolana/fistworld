@@ -2,11 +2,11 @@
 //!
 //! Responsibilities:
 //! - In-process reconnect snapshots for session accounts.
-//! - Legacy profile migration helpers kept outside the live hot path.
+//! - Session-scoped player account snapshots.
 //!
 //! Dependency notes:
 //! - May depend on `shared`.
-//! - Should expose storage APIs/resources to other domains, not direct file calls.
+//! - Should expose account resources to other domains.
 
 pub mod autosave;
 pub mod profiles;

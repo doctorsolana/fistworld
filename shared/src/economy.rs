@@ -86,7 +86,7 @@ pub const STARTING_HERO_COINS: u64 = 20;
 pub const STARTING_HERO_MONEY: u64 = STARTING_HERO_COINS * PENNIES_PER_COIN;
 pub const STARTING_TREASURY_MONEY: u64 = 20 * PENNIES_PER_COIN;
 /// Public daily wage for each combined Moot Steward position.
-pub const ROAD_STEWARD_DAILY_SALARY: u64 = PENNIES_PER_COIN;
+pub const MOOT_STEWARD_DAILY_SALARY: u64 = PENNIES_PER_COIN;
 /// Ordinary business wage. Kept equal across founding trades until skills and
 /// a labour market exist; importantly it is paid for holding a real position,
 /// not for each animation loop completed at high time warp.
@@ -284,7 +284,7 @@ impl Default for CivicDayLedger {
 /// The treasury's auditable operating ledger. `Settlement::treasury` remains
 /// the authoritative cash balance; this component explains every change and
 /// supplies the Reeve's bounded review window.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CivicAccount {
     #[serde(default)]
     pub current_day: CivicDayLedger,
@@ -298,19 +298,6 @@ pub struct CivicAccount {
     pub lifetime_income: u64,
     #[serde(default)]
     pub lifetime_spending: u64,
-}
-
-impl Default for CivicAccount {
-    fn default() -> Self {
-        Self {
-            current_day: CivicDayLedger::default(),
-            previous_day: CivicDayLedger::default(),
-            income_since_review: 0,
-            spending_since_review: 0,
-            lifetime_income: 0,
-            lifetime_spending: 0,
-        }
-    }
 }
 
 impl CivicAccount {

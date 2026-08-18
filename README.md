@@ -299,12 +299,10 @@ cargo run -p client --bin capture -- --help
 Presets include `survey`, `orbit`, `daycycle` and `water`. Rendering is required to catch
 mesh winding, shader, foliage, lighting and anchor problems that compilation cannot.
 
-For a deterministic grass comparison that cannot accidentally frame open ocean:
+For a deterministic grass capture that cannot accidentally frame open ocean:
 
 ```bash
-CITYSIM_MAP_ID=village_lab FISTFORCE_GRASS_RENDERER=legacy \
-  cargo run -p client --bin capture -- --at 112,-158 --name grass --zoom 90 --tilt 0.55
-CITYSIM_MAP_ID=village_lab FISTFORCE_GRASS_RENDERER=chunked \
+CITYSIM_MAP_ID=village_lab \
   cargo run -p client --bin capture -- --at 112,-158 --name grass --zoom 90 --tilt 0.55
 ```
 
@@ -334,7 +332,6 @@ The full lab is intentionally ignored by ordinary `cargo test` runs.
 | `FISTFORCE_AUTOCONNECT=<name>` | Skip local login/name entry |
 | `FISTFORCE_CLIENT_PERF=1` | Emit rolling client frame-time diagnostics |
 | `FISTFORCE_SERVER_PERF=1` | Emit server tick and phase diagnostics |
-| `FISTFORCE_GRASS_RENDERER=legacy\|chunked` | Override the saved 3D grass renderer for captures and profiling |
 | `FISTFORCE_GRASS_STRESS_DENSITY=<1..32>` | Capture/profiling-only grass density multiplier; normal gameplay remains 1x |
 | `FISTFORCE_DISPLAY_MODE=windowed\|borderless\|fullscreen` | Override the saved display mode for this run |
 | `FISTFORCE_RESOLUTION=<width>x<height>` | Override Windowed/Fullscreen output resolution |

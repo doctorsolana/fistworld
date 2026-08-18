@@ -5,7 +5,6 @@
 mod assets;
 mod debug;
 pub(crate) mod foliage;
-mod ground_cover;
 mod ground_cover_chunked;
 mod ground_cover_instancing;
 mod kinds;

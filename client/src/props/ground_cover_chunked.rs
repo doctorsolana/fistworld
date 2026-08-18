@@ -1,9 +1,7 @@
 //! Entity-light, GPU-instanced 3D ground cover.
 //!
-//! This remains parallel to [`super::ground_cover`]. It uses the same
-//! deterministic spawn generator, authored short/tall meshes, PBR texture,
-//! climate tint and wind field, but stores sector transforms in compact GPU
-//! instance buffers instead of creating an ECS entity per tuft.
+//! The deterministic spawn generator feeds compact GPU instance buffers grouped
+//! into camera-cullable sectors instead of creating an ECS entity per tuft.
 
 use bevy::light::NotShadowCaster;
 use bevy::pbr::ExtendedMaterial;
@@ -15,12 +13,11 @@ use shared::components::VillageRoad;
 use shared::props::{PropKind, PropSpawn};
 use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
 
-use crate::render::systems::{ClientWorldRoot, GraphicsSettings, GroundCoverRenderer};
+use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
 use crate::streaming::{streaming_anchor, AnchorCamera, AnchorPlayer};
 use crate::terrain::LoadedChunks;
 
 use super::foliage::flatten_base;
-use super::ground_cover::GroundCoverStressDensity;
 use super::ground_cover_instancing::{
     GrassInstance, GrassInstances, InstancedGrassExtension, InstancedGrassMaterial,
 };
@@ -29,6 +26,23 @@ use super::{BuildZoneChunkIndex, PropAssets};
 
 const GROUND_COVER_CHUNK_RADIUS: i32 = 4;
 const GRASS_BATCH_CHUNKS: i32 = 3;
+
+/// Opt-in renderer stress input. Ordinary worlds remain at 1x, while captures
+/// can request denser meadows with `FISTFORCE_GRASS_STRESS_DENSITY`.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct GroundCoverStressDensity(pub f32);
+
+impl Default for GroundCoverStressDensity {
+    fn default() -> Self {
+        let multiplier = std::env::var("FISTFORCE_GRASS_STRESS_DENSITY")
+            .ok()
+            .and_then(|raw| raw.parse::<f32>().ok())
+            .filter(|value| value.is_finite())
+            .unwrap_or(1.0)
+            .clamp(1.0, 32.0);
+        Self(multiplier)
+    }
+}
 
 #[derive(Component)]
 pub struct ChunkedGroundCover;
@@ -333,8 +347,7 @@ pub(super) fn stream_chunked_ground_cover(
     zones: Res<BuildZoneChunkIndex>,
     roads: Query<&VillageRoad>,
 ) {
-    let enabled =
-        settings.props_enabled && settings.ground_cover_renderer == GroundCoverRenderer::Chunked;
+    let enabled = settings.props_enabled;
     if state.material_cutout != Some(settings.foliage_cutout_enabled) {
         clear_render_entities(&mut commands, &mut state);
         state.chunks.clear();
@@ -472,7 +485,7 @@ pub(super) fn stream_chunked_ground_cover(
             .map(|chunk| chunk.short.len() + chunk.tall.len())
             .sum::<usize>();
         info!(
-            "GPU-instanced 3D grass ready: {} chunks, {} instances, {} render entities at {:.1}x stress density (the same instances would each be a legacy render entity)",
+            "GPU-instanced 3D grass ready: {} chunks, {} instances, {} render entities at {:.1}x stress density",
             state.chunks.len(),
             instances,
             state.render_entities.len(),
@@ -483,13 +496,9 @@ pub(super) fn stream_chunked_ground_cover(
 }
 
 pub(super) fn mark_chunked_grass_dirty_for_roads(
-    settings: Res<GraphicsSettings>,
     changed: Query<&VillageRoad, Changed<VillageRoad>>,
     mut state: ResMut<ChunkedGroundCoverState>,
 ) {
-    if settings.ground_cover_renderer != GroundCoverRenderer::Chunked {
-        return;
-    }
     for road in changed.iter() {
         let Some((min, max)) = road_chunk_bounds(road, 0.32) else {
             continue;
@@ -506,7 +515,6 @@ pub(super) fn mark_chunked_grass_dirty_for_roads(
 }
 
 pub(super) fn mark_chunked_grass_dirty_for_buildings(
-    settings: Res<GraphicsSettings>,
     added: Query<
         (
             &shared::building::PlacedBuilding,
@@ -516,9 +524,6 @@ pub(super) fn mark_chunked_grass_dirty_for_buildings(
     >,
     mut state: ResMut<ChunkedGroundCoverState>,
 ) {
-    if settings.ground_cover_renderer != GroundCoverRenderer::Chunked {
-        return;
-    }
     for (building, position) in added.iter() {
         for zone in shared::building::clearance_zones_for_building(
             position.0,

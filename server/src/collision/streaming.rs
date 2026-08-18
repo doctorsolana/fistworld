@@ -8,7 +8,7 @@ use shared::components::PlayerPosition;
 use shared::terrain::{ChunkCoord, WorldTerrain};
 
 use crate::collision::building_index::BuildingSpatialIndex;
-use crate::collision::library::{BakedColliderLibrary, StaticColliderInstance, StaticColliders};
+use crate::collision::library::{DerivedColliderLibrary, StaticColliderInstance, StaticColliders};
 
 /// How many chunks around each player we keep static colliders loaded for.
 const COLLIDER_VIEW_DISTANCE_CHUNKS: i32 = 3;
@@ -68,7 +68,7 @@ fn bump_chunk_version(colliders: &mut StaticColliders, chunk: ChunkCoord) {
 /// Stream in/out static colliders based on player positions.
 pub fn update_static_collider_streaming(
     terrain: Res<WorldTerrain>,
-    library: Option<Res<BakedColliderLibrary>>,
+    library: Option<Res<DerivedColliderLibrary>>,
     building_index: Res<BuildingSpatialIndex>,
     players: Query<&PlayerPosition>,
     roads: Query<&shared::components::VillageRoad>,
@@ -192,7 +192,6 @@ fn unload_chunk(colliders: &mut StaticColliders, chunk: ChunkCoord) {
     };
     for id in ids {
         if let Some(inst) = colliders.instances.remove(&id) {
-            colliders.pending_removed.push(id);
             if let Some(cell_list) = colliders.cells.get_mut(&inst.cell) {
                 cell_list.retain(|x| *x != id);
                 if cell_list.is_empty() {
@@ -207,7 +206,7 @@ fn unload_chunk(colliders: &mut StaticColliders, chunk: ChunkCoord) {
 
 fn load_chunk(
     terrain: &WorldTerrain,
-    library: &BakedColliderLibrary,
+    library: &DerivedColliderLibrary,
     colliders: &mut StaticColliders,
     chunk: ChunkCoord,
     chunk_zones: Option<&[BuildZoneEntry]>,
@@ -248,13 +247,11 @@ fn load_chunk(
         let inst = StaticColliderInstance {
             kind,
             position: spawn.position,
-            rotation: spawn.rotation,
             scale: spawn.scale,
             cell,
         };
 
         colliders.instances.insert(id, inst);
-        colliders.pending_added.push_back(id);
         colliders.cells.entry(cell).or_default().push(id);
         ids.push(id);
     }

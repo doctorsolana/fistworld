@@ -1466,7 +1466,7 @@ fn place_detail_model(
                 |office| {
                     if office.city_workers.is_empty() {
                         office
-                            .road_steward
+                            .lead_steward
                             .clone()
                             .unwrap_or_else(|| "Vacant".to_string())
                     } else {
@@ -1503,7 +1503,7 @@ fn place_detail_model(
                     );
                     let stewards = if office.city_workers.is_empty() {
                         office
-                            .road_steward
+                            .lead_steward
                             .as_deref()
                             .unwrap_or("vacant")
                             .to_string()

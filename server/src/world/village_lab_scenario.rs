@@ -311,6 +311,7 @@ impl LabScenario {
         self == Self::MerchantBeacon
     }
 
+    #[cfg(test)]
     pub(crate) fn is_triple_stress(self) -> bool {
         self == Self::TripleStress
     }
@@ -323,6 +324,7 @@ impl LabScenario {
         matches!(self, Self::TripleStress | Self::DenseStress)
     }
 
+    #[cfg(test)]
     pub(crate) fn runs_arrival_waves(self) -> bool {
         !self.is_crowd_stress()
             && (self.includes_secure()
@@ -1077,6 +1079,7 @@ impl LabArrivalTarget {
         }
     }
 
+    #[cfg(test)]
     pub(crate) const fn resident_prefix(self) -> &'static str {
         match self {
             Self::Meadow => "Meadow",
@@ -1102,6 +1105,7 @@ impl LabArrivalTarget {
     /// A/B policy cohorts must receive the same deterministic scatter and
     /// attributes. `seed_salt` stays distinct so their same-day waves have a
     /// stable ordering; this salt deliberately removes policy identity.
+    #[cfg(test)]
     pub(crate) const fn cohort_seed_salt(self) -> u64 {
         match self {
             Self::FrugalMeadow | Self::MutualAidMeadow => 0x504f_4c49,
@@ -1376,8 +1380,10 @@ fn spawn_runtime_village(
     initial_tier: SettlementTier,
 ) -> Entity {
     let hall_inventory = GoodsInventory::new_partitioned(shared::economy::capacity::HALL);
-    let mut policies = shared::components::SettlementPolicies::default();
-    policies.strategy = strategy;
+    let policies = shared::components::SettlementPolicies {
+        strategy,
+        ..Default::default()
+    };
     let settlement_entity = commands
         .spawn((
             Settlement {
@@ -2321,7 +2327,7 @@ pub(crate) fn log_rendered_village_diagnostics(
             market.listed_units(Good::Wood),
             economy.map_or(0.0, |economy| economy.reserve_days),
             administration
-                .and_then(|administration| administration.road_steward.as_deref())
+                .and_then(|administration| administration.lead_steward.as_deref())
                 .unwrap_or("vacant"),
             administration.map_or(0, |administration| administration.roadless_buildings),
             administration.map_or(0, |administration| administration.disconnected_buildings),

@@ -50,7 +50,7 @@ def close_vector(actual, expected, tolerance=1e-4):
 # Empty-node translations are part of the vehicle contract.  glTF converts Blender (X,Y,Z) to
 # (X,Z,-Y), so the aft seat at source Y=-1.24 appears at glTF Z=+1.24.
 assert close_vector(nodes["Anchor_Helm"][1].get("translation", [0, 0, 0]), [0.0, 0.35, 1.24])
-assert close_vector(nodes["Anchor_Occupant"][1].get("translation", [0, 0, 0]), [0.0, 0.025, 0.0])
+assert close_vector(nodes["Anchor_Occupant"][1].get("translation", [0, 0, 0]), [0.0, 0.115, 0.0])
 assert "rotation" not in nodes["Anchor_Helm"][1], "helm anchor must inherit the boat's forward axis"
 
 sail_node = nodes["DinghySail"][1]

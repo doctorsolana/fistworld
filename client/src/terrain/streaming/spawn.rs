@@ -10,6 +10,7 @@ pub(crate) fn update_terrain_chunks(
     mut loaded_chunks: ResMut<LoadedChunks>,
     mut streaming: ResMut<TerrainStreamingState>,
     chunk_query: Query<(Entity, &TerrainChunk, &Mesh3d)>,
+    far_terrain: Query<&FarTerrainState, With<FarTerrain>>,
     settings: Res<GraphicsSettings>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -29,23 +30,35 @@ pub(crate) fn update_terrain_chunks(
 
     // Recompute when player moves to new chunk OR when view distance setting changes.
     let should_recompute = streaming.center != Some(player_chunk) || settings.is_changed();
-    if !should_recompute {
+    if !should_recompute && !streaming.unload_pending {
         return;
     }
-    streaming.center = Some(player_chunk);
+    if should_recompute {
+        streaming.center = Some(player_chunk);
 
-    // Update desired chunk ordering (nearest -> farthest).
-    let mut desired: Vec<ChunkCoord> = player_chunk.chunks_in_radius(view_distance);
-    desired.retain(|c| c.in_world_bounds());
-    desired.sort_by_key(|c| {
-        let dx = (c.x - player_chunk.x).abs();
-        let dz = (c.z - player_chunk.z).abs();
-        // Chebyshev distance for square radius ordering.
-        dx.max(dz)
-    });
-    streaming.desired_order = desired;
+        // Update desired chunk ordering (nearest -> farthest).
+        let mut desired: Vec<ChunkCoord> = player_chunk.chunks_in_radius(view_distance);
+        desired.retain(|c| c.in_world_bounds());
+        desired.sort_by_key(|c| {
+            let dx = (c.x - player_chunk.x).abs();
+            let dz = (c.z - player_chunk.z).abs();
+            // Chebyshev distance for square radius ordering.
+            dx.max(dz)
+        });
+        streaming.desired_order = desired;
+        streaming.unload_pending = true;
+    }
 
-    // Unload chunks that are now out of range.
+    // Unload chunks that are now out of range. During a close-view streaming
+    // handoff the far mesh keeps its previous cutout until the complete new
+    // detail square is ready. Retain only chunks beneath that old cutout; all
+    // other stale chunks remain safe to release. This bounds rapid-pan memory
+    // while preventing the old implementation's whole-map coarse/detail flicker.
+    let protected_hole = if settings.far_terrain_enabled {
+        far_terrain.single().ok().filter(|state| !state.hole_filled)
+    } else {
+        None
+    };
     let mut to_remove: Vec<(
         Entity,
         ChunkCoord,
@@ -53,10 +66,15 @@ pub(crate) fn update_terrain_chunks(
         Handle<TerrainSplatMaterial>,
         Handle<Image>,
     )> = Vec::new();
+    let mut retained_stale = false;
     for (entity, chunk, mesh_handle) in chunk_query.iter() {
         let dx = (chunk.coord.x - player_chunk.x).abs();
         let dz = (chunk.coord.z - player_chunk.z).abs();
-        if dx > view_distance || dz > view_distance || !chunk.coord.in_world_bounds() {
+        let outside_desired =
+            dx > view_distance || dz > view_distance || !chunk.coord.in_world_bounds();
+        let protected_by_previous_hole =
+            protected_hole.is_some_and(|state| chunk_is_inside_active_far_hole(chunk.coord, state));
+        if outside_desired && !protected_by_previous_hole {
             to_remove.push((
                 entity,
                 chunk.coord,
@@ -64,8 +82,11 @@ pub(crate) fn update_terrain_chunks(
                 chunk.material.clone(),
                 chunk.weightmap.clone(),
             ));
+        } else if outside_desired {
+            retained_stale = true;
         }
     }
+    streaming.unload_pending = retained_stale;
     let removed_count = to_remove.len();
     if removed_count > 0 {
         for (_, coord, _, _, _) in to_remove.iter() {
@@ -84,6 +105,15 @@ pub(crate) fn update_terrain_chunks(
         perf.terrain_chunks_unloaded += removed_count as u32;
     }
     perf.terrain_update_ms += start.elapsed().as_secs_f32() * 1000.0;
+}
+
+fn chunk_is_inside_active_far_hole(coord: ChunkCoord, state: &FarTerrainState) -> bool {
+    if state.hole_filled || state.view_distance < 0 {
+        return false;
+    }
+    let dx = (coord.x - state.center_cell.x).abs();
+    let dz = (coord.z - state.center_cell.y).abs();
+    dx.max(dz) <= state.view_distance
 }
 
 pub(crate) fn update_terrain_render_distance(
@@ -200,9 +230,8 @@ pub(crate) fn spawn_terrain_chunks(
         }
 
         let resolution = WEIGHTMAP_RESOLUTION;
-        let seed = WORLD_SEED;
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let generator = TerrainGenerator::new(seed);
+            let generator = TerrainGenerator::new();
             let mesh_data = generator.generate_chunk_with_deltas(&delta_map, coord);
             let tangents = compute_chunk_tangents(&mesh_data).unwrap_or_default();
             // Authored surface paint is baked per-chunk map data (like the
@@ -249,4 +278,44 @@ pub(crate) fn spawn_terrain_chunks(
         perf.terrain_chunks_spawned += chunks_spawned as u32;
     }
     perf.terrain_spawn_ms += start.elapsed().as_secs_f32() * 1000.0;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_view_hole_protects_only_its_previous_detail_square() {
+        let state = FarTerrainState {
+            center_cell: IVec2::new(10, -4),
+            view_distance: 2,
+            hole_filled: false,
+        };
+
+        assert!(chunk_is_inside_active_far_hole(
+            ChunkCoord::new(8, -6),
+            &state
+        ));
+        assert!(chunk_is_inside_active_far_hole(
+            ChunkCoord::new(12, -2),
+            &state
+        ));
+        assert!(!chunk_is_inside_active_far_hole(
+            ChunkCoord::new(13, -4),
+            &state
+        ));
+    }
+
+    #[test]
+    fn filled_far_mesh_does_not_retain_stale_chunks() {
+        let state = FarTerrainState {
+            center_cell: IVec2::ZERO,
+            view_distance: 8,
+            hole_filled: true,
+        };
+        assert!(!chunk_is_inside_active_far_hole(
+            ChunkCoord::new(0, 0),
+            &state
+        ));
+    }
 }

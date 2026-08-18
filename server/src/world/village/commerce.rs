@@ -105,7 +105,7 @@ pub fn sync_porter_cargo_capacity(
         (Entity, &mut GoodsInventory),
         (
             With<CharacterKind>,
-            Or<(With<MarketPorter>, With<CompanyPorter>)>,
+            Or<(With<MootSteward>, With<CompanyPorter>)>,
             Without<PorterCargoCapacity>,
         ),
     >,
@@ -113,7 +113,7 @@ pub fn sync_porter_cargo_capacity(
         (
             Entity,
             &mut GoodsInventory,
-            Has<MarketPorter>,
+            Has<MootSteward>,
             Has<CompanyPorter>,
         ),
         (With<CharacterKind>, With<PorterCargoCapacity>),
@@ -581,9 +581,8 @@ mod policy_tests {
     }
 }
 
-/// Fill the Reeve position and retire legacy standalone Market Porters. The
-/// combined Moot Steward is staffed by the road domain and owns both hauling
-/// and road work.
+/// Fill the Reeve position. The combined Moot Steward is staffed by the road
+/// domain and owns both hauling and road work.
 pub fn staff_moot_hall_roles(
     mut commands: Commands,
     mut halls: Query<(
@@ -600,8 +599,7 @@ pub fn staff_moot_hall_roles(
         &VillagerIntent,
         &mut Occupation,
         &mut WorkStatus,
-        Option<&MarketPorter>,
-        Option<&crate::world::village_roads::RoadSteward>,
+        Option<&MootSteward>,
         Option<&shared::components::EmployedAt>,
         Option<&shared::components::CivicEmployment>,
     )>,
@@ -609,19 +607,12 @@ pub fn staff_moot_hall_roles(
     for (hall, settlement, mut administration, settlement_id, policies) in halls.iter_mut() {
         let mut steward = None;
         let mut reeve = None;
-        let mut legacy_porters = Vec::new();
-        for (entity, person_id, name, intent, _, _, _, _, _, civic_job) in villagers.iter() {
+        for (entity, person_id, name, intent, _, _, _, _, civic_job) in villagers.iter() {
             if intent.settlement() != Some(hall) || !intent.counts_as_resident() {
                 continue;
             }
             match civic_job.filter(|job| job.settlement == *settlement_id) {
-                Some(job)
-                    if matches!(
-                        job.role,
-                        shared::components::CivicRole::MootSteward
-                            | shared::components::CivicRole::RoadSteward
-                    ) =>
-                {
+                Some(job) if job.role == shared::components::CivicRole::MootSteward => {
                     let candidate = (entity, *person_id, name.0.clone());
                     if steward
                         .as_ref()
@@ -639,35 +630,11 @@ pub fn staff_moot_hall_roles(
                         reeve = Some(candidate);
                     }
                 }
-                Some(job) if job.role == shared::components::CivicRole::MarketPorter => {
-                    legacy_porters.push(entity);
-                }
                 _ => {}
             }
         }
 
-        // An old save may have two people in what is now one job. Release the
-        // standalone porter cleanly; the Moot Steward receives the marker.
-        for legacy in legacy_porters {
-            if Some(legacy) == steward.as_ref().map(|(entity, ..)| *entity) {
-                continue;
-            }
-            if let Ok((_, _, _, _, mut occupation, mut status, _, _, _, _)) =
-                villagers.get_mut(legacy)
-            {
-                occupation.0 = None;
-                *status = WorkStatus::LookingForWork;
-            }
-            commands
-                .entity(legacy)
-                .remove::<shared::components::CivicEmployment>()
-                .remove::<MarketPorter>()
-                .remove::<MarketCollectionRoutine>()
-                .remove::<MoveTarget>();
-        }
-
-        administration.road_steward = steward.as_ref().map(|(_, _, name)| name.clone());
-        administration.market_porter = administration.road_steward.clone();
+        administration.lead_steward = steward.as_ref().map(|(_, _, name)| name.clone());
         administration.reeve = reeve.as_ref().map(|(_, _, name)| name.clone());
         if reeve.is_some()
             || usize::from(steward.is_some()) >= settlement.residents.saturating_sub(1) as usize
@@ -682,7 +649,7 @@ pub fn staff_moot_hall_roles(
         let candidate = villagers
             .iter()
             .filter(
-                |(_, _, _, intent, occupation, status, _, _, employed_at, civic_job)| {
+                |(_, _, _, intent, occupation, status, _, employed_at, civic_job)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
                         && occupation.0.is_none()
                         && employed_at.is_none()
@@ -693,8 +660,7 @@ pub fn staff_moot_hall_roles(
             .min_by_key(|(_, person_id, ..)| **person_id)
             .map(|(entity, ..)| entity);
         let Some(candidate) = candidate else { continue };
-        let Ok((_, _, name, _, mut occupation, mut status, _, _, _, _)) =
-            villagers.get_mut(candidate)
+        let Ok((_, _, name, _, mut occupation, mut status, _, _, _)) = villagers.get_mut(candidate)
         else {
             continue;
         };
@@ -835,7 +801,7 @@ pub fn run_internal_deliveries(
     mut porters: Query<
         (
             Entity,
-            Option<&MarketPorter>,
+            Option<&MootSteward>,
             Option<&CompanyPorter>,
             &PlayerPosition,
             &mut CharacterActivity,
@@ -857,7 +823,7 @@ pub fn run_internal_deliveries(
         (
             With<CharacterKind>,
             Without<strategic::StrategicPerson>,
-            Or<(With<MarketPorter>, With<CompanyPorter>)>,
+            Or<(With<MootSteward>, With<CompanyPorter>)>,
         ),
     >,
 ) {
@@ -1492,7 +1458,7 @@ pub fn run_market_collections(
     mut porters: Query<
         (
             Entity,
-            (Option<&MarketPorter>, Option<&CompanyPorter>),
+            (Option<&MootSteward>, Option<&CompanyPorter>),
             (
                 Option<&FarmerRoutine>,
                 Option<&FishingRoutine>,
@@ -1519,7 +1485,7 @@ pub fn run_market_collections(
             With<CharacterKind>,
             Without<strategic::StrategicPerson>,
             Or<(
-                With<MarketPorter>,
+                With<MootSteward>,
                 With<CompanyPorter>,
                 With<FarmerRoutine>,
                 With<FishingRoutine>,

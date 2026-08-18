@@ -14,7 +14,7 @@ the client only presents the vessel and sends destinations.
    seed. It accepts only continuous water leading to reachable dry shore, then starts the
    Dinghy roughly 48–56 metres offshore: close enough for a short opening voyage, while
    leaving enough water for sailing to feel like an arrival rather than starting on the beach.
-   A fresh server begins at 07:30 on the display clock, with the sun already above the
+   A fresh server begins at 08:00 on the display clock, with the sun already above the
    horizon, so the first arrival is a readable warm sunrise rather than darkness.
 4. The server creates exactly one Hero and one starter Dinghy. The Hero is seated at the
    authored `Anchor_Helm` position. Presentation waits for the replicated authoritative
@@ -58,6 +58,12 @@ definition of a ship.
   it invalid, the vessel stops at the last valid water point instead of beaching.
 - `VesselNavigation` supplies hull speed. Future ship classes reuse the planner and add
   their own speed, cargo, crew, draft and combat components.
+- Navigation coordinates remain on the server's stable water plane. On the client, the Dinghy
+  samples the shared deterministic swell at its centre, bow, stern and both sides, then smoothly
+  follows that surface with height, pitch and roll. The seated Hero is visually pinned to the
+  resulting helm transform while its replicated position remains authoritative. The matching
+  tapered false sole sits just above the authored waterline and hides residual wave curvature
+  through the open floorboards without raising the whole hull out of the sea.
 
 Depth/draft, ship-to-ship avoidance, docks, boarding, repair, cargo vessels and naval
 combat are future mechanics. The present navigator proves coastline-constrained travel
@@ -73,6 +79,8 @@ and client presentation use one deterministic source.
   cannot become trapped offshore.
 - The authored `DinghySailRig` turns toward apparent wind and the `wind_fill` morph reacts
   to wind strength and crosswind.
+- When the asynchronous Dinghy scene appears, its sail is initialized from the current wind before
+  it is revealed. Later apparent-wind changes turn the rig smoothly instead of snapping.
 - Apparent-wind visuals divide replicated velocity by Time Warp. Fast-forward changes
   voyage duration but cannot make the sail point differently from the same voyage at 1x.
 - A wreck stops sailing, hides its failed sail rig and sets sail fill to zero.

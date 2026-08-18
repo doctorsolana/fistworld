@@ -62,8 +62,7 @@ pub fn staff_moot_stewards(
         &CharacterName,
         &VillagerIntent,
         &mut Occupation,
-        Option<&RoadSteward>,
-        Option<&crate::world::village::MarketPorter>,
+        Option<&MootSteward>,
         Option<&shared::components::EmployedAt>,
         Option<&shared::components::CivicEmployment>,
     )>,
@@ -74,24 +73,19 @@ pub fn staff_moot_stewards(
         let policies = policies.copied().unwrap_or_default();
         let current = villagers
             .iter()
-            .filter(|(_, _, _, intent, _, _, _, _, civic_job)| {
+            .filter(|(_, _, _, intent, _, _, _, civic_job)| {
                 intent.settlement() == Some(hall)
                     && intent.counts_as_resident()
                     && civic_job.is_some_and(|job| {
                         job.settlement == *settlement_id
-                            && matches!(
-                                job.role,
-                                shared::components::CivicRole::MootSteward
-                                    | shared::components::CivicRole::RoadSteward
-                            )
+                            && job.role == shared::components::CivicRole::MootSteward
                     })
             })
             .min_by_key(|(_, person_id, ..)| **person_id)
             .map(|(entity, ..)| entity);
 
         if current.is_none() {
-            administration.road_steward = None;
-            administration.market_porter = None;
+            administration.lead_steward = None;
         }
 
         let worker = if let Some(worker) = current {
@@ -106,11 +100,10 @@ pub fn staff_moot_stewards(
             }
             let candidate = villagers
                 .iter()
-                .filter(|(_, _, _, intent, occupation, steward, porter, employed_at, civic_job)| {
+                .filter(|(_, _, _, intent, occupation, steward, employed_at, civic_job)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
                         && occupation.0.is_none()
                         && steward.is_none()
-                        && porter.is_none()
                         && employed_at.is_none()
                         && civic_job.is_none()
                 })
@@ -119,18 +112,15 @@ pub fn staff_moot_stewards(
             let Some(candidate) = candidate else {
                 continue;
             };
-            let Ok((_, _, name, _, mut occupation, _, _, _, _)) = villagers.get_mut(candidate)
-            else {
+            let Ok((_, _, name, _, mut occupation, _, _, _)) = villagers.get_mut(candidate) else {
                 continue;
             };
             occupation.0 = Some("Moot Steward".to_string());
-            administration.road_steward = Some(name.0.clone());
-            administration.market_porter = Some(name.0.clone());
-            administration.road_steward_daily_salary = ROAD_STEWARD_DAILY_SALARY;
+            administration.lead_steward = Some(name.0.clone());
+            administration.steward_daily_salary = MOOT_STEWARD_DAILY_SALARY;
             runtime.last_audit_at = None;
             commands.entity(candidate).insert((
-                RoadSteward { settlement: hall },
-                crate::world::village::MarketPorter { settlement: hall },
+                MootSteward { settlement: hall },
                 WorkStatus::Employed,
                 shared::components::CivicEmployment {
                     settlement: *settlement_id,
@@ -144,23 +134,17 @@ pub fn staff_moot_stewards(
             candidate
         };
 
-        if let Ok((_, _, name, _, mut occupation, steward, porter, _, civic_job)) =
+        if let Ok((_, _, name, _, mut occupation, steward, _, civic_job)) =
             villagers.get_mut(worker)
         {
-            administration.road_steward = Some(name.0.clone());
-            administration.market_porter = Some(name.0.clone());
+            administration.lead_steward = Some(name.0.clone());
             if occupation.0.as_deref() != Some("Moot Steward") {
                 occupation.0 = Some("Moot Steward".to_string());
             }
             if steward.is_none_or(|steward| steward.settlement != hall) {
                 commands
                     .entity(worker)
-                    .insert(RoadSteward { settlement: hall });
-            }
-            if porter.is_none_or(|porter| porter.settlement != hall) {
-                commands
-                    .entity(worker)
-                    .insert(crate::world::village::MarketPorter { settlement: hall });
+                    .insert(MootSteward { settlement: hall });
             }
             if civic_job.is_none_or(|job| {
                 job.settlement != *settlement_id
@@ -208,8 +192,7 @@ pub fn staff_public_positions(
         &VillagerIntent,
         &mut Occupation,
         &mut WorkStatus,
-        Option<&RoadSteward>,
-        Option<&crate::world::village::MarketPorter>,
+        Option<&MootSteward>,
         Option<&shared::components::EmployedAt>,
         Option<&shared::components::CivicEmployment>,
         Option<&crate::world::village::MarketCollectionRoutine>,
@@ -246,7 +229,7 @@ pub fn staff_public_positions(
         let mut city_workers: Vec<_> = villagers
             .iter()
             .filter_map(
-                |(entity, person_id, name, intent, _, _, _, _, _, civic_job, _, _)| {
+                |(entity, person_id, name, intent, _, _, _, _, civic_job, _, _)| {
                     let job = civic_job?;
                     (intent.settlement() == Some(hall)
                         && intent.counts_as_resident()
@@ -254,18 +237,13 @@ pub fn staff_public_positions(
                         && matches!(
                             job.role,
                             shared::components::CivicRole::MootSteward
-                                | shared::components::CivicRole::RoadSteward
                                 | shared::components::CivicRole::CityWorker
                         ))
                     .then_some((
                         entity,
                         *person_id,
                         name.0.clone(),
-                        matches!(
-                            job.role,
-                            shared::components::CivicRole::MootSteward
-                                | shared::components::CivicRole::RoadSteward
-                        ),
+                        matches!(job.role, shared::components::CivicRole::MootSteward),
                     ))
                 },
             )
@@ -274,7 +252,7 @@ pub fn staff_public_positions(
         let mut guards: Vec<_> = villagers
             .iter()
             .filter_map(
-                |(entity, person_id, name, intent, _, _, _, _, _, civic_job, _, _)| {
+                |(entity, person_id, name, intent, _, _, _, _, civic_job, _, _)| {
                     let job = civic_job?;
                     (intent.settlement() == Some(hall)
                         && intent.counts_as_resident()
@@ -312,17 +290,14 @@ pub fn staff_public_positions(
             if *is_steward {
                 continue;
             }
-            if let Ok((_, _, _, _, mut occupation, mut status, steward, porter, _, _, _, _)) =
+            if let Ok((_, _, _, _, mut occupation, mut status, steward, _, _, _, _)) =
                 villagers.get_mut(*entity)
             {
                 occupation.0 = Some("Moot Steward".to_string());
                 *status = WorkStatus::Employed;
                 let mut worker = commands.entity(*entity);
                 if steward.is_none_or(|steward| steward.settlement != hall) {
-                    worker.insert(RoadSteward { settlement: hall });
-                }
-                if porter.is_none_or(|porter| porter.settlement != hall) {
-                    worker.insert(crate::world::village::MarketPorter { settlement: hall });
+                    worker.insert(MootSteward { settlement: hall });
                 }
                 worker.insert(shared::components::CivicEmployment {
                     settlement: *settlement_id,
@@ -353,7 +328,6 @@ pub fn staff_public_positions(
                 _,
                 _,
                 _,
-                _,
                 collection,
                 road_work,
             )) = villagers.get_mut(entity)
@@ -372,8 +346,7 @@ pub fn staff_public_positions(
             commands
                 .entity(entity)
                 .remove::<shared::components::CivicEmployment>()
-                .remove::<RoadSteward>()
-                .remove::<crate::world::village::MarketPorter>()
+                .remove::<MootSteward>()
                 .remove::<MoveTarget>()
                 .remove::<TravelRoute>()
                 .remove::<NavigationRoutePending>()
@@ -381,7 +354,7 @@ pub fn staff_public_positions(
         }
         city_workers.extend(retained_busy_workers);
         for (entity, ..) in guards.drain(desired_guards.min(guards.len())..) {
-            if let Ok((_, _, _, _, mut occupation, mut status, _, _, _, _, _, _)) =
+            if let Ok((_, _, _, _, mut occupation, mut status, _, _, _, _, _)) =
                 villagers.get_mut(entity)
             {
                 occupation.0 = None;
@@ -408,11 +381,10 @@ pub fn staff_public_positions(
             }
             let candidate = villagers
                 .iter()
-                .filter(|(_, _, _, intent, occupation, _, steward, porter, employed_at, civic_job, _, _)| {
+                .filter(|(_, _, _, intent, occupation, _, steward, employed_at, civic_job, _, _)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
                         && occupation.0.is_none()
                         && steward.is_none()
-                        && porter.is_none()
                         && employed_at.is_none()
                         && civic_job.is_none()
                 })
@@ -421,15 +393,14 @@ pub fn staff_public_positions(
             let Some((entity, person_id, name)) = candidate else {
                 break;
             };
-            if let Ok((_, _, _, _, mut occupation, mut status, steward, porter, _, _, _, _)) =
+            if let Ok((_, _, _, _, mut occupation, mut status, steward, _, _, _, _)) =
                 villagers.get_mut(entity)
             {
-                if steward.is_none() && porter.is_none() {
+                if steward.is_none() {
                     occupation.0 = Some("Moot Steward".to_string());
                     *status = WorkStatus::Employed;
                     commands.entity(entity).insert((
-                        RoadSteward { settlement: hall },
-                        crate::world::village::MarketPorter { settlement: hall },
+                        MootSteward { settlement: hall },
                         shared::components::CivicEmployment {
                             settlement: *settlement_id,
                             role: shared::components::CivicRole::MootSteward,
@@ -460,7 +431,7 @@ pub fn staff_public_positions(
             }
             let candidate = villagers
                 .iter()
-                .filter(|(_, _, _, intent, occupation, _, _, _, employed_at, civic_job, _, _)| {
+                .filter(|(_, _, _, intent, occupation, _, _, employed_at, civic_job, _, _)| {
                     matches!(intent, VillagerIntent::Resident { settlement } if *settlement == hall)
                         && occupation.0.is_none()
                         && employed_at.is_none()
@@ -471,7 +442,7 @@ pub fn staff_public_positions(
             let Some((entity, person_id, name)) = candidate else {
                 break;
             };
-            if let Ok((_, _, _, _, mut occupation, mut status, _, _, _, _, _, _)) =
+            if let Ok((_, _, _, _, mut occupation, mut status, _, _, _, _, _)) =
                 villagers.get_mut(entity)
             {
                 occupation.0 = Some("Town Guard".to_string());
@@ -547,7 +518,7 @@ pub fn audit_village_roads(
         Entity,
         &CharacterName,
         &VillagerIntent,
-        &RoadSteward,
+        &MootSteward,
         &shared::components::CivicEmployment,
         Option<&RoadBuilderRoutine>,
         Option<&crate::world::village::MarketCollectionRoutine>,
@@ -614,11 +585,7 @@ pub fn audit_village_roads(
                 steward.settlement == hall
                     && intent.settlement() == Some(hall)
                     && civic_job.settlement == *settlement_id
-                    && matches!(
-                        civic_job.role,
-                        shared::components::CivicRole::MootSteward
-                            | shared::components::CivicRole::RoadSteward
-                    )
+                    && civic_job.role == shared::components::CivicRole::MootSteward
             })
             // Prefer an actually idle steward. With two workers, selecting the
             // oldest one unconditionally could leave the second idle while a

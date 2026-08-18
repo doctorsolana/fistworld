@@ -362,12 +362,6 @@ pub struct EmployedAt(pub BuildingId);
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CivicRole {
     Reeve,
-    /// Legacy pre-v1. The live staffing system migrates this separate job into
-    /// [`Self::MootSteward`], but retaining the variant keeps old records
-    /// readable.
-    MarketPorter,
-    /// Legacy pre-v1 road-only office. See [`Self::MootSteward`].
-    RoadSteward,
     CityWorker,
     Guard,
     /// A founding public-works job which operates a Moot goods cart, audits
@@ -380,8 +374,6 @@ impl CivicRole {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Reeve => "Reeve",
-            Self::MarketPorter => "Market Porter (legacy)",
-            Self::RoadSteward => "Road Steward (legacy)",
             Self::CityWorker => "City Worker",
             Self::Guard => "Guard",
             Self::MootSteward => "Moot Steward",

@@ -638,12 +638,16 @@ pub fn capture_settlement_history(
                         business_permit_subsidy_bps: policy.business_permit_subsidy_bps,
                         strategy: policy.strategy,
                         autopilot: policy.autopilot,
-                        adjustment: (policy.last_change_day == completed_day)
-                            .then_some(policy.last_adjustment)
-                            .unwrap_or_default(),
-                        reason: (policy.last_change_day == completed_day)
-                            .then_some(policy.last_reason)
-                            .unwrap_or_default(),
+                        adjustment: if policy.last_change_day == completed_day {
+                            policy.last_adjustment
+                        } else {
+                            Default::default()
+                        },
+                        reason: if policy.last_change_day == completed_day {
+                            policy.last_reason
+                        } else {
+                            Default::default()
+                        },
                     },
                     physical_stock,
                     stock_liquidation_value: liquidation_value,

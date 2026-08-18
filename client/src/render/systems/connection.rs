@@ -12,7 +12,6 @@ use shared::protocol::{
 };
 use std::net::{SocketAddr, ToSocketAddrs};
 
-use super::particles::SandParticle;
 use super::world::ClientWorldRoot;
 use crate::states::GameState;
 use crate::terrain::LoadedChunks;
@@ -155,7 +154,6 @@ pub fn cleanup_enter_main_menu(
         )>,
     >,
     players: Query<Entity, With<Player>>,
-    particles: Query<Entity, With<SandParticle>>,
     mut loaded_chunks: ResMut<LoadedChunks>,
 ) {
     // Release cursor when entering main menu
@@ -174,11 +172,6 @@ pub fn cleanup_enter_main_menu(
     }
 
     for entity in players.iter() {
-        commands.entity(entity).despawn();
-    }
-
-    // Clean up particles
-    for entity in particles.iter() {
         commands.entity(entity).despawn();
     }
 

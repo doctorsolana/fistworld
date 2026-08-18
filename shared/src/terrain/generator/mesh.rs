@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn generated_chunk_mesh_has_expected_lengths_and_finite_normals() {
-        let generator = TerrainGenerator::new(super::super::WORLD_SEED);
+        let generator = TerrainGenerator::new();
         let mesh = generator.generate_chunk_with_deltas(&HashMap::new(), ChunkCoord::new(0, 0));
 
         let vertex_count = CHUNK_RESOLUTION * CHUNK_RESOLUTION;

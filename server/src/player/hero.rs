@@ -1018,7 +1018,6 @@ mod tests {
             StaticColliderInstance {
                 kind: tree_kind,
                 position: tree_position,
-                rotation: Quat::IDENTITY,
                 scale: 1.0,
                 cell: (0, 0),
             },
@@ -1029,9 +1028,7 @@ mod tests {
             by_kind: [(
                 tree_kind,
                 DerivedCollider {
-                    bounding_radius: 4.0,
                     horizontal_radius: 0.8,
-                    hulls: Vec::new(),
                 },
             )]
             .into_iter()

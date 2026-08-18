@@ -13,6 +13,17 @@ use crate::world::dev::DevMode;
 #[derive(Resource)]
 pub struct WorldTimeSpawned;
 
+/// The playable server opens a touch later than generic simulations so the
+/// first arrival reads clearly without changing the shared clock defaults,
+/// day length, work schedule or Village Lab scenarios.
+const FRESH_SERVER_START_HOUR: f32 = 8.0;
+
+fn fresh_server_clock() -> WorldTime {
+    let mut clock = WorldTime::new_default();
+    clock.set_normalized_time(FRESH_SERVER_START_HOUR / 24.0);
+    clock
+}
+
 /// Spawn the server-authoritative day/night clock replicated to all clients.
 ///
 /// This should run after the server has started networking, so clients actually receive it.
@@ -23,7 +34,7 @@ pub fn spawn_world_time_once(mut commands: Commands, spawned: Option<Res<WorldTi
     commands.insert_resource(WorldTimeSpawned);
 
     commands.spawn((
-        WorldTime::new_default(),
+        fresh_server_clock(),
         TimeWarp::default(),
         Replicate::to_clients(NetworkTarget::All),
     ));
@@ -73,5 +84,16 @@ pub fn handle_set_time_of_day(
             wt.set_normalized_time(normalized);
             info!("Debug: set time of day to {:?}", msg.preset);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_server_starts_at_eight_without_changing_shared_defaults() {
+        assert!((fresh_server_clock().normalized_time() - 8.0 / 24.0).abs() < 1.0e-4);
+        assert!((WorldTime::new_default().normalized_time() - 7.5 / 24.0).abs() < 1.0e-4);
     }
 }

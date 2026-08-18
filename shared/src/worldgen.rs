@@ -1171,10 +1171,14 @@ impl HeightField {
         };
         let min_length = (self.half_extent * 0.10).clamp(220.0, 500.0);
         let mut candidates = Vec::new();
-        for idx in 0..drainage.receiver.len() {
+        for (idx, &has_upstream) in has_channel_upstream
+            .iter()
+            .enumerate()
+            .take(drainage.receiver.len())
+        {
             if drainage.ocean[idx]
                 || drainage.accumulation[idx] < channel_cells
-                || has_channel_upstream[idx]
+                || has_upstream
                 || drainage.raw[idx] < min_spring_height
                 || drainage.distance_to_ocean[idx] < min_length
             {
@@ -1627,11 +1631,6 @@ pub fn biome_adjusted_weights(mut weights: [f32; 4], biome: WorldBiome) -> [f32;
     weights[0] -= moved;
     weights[1] += moved;
     weights
-}
-
-/// Grid-sampling convenience wrapper around [`surface_weights_at`].
-pub fn surface_weights(grid: &HeightGrid, x: f32, z: f32, h: f32) -> [f32; 4] {
-    surface_weights_at(h, grid.slope(x, z))
 }
 
 #[cfg(test)]

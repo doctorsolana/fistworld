@@ -514,8 +514,7 @@ pub fn review_automatic_staffing(
             });
             let measured_load = backlog
                 .max(
-                    u32::try_from(throughput)
-                        .unwrap_or(u32::MAX)
+                    throughput
                         .min(u32::MAX / Good::Wood.bulk_per_unit())
                         .saturating_mul(Good::Wood.bulk_per_unit()),
                 )
@@ -1437,8 +1436,10 @@ mod tests {
         wage: u64,
         wage_arrears: u64,
     ) -> impl Bundle {
-        let mut account = BusinessAccount::default();
-        account.wage_arrears = wage_arrears;
+        let account = BusinessAccount {
+            wage_arrears,
+            ..Default::default()
+        };
         (
             shared::components::BuildingId(id),
             shared::components::BuildingOf(settlement),
@@ -1731,9 +1732,14 @@ mod tests {
                 MootMarket::founding(),
             ))
             .id();
-        let mut account = BusinessAccount::default();
-        account.gross_revenue = 1;
-        account.previous_day.produced_units = 6;
+        let account = BusinessAccount {
+            gross_revenue: 1,
+            previous_day: shared::economy::BusinessDayLedger {
+                produced_units: 6,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let mut sale = BusinessSalePolicy::for_good(Good::Wheat);
         sale.days_without_sales = 3;
         let business = app

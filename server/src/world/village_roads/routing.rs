@@ -558,38 +558,41 @@ impl VillageRoadGraph {
 /// authoritative target whose route state was orphaned during a handoff.
 /// Route work is split into a bounded second system, so a crowd receiving jobs
 /// on one tick cannot create an unbounded A* spike.
+type RouteMoverData = (
+    Entity,
+    &'static CharacterKind,
+    &'static MoveTarget,
+    Option<&'static NavigationRouteFailed>,
+    Option<&'static NavigationRouteBackoff>,
+);
+
+type RouteMoverFilter = (
+    Or<(
+        Changed<MoveTarget>,
+        (
+            Without<TravelRoute>,
+            Without<NavigationRoutePending>,
+            Without<NavigationRouteFailed>,
+            Without<NavigationRouteBackoff>,
+        ),
+    )>,
+    Without<BuildingDoorUse>,
+    Without<PierTraversal>,
+    // Only an active forecourt step owns movement. A stale transit marker must
+    // not strand someone after their ticket is consumed and another routine
+    // takes over.
+    Or<(
+        Without<crate::world::village::MootQueueTransit>,
+        Without<crate::world::village::MootQueueTicket>,
+    )>,
+);
+
+type RouteMoverQuery<'w, 's> = Query<'w, 's, RouteMoverData, RouteMoverFilter>;
+
 pub fn queue_villager_travel_routes(
     simulation_time: crate::world::simulation_time::SimulationTime,
     mut commands: Commands,
-    movers: Query<
-        (
-            Entity,
-            &CharacterKind,
-            &MoveTarget,
-            Option<&NavigationRouteFailed>,
-            Option<&NavigationRouteBackoff>,
-        ),
-        (
-            Or<(
-                Changed<MoveTarget>,
-                (
-                    Without<TravelRoute>,
-                    Without<NavigationRoutePending>,
-                    Without<NavigationRouteFailed>,
-                    Without<NavigationRouteBackoff>,
-                ),
-            )>,
-            Without<BuildingDoorUse>,
-            Without<PierTraversal>,
-            // Only an active forecourt step owns movement. A stale transit
-            // marker must not strand someone after their permit/meal/arrival
-            // ticket has been consumed and another routine takes over.
-            Or<(
-                Without<crate::world::village::MootQueueTransit>,
-                Without<crate::world::village::MootQueueTicket>,
-            )>,
-        ),
-    >,
+    movers: RouteMoverQuery,
 ) {
     let now = simulation_time.elapsed_real_seconds_f64();
     for (entity, kind, target, failed, backoff) in movers.iter() {

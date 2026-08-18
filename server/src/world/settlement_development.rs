@@ -307,7 +307,7 @@ pub fn run_civic_hall_upgrade_projects(
                     employment.settlement == settlement_id
                         && matches!(
                             employment.role,
-                            CivicRole::MootSteward | CivicRole::RoadSteward | CivicRole::CityWorker
+                            CivicRole::MootSteward | CivicRole::CityWorker
                         )
                         && home.is_none()
                         && road.is_none()
@@ -352,9 +352,7 @@ pub fn run_civic_hall_upgrade_projects(
                         (employment.settlement == settlement_id
                             && matches!(
                                 employment.role,
-                                CivicRole::MootSteward
-                                    | CivicRole::RoadSteward
-                                    | CivicRole::CityWorker
+                                CivicRole::MootSteward | CivicRole::CityWorker
                             )
                             && home.is_none()
                             && road.is_none()
@@ -870,7 +868,7 @@ pub fn upgrade_town_roads(
             employment.settlement == *settlement_id
                 && matches!(
                     employment.role,
-                    CivicRole::MootSteward | CivicRole::RoadSteward | CivicRole::CityWorker
+                    CivicRole::MootSteward | CivicRole::CityWorker
                 )
         });
         if settlement.tier < SettlementTier::Town || !has_city_worker {
@@ -1202,8 +1200,10 @@ mod tests {
             let sold = market.purchase(Good::Wood, 1, u64::MAX, None, None);
             assert_eq!(sold.trade.units, 1, "market must keep trading");
         }
-        let mut economy = SettlementEconomy::default();
-        economy.prosperity = TOWN_MIN_PROSPERITY;
+        let economy = SettlementEconomy {
+            prosperity: TOWN_MIN_PROSPERITY,
+            ..Default::default()
+        };
         let settlement = app
             .world_mut()
             .spawn((
@@ -1281,9 +1281,11 @@ mod tests {
         let mut app = development_test_app();
         app.add_systems(Update, update_settlement_developments);
         app.world_mut().spawn(WorldTime::new_default());
-        let mut economy = SettlementEconomy::default();
-        economy.prosperity = VILLAGE_MIN_PROSPERITY;
-        economy.food_secure_days = VILLAGE_REQUIRED_SECURE_DAYS;
+        let economy = SettlementEconomy {
+            prosperity: VILLAGE_MIN_PROSPERITY,
+            food_secure_days: VILLAGE_REQUIRED_SECURE_DAYS,
+            ..Default::default()
+        };
         app.world_mut().spawn((
             SettlementId(74),
             Settlement {
@@ -1321,8 +1323,10 @@ mod tests {
         let mut app = development_test_app();
         app.add_systems(Update, update_settlement_developments);
         let clock = app.world_mut().spawn(WorldTime::new_default()).id();
-        let mut economy = SettlementEconomy::default();
-        economy.prosperity = CITY_MIN_PROSPERITY;
+        let economy = SettlementEconomy {
+            prosperity: CITY_MIN_PROSPERITY,
+            ..Default::default()
+        };
         let settlement = app
             .world_mut()
             .spawn((

@@ -1,11 +1,8 @@
 //! Spatial index for placed buildings.
 
 use bevy::prelude::*;
-use std::collections::HashMap;
 
 use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
-
-const BUILDING_CELL_SIZE: f32 = 32.0;
 
 #[derive(Clone, Copy, Debug)]
 pub struct IndexedBuilding {
@@ -15,51 +12,13 @@ pub struct IndexedBuilding {
 }
 
 /// Spatial index of placed buildings for collision and streaming broadphase.
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct BuildingSpatialIndex {
-    cell_size: f32,
-    cells: HashMap<(i32, i32), Vec<Entity>>,
     snapshot: Vec<IndexedBuilding>,
     pub version: u64,
 }
 
-impl Default for BuildingSpatialIndex {
-    fn default() -> Self {
-        Self {
-            cell_size: BUILDING_CELL_SIZE,
-            cells: HashMap::new(),
-            snapshot: Vec::new(),
-            version: 0,
-        }
-    }
-}
-
 impl BuildingSpatialIndex {
-    #[inline]
-    fn cell_key(&self, pos: Vec3) -> (i32, i32) {
-        (
-            (pos.x / self.cell_size).floor() as i32,
-            (pos.z / self.cell_size).floor() as i32,
-        )
-    }
-
-    /// Spatial building lookup. Unused until units query cover/obstruction.
-    #[allow(dead_code)]
-    pub fn collect_nearby_entities(&self, pos: Vec3, radius: f32, out: &mut Vec<Entity>) {
-        out.clear();
-
-        let (cx, cz) = self.cell_key(pos);
-        let cells = (radius / self.cell_size).ceil() as i32 + 1;
-
-        for dx in -cells..=cells {
-            for dz in -cells..=cells {
-                if let Some(list) = self.cells.get(&(cx + dx, cz + dz)) {
-                    out.extend(list.iter().copied());
-                }
-            }
-        }
-    }
-
     #[inline]
     pub fn snapshot(&self) -> &[IndexedBuilding] {
         &self.snapshot
@@ -69,7 +28,7 @@ impl BuildingSpatialIndex {
 /// Rebuild building spatial index when authored building state changes.
 pub fn sync_building_spatial_index(
     mut index: ResMut<BuildingSpatialIndex>,
-    buildings: Query<(Entity, &PlacedBuilding, &BuildingPosition)>,
+    buildings: Query<(&PlacedBuilding, &BuildingPosition)>,
     changed_buildings: Query<
         (),
         Or<(
@@ -87,12 +46,9 @@ pub fn sync_building_spatial_index(
         return;
     }
 
-    index.cells.clear();
     index.snapshot.clear();
 
-    for (entity, building, position) in buildings.iter() {
-        let key = index.cell_key(position.0);
-        index.cells.entry(key).or_default().push(entity);
+    for (building, position) in buildings.iter() {
         index.snapshot.push(IndexedBuilding {
             building_type: building.building_type,
             position: position.0,

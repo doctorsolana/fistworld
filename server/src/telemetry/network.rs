@@ -197,7 +197,7 @@ pub fn sample_link_flow_post_send(
         .iter()
         .map(|(peer, acc)| (*peer, acc))
         .collect();
-    per_client.sort_by(|(_, a), (_, b)| b.send_bytes_sum.cmp(&a.send_bytes_sum));
+    per_client.sort_by_key(|(_, acc)| std::cmp::Reverse(acc.send_bytes_sum));
 
     let per_client_summary = if per_client.is_empty() {
         "none".to_string()

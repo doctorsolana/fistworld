@@ -10,6 +10,8 @@ use shared::components::{
     AboardBoat, CharacterMotion, CloudSeed, CommandedBy, Hero, PlayerBoat, PlayerPosition,
     PlayerRotation, TimeWarp, WorldTime, WreckedVessel,
 };
+use shared::terrain::WorldTerrain;
+use shared::water::{water_swell_height, OCEAN_LOOP_SECONDS, WATER_SURFACE_OFFSET};
 
 use crate::camera_rts::{CommanderCamera, LocalPeerId};
 use crate::states::GameState;
@@ -21,6 +23,12 @@ const CAMERA_TRAVEL_SECONDS: f32 = 4.4;
 const PORTRAIT_PULLBACK_METERS: f32 = 1.35;
 const PORTRAIT_RISE_METERS: f32 = 0.18;
 const FINAL_RTS_ZOOM: f32 = 36.0;
+/// Authored seated-helm anchor in Bevy/glTF coordinates.
+const HELM_LOCAL: Vec3 = Vec3::new(0.0, 0.35, 1.24);
+/// Water samples sit inside the hull ends so a short shore wave cannot make
+/// the visual pose hinge on a point outside the boat.
+const BUOYANCY_HALF_LENGTH: f32 = 1.65;
+const BUOYANCY_HALF_BEAM: f32 = 0.65;
 
 fn smoothstep01(raw: f32) -> f32 {
     let raw = raw.clamp(0.0, 1.0);
@@ -37,6 +45,7 @@ impl Plugin for BoatPlugin {
             (
                 attach_boat_visuals,
                 sync_boat_transforms,
+                sync_aboard_hero_visuals.after(crate::hero::sync_hero_transforms),
                 tag_boat_sail_nodes,
                 drive_boat_sails,
                 drive_opening_cinematic.after(crate::camera_rts::update_commander_camera),
@@ -54,10 +63,20 @@ struct BoatVisual {
     snapshot: Vec3,
 }
 
+/// The renderer advances its water clock from local real time. Latching one
+/// offset from the replicated authoritative clock keeps hull sampling on the
+/// same phase without reacting to ordinary snapshot latency every frame.
+#[derive(Default)]
+struct BoatWaveClockSync {
+    world_time_entity: Option<Entity>,
+    offset: f32,
+}
+
 #[derive(Component)]
 struct BoatSailRig {
     boat: Entity,
     rest_rotation: Quat,
+    initialized: bool,
 }
 
 #[derive(Component)]
@@ -156,6 +175,9 @@ fn attach_boat_visuals(
 
 fn sync_boat_transforms(
     time: Res<Time>,
+    terrain: Res<WorldTerrain>,
+    world_time: Query<(Entity, &WorldTime)>,
+    mut wave_clock: Local<BoatWaveClockSync>,
     mut boats: Query<(
         Ref<PlayerPosition>,
         &PlayerRotation,
@@ -165,11 +187,18 @@ fn sync_boat_transforms(
     )>,
 ) {
     let blend = 1.0 - (-time.delta_secs() / 0.075).exp();
+    let ocean_seconds = synchronized_ocean_seconds(&time, &world_time, &mut wave_clock);
     for (position, rotation, wrecked, mut transform, mut visual) in boats.iter_mut() {
         if position.is_changed() {
             visual.snapshot = position.0;
         }
-        let target_position = visual.snapshot + Vec3::Y * if wrecked { -0.16 } else { 0.0 };
+        let (surface_y, buoyancy_rotation) =
+            boat_surface_pose(&terrain, visual.snapshot, rotation.0, ocean_seconds);
+        let target_position = Vec3::new(
+            visual.snapshot.x,
+            surface_y + if wrecked { -0.16 } else { 0.0 },
+            visual.snapshot.z,
+        );
         if transform.translation.distance_squared(target_position) > 30.0 * 30.0 {
             transform.translation = target_position;
         } else {
@@ -182,7 +211,120 @@ fn sync_boat_transforms(
         };
         transform.rotation = transform
             .rotation
-            .slerp(Quat::from_rotation_y(rotation.0) * wreck_tilt, blend);
+            .slerp(buoyancy_rotation * wreck_tilt, blend);
+    }
+}
+
+fn synchronized_ocean_seconds(
+    time: &Time,
+    world_time: &Query<(Entity, &WorldTime)>,
+    sync: &mut BoatWaveClockSync,
+) -> f32 {
+    let local = time.elapsed_secs_wrapped().rem_euclid(OCEAN_LOOP_SECONDS);
+    if let Ok((entity, world_time)) = world_time.single() {
+        if sync.world_time_entity != Some(entity) {
+            let half_loop = OCEAN_LOOP_SECONDS * 0.5;
+            sync.offset = (world_time.ocean_seconds - local + half_loop)
+                .rem_euclid(OCEAN_LOOP_SECONDS)
+                - half_loop;
+            sync.world_time_entity = Some(entity);
+        }
+    }
+    (local + sync.offset).rem_euclid(OCEAN_LOOP_SECONDS)
+}
+
+fn sampled_surface_height(terrain: &WorldTerrain, point: Vec2, ocean_seconds: f32) -> f32 {
+    let base = terrain
+        .water_surface_height(point.x, point.y)
+        .or_else(|| terrain.water_level())
+        .unwrap_or(0.0);
+    let depth = base - terrain.get_height(point.x, point.y);
+    base + WATER_SURFACE_OFFSET + water_swell_height(point.x, point.y, depth, ocean_seconds)
+}
+
+fn boat_surface_pose(
+    terrain: &WorldTerrain,
+    centre: Vec3,
+    yaw: f32,
+    ocean_seconds: f32,
+) -> (f32, Quat) {
+    let yaw_rotation = Quat::from_rotation_y(yaw);
+    let forward = (yaw_rotation * Vec3::NEG_Z).xz().normalize_or_zero();
+    let right = (yaw_rotation * Vec3::X).xz().normalize_or_zero();
+    let centre_xz = centre.xz();
+    let bow = sampled_surface_height(
+        terrain,
+        centre_xz + forward * BUOYANCY_HALF_LENGTH,
+        ocean_seconds,
+    );
+    let stern = sampled_surface_height(
+        terrain,
+        centre_xz - forward * BUOYANCY_HALF_LENGTH,
+        ocean_seconds,
+    );
+    let starboard = sampled_surface_height(
+        terrain,
+        centre_xz + right * BUOYANCY_HALF_BEAM,
+        ocean_seconds,
+    );
+    let port = sampled_surface_height(
+        terrain,
+        centre_xz - right * BUOYANCY_HALF_BEAM,
+        ocean_seconds,
+    );
+    let centre_height = sampled_surface_height(terrain, centre_xz, ocean_seconds);
+
+    (
+        centre_height,
+        orientation_from_surface_samples(yaw, bow, stern, starboard, port),
+    )
+}
+
+/// Construct an authored-local (+X right, +Y up, -Z bow) orientation from
+/// four water heights. Kept pure so pitch/roll sign regressions are testable.
+fn orientation_from_surface_samples(
+    yaw: f32,
+    bow: f32,
+    stern: f32,
+    starboard: f32,
+    port: f32,
+) -> Quat {
+    let yaw_rotation = Quat::from_rotation_y(yaw);
+    let flat_forward = yaw_rotation * Vec3::NEG_Z;
+    let flat_right = yaw_rotation * Vec3::X;
+    let forward_hint =
+        (flat_forward * (BUOYANCY_HALF_LENGTH * 2.0) + Vec3::Y * (bow - stern)).normalize_or_zero();
+    let right_hint = (flat_right * (BUOYANCY_HALF_BEAM * 2.0) + Vec3::Y * (starboard - port))
+        .normalize_or_zero();
+    let up = right_hint.cross(forward_hint).normalize_or_zero();
+    let right = forward_hint.cross(up).normalize_or_zero();
+    let forward = up.cross(right).normalize_or_zero();
+
+    Quat::from_mat3(&Mat3::from_cols(right, up, -forward)).normalize()
+}
+
+/// The replicated Hero stays yaw-only and server-authoritative. Its rendered
+/// root is pinned to the smoothed buoyant hull afterward so the seated sailor
+/// cannot visibly float through the bench as the Dinghy pitches and rolls.
+fn sync_aboard_hero_visuals(
+    boats: Query<(&CommandedBy, &Transform), (With<PlayerBoat>, With<BoatVisual>)>,
+    mut heroes: Query<
+        (&CommandedBy, &mut Transform),
+        (
+            With<AboardBoat>,
+            With<crate::hero::HeroVisual>,
+            Without<PlayerBoat>,
+        ),
+    >,
+) {
+    for (owner, mut transform) in heroes.iter_mut() {
+        let Some((_, boat_transform)) =
+            boats.iter().find(|(boat_owner, _)| boat_owner.0 == owner.0)
+        else {
+            continue;
+        };
+        transform.translation = boat_transform.translation + boat_transform.rotation * HELM_LOCAL;
+        transform.rotation = boat_transform.rotation;
     }
 }
 
@@ -203,21 +345,83 @@ fn player_boat_ancestor(
 /// Discover authored nodes after the async glTF scene has instantiated.
 fn tag_boat_sail_nodes(
     mut commands: Commands,
-    named: Query<(Entity, &Name, Option<&Transform>, Option<&MorphWeights>), Added<Name>>,
+    world_time: Query<&WorldTime>,
+    cloud_seed: Query<&CloudSeed>,
+    warp: Query<&TimeWarp>,
+    mut named: Query<
+        (
+            Entity,
+            &Name,
+            Option<&mut Transform>,
+            Option<&mut MorphWeights>,
+        ),
+        Added<Name>,
+    >,
     parents: Query<&ChildOf>,
-    boats: Query<(), With<PlayerBoat>>,
+    boat_markers: Query<(), With<PlayerBoat>>,
+    boats: Query<
+        (
+            &PlayerRotation,
+            Option<&CharacterMotion>,
+            Has<WreckedVessel>,
+        ),
+        With<PlayerBoat>,
+    >,
 ) {
-    for (entity, name, transform, morph) in named.iter() {
-        let Some(boat) = player_boat_ancestor(entity, &parents, &boats) else {
+    let wind = current_wind(&world_time, &cloud_seed);
+    let time_warp = warp.iter().next().map_or(1.0, |warp| warp.0.max(1.0));
+    for (entity, name, mut transform, mut morph) in named.iter_mut() {
+        let Some(boat) = player_boat_ancestor(entity, &parents, &boat_markers) else {
             continue;
         };
         if name.as_str() == "DinghySailRig" {
+            let rest_rotation = transform
+                .as_ref()
+                .map_or(Quat::IDENTITY, |transform| transform.rotation);
+            let initial = boats
+                .get(boat)
+                .ok()
+                .and_then(|(rotation, motion, wrecked)| {
+                    if wrecked {
+                        None
+                    } else {
+                        wind.map(|wind| sail_wind_state(rotation.0, motion, time_warp, wind))
+                    }
+                });
+            if let (Some(transform), Some(initial)) = (transform.as_deref_mut(), initial) {
+                transform.rotation = Quat::from_rotation_y(initial.local_yaw) * rest_rotation;
+            }
             commands.entity(entity).insert(BoatSailRig {
                 boat,
-                rest_rotation: transform.map_or(Quat::IDENTITY, |transform| transform.rotation),
+                rest_rotation,
+                initialized: initial.is_some(),
             });
+            if initial.is_none() {
+                // Never expose the authored zero-yaw pose while the replicated
+                // clock is still arriving. The first valid wind sample below
+                // initializes and reveals it in one Update frame.
+                commands.entity(entity).insert(Visibility::Hidden);
+            }
         }
         if name.as_str() == "DinghySail" && morph.is_some() {
+            if let Some(initial) = boats
+                .get(boat)
+                .ok()
+                .and_then(|(rotation, motion, wrecked)| {
+                    if wrecked {
+                        None
+                    } else {
+                        wind.map(|wind| sail_wind_state(rotation.0, motion, time_warp, wind))
+                    }
+                })
+            {
+                if let Some(weight) = morph
+                    .as_deref_mut()
+                    .and_then(|weights| weights.weights_mut().first_mut())
+                {
+                    *weight = initial.fill;
+                }
+            }
             commands.entity(entity).insert(BoatSailMorph { boat });
         }
         if name.as_str() == "Dinghy" {
@@ -227,6 +431,7 @@ fn tag_boat_sail_nodes(
 }
 
 fn drive_boat_sails(
+    time: Res<Time>,
     world_time: Query<&WorldTime>,
     cloud_seed: Query<&CloudSeed>,
     warp: Query<&TimeWarp>,
@@ -238,23 +443,19 @@ fn drive_boat_sails(
         ),
         With<PlayerBoat>,
     >,
-    mut rigs: Query<(&BoatSailRig, &mut Transform, Option<&mut Visibility>)>,
+    mut rigs: Query<(&mut BoatSailRig, &mut Transform, Option<&mut Visibility>)>,
     mut morphs: Query<(&BoatSailMorph, &mut MorphWeights)>,
 ) {
-    let Some(clock) = world_time.iter().next() else {
+    let Some(wind) = current_wind(&world_time, &cloud_seed) else {
         return;
     };
-    let absolute_seconds = clock.day as f32 * clock.cycle_duration() + clock.seconds_in_cycle;
-    let seed_phase =
-        shared::wind::wind_seed_phase(cloud_seed.iter().next().map_or(0, |seed| seed.seed));
-    let downwind = shared::wind::wind_direction(absolute_seconds, seed_phase);
-    let (_, wind_speed) = shared::wind::wind_state(absolute_seconds, seed_phase);
     // CharacterMotion is replicated in visual/world-time metres per real
     // second. Normalize it before calculating apparent wind so a 10x or 100x
     // simulation does not visually flatten the sail or reverse it.
     let time_warp = warp.iter().next().map_or(1.0, |warp| warp.0.max(1.0));
 
-    for (rig, mut transform, visibility) in rigs.iter_mut() {
+    let turn_blend = 1.0 - (-time.delta_secs() / 0.28).exp();
+    for (mut rig, mut transform, visibility) in rigs.iter_mut() {
         let Ok((rotation, motion, wrecked)) = boats.get(rig.boat) else {
             continue;
         };
@@ -268,14 +469,14 @@ fn drive_boat_sails(
         if let Some(mut visibility) = visibility {
             *visibility = Visibility::Inherited;
         }
-        let boat_velocity = motion.map_or(Vec2::ZERO, |motion| motion.velocity.xz() / time_warp);
-        let apparent = downwind * wind_speed - boat_velocity;
-        if apparent.length_squared() <= 1.0e-4 {
-            continue;
-        }
-        let world_bearing = apparent.x.atan2(apparent.y);
-        let local_yaw = world_bearing - rotation.0;
-        transform.rotation = Quat::from_rotation_y(local_yaw) * rig.rest_rotation;
+        let state = sail_wind_state(rotation.0, motion, time_warp, wind);
+        let target = Quat::from_rotation_y(state.local_yaw) * rig.rest_rotation;
+        transform.rotation = if rig.initialized {
+            transform.rotation.slerp(target, turn_blend)
+        } else {
+            rig.initialized = true;
+            target
+        };
     }
 
     for (sail, mut weights) in morphs.iter_mut() {
@@ -288,23 +489,63 @@ fn drive_boat_sails(
             }
             continue;
         }
-        let forward = (Quat::from_rotation_y(rotation.0) * Vec3::NEG_Z)
-            .xz()
-            .normalize_or_zero();
-        let velocity = motion.map_or(Vec2::ZERO, |motion| motion.velocity.xz() / time_warp);
-        let apparent = downwind * wind_speed - velocity;
-        let apparent_speed = apparent.length();
-        let crosswind = if apparent_speed > 1.0e-4 {
-            1.0 - forward.dot(apparent / apparent_speed).abs()
-        } else {
-            0.0
-        };
-        let fill = (0.2 + apparent_speed / shared::wind::WIND_SPEED_MAX * 0.45 + crosswind * 0.35)
-            .clamp(0.0, 1.0);
+        let state = sail_wind_state(rotation.0, motion, time_warp, wind);
         if let Some(weight) = weights.weights_mut().first_mut() {
-            *weight = fill;
+            *weight = state.fill;
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct CurrentWind {
+    downwind: Vec2,
+    speed: f32,
+}
+
+#[derive(Clone, Copy)]
+struct SailWindState {
+    local_yaw: f32,
+    fill: f32,
+}
+
+fn current_wind(
+    world_time: &Query<&WorldTime>,
+    cloud_seed: &Query<&CloudSeed>,
+) -> Option<CurrentWind> {
+    let clock = world_time.iter().next()?;
+    let absolute_seconds = clock.day as f32 * clock.cycle_duration() + clock.seconds_in_cycle;
+    let seed_phase =
+        shared::wind::wind_seed_phase(cloud_seed.iter().next().map_or(0, |seed| seed.seed));
+    let downwind = shared::wind::wind_direction(absolute_seconds, seed_phase);
+    let (_, speed) = shared::wind::wind_state(absolute_seconds, seed_phase);
+    Some(CurrentWind { downwind, speed })
+}
+
+fn sail_wind_state(
+    boat_yaw: f32,
+    motion: Option<&CharacterMotion>,
+    time_warp: f32,
+    wind: CurrentWind,
+) -> SailWindState {
+    let boat_velocity = motion.map_or(Vec2::ZERO, |motion| motion.velocity.xz() / time_warp);
+    let apparent = wind.downwind * wind.speed - boat_velocity;
+    let apparent_speed = apparent.length();
+    let local_yaw = if apparent_speed > 1.0e-4 {
+        apparent.x.atan2(apparent.y) - boat_yaw
+    } else {
+        0.0
+    };
+    let forward = (Quat::from_rotation_y(boat_yaw) * Vec3::NEG_Z)
+        .xz()
+        .normalize_or_zero();
+    let crosswind = if apparent_speed > 1.0e-4 {
+        1.0 - forward.dot(apparent / apparent_speed).abs()
+    } else {
+        0.0
+    };
+    let fill = (0.2 + apparent_speed / shared::wind::WIND_SPEED_MAX * 0.45 + crosswind * 0.35)
+        .clamp(0.0, 1.0);
+    SailWindState { local_yaw, fill }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -537,7 +778,9 @@ fn sync_voyage_hint(
 mod tests {
     use std::path::Path;
 
-    use super::{smoothstep01, GAME_INTRO_AUDIO};
+    use bevy::prelude::*;
+
+    use super::{orientation_from_surface_samples, smoothstep01, GAME_INTRO_AUDIO};
 
     #[test]
     fn opening_ease_starts_and_finishes_exactly() {
@@ -553,5 +796,36 @@ mod tests {
             .join("assets")
             .join(GAME_INTRO_AUDIO);
         assert!(path.is_file(), "missing opening music: {}", path.display());
+    }
+
+    #[test]
+    fn flat_water_preserves_the_authoritative_yaw() {
+        let yaw = 0.73;
+        let pose = orientation_from_surface_samples(yaw, 4.0, 4.0, 4.0, 4.0);
+        let expected = Quat::from_rotation_y(yaw);
+
+        assert!((pose * Vec3::NEG_Z).distance(expected * Vec3::NEG_Z) < 1.0e-5);
+        assert!((pose * Vec3::Y).distance(Vec3::Y) < 1.0e-5);
+    }
+
+    #[test]
+    fn higher_bow_visually_lifts_the_authored_bow() {
+        let pose = orientation_from_surface_samples(0.0, 0.4, -0.4, 0.0, 0.0);
+        let bow = pose * Vec3::NEG_Z;
+
+        assert!(bow.y > 0.0, "higher bow should pitch upward: {bow:?}");
+        assert!(pose.is_finite());
+    }
+
+    #[test]
+    fn higher_starboard_visually_lifts_the_authored_right_side() {
+        let pose = orientation_from_surface_samples(0.0, 0.0, 0.0, 0.3, -0.3);
+        let starboard = pose * Vec3::X;
+
+        assert!(
+            starboard.y > 0.0,
+            "higher starboard should roll upward: {starboard:?}"
+        );
+        assert!(pose.is_finite());
     }
 }

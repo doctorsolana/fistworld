@@ -127,8 +127,7 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                 SettlementEconomy::default(),
                 SettlementPolicies::default(),
                 MootAdministration {
-                    market_porter: Some(name_for_porter(town_index, 0)),
-                    road_steward: Some(name_for_porter(town_index, 0)),
+                    lead_steward: Some(name_for_porter(town_index, 0)),
                     city_workers: vec![
                         name_for_porter(town_index, 0),
                         name_for_porter(town_index, 1),
@@ -311,8 +310,7 @@ fn spawn_fixture(world: &mut World, towns: usize, npcs: usize) {
                 person.insert((
                     CharacterActivity::Idle,
                     Occupation(Some("Moot Steward".to_string())),
-                    crate::world::village_roads::RoadSteward { settlement: hall },
-                    super::MarketPorter { settlement: hall },
+                    super::MootSteward { settlement: hall },
                     CivicEmployment {
                         settlement: SettlementId(town_index as u64 + 1),
                         role: CivicRole::MootSteward,

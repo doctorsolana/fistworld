@@ -117,7 +117,7 @@ pub(super) fn log_prop_density_snapshot(
         .unwrap_or((ChunkCoord::new(0, 0), 0));
 
     let mut kind_counts: Vec<(shared::props::PropKind, usize)> = by_kind.into_iter().collect();
-    kind_counts.sort_by(|a, b| b.1.cmp(&a.1));
+    kind_counts.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
     let top_kinds: Vec<String> = kind_counts
         .into_iter()
         .take(12)

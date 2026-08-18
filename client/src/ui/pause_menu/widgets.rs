@@ -234,12 +234,6 @@ pub(super) fn spawn_graphics_panel(
             );
             spawn_slider(
                 panel,
-                "3D Grass Renderer",
-                SliderControl::GroundCoverRenderer,
-                settings.ground_cover_renderer.label(),
-            );
-            spawn_slider(
-                panel,
                 "Exposure",
                 SliderControl::Exposure,
                 &format!("{:+.1} EV", settings.grade_exposure),
@@ -257,20 +251,6 @@ pub(super) fn spawn_graphics_panel(
                 &format!("{:.0}%", settings.prop_render_multiplier * 100.0),
             );
         });
-}
-
-pub(super) fn tonemapping_label(tonemapping: Tonemapping) -> &'static str {
-    match tonemapping {
-        Tonemapping::AgX => "AgX",
-        Tonemapping::AcesFitted => "ACES",
-        Tonemapping::BlenderFilmic => "Filmic",
-        Tonemapping::Reinhard => "Reinhard",
-        Tonemapping::ReinhardLuminance => "Reinhard Lum",
-        Tonemapping::TonyMcMapface => "Tony",
-        Tonemapping::SomewhatBoringDisplayTransform => "SBDT",
-        Tonemapping::KhronosPbrNeutral => "Khronos PBR",
-        Tonemapping::None => "None",
-    }
 }
 
 pub(super) fn spawn_toggle(

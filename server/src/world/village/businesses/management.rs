@@ -148,8 +148,7 @@ pub(crate) fn review_automatic_price(
         let affordability_step = sale
             .max_daily_price_change_bps
             .saturating_mul(3)
-            .max(1_500)
-            .min(3_000);
+            .clamp(1_500, 3_000);
         desired = desired.min(price_step(current, affordability_step, false));
     }
 
@@ -171,8 +170,7 @@ pub(crate) fn review_automatic_price(
             let competitive_step = sale
                 .max_daily_price_change_bps
                 .saturating_mul(4)
-                .max(1_500)
-                .min(3_000);
+                .clamp(1_500, 3_000);
             let bounded = price_step(current, competitive_step, false).max(target);
             desired = desired.min(bounded);
         }

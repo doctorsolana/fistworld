@@ -140,14 +140,6 @@ fn configure_server_fixed_schedule(app: &mut App) {
 
     app.add_systems(
         FixedUpdate,
-        (player::index::sync_player_entity_index,)
-            .chain()
-            .in_set(ServerSet::Indices)
-            .run_if(server_is_started),
-    );
-
-    app.add_systems(
-        FixedUpdate,
         persistence::autosave::update_periodic_player_save
             .in_set(ServerSet::Persistence)
             .run_if(server_is_started),

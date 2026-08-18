@@ -118,9 +118,6 @@ fn wire_common_systems(app: &mut App) {
 
 /// Gameplay wiring: top-down commander camera + world visuals.
 fn wire_game_systems(app: &mut App) {
-    // Setup systems (run once at startup - rendering only)
-    app.add_systems(Startup, (game_systems::setup_particle_assets,));
-
     // Spawn world visuals and the perf overlay when entering gameplay
     app.add_systems(
         OnEnter(GameState::Playing),
@@ -161,12 +158,6 @@ fn wire_game_systems(app: &mut App) {
     );
 
     // Replication-driven spawn/setup must NOT be gated solely to `Playing`.
-
-    // Gameplay systems (only when playing) - split into groups to avoid tuple limit
-    app.add_systems(
-        Update,
-        (game_systems::update_sand_particles,).run_if(in_state(GameState::Playing)),
-    );
 
     // Player character visuals/animation
 

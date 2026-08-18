@@ -50,10 +50,6 @@ pub struct ResolvedMapObject {
     pub scale: f32,
 }
 
-pub fn load_default_map() -> Result<LoadedMap, String> {
-    load_map(DEFAULT_MAP_ID)
-}
-
 pub fn load_map(map_id: &str) -> Result<LoadedMap, String> {
     let (map_path, map_bytes) = load_map_ron_bytes(map_id)?;
     let map_text = std::str::from_utf8(&map_bytes)

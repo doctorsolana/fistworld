@@ -11,7 +11,7 @@ pub mod scaled_target;
 pub mod settings;
 pub mod setup;
 
-pub use atmosphere::{sync_atmosphere_enabled, update_atmosphere};
+pub(crate) use atmosphere::{sync_atmosphere_enabled, update_atmosphere};
 pub use cloud_layer::{spawn_cloud_plane, update_cloud_plane, CloudLayerMaterial, CloudLayerPlane};
 pub use cloud_shadows::sync_cloud_shadow_params;
 pub use clouds::{
@@ -23,8 +23,8 @@ pub use scaled_target::sync_scene_render_target;
 pub use settings::{
     apply_graphics_settings, available_display_resolutions, best_fullscreen_video_mode,
     save_graphics_settings, sync_shadow_cascades_to_zoom, tick_display_change_confirmation,
-    DisplayMode, DisplayResolution, GraphicsSettings, GroundCoverRenderer, InputSettings,
-    PendingDisplayChange, DISPLAY_CONFIRMATION_SECONDS, LAUNCHER_RESOLUTION,
+    DisplayMode, DisplayResolution, GraphicsSettings, InputSettings, PendingDisplayChange,
+    DISPLAY_CONFIRMATION_SECONDS, LAUNCHER_RESOLUTION,
 };
 pub use setup::setup_rendering;
 

@@ -191,7 +191,7 @@ fn cloud_density(world_xz: vec2<f32>, params_a: vec4<f32>, seed_phase: f32) -> f
 // ONE storm system per map: a ~2km ragged disc around a drifting center
 // (storm.xy = center at the wind anchor, storm.z = storminess). The caller
 // extrapolates the center with the cloud drift so motion is frame-smooth.
-// Radii must match STORM_EDGE_RADIUS in clouds.rs.
+// Keep the radius literals in all three shader copies identical.
 fn storm_cell(world_xz: vec2<f32>, center: vec2<f32>, storminess: f32) -> f32 {
     if (storminess < 0.01) {
         return 0.0;

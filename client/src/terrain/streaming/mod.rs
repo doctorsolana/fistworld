@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use shared::terrain::{
     ChunkCoord, TerrainDeltaChunk, TerrainDeltaData, TerrainGenerator, WorldTerrain,
-    CHUNK_RESOLUTION, CHUNK_SIZE, WORLD_RADIUS_METERS, WORLD_SEED,
+    CHUNK_RESOLUTION, CHUNK_SIZE,
 };
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
@@ -48,6 +48,9 @@ pub struct TerrainStreamingState {
     pub material_lod_center: Option<ChunkCoord>,
     /// Last normal-strength radius applied to loaded terrain materials.
     pub material_lod_radius: i32,
+    /// A close-view hole handoff retained stale chunks that should be checked
+    /// again after the far-terrain cutout moves to the new streaming centre.
+    pub unload_pending: bool,
 }
 
 impl Default for TerrainStreamingState {
@@ -58,6 +61,7 @@ impl Default for TerrainStreamingState {
             render_distance: -1,
             material_lod_center: None,
             material_lod_radius: -1,
+            unload_pending: false,
         }
     }
 }

@@ -29,7 +29,6 @@ const MAX_SETTLEMENT_SEARCH_RADIUS: f32 = 320.0;
 #[derive(Resource, Default)]
 pub struct PermitPlanningDiagnostics {
     pub primary_site_milliseconds: Vec<f64>,
-    pub alternative_site_milliseconds: Vec<f64>,
     pub fishing_site_milliseconds: Vec<f64>,
     pub final_access_milliseconds: Vec<f64>,
 }
@@ -277,6 +276,7 @@ pub(super) fn should_try_complementary_fishing(
 /// retained company cash pays the actual civic fee, while a first-time sole
 /// founder explicitly capitalises a company before its site is approved.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
 pub fn consider_permits(
     simulation_time: crate::world::simulation_time::SimulationTime,
     world_time: Query<&WorldTime>,
@@ -1114,7 +1114,7 @@ pub fn consider_permits(
                             return None;
                         }
                         if opportunity.kind == SettlementBuildingKind::House {
-                            let personal = ((*person_id).0.wrapping_mul(31) % 11) as f32 - 5.0;
+                            let personal = (person_id.0.wrapping_mul(31) % 11) as f32 - 5.0;
                             return Some(opportunity.score + personal - holding_count as f32 * 4.0);
                         }
                         let strategy = investment_strategy(*person_id, attributes.as_ref());
@@ -2811,6 +2811,7 @@ fn fishing_water_quality(
 /// obstacle indexes and adjacency context. This public no-context wrapper is a
 /// conservative baseline used by geometry and road regression tests; it still
 /// treats completed roads as occupied infrastructure.
+#[cfg(test)]
 pub fn find_site(
     terrain: &WorldTerrain,
     hall: Vec3,
@@ -3776,6 +3777,7 @@ fn resource_plot_is_viable(
         || lumber_plot_has_reachable_tree(terrain, kind.entrance_position(candidate, rotation))
 }
 
+#[cfg(test)]
 pub(super) fn find_site_with_plan(
     terrain: &WorldTerrain,
     hall: Vec3,
@@ -4311,7 +4313,7 @@ fn find_site_with_plan_diagnostics(
             derived,
             minimum_radius_hint,
             maximum_search_rings,
-            rejections.as_deref_mut(),
+            rejections,
         );
     }
 

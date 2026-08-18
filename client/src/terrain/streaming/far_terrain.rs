@@ -49,7 +49,9 @@ pub(crate) fn ensure_far_terrain_mesh(
             FarTerrainState {
                 center_cell: IVec2::new(i32::MIN, i32::MIN),
                 view_distance: -1,
-                hole_filled: false,
+                // The material starts with a zero-sized hole. Keep the state
+                // truthful until the first complete detail square is ready.
+                hole_filled: true,
             },
             Mesh3d(mesh_handle),
             MeshMaterial3d(render_assets.far_mesh_material.clone()),
@@ -191,24 +193,32 @@ pub(crate) fn update_far_terrain_hole(
     let center_cell = IVec2::new(center_chunk.x, center_chunk.z);
 
     // Fill the hole before the chunks start their dither-out, or the fade would reveal
-    // void instead of map underneath. Also keep it filled while detail is streaming:
-    // terrain arrives asynchronously and water is built over several later frames, so
-    // cutting the full desired square immediately exposes a gray, stair-stepped void at
-    // the edge of the water. The far mesh sits 5 cm below detail and is the intended
-    // fallback; remove it only after every desired terrain chunk exists and every water
-    // chunk has either produced a mesh or been confirmed dry.
+    // void instead of map underneath. At close zoom, move an existing hole only after
+    // the complete new detail square is ready. Re-filling the whole hole while crossing
+    // every 64m chunk boundary put the coarse and detailed land surfaces on top of one
+    // another; their different tessellation then appeared to flicker as the camera moved.
+    // `update_terrain_chunks` temporarily retains only the old hole's protected chunks,
+    // so leaving the previous cutout in place cannot expose a streaming gap behind us.
     let zoom = camera_query
         .iter()
         .next()
         .and_then(|(_, controller)| controller.map(|c| c.zoom))
         .unwrap_or(0.0);
-    let detail_ready = loaded_water.as_ref().is_some_and(|water| {
-        streaming
-            .desired_order
-            .iter()
-            .all(|coord| loaded_chunks.chunks.contains(coord) && water.entries.contains_key(coord))
-    });
-    let hole_filled = zoom > crate::terrain::map_view::HOLE_FILL_ZOOM || !detail_ready;
+    let detail_ready = !streaming.desired_order.is_empty()
+        && loaded_water.as_ref().is_some_and(|water| {
+            streaming.desired_order.iter().all(|coord| {
+                loaded_chunks.chunks.contains(coord) && water.entries.contains_key(coord)
+            })
+        });
+    let hole_filled = zoom > crate::terrain::map_view::HOLE_FILL_ZOOM;
+
+    // Preserve the previous close-view hole while the leading chunk ring is
+    // arriving. On initial load (or after returning from map view) the existing
+    // state is filled, so the far mesh remains a safe fallback until detail is
+    // genuinely complete.
+    if !hole_filled && !detail_ready {
+        return;
+    }
 
     if state.center_cell == center_cell
         && state.view_distance == view_distance

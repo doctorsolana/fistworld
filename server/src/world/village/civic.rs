@@ -24,9 +24,10 @@ use shared::economy::{
 const CIVIC_UNPAID_DAYS_BEFORE_RESIGNATION: u64 = 3;
 
 pub(crate) fn filled_civic_positions(administration: &MootAdministration) -> usize {
-    let workers = administration.city_workers.len().max(usize::from(
-        administration.road_steward.is_some() || administration.market_porter.is_some(),
-    ));
+    let workers = administration
+        .city_workers
+        .len()
+        .max(usize::from(administration.lead_steward.is_some()));
     usize::from(administration.reeve.is_some()) + workers + administration.guards.len()
 }
 
@@ -297,8 +298,7 @@ pub fn run_civic_payroll(
             commands
                 .entity(worker)
                 .remove::<CivicEmployment>()
-                .remove::<crate::world::village_roads::RoadSteward>()
-                .remove::<MarketPorter>()
+                .remove::<MootSteward>()
                 .remove::<MoveTarget>()
                 .remove::<TravelRoute>()
                 .remove::<NavigationRoutePending>()
@@ -318,7 +318,7 @@ pub fn run_civic_payroll(
             .iter()
             .map(|entry| entry.arrears)
             .fold(0u64, u64::saturating_add);
-        administration.road_steward_daily_salary = FOUNDING_DAILY_WAGE;
+        administration.steward_daily_salary = FOUNDING_DAILY_WAGE;
     }
 }
 
@@ -530,7 +530,7 @@ pub fn review_civic_policies(
         }
         policy.last_review_day = day;
         let (income, spending) = account.close_review_window();
-        let payroll = civic_daily_payroll(&administration);
+        let payroll = civic_daily_payroll(administration);
         let three_day_payroll = payroll.saturating_mul(3);
         let healthy_reserve = payroll.saturating_mul(14);
         let stressed = administration.wage_arrears > 0
@@ -972,8 +972,7 @@ mod tests {
     fn duplicate_display_names_do_not_merge_civic_positions() {
         let office = MootAdministration {
             reeve: Some("Alda".into()),
-            road_steward: Some("Alda".into()),
-            market_porter: Some("Alda".into()),
+            lead_steward: Some("Alda".into()),
             city_workers: vec!["Alda".into(), "Alda".into()],
             guards: vec!["Alda".into()],
             ..default()
@@ -1002,12 +1001,14 @@ mod tests {
     fn hostile_manual_policy_values_are_clamped_at_the_authoritative_boundary() {
         let mut app = App::new();
         app.add_systems(Update, sync_civic_market_policy);
-        let mut policy = SettlementPolicies::default();
-        policy.market_fee_bps = u16::MAX;
-        policy.business_profit_tax_bps = u16::MAX;
-        policy.food_reserve_target_days = 0;
-        policy.civic_payroll_reserve_days = u8::MAX;
-        policy.business_permit_subsidy_bps = u16::MAX;
+        let policy = SettlementPolicies {
+            market_fee_bps: u16::MAX,
+            business_profit_tax_bps: u16::MAX,
+            food_reserve_target_days: 0,
+            civic_payroll_reserve_days: u8::MAX,
+            business_permit_subsidy_bps: u16::MAX,
+            ..Default::default()
+        };
         let hall = app
             .world_mut()
             .spawn((
@@ -1057,8 +1058,10 @@ mod tests {
         let mut clock = WorldTime::new_default();
         clock.day = 7;
         app.world_mut().spawn(clock);
-        let mut policy = SettlementPolicies::default();
-        policy.last_review_day = 0;
+        let policy = SettlementPolicies {
+            last_review_day: 0,
+            ..Default::default()
+        };
         let hall = app
             .world_mut()
             .spawn((
@@ -1097,9 +1100,11 @@ mod tests {
         let mut clock = WorldTime::new_default();
         clock.day = 20;
         app.world_mut().spawn(clock);
-        let mut policy = SettlementPolicies::default();
-        policy.autopilot = false;
-        policy.last_review_day = 0;
+        let policy = SettlementPolicies {
+            autopilot: false,
+            last_review_day: 0,
+            ..Default::default()
+        };
         let hall = app
             .world_mut()
             .spawn((

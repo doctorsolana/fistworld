@@ -580,7 +580,8 @@ pub fn run_tavern_routines(
                             routine.phase = TavernVisitPhase::Dining;
                             continue;
                         }
-                        debug_assert_eq!(inventory.remove(ingredient, 1), 1);
+                        let consumed = inventory.remove(ingredient, 1);
+                        debug_assert_eq!(consumed, 1);
                         company.credit(price);
                         account.record_service_sale(clock.day, price, 1);
                         service.record_meal(clock.day, ingredient, price);
@@ -783,7 +784,8 @@ pub fn run_strategic_tavern_visits(
             plan.leisure_status = PlannedLeisureStatus::CouldNotAfford;
             continue;
         }
-        debug_assert_eq!(inventory.remove(ingredient, 1), 1);
+        let consumed = inventory.remove(ingredient, 1);
+        debug_assert_eq!(consumed, 1);
         company.credit(price);
         account.record_service_sale(clock.day, price, 1);
         service.record_meal(clock.day, ingredient, price);

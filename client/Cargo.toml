@@ -15,7 +15,6 @@ dev = ["bevy/dynamic_linking"]
 [dependencies]
 bevy = { workspace = true }
 lightyear = { workspace = true }
-noise = { workspace = true }
 shared = { path = "../shared" }
 rand = "0.8"
 ron = "0.8"

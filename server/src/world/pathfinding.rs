@@ -1,43 +1,20 @@
-//! Grid A* pathfinding over the terrain heightfield and building obstacle grid.
+//! Shared server budget for bounded tactical route planning.
 //!
-//! Salvaged from the deleted NPC AI. Deliberately free of any unit/agent type:
-//! the search takes only `(&WorldTerrain, &SpatialObstacleGrid, from, to, &mut scratch)`,
-//! so it can back whatever the tactics unit sim ends up being.
-//!
-//! NOTE: this is per-agent A*. Moving hundreds of units toward a shared destination
-//! wants a flow field instead (one Dijkstra sweep from the goal, then every unit reads
-//! a direction from the grid). Keep this for single-agent queries and formation anchors.
-
-#![allow(dead_code)]
+//! Village-road routing owns the active pathfinding implementation. Keeping
+//! its CPU budget in this small module lets runtime, labs, and tests configure
+//! the same limits without retaining the superseded per-agent grid A*.
 
 use bevy::prelude::*;
-use shared::physics::ground_clearance_center;
-use shared::spatial::SpatialObstacleGrid;
-use shared::terrain::WorldTerrain;
-use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
 use std::time::Duration;
 
-const GRID_CELL_SIZE: f32 = 2.0; // meters
-const GRID_MAX_STEP: f32 = 1.2; // max height delta between neighbor cells
-
-// Hard cap per path search. One dense-village survey can cost several
-// milliseconds even with this bound, so scheduling also uses elapsed CPU time.
-const GRID_MAX_NODES: usize = 4000;
-// The time budget is the primary limiter: easy/cache-hit routes can drain a
-// burst together, while one difficult survey still ends the planner's turn.
+// A hard request cap protects a tick even when every lookup is a cheap cache
+// hit. The wall-clock budget is normally the first limit reached.
 const DEFAULT_PATHFINDING_REQUESTS_PER_TICK: usize = 16;
 const DEFAULT_PATHFINDING_MILLISECONDS_PER_TICK: f32 = 2.0;
 
 #[derive(Resource, Clone, Debug)]
 pub struct PathfindingBudgetSettings {
-    /// Hard safety ceiling. The wall-clock budget below normally stops the
-    /// planner first, but this prevents a cache-hit crowd from monopolising a
-    /// tick even when every lookup is individually cheap.
     pub max_requests_per_tick: usize,
-    /// Real CPU time available to tactical route planning in one server tick.
-    /// At least one request is always served so a single difficult route
-    /// cannot deadlock the fair round-robin queue.
     pub max_milliseconds_per_tick: f32,
 }
 
@@ -65,186 +42,4 @@ impl PathfindingBudgetSettings {
     pub fn max_duration(&self) -> Duration {
         Duration::from_secs_f32(self.max_milliseconds_per_tick / 1_000.0)
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct GridPos {
-    x: i32,
-    z: i32,
-}
-
-fn world_to_grid(p: Vec3) -> GridPos {
-    GridPos {
-        x: (p.x / GRID_CELL_SIZE).round() as i32,
-        z: (p.z / GRID_CELL_SIZE).round() as i32,
-    }
-}
-
-fn grid_to_world(terrain: &WorldTerrain, g: GridPos) -> Vec3 {
-    let x = g.x as f32 * GRID_CELL_SIZE;
-    let z = g.z as f32 * GRID_CELL_SIZE;
-    let y = terrain.get_height(x, z) + ground_clearance_center();
-    Vec3::new(x, y, z)
-}
-
-fn heuristic(a: GridPos, b: GridPos) -> f32 {
-    let dx = (a.x - b.x) as f32;
-    let dz = (a.z - b.z) as f32;
-    (dx * dx + dz * dz).sqrt()
-}
-
-#[derive(Clone, Copy, Debug)]
-struct OpenNode {
-    f_cost: i32,
-    pos: GridPos,
-}
-
-impl Eq for OpenNode {}
-impl PartialEq for OpenNode {
-    fn eq(&self, other: &Self) -> bool {
-        self.f_cost == other.f_cost && self.pos == other.pos
-    }
-}
-impl Ord for OpenNode {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Reverse for min-heap behavior.
-        other
-            .f_cost
-            .cmp(&self.f_cost)
-            .then_with(|| self.pos.x.cmp(&other.pos.x))
-            .then_with(|| self.pos.z.cmp(&other.pos.z))
-    }
-}
-impl PartialOrd for OpenNode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct PathfindingScratch {
-    open: BinaryHeap<OpenNode>,
-    came_from: HashMap<GridPos, GridPos>,
-    g_score: HashMap<GridPos, f32>,
-    height_cache: HashMap<GridPos, f32>,
-}
-
-pub fn find_path_a_star_with_scratch(
-    terrain: &WorldTerrain,
-    obstacles: &SpatialObstacleGrid,
-    start_world: Vec3,
-    goal_world: Vec3,
-    scratch: &mut PathfindingScratch,
-) -> Vec<Vec3> {
-    let start = world_to_grid(start_world);
-    let goal = world_to_grid(goal_world);
-
-    if start == goal {
-        return vec![goal_world];
-    }
-
-    scratch.open.clear();
-    scratch.came_from.clear();
-    scratch.g_score.clear();
-    scratch.height_cache.clear();
-
-    let height = |p: GridPos, terrain: &WorldTerrain, cache: &mut HashMap<GridPos, f32>| -> f32 {
-        if let Some(h) = cache.get(&p) {
-            return *h;
-        }
-        let w = grid_to_world(terrain, p);
-        let h = w.y;
-        cache.insert(p, h);
-        h
-    };
-
-    scratch.g_score.insert(start, 0.0);
-    scratch.open.push(OpenNode {
-        f_cost: (heuristic(start, goal) * 1000.0) as i32,
-        pos: start,
-    });
-
-    let neighbors = |p: GridPos| -> [GridPos; 8] {
-        [
-            GridPos { x: p.x + 1, z: p.z },
-            GridPos { x: p.x - 1, z: p.z },
-            GridPos { x: p.x, z: p.z + 1 },
-            GridPos { x: p.x, z: p.z - 1 },
-            GridPos {
-                x: p.x + 1,
-                z: p.z + 1,
-            },
-            GridPos {
-                x: p.x + 1,
-                z: p.z - 1,
-            },
-            GridPos {
-                x: p.x - 1,
-                z: p.z + 1,
-            },
-            GridPos {
-                x: p.x - 1,
-                z: p.z - 1,
-            },
-        ]
-    };
-
-    let mut expanded = 0_usize;
-    while let Some(OpenNode { pos: current, .. }) = scratch.open.pop() {
-        expanded += 1;
-        if expanded > GRID_MAX_NODES {
-            return Vec::new();
-        }
-
-        if current == goal {
-            // Reconstruct path.
-            let mut path = vec![current];
-            let mut cur = current;
-            while let Some(prev) = scratch.came_from.get(&cur).copied() {
-                path.push(prev);
-                cur = prev;
-            }
-            path.reverse();
-            return path
-                .into_iter()
-                .map(|gp| grid_to_world(terrain, gp))
-                .collect();
-        }
-
-        let current_h = height(current, terrain, &mut scratch.height_cache);
-
-        for n in neighbors(current) {
-            let n_h = height(n, terrain, &mut scratch.height_cache);
-            if (n_h - current_h).abs() > GRID_MAX_STEP {
-                continue;
-            }
-
-            let neighbor_xz = Vec2::new(n.x as f32 * GRID_CELL_SIZE, n.z as f32 * GRID_CELL_SIZE);
-            if obstacles.point_blocked(neighbor_xz) {
-                continue;
-            }
-
-            let diag = (n.x != current.x) && (n.z != current.z);
-            let step_cost = if diag { std::f32::consts::SQRT_2 } else { 1.0 };
-
-            let tentative_g = scratch
-                .g_score
-                .get(&current)
-                .copied()
-                .unwrap_or(f32::INFINITY)
-                + step_cost;
-            if tentative_g < scratch.g_score.get(&n).copied().unwrap_or(f32::INFINITY) {
-                scratch.came_from.insert(n, current);
-                scratch.g_score.insert(n, tentative_g);
-
-                let f = tentative_g + heuristic(n, goal);
-                scratch.open.push(OpenNode {
-                    f_cost: (f * 1000.0) as i32,
-                    pos: n,
-                });
-            }
-        }
-    }
-
-    Vec::new()
 }

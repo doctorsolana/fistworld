@@ -1,22 +1,13 @@
-//! Session account snapshot and legacy serializable profile data.
+//! Session account and hero snapshots.
 //!
 //! This module defines the session profile used to restore a connection's
 //! commander state. The running server retains live heroes and possessions;
-//! restarting the server deliberately starts a fresh world. The serializable
-//! layout remains available for explicit migration tooling.
+//! restarting the server deliberately starts a fresh world.
 
 use crate::player::SPAWN_POSITION;
-use serde::{Deserialize, Serialize};
-
-/// Current profile version for migration support
-pub const PROFILE_VERSION: u32 = 8;
-
 /// Compact account/commander snapshot retained for the running session.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PlayerProfile {
-    /// Profile format version for migration
-    pub version: u32,
-
     /// Player's chosen name (permanent, case-insensitive unique)
     pub player_name: String,
 
@@ -34,36 +25,23 @@ pub struct PlayerProfile {
     ///
     /// A hero is not lost by logging off: the entity stays standing in the
     /// running world and is re-adopted on reconnect. This compact copy supports
-    /// session metadata and legacy migration; live body state is authoritative.
+    /// session metadata; live body state is authoritative.
     pub hero: Option<HeroSave>,
-
-    // === Combat State ===
-
-    // === Inventory ===
-
-    // === Death State ===
 
     // === Progression ===
     /// Player's main level (starts at 0)
-    #[serde(default)]
     pub level: u32,
     /// Prestige count (starts at 0)
-    #[serde(default)]
     pub prestige: u32,
     /// Reputation (can be negative)
-    #[serde(default)]
     pub reputation: i32,
     /// Stamina attribute (scaffold)
-    #[serde(default)]
     pub stamina: u32,
     /// Intelligence attribute (scaffold)
-    #[serde(default)]
     pub intelligence: u32,
     /// Charm attribute for the embodied character.
-    #[serde(default)]
     pub charm: u32,
     /// Global banked gold accessible from bank branches
-    #[serde(default)]
     pub bank_gold: u64,
 
     // === Metadata ===
@@ -73,8 +51,8 @@ pub struct PlayerProfile {
     pub total_playtime_secs: u64,
 }
 
-/// Persisted hero body.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Compact hero body snapshot.
+#[derive(Debug, Clone, PartialEq)]
 pub struct HeroSave {
     /// Feet position [x, y, z]; Y is re-snapped to terrain on restore.
     pub position: [f32; 3],
@@ -132,15 +110,12 @@ impl PlayerProfile {
     /// Create a new player profile with default starting state
     pub fn new_player(name: String) -> Self {
         Self {
-            version: PROFILE_VERSION,
             player_name: name,
 
             // Spawn at default spawn position
             position: SPAWN_POSITION,
             rotation: 0.0,
             hero: None,
-
-            // Not dead
 
             // Progression defaults
             level: 0,

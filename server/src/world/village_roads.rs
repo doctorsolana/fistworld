@@ -28,7 +28,7 @@ pub(crate) fn road_point_key(point: Vec2) -> (i32, i32) {
 #[cfg(test)]
 use routing::{reverse_route_clears_goal_prop_exemption, RoadGraphNode};
 #[cfg(test)]
-pub use steward::staff_moot_stewards as staff_and_pay_road_stewards;
+pub use steward::staff_moot_stewards as staff_and_pay_moot_stewards;
 pub use steward::{
     audit_village_roads, ensure_moot_administrations, staff_moot_stewards, staff_public_positions,
 };
@@ -46,7 +46,7 @@ use shared::components::{
 };
 #[cfg(test)]
 use shared::economy::Wallet;
-use shared::economy::ROAD_STEWARD_DAILY_SALARY;
+use shared::economy::MOOT_STEWARD_DAILY_SALARY;
 use shared::spatial::SpatialObstacleGrid;
 use shared::terrain::{world_pos_in_bounds, ChunkCoord, WorldTerrain, CHUNK_SIZE};
 use std::cmp::Ordering;
@@ -57,8 +57,8 @@ use crate::player::hero::MoveTarget;
 use crate::world::navgrid::{NAVIGATION_SAMPLE_STEP, VILLAGER_NAV_RADIUS, VILLAGER_PROP_RADIUS};
 use crate::world::village::{
     ambient::AmbientRoutine, FarmerRoutine, FishingRoutine, HomeRoutine, HouseholdShoppingRoutine,
-    LumberjackRoutine, MarketCollectionRoutine, MootQueueTicket, PierTraversal, UnderConstruction,
-    VillagerIntent, CHOP_SECONDS,
+    LumberjackRoutine, MarketCollectionRoutine, MootQueueTicket, MootSteward, PierTraversal,
+    UnderConstruction, VillagerIntent, CHOP_SECONDS,
 };
 use crate::{
     collision::library::{DerivedColliderLibrary, StaticColliders},
@@ -336,15 +336,6 @@ pub struct RoadBuilderRoutine {
     pub settlement: Entity,
     attempt: u8,
     phase: RoadBuildPhase,
-}
-
-/// Marks the one resident holding the Moot Hall's public road position.
-///
-/// This server-only identity prevents the ordinary permit and vacancy systems
-/// from treating the steward as unemployed while they are between audits.
-#[derive(Component, Debug, Clone, Copy)]
-pub struct RoadSteward {
-    pub settlement: Entity,
 }
 
 #[derive(Component, Debug, Clone)]
@@ -2225,7 +2216,7 @@ fn polyline_clear_live_world_with_start_escape(
         let clear = crate::player::hero::navigation_segment_clear(
             segment[0],
             segment[1],
-            escaping.then_some(None).unwrap_or(buildings),
+            if escaping { None } else { buildings },
             colliders,
             derived,
         );

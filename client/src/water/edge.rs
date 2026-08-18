@@ -17,6 +17,8 @@ const EDGE_OCEAN_HALF_EXTENT: f32 = 1_152.0;
 /// keeps the main 24m/42m swells smooth while staying a single modest draw.
 const EDGE_OCEAN_SPACING: f32 = 8.0;
 
+const _: () = assert!(EDGE_OCEAN_HALF_EXTENT > WATER_FADE_END + CHUNK_SIZE * 0.5);
+
 #[derive(Component)]
 pub(super) struct OceanEdgeExtension;
 
@@ -151,11 +153,6 @@ fn build_ocean_edge_mesh() -> Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn extension_edges_are_beyond_the_shader_fade() {
-        assert!(EDGE_OCEAN_HALF_EXTENT > WATER_FADE_END + CHUNK_SIZE * 0.5);
-    }
 
     #[test]
     fn extension_grid_has_expected_compact_size() {

@@ -401,6 +401,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "every UI Button must use the shared style contract")]
     fn unstyled_button_breaks_the_development_contract() {
         let mut world = World::new();

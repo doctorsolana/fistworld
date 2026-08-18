@@ -604,7 +604,8 @@ pub fn update_settlement_economies(
                                 None,
                             );
                             if purchase.trade.units == 1 && wallet.debit(purchase.trade.pennies) {
-                                debug_assert_eq!(hall.remove(good, 1), 1);
+                                let removed = hall.remove(good, 1);
+                                debug_assert_eq!(removed, 1);
                                 business_events.record_market_purchase(
                                     meal_day,
                                     *settlement_id,
@@ -694,7 +695,8 @@ pub fn update_settlement_economies(
                                             purchase.trade.pennies,
                                         );
                                     }
-                                    debug_assert_eq!(hall.remove(good, 1), 1);
+                                    let removed = hall.remove(good, 1);
+                                    debug_assert_eq!(removed, 1);
                                     business_events.record_market_purchase(
                                         meal_day,
                                         *settlement_id,

@@ -40,9 +40,16 @@ pub const WATER_CULL_DISTANCE: f32 = 1_100.0;
 
 /// Zoom past which the far mesh stops cutting a hole under the streamed chunks.
 ///
-/// Deliberately below [`DETAIL_FADE_START`]: the far mesh must already be solid
-/// underneath before any chunk starts to dither out.
-pub const HOLE_FILL_ZOOM: f32 = 600.0;
+/// Keep this shortly below [`DETAIL_FADE_START`]: the far mesh must be solid
+/// before chunks begin dithering, but enabling it hundreds of metres earlier
+/// leaves two differently tessellated land surfaces competing at ordinary RTS
+/// zooms. The short lead-in gives the renderer several wheel steps to prepare
+/// the fallback without exposing that overlap during close play.
+pub const HOLE_FILL_ZOOM: f32 = DETAIL_FADE_START - 100.0;
+
+const _: () = assert!(WATER_CULL_DISTANCE > WATER_FADE_END);
+const _: () = assert!(HOLE_FILL_ZOOM < DETAIL_FADE_START);
+const _: () = assert!(DETAIL_FADE_START - HOLE_FILL_ZOOM <= 100.0);
 
 /// Distance fade for a streamed terrain chunk.
 ///
@@ -97,7 +104,6 @@ mod tests {
     fn water_range_culls_only_after_shader_fade_without_dithering() {
         let range = water_visibility_range();
         assert!(range.is_abrupt());
-        assert!(WATER_CULL_DISTANCE > WATER_FADE_END);
         assert_eq!(range.end_margin, WATER_CULL_DISTANCE..WATER_CULL_DISTANCE);
     }
 }

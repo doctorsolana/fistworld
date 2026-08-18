@@ -184,6 +184,24 @@ use crate::world::village_roads::{
     RoadRequest, RouteWaypoint, TravelRoute, VillageRoadGraph,
 };
 
+type PermitBusyFilter = Or<(
+    With<FarmerRoutine>,
+    With<FishingRoutine>,
+    With<LumberjackRoutine>,
+    With<QuarryRoutine>,
+    With<ProcessingRoutine>,
+    With<MarketCollectionRoutine>,
+    With<InternalDeliveryRoutine>,
+    With<TradeRouteRoutine>,
+    With<HouseholdShoppingRoutine>,
+    With<MootQueueTicket>,
+    With<MootMealRoutine>,
+    With<TavernVisitRoutine>,
+    With<TavernWorkerRoutine>,
+    With<WorkplaceDoorTransit>,
+    With<PierTraversal>,
+)>;
+
 /// Terrain and collision truth needed while choosing a plot. Keeping these
 /// related resources in one system parameter leaves room for the rest of the
 /// permit system's settlement queries within Bevy's system-parameter limit.
@@ -206,28 +224,7 @@ pub struct PermitPlanningResources<'w, 's> {
     >,
     trade_contracts: Query<'w, 's, &'static shared::components::CivicTradeContract>,
     merchant_demand: Option<Res<'w, trade_routes::RegionalMerchantDemand>>,
-    permit_busy: Query<
-        'w,
-        's,
-        (),
-        Or<(
-            With<FarmerRoutine>,
-            With<FishingRoutine>,
-            With<LumberjackRoutine>,
-            With<QuarryRoutine>,
-            With<ProcessingRoutine>,
-            With<MarketCollectionRoutine>,
-            With<InternalDeliveryRoutine>,
-            With<TradeRouteRoutine>,
-            With<HouseholdShoppingRoutine>,
-            With<MootQueueTicket>,
-            With<MootMealRoutine>,
-            With<TavernVisitRoutine>,
-            With<TavernWorkerRoutine>,
-            With<WorkplaceDoorTransit>,
-            With<PierTraversal>,
-        )>,
-    >,
+    permit_busy: Query<'w, 's, (), PermitBusyFilter>,
     portfolios: Query<
         'w,
         's,
@@ -712,10 +709,10 @@ pub(crate) struct FishingWorkProgress {
     seconds: f32,
 }
 
-/// One of the founding Moot Hall's commercial workers. A solvent Hamlet can
-/// staff two long-distance haulers between private stores and the public market.
+/// A founding public worker who collects market goods and maintains roads.
+/// A solvent Hamlet can staff two people in this combined role.
 #[derive(Component, Debug, Clone, Copy)]
-pub struct MarketPorter {
+pub struct MootSteward {
     pub(crate) settlement: Entity,
 }
 

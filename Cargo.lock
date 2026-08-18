@@ -2515,7 +2515,6 @@ dependencies = [
  "bytemuck",
  "image",
  "lightyear",
- "noise",
  "rand 0.8.5",
  "ron 0.8.1",
  "serde",
@@ -7279,9 +7278,7 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "bincode 1.3.3",
  "lightyear",
- "serde",
  "shared",
 ]
 
@@ -7325,7 +7322,6 @@ dependencies = [
  "image",
  "lightyear",
  "noise",
- "rand 0.8.5",
  "ron 0.8.1",
  "serde",
  "serde_json",

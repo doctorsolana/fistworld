@@ -9,7 +9,6 @@ use shared::terrain::WorldTerrain;
 use crate::collision;
 use crate::net;
 use crate::persistence;
-use crate::player;
 use crate::telemetry;
 
 pub(crate) fn setup_resources(app: &mut App) {
@@ -21,7 +20,6 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<crate::player::permits::PermitIdAllocator>();
     app.init_resource::<crate::world::dev::VillagerSeed>();
     app.init_resource::<net::input::ClientInputIngressStats>();
-    app.init_resource::<player::index::PlayerEntityIndex>();
     app.init_resource::<SpatialObstacleGrid>();
     app.init_resource::<crate::world::navgrid::ObstacleGridState>();
     app.init_resource::<crate::world::regions::RegionRegistry>();

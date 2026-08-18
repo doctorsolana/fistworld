@@ -44,7 +44,6 @@ pub const LIMEWASH: Color = Color::srgba(0.836, 0.812, 0.769, 0.96);
 pub const LIMEWASH_LIT: Color = Color::srgba(0.886, 0.867, 0.827, 0.97);
 
 /// A recessed well inside a plate — the strip a row of buttons sits in.
-#[allow(dead_code)]
 pub const LIMEWASH_WELL: Color = Color::srgba(0.741, 0.718, 0.678, 0.96);
 /// Denser header strip and lighter detail leaf used by ledger windows.
 pub const LIMEWASH_HEADER: Color = Color::srgba(0.780, 0.755, 0.710, 1.0);
@@ -75,9 +74,6 @@ pub const PLATE_RULE_SOFT: Color = Color::srgba(0.361, 0.345, 318.0 / 1000.0, 0.
 
 /// Iron-gall ink. All primary text.
 pub const INK: Color = Color::srgb(0.129, 0.118, 0.102);
-/// Secondary values.
-#[allow(dead_code)]
-pub const INK_SOFT: Color = Color::srgb(0.243, 0.227, 0.203);
 /// Small-caps labels, hints, keybind lines. Tuned to stay readable at 10px.
 pub const INK_MUTED: Color = Color::srgb(0.361, 0.345, 318.0 / 1000.0);
 /// Text ON a saturated or slate fill, where ink would disappear.
@@ -103,7 +99,6 @@ pub const SLATE_HOVERED: Color = Color::srgba(0.335, 318.0 / 1000.0, 0.294, 0.98
 pub const SLATE_PRESSED: Color = Color::srgba(0.196, 0.184, 0.169, 0.98);
 
 /// Danger. Madder red, reserved for destructive actions.
-#[allow(dead_code)]
 pub const ACCENT_RED: Color = Color::srgb(0.545, 0.196, 0.169);
 /// Moss-green status mark. Dark enough to retain contrast on limewash.
 pub const STATUS_GOOD: Color = Color::srgb(0.243, 0.435, 0.196);

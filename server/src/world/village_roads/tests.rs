@@ -68,21 +68,13 @@ fn one_static_prop(
         StaticColliderInstance {
             kind,
             position,
-            rotation: Quat::IDENTITY,
             scale: 1.0,
             cell,
         },
     );
     colliders.cells.insert(cell, vec![1]);
     let derived = DerivedColliderLibrary {
-        by_kind: std::collections::HashMap::from([(
-            kind,
-            DerivedCollider {
-                bounding_radius: horizontal_radius,
-                horizontal_radius,
-                hulls: Vec::new(),
-            },
-        )]),
+        by_kind: std::collections::HashMap::from([(kind, DerivedCollider { horizontal_radius })]),
     };
     (colliders, derived)
 }
@@ -358,7 +350,7 @@ fn unchanged_geometry_rejects_a_cached_failure_without_another_survey() {
             NavigationRoutePending::new(goal),
         ))
         .id();
-    let obstacle_version = 0_u64 ^ 0_u64.rotate_left(29) ^ 0x9E37_79B9_7F4A_7C15;
+    let obstacle_version = 0x9E37_79B9_7F4A_7C15;
     let backoff = NavigationRouteBackoff {
         goal,
         failures: 1,
@@ -1793,14 +1785,14 @@ fn detached_and_unfinished_roads_are_not_public_network_anchors() {
 }
 
 #[test]
-fn road_steward_audits_repairs_and_is_paid_from_the_treasury() {
+fn moot_steward_audits_repairs_and_is_paid_from_the_treasury() {
     let mut app = road_test_app();
     app.add_systems(
         Update,
         (
             crate::world::village::ensure_civic_accounts,
             ensure_moot_administrations,
-            staff_and_pay_road_stewards,
+            staff_and_pay_moot_stewards,
             crate::world::village::run_civic_payroll,
             audit_village_roads,
         )
@@ -1848,7 +1840,7 @@ fn road_steward_audits_repairs_and_is_paid_from_the_treasury() {
     app.update();
 
     let administration = app.world().get::<MootAdministration>(settlement).unwrap();
-    assert_eq!(administration.road_steward.as_deref(), Some("Alda"));
+    assert_eq!(administration.lead_steward.as_deref(), Some("Alda"));
     assert_eq!(administration.roadless_buildings, 1);
     assert_eq!(administration.disconnected_buildings, 0);
     let request = app.world().get::<RoadRequest>(house).unwrap();
@@ -1869,7 +1861,7 @@ fn road_steward_audits_repairs_and_is_paid_from_the_treasury() {
         app.world()
             .get::<MootAdministration>(settlement)
             .unwrap()
-            .road_steward
+            .lead_steward
             .as_deref(),
         Some("Brina")
     );
@@ -1931,17 +1923,12 @@ fn a_second_moot_steward_waits_for_a_real_collection_backlog() {
 
     let first_staffed = {
         let world = app.world_mut();
-        let mut stewards = world.query::<(
-            &shared::components::CivicEmployment,
-            Option<&RoadSteward>,
-            Option<&crate::world::village::MarketPorter>,
-        )>();
+        let mut stewards =
+            world.query::<(&shared::components::CivicEmployment, Option<&MootSteward>)>();
         stewards
             .iter(world)
-            .filter(|(job, road, porter)| {
-                job.role == shared::components::CivicRole::MootSteward
-                    && road.is_some()
-                    && porter.is_some()
+            .filter(|(job, steward)| {
+                job.role == shared::components::CivicRole::MootSteward && steward.is_some()
             })
             .count()
     };
@@ -1975,17 +1962,13 @@ fn a_second_moot_steward_waits_for_a_real_collection_backlog() {
     ));
     app.update();
 
-    let mut stewards = app.world_mut().query::<(
-        &shared::components::CivicEmployment,
-        Option<&RoadSteward>,
-        Option<&crate::world::village::MarketPorter>,
-    )>();
+    let mut stewards = app
+        .world_mut()
+        .query::<(&shared::components::CivicEmployment, Option<&MootSteward>)>();
     let staffed = stewards
         .iter(app.world())
-        .filter(|(job, road, porter)| {
-            job.role == shared::components::CivicRole::MootSteward
-                && road.is_some()
-                && porter.is_some()
+        .filter(|(job, steward)| {
+            job.role == shared::components::CivicRole::MootSteward && steward.is_some()
         })
         .count();
     assert_eq!(staffed, 2);
@@ -1995,13 +1978,13 @@ fn a_second_moot_steward_waits_for_a_real_collection_backlog() {
 }
 
 #[test]
-fn strategic_road_steward_audits_offscreen_and_wakes_for_repairs() {
+fn strategic_moot_steward_audits_offscreen_and_wakes_for_repairs() {
     let mut app = road_test_app();
     app.add_systems(
         Update,
         (
             ensure_moot_administrations,
-            staff_and_pay_road_stewards,
+            staff_and_pay_moot_stewards,
             audit_village_roads,
         )
             .chain(),
@@ -2085,7 +2068,7 @@ fn steward_does_not_mistake_a_neighbours_road_for_the_buildings_connector() {
         Update,
         (
             ensure_moot_administrations,
-            staff_and_pay_road_stewards,
+            staff_and_pay_moot_stewards,
             audit_village_roads,
         )
             .chain(),
@@ -2172,13 +2155,13 @@ fn steward_does_not_mistake_a_neighbours_road_for_the_buildings_connector() {
 }
 
 #[test]
-fn road_steward_reclaims_an_abandoned_unfinished_connector() {
+fn moot_steward_reclaims_an_abandoned_unfinished_connector() {
     let mut app = road_test_app();
     app.add_systems(
         Update,
         (
             ensure_moot_administrations,
-            staff_and_pay_road_stewards,
+            staff_and_pay_moot_stewards,
             audit_village_roads,
         )
             .chain(),
@@ -2252,13 +2235,13 @@ fn road_steward_reclaims_an_abandoned_unfinished_connector() {
 }
 
 #[test]
-fn road_steward_keeps_one_oldest_repair_request_while_off_duty() {
+fn moot_steward_keeps_one_oldest_repair_request_while_off_duty() {
     let mut app = road_test_app();
     app.add_systems(
         Update,
         (
             ensure_moot_administrations,
-            staff_and_pay_road_stewards,
+            staff_and_pay_moot_stewards,
             audit_village_roads,
         )
             .chain(),
@@ -2364,7 +2347,7 @@ fn inactive_private_road_request_becomes_backlog_without_dual_ownership() {
         Update,
         (
             ensure_moot_administrations,
-            staff_and_pay_road_stewards,
+            staff_and_pay_moot_stewards,
             audit_village_roads,
         )
             .chain(),
@@ -2466,13 +2449,13 @@ fn inactive_private_road_request_becomes_backlog_without_dual_ownership() {
 }
 
 #[test]
-fn road_steward_reclaims_a_live_connector_that_makes_no_daylight_progress() {
+fn moot_steward_reclaims_a_live_connector_that_makes_no_daylight_progress() {
     let mut app = road_test_app();
     app.add_systems(
         Update,
         (
             ensure_moot_administrations,
-            staff_and_pay_road_stewards,
+            staff_and_pay_moot_stewards,
             audit_village_roads,
         )
             .chain(),
@@ -2634,7 +2617,7 @@ fn active_road_builder_is_not_hired_for_a_production_job() {
 }
 
 #[test]
-fn road_steward_cannot_also_be_hired_as_a_farmer() {
+fn moot_steward_cannot_also_be_hired_as_a_farmer() {
     let mut app = road_test_app();
     app.add_systems(Update, crate::world::village::fill_vacancies);
     let settlement = app
@@ -2647,7 +2630,7 @@ fn road_steward_cannot_also_be_hired_as_a_farmer() {
                 treasury: 0,
             },
             MootAdministration {
-                road_steward: Some("Alda".into()),
+                lead_steward: Some("Alda".into()),
                 ..default()
             },
         ))
@@ -2658,9 +2641,9 @@ fn road_steward_cannot_also_be_hired_as_a_farmer() {
             CharacterName("Alda".into()),
             VillagerIntent::Resident { settlement },
             PlayerPosition(Vec3::ZERO),
-            Occupation(Some("Road Steward".into())),
+            Occupation(Some("Moot Steward".into())),
             WorkStatus::Employed,
-            RoadSteward { settlement },
+            MootSteward { settlement },
         ))
         .id();
     let farm = app
@@ -2689,7 +2672,7 @@ fn road_steward_cannot_also_be_hired_as_a_farmer() {
         .is_empty());
     assert_eq!(
         app.world().get::<Occupation>(steward).unwrap().0.as_deref(),
-        Some("Road Steward")
+        Some("Moot Steward")
     );
     assert_eq!(
         *app.world().get::<WorkStatus>(steward).unwrap(),
@@ -2698,13 +2681,13 @@ fn road_steward_cannot_also_be_hired_as_a_farmer() {
 }
 
 #[test]
-fn road_steward_reclaims_a_stale_request_from_a_builder_with_a_new_permit() {
+fn moot_steward_reclaims_a_stale_request_from_a_builder_with_a_new_permit() {
     let mut app = road_test_app();
     app.add_systems(
         Update,
         (
             ensure_moot_administrations,
-            staff_and_pay_road_stewards,
+            staff_and_pay_moot_stewards,
             audit_village_roads,
         )
             .chain(),
@@ -2776,13 +2759,13 @@ fn road_steward_reclaims_a_stale_request_from_a_builder_with_a_new_permit() {
 }
 
 #[test]
-fn road_steward_reclaims_a_connector_from_a_privately_employed_owner() {
+fn moot_steward_reclaims_a_connector_from_a_privately_employed_owner() {
     let mut app = road_test_app();
     app.add_systems(
         Update,
         (
             ensure_moot_administrations,
-            staff_and_pay_road_stewards,
+            staff_and_pay_moot_stewards,
             audit_village_roads,
         )
             .chain(),

@@ -390,7 +390,6 @@ pub(crate) fn build_far_terrain_mesh(
 
             let height = terrain.get_height(world_x, world_z);
             let normal = terrain.get_normal(world_x, world_z);
-            let biome = terrain.get_biome(world_x, world_z);
             let water_level = terrain.generator.loaded_map().heightmap.water_level;
             let is_ocean = matches!(water_level, Some(level) if height <= level);
 

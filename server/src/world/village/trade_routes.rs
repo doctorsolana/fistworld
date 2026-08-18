@@ -1733,7 +1733,7 @@ pub fn manage_company_trade_routes(
             .copied()
             .filter(|warehouse| warehouse.can_operate && warehouse.settlement == origin_id)
             .filter(|warehouse| {
-                porters.iter().any(|(_, _, porter, _, ..)| {
+                porters.iter().any(|(_, _, porter, ..)| {
                     porter.company == warehouse.company && porter.storage_hall == warehouse.id
                 })
             })

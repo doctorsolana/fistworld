@@ -17,6 +17,3 @@ pub const WORLD_RADIUS_METERS: f32 = WORLD_RADIUS_CHUNKS as f32 * CHUNK_SIZE;
 
 /// Default sea level used by existing water visuals.
 pub const SEA_LEVEL: f32 = 0.0;
-
-/// View distance in chunks (64m chunks, 6 chunks = 384m view distance).
-pub const VIEW_DISTANCE: i32 = 6;

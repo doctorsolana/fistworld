@@ -15,10 +15,9 @@ use actions::{
 };
 use animation::animate_menu_transition;
 use layout::{despawn_pause_menu, spawn_pause_menu};
-use widgets::{spawn_button, spawn_controls_panel, spawn_graphics_panel, tonemapping_label};
+use widgets::{spawn_button, spawn_controls_panel, spawn_graphics_panel};
 
 use bevy::app::AppExit;
-use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 use bevy::window::{CursorOptions, Monitor, PrimaryMonitor, PrimaryWindow};
 use lightyear::prelude::client::*;
@@ -134,14 +133,10 @@ enum PauseButton {
 #[derive(Component, Clone, Copy, Debug)]
 enum GraphicsToggle {
     Bloom,
-    Ssao,
     Shadows,
     Atmosphere,
     Clouds,
-    FarTerrain,
-    Props,
     Vsync,
-    FoliageCutout,
 }
 
 /// Slider controls (for view distance and prop distance)
@@ -151,12 +146,9 @@ enum SliderControl {
     Resolution,
     RenderScale,
     ShadowQuality,
-    GroundCoverRenderer,
-    Tonemapping,
     Exposure,
     ViewDistance,
     PropDistance,
-    LightingBoost,
 }
 
 /// Marker for toggle button text (so we can update it)

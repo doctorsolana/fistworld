@@ -49,9 +49,11 @@ const DINGHY_SCENE_PATH: &str = "game_assets/vehicles/boats/Dinghy.glb#Scene0";
 
 The Dinghy intentionally has no `PropKind` or static collider-manifest entry. Runtime spawns it as a
 replicated `PlayerBoat + Vessel`, resolves the named helm/sail nodes, rotates `DinghySailRig`, and
-drives the `wind_fill` morph without re-exporting the art. Water navigation, hull speed and wreck
-state live outside the building/prop pipeline. See `docs/PLAYER-START-AND-VESSELS.md` for the
-executable mechanics contract.
+drives the `wind_fill` morph without re-exporting the art. The client samples the same deterministic
+broad swell as the water shader at the hull centre, bow, stern, port and starboard points, then
+applies visual height, pitch and roll to the hull and seated Hero. Water navigation, hull speed and
+wreck state remain server-authoritative and outside the building/prop pipeline. See
+`docs/PLAYER-START-AND-VESSELS.md` for the executable mechanics contract.
 
 ## Contract
 
@@ -60,19 +62,19 @@ executable mechanics contract.
 - **Waterline:** root origin is footprint-centred at `SEA_LEVEL = 0`; the hull has 0.42 m of real
   draft below it.  Do not raise the model to put its keel on zero.
 - **Facing:** bow faces Blender `+Y`, exported glTF/Bevy `-Z`; right is `+X`, left is `-X`.
-- **Geometry:** 712 editable Blender vertices and 1,368 triangles across five meshes.  The flat
-  shading and per-face vertex colours produce 2,746 exported position vertices in glTF, where a
+- **Geometry:** 732 editable Blender vertices and 1,404 triangles across five meshes.  The flat
+  shading and per-face vertex colours produce 2,806 exported position vertices in glTF, where a
   vertex must split whenever its normal or colour differs.  There is no skin and no animation.
 - **Material:** two double-sided vertex-colour materials (wood and cloth), no textures and no KHR
   extensions.  Double-sided cloth is required; the hull also remains safe at grazing wave angles.
-  The cost is negligible at 1,368 triangles.  The
+  The cost is negligible at 1,404 triangles.  The
   preview water/foam/lights/camera remain in the `.blend` and do not ship.
 - **Collider:** none authored.  A moving boat should use a simple runtime hull/footprint rather than
   the static building collider bake.
 
 ```text
 Dinghy                    empty; spawn/root node at the waterline
-├── DinghyHull            hollow clinker hull, floor, thwarts, ribs and rope
+├── DinghyHull            hollow clinker hull, tapered dry sole, floorboards, thwarts, ribs and rope
 ├── DinghyMast            fixed mast and stepped collar
 ├── DinghySailRig         empty; rotate around Z in Blender / Y in glTF for wind direction
 │   ├── DinghyBoom        rigid boom
@@ -93,7 +95,7 @@ and drive its root from a named empty in the boat hierarchy:
 - `Anchor_Helm` is the seated root contact plane on top of the aft thwart.  Its local rotation is
   identity, so the character faces the same forward direction as the boat.  Parent/synchronise the
   visual root to this transform and play `sit_idle` while underway.
-- `Anchor_Occupant` is a standing root on the centre floorboards.  It is useful while boarding,
+- `Anchor_Occupant` is a standing root on the raised centre floorboards.  It is useful while boarding,
   docked or idling, but should not be the sailing position because the boom uses this working space.
 - `Anchor_Board.L` and `.R` are safe waterline entry/exit targets.  On disembark, move to the chosen
   side anchor before restoring ordinary locomotion and collision.
@@ -114,7 +116,10 @@ These are independent and procedural; no baked clip or cloth simulation is neede
    intermediate value remains attached to the mast, boom and leech rope.
 
 The exported GLB defaults to `wind_fill = 0` and zero rig yaw.  The studio `.blend` deliberately
-opens at fill `0.72` and yaw `-22°` so the cloth volume is immediately inspectable.
+opens at fill `0.72` and yaw `-22°` so the cloth volume is immediately inspectable. Runtime computes
+the first apparent-wind pose before revealing the asynchronous rig, then smoothly blends later
+changes; the zero-yaw export pose is therefore only a deterministic asset default, not a visible
+startup frame.
 
 ## Verification
 

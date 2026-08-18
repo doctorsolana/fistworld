@@ -217,8 +217,6 @@ pub(super) fn cloud_wind_state(abs_seconds: f32, seed_phase: f32) -> (Vec2, f32)
 /// How much slower THE storm system drifts than the clouds streaming through
 /// it. Must match the extrapolation factor in the shaders' storm callers.
 pub(super) const STORM_DRIFT_FACTOR: f32 = 0.55;
-/// Outer radius of the storm disc (m). Must match `storm_cell` in the shaders.
-pub(super) const STORM_EDGE_RADIUS: f32 = 1300.0;
 /// The storm center is reflected inside +/- this fraction of the half extent,
 /// so a storm is ALWAYS somewhere on the map — the drift is slow (~1.7 m/s),
 /// and a wrapped-off-map storm would leave FORCE STORM showing nothing for
@@ -237,7 +235,7 @@ pub(super) fn storm_center(seed_phase: f32, abs_seconds: f32, half_extent: f32) 
     let (wind_offset, _) = cloud_wind_state(abs_seconds, seed_phase);
     // Float-only spawn hash: derived from the same seed phase the shaders
     // already carry, so no extra plumbing.
-    let h = |k: f32| ((seed_phase * k).sin() * 43758.5453).fract();
+    let h = |k: f32| ((seed_phase * k).sin() * 43_758.547).fract();
     let spawn = Vec2::new(
         (h(12.9898) - 0.5) * 1.6 * half_extent,
         (h(78.233) - 0.5) * 1.6 * half_extent,

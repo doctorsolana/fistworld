@@ -5,7 +5,7 @@ use shared::components::{
     CharacterAttributes, Health, Hero, HeroOutfit, Player, PlayerPosition, PlayerProgression,
     PlayerRotation,
 };
-use shared::player_profile::{PlayerProfile, PROFILE_VERSION};
+use shared::player_profile::PlayerProfile;
 
 use crate::persistence::profiles::PlayerProfiles;
 
@@ -56,7 +56,6 @@ pub fn update_periodic_player_save(
         let attributes = hero_snapshot.map(|(_, _, _, _, attributes, _)| *attributes);
 
         let profile = PlayerProfile {
-            version: PROFILE_VERSION,
             hero: hero_state,
             player_name: profiles
                 .profiles

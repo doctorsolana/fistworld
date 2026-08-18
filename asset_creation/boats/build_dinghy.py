@@ -388,10 +388,52 @@ for i in range(3):
     face(hull_bm, hull_col,
          (bow_bottom[i], bow_bottom[(i + 1) % 3], bow_top[(i + 1) % 3], bow_top[i]), C_PLANK)
 
-# Three longitudinal floorboards leave dry-looking footing and a clear standing space for the player.
+# A shallow, tapered false sole hides the animated water surface through the open cockpit without
+# turning the dinghy into a sealed bathtub.  Runtime follows the broad wave plane, so this modest
+# 7.5 cm clearance only has to cover the residual curve between buoyancy samples.  Keeping the sole
+# inside the hull mesh also preserves the twelve-node runtime contract and one shared wood draw.
+sole_stations = (-1.60, -0.82, 0.0, 0.78, 1.55)
+sole_top = 0.075
+sole_bottom = 0.035
+
+
+def sole_half_width(y):
+    section = section_at(y)
+    _y, gunwale_x, gunwale_z, chine_x, chine_z, _keel_z = section
+    # Match where the sloping inner plank actually crosses the top of the sole.  A width based only
+    # on the chine leaves a thin open strip farther out at this height, which the live water shader
+    # can reveal as a blue seam even though the centre of the cockpit is dry.
+    inner_high_z = gunwale_z - 0.018
+    inner_low_z = chine_z - 0.018
+    t = max(0.0, min(1.0, (inner_high_z - sole_top) / (inner_high_z - inner_low_z)))
+    wall_at_section = min(wall, gunwale_x * 0.45)
+    inner_x = gunwale_x + (chine_x - gunwale_x) * t - wall_at_section
+    return max(0.24, inner_x - 0.012)
+
+
+for a, b in zip(sole_stations[:-1], sole_stations[1:]):
+    half_a = sole_half_width(a)
+    half_b = sole_half_width(b)
+    top = ((-half_a, a, sole_top), (half_a, a, sole_top),
+           (half_b, b, sole_top), (-half_b, b, sole_top))
+    bottom = tuple((x, y, sole_bottom) for x, y, _ in top)
+    face(hull_bm, hull_col, top, shade(C_INSIDE, 0.88))
+    face(hull_bm, hull_col, reversed(bottom), shade(C_INSIDE, 0.68))
+    face(hull_bm, hull_col,
+         (bottom[0], bottom[3], top[3], top[0]), shade(C_INSIDE, 0.74))
+    face(hull_bm, hull_col,
+         (bottom[1], top[1], top[2], bottom[2]), shade(C_INSIDE, 0.78))
+for y in (sole_stations[0], sole_stations[-1]):
+    half = sole_half_width(y)
+    face(hull_bm, hull_col,
+         ((-half, y, sole_bottom), (half, y, sole_bottom),
+          (half, y, sole_top), (-half, y, sole_top)), shade(C_INSIDE, 0.76))
+
+# Three longitudinal floorboards leave dry-looking footing and a clear standing space for the
+# player. Their lower faces meet the sole, preventing a bright water seam between the pieces.
 for i, x in enumerate((-0.29, 0.0, 0.29)):
     colour = shade(C_PLANK, 0.88 + i * 0.08)
-    box(hull_bm, hull_col, x - 0.11, x + 0.11, -1.40, 1.30, -0.065, 0.005,
+    box(hull_bm, hull_col, x - 0.11, x + 0.11, -1.40, 1.30, sole_top, 0.115,
         shade(colour, 0.80), top_rgb=colour)
 
 # Two thwarts; the centre stays open for the player to stand and work the sailing rig.
@@ -545,7 +587,7 @@ sail, wind_fill = build_sail()
 
 # Runtime anchors.  Left is -X for an asset facing +Y in Blender / -Z in glTF.
 for name, location in (
-    ("Anchor_Occupant", (0.0, 0.0, 0.025)),
+    ("Anchor_Occupant", (0.0, 0.0, 0.115)),
     ("Anchor_Helm", (0.0, -1.24, 0.35)),
     ("Anchor_Board.L", (-1.02, -0.35, 0.02)),
     ("Anchor_Board.R", (1.02, -0.35, 0.02)),

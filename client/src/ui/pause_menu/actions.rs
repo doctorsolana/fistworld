@@ -102,10 +102,6 @@ pub(super) fn handle_graphics_toggles(
                     settings.bloom_enabled = !settings.bloom_enabled;
                     settings.bloom_enabled
                 }
-                GraphicsToggle::Ssao => {
-                    settings.ssao_enabled = !settings.ssao_enabled;
-                    settings.ssao_enabled
-                }
                 GraphicsToggle::Shadows => {
                     settings.shadows_enabled = !settings.shadows_enabled;
                     settings.shadows_enabled
@@ -118,21 +114,9 @@ pub(super) fn handle_graphics_toggles(
                     settings.clouds_enabled = !settings.clouds_enabled;
                     settings.clouds_enabled
                 }
-                GraphicsToggle::FarTerrain => {
-                    settings.far_terrain_enabled = !settings.far_terrain_enabled;
-                    settings.far_terrain_enabled
-                }
-                GraphicsToggle::Props => {
-                    settings.props_enabled = !settings.props_enabled;
-                    settings.props_enabled
-                }
                 GraphicsToggle::Vsync => {
                     settings.vsync_enabled = !settings.vsync_enabled;
                     settings.vsync_enabled
-                }
-                GraphicsToggle::FoliageCutout => {
-                    settings.foliage_cutout_enabled = !settings.foliage_cutout_enabled;
-                    settings.foliage_cutout_enabled
                 }
             };
 
@@ -289,49 +273,6 @@ pub(super) fn handle_slider_steps(
                         }
                     }
                 }
-                SliderControl::GroundCoverRenderer => {
-                    let new_val = if step.delta > 0 {
-                        settings.ground_cover_renderer.next()
-                    } else {
-                        settings.ground_cover_renderer.prev()
-                    };
-                    if new_val != settings.ground_cover_renderer {
-                        settings.ground_cover_renderer = new_val;
-                        info!("3D grass renderer = {}", new_val.label());
-                        for (text_control, mut text) in slider_texts.iter_mut() {
-                            if matches!(text_control.0, SliderControl::GroundCoverRenderer) {
-                                text.0 = new_val.label().to_string();
-                            }
-                        }
-                    }
-                }
-                SliderControl::Tonemapping => {
-                    let options = [
-                        Tonemapping::AgX,
-                        Tonemapping::AcesFitted,
-                        Tonemapping::BlenderFilmic,
-                    ];
-                    let current_idx = options
-                        .iter()
-                        .position(|&m| m == settings.tonemapping)
-                        .unwrap_or(0);
-                    let new_idx = if step.delta > 0 {
-                        (current_idx + 1) % options.len()
-                    } else {
-                        (current_idx + options.len() - 1) % options.len()
-                    };
-                    let new_val = options[new_idx];
-                    if new_val != settings.tonemapping {
-                        settings.tonemapping = new_val;
-                        info!("Tone mapping = {:?}", new_val);
-
-                        for (text_control, mut text) in slider_texts.iter_mut() {
-                            if matches!(text_control.0, SliderControl::Tonemapping) {
-                                text.0 = tonemapping_label(new_val).to_string();
-                            }
-                        }
-                    }
-                }
                 SliderControl::Exposure => {
                     // Color grading exposure: -1.0..2.0 in 0.1 steps
                     let steps: Vec<f32> = (-10..=20).map(|i| i as f32 * 0.1).collect();
@@ -398,33 +339,6 @@ pub(super) fn handle_slider_steps(
                         // Update text
                         for (text_control, mut text) in slider_texts.iter_mut() {
                             if matches!(text_control.0, SliderControl::PropDistance) {
-                                text.0 = format!("{:.0}%", new_val * 100.0);
-                            }
-                        }
-                    }
-                }
-                SliderControl::LightingBoost => {
-                    // Lighting boost: 50%-400% in 10% steps
-                    let steps: Vec<f32> = (5..=40).map(|i| i as f32 * 0.1).collect();
-                    let current_idx = steps
-                        .iter()
-                        .position(|&x| (x - settings.lighting_boost).abs() < 0.05)
-                        .unwrap_or(5); // Default to 1.0 (index 5) if not found
-
-                    let new_idx = if step.delta > 0 {
-                        (current_idx + 1).min(steps.len() - 1)
-                    } else {
-                        current_idx.saturating_sub(1)
-                    };
-
-                    let new_val = steps[new_idx];
-                    if (new_val - settings.lighting_boost).abs() > 0.01 {
-                        settings.lighting_boost = new_val;
-                        info!("Lighting boost = {:.0}%", new_val * 100.0);
-
-                        // Update text
-                        for (text_control, mut text) in slider_texts.iter_mut() {
-                            if matches!(text_control.0, SliderControl::LightingBoost) {
                                 text.0 = format!("{:.0}%", new_val * 100.0);
                             }
                         }

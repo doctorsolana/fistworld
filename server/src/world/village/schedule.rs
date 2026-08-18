@@ -195,8 +195,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                     .in_set(VillageEconomySet::SettlementAccounts),
                 super::consider_permits.in_set(VillageEconomySet::Permits),
             )
-                .chain()
-                .in_set(VillageCoreSet::EconomyPlanning),
+                .chain(),
             (
                 (
                     super::advance_moot_service_queues,
@@ -225,8 +224,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 )
                     .chain()
                     .in_set(VillageConstructionSet::Employment),
-            )
-                .in_set(VillageCoreSet::Construction),
+            ),
             (
                 super::sync_porter_cargo_capacity,
                 super::refresh_character_day_plans,
@@ -294,8 +292,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 .chain()
                 .in_set(VillageCoreSet::Directory),
         )
-            .chain()
-            .in_set(VillageSimulationSet::Core),
+            .chain(),
     );
 
     app.add_systems(

@@ -203,6 +203,9 @@ pub(super) fn selectable_base(
 }
 
 #[cfg(test)]
+// The focused geometry/picking tests sit beside the helpers they exercise;
+// the large ECS click system follows as a separate section of this module.
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use bevy::camera::{PerspectiveProjection, Projection, RenderTargetInfo, Viewport};
     use bevy::ecs::system::RunSystemOnce;

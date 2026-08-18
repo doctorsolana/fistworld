@@ -330,24 +330,6 @@ impl BuildingType {
     }
 }
 
-fn multistory_def(
-    building_type: BuildingType,
-    display_name: &'static str,
-    footprint: Vec2,
-    height: f32,
-) -> BuildingDef {
-    BuildingDef {
-        building_type,
-        display_name,
-        footprint,
-        footprint_center: Vec2::ZERO,
-        height,
-        flatten_radius: 1.5,
-        color: Color::srgb(0.58, 0.56, 0.53),
-        model_path: building_type.scene_path(),
-    }
-}
-
 /// Definition of a building's properties.
 #[derive(Debug, Clone)]
 pub struct BuildingDef {

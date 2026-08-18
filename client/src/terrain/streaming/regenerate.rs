@@ -16,10 +16,6 @@ pub(crate) fn regenerate_dirty_chunks(
     chunk_query: Query<(Entity, &TerrainChunk, &Mesh3d)>,
     debug_perf: Res<DebugPerfSettings>,
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<TerrainSplatMaterial>>,
-    mut images: ResMut<Assets<Image>>,
-    mut paint_state: ResMut<TerrainPaintState>,
     mut tasks: ResMut<TerrainChunkTasks>,
     mut perf: ResMut<PerfHitchStats>,
 ) {

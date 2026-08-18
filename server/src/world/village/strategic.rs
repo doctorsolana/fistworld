@@ -69,10 +69,10 @@ impl StrategicTravel {
     }
 
     fn from_tactical(target: Vec3, route: Option<&TravelRoute>, last_world_seconds: f64) -> Self {
-        let mut waypoints = route
+        let mut waypoints: Vec<RouteWaypoint> = route
             .filter(|route| route.goal.distance_squared(target) <= 0.01)
             .map(|route| route.waypoints.iter().skip(route.next).copied().collect())
-            .unwrap_or_else(Vec::new);
+            .unwrap_or_default();
         if waypoints.last().is_none_or(|waypoint: &RouteWaypoint| {
             waypoint.position.distance_squared(target) > 0.01
         }) {
@@ -213,12 +213,8 @@ pub fn advance_strategic_company_deliveries(
     let strategic_porters: HashSet<SettlementId> = civic_workers
         .iter()
         .filter_map(|(employment, strategic)| {
-            (strategic.is_some()
-                && matches!(
-                    employment.role,
-                    CivicRole::MootSteward | CivicRole::MarketPorter
-                ))
-            .then_some(employment.settlement)
+            (strategic.is_some() && employment.role == CivicRole::MootSteward)
+                .then_some(employment.settlement)
         })
         .collect();
     let strategic_private_porters: HashSet<(SettlementId, shared::components::CompanyId)> =
@@ -998,11 +994,8 @@ pub fn advance_strategic_villages(
     let strategic_porters: HashSet<SettlementId> = civic_workers
         .iter()
         .filter_map(|(employment, strategic)| {
-            (matches!(
-                employment.role,
-                CivicRole::MootSteward | CivicRole::MarketPorter
-            ) && strategic.is_some())
-            .then_some(employment.settlement)
+            (employment.role == CivicRole::MootSteward && strategic.is_some())
+                .then_some(employment.settlement)
         })
         .collect();
     let strategic_private_porters: HashSet<(SettlementId, shared::components::CompanyId)> =
@@ -1780,7 +1773,7 @@ mod tests {
                 treasury: 0,
             },
             MootAdministration {
-                market_porter: Some("Porter".into()),
+                lead_steward: Some("Porter".into()),
                 ..default()
             },
             GoodsInventory::new(shared::economy::capacity::HALL),
@@ -2017,7 +2010,7 @@ mod tests {
     }
 
     #[test]
-    fn abstract_worker_self_hauls_until_the_market_porter_is_strategic() {
+    fn abstract_worker_self_hauls_until_the_moot_steward_is_strategic() {
         let mut app = App::new();
         app.init_resource::<StrategicStep>();
         app.init_resource::<StrategicProductionProgress>();
@@ -2038,7 +2031,7 @@ mod tests {
                     treasury: 0,
                 },
                 MootAdministration {
-                    market_porter: Some("Porter".into()),
+                    lead_steward: Some("Porter".into()),
                     ..default()
                 },
                 GoodsInventory::new(shared::economy::capacity::HALL),

@@ -16,7 +16,6 @@ pub mod region;
 pub mod rng;
 pub mod rotation;
 pub mod spatial;
-pub mod structures;
 pub mod terrain;
 pub mod water;
 pub mod wind;

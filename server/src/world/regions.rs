@@ -31,7 +31,6 @@ const INTEREST_EXIT_MARGIN_RINGS: i32 = 1;
 /// Per-region state owned by the strategic layer.
 #[derive(Debug, Clone)]
 pub struct RegionState {
-    pub coord: RegionCoord,
     /// How much simulation this region currently receives.
     pub sim_level: SimLevel,
     /// Clients currently interested in this region. Drives `sim_level`.
@@ -42,9 +41,8 @@ pub struct RegionState {
 }
 
 impl RegionState {
-    fn new(coord: RegionCoord) -> Self {
+    fn new() -> Self {
         Self {
-            coord,
             sim_level: SimLevel::Strategic,
             observers: 0,
             strategic_secs: 0.0,
@@ -79,10 +77,6 @@ impl RegionRegistry {
         self.regions.contains_key(&coord)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &RegionState> {
-        self.regions.values()
-    }
-
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -97,7 +91,7 @@ impl RegionRegistry {
 
     #[cfg(test)]
     pub(crate) fn set_level_for_test(&mut self, coord: RegionCoord, sim_level: SimLevel) {
-        let mut state = RegionState::new(coord);
+        let mut state = RegionState::new();
         state.sim_level = sim_level;
         self.regions.insert(coord, state);
         self.revision = self.revision.wrapping_add(1);
@@ -115,10 +109,7 @@ pub struct ClientInterest {
 }
 
 impl ClientInterest {
-    pub fn regions_for(&self, client: Entity) -> Option<&HashSet<RegionCoord>> {
-        self.by_client.get(&client)
-    }
-
+    #[cfg(test)]
     pub fn is_interested(&self, client: Entity, coord: RegionCoord) -> bool {
         self.by_client
             .get(&client)
@@ -139,7 +130,7 @@ pub fn build_region_registry(mut registry: ResMut<RegionRegistry>, terrain: Res<
     for z in min.z..=max.z {
         for x in min.x..=max.x {
             let coord = RegionCoord::new(x, z);
-            registry.regions.insert(coord, RegionState::new(coord));
+            registry.regions.insert(coord, RegionState::new());
         }
     }
 
@@ -532,7 +523,7 @@ mod tests {
     fn registry_with(coords: &[RegionCoord]) -> RegionRegistry {
         let mut registry = RegionRegistry::default();
         for coord in coords {
-            registry.regions.insert(*coord, RegionState::new(*coord));
+            registry.regions.insert(*coord, RegionState::new());
         }
         registry
     }

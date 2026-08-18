@@ -76,8 +76,8 @@ impl WorldTime {
     pub const DEFAULT_DAY_DURATION: f32 = 24.0 * 60.0;
     /// 4 minutes of night — a moonlit interlude, not a second shift.
     pub const DEFAULT_NIGHT_DURATION: f32 = 4.0 * 60.0;
-    /// Start at 07:30 on the display clock: the sun is about 17 degrees above
-    /// the horizon, giving the first player a warm sunrise that is still bright
+    /// Default to 07:30 on the display clock: the sun is about 17 degrees above
+    /// the horizon, giving simulations a warm sunrise that is still bright
     /// enough to read the character, sail and coastline clearly.
     pub const DEFAULT_START_SECONDS_IN_DAY: f32 = 135.0;
     /// Displayed clock hour of sunrise. The display clock is deliberately

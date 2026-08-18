@@ -514,11 +514,8 @@ pub fn process_character_deaths(
                 if administration.reeve.as_deref() == Some(dead.name.as_str()) {
                     administration.reeve = None;
                 }
-                if administration.road_steward.as_deref() == Some(dead.name.as_str()) {
-                    administration.road_steward = None;
-                }
-                if administration.market_porter.as_deref() == Some(dead.name.as_str()) {
-                    administration.market_porter = None;
+                if administration.lead_steward.as_deref() == Some(dead.name.as_str()) {
+                    administration.lead_steward = None;
                 }
                 administration
                     .city_workers

@@ -17,17 +17,15 @@ const TARGET_TICK_SECS: f64 = 1.0 / FIXED_TIMESTEP_HZ;
 enum Phase {
     Core,
     Navigation,
-    Collision,
 }
 
 impl Phase {
-    const COUNT: usize = 3;
+    const COUNT: usize = 2;
 
     fn idx(self) -> usize {
         match self {
             Phase::Core => 0,
             Phase::Navigation => 1,
-            Phase::Collision => 2,
         }
     }
 }
@@ -117,19 +115,6 @@ impl ServerPerfMonitor {
         self.phase_sum = [Duration::ZERO; Phase::COUNT];
         self.phase_max = [Duration::ZERO; Phase::COUNT];
     }
-
-    /// Nothing records collision time now that character resolution is gone, so the
-    /// `collision` phase reads 0.00 until the unit sim starts feeding it.
-    #[allow(dead_code)]
-    pub fn record_collision_ms(&mut self, ms: f32) {
-        if !self.enabled || ms <= 0.0 {
-            return;
-        }
-        self.add_phase_duration(
-            Phase::Collision,
-            Duration::from_secs_f64(ms as f64 / 1000.0),
-        );
-    }
 }
 
 pub fn handle_perf_tick_begin(mut perf: ResMut<ServerPerfMonitor>) {
@@ -215,9 +200,6 @@ pub fn update_server_perf_log(
     let navigation_avg_ms =
         perf.phase_sum[Phase::Navigation.idx()].as_secs_f64() * 1000.0 / ticks_f;
     let navigation_max_ms = perf.phase_max[Phase::Navigation.idx()].as_secs_f64() * 1000.0;
-    let collision_avg_ms = perf.phase_sum[Phase::Collision.idx()].as_secs_f64() * 1000.0 / ticks_f;
-    let collision_max_ms = perf.phase_max[Phase::Collision.idx()].as_secs_f64() * 1000.0;
-
     let mut players_count = 0usize;
     let mut missing_input_players = 0usize;
     for player in players.iter() {
@@ -286,7 +268,7 @@ pub fn update_server_perf_log(
     }
 
     info!(
-        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} navigation={:.2}/{:.2} collision={:.2}/{:.2} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} villagers={} idle={} migrating={} settled={} nav_pending={} nav_failed={} migration_cooldown={}",
+        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} navigation={:.2}/{:.2} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} villagers={} idle={} migrating={} settled={} nav_pending={} nav_failed={} migration_cooldown={}",
         tick_avg_ms,
         tick_max_ms,
         over_budget_pct,
@@ -294,8 +276,6 @@ pub fn update_server_perf_log(
         core_max_ms,
         navigation_avg_ms,
         navigation_max_ms,
-        collision_avg_ms,
-        collision_max_ms,
         client_inputs.latest.len(),
         missing_input_players,
         input_ingress_total_per_sec,
