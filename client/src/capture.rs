@@ -410,6 +410,15 @@ pub struct Shot {
     pub tilt: f32,
     /// Time of day in `0.0..=1.0` (0.5 = noon).
     pub time_of_day: f32,
+    /// Free-look pitch in radians below the horizon (0.0 = level, negative
+    /// looks up). The RTS camera derives tilt from zoom every frame, so
+    /// `tilt` can never frame the horizon or sky; when `pitch` is set the
+    /// baked transform is overwritten after the camera update — the same
+    /// escape the opening cinematic uses. `focus`/`zoom` still park the
+    /// controller so streaming loads the right chunks.
+    pub pitch: Option<f32>,
+    /// Camera height in metres above the water surface for free-look shots.
+    pub eye: f32,
 }
 
 impl Default for Shot {
@@ -421,7 +430,40 @@ impl Default for Shot {
             zoom: 220.0,
             tilt: 0.75,
             time_of_day: 0.5,
+            pitch: None,
+            eye: 1.7,
         }
+    }
+}
+
+/// Free-look pose of the active shot, applied by [`apply_capture_free_look`]
+/// AFTER the RTS camera bake each frame.
+#[derive(Resource, Default)]
+struct CaptureFreeLook(Option<FreeLookPose>);
+
+struct FreeLookPose {
+    focus: Vec3,
+    yaw: f32,
+    pitch: f32,
+    eye: f32,
+}
+
+/// Overwrite the baked commander transform for free-look shots. Must run
+/// after `update_commander_camera`, which unconditionally rewrites tilt from
+/// zoom and bakes the transform (the opening cinematic escapes the same way).
+fn apply_capture_free_look(
+    free_look: Res<CaptureFreeLook>,
+    terrain: Option<Res<shared::terrain::WorldTerrain>>,
+    mut cameras: Query<&mut Transform, With<CommanderCamera>>,
+) {
+    let Some(pose) = &free_look.0 else { return };
+    let surface = terrain
+        .as_deref()
+        .and_then(|t| t.get_water_height(pose.focus.x, pose.focus.z))
+        .unwrap_or(pose.focus.y);
+    for mut transform in cameras.iter_mut() {
+        transform.translation = Vec3::new(pose.focus.x, surface + pose.eye, pose.focus.z);
+        transform.rotation = Quat::from_rotation_y(pose.yaw) * Quat::from_rotation_x(-pose.pitch);
     }
 }
 
@@ -493,6 +535,7 @@ pub fn run(config: CaptureConfig) {
     crate::app_wiring::setup_resources(&mut app);
     crate::app_wiring::setup_systems(&mut app);
 
+    app.init_resource::<CaptureFreeLook>();
     app.insert_resource(CaptureState::Warmup {
         frames_left: config.warmup_frames,
     });
@@ -517,6 +560,7 @@ pub fn run(config: CaptureConfig) {
             // the pose this system applied in frame N — a continuous flight
             // must not trail its own screenshots by a frame.
             drive_capture.before(crate::camera_rts::update_commander_camera),
+            apply_capture_free_look.after(crate::camera_rts::update_commander_camera),
         ),
     );
 
@@ -2324,6 +2368,7 @@ fn drive_capture(
     mut cameras: Query<&mut CommanderCamera>,
     mut world_time: Query<&mut WorldTime>,
     loaded_chunks: Option<Res<LoadedChunks>>,
+    mut free_look: ResMut<CaptureFreeLook>,
     mut pending_probes: Local<Vec<PathBuf>>,
     mut app_exit: MessageWriter<AppExit>,
 ) {
@@ -2332,7 +2377,7 @@ fn drive_capture(
             // Park the camera on the first shot during warmup so streaming loads the
             // right chunks rather than whatever is around the origin.
             if let Some(shot) = config.shots.first() {
-                apply_shot(shot, &mut cameras, &mut world_time);
+                apply_shot(shot, &mut cameras, &mut world_time, &mut free_look);
             }
 
             if *frames_left > 0 {
@@ -2355,7 +2400,7 @@ fn drive_capture(
                 *state = CaptureState::Done;
                 return;
             };
-            apply_shot(current, &mut cameras, &mut world_time);
+            apply_shot(current, &mut cameras, &mut world_time, &mut free_look);
 
             if *frames_left > 0 {
                 *frames_left -= 1;
@@ -2489,7 +2534,14 @@ fn apply_shot(
     shot: &Shot,
     cameras: &mut Query<&mut CommanderCamera>,
     world_time: &mut Query<&mut WorldTime>,
+    free_look: &mut CaptureFreeLook,
 ) {
+    free_look.0 = shot.pitch.map(|pitch| FreeLookPose {
+        focus: shot.focus,
+        yaw: shot.yaw,
+        pitch,
+        eye: shot.eye,
+    });
     for mut camera in cameras.iter_mut() {
         // Set BOTH the rendered value and the target. The commander camera eases
         // toward its targets every frame, so writing only the rendered value

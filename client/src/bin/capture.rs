@@ -30,6 +30,8 @@ fn main() {
     let mut settle_frames = 60_u32;
     let mut preset: Option<String> = None;
     let mut name = "shot".to_string();
+    let mut pitch: Option<f32> = None;
+    let mut eye = 1.7_f32;
 
     let mut i = 0;
     while i < args.len() {
@@ -46,6 +48,8 @@ fn main() {
             "--zoom" => zoom = value().parse().unwrap_or(zoom),
             "--tilt" => tilt = value().parse().unwrap_or(tilt),
             "--time" => time_of_day = value().parse().unwrap_or(time_of_day),
+            "--pitch" => pitch = value().parse().ok(),
+            "--eye" => eye = value().parse().unwrap_or(eye),
             "--warmup" => warmup_frames = value().parse().unwrap_or(warmup_frames),
             "--settle" => settle_frames = value().parse().unwrap_or(settle_frames),
             "--preset" => preset = Some(value()),
@@ -54,7 +58,7 @@ fn main() {
         i += 1;
     }
 
-    let shots = match preset.as_deref() {
+    let mut shots = match preset.as_deref() {
         Some(p) => preset_shots(p, focus, time_of_day),
         None => vec![Shot {
             name,
@@ -63,8 +67,17 @@ fn main() {
             zoom,
             tilt,
             time_of_day,
+            ..Default::default()
         }],
     };
+    // Free look composes with presets too: `--preset daycycle --pitch 0.0`
+    // photographs the horizon across the whole day.
+    if pitch.is_some() {
+        for shot in &mut shots {
+            shot.pitch = pitch;
+            shot.eye = eye;
+        }
+    }
 
     // The flight preset only means anything when the camera genuinely moves
     // every rendered frame; settle frames would reintroduce the stationary
@@ -106,6 +119,7 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
                 zoom: 220.0,
                 tilt: 0.7,
                 time_of_day,
+                ..Default::default()
             })
             .collect(),
         // Near/far pair plus a low angle: LOD popping, terrain silhouette, horizon.
@@ -304,6 +318,8 @@ OPTIONS:
     --time <0..1>      Time of day, 0.5 = noon [default: 0.5]
     --warmup <frames>  Frames before first shot, for streaming  [default: 240]
     --settle <frames>  Frames after each camera move            [default: 60]
+    --pitch <rad>      free-look: pitch below horizon (0 = level, negative = up); bypasses the RTS tilt lock
+    --eye <m>          free-look camera height above the water (default 1.7)
     --preset <name>    orbit | survey | daycycle | water | shorecycle | streaming-pan | streaming-handoff | streaming-flight
 
 EXAMPLES:
