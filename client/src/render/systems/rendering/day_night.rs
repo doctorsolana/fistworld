@@ -102,8 +102,18 @@ pub fn update_day_night_cycle(
 
     // Bevy directional light points along -Z (forward). Rotate -Z to match sun_dir.
     let sun_rotation = Quat::from_rotation_arc(Vec3::NEG_Z, sun_dir);
+    // STEP the shadow-casting light instead of rotating it every frame. The
+    // 20-minute day sweeps the sun fast enough that per-frame rotation
+    // re-renders the cascades at a fractionally different angle each frame,
+    // and the shadow-map texels crawl — hard tree-shadow edges visibly
+    // "wave" (the retired Gaussian filter was blurring this artifact away,
+    // at half the frame budget). Between steps the map is bit-stable; each
+    // ~0.35 deg step is an imperceptible diffuse change. Color/illuminance
+    // still update continuously, as do water glints and cloud shadows
+    // (driven by the continuous sun_dir, not this transform).
+    const SUN_SHADOW_STEP_RADIANS: f32 = 0.006;
     for (mut sun_light, mut sun_transform) in sun_query.iter_mut() {
-        if sun_transform.rotation != sun_rotation {
+        if sun_transform.rotation.angle_between(sun_rotation) > SUN_SHADOW_STEP_RADIANS {
             sun_transform.rotation = sun_rotation;
         }
         if sun_light.color != sun_color || sun_light.illuminance != sun_illuminance {
