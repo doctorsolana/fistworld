@@ -600,7 +600,7 @@ pub fn tick_display_change_confirmation(
 #[derive(Resource, Clone)]
 pub struct InputSettings {
     /// Mouse sensitivity multiplier. Range: 0.1-3.0. Default: 1.0.
-    /// Applied as a multiplier to the base MOUSE_SENSITIVITY constant.
+    /// Multiplies the RTS camera's yaw look sensitivity (camera_rts.rs).
     pub mouse_sensitivity: f32,
 }
 

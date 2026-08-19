@@ -406,13 +406,11 @@ pub struct Shot {
     pub yaw: f32,
     /// Distance from the focus point.
     pub zoom: f32,
-    /// Downward tilt in radians. Lower = more horizon, higher = more top-down.
-    pub tilt: f32,
     /// Time of day in `0.0..=1.0` (0.5 = noon).
     pub time_of_day: f32,
     /// Free-look pitch in radians below the horizon (0.0 = level, negative
-    /// looks up). The RTS camera derives tilt from zoom every frame, so
-    /// `tilt` can never frame the horizon or sky; when `pitch` is set the
+    /// looks up). The RTS camera derives its tilt from zoom every frame and
+    /// can never frame the horizon or sky; when `pitch` is set the
     /// baked transform is overwritten after the camera update — the same
     /// escape the opening cinematic uses. `focus`/`zoom` still park the
     /// controller so streaming loads the right chunks.
@@ -428,7 +426,6 @@ impl Default for Shot {
             focus: Vec3::ZERO,
             yaw: -0.45,
             zoom: 220.0,
-            tilt: 0.75,
             time_of_day: 0.5,
             pitch: None,
             eye: 1.7,
@@ -2443,11 +2440,10 @@ fn drive_capture(
             }
 
             info!(
-                "capture: '{}' focus={:?} zoom={} tilt={} time={} | {} terrain chunks loaded",
+                "capture: '{}' focus={:?} zoom={} time={} | {} terrain chunks loaded",
                 current.name,
                 current.focus,
                 current.zoom,
-                current.tilt,
                 current.time_of_day,
                 loaded_chunks.map(|c| c.chunks.len()).unwrap_or(0),
             );
@@ -2553,7 +2549,6 @@ fn apply_shot(
         camera.yaw_target = shot.yaw;
         camera.zoom = shot.zoom;
         camera.zoom_target = shot.zoom;
-        camera.tilt = shot.tilt;
     }
 
     for mut time in world_time.iter_mut() {

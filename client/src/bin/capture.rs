@@ -24,7 +24,6 @@ fn main() {
     let mut focus = Vec3::ZERO;
     let mut yaw = -0.45_f32;
     let mut zoom = 220.0_f32;
-    let mut tilt = 0.75_f32;
     let mut time_of_day = 0.5_f32;
     let mut warmup_frames = 240_u32;
     let mut settle_frames = 60_u32;
@@ -46,7 +45,6 @@ fn main() {
             "--at" => focus = parse_vec3(&value()),
             "--yaw" => yaw = value().parse().unwrap_or(yaw),
             "--zoom" => zoom = value().parse().unwrap_or(zoom),
-            "--tilt" => tilt = value().parse().unwrap_or(tilt),
             "--time" => time_of_day = value().parse().unwrap_or(time_of_day),
             "--pitch" => pitch = value().parse().ok(),
             "--eye" => eye = value().parse().unwrap_or(eye),
@@ -65,7 +63,6 @@ fn main() {
             focus,
             yaw,
             zoom,
-            tilt,
             time_of_day,
             ..Default::default()
         }],
@@ -117,7 +114,6 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
                 focus,
                 yaw: i as f32 * std::f32::consts::FRAC_PI_2,
                 zoom: 220.0,
-                tilt: 0.7,
                 time_of_day,
                 ..Default::default()
             })
@@ -128,7 +124,6 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
                 name: "close".into(),
                 focus,
                 zoom: 90.0,
-                tilt: 0.55,
                 time_of_day,
                 ..Default::default()
             },
@@ -136,7 +131,6 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
                 name: "mid".into(),
                 focus,
                 zoom: 260.0,
-                tilt: 0.75,
                 time_of_day,
                 ..Default::default()
             },
@@ -144,7 +138,6 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
                 name: "far".into(),
                 focus,
                 zoom: 700.0,
-                tilt: 0.95,
                 time_of_day,
                 ..Default::default()
             },
@@ -152,7 +145,7 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
                 name: "horizon".into(),
                 focus,
                 zoom: 200.0,
-                tilt: 0.18,
+                pitch: Some(0.18),
                 time_of_day,
                 ..Default::default()
             },
@@ -185,7 +178,7 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
                 name: "water_low".into(),
                 focus,
                 zoom: 120.0,
-                tilt: 0.12,
+                pitch: Some(0.12),
                 time_of_day,
                 ..Default::default()
             },
@@ -193,7 +186,6 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
                 name: "water_mid".into(),
                 focus,
                 zoom: 200.0,
-                tilt: 0.45,
                 time_of_day,
                 ..Default::default()
             },
@@ -201,7 +193,6 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
                 name: "water_down".into(),
                 focus,
                 zoom: 260.0,
-                tilt: 1.1,
                 time_of_day,
                 ..Default::default()
             },
@@ -214,7 +205,6 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
                 name: format!("shore_phase_{phase}"),
                 focus,
                 zoom: 105.0,
-                tilt: 0.48,
                 time_of_day,
                 ..Default::default()
             })
@@ -234,7 +224,6 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
             name: name.into(),
             focus: focus + offset,
             zoom: 1_092.0,
-            tilt: 0.85,
             time_of_day,
             ..Default::default()
         })
@@ -247,7 +236,6 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
             name: "handoff_warm".into(),
             focus,
             zoom: 1_092.0,
-            tilt: 0.85,
             time_of_day,
             ..Default::default()
         })
@@ -255,7 +243,6 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
             name: format!("handoff_{frame:02}"),
             focus: focus + Vec3::new(384.0, 0.0, 0.0),
             zoom: 1_092.0,
-            tilt: 0.85,
             time_of_day,
             ..Default::default()
         }))
@@ -271,7 +258,6 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
                 name: format!("flight_{frame:02}"),
                 focus: focus + Vec3::new(frame as f32 * 24.0, 0.0, frame as f32 * -16.0),
                 zoom: 1_092.0,
-                tilt: 0.85,
                 time_of_day,
                 ..Default::default()
             })
@@ -314,7 +300,6 @@ OPTIONS:
     --at <x,y,z>       Camera focus point ("x,z" also works)
     --yaw <rad>        Camera yaw              [default: -0.45]
     --zoom <m>         Distance from focus     [default: 220]
-    --tilt <rad>       Downward tilt; 0.1 = near-horizon, 1.2 = top-down
     --time <0..1>      Time of day, 0.5 = noon [default: 0.5]
     --warmup <frames>  Frames before first shot, for streaming  [default: 240]
     --settle <frames>  Frames after each camera move            [default: 60]

@@ -85,13 +85,6 @@ impl CloudCover {
     }
 }
 
-/// Fixed wind bearing shared by the cloud plane and the cloud shadows.
-///
-/// The world's ONE wind now, rather than a bearing of its own. It was
-/// `(0.86, 0.5)`: 4.7 degrees off the foliage and 0.99479 long, so cloud drift
-/// ran half a percent slower than `CLOUD_WIND_SPEED` claimed and the storm's
-/// 400 m meander below was really 397.9 m. Both are exact now.
-const CLOUD_WIND_BEARING: Vec2 = crate::wind::WIND_DIRECTION;
 /// World-space cloud drift offset at an absolute world time.
 ///
 /// THE single source of wind for the cloud plane and the terrain/water cloud
@@ -106,9 +99,7 @@ const CLOUD_WIND_BEARING: Vec2 = crate::wind::WIND_DIRECTION;
 /// the drift per-frame, so cloud/shadow motion is frame-smooth while material
 /// re-uploads stay at ~1/sec.
 pub(super) fn cloud_wind_state(abs_seconds: f32, seed_phase: f32) -> (Vec2, f32) {
-    let (offset, speed) = crate::wind::wind_state(abs_seconds, seed_phase);
-    debug_assert_eq!(CLOUD_WIND_BEARING, crate::wind::WIND_DIRECTION);
-    (offset, speed)
+    crate::wind::wind_state(abs_seconds, seed_phase)
 }
 
 /// How much slower THE storm system drifts than the clouds streaming through
@@ -137,7 +128,10 @@ pub(super) fn storm_center(seed_phase: f32, abs_seconds: f32, half_extent: f32) 
         (h(12.9898) - 0.5) * 1.6 * half_extent,
         (h(78.233) - 0.5) * 1.6 * half_extent,
     );
-    let perp = Vec2::new(-CLOUD_WIND_BEARING.y, CLOUD_WIND_BEARING.x);
+    let perp = Vec2::new(
+        -crate::wind::WIND_DIRECTION.y,
+        crate::wind::WIND_DIRECTION.x,
+    );
     let meander = perp * (400.0 * (abs_seconds * 0.002 + seed_phase).sin());
     let pos = spawn + wind_offset * STORM_DRIFT_FACTOR + meander;
     let limit = half_extent * STORM_TRACK_LIMIT_FRAC;

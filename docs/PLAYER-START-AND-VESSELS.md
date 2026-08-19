@@ -92,9 +92,9 @@ For an offline visual regression without starting a server:
 
 ```bash
 FISTFORCE_CAPTURE_DINGHY=underway cargo run -p client --bin capture -- \
-  --out /tmp/dinghy --at 0,0 --zoom 13 --tilt 0.52
+  --out /tmp/dinghy --at 0,0 --zoom 13
 FISTFORCE_CAPTURE_DINGHY=wreck cargo run -p client --bin capture -- \
-  --out /tmp/dinghy-wreck --at 0,0 --zoom 13 --tilt 0.52
+  --out /tmp/dinghy-wreck --at 0,0 --zoom 13
 ```
 
 The fixture resolves the authored local water height and the normal commander camera anchors close

@@ -29,8 +29,7 @@ pub const CLOUD_LAYER_HEIGHT: f32 = 350.0;
 const CLOUD_PLANE_SIZE: f32 = 40_000.0;
 /// Dominant blob scale of the cloud field (shared design constant).
 const CLOUD_FIELD_INV_SCALE: f32 = 1.0 / 190.0;
-/// Fixed wind bearing + speed (world units/sec). Shared with the terrain and
-/// water cloud-shadow params — any change must be mirrored there.
+/// Base opacity of the deck (params_b.w); the shader shapes it per-fragment.
 const CLOUD_ALPHA_SCALE: f32 = 0.85;
 
 // Diff-gates: every materials.get_mut re-prepares the material on the GPU, so
@@ -161,7 +160,6 @@ pub fn spawn_cloud_plane(
 #[derive(Default)]
 pub struct CloudPlaneCache {
     written: bool,
-    wind_offset: Vec2,
     anchor_time: f32,
     speed_client: f32,
     coverage: f32,
@@ -318,7 +316,6 @@ pub fn update_cloud_plane(
     material.uniform.storm = storm;
 
     cache.written = true;
-    cache.wind_offset = wind_offset;
     cache.anchor_time = anchor_time;
     cache.speed_client = speed_client;
     cache.coverage = cover.current;

@@ -176,6 +176,7 @@ pub fn update_commander_camera(
     keys: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     input_state: Res<crate::input::InputState>,
+    input_settings: Res<crate::render::systems::InputSettings>,
     opening: Option<Res<crate::boat::OpeningCinematic>>,
     mut mouse_motion: MessageReader<MouseMotion>,
     mut mouse_wheel: MessageReader<MouseWheel>,
@@ -197,7 +198,8 @@ pub fn update_commander_camera(
             .is_none_or(|opening| !opening.is_active());
 
     if accepts_world_input && mouse_buttons.pressed(MouseButton::Right) {
-        controller.yaw_target -= look_delta.x * controller.look_sensitivity;
+        controller.yaw_target -=
+            look_delta.x * controller.look_sensitivity * input_settings.mouse_sensitivity;
     }
 
     let mut scroll_lines = 0.0;

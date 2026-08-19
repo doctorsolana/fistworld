@@ -21,7 +21,7 @@ pub use settings::{
     apply_graphics_settings, available_display_resolutions, best_fullscreen_video_mode,
     save_graphics_settings, sync_shadow_cascades_to_zoom, tick_display_change_confirmation,
     DisplayMode, DisplayResolution, GraphicsSettings, InputSettings, PendingDisplayChange,
-    DISPLAY_CONFIRMATION_SECONDS, LAUNCHER_RESOLUTION,
+    LAUNCHER_RESOLUTION,
 };
 pub use setup::setup_rendering;
 
