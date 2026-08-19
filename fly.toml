@@ -13,6 +13,8 @@ primary_region = 'ams'
 
 [env]
   CITYSIM_MAP_ID = "big_world"
+  FISTWORLD_IMMIGRANTS_PER_DAY = "3"
+  FISTWORLD_WORLD_NPC_CAP = "5000"
   RUST_LOG = "info"
 
 [[vm]]

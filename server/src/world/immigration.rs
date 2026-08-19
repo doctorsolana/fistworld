@@ -11,8 +11,8 @@ use bevy::prelude::*;
 use lightyear::prelude::{NetworkTarget, Replicate};
 
 use shared::components::{
-    AboardBoat, CharacterActivity, CharacterMotion, CharacterObjective, PlayerBoat, PlayerPosition,
-    PlayerRotation, Settlement, SettlementBuildingKind, Vessel, WorldTime,
+    AboardBoat, CharacterActivity, CharacterKind, CharacterMotion, CharacterObjective, PlayerBoat,
+    PlayerPosition, PlayerRotation, Settlement, SettlementBuildingKind, Vessel, WorldTime,
 };
 use shared::economy::SettlementEconomy;
 use shared::region::RegionCoord;
@@ -25,7 +25,10 @@ use crate::player::boat::{
 use crate::world::village::VillagerIntent;
 use crate::world::village_roads::overland_trade_corridor_exists;
 
-const DEFAULT_INTERVAL_DAYS: f32 = 0.35;
+const DEFAULT_IMMIGRANTS_PER_DAY: f32 = 3.0;
+const DEFAULT_WORLD_NPC_CAP: usize = 5_000;
+const MIN_IMMIGRANTS_PER_DAY: f32 = 0.1;
+const MAX_IMMIGRANTS_PER_DAY: f32 = 20.0;
 const FIRST_ARRIVAL_DELAY_DAYS: f32 = 0.06;
 const RETRY_DELAY_DAYS: f32 = 0.08;
 const MIN_ATTRACTIVENESS: f32 = 18.0;
@@ -37,6 +40,8 @@ pub struct NaturalImmigrationDirector {
     interval_days: f32,
     next_arrival_world_seconds: Option<f64>,
     sequence: u64,
+    world_npc_cap: usize,
+    population_cap_announced: bool,
     coastal_approaches: Vec<CoastalVoyage>,
     settlement_landfalls: bevy::platform::collections::HashMap<Entity, (Vec3, CoastalVoyage)>,
 }
@@ -49,16 +54,34 @@ impl Default for NaturalImmigrationDirector {
             .ok()
             .map(|raw| parse_bool(&raw))
             .unwrap_or(!lab);
-        let interval_days = std::env::var("FISTWORLD_IMMIGRATION_INTERVAL_DAYS")
+        let immigrants_per_day = std::env::var("FISTWORLD_IMMIGRANTS_PER_DAY")
             .ok()
             .and_then(|raw| raw.parse::<f32>().ok())
-            .filter(|days| days.is_finite())
-            .unwrap_or(DEFAULT_INTERVAL_DAYS)
-            .clamp(0.05, 10.0);
+            .filter(|rate| rate.is_finite() && *rate > 0.0)
+            .map(|rate| rate.clamp(MIN_IMMIGRANTS_PER_DAY, MAX_IMMIGRANTS_PER_DAY))
+            // Preserve old deployments that still set the less intuitive
+            // interval variable. The arrivals-per-day setting wins whenever
+            // both are present.
+            .or_else(|| {
+                std::env::var("FISTWORLD_IMMIGRATION_INTERVAL_DAYS")
+                    .ok()
+                    .and_then(|raw| raw.parse::<f32>().ok())
+                    .filter(|days| days.is_finite() && *days > 0.0)
+                    .map(|days| {
+                        (1.0 / days.clamp(0.05, 10.0))
+                            .clamp(MIN_IMMIGRANTS_PER_DAY, MAX_IMMIGRANTS_PER_DAY)
+                    })
+            })
+            .unwrap_or(DEFAULT_IMMIGRANTS_PER_DAY);
+        let interval_days = interval_days_for_rate(immigrants_per_day);
+        let world_npc_cap = std::env::var("FISTWORLD_WORLD_NPC_CAP")
+            .ok()
+            .and_then(|raw| raw.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_WORLD_NPC_CAP);
         if enabled {
             info!(
-                "Natural immigration enabled (base interval {:.2} world days)",
-                interval_days
+                "Natural immigration enabled (base {:.2} immigrants/world day, world NPC cap {})",
+                immigrants_per_day, world_npc_cap
             );
         }
         Self {
@@ -66,10 +89,16 @@ impl Default for NaturalImmigrationDirector {
             interval_days,
             next_arrival_world_seconds: None,
             sequence: 0,
+            world_npc_cap,
+            population_cap_announced: false,
             coastal_approaches: Vec::new(),
             settlement_landfalls: default(),
         }
     }
+}
+
+fn interval_days_for_rate(immigrants_per_day: f32) -> f32 {
+    1.0 / immigrants_per_day.clamp(MIN_IMMIGRANTS_PER_DAY, MAX_IMMIGRANTS_PER_DAY)
 }
 
 /// Discover immutable edge approaches while the server is starting, before a
@@ -233,6 +262,7 @@ pub fn plan_natural_immigration(
         Option<&SettlementEconomy>,
     )>,
     active: Query<(), With<NpcArrivalBoat>>,
+    people: Query<&CharacterKind>,
     mut director: ResMut<NaturalImmigrationDirector>,
     mut villager_seed: ResMut<crate::world::dev::VillagerSeed>,
 ) {
@@ -254,6 +284,34 @@ pub fn plan_natural_immigration(
     }
     if now < director.next_arrival_world_seconds.unwrap_or(f64::INFINITY) {
         return;
+    }
+
+    // This full count happens only when an arrival is due (three times per
+    // world day by default), never once per server tick. Strategic residents
+    // retain CharacterKind, so this is a true world total across tactical and
+    // cheap off-screen people. Player heroes deliberately do not consume the
+    // NPC population budget.
+    let world_npc_count = people
+        .iter()
+        .filter(|kind| **kind == CharacterKind::Villager)
+        .count();
+    if world_npc_count >= director.world_npc_cap {
+        if !director.population_cap_announced {
+            info!(
+                "Natural immigration paused at world NPC cap ({world_npc_count}/{})",
+                director.world_npc_cap
+            );
+            director.population_cap_announced = true;
+        }
+        director.next_arrival_world_seconds = Some(now + cycle * f64::from(director.interval_days));
+        return;
+    }
+    if director.population_cap_announced {
+        info!(
+            "Natural immigration resumed below world NPC cap ({world_npc_count}/{})",
+            director.world_npc_cap
+        );
+        director.population_cap_announced = false;
     }
 
     director.sequence = director.sequence.wrapping_add(1);
@@ -602,6 +660,51 @@ mod tests {
     }
 
     #[test]
+    fn three_immigrants_per_day_maps_to_a_third_day_base_interval() {
+        assert!((interval_days_for_rate(3.0) - (1.0 / 3.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn natural_immigration_stops_at_the_world_npc_cap() {
+        let mut app = App::new();
+        app.insert_resource(WorldTerrain::default())
+            .insert_resource(NaturalImmigrationDirector {
+                enabled: true,
+                interval_days: interval_days_for_rate(3.0),
+                next_arrival_world_seconds: Some(0.0),
+                sequence: 0,
+                world_npc_cap: 1,
+                population_cap_announced: false,
+                coastal_approaches: Vec::new(),
+                settlement_landfalls: default(),
+            })
+            .insert_resource(crate::world::dev::VillagerSeed::default())
+            .add_systems(Update, plan_natural_immigration);
+        app.world_mut().spawn(WorldTime::new_default());
+        app.world_mut().spawn((
+            settlement("Cap Test", 1),
+            PlayerPosition(Vec3::ZERO),
+            PlayerRotation(0.0),
+            SettlementEconomy::default(),
+        ));
+        app.world_mut().spawn(CharacterKind::Villager);
+
+        app.update();
+
+        let arrivals = app
+            .world_mut()
+            .query_filtered::<Entity, With<NpcArrivalBoat>>()
+            .iter(app.world())
+            .count();
+        assert_eq!(arrivals, 0);
+        let director = app.world().resource::<NaturalImmigrationDirector>();
+        assert!(director.population_cap_announced);
+        assert!(director
+            .next_arrival_world_seconds
+            .is_some_and(|next| next > 0.0));
+    }
+
+    #[test]
     fn distance_is_a_bias_rather_than_an_absolute_rule() {
         let entity = Entity::from_bits(2);
         let economy = SettlementEconomy {
@@ -687,9 +790,11 @@ mod tests {
         app.insert_resource(terrain)
             .insert_resource(NaturalImmigrationDirector {
                 enabled: true,
-                interval_days: DEFAULT_INTERVAL_DAYS,
+                interval_days: interval_days_for_rate(DEFAULT_IMMIGRANTS_PER_DAY),
                 next_arrival_world_seconds: Some(0.0),
                 sequence: 0,
+                world_npc_cap: DEFAULT_WORLD_NPC_CAP,
+                population_cap_announced: false,
                 coastal_approaches,
                 settlement_landfalls: default(),
             })

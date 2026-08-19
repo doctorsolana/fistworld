@@ -145,7 +145,10 @@ inside the new system, and do not add lab-only ordering to make a test pass.
   map-edge Dinghy, and only removes the boat after it reaches its certified mooring. The
   passenger then resumes the existing land-route and Moot-queue flow; this is not a second
   admission implementation. Ordinary worlds enable it by default, labs disable it unless
-  `FISTWORLD_NATURAL_IMMIGRATION=1` is explicitly supplied.
+  `FISTWORLD_NATURAL_IMMIGRATION=1` is explicitly supplied. Its startup defaults are three
+  arrivals per world day and a 5,000-villager world ceiling; override those with
+  `FISTWORLD_IMMIGRANTS_PER_DAY` and `FISTWORLD_WORLD_NPC_CAP`. Seasonal and opportunity
+  modifiers intentionally make the observed cadence vary around the configured base rate.
 - Avoid per-tick full-population scans, string joins and allocations. Reconcile on changed
   state or slow world boundaries.
 - The live server does not load player or world state after restart. Legacy player-profile

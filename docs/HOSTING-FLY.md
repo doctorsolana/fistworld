@@ -71,13 +71,19 @@ Natural immigration is enabled on ordinary hosted worlds. New people enter from 
 real map-edge coast in one-use Dinghies, choose among existing settlements using
 food, homes, jobs, prosperity, unrest, personal preference and a bounded distance
 bias, sail to dry land and then walk through the ordinary Moot immigration queue.
-The default cadence is one opportunity every 0.35 world days, modified by season
-and settlement attractiveness. Operational overrides are:
+The default base cadence is three immigrants per world day, modified by season
+and settlement attractiveness. Natural arrivals pause when the total villager
+population reaches 5,000 and resume after it falls below that ceiling. The checked-in
+`fly.toml` sets both defaults explicitly. Operational overrides are:
 
 ```bash
 fly secrets set FISTWORLD_NATURAL_IMMIGRATION=0      # disable it
-fly secrets set FISTWORLD_IMMIGRATION_INTERVAL_DAYS=0.5
+fly secrets set FISTWORLD_IMMIGRANTS_PER_DAY=2
+fly secrets set FISTWORLD_WORLD_NPC_CAP=3000
 ```
+
+`FISTWORLD_IMMIGRATION_INTERVAL_DAYS` remains a compatibility fallback for an old
+deployment, but the clearer arrivals-per-day setting takes precedence.
 
 To stop compute charges while keeping the app and its IP allocation:
 
