@@ -555,41 +555,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         shore_dist,
     );
 
-    // A coherent family of fronts, roughly 5m apart, traveling shoreward.
-    // The distance field follows the smoothed coast contour, so diagonal
-    // beaches receive the same shore-normal motion as cardinal beaches.
-    let ocean_band_phase = shore_dist * 5.6 + globals.time * 0.115;
-    let ocean_band = fract(ocean_band_phase);
-    let ocean_band_half_width = min(max(0.055, fwidth(ocean_band_phase) * 0.75), 0.11);
-    let ocean_line_core = smoothstep(
-        0.42 - ocean_band_half_width,
-        0.42 + ocean_band_half_width,
-        ocean_band,
-    ) * (1.0 - smoothstep(
-        0.58 - ocean_band_half_width,
-        0.58 + ocean_band_half_width,
-        ocean_band,
-    ));
-    let ocean_opacity_noise = mix(0.72, 1.0, smoothstep(
-        0.15,
-        0.85,
-        0.5 + 0.5 * sin(
-            dot(in.world_position.xz, vec2<f32>(0.075, 0.061)) + globals.time * 0.42
-        ),
-    ));
-    let ocean_line_resolve = 1.0 - smoothstep(0.15, 0.45, fwidth(ocean_band_phase));
-    let ocean_travel_lines = ocean_line_core
-        * ocean_opacity_noise
-        * shore_zone
-        * shore_zone
-        * ocean_line_resolve;
     let ocean_wash = (1.0 - smoothstep(0.018, 0.145, shore_dist)) * 0.42 * foam_dist_fade;
     // The contact line persists as the stylized one-pixel coast outline, but
     // its full strength at map distances read as a hard white rim around
-    // every landmass; let it recede without disappearing.
+    // every landmass; let it recede without disappearing. The old family of
+    // traveling shore-normal foam fronts is gone: with the sea genuinely
+    // rolling, marching parallel stripes read as artificial.
     let contact_strength = mix(0.95, 0.35, smoothstep(500.0, 1500.0, view_dist));
     let ocean_shore_foam = clamp(
-        ocean_contact * contact_strength + ocean_travel_lines * 0.92 + ocean_wash,
+        ocean_contact * contact_strength + ocean_wash,
         0.0,
         1.0,
     );
