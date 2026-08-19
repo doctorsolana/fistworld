@@ -46,13 +46,13 @@ fn glitter_level(
     let id = floor(world_xz / cell);
     let rnd = glitter_hash(id);
     // Sparse population: most cells stay dark.
-    if (rnd < 0.86) {
+    if (rnd < 0.90) {
         return 0.0;
     }
     let jitter = vec2<f32>(glitter_hash(id + 17.0), glitter_hash(id + 41.0)) - 0.5;
     let local = fract(world_xz / cell) - 0.5 - jitter * 0.9;
     let d = length(local) * cell;
-    let radius = cell * 0.09;
+    let radius = cell * 0.12;
     let aa = max(fwidth(d), cell * 0.03);
     let dot_mask = 1.0 - smoothstep(radius - aa, radius + aa, d);
     // Per-cell pseudo ripple facet. The half-vector specular keeps lit cells
@@ -83,7 +83,15 @@ fn ocean_glitter(
     let cell0 = 0.588 * exp2(level);
     let g0 = glitter_level(world_xz, cell0, view_vec, sun_dir, time);
     let g1 = glitter_level(world_xz + vec2<f32>(37.0, -11.0), cell0 * 2.0, view_vec, sun_dir, time);
-    return mix(g0, g1, fract(lod));
+    // The dots are round in WORLD space; when the view tilts toward the
+    // horizon the screen footprint stretches and rows of dots smear into a
+    // dashed grid. Fade the glitter out as the footprint turns anisotropic
+    // and let the soft analytic glint own grazing angles.
+    let px = vec2<f32>(dpdx(world_xz.x), dpdx(world_xz.y));
+    let py = vec2<f32>(dpdy(world_xz.x), dpdy(world_xz.y));
+    let long_axis = max(length(px), length(py));
+    let aniso = min(length(px), length(py)) / max(long_axis, 1.0e-6);
+    return mix(g0, g1, fract(lod)) * smoothstep(0.35, 0.65, aniso);
 }
 
 @vertex

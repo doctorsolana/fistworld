@@ -22,6 +22,21 @@ const DIR_B_Z: f32 = 0.919_145;
 const DIR_C_X: f32 = 0.196_116_1;
 const DIR_C_Z: f32 = -0.980_580_7;
 
+/// Stokes-style second-harmonic crest sharpening for the two dominant swells.
+/// `sin(p) - e*cos(2p)` raises and narrows crests while widening troughs —
+/// the trochoid silhouette — as a pure HEIGHT function: no horizontal
+/// displacement, so CPU height sampling (boat buoyancy) stays trivial and the
+/// 120s loop is preserved (2x an integer harmonic is still an integer
+/// harmonic). Each component divides by (1 + e) so |profile| <= 1 and the
+/// declared WATER_DEEP_SWELL_AMPLITUDE bound still holds.
+pub const WATER_SWELL_SHARPNESS_A: f32 = 0.24;
+pub const WATER_SWELL_SHARPNESS_B: f32 = 0.18;
+
+#[inline]
+fn sharp_sin(phase: f32, sharpness: f32) -> f32 {
+    (phase.sin() - sharpness * (2.0 * phase).cos()) / (1.0 + sharpness)
+}
+
 #[inline]
 fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
     let t = ((value - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
@@ -48,7 +63,9 @@ pub fn water_swell_unit(world_x: f32, world_z: f32, ocean_seconds: f32) -> f32 {
     let phase_b = (world_x * DIR_B_X + world_z * DIR_B_Z) * k_b - ocean_seconds * base_omega * 14.0;
     let phase_c = (world_x * DIR_C_X + world_z * DIR_C_Z) * k_c + ocean_seconds * base_omega * 21.0;
 
-    phase_a.sin() * 0.58 + phase_b.sin() * 0.29 + phase_c.sin() * 0.13
+    sharp_sin(phase_a, WATER_SWELL_SHARPNESS_A) * 0.58
+        + sharp_sin(phase_b, WATER_SWELL_SHARPNESS_B) * 0.29
+        + phase_c.sin() * 0.13
 }
 
 /// Broad animated surface displacement for physics. Rendering additionally

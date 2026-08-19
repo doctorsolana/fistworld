@@ -47,9 +47,10 @@ pub struct ToonWaterUniform {
     pub wave_params: Vec4,
     /// xyz: direction to the sun (world), w: glint strength (0 at night).
     pub sun_params: Vec4,
-    /// Interaction ripples: xy = world xz, z = spawn time, w = strength
-    /// (0 = slot empty). The shader animates each ring from its spawn time.
-    pub ripples: [Vec4; 8],
+    /// Wake/interaction foam: xy = world xz, z = spawn time, w = strength
+    /// (0 = slot empty). The shader animates each ring from its spawn time;
+    /// `spawn_boat_wake_ripples` drops stern breadcrumbs here round-robin.
+    pub ripples: [Vec4; 16],
     /// Cloud shadow field: x coverage, y inv world scale, zw wind offset.
     pub clouds_a: Vec4,
     /// Cloud shadow field: xy sun projection (sun_dir.xz / sun_dir.y),
@@ -69,6 +70,8 @@ pub struct ToonWaterUniform {
     pub map_bounds: Vec4,
     /// xy: streamed detail centre; z/w: inner/outer square edge fade.
     pub detail_bounds: Vec4,
+    /// x: faceted low-poly normal blend (experiment; FISTWORLD_OCEAN_FACETED).
+    pub style: Vec4,
 }
 
 impl Material for ToonWaterMaterial {
@@ -122,7 +125,7 @@ pub(super) fn setup_water_assets(
             ),
             // Overwritten every frame the sun moves appreciably.
             sun_params: Vec4::new(0.35, 0.75, 0.30, 1.1),
-            ripples: [Vec4::new(0.0, 0.0, -100.0, 0.0); 8],
+            ripples: [Vec4::new(0.0, 0.0, -100.0, 0.0); 16],
             // Cloud shadows start off (strength 0 = shade 1.0 exactly);
             // sync_cloud_shadow_params owns these fields at runtime.
             clouds_a: Vec4::ZERO,
@@ -138,12 +141,95 @@ pub(super) fn setup_water_assets(
             ),
             map_bounds: Vec4::ZERO,
             detail_bounds: Vec4::ZERO,
+            // Opt-in faceted-sea experiment; plain smooth toon water default.
+            style: Vec4::new(
+                if std::env::var("FISTWORLD_OCEAN_FACETED").is_ok_and(|v| v == "1") {
+                    1.0
+                } else {
+                    0.0
+                },
+                0.0,
+                0.0,
+                0.0,
+            ),
         },
         alpha_mode: AlphaMode::Blend,
         double_sided: false,
     });
 
     commands.insert_resource(WaterRenderAssets { material });
+}
+
+/// Round-robin wake breadcrumb state for [`spawn_boat_wake_ripples`].
+#[derive(Default)]
+pub(super) struct WakeSpawnState {
+    next_slot: usize,
+    last_drop: HashMap<Entity, Vec2>,
+}
+
+/// Drop one foam breadcrumb behind every moving boat into the shader's ripple
+/// slots. Event-driven by distance traveled: the single shared water material
+/// is only re-prepared on the frames a breadcrumb actually lands (~2/sec per
+/// moving boat), respecting the read-first mutation discipline used by every
+/// other writer of this material.
+pub(super) fn spawn_boat_wake_ripples(
+    time: Res<Time>,
+    warp: Query<&shared::components::TimeWarp>,
+    boats: Query<
+        (
+            Entity,
+            &Transform,
+            Option<&shared::components::CharacterMotion>,
+            Has<shared::components::WreckedVessel>,
+        ),
+        With<shared::components::PlayerBoat>,
+    >,
+    render_assets: Option<Res<WaterRenderAssets>>,
+    mut materials: ResMut<Assets<ToonWaterMaterial>>,
+    mut state: Local<WakeSpawnState>,
+) {
+    let Some(render_assets) = render_assets else {
+        return;
+    };
+    // CharacterMotion is replicated in world-time metres per real second;
+    // normalize so a 10x or 100x simulation doesn't spray breadcrumbs.
+    let time_warp = warp.iter().next().map_or(1.0, |warp| warp.0.max(1.0));
+
+    state.last_drop.retain(|entity, _| boats.contains(*entity));
+
+    for (entity, transform, motion, wrecked) in boats.iter() {
+        let speed = motion.map_or(0.0, |motion| (motion.velocity.xz() / time_warp).length());
+        if wrecked || speed < 0.8 {
+            state.last_drop.remove(&entity);
+            continue;
+        }
+        // The wake trails from the stern; the authored hull points -Z forward.
+        let stern = transform.translation + transform.rotation * Vec3::new(0.0, 0.0, 1.7);
+        let stern_xz = stern.xz();
+        let moved = state
+            .last_drop
+            .get(&entity)
+            .map_or(f32::MAX, |last| last.distance(stern_xz));
+        if moved < 1.6 {
+            continue;
+        }
+        state.last_drop.insert(entity, stern_xz);
+
+        let Some(mut material) = materials.get_mut(&render_assets.material) else {
+            return;
+        };
+        let slot_count = material.uniform.ripples.len();
+        let slot = state.next_slot % slot_count;
+        state.next_slot = (state.next_slot + 1) % slot_count;
+        material.uniform.ripples[slot] = Vec4::new(
+            stern_xz.x,
+            stern_xz.y,
+            // The shader ages slots against globals.time, which mirrors this
+            // wrapped clock.
+            time.elapsed_secs_wrapped(),
+            (speed / 3.0).clamp(0.35, 1.0),
+        );
+    }
 }
 
 /// Keep the finite detailed-water square invisible by fading its outer loaded

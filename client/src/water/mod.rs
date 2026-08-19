@@ -14,8 +14,8 @@ use chunks::{
 };
 use edge::{ensure_ocean_edge_extension, update_ocean_edge_extension};
 use material::{
-    setup_water_assets, sync_water_detail_bounds, sync_water_map_bounds, sync_water_wave_clock,
-    update_water_cull_mode, update_water_sun_dir, ToonWaterMaterial,
+    setup_water_assets, spawn_boat_wake_ripples, sync_water_detail_bounds, sync_water_map_bounds,
+    sync_water_wave_clock, update_water_cull_mode, update_water_sun_dir, ToonWaterMaterial,
 };
 use overlay::{despawn_underwater_overlay, spawn_underwater_overlay, update_underwater_overlay};
 
@@ -73,6 +73,7 @@ impl Plugin for WaterPlugin {
                 sync_water_wave_clock,
                 sync_water_map_bounds,
                 sync_water_detail_bounds.after(spawn_water_chunks),
+                spawn_boat_wake_ripples,
             )
                 .after(TerrainUpdateSet)
                 .run_if(in_state(GameState::Playing)),

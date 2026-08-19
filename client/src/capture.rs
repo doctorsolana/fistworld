@@ -503,6 +503,7 @@ pub fn run(config: CaptureConfig) {
         Update,
         (
             spawn_capture_dinghy,
+            drive_capture_dinghy,
             spawn_capture_heroes,
             stage_capture_permit_placement,
             exercise_capture_door,
@@ -522,10 +523,12 @@ pub fn run(config: CaptureConfig) {
     app.run();
 }
 
-/// `FISTFORCE_CAPTURE_DINGHY=underway|wreck` stages the real runtime scene on
-/// water at the first shot's focus. This is presentation-only—the live server
-/// remains the authority for navigation and disembarkation—but it exercises
-/// the identical named sail nodes, morph and wreck state without a login.
+/// `FISTFORCE_CAPTURE_DINGHY=underway|sailing|wreck` stages the real runtime
+/// scene on water at the first shot's focus. This is presentation-only—the
+/// live server remains the authority for navigation and disembarkation—but it
+/// exercises the identical named sail nodes, morph and wreck state without a
+/// login. `sailing` additionally advances the hull along its velocity so the
+/// wake foam trail behind a genuinely moving boat can be photographed.
 fn spawn_capture_dinghy(
     mut commands: Commands,
     mut config: ResMut<CaptureConfig>,
@@ -558,16 +561,24 @@ fn spawn_capture_dinghy(
         shot.focus.y = water + 0.55;
     }
     let wrecked = mode.trim().eq_ignore_ascii_case("wreck");
+    let sailing = mode.trim().eq_ignore_ascii_case("sailing");
+    // Match the heading to the velocity so a sailing hull moves bow-first
+    // (authored bow is -Z: yaw for velocity v is atan2(-v.x, -v.z)).
+    let velocity = Vec3::new(2.0, 0.0, -1.0);
+    let yaw = (-velocity.x).atan2(-velocity.z);
     let mut vessel = commands.spawn((
         shared::components::PlayerBoat,
         shared::components::Vessel,
         shared::components::CommandedBy("capture-sailor".into()),
         shared::components::PlayerPosition(position),
-        shared::components::PlayerRotation(-0.45),
-        shared::components::CharacterMotion::new(Vec3::new(2.0, 0.0, -1.0)),
+        shared::components::PlayerRotation(yaw),
+        shared::components::CharacterMotion::new(velocity),
     ));
     if wrecked {
         vessel.insert(shared::components::WreckedVessel);
+    }
+    if sailing {
+        vessel.insert(CaptureSailing);
     }
     if !wrecked {
         let manifest = match shared::character::CharacterManifest::load() {
@@ -578,7 +589,7 @@ fn spawn_capture_dinghy(
                 return;
             }
         };
-        let helm = position + Quat::from_rotation_y(-0.45) * Vec3::new(0.0, 0.35, 1.24);
+        let helm = position + Quat::from_rotation_y(yaw) * Vec3::new(0.0, 0.35, 1.24);
         commands.spawn((
             shared::components::Hero {
                 owner: lightyear::prelude::PeerId::Netcode(9_999),
@@ -592,11 +603,31 @@ fn spawn_capture_dinghy(
             shared::components::AboardBoat,
             shared::components::CharacterActivity::Sitting,
             shared::components::PlayerPosition(helm),
-            shared::components::PlayerRotation(-0.45),
-            shared::components::CharacterMotion::new(Vec3::new(2.0, 0.0, -1.0)),
+            shared::components::PlayerRotation(yaw),
+            shared::components::CharacterMotion::new(velocity),
         ));
     }
     *spawned = true;
+}
+
+/// Marks the staged capture dinghy that should genuinely travel, so the wake
+/// breadcrumb trail forms exactly as it does behind a live sailing boat.
+#[derive(Component)]
+struct CaptureSailing;
+
+fn drive_capture_dinghy(
+    time: Res<Time>,
+    mut boats: Query<
+        (
+            &mut shared::components::PlayerPosition,
+            &shared::components::CharacterMotion,
+        ),
+        With<CaptureSailing>,
+    >,
+) {
+    for (mut position, motion) in boats.iter_mut() {
+        position.0 += motion.velocity * time.delta_secs();
+    }
 }
 
 /// `FISTFORCE_CAPTURE_DOOR=open` holds the offline settlement's town-hall
