@@ -128,13 +128,16 @@ pub fn setup_rendering(
                 Color::srgb(0.88, 0.92, 0.96),
             ),
         },
-        // Gaussian samples a wide PCF kernel per fragment per cascade — measured
-        // ~half the frame at RTS zooms. Hardware2x2 is the ablation hook; the
-        // default stays Gaussian until the measurement verdict is in.
-        if std::env::var("FISTFORCE_SHADOW_FILTER").is_ok_and(|v| v == "hw") {
-            ShadowFilteringMethod::Hardware2x2
-        } else {
+        // Measurement verdict (2026-08-19, M-series, 1920x1200, real connected
+        // game): Gaussian's wide per-fragment PCF kernel held the steady state
+        // at ~56-72 fps; Hardware2x2 ran ~87-99 fps — about +50% — and at RTS
+        // zooms the shadow edges read equally well (arguably crisper). Default
+        // is Hardware2x2; FISTFORCE_SHADOW_FILTER=gaussian is the ablation
+        // hook to compare the soft filter again.
+        if std::env::var("FISTFORCE_SHADOW_FILTER").is_ok_and(|v| v == "gaussian") {
             ShadowFilteringMethod::Gaussian
+        } else {
+            ShadowFilteringMethod::Hardware2x2
         },
     ));
     // SSAO is opt-in: a fullscreen AO pass plus a depth/normal prepass is a
