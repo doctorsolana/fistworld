@@ -1,7 +1,7 @@
 // Low-resolution world material. Land keeps StandardMaterial's normal PBR
 // response; ocean vertices are a stable, unlit continuation of the detailed
-// water surface. COLOR_0 alpha is authored metadata (1 land, 0 sea-level
-// ocean, 0.25 river stamp), interpolated by the rasterizer to soften the far
+// water surface. COLOR_0 alpha is authored metadata (land coverage 0..1,
+// rivers stamped at -0.25), interpolated by the rasterizer to soften the far
 // shoreline.
 
 #import bevy_pbr::{
@@ -155,14 +155,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
 #ifdef VERTEX_COLORS
-    // COLOR_0 alpha is authored metadata: 0.0 = sea-level ocean underlay,
-    // 0.25 = river stamp, 1.0 = land, interpolated at the boundaries.
-    let authored_a = clamp(in.color.a, 0.0, 1.0);
+    // COLOR_0 alpha is authored metadata: the LAND COVERAGE of the lattice
+    // cell (0 = open sea, 1 = solid land, fractional on anti-aliased
+    // coastline vertices). Rivers are stamped at exactly -0.25 — negative,
+    // because interpolation between any two coverage values can never go
+    // below zero, so a river can never be faked at a coast.
+    let a_raw = in.color.a;
 #else
-    let authored_a = 1.0;
+    let a_raw = 1.0;
 #endif
-    let is_river = authored_a > 0.1 && authored_a < 0.4;
-    let ocean = select(1.0 - authored_a, 1.0, is_river);
+    let is_river = a_raw < -0.05;
+    let land_frac = clamp(a_raw, 0.0, 1.0);
+    let ocean = select(1.0 - land_frac, 1.0, is_river);
 
     // COLOR_0 RGB already contains the depth ramp. Alpha is metadata here,
     // not transparency, so restore opacity before StandardMaterial shading.
@@ -180,7 +184,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // detail, and the river stamp (with its interpolated banks) rendered as an
     // opaque band floating over the detailed terrain at middle zoom; both must
     // go. water_params.yz is the detail-hole center and w its half extent.
-    if (inside_detail_hole && authored_a > 0.1) {
+    if (inside_detail_hole && (is_river || a_raw > 0.04)) {
         discard;
     }
 

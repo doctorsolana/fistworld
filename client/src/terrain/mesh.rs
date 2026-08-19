@@ -334,8 +334,8 @@ fn far_river_surfaces(
     origin: Vec2,
     spacing: f32,
     resolution: usize,
-) -> Vec<Option<f32>> {
-    let mut surfaces = vec![None; resolution * resolution];
+) -> Vec<Option<(f32, f32)>> {
+    let mut surfaces: Vec<Option<(f32, f32)>> = vec![None; resolution * resolution];
     let Some(ocean) = terrain.water_level() else {
         return surfaces;
     };
@@ -381,9 +381,18 @@ fn far_river_surfaces(
                             if height > surface + 2.0 {
                                 continue;
                             }
+                            // Edge weight 1 on the axis, 0 at the stamp rim:
+                            // the colour pass blends partial-weight vertices
+                            // toward land so the 16m lattice cannot render
+                            // the ribbon as a hard zigzag at map zoom.
+                            let weight = 1.0 - world.distance(p) / radius;
                             let target = &mut surfaces[cz as usize * resolution + cx as usize];
-                            *target =
-                                Some(target.map_or(surface, |existing| existing.max(surface)));
+                            *target = Some(target.map_or(
+                                (surface, weight),
+                                |(existing_surface, existing_weight)| {
+                                    (existing_surface.max(surface), existing_weight.max(weight))
+                                },
+                            ));
                         }
                     }
                 }
@@ -416,7 +425,12 @@ pub(crate) fn build_far_terrain_mesh(
             let normal = terrain.get_normal(world_x, world_z);
             let water_level = terrain.generator.loaded_map().heightmap.water_level;
             let is_ocean = matches!(water_level, Some(level) if height <= level);
-            let river_surface = river_surfaces[zi * resolution + xi];
+            // Only the stamp's solid core renders AS the river; rim vertices
+            // stay land geometry and just take a colour tint below.
+            let river_stamp = river_surfaces[zi * resolution + xi];
+            let river_surface = river_stamp
+                .filter(|(_, weight)| *weight >= 0.5)
+                .map(|(surface, _)| surface);
             let is_water = is_ocean || river_surface.is_some();
 
             // The far ocean represents the water surface, not the normally-lit
@@ -452,12 +466,14 @@ pub(crate) fn build_far_terrain_mesh(
             // would call them land.
             if river_surface.is_some() {
                 // The shallow end of the ocean ramp, so a river reads as the
-                // same substance as the sea it runs into. Alpha 0.25 is the
-                // far material's RIVER marker (0.0 is sea-level ocean), not
-                // transparency: inside the moving detail hole rivers must be
-                // discarded — the detailed terrain and water fully cover them
-                // there — while the sea-level ocean underlay must survive.
-                colors.push([0.42, 0.66, 0.78, 0.25]);
+                // same substance as the sea it runs into. Alpha -0.25 is the
+                // far material's RIVER marker, deliberately NEGATIVE: coastal
+                // vertices carry fractional land coverage in 0..1, and a
+                // negative stamp is the only value interpolation against any
+                // coverage can never produce. Inside the moving detail hole
+                // rivers must be discarded — the detailed terrain and water
+                // fully cover them — while the sea-level underlay survives.
+                colors.push([0.42, 0.66, 0.78, -0.25]);
                 continue;
             }
 
@@ -578,8 +594,50 @@ pub(crate) fn build_far_terrain_mesh(
 
             // Alpha is a material marker on this opaque mesh: the far shader
             // shades ocean as unlit water and everything else as ordinary PBR
-            // terrain. Interpolation across triangles softens the handoff.
-            colors.push([color.x, color.y, color.z, if is_water { 0.0 } else { 1.0 }]);
+            // terrain. Near the waterline alpha carries the true sub-lattice
+            // LAND COVERAGE (2x2 soft supersample) and RGB blends between the
+            // two sides — without this the 16m lattice renders every coast as
+            // a hard mid-edge staircase at map zoom.
+            let near_coast =
+                matches!(water_level, Some(level) if (height - level).abs() < spacing * 0.5);
+            let (color, alpha) = match (near_coast, water_level) {
+                (true, Some(level)) => {
+                    let offset = spacing * 0.25;
+                    let mut water_cover = 0.0;
+                    for (dx, dz) in [
+                        (-offset, -offset),
+                        (offset, -offset),
+                        (-offset, offset),
+                        (offset, offset),
+                    ] {
+                        let sub = terrain.get_height(world_x + dx, world_z + dz);
+                        water_cover += ((level - sub) + 0.5).clamp(0.0, 1.0);
+                    }
+                    let land_frac = 1.0 - water_cover * 0.25;
+                    let sand = Vec3::new(palette.sand.x, palette.sand.y, palette.sand.z);
+                    let coast_water = Vec3::from_array([
+                        crate::water::WATER_SHALLOW_RGBA[0],
+                        crate::water::WATER_SHALLOW_RGBA[1],
+                        crate::water::WATER_SHALLOW_RGBA[2],
+                    ]) * 0.70
+                        + sand * 0.30;
+                    if is_water {
+                        (color.lerp(sand, land_frac), land_frac)
+                    } else {
+                        (color.lerp(coast_water, 1.0 - land_frac), land_frac)
+                    }
+                }
+                _ => (color, if is_water { 0.0 } else { 1.0 }),
+            };
+            // Soften the river ribbon's rim: partial-weight stamp vertices
+            // lean toward the river colour while remaining land.
+            let color = match river_stamp {
+                Some((_, weight)) if weight < 0.5 => {
+                    color.lerp(Vec3::new(0.42, 0.66, 0.78), (weight * 1.4).min(0.7))
+                }
+                _ => color,
+            };
+            colors.push([color.x, color.y, color.z, alpha]);
         }
     }
 
@@ -690,8 +748,11 @@ mod tests {
                 let sample = Vec2::new(point.x, point.z);
                 let origin = sample - Vec2::splat(spacing * 2.0);
                 let surfaces = far_river_surfaces(&terrain, origin, spacing, resolution);
-                let index = surfaces.iter().position(Option::is_some)?;
-                Some((origin, index, surfaces[index].unwrap()))
+                // Only solid-core stamps (weight >= 0.5) become river geometry.
+                let index = surfaces
+                    .iter()
+                    .position(|entry| entry.is_some_and(|(_, weight)| weight >= 0.5))?;
+                Some((origin, index, surfaces[index].unwrap().0))
             })
             .expect("the map-scale river stamp should reach some grid vertex");
 
@@ -705,9 +766,9 @@ mod tests {
             _ => panic!("unexpected colors"),
         };
 
-        // Alpha 0.25 is the far material's river marker: water everywhere,
-        // but discarded inside the moving detail hole (unlike alpha-0 ocean).
-        assert_eq!(colors[river_index][3], 0.25);
+        // Alpha -0.25 is the far material's river marker: negative so that
+        // interpolation against coastal coverage values can never fake it.
+        assert_eq!(colors[river_index][3], -0.25);
         assert!(
             (positions[river_index][1]
                 - (river_surface + crate::terrain::map_view::FAR_WATER_SURFACE_OFFSET))

@@ -82,7 +82,13 @@ fn build_live_map_image(
             let dz = (zd - zu) / (2.0 * step_world);
             let shade = (1.0 - (dx * 0.7 + dz * 0.7) * 1.6).clamp(0.55, 1.35);
 
-            let underwater = water_level.map(|wl| h < wl).unwrap_or(false);
+            // Soft waterline: the binary h < wl test pixelated every coast
+            // into a 16m staircase. Blend across a ±0.35m height band so the
+            // edge anti-aliases along the bank ramp instead.
+            let water_t = water_level
+                .map(|wl| ((wl - h) / 0.35 + 0.5).clamp(0.0, 1.0))
+                .unwrap_or(0.0);
+            let underwater = water_t >= 1.0;
             let rgb = if underwater {
                 let wl = water_level.unwrap_or(0.0);
                 let depth_t = ((wl - h) / 8.0).clamp(0.0, 1.0);
@@ -171,6 +177,15 @@ fn build_live_map_image(
                     )
                 };
                 [base[0] * shade, base[1] * shade, base[2] * shade]
+            };
+
+            let rgb = if water_t > 0.0 && !underwater {
+                let wl = water_level.unwrap_or(0.0);
+                let depth_t = ((wl - h) / 8.0).clamp(0.0, 1.0);
+                let water_rgb = lerp3([0.36, 0.66, 0.80], [0.05, 0.20, 0.38], depth_t);
+                lerp3(rgb, water_rgb, water_t)
+            } else {
+                rgb
             };
 
             pixels.push((rgb[0].clamp(0.0, 1.0) * 255.0) as u8);
