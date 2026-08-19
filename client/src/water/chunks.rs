@@ -90,6 +90,7 @@ pub(super) fn next_water_detail_coverage(
     loaded: &LoadedWaterChunks,
     desired_center: ChunkCoord,
     desired_radius: i32,
+    min_recenter_radius: i32,
 ) -> WaterDetailCoverage {
     let desired_radius = desired_radius.max(0);
     let complete = complete_water_render_distance(loaded, desired_center, desired_radius);
@@ -97,6 +98,13 @@ pub(super) fn next_water_detail_coverage(
         return current;
     }
 
+    // Recenter as one atomic handoff — progressively moving the square while
+    // its leading rings are incomplete is the visible dark-box bug — but do
+    // not wait for the ENTIRE middle-zoom footprint (a 41x41 square taking
+    // seconds to fill after a long pan). Once the terrain square plus the fade
+    // band is complete, the handoff is already invisible; the same-center arm
+    // then grows the radius outward every frame as further rings land.
+    let recenter_radius = desired_radius.min(min_recenter_radius.max(0));
     match current.center {
         None => WaterDetailCoverage {
             center: Some(desired_center),
@@ -106,11 +114,9 @@ pub(super) fn next_water_detail_coverage(
             center: Some(desired_center),
             radius: complete,
         },
-        // Recenter only as one atomic handoff. Progressively moving the square
-        // while its leading rings are incomplete is the visible dark-box bug.
-        Some(_) if complete >= desired_radius => WaterDetailCoverage {
+        Some(_) if complete >= recenter_radius => WaterDetailCoverage {
             center: Some(desired_center),
-            radius: desired_radius,
+            radius: complete,
         },
         Some(_) => current,
     }
@@ -271,7 +277,7 @@ mod tests {
         loaded.entries.insert(new_center, None);
 
         assert_eq!(
-            next_water_detail_coverage(current, &loaded, new_center, 1),
+            next_water_detail_coverage(current, &loaded, new_center, 1, 1),
             current
         );
 
@@ -279,7 +285,32 @@ mod tests {
             loaded.entries.insert(coord, None);
         }
         assert_eq!(
-            next_water_detail_coverage(current, &loaded, new_center, 1),
+            next_water_detail_coverage(current, &loaded, new_center, 1, 1),
+            WaterDetailCoverage {
+                center: Some(new_center),
+                radius: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn coverage_recenter_does_not_wait_for_the_full_middle_zoom_footprint() {
+        let old_center = ChunkCoord::new(0, 0);
+        let new_center = ChunkCoord::new(6, 0);
+        let current = WaterDetailCoverage {
+            center: Some(old_center),
+            radius: 2,
+        };
+        let mut loaded = LoadedWaterChunks::default();
+        for coord in new_center.chunks_in_radius(1) {
+            loaded.entries.insert(coord, None);
+        }
+
+        // Desired footprint is much larger, but the terrain square plus fade
+        // band (min_recenter_radius = 1 here) is complete: recenter now with
+        // the complete radius and let the same-center arm grow it afterward.
+        assert_eq!(
+            next_water_detail_coverage(current, &loaded, new_center, 20, 1),
             WaterDetailCoverage {
                 center: Some(new_center),
                 radius: 1,

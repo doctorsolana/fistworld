@@ -6,7 +6,7 @@ use shared::water::{
     OCEAN_LOOP_SECONDS, WATER_DEEP_SWELL_AMPLITUDE, WATER_SWELL_DEPTH_FULL, WATER_SWELL_DEPTH_START,
 };
 
-use crate::terrain::map_view::{WATER_FADE_END, WATER_FADE_START};
+use crate::terrain::map_view::{FOAM_FADE_END, FOAM_FADE_START, WATER_FADE_END, WATER_FADE_START};
 
 const TOON_WATER_SHADER: &str = "toon_water.wgsl";
 
@@ -62,7 +62,7 @@ pub struct ToonWaterUniform {
     /// THE storm system: xy = center at the wind anchor, z = storminess
     /// (0 while clouds are disabled), w: reserved.
     pub storm: Vec4,
-    /// xy: per-pixel detail fade start/end; zw reserved.
+    /// xy: per-pixel detail fade start/end; zw: foam-family fade start/end.
     pub distance_fade: Vec4,
     /// min xz, max xz of the playable rectangle. The visual edge-ocean patch
     /// uses this to remain strictly outside gameplay terrain.
@@ -109,7 +109,9 @@ pub(super) fn setup_water_assets(
             deep_color: LinearRgba::from_f32_array(WATER_DEEP_RGBA),
             foam_color: LinearRgba::new(0.96, 0.98, 1.00, 1.0),
             // x: foam edge width, y: foam smoothness, z: fleck density, w: flow speed
-            foam_params: Vec4::new(0.16, 0.055, 1.0, 0.16),
+            // Edge width 0.13 keeps whitecaps as sparse caps on genuine
+            // crests; 0.16 painted wide soft discs across the open sea.
+            foam_params: Vec4::new(0.13, 0.055, 1.0, 0.16),
             // x: foam scale, y/z: shore-distance swell fade, w: near-shore swell multiplier
             ring_params: Vec4::new(1.35, 0.03, 0.72, 0.12),
             wave_params: Vec4::new(
@@ -128,7 +130,12 @@ pub(super) fn setup_water_assets(
             clouds_c: Vec4::ZERO,
             climate: Vec4::ZERO,
             storm: Vec4::new(1.0e8, 1.0e8, 0.0, 0.0),
-            distance_fade: Vec4::new(WATER_FADE_START, WATER_FADE_END, 0.0, 0.0),
+            distance_fade: Vec4::new(
+                WATER_FADE_START,
+                WATER_FADE_END,
+                FOAM_FADE_START,
+                FOAM_FADE_END,
+            ),
             map_bounds: Vec4::ZERO,
             detail_bounds: Vec4::ZERO,
         },
@@ -159,11 +166,18 @@ pub(super) fn sync_water_detail_bounds(
     let zoom = cameras.single().map_or(0.0, |camera| camera.zoom);
     let desired_distance =
         super::chunks::desired_water_render_distance(streaming.render_distance, zoom);
+    // Recentering may happen as soon as the terrain streaming square plus the
+    // three-chunk fade band is complete: that is exactly the region the far
+    // terrain hole exposes, so waiting for the full middle-zoom water
+    // footprint would leave transparent detailed water over the dark far
+    // underlay near the leading edge for seconds after a fast pan.
+    let min_recenter = streaming.render_distance.max(0) + 3;
     let next = super::chunks::next_water_detail_coverage(
         *coverage,
         &loaded_water,
         center,
         desired_distance,
+        min_recenter,
     );
     if next.center.is_none() {
         return;

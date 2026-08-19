@@ -327,7 +327,8 @@ pub(crate) fn compute_chunk_tangents(
 /// against ~250 river segments is 66 million distance tests, and stamping the
 /// segments costs a few thousand. Keeping the surface as well as a boolean is
 /// essential: the map mesh must put the river at water height and tag it as
-/// water, or the moving detail hole removes it at middle zoom.
+/// river water. Inside the moving detail hole the stamp is discarded — the
+/// streamed terrain and water render the real channel there.
 fn far_river_surfaces(
     terrain: &shared::terrain::WorldTerrain,
     origin: Vec2,
@@ -368,6 +369,18 @@ fn far_river_surfaces(
                             origin.y + cz as f32 * spacing,
                         );
                         if world.distance(p) <= radius {
+                            // Stamp only genuine valley floor. Dragging bank
+                            // and ridge vertices inside the smear radius down
+                            // to the river surface carved an artificial ~50m
+                            // canyon into the far mesh: its dark unlit walls
+                            // read as an opaque band crossing the whole map at
+                            // middle zoom, with pale vertical walls wherever
+                            // the bed dropped steeply. Where the river runs in
+                            // a gorge the coarse mesh simply shows the gorge.
+                            let height = terrain.get_height(world.x, world.y);
+                            if height > surface + 2.0 {
+                                continue;
+                            }
                             let target = &mut surfaces[cz as usize * resolution + cx as usize];
                             *target =
                                 Some(target.map_or(surface, |existing| existing.max(surface)));
@@ -407,9 +420,10 @@ pub(crate) fn build_far_terrain_mesh(
             let is_water = is_ocean || river_surface.is_some();
 
             // The far ocean represents the water surface, not the normally-lit
-            // seabed. Keep it at one stable height just below the animated
-            // surface; moving it during an LOD transition visibly distorted
-            // rivers and shallow coastlines into dark boxes.
+            // seabed. Keep it at one stable height beneath the animated
+            // surface's deepest trough; moving it during an LOD transition
+            // visibly distorted rivers and shallow coastlines into dark boxes,
+            // while placing it inside the swell produced moving gray cutouts.
             let rendered_height = if is_water {
                 river_surface.unwrap_or_else(|| water_level.unwrap_or(height))
                     + crate::terrain::map_view::FAR_WATER_SURFACE_OFFSET
@@ -438,9 +452,12 @@ pub(crate) fn build_far_terrain_mesh(
             // would call them land.
             if river_surface.is_some() {
                 // The shallow end of the ocean ramp, so a river reads as the
-                // same substance as the sea it runs into. Alpha zero is the
-                // far material's water marker, not transparency.
-                colors.push([0.42, 0.66, 0.78, 0.0]);
+                // same substance as the sea it runs into. Alpha 0.25 is the
+                // far material's RIVER marker (0.0 is sea-level ocean), not
+                // transparency: inside the moving detail hole rivers must be
+                // discarded — the detailed terrain and water fully cover them
+                // there — while the sea-level ocean underlay must survive.
+                colors.push([0.42, 0.66, 0.78, 0.25]);
                 continue;
             }
 
@@ -469,11 +486,17 @@ pub(crate) fn build_far_terrain_mesh(
                     // Same deliberately soft three-band quantization as
                     // toon_water.wgsl.
                     let depth_banded = depth.lerp((depth * 3.0 + 0.5).floor() / 3.0, 0.35);
+                    // The raw shallow material constant is only ever seen up
+                    // close through ~70% alpha over a sandy seabed; baked
+                    // opaque it rims every coast in neon cyan at map zoom.
+                    // Bake the observed composite instead, exactly as the
+                    // deep endpoint below bakes its own composite.
                     let shallow = Vec3::from_array([
                         crate::water::WATER_SHALLOW_RGBA[0],
                         crate::water::WATER_SHALLOW_RGBA[1],
                         crate::water::WATER_SHALLOW_RGBA[2],
-                    ]);
+                    ]) * 0.70
+                        + Vec3::new(palette.sand.x, palette.sand.y, palette.sand.z) * 0.30;
                     // The detailed surface is translucent over the seabed, so
                     // its observed deep color is a touch less blue than its
                     // material constant alone. Bake that composite into the
@@ -650,21 +673,27 @@ mod tests {
     #[test]
     fn far_river_vertices_are_water_at_the_river_surface() {
         let terrain = shared::terrain::WorldTerrain::default();
-        let river = terrain
+        let spacing = 16.0;
+        let resolution = 5;
+        // The valley-floor gate legitimately refuses gorge sections, so probe
+        // the start, middle and end of each river until one point stamps.
+        let (origin, river_index, river_surface) = terrain
             .rivers()
             .iter()
-            .find(|river| river.len() >= 2)
-            .expect("the default map should contain a river");
-        let sample = Vec2::new(river[0].x, river[0].z);
-        let spacing = 16.0;
-        let origin = sample - Vec2::splat(spacing * 2.0);
-        let resolution = 5;
-        let surfaces = far_river_surfaces(&terrain, origin, spacing, resolution);
-        let river_index = surfaces
-            .iter()
-            .position(Option::is_some)
-            .expect("the map-scale river stamp should reach a nearby grid vertex");
-        let river_surface = surfaces[river_index].unwrap();
+            .filter(|river| river.len() >= 2)
+            .flat_map(|river| {
+                [0, river.len() / 2, river.len() - 1]
+                    .into_iter()
+                    .filter_map(move |i| river.get(i))
+            })
+            .find_map(|point| {
+                let sample = Vec2::new(point.x, point.z);
+                let origin = sample - Vec2::splat(spacing * 2.0);
+                let surfaces = far_river_surfaces(&terrain, origin, spacing, resolution);
+                let index = surfaces.iter().position(Option::is_some)?;
+                Some((origin, index, surfaces[index].unwrap()))
+            })
+            .expect("the map-scale river stamp should reach some grid vertex");
 
         let mesh = build_far_terrain_mesh(&terrain, origin, spacing, resolution);
         let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
@@ -676,7 +705,9 @@ mod tests {
             _ => panic!("unexpected colors"),
         };
 
-        assert_eq!(colors[river_index][3], 0.0);
+        // Alpha 0.25 is the far material's river marker: water everywhere,
+        // but discarded inside the moving detail hole (unlike alpha-0 ocean).
+        assert_eq!(colors[river_index][3], 0.25);
         assert!(
             (positions[river_index][1]
                 - (river_surface + crate::terrain::map_view::FAR_WATER_SURFACE_OFFSET))

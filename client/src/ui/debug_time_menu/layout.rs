@@ -6,19 +6,18 @@ pub(super) fn spawn_debug_time_menu(
     mut commands: Commands,
     open: Res<DebugTimeMenuOpen>,
     god: Res<GodCapability>,
+    cloud_override: Res<CloudCoverOverride>,
+    perf: Res<DebugPerfSettings>,
     existing: Query<Entity, With<DebugMenuRoot>>,
 ) {
     if !open.0 || !existing.is_empty() {
         return;
     }
 
+    let panel_height = if god.0 { 650.0 } else { 330.0 };
     let layout = ModalLayout {
-        panel_size: if god.0 {
-            Vec2::new(420.0, 580.0)
-        } else {
-            Vec2::new(420.0, 330.0)
-        },
-        panel_padding: 18.0,
+        panel_size: Vec2::new(560.0, panel_height),
+        panel_padding: 0.0,
     };
 
     let nodes = spawn_modal(
@@ -29,223 +28,328 @@ pub(super) fn spawn_debug_time_menu(
         layout,
     );
 
+    commands.entity(nodes.panel).insert((
+        debug_panel_node(panel_height),
+        BackgroundColor(LIMEWASH_LIT),
+        BorderColor::all(PLATE_RULE),
+        plate_shadow(),
+    ));
     commands.entity(nodes.panel).with_children(|panel| {
         if !god.0 {
+            spawn_debug_header(panel, "SERVER ADMIN", "GOD ACCESS / CONNECTION SECURITY");
             spawn_god_access_panel(panel);
+            spawn_debug_footer(panel, "ENTER submit   ESC close");
             return;
         }
-        panel.spawn((
-            Text::new("DEBUG TIME"),
-            TextFont {
-                font_size: FontSize::Px(26.0),
-                ..default()
-            },
-            TextColor(EMBER),
-            Node {
-                margin: UiRect::bottom(Val::Px(8.0)),
-                ..default()
-            },
-        ));
-
-        panel.spawn((
-            Text::new("Set server time of day"),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor(INK_MUTED),
-            Node {
-                margin: UiRect::bottom(Val::Px(16.0)),
-                ..default()
-            },
-        ));
-
-        spawn_time_button(panel, "NIGHT", TimeOfDayPreset::Night);
-        spawn_time_button(panel, "MORNING", TimeOfDayPreset::Morning);
-        spawn_time_button(panel, "MIDDAY", TimeOfDayPreset::Midday);
-        spawn_time_button(panel, "SUNSET", TimeOfDayPreset::Sunset);
-
-        panel.spawn((
-            Text::new("Cloud cover test"),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor(INK_MUTED),
-            Node {
-                margin: UiRect::top(Val::Px(12.0)),
-                ..default()
-            },
-        ));
-
-        spawn_cloud_cover_button(panel, "AUTO CLOUDS", CloudCoverMode::Auto);
-        spawn_cloud_cover_button(panel, "FORCE CLEAR", CloudCoverMode::Clear);
-        spawn_cloud_cover_button(panel, "FORCE CLOUDY", CloudCoverMode::Cloudy);
-        spawn_cloud_cover_button(panel, "FORCE STORM", CloudCoverMode::Storm);
-
-        panel.spawn((
-            Text::new("Performance debug"),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor(INK_MUTED),
-            Node {
-                margin: UiRect::top(Val::Px(12.0)),
-                ..default()
-            },
-        ));
-
-        spawn_weightmap_stats_button(panel);
-        spawn_render_diag_button(panel);
-
-        // Character selection section
-        panel.spawn((
-            Text::new("Player character"),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor(INK_MUTED),
-            Node {
-                margin: UiRect::top(Val::Px(12.0)),
-                ..default()
-            },
-        ));
-
-        panel.spawn((
-            Text::new("NPC debug"),
-            TextFont {
-                font_size: FontSize::Px(12.0),
-                ..default()
-            },
-            TextColor(INK_MUTED),
-            Node {
-                margin: UiRect::top(Val::Px(12.0)),
-                ..default()
-            },
-        ));
-
+        spawn_debug_header(panel, "WORLD CONTROL", "DEVELOPER CONSOLE / J");
         panel
             .spawn((
-                Button,
-                CloseButton,
+                DebugMenuViewport,
+                ScrollPosition::default(),
                 Node {
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                    ..debug_button_node()
+                    width: Val::Percent(100.0),
+                    flex_grow: 1.0,
+                    min_height: Val::Px(0.0),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Stretch,
+                    row_gap: Val::Px(18.0),
+                    padding: UiRect::all(Val::Px(22.0)),
+                    overflow: Overflow::scroll_y(),
+                    scrollbar_width: 8.0,
+                    ..default()
                 },
-                button_chrome(UiButtonVariant::Secondary),
             ))
-            .with_children(|btn| {
-                btn.spawn((
-                    Text::new("CLOSE"),
-                    UiButtonLabel,
-                    debug_button_font(),
-                    TextColor(INK),
-                ));
+            .with_children(|body| {
+                spawn_section_header(
+                    body,
+                    "WORLD CLOCK",
+                    "Move the authoritative server clock to a stable daylight preset.",
+                );
+                body.spawn(debug_button_row()).with_children(|row| {
+                    spawn_time_button(row, "NIGHT", TimeOfDayPreset::Night);
+                    spawn_time_button(row, "MORNING", TimeOfDayPreset::Morning);
+                });
+                body.spawn(debug_button_row()).with_children(|row| {
+                    spawn_time_button(row, "MIDDAY", TimeOfDayPreset::Midday);
+                    spawn_time_button(row, "SUNSET", TimeOfDayPreset::Sunset);
+                });
+
+                spawn_section_header(
+                    body,
+                    "WEATHER",
+                    "Override cloud cover for lighting, visibility and storm testing.",
+                );
+                body.spawn(debug_button_row()).with_children(|row| {
+                    spawn_cloud_cover_button(
+                        row,
+                        "AUTO CLOUDS",
+                        CloudCoverMode::Auto,
+                        cloud_override.mode == CloudCoverMode::Auto,
+                    );
+                    spawn_cloud_cover_button(
+                        row,
+                        "FORCE CLEAR",
+                        CloudCoverMode::Clear,
+                        cloud_override.mode == CloudCoverMode::Clear,
+                    );
+                });
+                body.spawn(debug_button_row()).with_children(|row| {
+                    spawn_cloud_cover_button(
+                        row,
+                        "FORCE CLOUDY",
+                        CloudCoverMode::Cloudy,
+                        cloud_override.mode == CloudCoverMode::Cloudy,
+                    );
+                    spawn_cloud_cover_button(
+                        row,
+                        "FORCE STORM",
+                        CloudCoverMode::Storm,
+                        cloud_override.mode == CloudCoverMode::Storm,
+                    );
+                });
+
+                spawn_section_header(
+                    body,
+                    "DIAGNOSTICS",
+                    "Opt-in instrumentation for investigating rendering and terrain cost.",
+                );
+                body.spawn(debug_button_row()).with_children(|row| {
+                    spawn_weightmap_stats_button(row, perf.weightmap_stats);
+                    spawn_render_diag_button(row, perf.render_diag_logging);
+                });
             });
+        spawn_debug_footer(panel, "J or ESC close");
     });
 }
 
-fn spawn_god_access_panel(panel: &mut ChildSpawnerCommands<'_>) {
-    panel.spawn((
-        Text::new("SERVER ADMIN"),
-        TextFont {
-            font_size: FontSize::Px(26.0),
-            ..default()
-        },
-        TextColor(EMBER),
-    ));
-    panel.spawn((
-        Text::new("Enter the hosted server access key to unlock God Mode for this connection."),
-        TextFont {
-            font_size: FontSize::Px(12.0),
-            ..default()
-        },
-        TextColor(INK_MUTED),
-        Node {
-            max_width: Val::Px(340.0),
-            margin: UiRect::vertical(Val::Px(12.0)),
-            ..default()
-        },
-    ));
+fn debug_panel_node(height: f32) -> Node {
+    Node {
+        width: Val::Vw(88.0),
+        max_width: Val::Px(560.0),
+        height: Val::Vh(84.0),
+        max_height: Val::Px(height),
+        flex_direction: FlexDirection::Column,
+        align_items: AlignItems::Stretch,
+        border: UiRect::all(Val::Px(1.0)),
+        border_radius: BorderRadius::all(Val::Px(RADIUS)),
+        overflow: Overflow::clip(),
+        ..default()
+    }
+}
+
+fn spawn_debug_header(panel: &mut ChildSpawnerCommands<'_>, title: &str, subtitle: &str) {
     panel
         .spawn((
             Node {
-                width: Val::Px(340.0),
-                height: Val::Px(42.0),
+                width: Val::Percent(100.0),
+                flex_shrink: 0.0,
+                justify_content: JustifyContent::SpaceBetween,
                 align_items: AlignItems::Center,
-                padding: UiRect::horizontal(Val::Px(10.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
+                padding: UiRect::axes(Val::Px(22.0), Val::Px(15.0)),
+                border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(crate::ui::styles::SLATE),
-            BorderColor::from(INK_MUTED),
+            BackgroundColor(LIMEWASH_HEADER),
+            BorderColor::all(PLATE_RULE_SOFT),
         ))
-        .with_children(|field| {
-            field.spawn((
-                GodAccessInputDisplay,
-                Text::new("_"),
-                TextFont {
-                    font_size: FontSize::Px(18.0),
+        .with_children(|header| {
+            header
+                .spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(3.0),
                     ..default()
-                },
-                TextColor(crate::ui::styles::INK_INVERSE),
-            ));
+                })
+                .with_children(|copy| {
+                    copy.spawn((
+                        Text::new(title),
+                        TextFont {
+                            font_size: FontSize::Px(type_scale::HEADING),
+                            ..default()
+                        },
+                        TextColor(EMBER),
+                    ));
+                    copy.spawn((
+                        Text::new(subtitle),
+                        TextFont {
+                            font_size: FontSize::Px(type_scale::CAPTION),
+                            ..default()
+                        },
+                        TextColor(INK_MUTED),
+                    ));
+                });
+            header
+                .spawn((
+                    Button,
+                    CloseButton,
+                    Node {
+                        width: Val::Px(30.0),
+                        height: Val::Px(30.0),
+                        flex_shrink: 0.0,
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                        ..default()
+                    },
+                    button_chrome(UiButtonVariant::Ghost),
+                ))
+                .with_child((
+                    Text::new("X"),
+                    UiButtonLabel,
+                    TextFont {
+                        font_size: FontSize::Px(type_scale::VALUE),
+                        ..default()
+                    },
+                    TextColor(INK_MUTED),
+                ));
         });
-    panel.spawn((
-        GodAccessFeedbackText,
-        Text::new(""),
-        TextFont {
-            font_size: FontSize::Px(11.0),
+}
+
+fn spawn_section_header(parent: &mut ChildSpawnerCommands<'_>, title: &str, detail: &str) {
+    parent
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(3.0),
             ..default()
-        },
-        TextColor(INK_MUTED),
-        Node {
-            min_height: Val::Px(20.0),
-            margin: UiRect::top(Val::Px(8.0)),
-            ..default()
-        },
-    ));
-    panel
-        .spawn((
-            Button,
-            GodAccessSubmitButton,
-            Node {
-                width: Val::Px(180.0),
-                height: Val::Px(42.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
-                ..default()
-            },
-            button_chrome(UiButtonVariant::Developer),
-        ))
-        .with_children(|button| {
-            button.spawn((
-                Text::new("UNLOCK GOD MODE"),
-                UiButtonLabel,
+        })
+        .with_children(|copy| {
+            copy.spawn((
+                Text::new(title),
                 TextFont {
-                    font_size: FontSize::Px(14.0),
+                    font_size: FontSize::Px(type_scale::VALUE),
                     ..default()
                 },
                 TextColor(INK),
             ));
+            copy.spawn((
+                Text::new(detail),
+                TextFont {
+                    font_size: FontSize::Px(type_scale::CAPTION),
+                    ..default()
+                },
+                TextColor(INK_MUTED),
+            ));
         });
+}
+
+fn debug_button_row() -> Node {
+    Node {
+        width: Val::Percent(100.0),
+        flex_direction: FlexDirection::Row,
+        justify_content: JustifyContent::SpaceBetween,
+        column_gap: Val::Px(8.0),
+        ..default()
+    }
+}
+
+fn spawn_debug_footer(panel: &mut ChildSpawnerCommands<'_>, hint: &str) {
     panel.spawn((
-        Text::new("ENTER submit   ESC close"),
+        Text::new(hint),
         TextFont {
-            font_size: FontSize::Px(9.0),
+            font_size: FontSize::Px(type_scale::CAPTION),
             ..default()
         },
         TextColor(INK_MUTED),
         Node {
-            margin: UiRect::top(Val::Px(10.0)),
+            width: Val::Percent(100.0),
+            flex_shrink: 0.0,
+            padding: UiRect::axes(Val::Px(22.0), Val::Px(10.0)),
+            border: UiRect::top(Val::Px(1.0)),
             ..default()
         },
+        BorderColor::all(PLATE_RULE_SOFT),
     ));
+}
+
+fn spawn_god_access_panel(panel: &mut ChildSpawnerCommands<'_>) {
+    panel
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_grow: 1.0,
+            min_height: Val::Px(0.0),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Stretch,
+            row_gap: Val::Px(12.0),
+            padding: UiRect::all(Val::Px(22.0)),
+            ..default()
+        })
+        .with_children(|body| {
+            body.spawn((
+                Text::new(
+                    "Enter the hosted-server access key to unlock developer controls for this connection. The key is never saved locally.",
+                ),
+                TextFont {
+                    font_size: FontSize::Px(type_scale::BODY),
+                    ..default()
+                },
+                TextColor(INK_MUTED),
+            ));
+            body
+                .spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(42.0),
+                        align_items: AlignItems::Center,
+                        padding: UiRect::horizontal(Val::Px(12.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                        ..default()
+                    },
+                    BackgroundColor(SLATE),
+                    BorderColor::all(PLATE_RULE),
+                ))
+                .with_children(|field| {
+                    field.spawn((
+                        GodAccessInputDisplay,
+                        Text::new("_"),
+                        TextFont {
+                            font_size: FontSize::Px(type_scale::HEADING),
+                            ..default()
+                        },
+                        TextColor(INK_INVERSE),
+                    ));
+                });
+            body.spawn((
+                GodAccessFeedbackText,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(type_scale::CAPTION),
+                    ..default()
+                },
+                TextColor(INK_MUTED),
+                Node {
+                    min_height: Val::Px(20.0),
+                    ..default()
+                },
+            ));
+            body
+                .spawn((
+                    Button,
+                    GodAccessSubmitButton,
+                    Node {
+                        width: Val::Px(200.0),
+                        height: Val::Px(40.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                        ..default()
+                    },
+                    button_chrome(UiButtonVariant::Developer),
+                ))
+                .with_children(|button| {
+                    button.spawn((
+                        Text::new("UNLOCK GOD MODE"),
+                        UiButtonLabel,
+                        TextFont {
+                            font_size: FontSize::Px(type_scale::BODY),
+                            ..default()
+                        },
+                        TextColor(INK),
+                    ));
+                });
+        });
 }
 
 pub(super) fn spawn_time_button(
@@ -257,10 +361,7 @@ pub(super) fn spawn_time_button(
         .spawn((
             Button,
             TimeButton(preset),
-            Node {
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..debug_button_node()
-            },
+            debug_button_node(),
             button_chrome(UiButtonVariant::Secondary),
         ))
         .with_children(|btn| {
@@ -277,16 +378,14 @@ pub(super) fn spawn_cloud_cover_button(
     parent: &mut ChildSpawnerCommands<'_>,
     text: &str,
     mode: CloudCoverMode,
+    selected: bool,
 ) {
     parent
         .spawn((
             Button,
             CloudCoverButton(mode),
-            Node {
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..debug_button_node()
-            },
-            button_chrome(UiButtonVariant::Secondary),
+            debug_button_node(),
+            selected_button_chrome(UiButtonVariant::Secondary, selected),
         ))
         .with_children(|btn| {
             btn.spawn((
@@ -298,21 +397,22 @@ pub(super) fn spawn_cloud_cover_button(
         });
 }
 
-pub(super) fn spawn_weightmap_stats_button(parent: &mut ChildSpawnerCommands<'_>) {
+pub(super) fn spawn_weightmap_stats_button(parent: &mut ChildSpawnerCommands<'_>, selected: bool) {
     parent
         .spawn((
             Button,
             PerfWeightmapToggleButton,
-            Node {
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..debug_button_node()
-            },
-            button_chrome(UiButtonVariant::Developer),
+            debug_button_node(),
+            selected_button_chrome(UiButtonVariant::Developer, selected),
         ))
         .with_children(|btn| {
             btn.spawn((
                 PerfWeightmapLabel,
-                Text::new("WEIGHTMAP STATS: OFF"),
+                Text::new(if selected {
+                    "WEIGHTMAP STATS: ON"
+                } else {
+                    "WEIGHTMAP STATS: OFF"
+                }),
                 UiButtonLabel,
                 debug_button_font(),
                 TextColor(INK),
@@ -320,21 +420,22 @@ pub(super) fn spawn_weightmap_stats_button(parent: &mut ChildSpawnerCommands<'_>
         });
 }
 
-pub(super) fn spawn_render_diag_button(parent: &mut ChildSpawnerCommands<'_>) {
+pub(super) fn spawn_render_diag_button(parent: &mut ChildSpawnerCommands<'_>, selected: bool) {
     parent
         .spawn((
             Button,
             PerfRenderDiagToggleButton,
-            Node {
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..debug_button_node()
-            },
-            button_chrome(UiButtonVariant::Developer),
+            debug_button_node(),
+            selected_button_chrome(UiButtonVariant::Developer, selected),
         ))
         .with_children(|btn| {
             btn.spawn((
                 PerfRenderDiagLabel,
-                Text::new("RENDER DIAG LOGGING: OFF"),
+                Text::new(if selected {
+                    "RENDER DIAG LOGGING: ON"
+                } else {
+                    "RENDER DIAG LOGGING: OFF"
+                }),
                 UiButtonLabel,
                 debug_button_font(),
                 TextColor(INK),
@@ -344,20 +445,21 @@ pub(super) fn spawn_render_diag_button(parent: &mut ChildSpawnerCommands<'_>) {
 
 fn debug_button_node() -> Node {
     Node {
-        width: Val::Px(280.0),
-        height: Val::Px(55.0),
+        // Percentage sizing keeps the paired rows stable at both the 560 px
+        // desktop cap and the narrower 88 vw fallback.
+        width: Val::Percent(49.0),
+        height: Val::Px(40.0),
         justify_content: JustifyContent::Center,
         align_items: AlignItems::Center,
-        margin: UiRect::all(Val::Px(8.0)),
         border: UiRect::all(Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(4.0)),
+        border_radius: BorderRadius::all(Val::Px(RADIUS)),
         ..default()
     }
 }
 
 fn debug_button_font() -> TextFont {
     TextFont {
-        font_size: FontSize::Px(22.0),
+        font_size: FontSize::Px(type_scale::BODY),
         ..default()
     }
 }
@@ -389,4 +491,23 @@ pub(super) fn despawn_recursive(
         }
     }
     commands.entity(entity).despawn();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_menu_uses_the_responsive_ledger_dimensions() {
+        let panel = debug_panel_node(650.0);
+        assert_eq!(panel.width, Val::Vw(88.0));
+        assert_eq!(panel.max_width, Val::Px(560.0));
+        assert_eq!(panel.height, Val::Vh(84.0));
+        assert_eq!(panel.max_height, Val::Px(650.0));
+        assert_eq!(panel.overflow, Overflow::clip());
+
+        let button = debug_button_node();
+        assert_eq!(button.width, Val::Percent(49.0));
+        assert_eq!(button.height, Val::Px(40.0));
+    }
 }

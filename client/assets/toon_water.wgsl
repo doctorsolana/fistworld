@@ -39,6 +39,7 @@ struct ToonWaterUniform {
     storm: vec4<f32>,
     // xy: clean per-pixel distance fade start/end. This replaces Bevy's
     // 4x4 visibility dither, which reads as a dark checkerboard on water.
+    // zw: camera-distance fade for the foam family (washes/crests).
     distance_fade: vec4<f32>,
     // xy: playable min xz, zw: playable max xz. Only the visual map-edge
     // continuation uses this; ordinary water has signed depth <= 1.
@@ -75,6 +76,71 @@ fn wave_gradient(p: vec2<f32>, time: f32, freq: f32, speed: f32) -> vec2<f32> {
 fn hash12(p: vec2<f32>) -> f32 {
     let h = dot(p, vec2<f32>(127.1, 311.7));
     return fract(sin(h) * 43758.5453);
+}
+
+// === Map-scale ocean glitter (EXACT copy in toon_water.wgsl / far_terrain.wgsl — keep in sync) ===
+// Sparse world-anchored sparkle that stays a couple of pixels wide at any
+// zoom: the cell size tracks the fragment's world footprint across two
+// blended power-of-two levels, so the twinkle population per screen area is
+// constant and can never alias into the moire blobs a sub-pixel ripple field
+// produces. The base 0.588m cell matches the detailed glint's sparkle hash.
+// Sinless hash: sin-based hashes lose precision at cell ids in the
+// thousands and their error is spatially correlated, which read as diagonal
+// rows of sparkle across the open sea.
+fn glitter_hash(p: vec2<f32>) -> f32 {
+    var p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.1031);
+    p3 += dot(p3, vec3<f32>(p3.y, p3.z, p3.x) + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+fn glitter_level(
+    world_xz: vec2<f32>,
+    cell: f32,
+    view_vec: vec3<f32>,
+    sun_dir: vec3<f32>,
+    time: f32,
+) -> f32 {
+    let id = floor(world_xz / cell);
+    let rnd = glitter_hash(id);
+    // Sparse population: most cells stay dark.
+    if (rnd < 0.86) {
+        return 0.0;
+    }
+    let jitter = vec2<f32>(glitter_hash(id + 17.0), glitter_hash(id + 41.0)) - 0.5;
+    let local = fract(world_xz / cell) - 0.5 - jitter * 0.9;
+    let d = length(local) * cell;
+    let radius = cell * 0.09;
+    let aa = max(fwidth(d), cell * 0.03);
+    let dot_mask = 1.0 - smoothstep(radius - aa, radius + aa, d);
+    // Per-cell pseudo ripple facet. The half-vector specular keeps lit cells
+    // concentrated along the sun path without animated surface normals.
+    let tilt = (vec2<f32>(glitter_hash(id + 5.0), glitter_hash(id + 9.0)) - 0.5) * 1.1;
+    let wobble = 0.12 * vec2<f32>(
+        sin(time * (2.0 + 3.0 * fract(rnd * 13.7)) + rnd * 6.2832),
+        cos(time * (1.7 + 2.6 * fract(rnd * 7.31)) + rnd * 12.566),
+    );
+    let facet = normalize(vec3<f32>(tilt.x + wobble.x, 1.0, tilt.y + wobble.y));
+    let half_vec = normalize(view_vec + sun_dir);
+    let spec = pow(max(dot(facet, half_vec), 0.0), 48.0);
+    let twinkle = 0.35
+        + 0.65 * (0.5 + 0.5 * sin(time * (2.5 + 4.0 * fract(rnd * 9.17)) + rnd * 25.13));
+    return dot_mask * spec * twinkle;
+}
+
+fn ocean_glitter(
+    world_xz: vec2<f32>,
+    view_vec: vec3<f32>,
+    sun_dir: vec3<f32>,
+    time: f32,
+) -> f32 {
+    let fp = max(max(fwidth(world_xz.x), fwidth(world_xz.y)), 1.0e-4);
+    // Cell spacing ~12 px so each lit dot renders ~2-3 px wide.
+    let lod = max(log2(fp * 12.0 / 0.588), 0.0);
+    let level = floor(lod);
+    let cell0 = 0.588 * exp2(level);
+    let g0 = glitter_level(world_xz, cell0, view_vec, sun_dir, time);
+    let g1 = glitter_level(world_xz + vec2<f32>(37.0, -11.0), cell0 * 2.0, view_vec, sun_dir, time);
+    return mix(g0, g1, fract(lod));
 }
 
 // Altitude of the procedural cloud field the shadows are projected from.
@@ -356,6 +422,14 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let world_uv = in.world_position.xz * (0.05 * wave_scale);
     let flow_uv = world_uv + vec2<f32>(t * 0.35, -t * 0.22);
 
+    // Camera-distance response for the foam family. distance_fade.zw carries
+    // the foam fade band (client/src/water/material.rs): washes and crests are
+    // gone well before the 1250-1800m water crossfade begins, so the coarse
+    // far-mesh shoreline never fights an aliased bright rim on the way out.
+    let view_dist = distance(view.world_position.xyz, in.world_position.xyz);
+    let foam_dist_fade =
+        1.0 - smoothstep(material.distance_fade.z, material.distance_fade.w, view_dist);
+
     // Crest foam bands — an OPEN-WATER feature, gated by DISTANCE to the
     // coast: foam lines own the shore band, then a calm gap, and crests
     // only fade in ~10-20m out regardless of how steep the bank is.
@@ -367,7 +441,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let edge_smooth = max(material.foam_params.y, 0.0005);
     let crest_threshold = 1.0 - edge_width;
     let crest_foam = smoothstep(crest_threshold - edge_smooth, crest_threshold + edge_smooth, crest01)
-        * open_water;
+        * open_water
+        * foam_dist_fade;
 
     // --- Shoreline: rivers retain the authored depth-phased lap below. Ocean
     // foam instead uses one stable distance field for contact, traveling lines
@@ -411,15 +486,20 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         0.8,
         0.5 + 0.5 * sin(dot(in.world_position.xz, vec2<f32>(0.13, 0.11)) + globals.time * 0.7 + line_wobble * 1.7)
     );
-    let river_travel_lines = line_core * breakup * shore_zone * shore_zone;
+    // Kill traveling lines as their period approaches the pixel grid. This is
+    // energy-conserving, unlike the half-width floor alone, which widened the
+    // undersampled lines into one solid shimmering band at middle zoom.
+    let river_line_resolve = 1.0 - smoothstep(0.15, 0.45, fwidth(band_phase));
+    let river_travel_lines = line_core * breakup * shore_zone * shore_zone * river_line_resolve;
 
     // Soft wash under the lines, kept close to the waterline. The border is
     // wobbled by the SMOOTH wave field — the old floor()+time hash re-rolled
     // a new random value whenever the scrolling cell grid crossed a
     // boundary, which made the fade edge flicker.
     let wash_border = line_wobble * 0.035;
-    let river_wash =
-        (1.0 - smoothstep(0.03 + wash_border, 0.16 + wash_border * 1.6, shore_dist)) * 0.55;
+    let river_wash = (1.0 - smoothstep(0.03 + wash_border, 0.16 + wash_border * 1.6, shore_dist))
+        * 0.55
+        * foam_dist_fade;
 
     let river_shore_foam = clamp(
         river_contact + river_travel_lines * 0.95 + river_wash,
@@ -457,13 +537,19 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             dot(in.world_position.xz, vec2<f32>(0.075, 0.061)) + globals.time * 0.42
         ),
     ));
+    let ocean_line_resolve = 1.0 - smoothstep(0.15, 0.45, fwidth(ocean_band_phase));
     let ocean_travel_lines = ocean_line_core
         * ocean_opacity_noise
         * shore_zone
-        * shore_zone;
-    let ocean_wash = (1.0 - smoothstep(0.018, 0.145, shore_dist)) * 0.42;
+        * shore_zone
+        * ocean_line_resolve;
+    let ocean_wash = (1.0 - smoothstep(0.018, 0.145, shore_dist)) * 0.42 * foam_dist_fade;
+    // The contact line persists as the stylized one-pixel coast outline, but
+    // its full strength at map distances read as a hard white rim around
+    // every landmass; let it recede without disappearing.
+    let contact_strength = mix(0.95, 0.35, smoothstep(500.0, 1500.0, view_dist));
     let ocean_shore_foam = clamp(
-        ocean_contact * 0.95 + ocean_travel_lines * 0.92 + ocean_wash,
+        ocean_contact * contact_strength + ocean_travel_lines * 0.92 + ocean_wash,
         0.0,
         1.0,
     );
@@ -486,8 +572,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Sparkle comes from the sun-glint pass alone — a drifting dot pattern
     // reads as a texture sliding over the surface, worst at the shore edge.
+    // Crests stay subtle: at middle zoom their soft discs are the "large
+    // white moving things" that read as suds smeared across the open sea —
+    // the restored sun glitter carries the sparkle instead.
     let foam_mask = clamp(
-        shore_foam + crest_foam * 0.25 + ripple_foam * 0.85,
+        shore_foam + crest_foam * 0.16 + ripple_foam * 0.85,
         0.0,
         1.0
     );
@@ -499,7 +588,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Fresnel: grazing views pick up a pale sky tint and turn more opaque;
     // looking straight down stays clear. Sells the surface as reflective
     // without any actual reflection rendering.
-    let view_dist = distance(view.world_position.xyz, in.world_position.xyz);
     let view_vec = normalize(view.world_position.xyz - in.world_position.xyz);
 #ifdef VERTEX_NORMALS
     let broad_normal = normalize(in.world_normal);
@@ -538,16 +626,28 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let ripple_normal = normalize(vec3<f32>(-grad.x, 1.0, -grad.y));
     let sun_dir = normalize(material.sun_params.xyz);
     let sparkle = 0.25 + 0.75 * hash12(floor(in.world_position.xz * 1.7));
-    let dist_fade = mix(0.2, 1.0, 1.0 - smoothstep(50.0, 150.0, view_dist));
-    let glint = min(
-        pow(max(dot(reflect(-view_vec, ripple_normal), sun_dir), 0.0), 130.0)
-            * material.sun_params.w * sparkle * dist_fade,
-        1.4
-    );
+    // The analytic ripple field goes sub-pixel past ~150m, where it used to
+    // alias into slow moire blobs (its old fix — a flat 0.2 floor — just made
+    // the glimmer vanish at middle zoom). Hand it off to the footprint-aware
+    // glitter instead; the far-ocean underlay continues the same field beyond
+    // the detailed-water fade.
+    let near_fade = 1.0 - smoothstep(50.0, 150.0, view_dist);
+    let glitter_fade = smoothstep(90.0, 170.0, view_dist);
+    let analytic = pow(max(dot(reflect(-view_vec, ripple_normal), sun_dir), 0.0), 130.0)
+        * sparkle * near_fade;
+    let glitter = ocean_glitter(in.world_position.xz, view_vec, sun_dir, globals.time)
+        * glitter_fade;
+    let glint = min((analytic + glitter) * material.sun_params.w, 1.4);
     color_rgb += glint * vec3<f32>(1.0, 0.97, 0.88);
     // Foam pushes toward opaque so the white shore lines read solid instead
-    // of washing out over the seabed.
-    alpha = clamp(alpha + min(glint, 1.0) * 0.25 + foam_mask * 0.5, 0.0, 1.0);
+    // of washing out over the seabed. The push relaxes with camera distance:
+    // forcing aliased far foam opaque defeated the translucency that would
+    // otherwise soften it.
+    alpha = clamp(
+        alpha + min(glint, 1.0) * 0.25 + foam_mask * (0.20 + 0.30 * foam_dist_fade),
+        0.0,
+        1.0,
+    );
 
     // Cloud shadows: same sun-projected field the terrain samples, so shade
     // bands cross the waterline without a seam. Multiplied after the glint

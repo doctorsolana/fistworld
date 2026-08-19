@@ -37,10 +37,19 @@ pub const WATER_FADE_END: f32 = MAP_VIEW_BLEND_END;
 /// cutting off a still-visible edge.
 pub const WATER_CULL_DISTANCE: f32 = DETAIL_SWITCH_ZOOM + 100.0;
 
-/// The opaque map-water continuation sits 5 mm beneath the detailed water's
-/// undisplaced 2 cm surface. Keeping it at one real height avoids deforming
-/// rivers and ocean into visible boxes during the LOD handoff.
-pub const FAR_WATER_SURFACE_OFFSET: f32 = shared::water::WATER_SURFACE_OFFSET - 0.005;
+/// Camera-distance band across which the shore-foam washes and crest foam
+/// fade away. Foam features are 1-5m wide; past this range they are heavily
+/// undersampled and read as a solid white rim around every landmass, so they
+/// must be gone before the 1250-1800m water crossfade reveals the far mesh.
+pub const FOAM_FADE_START: f32 = 500.0;
+pub const FOAM_FADE_END: f32 = 1_200.0;
+
+/// The opaque map-water continuation sits beneath the detailed surface's
+/// deepest possible offshore trough. It remains visible through translucent
+/// water, but must never win the depth test as the animated swell passes it;
+/// that intersection appeared as large gray shapes moving across the ocean.
+pub const FAR_WATER_SURFACE_OFFSET: f32 =
+    shared::water::WATER_SURFACE_OFFSET - shared::water::WATER_DEEP_SWELL_AMPLITUDE - 0.05;
 
 /// Static separation between detailed land and its coarse underlay.
 ///
@@ -61,28 +70,24 @@ const _: () = assert!(WATER_FADE_END == MAP_VIEW_BLEND_END);
 const _: () = assert!(MAP_VIEW_BLEND_START < MAP_VIEW_BLEND_END);
 const _: () = assert!(MAP_VIEW_BLEND_END <= DETAIL_SWITCH_ZOOM);
 const _: () = assert!(HOLE_FILL_ZOOM == DETAIL_SWITCH_ZOOM);
+const _: () = assert!(
+    FAR_WATER_SURFACE_OFFSET
+        < shared::water::WATER_SURFACE_OFFSET - shared::water::WATER_DEEP_SWELL_AMPLITUDE
+);
 
 /// Switch every streamed land chunk in lockstep with the far-terrain cutout.
 ///
 /// This runs after chunk finalization, so chunks created while already in map
 /// view are hidden in the same frame rather than briefly flashing into view.
 pub(crate) fn sync_detail_visibility(
-    cameras: Query<&CommanderCamera>,
     settings: Res<GraphicsSettings>,
     far_terrain: Query<&FarTerrainState, With<FarTerrain>>,
     mut chunks: Query<(&TerrainChunk, &mut Visibility)>,
 ) {
-    let Ok(camera) = cameras.single() else {
-        return;
-    };
     let committed_hole = far_terrain.single().ok();
     for (chunk, mut visibility) in chunks.iter_mut() {
-        let target = detail_visibility_for_chunk(
-            camera.zoom,
-            settings.far_terrain_enabled,
-            chunk.coord,
-            committed_hole,
-        );
+        let target =
+            detail_visibility_for_chunk(settings.far_terrain_enabled, chunk.coord, committed_hole);
         if *visibility != target {
             *visibility = target;
         }
@@ -90,14 +95,10 @@ pub(crate) fn sync_detail_visibility(
 }
 
 fn detail_visibility_for_chunk(
-    zoom: f32,
     far_terrain_enabled: bool,
     coord: shared::terrain::ChunkCoord,
     committed_hole: Option<&FarTerrainState>,
 ) -> Visibility {
-    if far_terrain_enabled && zoom > DETAIL_SWITCH_ZOOM {
-        return Visibility::Hidden;
-    }
     if !far_terrain_enabled {
         return Visibility::Inherited;
     }
@@ -107,6 +108,11 @@ fn detail_visibility_for_chunk(
     // newly completed leading-edge chunk before the cutout moves overlays two
     // differently tessellated surfaces, which reads as a dark 64 m box while
     // panning at middle zoom.
+    //
+    // The committed state is also the sole zoom authority here. Re-reading the
+    // live camera zoom raced the unordered camera update: crossing the map-
+    // view threshold between the hole commit and this system hid every chunk
+    // for a frame while the cutout was still open.
     let Some(state) = committed_hole else {
         return Visibility::Inherited;
     };
@@ -167,39 +173,47 @@ mod tests {
         assert!(WATER_FADE_START < WATER_FADE_END);
         assert!(WATER_FADE_END < WATER_CULL_DISTANCE);
         assert!(WATER_FADE_END <= HOLE_FILL_ZOOM);
+        assert!(
+            FAR_WATER_SURFACE_OFFSET
+                < shared::water::WATER_SURFACE_OFFSET - shared::water::WATER_DEEP_SWELL_AMPLITUDE
+        );
     }
 
     #[test]
-    fn terrain_switch_matches_far_hole_threshold() {
+    fn terrain_switch_follows_only_the_committed_hole_state() {
         let committed = FarTerrainState {
             center_cell: IVec2::ZERO,
             view_distance: 8,
             hole_filled: false,
         };
+        // An open committed hole shows its square regardless of the live
+        // camera zoom — the committed state IS the zoom snapshot.
         assert_eq!(
             detail_visibility_for_chunk(
-                DETAIL_SWITCH_ZOOM,
                 true,
                 shared::terrain::ChunkCoord::new(0, 0),
                 Some(&committed),
             ),
             Visibility::Inherited
         );
+        let filled = FarTerrainState {
+            hole_filled: true,
+            ..committed
+        };
         assert_eq!(
             detail_visibility_for_chunk(
-                DETAIL_SWITCH_ZOOM + 0.01,
                 true,
                 shared::terrain::ChunkCoord::new(0, 0),
-                Some(&committed),
+                Some(&filled),
             ),
             Visibility::Hidden
         );
+        // Disabled far terrain always shows detail.
         assert_eq!(
             detail_visibility_for_chunk(
-                DETAIL_SWITCH_ZOOM + 1_000.0,
                 false,
                 shared::terrain::ChunkCoord::new(0, 0),
-                Some(&committed),
+                Some(&filled),
             ),
             Visibility::Inherited
         );
@@ -215,7 +229,6 @@ mod tests {
         };
         assert_eq!(
             detail_visibility_for_chunk(
-                1_000.0,
                 true,
                 shared::terrain::ChunkCoord::new(12, -4),
                 Some(&committed),
@@ -224,7 +237,6 @@ mod tests {
         );
         assert_eq!(
             detail_visibility_for_chunk(
-                1_000.0,
                 true,
                 shared::terrain::ChunkCoord::new(13, -4),
                 Some(&committed),
@@ -238,7 +250,6 @@ mod tests {
         };
         assert_eq!(
             detail_visibility_for_chunk(
-                1_000.0,
                 true,
                 shared::terrain::ChunkCoord::new(10, -4),
                 Some(&filled),

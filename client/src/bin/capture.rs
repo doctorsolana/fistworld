@@ -5,8 +5,8 @@
 //! cargo run -p client --bin capture -- --preset spawn        # a few useful angles
 //! ```
 //!
-//! Must be run from the repo root (or with `BEVY_ASSET_ROOT` set) so the asset server
-//! resolves `client/assets`.
+//! Set `BEVY_ASSET_ROOT="$PWD/client/assets"` when running from the repo so the asset
+//! server uses the source asset tree rather than looking beside the built executable.
 
 use std::path::PathBuf;
 
@@ -66,18 +66,30 @@ fn main() {
         }],
     };
 
+    // The flight preset only means anything when the camera genuinely moves
+    // every rendered frame; settle frames would reintroduce the stationary
+    // catch-up gaps the preset exists to eliminate.
+    let continuous = matches!(preset.as_deref(), Some("streaming-flight"));
+
     println!(
-        "capture: {} shot(s) -> {} (warmup {} frames)",
+        "capture: {} shot(s) -> {} (warmup {} frames{})",
         shots.len(),
         out_dir.display(),
-        warmup_frames
+        warmup_frames,
+        if continuous {
+            ", continuous flight"
+        } else {
+            ""
+        },
     );
 
     run(CaptureConfig {
         out_dir,
         shots,
         warmup_frames,
-        settle_frames,
+        settle_frames: if continuous { 0 } else { settle_frames },
+        continuous,
+        probe_every: 4,
     });
 }
 
@@ -213,6 +225,43 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
             ..Default::default()
         })
         .collect(),
+        // Hold the destination for successive one-frame captures after a
+        // six-chunk camera jump. This photographs the exact frame where the
+        // far-terrain hole commits, rather than only the safe fallback before
+        // loading and the settled result afterwards.
+        "streaming-handoff" => std::iter::once(Shot {
+            name: "handoff_warm".into(),
+            focus,
+            zoom: 1_092.0,
+            tilt: 0.85,
+            time_of_day,
+            ..Default::default()
+        })
+        .chain((0..32).map(|frame| Shot {
+            name: format!("handoff_{frame:02}"),
+            focus: focus + Vec3::new(384.0, 0.0, 0.0),
+            zoom: 1_092.0,
+            tilt: 0.85,
+            time_of_day,
+            ..Default::default()
+        }))
+        .collect(),
+        // Move the camera every RENDERED frame (continuous mode: no settle,
+        // no between-shot file waits), crossing several chunk rows diagonally
+        // at a deliberately aggressive ~29 m/frame. Screenshot probes fire
+        // asynchronously every 4th frame and are collected after the flight,
+        // so streaming never gets a stationary frame to catch up in — this is
+        // the preset that actually reproduces fast-pan artifacts.
+        "streaming-flight" => (0..48)
+            .map(|frame| Shot {
+                name: format!("flight_{frame:02}"),
+                focus: focus + Vec3::new(frame as f32 * 24.0, 0.0, frame as f32 * -16.0),
+                zoom: 1_092.0,
+                tilt: 0.85,
+                time_of_day,
+                ..Default::default()
+            })
+            .collect(),
         "spawn" => preset_shots("survey", focus, time_of_day),
         other => {
             eprintln!("capture: unknown preset '{other}', using a single shot");
@@ -255,7 +304,7 @@ OPTIONS:
     --time <0..1>      Time of day, 0.5 = noon [default: 0.5]
     --warmup <frames>  Frames before first shot, for streaming  [default: 240]
     --settle <frames>  Frames after each camera move            [default: 60]
-    --preset <name>    orbit | survey | daycycle | water | shorecycle | streaming-pan
+    --preset <name>    orbit | survey | daycycle | water | shorecycle | streaming-pan | streaming-handoff | streaming-flight
 
 EXAMPLES:
     cargo run -p client --bin capture -- --at 0,0 --preset survey

@@ -435,6 +435,16 @@ pub struct CaptureConfig {
     pub warmup_frames: u32,
     /// Frames between moving the camera and taking the shot.
     pub settle_frames: u32,
+    /// Fly the camera continuously: one shot per rendered frame, never
+    /// pausing in `AwaitingFile` between shots. Screenshot probes are fired
+    /// asynchronously and awaited only after the final shot, so streaming
+    /// gets no stationary frames in which to catch up — the whole point of a
+    /// fast-pan regression capture.
+    pub continuous: bool,
+    /// In continuous mode, request a screenshot every N shots. Never exceeds
+    /// one request per frame: Bevy silently despawns a same-frame duplicate
+    /// screenshot of the same window and its PNG would never land.
+    pub probe_every: u32,
 }
 
 /// Where we are in the capture sequence.
@@ -456,6 +466,11 @@ enum CaptureState {
     AwaitingFile {
         shot: usize,
         path: PathBuf,
+        frames_waited: u32,
+    },
+    /// Continuous flight finished; waiting for every probe PNG to land.
+    AwaitingAll {
+        paths: Vec<PathBuf>,
         frames_waited: u32,
     },
     Done,
@@ -497,7 +512,10 @@ pub fn run(config: CaptureConfig) {
             open_capture_history,
             position_capture_company_scroll,
             force_capture_drag_box,
-            drive_capture,
+            // Before the camera bake, so the pose photographed in frame N is
+            // the pose this system applied in frame N — a continuous flight
+            // must not trail its own screenshots by a frame.
+            drive_capture.before(crate::camera_rts::update_commander_camera),
         ),
     );
 
@@ -645,6 +663,18 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
     if std::env::var("FISTFORCE_CAPTURE_HUD").is_ok_and(|mode| mode == "god") {
         commands.insert_resource(crate::ui::hud::GodCapability(true));
         commands.insert_resource(crate::ui::hud::HudMode::God);
+    }
+
+    // FISTFORCE_CAPTURE_DEBUG_MENU=god|access opens the real J menu without
+    // synthesizing keyboard input. Keeping this as a first-class capture target
+    // prevents developer-only screens from escaping the ordinary UI visual audit.
+    if let Ok(mode) = std::env::var("FISTFORCE_CAPTURE_DEBUG_MENU") {
+        let god_access = mode.trim().eq_ignore_ascii_case("god");
+        commands.insert_resource(crate::ui::debug_time_menu::DebugTimeMenuOpen(true));
+        commands.insert_resource(crate::ui::hud::GodCapability(god_access));
+        if god_access {
+            commands.insert_resource(crate::ui::hud::HudMode::God);
+        }
     }
 
     // FISTFORCE_CAPTURE_ROADS=compare stages the same completed main road
@@ -2263,6 +2293,7 @@ fn drive_capture(
     mut cameras: Query<&mut CommanderCamera>,
     mut world_time: Query<&mut WorldTime>,
     loaded_chunks: Option<Res<LoadedChunks>>,
+    mut pending_probes: Local<Vec<PathBuf>>,
     mut app_exit: MessageWriter<AppExit>,
 ) {
     match &mut *state {
@@ -2297,6 +2328,41 @@ fn drive_capture(
 
             if *frames_left > 0 {
                 *frames_left -= 1;
+                return;
+            }
+
+            if config.continuous {
+                // One shot per rendered frame: fire the probe screenshot
+                // asynchronously and keep flying. Parking in AwaitingFile
+                // here is exactly what used to let streaming catch up and
+                // hide every fast-pan artifact.
+                let probe_every = config.probe_every.max(1) as usize;
+                let last = index + 1 == config.shots.len();
+                if index % probe_every == 0 || last {
+                    let path = config.out_dir.join(format!("{}.png", current.name));
+                    let _ = std::fs::remove_file(&path);
+                    commands
+                        .spawn(Screenshot::primary_window())
+                        .observe(save_to_disk(path.clone()));
+                    info!(
+                        "capture: probe '{}' at focus={:?} | {} terrain chunks loaded",
+                        current.name,
+                        current.focus,
+                        loaded_chunks.map(|c| c.chunks.len()).unwrap_or(0),
+                    );
+                    pending_probes.push(path);
+                }
+                *state = if last {
+                    CaptureState::AwaitingAll {
+                        paths: std::mem::take(&mut *pending_probes),
+                        frames_waited: 0,
+                    }
+                } else {
+                    CaptureState::Settling {
+                        shot: index + 1,
+                        frames_left: 0,
+                    }
+                };
                 return;
             }
 
@@ -2353,6 +2419,32 @@ fn drive_capture(
                     shot: next,
                     frames_left: config.settle_frames,
                 };
+            }
+        }
+
+        CaptureState::AwaitingAll {
+            paths,
+            frames_waited,
+        } => {
+            *frames_waited += 1;
+            paths.retain(|path| {
+                let written = std::fs::metadata(path)
+                    .map(|m| m.len() > 0)
+                    .unwrap_or(false);
+                if written {
+                    info!("capture: wrote {}", path.display());
+                }
+                !written
+            });
+            if paths.is_empty() {
+                info!("capture: all probe shot(s) complete");
+                *state = CaptureState::Done;
+            } else if *frames_waited > 1_200 {
+                error!(
+                    "capture: {} probe(s) never hit disk, giving up",
+                    paths.len()
+                );
+                *state = CaptureState::Done;
             }
         }
 

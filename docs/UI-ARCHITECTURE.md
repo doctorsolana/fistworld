@@ -1,6 +1,6 @@
 # Client UI architecture
 
-Last reconciled with Bevy 0.19 on 2026-08-15. This is the contract for new UI and for
+Last reconciled with Bevy 0.19 on 2026-08-19. This is the contract for new UI and for
 touching an existing screen. The goal is a coherent medieval ledger interface without
 screen-specific hover logic, accidental world input, or full-tree churn at simulation speed.
 
@@ -81,6 +81,9 @@ Use `spawn_modal`. Custom layouts use `modal_root_chrome` and
 3. a blocking panel above it; and
 4. a modal `TabGroup`, so keyboard focus cannot escape behind the window.
 
+The default panel is the limewash ledger shell. A deliberately dark front-of-house screen must
+override it explicitly; developer and debug screens do not receive a separate prototype theme.
+
 Never color both the root and backdrop: their alpha compounds. `InputState::modal_open` is
 derived from `ModalRoot`; do not borrow an unrelated flag such as inventory state. The hero
 creator is the one transparent-backdrop exception because its 3D diorama is intentionally
@@ -140,6 +143,7 @@ manually:
 FISTFORCE_CAPTURE_SETTLEMENT=village \
 FISTFORCE_CAPTURE_PROPERTY=1 \
 FISTFORCE_CAPTURE_HUD=god \
+BEVY_ASSET_ROOT="$PWD/client/assets" \
 cargo run --profile playtest -p client --bin capture -- \
   --at 0,0 --name property-ui --zoom 160 \
   --out /tmp/fistworld-ui --warmup 90 --settle 30
@@ -147,3 +151,19 @@ cargo run --profile playtest -p client --bin capture -- \
 
 Inspect the result at `/tmp/fistworld-ui/property-ui.png`. The world must remain visible under
 one dark scrim; no surface may flash to `BUTTON_NORMAL` merely because the pointer entered it.
+
+The real J menu and its locked-access state are deterministic visual targets too:
+
+```bash
+BEVY_ASSET_ROOT="$PWD/client/assets" \
+FISTFORCE_CAPTURE_DEBUG_MENU=god \
+cargo run --profile playtest -p client --bin capture -- \
+  --at 0,0 --name j-menu-god --zoom 220 \
+  --out /tmp/fistworld-ui --warmup 120 --settle 40
+
+BEVY_ASSET_ROOT="$PWD/client/assets" \
+FISTFORCE_CAPTURE_DEBUG_MENU=access \
+cargo run --profile playtest -p client --bin capture -- \
+  --at 0,0 --name j-menu-access --zoom 220 \
+  --out /tmp/fistworld-ui --warmup 120 --settle 40
+```

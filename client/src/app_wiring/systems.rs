@@ -142,6 +142,12 @@ fn wire_game_systems(app: &mut App) {
             terrain::map_view::update_map_view_state,
         )
             .chain()
+            // Every terrain streaming decision in a frame must read ONE camera
+            // pose. Left unordered, this chain could interleave into the middle
+            // of the terrain set, moving the anchor between the desired-set
+            // computation and the far-hole commit — which stamped the hole one
+            // chunk row ahead of the validated square during fast pans.
+            .before(crate::terrain::TerrainUpdateSet)
             .run_if(in_state(GameState::Playing)),
     );
 

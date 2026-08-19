@@ -4,7 +4,6 @@ use bevy::asset::AssetEvent;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::diagnostic::{DiagnosticsStore, SystemInformationDiagnosticsPlugin};
 use bevy::ecs::message::MessageReader;
-use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 use super::materials::{TerrainRenderAssets, TerrainSplatExtension, TerrainSplatMaterial};
@@ -180,7 +179,19 @@ pub(super) fn warmup_terrain_pipeline(
         },
     });
 
-    let mesh_handle = meshes.add(bevy::math::primitives::Plane3d::default());
+    // Match the REAL chunk vertex layout: every streamed chunk mesh carries
+    // tangents (mesh.rs), and vertex layout is part of pipeline
+    // specialization. A tangent-less warmup plane compiled a pipeline no real
+    // chunk ever uses, so the first live chunk batch could still stall — or
+    // be skipped by async pipeline compilation for a few frames — exactly
+    // when the first far-terrain hole commit needed it rasterizable.
+    let mut warmup_mesh = bevy::math::primitives::Plane3d::default().mesh().build();
+    let warmup_vertices = warmup_mesh.count_vertices();
+    warmup_mesh.insert_attribute(
+        Mesh::ATTRIBUTE_TANGENT,
+        vec![[1.0, 0.0, 0.0, 1.0]; warmup_vertices],
+    );
+    let mesh_handle = meshes.add(warmup_mesh);
 
     let entity = commands
         .spawn((
@@ -195,7 +206,8 @@ pub(super) fn warmup_terrain_pipeline(
             Transform::from_translation(Vec3::new(0.0, -10000.0, 0.0)),
             Visibility::Visible,
             NoFrustumCulling,
-            NotShadowCaster,
+            // Deliberately a shadow caster: real chunks cast, and the
+            // shadow-pass pipeline variant is the other one worth warming.
         ))
         .id();
     commands.entity(world_root).add_child(entity);

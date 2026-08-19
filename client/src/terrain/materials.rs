@@ -29,8 +29,14 @@ pub type FarTerrainMaterial = ExtendedMaterial<StandardMaterial, FarTerrainExten
 pub struct FarTerrainExtension {
     /// x: height of the sun direction. The far water mirrors the detailed
     /// water's compact night tint without inheriting terrain lighting.
+    /// y/z: detail-hole centre, w: detail-hole half extent.
     #[uniform(100)]
     pub water_params: Vec4,
+    /// xyz: direction to the sun (world), w: glint strength (0 at night).
+    /// Mirrors the detailed water's `sun_params` so the map-scale glitter
+    /// keeps the same day/night response through the LOD crossfade.
+    #[uniform(101)]
+    pub sun_glint: Vec4,
 }
 
 impl MaterialExtension for FarTerrainExtension {
@@ -103,6 +109,8 @@ pub(super) fn setup_terrain_render_assets(
         },
         extension: FarTerrainExtension {
             water_params: Vec4::new(0.75, 0.0, 0.0, 0.0),
+            // Matches the toon-water default until the first sun sync runs.
+            sun_glint: Vec4::new(0.35, 0.75, 0.30, 1.1),
         },
     });
 
@@ -131,15 +139,22 @@ pub(super) fn sync_far_terrain_water_sun(
     let Ok(sun_tf) = sun.single() else {
         return;
     };
-    let sun_height = Vec3::from(sun_tf.back()).y;
+    let to_sun = Vec3::from(sun_tf.back());
+    // Identical strength curve to `update_water_sun_dir`, so the far glitter
+    // and the detailed glint brighten and die together across the day.
+    let strength = 1.1 * to_sun.y.clamp(0.0, 1.0).sqrt();
+    let glint = Vec4::new(to_sun.x, to_sun.y, to_sun.z, strength);
     let Some(material) = materials.get(&render_assets.far_mesh_material) else {
         return;
     };
-    if (material.extension.water_params.x - sun_height).abs() < 0.002 {
+    if (material.extension.water_params.x - to_sun.y).abs() < 0.002
+        && material.extension.sun_glint.distance_squared(glint) < 1e-4
+    {
         return;
     }
     if let Some(mut material) = materials.get_mut(&render_assets.far_mesh_material) {
-        material.extension.water_params.x = sun_height;
+        material.extension.water_params.x = to_sun.y;
+        material.extension.sun_glint = glint;
     }
 }
 

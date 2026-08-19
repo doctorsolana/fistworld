@@ -10,7 +10,9 @@ use actions::{
     handle_god_access_input, receive_god_access_result, toggle_debug_time_menu,
 };
 use layout::{despawn_debug_time_menu, spawn_debug_time_menu};
-use state_sync::{sync_debug_menu_open_state, update_perf_button_labels};
+use state_sync::{
+    sync_debug_menu_open_state, update_cloud_button_styles, update_perf_button_labels,
+};
 
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -24,10 +26,16 @@ use shared::protocol::{
 use crate::input::InputState;
 use crate::render::systems::{CloudCover, CloudCoverMode, CloudCoverOverride};
 use crate::states::GameState;
-use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
+use crate::ui::foundation::{
+    button_chrome, selected_button_chrome, type_scale, UiButtonLabel, UiButtonStyle,
+    UiButtonVariant,
+};
 use crate::ui::hud::{GodCapability, HudMode};
 use crate::ui::modal::{handle_backdrop_pressed, spawn_modal, sync_modal_cursor, ModalLayout};
-use crate::ui::styles::{EMBER, INK, INK_MUTED};
+use crate::ui::styles::{
+    plate_shadow, EMBER, INK, INK_INVERSE, INK_MUTED, LIMEWASH_HEADER, LIMEWASH_LIT, PLATE_RULE,
+    PLATE_RULE_SOFT, RADIUS, SLATE,
+};
 
 pub struct DebugTimeMenuPlugin;
 
@@ -66,7 +74,7 @@ impl Plugin for DebugTimeMenuPlugin {
         );
         app.add_systems(
             Update,
-            update_perf_button_labels
+            (update_perf_button_labels, update_cloud_button_styles)
                 .run_if(debug_menu_open)
                 .run_if(in_state(GameState::Playing)),
         );
@@ -128,6 +136,9 @@ struct DebugMenuRoot;
 struct DebugMenuBackdrop;
 #[derive(Component)]
 struct DebugMenuPanel;
+
+#[derive(Component)]
+struct DebugMenuViewport;
 
 #[derive(Component, Clone, Copy)]
 struct TimeButton(TimeOfDayPreset);

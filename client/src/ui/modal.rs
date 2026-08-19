@@ -7,7 +7,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::input::InputState;
 use crate::ui::foundation::{layer, UiButtonStyleExempt, UiRefreshExempt};
-use crate::ui::styles::{MENU_BACKGROUND, MODAL_BACKDROP, PLATE_RULE};
+use crate::ui::styles::{plate_shadow, LIMEWASH_LIT, MODAL_BACKDROP, PLATE_RULE, RADIUS};
 
 /// Common marker for all windows created by [`spawn_modal`].
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,8 +125,10 @@ where
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     flex_direction: FlexDirection::Column,
-                    border: UiRect::all(Val::Px(2.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(RADIUS)),
                     padding: UiRect::all(Val::Px(layout.panel_padding)),
+                    overflow: Overflow::clip(),
                     ..default()
                 },
                 // `Node` requires `FocusPolicy`, whose default is `Pass`. Without
@@ -137,8 +139,9 @@ where
                 // interaction path used by Bevy 0.19.
                 FocusPolicy::Block,
                 Pickable::default(),
-                BackgroundColor(MENU_BACKGROUND),
-                BorderColor::from(PLATE_RULE),
+                BackgroundColor(LIMEWASH_LIT),
+                BorderColor::all(PLATE_RULE),
+                plate_shadow(),
             ))
             .id();
         panel_entity = Some(panel);
@@ -247,6 +250,14 @@ mod tests {
         assert_eq!(
             world.get::<BackgroundColor>(nodes.backdrop).unwrap().0,
             MODAL_BACKDROP
+        );
+        assert_eq!(
+            world.get::<BackgroundColor>(nodes.panel).unwrap().0,
+            LIMEWASH_LIT
+        );
+        assert_eq!(
+            world.get::<BorderColor>(nodes.panel).unwrap(),
+            &BorderColor::all(PLATE_RULE)
         );
         assert_eq!(
             world.get::<GlobalZIndex>(nodes.root),

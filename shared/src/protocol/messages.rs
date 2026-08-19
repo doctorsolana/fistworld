@@ -481,7 +481,7 @@ pub struct DevStatus {
 /// Client -> server: unlock the hosted server's administrative tools.
 ///
 /// Local development still grants God Mode through `FISTWORLD_DEV=1`. Hosted
-/// servers instead keep a long access key in their secret environment and only
+/// servers instead keep an access key in their secret environment and only
 /// grant the requesting connection after this explicit challenge. The key is
 /// never replicated or stored in player/world state.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]

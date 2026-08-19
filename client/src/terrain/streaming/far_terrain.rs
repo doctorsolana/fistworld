@@ -160,7 +160,6 @@ fn build_ocean_skirt_mesh(bounds: shared::map::MapBounds, water_level: f32) -> M
 
 pub(crate) fn update_far_terrain_hole(
     mut far_query: Query<&mut FarTerrainState, With<FarTerrain>>,
-    player_query: AnchorPlayer,
     camera_query: AnchorCamera,
     streaming: Res<TerrainStreamingState>,
     loaded_chunks: Res<LoadedChunks>,
@@ -173,9 +172,6 @@ pub(crate) fn update_far_terrain_hole(
         return;
     }
 
-    let Some(anchor_pos) = streaming_anchor(&player_query, &camera_query) else {
-        return;
-    };
     let Ok(mut state) = far_query.single_mut() else {
         return;
     };
@@ -188,7 +184,15 @@ pub(crate) fn update_far_terrain_hole(
     } else {
         settings.view_distance
     };
-    let center_chunk = ChunkCoord::from_world_pos(anchor_pos);
+    // Commit the hole at the SNAPSHOT centre `desired_order` was built from,
+    // never the live anchor. Re-deriving the centre from the camera here
+    // raced the unordered camera update: a mid-frame chunk-boundary crossing
+    // committed the hole one row ahead of the validated square, and that
+    // unvalidated leading row rendered as a 64 m black strip for the entire
+    // async build time of its chunks.
+    let Some(center_chunk) = streaming.center else {
+        return;
+    };
     let center_cell = IVec2::new(center_chunk.x, center_chunk.z);
 
     // Fill the hole before detail chunks switch away, or their removal would reveal void

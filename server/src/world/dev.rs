@@ -15,7 +15,7 @@ use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 /// Administrative configuration read once at startup.
 ///
 /// `FISTWORLD_DEV=1` is the convenient local-development mode and grants every
-/// connection. A hosted server leaves that off and supplies a long
+/// connection. A hosted server leaves that off and supplies an
 /// `FISTWORLD_GOD_KEY`; individual connections must unlock through the J menu.
 #[derive(Resource)]
 pub struct DevMode {
@@ -26,22 +26,31 @@ pub struct DevMode {
 impl Default for DevMode {
     fn default() -> Self {
         let unrestricted = parse_dev_flag(std::env::var("FISTWORLD_DEV").ok());
-        let access_key = std::env::var("FISTWORLD_GOD_KEY")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| value.len() >= 12);
+        let configured_key = std::env::var("FISTWORLD_GOD_KEY").ok();
+        let access_key = hosted_access_key(configured_key.as_deref());
         if unrestricted {
             info!("Dev mode: god commands enabled");
         } else if access_key.is_some() {
             info!("Hosted God Mode challenge enabled");
-        } else if std::env::var("FISTWORLD_GOD_KEY").is_ok() {
-            warn!("Ignoring FISTWORLD_GOD_KEY shorter than 12 characters");
+        } else if configured_key.is_some() {
+            warn!("Ignoring FISTWORLD_GOD_KEY shorter than {MIN_HOSTED_GOD_KEY_LENGTH} characters");
         }
         Self {
             unrestricted,
             access_key,
         }
     }
+}
+
+// The hosted server is still an early playtest environment. Four characters
+// keeps accidental unlocks out while allowing a deliberately memorable test
+// key such as `5555`. Raise this before God Mode protects a persistent world.
+const MIN_HOSTED_GOD_KEY_LENGTH: usize = 4;
+
+fn hosted_access_key(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|value| value.len() >= MIN_HOSTED_GOD_KEY_LENGTH)
+        .map(str::to_string)
 }
 
 impl DevMode {
@@ -597,6 +606,14 @@ mod tests {
         assert!(!dev.key_matches("a-long-hosted-ke"));
         assert!(!dev.key_matches("a-long-hosted-key!"));
         assert!(!dev.key_matches("A-long-hosted-key"));
+    }
+
+    #[test]
+    fn hosted_playtest_key_accepts_four_characters_but_not_fewer() {
+        assert_eq!(hosted_access_key(Some(" 5555 ")).as_deref(), Some("5555"));
+        assert_eq!(hosted_access_key(Some("555")), None);
+        assert_eq!(hosted_access_key(Some("   ")), None);
+        assert_eq!(hosted_access_key(None), None);
     }
 
     #[test]
