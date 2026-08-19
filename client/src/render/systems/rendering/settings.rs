@@ -366,7 +366,18 @@ pub const SETTINGS_FILE: &str = "client_data/settings.ron";
 
 impl Default for GraphicsSettings {
     fn default() -> Self {
-        let mut settings = Self {
+        let mut settings = Self::shipped_defaults();
+        settings.apply_env_overrides();
+        settings
+    }
+}
+
+impl GraphicsSettings {
+    /// The literal shipped defaults, with NO env overrides applied. This is
+    /// the persistence baseline: env-forced values must never reach the
+    /// settings file (see [`revert_env_forced`]).
+    fn shipped_defaults() -> Self {
+        Self {
             render_scale: 0.75,
             ssao_enabled: false,
             shadow_quality: ShadowQuality::Medium,
@@ -391,13 +402,9 @@ impl Default for GraphicsSettings {
             view_distance: 8,
             prop_render_multiplier: 1.0,
             lighting_boost: 1.0,
-        };
-        settings.apply_env_overrides();
-        settings
+        }
     }
-}
 
-impl GraphicsSettings {
     pub const fn display_mode(&self) -> DisplayMode {
         match (self.fullscreen_enabled, self.exclusive_fullscreen_enabled) {
             (false, _) => DisplayMode::Windowed,
@@ -503,6 +510,44 @@ impl GraphicsSettings {
         }
     }
 
+    /// Undo [`Self::apply_env_overrides`] for persistence: every field an env
+    /// var is forcing THIS session reverts to `baseline` (the settings file as
+    /// loaded, or the shipped defaults). Without this, one profiling run with
+    /// FISTFORCE_ATMOSPHERE=0 that happened to save its settings would bake
+    /// "atmosphere off" into the file — and every later session would join a
+    /// skyless world with no idea why (this actually happened; the sky and
+    /// clouds were silently off for days). Env overrides are session-only.
+    fn revert_env_forced(&mut self, baseline: &Self) {
+        let forced = |name: &str| std::env::var(name).is_ok();
+        if forced("FISTFORCE_RENDER_SCALE") {
+            self.render_scale = baseline.render_scale;
+        }
+        if forced("FISTFORCE_SHADOWS") {
+            self.shadows_enabled = baseline.shadows_enabled;
+        }
+        if forced("FISTFORCE_ATMOSPHERE") {
+            self.atmosphere_enabled = baseline.atmosphere_enabled;
+        }
+        if forced("FISTFORCE_CLOUDS") {
+            self.clouds_enabled = baseline.clouds_enabled;
+        }
+        if forced("FISTFORCE_PROPS") {
+            self.props_enabled = baseline.props_enabled;
+        }
+        if forced("FISTFORCE_VSYNC") {
+            self.vsync_enabled = baseline.vsync_enabled;
+        }
+        if forced("FISTFORCE_FULLSCREEN") || forced("FISTFORCE_DISPLAY_MODE") {
+            self.fullscreen_enabled = baseline.fullscreen_enabled;
+        }
+        if forced("FISTFORCE_EXCLUSIVE_FULLSCREEN") || forced("FISTFORCE_DISPLAY_MODE") {
+            self.exclusive_fullscreen_enabled = baseline.exclusive_fullscreen_enabled;
+        }
+        if forced("FISTFORCE_RESOLUTION") {
+            self.display_resolution = baseline.display_resolution;
+        }
+    }
+
     /// Settings for this run: the saved file (if any) under the env overrides.
     /// FISTFORCE_NO_SETTINGS_FILE skips the file for reproducible captures.
     pub fn load_or_default() -> Self {
@@ -550,7 +595,16 @@ pub fn save_graphics_settings(
         return;
     }
     *deadline = None;
-    let serialized = match ron::ser::to_string_pretty(&*settings, ron::ser::PrettyConfig::default())
+    // Env-forced values are session-only and must never reach the file: the
+    // baseline for forced fields is whatever the file already says (or the
+    // shipped defaults when there is no file yet).
+    let baseline = std::fs::read_to_string(SETTINGS_FILE)
+        .ok()
+        .and_then(|text| ron::from_str::<GraphicsSettings>(&text).ok())
+        .unwrap_or_else(GraphicsSettings::shipped_defaults);
+    let mut to_save = settings.clone();
+    to_save.revert_env_forced(&baseline);
+    let serialized = match ron::ser::to_string_pretty(&to_save, ron::ser::PrettyConfig::default())
     {
         Ok(text) => text,
         Err(err) => {
