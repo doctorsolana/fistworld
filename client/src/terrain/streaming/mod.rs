@@ -23,7 +23,9 @@ use shared::terrain::{
 };
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
-use crate::streaming::{streaming_anchor, AnchorCamera, AnchorPlayer};
+use crate::streaming::{
+    chunk_stream_priority, streaming_anchor, streaming_view_priority, AnchorCamera, AnchorPlayer,
+};
 use crate::ui::DebugPerfSettings;
 
 use super::chunks::{FarTerrain, FarTerrainState, LoadedChunks, TerrainChunk, TerrainMaterialLod};
@@ -126,8 +128,7 @@ pub struct TerrainDeltaState {
 // coastline was a visibly square staircase from mid zoom; 16m keeps the
 // one-time build and the async hole rebuilds cheap while halving the step.
 const FAR_TERRAIN_RESOLUTION: usize = 513;
-const FAR_TERRAIN_INNER_BUFFER: f32 = 0.0;
-const FAR_TERRAIN_Y_OFFSET: f32 = -0.05;
+const FAR_TERRAIN_Y_OFFSET: f32 = 0.0;
 
 const SPLAT_NORMAL_RATIO: f32 = 0.35;
 const DIRTY_REGEN_MAX_PER_FRAME: usize = 8;

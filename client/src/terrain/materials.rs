@@ -34,6 +34,10 @@ pub struct FarTerrainExtension {
 }
 
 impl MaterialExtension for FarTerrainExtension {
+    fn vertex_shader() -> ShaderRef {
+        "shaders/far_terrain.wgsl".into()
+    }
+
     fn fragment_shader() -> ShaderRef {
         "shaders/far_terrain.wgsl".into()
     }
@@ -92,6 +96,9 @@ pub(super) fn setup_terrain_render_assets(
             perceptual_roughness: 0.98,
             metallic: 0.0,
             reflectance: 0.08,
+            // Land overlap is resolved selectively in far_terrain.wgsl.
+            // Material-wide bias would also push water behind its seabed.
+            depth_bias: 0.0,
             ..default()
         },
         extension: FarTerrainExtension {

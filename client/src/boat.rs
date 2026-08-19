@@ -308,11 +308,25 @@ fn orientation_from_surface_samples(
 /// cannot visibly float through the bench as the Dinghy pitches and rolls.
 fn sync_aboard_hero_visuals(
     boats: Query<(&CommandedBy, &Transform), (With<PlayerBoat>, With<BoatVisual>)>,
+    all_boats: Query<
+        (&PlayerPosition, &Transform),
+        (With<PlayerBoat>, With<BoatVisual>, Without<Hero>),
+    >,
     mut heroes: Query<
         (&CommandedBy, &mut Transform),
         (
             With<AboardBoat>,
+            With<Hero>,
             With<crate::hero::HeroVisual>,
+            Without<PlayerBoat>,
+        ),
+    >,
+    mut npc_passengers: Query<
+        (&PlayerPosition, &mut Transform),
+        (
+            With<AboardBoat>,
+            With<crate::hero::HeroVisual>,
+            Without<Hero>,
             Without<PlayerBoat>,
         ),
     >,
@@ -320,6 +334,25 @@ fn sync_aboard_hero_visuals(
     for (owner, mut transform) in heroes.iter_mut() {
         let Some((_, boat_transform)) =
             boats.iter().find(|(boat_owner, _)| boat_owner.0 == owner.0)
+        else {
+            continue;
+        };
+        transform.translation = boat_transform.translation + boat_transform.rotation * HELM_LOCAL;
+        transform.rotation = boat_transform.rotation;
+    }
+
+    // Natural immigrant boats have no player account/CommandedBy authority.
+    // Their replicated passenger position is pinned to the authoritative helm,
+    // so the closest matching boat snapshot is an unambiguous, bounded visual
+    // join (the server permits at most eight such voyages at once).
+    for (position, mut transform) in npc_passengers.iter_mut() {
+        let Some((_, boat_transform)) = all_boats
+            .iter()
+            .filter(|(boat_position, _)| boat_position.0.distance_squared(position.0) <= 4.0 * 4.0)
+            .min_by(|(a, _), (b, _)| {
+                a.0.distance_squared(position.0)
+                    .total_cmp(&b.0.distance_squared(position.0))
+            })
         else {
             continue;
         };

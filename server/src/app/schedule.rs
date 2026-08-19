@@ -29,6 +29,10 @@ enum ServerSet {
 }
 
 fn configure_server_fixed_schedule(app: &mut App) {
+    app.add_systems(
+        Startup,
+        world::immigration::prepare_natural_immigration_coasts,
+    );
     world::village::schedule::configure_shared_village_simulation(app, FixedUpdate);
 
     app.configure_sets(
@@ -113,6 +117,24 @@ fn configure_server_fixed_schedule(app: &mut App) {
             .run_if(server_is_started),
     );
 
+    app.add_systems(
+        FixedUpdate,
+        world::immigration::plan_natural_immigration
+            .after(world::time::update_world_time)
+            .before(crate::city::buildings::sync_authored_plot_buildings)
+            .in_set(ServerSet::WorldTick)
+            .run_if(server_is_started),
+    );
+
+    app.add_systems(
+        FixedUpdate,
+        world::dev::handle_god_access_requests
+            .after(player::spawn::handle_player_name_submission)
+            .before(player::roster::handle_character_roster_requests)
+            .in_set(ServerSet::NetIngress)
+            .run_if(server_is_started),
+    );
+
     // Opening-voyage systems are kept out of the already-large ingress tuple
     // so adding future vessel classes does not hit Bevy's tuple arity ceiling.
     app.add_systems(
@@ -130,6 +152,8 @@ fn configure_server_fixed_schedule(app: &mut App) {
             player::boat::plan_vessel_routes,
             player::boat::step_boats,
             player::boat::sync_aboard_heroes,
+            world::immigration::sync_natural_immigrant_passengers,
+            world::immigration::finish_natural_immigrant_voyages,
         )
             .chain()
             .after(player::hero::handle_unit_move_orders)

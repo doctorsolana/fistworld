@@ -23,7 +23,7 @@ use shared::terrain::WorldTerrain;
 use crate::player::hero::{HeroIndex, OfflineHero};
 
 const BOAT_SPEED: f32 = 7.0;
-const BOAT_ARRIVE_EPSILON: f32 = 0.2;
+pub(crate) const BOAT_ARRIVE_EPSILON: f32 = 0.2;
 const NAV_CELL: f32 = 6.0;
 const NAV_MAX_EXPANDED: usize = 60_000;
 const NAV_ROUTES_PER_TICK: usize = 4;
@@ -35,7 +35,7 @@ const EDGE_INSET: f32 = 64.0;
 const START_OFFSHORE_DISTANCE: f32 = 56.0;
 const MIN_EDGE_APPROACH: f32 = START_OFFSHORE_DISTANCE + COAST_SCAN_STEP;
 const MAX_DISEMBARK_DISTANCE: f32 = 11.0;
-const HELM_LOCAL: Vec3 = Vec3::new(0.0, 0.35, 1.24);
+pub(crate) const HELM_LOCAL: Vec3 = Vec3::new(0.0, 0.35, 1.24);
 
 /// Retained route on one player boat. Waypoints are world XZ positions whose
 /// water occupancy was certified when the order was accepted.
@@ -69,9 +69,20 @@ impl VesselNavigationQueue {
 }
 
 impl VesselNavigation {
-    const DINGHY: Self = Self {
+    pub(crate) const DINGHY: Self = Self {
         hull_speed: BOAT_SPEED,
     };
+}
+
+/// One ocean-connected approach discovered from a map edge. Natural
+/// immigrants choose among these by the walking distance from landfall to the
+/// settlement they intend to join; player starts choose one by account seed.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CoastalVoyage {
+    pub start: Vec3,
+    pub yaw: f32,
+    pub mooring: Vec2,
+    pub landing: Vec3,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -132,7 +143,7 @@ fn segment_is_water(terrain: &WorldTerrain, start: Vec2, end: Vec2) -> bool {
     })
 }
 
-fn edge_candidate(terrain: &WorldTerrain, side: usize, t: f32) -> Option<(Vec3, Vec2)> {
+fn edge_candidate(terrain: &WorldTerrain, side: usize, t: f32) -> Option<CoastalVoyage> {
     let bounds = terrain.generator.active_map_bounds();
     let t = t.clamp(0.04, 0.96);
     let (start, inward, max_scan) = match side % 4 {
@@ -172,6 +183,7 @@ fn edge_candidate(terrain: &WorldTerrain, side: usize, t: f32) -> Option<(Vec3, 
     water_at(terrain, start)?;
     let mut distance = COAST_SCAN_STEP;
     let mut shore = None;
+    let mut last_water = start;
     while distance <= max_scan {
         let point = start + inward * distance;
         if dry_at(terrain, point) {
@@ -183,6 +195,7 @@ fn edge_candidate(terrain: &WorldTerrain, side: usize, t: f32) -> Option<(Vec3, 
         if water_at(terrain, point).is_none() {
             break;
         }
+        last_water = point;
         distance += COAST_SCAN_STEP;
     }
     let shore = shore?;
@@ -193,8 +206,37 @@ fn edge_candidate(terrain: &WorldTerrain, side: usize, t: f32) -> Option<(Vec3, 
     let inward = (shore - start).normalize_or_zero();
     let voyage_start = shore - inward * START_OFFSHORE_DISTANCE;
     let water = water_at(terrain, voyage_start)?;
-    segment_is_water(terrain, start, voyage_start)
-        .then_some((Vec3::new(voyage_start.x, water, voyage_start.y), inward))
+    if !segment_is_water(terrain, start, voyage_start)
+        || !segment_is_water(terrain, voyage_start, last_water)
+    {
+        return None;
+    }
+    let yaw = f32::atan2(-inward.x, -inward.y);
+    Some(CoastalVoyage {
+        start: Vec3::new(voyage_start.x, water, voyage_start.y),
+        yaw,
+        mooring: last_water,
+        landing: Vec3::new(shore.x, terrain.get_height(shore.x, shore.y), shore.y),
+    })
+}
+
+/// All deterministic edge approaches. This is intentionally evaluated only
+/// when a new voyage begins, never per vessel tick.
+pub(crate) fn coastal_voyages(terrain: &WorldTerrain, seed: u64) -> Vec<CoastalVoyage> {
+    let first_side = (seed & 3) as usize;
+    let first_sample = ((seed >> 8) % 48) as usize;
+    let mut voyages = Vec::new();
+    for side_offset in 0..4 {
+        let side = (first_side + side_offset) % 4;
+        for sample_offset in 0..48 {
+            let sample = (first_sample + sample_offset * 17) % 48;
+            let t = (sample as f32 + 0.5) / 48.0;
+            if let Some(voyage) = edge_candidate(terrain, side, t) {
+                voyages.push(voyage);
+            }
+        }
+    }
+    voyages
 }
 
 /// Pick a deterministic-looking edge start without trusting the client. The
@@ -202,21 +244,10 @@ fn edge_candidate(terrain: &WorldTerrain, side: usize, t: f32) -> Option<(Vec3, 
 /// scan guarantees that an unlucky first choice does not reject a valid map.
 fn starting_voyage(terrain: &WorldTerrain, account: &str) -> Option<(Vec3, f32)> {
     let seed = stable_account_seed(account);
-    let first_side = (seed & 3) as usize;
-    let first_sample = ((seed >> 8) % 48) as usize;
-    for side_offset in 0..4 {
-        let side = (first_side + side_offset) % 4;
-        for sample_offset in 0..48 {
-            let sample = (first_sample + sample_offset * 17) % 48;
-            let t = (sample as f32 + 0.5) / 48.0;
-            if let Some((position, inward)) = edge_candidate(terrain, side, t) {
-                // Authored -Z is the bow. This yaw points -Z along `inward`.
-                let yaw = f32::atan2(-inward.x, -inward.y);
-                return Some((position, yaw));
-            }
-        }
-    }
-    None
+    coastal_voyages(terrain, seed)
+        .into_iter()
+        .next()
+        .map(|voyage| (voyage.start, voyage.yaw))
 }
 
 fn to_cell(point: Vec2) -> WaterCell {

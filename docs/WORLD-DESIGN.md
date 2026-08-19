@@ -1158,6 +1158,13 @@ The first boat slice is now live: a new Hero arrives by one-use Dinghy, follows 
 server-authoritative water route, responds physically and visually to shared wind, and
 disembarks onto nearby dry shore. This proves the generic `Vessel` navigation seam; docks,
 draft, cargo ships, boarding and naval combat remain future work.
+Natural newcomers now use that same seam rather than appearing beside a Hall. Each arrival
+first receives a real edge coast, evaluates public settlement conditions with personal noise
+and a capped distance preference, then sails to the reachable coast nearest its chosen Moot.
+The temporary Dinghy disappears at landfall; the passenger is put on verified dry ground and
+hands off to the ordinary tactical land planner, immigration intent and visible Hall queue.
+The director creates at most one voyage per pass and permits at most eight active voyages, so
+time warp cannot turn one tick into an unbounded coastline/pathfinding burst.
 The implemented local Moot is a private consignment exchange with physical stock,
 seller-owned listings, last-sale/best-offer quotes and a civic transaction fee; it
 now has a nearby on-foot player exchange. A completed Marketplace is the explicit regional

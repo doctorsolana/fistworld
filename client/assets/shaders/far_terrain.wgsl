@@ -4,9 +4,11 @@
 // interpolated by the rasterizer to soften the far shoreline.
 
 #import bevy_pbr::{
-    forward_io::{VertexOutput, FragmentOutput},
+    mesh_functions,
+    forward_io::{Vertex, VertexOutput, FragmentOutput},
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
+    view_transformations::position_world_to_clip,
 }
 
 #ifdef VISIBILITY_RANGE_DITHER
@@ -14,6 +16,58 @@
 #endif
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> water_params: vec4<f32>;
+
+@vertex
+fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
+    var out: VertexOutput;
+    let world_from_local = mesh_functions::get_world_from_local(vertex_no_morph.instance_index);
+    let world_pos = mesh_functions::mesh_position_local_to_world(
+        world_from_local,
+        vec4<f32>(vertex_no_morph.position, 1.0),
+    );
+
+    out.world_position = world_pos;
+    out.position = position_world_to_clip(world_pos.xyz);
+
+    // Geometry remains fixed throughout the transition. The far land mesh is
+    // authored as a stable 5 cm underlay, while water is authored at its real
+    // surface height. Do not apply a distance-dependent world or clip-space
+    // displacement here: either one becomes visible at map-scale distances.
+
+#ifdef VERTEX_NORMALS
+    out.world_normal = mesh_functions::mesh_normal_local_to_world(
+        vertex_no_morph.normal,
+        vertex_no_morph.instance_index,
+    );
+#endif
+#ifdef VERTEX_UVS_A
+    out.uv = vertex_no_morph.uv;
+#endif
+#ifdef VERTEX_UVS_B
+    out.uv_b = vertex_no_morph.uv_b;
+#endif
+#ifdef VERTEX_TANGENTS
+    out.world_tangent = mesh_functions::mesh_tangent_local_to_world(
+        world_from_local,
+        vertex_no_morph.tangent,
+        vertex_no_morph.instance_index,
+    );
+#endif
+#ifdef VERTEX_COLORS
+    out.color = vertex_no_morph.color;
+#endif
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    out.instance_index = vertex_no_morph.instance_index;
+#endif
+#ifdef VISIBILITY_RANGE_DITHER
+    out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(
+        vertex_no_morph.instance_index,
+        world_from_local[3],
+    );
+#endif
+
+    return out;
+}
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
@@ -34,12 +88,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let authored_rgb = pbr_input.material.base_color.rgb;
     pbr_input.material.base_color = vec4<f32>(authored_rgb, 1.0);
 
-    // Keep the far ocean beneath close-water fades, but retain the old hole
-    // for land so coarse far geometry cannot poke through detailed terrain.
+    let inside_detail_hole = water_params.w > 0.0
+        && all(abs(in.world_position.xz - water_params.yz) <= vec2<f32>(water_params.w));
+
+    // Far water is the opaque underlay for the entire detailed-water surface.
+    // Discarding it inside the water core made translucent water blend over
+    // streamed seabed in one chunk and over the clear background in the next,
+    // exposing the terrain streaming square as a dark box during fast pans.
+    // Retain the land-only hole so coarse ground cannot poke through detail.
     // water_params.yz is the detail-hole center and w its half extent.
-    if (water_params.w > 0.0
-        && all(abs(in.world_position.xz - water_params.yz) <= vec2<f32>(water_params.w))
-        && ocean < 0.5) {
+    if (inside_detail_hole && ocean < 0.5) {
         discard;
     }
 

@@ -8,11 +8,14 @@ pub mod overlay;
 
 pub use chunks::WaterChunk;
 
-use chunks::{cleanup_water_chunks, spawn_water_chunks, LoadedWaterChunks, WaterRenderAssets};
+use chunks::{
+    cleanup_water_chunks, spawn_water_chunks, LoadedWaterChunks, WaterDetailCoverage,
+    WaterRenderAssets,
+};
 use edge::{ensure_ocean_edge_extension, update_ocean_edge_extension};
 use material::{
-    setup_water_assets, sync_water_map_bounds, sync_water_wave_clock, update_water_cull_mode,
-    update_water_sun_dir, ToonWaterMaterial,
+    setup_water_assets, sync_water_detail_bounds, sync_water_map_bounds, sync_water_wave_clock,
+    update_water_cull_mode, update_water_sun_dir, ToonWaterMaterial,
 };
 use overlay::{despawn_underwater_overlay, spawn_underwater_overlay, update_underwater_overlay};
 
@@ -33,7 +36,7 @@ use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_RESOLUTION, CHUNK_SIZE, VE
 
 use crate::render::systems::{ClientWorldRoot, SunLight};
 use crate::states::GameState;
-use crate::terrain::{LoadedChunks, TerrainUpdateSet};
+use crate::terrain::TerrainUpdateSet;
 
 /// Linear palette for the detailed animated water surface.
 pub(crate) const WATER_SHALLOW_RGBA: [f32; 4] = [0.12, 0.62, 0.92, 0.70];
@@ -45,6 +48,7 @@ impl Plugin for WaterPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<ToonWaterMaterial>::default());
         app.init_resource::<LoadedWaterChunks>();
+        app.init_resource::<WaterDetailCoverage>();
         app.add_systems(Startup, setup_water_assets);
         app.add_systems(OnEnter(GameState::Playing), spawn_underwater_overlay);
         app.add_systems(OnExit(GameState::Playing), despawn_underwater_overlay);
@@ -68,7 +72,9 @@ impl Plugin for WaterPlugin {
                 update_water_sun_dir,
                 sync_water_wave_clock,
                 sync_water_map_bounds,
+                sync_water_detail_bounds.after(spawn_water_chunks),
             )
+                .after(TerrainUpdateSet)
                 .run_if(in_state(GameState::Playing)),
         );
     }

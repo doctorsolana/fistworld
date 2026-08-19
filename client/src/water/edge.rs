@@ -12,7 +12,7 @@ use crate::terrain::TerrainStreamingState;
 
 /// Every physical edge of this patch lies past the shader's radial fade, even
 /// with the streaming anchor quantized to a chunk centre.
-const EDGE_OCEAN_HALF_EXTENT: f32 = 1_152.0;
+const EDGE_OCEAN_HALF_EXTENT: f32 = 1_920.0;
 /// The 13m shortest swell contributes only 13% of displacement; an 8m grid
 /// keeps the main 24m/42m swells smooth while staying a single modest draw.
 const EDGE_OCEAN_SPACING: f32 = 8.0;
@@ -157,6 +157,6 @@ mod tests {
     #[test]
     fn extension_grid_has_expected_compact_size() {
         let mesh = build_ocean_edge_mesh();
-        assert_eq!(mesh.count_vertices(), 83_521);
+        assert_eq!(mesh.count_vertices(), 231_361);
     }
 }

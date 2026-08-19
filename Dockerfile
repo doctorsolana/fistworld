@@ -1,5 +1,5 @@
 # Build stage - compile the Rust server
-FROM rust:1.92-slim-bookworm AS builder
+FROM rust:1.97-slim-bookworm AS builder
 
 WORKDIR /app
 
@@ -56,22 +56,16 @@ RUN apt-get update && apt-get install -y \
 # Copy the built binary
 COPY --from=builder /app/target/release/server /usr/local/bin/server
 
-# Copy colliders data (server needs this at runtime)
-RUN mkdir -p /usr/local/bin/client/assets
-COPY client/assets/colliders.bin /usr/local/bin/client/assets/colliders.bin
+# Copy the authoritative runtime data into the same workspace-shaped location
+# used when the server was compiled (`/app/server/../client/assets`). The server
+# uses colliders for physical queries, and the shared map loader validates
+# authored prop scenes even though the headless process never renders the GLBs.
+RUN mkdir -p /app/server /app/client/assets
+COPY client/assets/colliders.bin /app/client/assets/colliders.bin
+COPY client/assets/maps /app/client/assets/maps
+COPY client/assets/game_assets /app/client/assets/game_assets
 
-# The MAP is not optional. The server does `init_resource::<WorldTerrain>()` at
-# boot, whose Default runs the map loader, which panics outright if it cannot
-# find the authored map ("Failed to load authored map"). Without this the
-# container built and then died on its first tick.
-#
-# map.ron is ~13MB, most of it baked prop spawns that are already derivable from
-# the seed recipe — worth trimming later, but the server needs the file as-is
-# today because the loader reads spawns from it rather than regenerating them.
-COPY client/assets/maps /usr/local/bin/client/assets/maps
-
-# Set working directory so relative paths work
-WORKDIR /usr/local/bin
+WORKDIR /app/server
 
 # Expose UDP port for game traffic
 EXPOSE 5000/udp

@@ -104,6 +104,7 @@ pub(crate) fn process_chunk_tasks(
 
     let player_chunk = ChunkCoord::from_world_pos(anchor_pos);
     let view_distance = settings.view_distance;
+    let view_priority = streaming_view_priority(&camera_query);
 
     // Bootstrap mode: prioritize getting at least nearby terrain visible quickly after connect.
     // Once chunks exist, return to stricter per-frame finalize budget.
@@ -137,11 +138,6 @@ pub(crate) fn process_chunk_tasks(
                 }
                 ordered_coords.push(coord);
             }
-            ordered_coords.sort_by_key(|coord| {
-                let dx = (coord.x - player_chunk.x).abs();
-                let dz = (coord.z - player_chunk.z).abs();
-                dx.max(dz)
-            });
         }
 
         for coord in scratch.to_remove.drain(..) {
@@ -151,6 +147,13 @@ pub(crate) fn process_chunk_tasks(
         tasks.order_view_distance = view_distance;
         tasks.order_dirty = false;
     }
+
+    // Camera orientation may change while async tasks are in flight. Resorting
+    // at this small bounded size lets newly visible chunks jump the finalize
+    // queue without rebuilding or cancelling useful safety-ring work.
+    tasks
+        .ordered_coords
+        .sort_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
 
     {
         let TerrainChunkTasks {
@@ -260,8 +263,6 @@ pub(crate) fn process_chunk_tasks(
                     material: material.clone(),
                 },
                 TerrainMaterialLod { use_lite: false },
-                // Dithers this chunk into the far map mesh as the camera pulls back.
-                crate::terrain::map_view::detail_visibility_range(),
             ))
             .id();
         // Ablation hook: terrain-chunk shadow casting is the prime suspect for

@@ -193,6 +193,26 @@ fn preset_shots(preset: &str, focus: Vec3, time_of_day: f32) -> Vec<Shot> {
                 ..Default::default()
             })
             .collect(),
+        // Deliberately jump the middle-zoom camera farther than one streamed
+        // chunk between screenshots. With a one-frame settle this catches the
+        // real leading-edge handoff while it is incomplete, rather than only
+        // photographing the world after streaming has caught up.
+        "streaming-pan" => [
+            ("pan_warm", Vec3::ZERO),
+            ("pan_east", Vec3::new(384.0, 0.0, 0.0)),
+            ("pan_north", Vec3::new(384.0, 0.0, -384.0)),
+            ("pan_home", Vec3::ZERO),
+        ]
+        .into_iter()
+        .map(|(name, offset)| Shot {
+            name: name.into(),
+            focus: focus + offset,
+            zoom: 1_092.0,
+            tilt: 0.85,
+            time_of_day,
+            ..Default::default()
+        })
+        .collect(),
         "spawn" => preset_shots("survey", focus, time_of_day),
         other => {
             eprintln!("capture: unknown preset '{other}', using a single shot");
@@ -235,7 +255,7 @@ OPTIONS:
     --time <0..1>      Time of day, 0.5 = noon [default: 0.5]
     --warmup <frames>  Frames before first shot, for streaming  [default: 240]
     --settle <frames>  Frames after each camera move            [default: 60]
-    --preset <name>    orbit | survey | daycycle | water | shorecycle
+    --preset <name>    orbit | survey | daycycle | water | shorecycle | streaming-pan
 
 EXAMPLES:
     cargo run -p client --bin capture -- --at 0,0 --preset survey

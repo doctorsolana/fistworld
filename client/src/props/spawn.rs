@@ -9,7 +9,10 @@ use shared::terrain::{WorldTerrain, CHUNK_SIZE};
 use std::collections::HashSet;
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
-use crate::streaming::{camera_view_distance, streaming_anchor, AnchorCamera, AnchorPlayer};
+use crate::streaming::{
+    camera_view_distance, chunk_stream_priority, streaming_anchor, streaming_view_priority,
+    AnchorCamera, AnchorPlayer,
+};
 use crate::terrain::{LoadedChunks, PerfHitchStats};
 
 use super::foliage::needs_foliage_materials;
@@ -178,21 +181,27 @@ pub(super) fn spawn_chunk_props(
         return;
     }
 
+    let camera_distance = camera_view_distance(&camera_query);
+    let view_priority = streaming_view_priority(&camera_query);
+    if super::props_suppressed_at_zoom(camera_distance) {
+        // Cleanup removes already-realized chunks. Drop queued instances here
+        // as well so zooming to map view cannot continue realizing scenery for
+        // a frame while that cleanup is deferred.
+        pending_spawns.queue.clear();
+        return;
+    }
+
     // Stage 1: enqueue at most one new chunk's spawn list per frame.
     // Props stream independently from terrain. Terrain can stay loaded farther out for silhouettes,
     // while dense forests/ground clutter should only exist as live entities near the player.
     let player_chunk = shared::terrain::ChunkCoord::from_world_pos(anchor_pos);
-    let prop_radius = prop_stream_radius_chunks(&settings, camera_view_distance(&camera_query));
+    let prop_radius = prop_stream_radius_chunks(&settings, camera_distance);
     let mut desired: Vec<shared::terrain::ChunkCoord> = player_chunk
         .chunks_in_radius(prop_radius)
         .into_iter()
         .filter(|coord| loaded_chunks.chunks.contains(coord))
         .collect();
-    desired.sort_by_key(|coord| {
-        let dx = (coord.x - player_chunk.x).abs();
-        let dz = (coord.z - player_chunk.z).abs();
-        dx.max(dz)
-    });
+    desired.sort_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
 
     for coord in desired {
         if loaded_prop_chunks.chunks.contains(&coord) {
@@ -503,16 +512,22 @@ pub(super) fn cleanup_chunk_props(
     mut pending_spawns: ResMut<PendingPropSpawns>,
     mut prop_chunk_index: ResMut<PropChunkIndex>,
 ) {
+    let camera_distance = camera_view_distance(&camera_query);
+    let suppress_props = super::props_suppressed_at_zoom(camera_distance);
     let player_chunk = streaming_anchor(&player_query, &camera_query)
         .map(shared::terrain::ChunkCoord::from_world_pos);
-    let prop_radius = prop_stream_radius_chunks(&settings, camera_view_distance(&camera_query));
+    let prop_radius = prop_stream_radius_chunks(&settings, camera_distance);
 
-    // Find chunks that are no longer loaded or are outside the tighter prop streaming radius.
+    // Full map view needs no individual scenery at all. Otherwise find chunks
+    // that are no longer loaded or are outside the tighter prop radius.
     let chunks_to_remove: Vec<shared::terrain::ChunkCoord> = loaded_prop_chunks
         .chunks
         .iter()
         .copied()
         .filter(|coord| {
+            if suppress_props {
+                return true;
+            }
             if !loaded_chunks.chunks.contains(coord) {
                 return true;
             }

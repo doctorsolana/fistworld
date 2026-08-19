@@ -478,6 +478,24 @@ pub struct DevStatus {
     pub god: bool,
 }
 
+/// Client -> server: unlock the hosted server's administrative tools.
+///
+/// Local development still grants God Mode through `FISTWORLD_DEV=1`. Hosted
+/// servers instead keep a long access key in their secret environment and only
+/// grant the requesting connection after this explicit challenge. The key is
+/// never replicated or stored in player/world state.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct RequestGodAccess {
+    pub key: String,
+}
+
+/// Server -> client result for [`RequestGodAccess`].
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct GodAccessResult {
+    pub granted: bool,
+    pub message: String,
+}
+
 /// What the bullet impacted (used for visuals/debug).
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct SubmitPlayerName {

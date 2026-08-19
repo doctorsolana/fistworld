@@ -66,7 +66,14 @@ Phase 0 exit blockers.
 - [x] New-player presentation: mandatory character creator, dressed Hero/boat readiness
       gate, face-to-RTS opening camera, selected water-only boat and shore disembark. See
       [PLAYER-START-AND-VESSELS.md](PLAYER-START-AND-VESSELS.md).
-- [ ] Redeploy and verify a real client can join, get a body, disconnect, and return
+- [x] Natural physical immigration: newcomers choose a viable settlement with imperfect
+      personal preferences and a bounded coast-to-town distance bias, sail an ephemeral
+      Dinghy from the map edge, disembark on certified dry ground, then use the ordinary
+      embodied land planner and visible Moot registration queue. Seasonal cadence and an
+      eight-voyage ceiling keep the system legible and bounded at high time warp.
+- [x] Deploy to Fly.io and verify a real public client can join, create a Hero and
+      starter Dinghy, sail through the ordinary right-click order path, disconnect,
+      reconnect, and re-adopt the same live Hero body.
 
 **Exit:** a non-dev client spawns a hero, walks and trades, disconnects, and finds the exact
 live body again while that server session continues.

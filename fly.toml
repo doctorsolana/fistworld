@@ -12,9 +12,10 @@ primary_region = 'ams'
     port = 5000
 
 [env]
-  RUST_LOG = "info,server=debug"
+  CITYSIM_MAP_ID = "big_world"
+  RUST_LOG = "info"
 
 [[vm]]
-  memory = '1gb'
+  memory = '512mb'
   cpu_kind = 'shared'
   cpus = 1

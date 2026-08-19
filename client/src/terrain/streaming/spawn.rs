@@ -35,16 +35,13 @@ pub(crate) fn update_terrain_chunks(
     }
     if should_recompute {
         streaming.center = Some(player_chunk);
+        let view_priority = streaming_view_priority(&camera_query);
 
-        // Update desired chunk ordering (nearest -> farthest).
+        // Visible/in-front chunks stream before the retained safety ring behind
+        // the camera. The renderer independently frustum-culls actual draws.
         let mut desired: Vec<ChunkCoord> = player_chunk.chunks_in_radius(view_distance);
         desired.retain(|c| c.in_world_bounds());
-        desired.sort_by_key(|c| {
-            let dx = (c.x - player_chunk.x).abs();
-            let dz = (c.z - player_chunk.z).abs();
-            // Chebyshev distance for square radius ordering.
-            dx.max(dz)
-        });
+        desired.sort_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
         streaming.desired_order = desired;
         streaming.unload_pending = true;
     }
@@ -200,6 +197,7 @@ pub(crate) fn spawn_terrain_chunks(
     };
 
     let view_distance = settings.view_distance;
+    let view_priority = streaming_view_priority(&camera_query);
 
     // Load new chunks with a soft time budget to avoid hitching.
     let mut chunks_spawned = 0;
@@ -262,7 +260,9 @@ pub(crate) fn spawn_terrain_chunks(
         && !streaming.desired_order.is_empty();
 
     if use_cached_order {
-        for coord in streaming.desired_order.iter().copied() {
+        let mut desired = streaming.desired_order.clone();
+        desired.sort_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
+        for coord in desired {
             if !enqueue_chunk_if_needed(coord) {
                 break;
             }

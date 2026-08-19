@@ -43,6 +43,8 @@ struct ToonWaterUniform {
     // xy: playable min xz, zw: playable max xz. Only the visual map-edge
     // continuation uses this; ordinary water has signed depth <= 1.
     map_bounds: vec4<f32>,
+    // xy: streamed detail centre; zw: square edge fade start/end.
+    detail_bounds: vec4<f32>,
 };
 
 @group(3) @binding(0) var<uniform> material: ToonWaterUniform;
@@ -311,7 +313,8 @@ fn vertex(vertex_no_morph: Vertex) -> VertexOutput {
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // One camera-local square covers sides and corners without gaps. Its
     // private B > 1 vertex tag keeps it strictly outside gameplay terrain.
-    if (in.color.b > 1.5
+    let is_edge_extension = in.color.b > 1.5;
+    if (is_edge_extension
         && in.world_position.x >= material.map_bounds.x
         && in.world_position.z >= material.map_bounds.y
         && in.world_position.x <= material.map_bounds.z
@@ -595,12 +598,25 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Smoothly reveal the matching far-ocean surface. Alpha blending is
     // continuous, so there is no screen-door pattern and no chunk-shaped box.
-    let water_detail = 1.0 - smoothstep(
+    let camera_detail = 1.0 - smoothstep(
         material.distance_fade.x,
         material.distance_fade.y,
         view_dist,
     );
-    alpha *= water_detail;
+    let square_distance = max(
+        abs(in.world_position.x - material.detail_bounds.x),
+        abs(in.world_position.z - material.detail_bounds.y),
+    );
+    let streamed_detail = select(
+        1.0,
+        1.0 - smoothstep(
+            material.detail_bounds.z,
+            material.detail_bounds.w,
+            square_distance,
+        ),
+        material.detail_bounds.w > material.detail_bounds.z && !is_edge_extension,
+    );
+    alpha *= camera_detail * streamed_detail;
 
     return vec4<f32>(color_rgb, alpha);
 }

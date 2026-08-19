@@ -50,6 +50,7 @@ pub fn handle_player_name_submission(
         With<ClientOf>,
     >,
     dev: Res<DevMode>,
+    god_sessions: Res<crate::world::dev::GodAccessSessions>,
 ) {
     for (client_entity, remote_id, mut receiver, mut sender, mut dev_sender) in
         client_links.iter_mut()
@@ -184,7 +185,9 @@ pub fn handle_player_name_submission(
                 profile_loaded,
                 needs_hero_creation: !has_hero,
             });
-            dev_sender.send::<ReliableChannel>(DevStatus { god: dev.0 });
+            dev_sender.send::<ReliableChannel>(DevStatus {
+                god: dev.allows(peer_id, &god_sessions),
+            });
             info!("Player '{}' spawned successfully for {:?}", name, peer_id);
             // This connection is now named. The outer `peer_to_name` guard is
             // only re-read next run, so without this break a client that sent

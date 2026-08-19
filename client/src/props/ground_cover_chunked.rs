@@ -3,6 +3,7 @@
 //! The deterministic spawn generator feeds compact GPU instance buffers grouped
 //! into camera-cullable sectors instead of creating an ECS entity per tuft.
 
+use bevy::camera::visibility::VisibilityRange;
 use bevy::light::NotShadowCaster;
 use bevy::pbr::ExtendedMaterial;
 use bevy::prelude::*;
@@ -14,7 +15,10 @@ use shared::props::{PropKind, PropSpawn};
 use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
 
 use crate::render::systems::{ClientWorldRoot, GraphicsSettings};
-use crate::streaming::{streaming_anchor, AnchorCamera, AnchorPlayer};
+use crate::streaming::{
+    camera_view_distance, chunk_stream_priority, streaming_anchor, streaming_view_priority,
+    AnchorCamera, AnchorPlayer,
+};
 use crate::terrain::LoadedChunks;
 
 use super::foliage::flatten_base;
@@ -26,6 +30,22 @@ use super::{BuildZoneChunkIndex, PropAssets};
 
 const GROUND_COVER_CHUNK_RADIUS: i32 = 4;
 const GRASS_BATCH_CHUNKS: i32 = 3;
+/// Grass blades are well below one pixel by this distance. Keeping their
+/// alpha-masked geometry alive beyond it turns whole meadow sectors into
+/// shimmering dots and wastes fill rate in middle/map view.
+const GROUND_COVER_END_DISTANCE: f32 = 700.0;
+const _: () = assert!(GROUND_COVER_END_DISTANCE < crate::terrain::map_view::MAP_VIEW_BLEND_START);
+
+fn ground_cover_visibility_range() -> VisibilityRange {
+    VisibilityRange {
+        start_margin: 0.0..0.0,
+        // Abrupt on purpose: the custom instanced shader does not participate
+        // in Bevy's dither crossfade, and dithering tiny blades recreates the
+        // speckle this cutoff is intended to remove.
+        end_margin: GROUND_COVER_END_DISTANCE..GROUND_COVER_END_DISTANCE,
+        use_aabb: true,
+    }
+}
 
 /// Opt-in renderer stress input. Ordinary worlds remain at 1x, while captures
 /// can request denser meadows with `FISTFORCE_GRASS_STRESS_DENSITY`.
@@ -320,6 +340,7 @@ fn sync_render_sector(
                 GlobalTransform::default(),
                 Visibility::Visible,
                 InheritedVisibility::default(),
+                ground_cover_visibility_range(),
                 NotShadowCaster,
             ))
             .id();
@@ -369,9 +390,17 @@ pub(super) fn stream_chunked_ground_cover(
         return;
     };
     let (players, cameras) = anchor;
+    if super::props_suppressed_at_zoom(camera_view_distance(&cameras)) {
+        clear_render_entities(&mut commands, &mut state);
+        state.chunks.clear();
+        state.dirty.clear();
+        state.reported_chunk_count = 0;
+        return;
+    }
     let Some(anchor_pos) = streaming_anchor(&players, &cameras) else {
         return;
     };
+    let view_priority = streaming_view_priority(&cameras);
     let Ok(world_root) = world_root_query.single() else {
         return;
     };
@@ -416,11 +445,7 @@ pub(super) fn stream_chunked_ground_cover(
         .copied()
         .filter(|coord| state.chunks.contains_key(coord))
         .collect::<Vec<_>>();
-    dirty.sort_by_key(|coord| {
-        (coord.x - anchor_chunk.x)
-            .abs()
-            .max((coord.z - anchor_chunk.z).abs())
-    });
+    dirty.sort_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
     if let Some(coord) = dirty.first().copied() {
         build_chunk(
             coord,
@@ -452,11 +477,7 @@ pub(super) fn stream_chunked_ground_cover(
         .into_iter()
         .filter(|coord| loaded_chunks.chunks.contains(coord) && !state.chunks.contains_key(coord))
         .collect::<Vec<_>>();
-    desired.sort_by_key(|coord| {
-        (coord.x - anchor_chunk.x)
-            .abs()
-            .max((coord.z - anchor_chunk.z).abs())
-    });
+    desired.sort_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
     if let Some(coord) = desired.first().copied() {
         build_chunk(
             coord,
@@ -623,5 +644,16 @@ mod tests {
         let max = Vec3::from(bounds.max());
         assert!(min.cmple(Vec3::new(7.0, 1.0, -7.0)).all());
         assert!(max.cmpge(Vec3::new(21.0, 9.0, 10.0)).all());
+    }
+
+    #[test]
+    fn grass_is_abruptly_culled_before_map_view() {
+        let range = ground_cover_visibility_range();
+        assert!(range.is_abrupt());
+        assert!(range.use_aabb);
+        assert_eq!(
+            range.end_margin,
+            GROUND_COVER_END_DISTANCE..GROUND_COVER_END_DISTANCE
+        );
     }
 }

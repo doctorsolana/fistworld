@@ -70,6 +70,7 @@ pub fn handle_disconnections(
         &PlayerProgression,
     )>,
     mut inputs: ResMut<ClientInputs>,
+    mut god_sessions: ResMut<crate::world::dev::GodAccessSessions>,
     heroes: Query<(
         Entity,
         &shared::components::Hero,
@@ -91,6 +92,7 @@ pub fn handle_disconnections(
         );
         return;
     };
+    god_sessions.remove(peer_id);
 
     info!(
         "PLAYER LEFT GAME - Client {:?} disconnected: {:?}",

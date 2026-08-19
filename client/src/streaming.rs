@@ -9,6 +9,7 @@
 
 use bevy::prelude::*;
 use shared::components::{LocalPlayer, PlayerPosition};
+use shared::terrain::{ChunkCoord, CHUNK_SIZE};
 
 use crate::camera_rts::CommanderCamera;
 
@@ -51,5 +52,78 @@ pub fn camera_view_distance(camera: &AnchorCamera) -> f32 {
         .unwrap_or(DEFAULT_VIEW_DISTANCE)
 }
 
+/// Camera plane used only to prioritize streaming work.
+///
+/// We deliberately keep a safety ring behind the camera so a quick orbit does
+/// not expose an empty world. Bevy's renderer frustum-culls those meshes; this
+/// hint merely makes chunks in front finish loading before chunks behind.
+#[derive(Debug, Clone, Copy)]
+pub struct StreamingViewPriority {
+    position: Vec3,
+    forward: Vec3,
+}
+
+pub fn streaming_view_priority(camera: &AnchorCamera) -> Option<StreamingViewPriority> {
+    camera
+        .iter()
+        .next()
+        .map(|(transform, _)| StreamingViewPriority {
+            position: transform.translation(),
+            forward: Vec3::from(transform.forward()),
+        })
+}
+
+/// Deterministic front-first priority for a chunk around the streaming anchor.
+pub fn chunk_stream_priority(
+    coord: ChunkCoord,
+    anchor: Vec3,
+    view: Option<StreamingViewPriority>,
+) -> (u8, i32, i32, i32, i32) {
+    let anchor_chunk = ChunkCoord::from_world_pos(anchor);
+    let dx = (coord.x - anchor_chunk.x).abs();
+    let dz = (coord.z - anchor_chunk.z).abs();
+    let ring = dx.max(dz);
+
+    let (behind, forward_rank) = view.map_or((0, 0), |view| {
+        let origin = coord.world_pos();
+        let center = Vec3::new(
+            origin.x + CHUNK_SIZE * 0.5,
+            anchor.y,
+            origin.z + CHUNK_SIZE * 0.5,
+        );
+        let forward_distance = (center - view.position).dot(view.forward);
+        // Let a chunk intersect the camera plane before treating it as behind.
+        // The nearest ring always remains first as an anti-pop safety core.
+        let behind = u8::from(ring > 1 && forward_distance < -CHUNK_SIZE * 0.75);
+        let forward_rank = (-forward_distance / CHUNK_SIZE).round() as i32;
+        (behind, forward_rank)
+    });
+
+    (behind, ring, forward_rank, coord.x, coord.z)
+}
+
 /// Fallback when no commander camera exists yet (first frames, or a non-gameplay app).
 const DEFAULT_VIEW_DISTANCE: f32 = 220.0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_priority_keeps_near_core_then_prefers_camera_front() {
+        let anchor = Vec3::ZERO;
+        let view = Some(StreamingViewPriority {
+            position: Vec3::new(0.0, 100.0, 100.0),
+            forward: Vec3::new(0.0, -1.0, -1.0).normalize(),
+        });
+        let near = chunk_stream_priority(ChunkCoord::new(0, 0), anchor, view);
+        let ahead = chunk_stream_priority(ChunkCoord::new(0, -4), anchor, view);
+        let behind = chunk_stream_priority(ChunkCoord::new(0, 4), anchor, view);
+
+        assert_eq!(near.0, 0);
+        assert_eq!(ahead.0, 0);
+        assert_eq!(behind.0, 1);
+        assert!(near < behind);
+        assert!(ahead < behind);
+    }
+}

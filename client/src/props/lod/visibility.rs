@@ -123,6 +123,7 @@ pub(crate) fn update_tree_lod_visibility(
     >,
     mut elapsed: Local<f32>,
     mut last_player_pos: Local<Option<Vec3>>,
+    mut last_map_view_suppressed: Local<Option<bool>>,
     mut shadows_zoomed_off: Local<bool>,
 ) {
     let Some(anchor_pos) = streaming_anchor(&player, &camera) else {
@@ -131,16 +132,25 @@ pub(crate) fn update_tree_lod_visibility(
 
     const TREE_LOD_UPDATE_INTERVAL_SECS: f32 = 0.12;
     const TREE_LOD_PLAYER_MOVE_THRESHOLD: f32 = 4.0;
+    let zoom = camera
+        .iter()
+        .next()
+        .and_then(|(_, controller)| controller)
+        .map(|controller| controller.zoom);
+    let map_view_suppressed = zoom.is_some_and(crate::props::props_suppressed_at_zoom);
     let player_moved = last_player_pos.is_none_or(|last| {
         last.distance_squared(anchor_pos) >= TREE_LOD_PLAYER_MOVE_THRESHOLD.powi(2)
     });
-    let force_update = settings.is_changed() || debug_mode.is_changed() || player_moved;
+    let suppression_changed = *last_map_view_suppressed != Some(map_view_suppressed);
+    let force_update =
+        settings.is_changed() || debug_mode.is_changed() || player_moved || suppression_changed;
     *elapsed += time.delta_secs();
     if !force_update && *elapsed < TREE_LOD_UPDATE_INTERVAL_SECS {
         return;
     }
     *elapsed = 0.0;
     *last_player_pos = Some(anchor_pos);
+    *last_map_view_suppressed = Some(map_view_suppressed);
 
     let prop_multiplier = settings.prop_render_multiplier;
     let max_prop_distance = settings.view_distance as f32 * CHUNK_SIZE;
@@ -148,11 +158,6 @@ pub(crate) fn update_tree_lod_visibility(
     // Cutoff radius follows camera zoom so the whole visible field shadows;
     // past TREE_SHADOW_OFF_ZOOM the trees stop casting altogether (zoom-level
     // hysteresis via *shadows_zoomed_off*, per-tree hysteresis further down).
-    let zoom = camera
-        .iter()
-        .next()
-        .and_then(|(_, controller)| controller)
-        .map(|controller| controller.zoom);
     let shadow_cutoff = match zoom {
         Some(zoom) => {
             if zoom > TREE_SHADOW_OFF_ZOOM {
@@ -200,41 +205,45 @@ pub(crate) fn update_tree_lod_visibility(
         let split_plus_hysteresis_sq = split_plus_hysteresis * split_plus_hysteresis;
         let split_minus_hysteresis = (split - TREE_LOD_HYSTERESIS).max(0.0);
         let split_minus_hysteresis_sq = split_minus_hysteresis * split_minus_hysteresis;
-        let desired_active_lod = match *debug_mode {
-            PropLodDebugMode::ForceLod0 => TreeActiveLod::Lod0,
-            PropLodDebugMode::ForceLod1 => {
-                if has_lod1 {
-                    TreeActiveLod::Lod1
-                } else {
-                    TreeActiveLod::Lod0
+        let desired_active_lod = if map_view_suppressed {
+            TreeActiveLod::Hidden
+        } else {
+            match *debug_mode {
+                PropLodDebugMode::ForceLod0 => TreeActiveLod::Lod0,
+                PropLodDebugMode::ForceLod1 => {
+                    if has_lod1 {
+                        TreeActiveLod::Lod1
+                    } else {
+                        TreeActiveLod::Lod0
+                    }
                 }
-            }
-            PropLodDebugMode::Off => {
-                if distance_sq > lod_end_sq {
-                    TreeActiveLod::Hidden
-                } else if !has_lod1 {
-                    TreeActiveLod::Lod0
-                } else {
-                    match current_state.active_lod {
-                        TreeActiveLod::Lod0 => {
-                            if distance_sq >= split_plus_hysteresis_sq {
-                                TreeActiveLod::Lod1
-                            } else {
-                                TreeActiveLod::Lod0
+                PropLodDebugMode::Off => {
+                    if distance_sq > lod_end_sq {
+                        TreeActiveLod::Hidden
+                    } else if !has_lod1 {
+                        TreeActiveLod::Lod0
+                    } else {
+                        match current_state.active_lod {
+                            TreeActiveLod::Lod0 => {
+                                if distance_sq >= split_plus_hysteresis_sq {
+                                    TreeActiveLod::Lod1
+                                } else {
+                                    TreeActiveLod::Lod0
+                                }
                             }
-                        }
-                        TreeActiveLod::Lod1 => {
-                            if distance_sq <= split_minus_hysteresis_sq {
-                                TreeActiveLod::Lod0
-                            } else {
-                                TreeActiveLod::Lod1
+                            TreeActiveLod::Lod1 => {
+                                if distance_sq <= split_minus_hysteresis_sq {
+                                    TreeActiveLod::Lod0
+                                } else {
+                                    TreeActiveLod::Lod1
+                                }
                             }
-                        }
-                        TreeActiveLod::Hidden => {
-                            if distance_sq <= split_sq {
-                                TreeActiveLod::Lod0
-                            } else {
-                                TreeActiveLod::Lod1
+                            TreeActiveLod::Hidden => {
+                                if distance_sq <= split_sq {
+                                    TreeActiveLod::Lod0
+                                } else {
+                                    TreeActiveLod::Lod1
+                                }
                             }
                         }
                     }

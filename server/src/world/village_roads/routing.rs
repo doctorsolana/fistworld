@@ -804,8 +804,14 @@ fn is_intersettlement_route_objective(objective: Option<&CharacterObjective>) ->
     )
 }
 
+fn needs_regional_corridor(objective: Option<&CharacterObjective>, local_distance: f32) -> bool {
+    is_intersettlement_route_objective(objective)
+        || (local_distance > EXTENDED_LOCAL_SURVEY_MAX_DISTANCE
+            && matches!(objective, Some(CharacterObjective::TravellingToSettlement)))
+}
+
 fn agent_survey_max_nodes(local_distance: f32, objective: Option<&CharacterObjective>) -> usize {
-    if is_intersettlement_route_objective(objective) {
+    if needs_regional_corridor(objective, local_distance) {
         INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES
     } else if (EXTENDED_LOCAL_SURVEY_MIN_DISTANCE..=EXTENDED_LOCAL_SURVEY_MAX_DISTANCE)
         .contains(&local_distance)
@@ -1622,7 +1628,12 @@ pub fn plan_villager_travel_routes(
         // Scatter deterministic collidable props once for this order, covering
         // the direct path and every possible road connector.
         let prop_started = Instant::now();
-        let intersettlement_route = is_intersettlement_route_objective(objective);
+        // A newcomer may have several kilometres of inland travel after a
+        // coastal landing. Give that committed migration the same bounded,
+        // coarse, incremental corridor mechanics as a caravan, while keeping
+        // it in the ordinary committed priority bucket so a wave cannot starve
+        // established work. Local migration retains the cheap town planner.
+        let intersettlement_route = needs_regional_corridor(objective, local_distance);
         let prop_blockers = blockers_for_agent_route(
             &terrain,
             start.survey,
@@ -2154,6 +2165,22 @@ mod local_tests {
             agent_survey_max_nodes(600.0, Some(&CharacterObjective::GoingToFarm)),
             AGENT_SURVEY_MAX_NODES,
             "ordinary villagers must not inherit the expensive caravan budget",
+        );
+        assert_eq!(
+            agent_survey_max_nodes(600.0, Some(&CharacterObjective::TravellingToSettlement),),
+            INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
+            "a coastal immigrant must not be stranded by the local commute cap",
+        );
+        assert_eq!(
+            route_request_priority(
+                Some(&VillagerIntent::Travelling {
+                    settlement: Entity::from_bits(1),
+                }),
+                false,
+                Some(&CharacterObjective::TravellingToSettlement),
+            ),
+            ROUTE_PRIORITY_COMMITTED,
+            "a migration wave must not outrank every established work journey",
         );
     }
 

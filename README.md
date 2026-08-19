@@ -107,6 +107,10 @@ arrival and reusable ship-navigation contract are documented in
   shore disembarks and selects the Hero while the one-use starter boat becomes a visible
   wreck. Bounded vessel-route planning is shared infrastructure for later merchant and war
   ships. Returning to the same running server re-adopts the live Hero and skips creation.
+- Ordinary worlds also receive natural NPC immigration through physical one-use Dinghies.
+  Arrivals choose among towns from food, housing, work, civic conditions, individual taste
+  and a bounded distance preference; after a water-certified voyage they disembark on dry
+  land, walk with the normal villager pathfinder and join the visible Moot Hall line.
 - The Hall's property ledger is actionable for an embodied hero. It returns an exact
   company-specific business-permit quote, charges only its refundable permit fee, and opens a
   world placement ghost. Road frontage snaps magnetically while free placement remains

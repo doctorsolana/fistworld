@@ -678,7 +678,11 @@ pub fn update_person_simulation_lod(
                     || queue
                     || meal
                     || loaded_trade
-                    || matches!(intent, super::VillagerIntent::Travelling { .. }),
+                    || matches!(
+                        intent,
+                        super::VillagerIntent::Travelling { .. }
+                            | super::VillagerIntent::ArrivingBySea { .. }
+                    ),
                 now,
             );
         }
@@ -730,7 +734,11 @@ pub fn update_person_simulation_lod(
                     || queue
                     || meal
                     || loaded_trade
-                    || matches!(intent, super::VillagerIntent::Travelling { .. }),
+                    || matches!(
+                        intent,
+                        super::VillagerIntent::Travelling { .. }
+                            | super::VillagerIntent::ArrivingBySea { .. }
+                    ),
                 now,
             );
         }
@@ -771,7 +779,11 @@ pub fn update_person_simulation_lod(
             || queue
             || meal
             || loaded_trade
-            || matches!(intent, super::VillagerIntent::Travelling { .. });
+            || matches!(
+                intent,
+                super::VillagerIntent::Travelling { .. }
+                    | super::VillagerIntent::ArrivingBySea { .. }
+            );
         if !critical {
             apply_person_lod(
                 &mut commands,

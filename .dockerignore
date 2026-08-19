@@ -1,11 +1,24 @@
 # Ignore build artifacts
 target/
 
-# Ignore client (not needed for server deployment)
-client/
-# But keep colliders.bin (server needs it)
-!client/assets/
+# Local captures, profiling output, source-art work and documentation are not
+# inputs to the headless runtime image. Keeping them out turns a ~530 MB upload
+# into the small reproducible server context the Dockerfile actually consumes.
+logs/
+asset_creation/
+docs/
+
+# The client executable and Rust sources are not part of the headless image.
+# Keep only the runtime data the shared map loader validates on server boot.
+client/src/
+client/Cargo.toml
+client/build.rs
+client/assets/*
 !client/assets/colliders.bin
+!client/assets/maps/
+!client/assets/maps/**
+!client/assets/game_assets/
+!client/assets/game_assets/**
 
 # Ignore tools
 tools/

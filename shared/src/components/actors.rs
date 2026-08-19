@@ -231,6 +231,7 @@ pub enum CharacterObjective {
     #[default]
     Idle,
     LookingForSettlement,
+    SailingToSettlement,
     TravellingToSettlement,
     WaitingToRetryMigration,
     QueuedForImmigration,
@@ -298,6 +299,7 @@ impl CharacterObjective {
         match self {
             Self::Idle => "Idle",
             Self::LookingForSettlement => "Looking for a settlement",
+            Self::SailingToSettlement => "Sailing to a chosen settlement",
             Self::TravellingToSettlement => "Going to register at the Moot Hall",
             Self::WaitingToRetryMigration => "Waiting to retry settlement travel",
             Self::QueuedForImmigration => "In line to register as a resident",

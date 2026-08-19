@@ -64,6 +64,7 @@ pub fn update_world_time(
 /// Handle debug requests to set time of day.
 pub fn handle_set_time_of_day(
     dev: Res<DevMode>,
+    sessions: Res<crate::world::dev::GodAccessSessions>,
     mut client_links: Query<(&RemoteId, &mut MessageReceiver<SetTimeOfDay>), With<ClientOf>>,
     mut world_time: Query<&mut WorldTime>,
 ) {
@@ -73,7 +74,7 @@ pub fn handle_set_time_of_day(
 
     for (remote_id, mut receiver) in client_links.iter_mut() {
         for msg in receiver.receive() {
-            if !dev.0 {
+            if !dev.allows(remote_id.0, &sessions) {
                 warn!(
                     "Ignoring SetTimeOfDay from {:?}: dev mode disabled",
                     remote_id.0

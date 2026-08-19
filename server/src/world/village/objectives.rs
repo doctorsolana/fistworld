@@ -183,6 +183,9 @@ fn objective_for(
                     CharacterObjective::LookingForSettlement
                 };
             }
+            VillagerIntent::ArrivingBySea { .. } => {
+                return CharacterObjective::SailingToSettlement;
+            }
             VillagerIntent::Travelling { .. } => {
                 return CharacterObjective::TravellingToSettlement;
             }

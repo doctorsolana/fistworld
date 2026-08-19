@@ -6,16 +6,20 @@ pub mod state_sync;
 
 use actions::{
     close_debug_menu_on_main_menu, close_debug_time_menu_on_escape, debug_menu_closed,
-    debug_menu_open, handle_backdrop_click, handle_debug_menu_interactions, toggle_debug_time_menu,
+    debug_menu_open, handle_backdrop_click, handle_debug_menu_interactions,
+    handle_god_access_input, receive_god_access_result, toggle_debug_time_menu,
 };
 use layout::{despawn_debug_time_menu, spawn_debug_time_menu};
 use state_sync::{sync_debug_menu_open_state, update_perf_button_labels};
 
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 use lightyear::prelude::*;
 
-use shared::protocol::{ReliableChannel, SetTimeOfDay, TimeOfDayPreset};
+use shared::protocol::{
+    GodAccessResult, ReliableChannel, RequestGodAccess, SetTimeOfDay, TimeOfDayPreset,
+};
 
 use crate::input::InputState;
 use crate::render::systems::{CloudCover, CloudCoverMode, CloudCoverOverride};
@@ -31,6 +35,7 @@ impl Plugin for DebugTimeMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DebugTimeMenuOpen>();
         app.init_resource::<DebugPerfSettings>();
+        app.init_resource::<GodAccessInput>();
         app.add_systems(
             Update,
             toggle_debug_time_menu.run_if(in_state(GameState::Playing)),
@@ -71,6 +76,16 @@ impl Plugin for DebugTimeMenuPlugin {
                 .run_if(debug_menu_open)
                 .run_if(in_state(GameState::Playing)),
         );
+        app.add_systems(
+            Update,
+            handle_god_access_input
+                .run_if(debug_menu_open)
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.add_systems(
+            Update,
+            receive_god_access_result.run_if(in_state(GameState::Playing)),
+        );
         app.add_systems(Update, despawn_debug_time_menu.run_if(debug_menu_closed));
         app.add_systems(OnEnter(GameState::MainMenu), close_debug_menu_on_main_menu);
     }
@@ -78,6 +93,16 @@ impl Plugin for DebugTimeMenuPlugin {
 
 #[derive(Resource, Default)]
 pub struct DebugTimeMenuOpen(pub bool);
+
+/// Ephemeral hosted-admin challenge state. The key is cleared on success,
+/// close, and return to the main menu; it is never written to settings.
+#[derive(Resource, Default)]
+pub struct GodAccessInput {
+    key: String,
+    feedback: String,
+    submitted: bool,
+    skip_text_frame: bool,
+}
 
 #[derive(Resource)]
 pub struct DebugPerfSettings {
@@ -124,3 +149,12 @@ struct PerfRenderDiagToggleButton;
 
 #[derive(Component)]
 struct PerfRenderDiagLabel;
+
+#[derive(Component)]
+struct GodAccessInputDisplay;
+
+#[derive(Component)]
+struct GodAccessFeedbackText;
+
+#[derive(Component)]
+struct GodAccessSubmitButton;

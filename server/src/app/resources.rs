@@ -19,6 +19,7 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<crate::player::boat::VesselNavigationQueue>();
     app.init_resource::<crate::player::permits::PermitIdAllocator>();
     app.init_resource::<crate::world::dev::VillagerSeed>();
+    app.init_resource::<crate::world::immigration::NaturalImmigrationDirector>();
     app.init_resource::<net::input::ClientInputIngressStats>();
     app.init_resource::<SpatialObstacleGrid>();
     app.init_resource::<crate::world::navgrid::ObstacleGridState>();
@@ -39,6 +40,7 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<crate::world::village_roads::VillageRoadGraph>();
     app.init_resource::<crate::world::pathfinding::PathfindingBudgetSettings>();
     app.init_resource::<crate::world::dev::DevMode>();
+    app.init_resource::<crate::world::dev::GodAccessSessions>();
     app.init_resource::<collision::building_index::BuildingSpatialIndex>();
     app.init_resource::<collision::streaming::ColliderStreamingState>();
     // World and account state share one lifetime: reconnecting to this running

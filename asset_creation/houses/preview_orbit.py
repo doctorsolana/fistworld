@@ -32,8 +32,9 @@ hi = Vector((max(p[i] for p in pts) for i in range(3)))
 centre = (lo + hi) / 2
 radius = max((p - centre).length for p in pts)
 
-sc.render.engine = "CYCLES"; sc.cycles.samples = 90
-sc.render.resolution_x, sc.render.resolution_y = 620, 760
+sc.render.engine = "CYCLES"; sc.cycles.samples = int(os.environ.get("ORBIT_SAMPLES", "90"))
+sc.render.resolution_x = int(os.environ.get("ORBIT_WIDTH", "620"))
+sc.render.resolution_y = int(os.environ.get("ORBIT_HEIGHT", "760"))
 sc.view_settings.view_transform = "Khronos PBR Neutral"
 w = bpy.data.worlds.new("Sky"); sc.world = w; w.use_nodes = True
 w.node_tree.nodes["Background"].inputs[0].default_value = (0.47, 0.56, 0.70, 1)
@@ -56,7 +57,7 @@ dist = radius / math.tan(fov / 2) * 1.30
 # AZIMUTH 0 IS THE BUILDING'S FRONT. Every building here faces Blender -X, so the camera must sit on
 # -X for the "front" view -- with a naive (-sin a, -cos a) that is a=90, and the first run labelled the
 # side elevation "front" and the real front "left".
-FRONT_AZ = 90
+FRONT_AZ = float(os.environ.get("ORBIT_FRONT_AZ", "90"))
 VIEWS = [("front", 0, 0.22), ("front-L", 45, 0.22), ("left", 90, 0.22), ("rear-L", 135, 0.22),
          ("rear", 180, 0.22), ("rear-R", 225, 0.22), ("right", 270, 0.22), ("front-R", 315, 0.22),
          ("top", 0, 2.60)]

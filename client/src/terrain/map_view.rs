@@ -1,65 +1,124 @@
 //! Map view — how the world degrades naturally into a map as the camera pulls back.
 //!
 //! Close up, terrain is streamed chunks using the splat shader plus a separate water
-//! surface; far out, the whole map is one low-resolution vertex-coloured mesh. The wrong
-//! way to switch between them is a global visibility toggle: it is stateful (chunks that
-//! stream in *after* the flip get missed, which showed up as a square of high-detail
-//! water floating in the map), and it snaps the entire view at once.
+//! surface; far out, the whole map is one low-resolution vertex-coloured mesh.
 //!
-//! Terrain chunks use Bevy's per-entity dithered [`VisibilityRange`]. Water is a broad,
-//! translucent surface where that 4x4 discard pattern is conspicuous, so its shader uses
-//! a continuous alpha fade and its range only performs an abrupt, already-transparent
-//! CPU cull.
+//! Detailed land uses one zoom-driven switch synchronized with the moving hole in the
+//! far terrain. A per-chunk distance switch cannot match that square cutout: it either
+//! leaves open strips or overlaps two differently tessellated height fields. Water uses
+//! a continuous shader fade and an abrupt, already-transparent CPU cull.
 //!
 //! The far mesh sits ~5cm below the detail chunks. Detailed land retains a cut-out hole
 //! to prevent coarse geometry poking through, while far ocean remains beneath the water
 //! fade at every zoom.
 
+use crate::camera_rts::CommanderCamera;
 use bevy::camera::visibility::VisibilityRange;
 use bevy::prelude::*;
 
-use crate::camera_rts::CommanderCamera;
+use super::chunks::{FarTerrain, FarTerrainState, TerrainChunk};
+use crate::render::systems::GraphicsSettings;
 
-/// Camera distance at which detail chunks begin dithering into the far mesh.
-pub const DETAIL_FADE_START: f32 = 1_050.0;
+/// Commander zoom at which all detailed land switches to the far mesh.
+pub const DETAIL_SWITCH_ZOOM: f32 = 1_800.0;
 
-/// Camera distance at which detail chunks are fully gone and only the map remains.
-pub const DETAIL_FADE_END: f32 = 1_550.0;
+/// Commander-zoom band used for atmosphere/cloud map-view blending.
+pub const MAP_VIEW_BLEND_START: f32 = 1_250.0;
+pub const MAP_VIEW_BLEND_END: f32 = 1_800.0;
 
-/// Water starts handing off sooner than terrain because its animated foam and
-/// glints make a whole-chunk streaming edge much easier to see. At the usual
-/// RTS camera height this leaves the centre fully detailed while the outer
-/// water ring dissolves continuously into the matching far surface.
-pub const WATER_FADE_START: f32 = 650.0;
-pub const WATER_FADE_END: f32 = 1_000.0;
+/// Keep the true high-resolution shoreline throughout ordinary middle zoom.
+/// The water shader separately fades across the outer streamed-chunk ring, so
+/// retaining central detail here cannot expose a hard square boundary.
+pub const WATER_FADE_START: f32 = MAP_VIEW_BLEND_START;
+pub const WATER_FADE_END: f32 = MAP_VIEW_BLEND_END;
 
 /// Abrupt CPU cull after the shader has already reached zero alpha. The extra
 /// margin covers a 64m chunk's diagonal, preventing a chunk-center cull from
 /// cutting off a still-visible edge.
-pub const WATER_CULL_DISTANCE: f32 = 1_100.0;
+pub const WATER_CULL_DISTANCE: f32 = DETAIL_SWITCH_ZOOM + 100.0;
+
+/// The opaque map-water continuation sits 5 mm beneath the detailed water's
+/// undisplaced 2 cm surface. Keeping it at one real height avoids deforming
+/// rivers and ocean into visible boxes during the LOD handoff.
+pub const FAR_WATER_SURFACE_OFFSET: f32 = shared::water::WATER_SURFACE_OFFSET - 0.005;
+
+/// Static separation between detailed land and its coarse underlay.
+///
+/// Five centimetres prevents depth fighting without changing perceptible
+/// terrain shape. Unlike the old moving 64 m skirt, this never varies with
+/// zoom or distance and therefore cannot create a warped transition band.
+pub const FAR_LAND_Y_OFFSET: f32 = -0.05;
 
 /// Zoom past which the far mesh stops cutting a hole under the streamed chunks.
 ///
-/// Keep this shortly below [`DETAIL_FADE_START`]: the far mesh must be solid
-/// before chunks begin dithering, but enabling it hundreds of metres earlier
-/// leaves two differently tessellated land surfaces competing at ordinary RTS
-/// zooms. The short lead-in gives the renderer several wheel steps to prepare
-/// the fallback without exposing that overlap during close play.
-pub const HOLE_FILL_ZOOM: f32 = DETAIL_FADE_START - 100.0;
+/// Close the coarse land cutout at the same map-view threshold where detailed
+/// land switches off. Closing it earlier overlays two differently tessellated
+/// height fields and creates a conspicuous striped/warped square.
+pub const HOLE_FILL_ZOOM: f32 = DETAIL_SWITCH_ZOOM;
 
 const _: () = assert!(WATER_CULL_DISTANCE > WATER_FADE_END);
-const _: () = assert!(HOLE_FILL_ZOOM < DETAIL_FADE_START);
-const _: () = assert!(DETAIL_FADE_START - HOLE_FILL_ZOOM <= 100.0);
+const _: () = assert!(WATER_FADE_END == MAP_VIEW_BLEND_END);
+const _: () = assert!(MAP_VIEW_BLEND_START < MAP_VIEW_BLEND_END);
+const _: () = assert!(MAP_VIEW_BLEND_END <= DETAIL_SWITCH_ZOOM);
+const _: () = assert!(HOLE_FILL_ZOOM == DETAIL_SWITCH_ZOOM);
 
-/// Distance fade for a streamed terrain chunk.
+/// Switch every streamed land chunk in lockstep with the far-terrain cutout.
 ///
-/// `use_aabb` matters here: chunks are 64m slabs, and fading on the centre point would
-/// make a chunk under the screen edge pop earlier than one under the cursor.
-pub fn detail_visibility_range() -> VisibilityRange {
-    VisibilityRange {
-        start_margin: 0.0..0.0,
-        end_margin: DETAIL_FADE_START..DETAIL_FADE_END,
-        use_aabb: true,
+/// This runs after chunk finalization, so chunks created while already in map
+/// view are hidden in the same frame rather than briefly flashing into view.
+pub(crate) fn sync_detail_visibility(
+    cameras: Query<&CommanderCamera>,
+    settings: Res<GraphicsSettings>,
+    far_terrain: Query<&FarTerrainState, With<FarTerrain>>,
+    mut chunks: Query<(&TerrainChunk, &mut Visibility)>,
+) {
+    let Ok(camera) = cameras.single() else {
+        return;
+    };
+    let committed_hole = far_terrain.single().ok();
+    for (chunk, mut visibility) in chunks.iter_mut() {
+        let target = detail_visibility_for_chunk(
+            camera.zoom,
+            settings.far_terrain_enabled,
+            chunk.coord,
+            committed_hole,
+        );
+        if *visibility != target {
+            *visibility = target;
+        }
+    }
+}
+
+fn detail_visibility_for_chunk(
+    zoom: f32,
+    far_terrain_enabled: bool,
+    coord: shared::terrain::ChunkCoord,
+    committed_hole: Option<&FarTerrainState>,
+) -> Visibility {
+    if far_terrain_enabled && zoom > DETAIL_SWITCH_ZOOM {
+        return Visibility::Hidden;
+    }
+    if !far_terrain_enabled {
+        return Visibility::Inherited;
+    }
+
+    // The far mesh moves its land cutout only after the complete replacement
+    // detail square is loaded. Match that committed square exactly: showing a
+    // newly completed leading-edge chunk before the cutout moves overlays two
+    // differently tessellated surfaces, which reads as a dark 64 m box while
+    // panning at middle zoom.
+    let Some(state) = committed_hole else {
+        return Visibility::Inherited;
+    };
+    if state.hole_filled || state.view_distance < 0 {
+        return Visibility::Hidden;
+    }
+    let dx = (coord.x - state.center_cell.x).abs();
+    let dz = (coord.z - state.center_cell.y).abs();
+    if dx.max(dz) <= state.view_distance {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
     }
 }
 
@@ -89,8 +148,8 @@ pub fn update_map_view_state(cameras: Query<&CommanderCamera>, mut blend: ResMut
     let Ok(camera) = cameras.single() else {
         return;
     };
-    let next =
-        ((camera.zoom - DETAIL_FADE_START) / (DETAIL_FADE_END - DETAIL_FADE_START)).clamp(0.0, 1.0);
+    let next = ((camera.zoom - MAP_VIEW_BLEND_START) / (MAP_VIEW_BLEND_END - MAP_VIEW_BLEND_START))
+        .clamp(0.0, 1.0);
     if blend.0 != next {
         blend.0 = next;
     }
@@ -105,5 +164,86 @@ mod tests {
         let range = water_visibility_range();
         assert!(range.is_abrupt());
         assert_eq!(range.end_margin, WATER_CULL_DISTANCE..WATER_CULL_DISTANCE);
+        assert!(WATER_FADE_START < WATER_FADE_END);
+        assert!(WATER_FADE_END < WATER_CULL_DISTANCE);
+        assert!(WATER_FADE_END <= HOLE_FILL_ZOOM);
+    }
+
+    #[test]
+    fn terrain_switch_matches_far_hole_threshold() {
+        let committed = FarTerrainState {
+            center_cell: IVec2::ZERO,
+            view_distance: 8,
+            hole_filled: false,
+        };
+        assert_eq!(
+            detail_visibility_for_chunk(
+                DETAIL_SWITCH_ZOOM,
+                true,
+                shared::terrain::ChunkCoord::new(0, 0),
+                Some(&committed),
+            ),
+            Visibility::Inherited
+        );
+        assert_eq!(
+            detail_visibility_for_chunk(
+                DETAIL_SWITCH_ZOOM + 0.01,
+                true,
+                shared::terrain::ChunkCoord::new(0, 0),
+                Some(&committed),
+            ),
+            Visibility::Hidden
+        );
+        assert_eq!(
+            detail_visibility_for_chunk(
+                DETAIL_SWITCH_ZOOM + 1_000.0,
+                false,
+                shared::terrain::ChunkCoord::new(0, 0),
+                Some(&committed),
+            ),
+            Visibility::Inherited
+        );
+        assert_eq!(DETAIL_SWITCH_ZOOM, HOLE_FILL_ZOOM);
+    }
+
+    #[test]
+    fn leading_chunks_wait_for_the_committed_far_hole() {
+        let committed = FarTerrainState {
+            center_cell: IVec2::new(10, -4),
+            view_distance: 2,
+            hole_filled: false,
+        };
+        assert_eq!(
+            detail_visibility_for_chunk(
+                1_000.0,
+                true,
+                shared::terrain::ChunkCoord::new(12, -4),
+                Some(&committed),
+            ),
+            Visibility::Inherited
+        );
+        assert_eq!(
+            detail_visibility_for_chunk(
+                1_000.0,
+                true,
+                shared::terrain::ChunkCoord::new(13, -4),
+                Some(&committed),
+            ),
+            Visibility::Hidden
+        );
+
+        let filled = FarTerrainState {
+            hole_filled: true,
+            ..committed
+        };
+        assert_eq!(
+            detail_visibility_for_chunk(
+                1_000.0,
+                true,
+                shared::terrain::ChunkCoord::new(10, -4),
+                Some(&filled),
+            ),
+            Visibility::Hidden
+        );
     }
 }

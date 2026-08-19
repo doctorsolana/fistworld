@@ -12,6 +12,7 @@
 pub mod bootstrap;
 pub mod dev;
 pub mod identity;
+pub mod immigration;
 pub mod map_state;
 pub mod navgrid;
 pub mod pathfinding;

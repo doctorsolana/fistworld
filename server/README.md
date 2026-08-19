@@ -140,6 +140,12 @@ inside the new system, and do not add lab-only ordering to make a test pass.
   path, obstructed searches are water-certified A*, and `VesselNavigationQueue` admits at
   most four searches per fixed tick so a fleet order cannot monopolize network ingress.
   Server movement rechecks water and derives speed from the shared deterministic wind.
+- `world::immigration` owns natural arrivals. It scores settlements from public opportunity
+  plus bounded personal/geographic bias, uses the generic vessel navigator for an ephemeral
+  map-edge Dinghy, and only removes the boat after it reaches its certified mooring. The
+  passenger then resumes the existing land-route and Moot-queue flow; this is not a second
+  admission implementation. Ordinary worlds enable it by default, labs disable it unless
+  `FISTWORLD_NATURAL_IMMIGRATION=1` is explicitly supplied.
 - Avoid per-tick full-population scans, string joins and allocations. Reconcile on changed
   state or slow world boundaries.
 - The live server does not load player or world state after restart. Legacy player-profile

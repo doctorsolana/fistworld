@@ -107,9 +107,8 @@ fn build_ocean_skirt_mesh(bounds: shared::map::MapBounds, water_level: f32) -> M
     let outer_min_z = min_z - OCEAN_SKIRT_MARGIN;
     let outer_max_x = max_x + OCEAN_SKIRT_MARGIN;
     let outer_max_z = max_z + OCEAN_SKIRT_MARGIN;
-    // Far-ocean vertices are authored at water - 0.35 and their entity is
-    // lowered another 0.05m. Match that final world height exactly.
-    let y = water_level - 0.40;
+    // Match the far mesh's stable map-water height exactly.
+    let y = water_level + crate::terrain::map_view::FAR_WATER_SURFACE_OFFSET + FAR_TERRAIN_Y_OFFSET;
 
     let mut positions = Vec::with_capacity(16);
     let mut normals = Vec::with_capacity(16);
@@ -192,8 +191,8 @@ pub(crate) fn update_far_terrain_hole(
     let center_chunk = ChunkCoord::from_world_pos(anchor_pos);
     let center_cell = IVec2::new(center_chunk.x, center_chunk.z);
 
-    // Fill the hole before the chunks start their dither-out, or the fade would reveal
-    // void instead of map underneath. At close zoom, move an existing hole only after
+    // Fill the hole before detail chunks switch away, or their removal would reveal void
+    // instead of map underneath. At close zoom, move an existing hole only after
     // the complete new detail square is ready. Re-filling the whole hole while crossing
     // every 64m chunk boundary put the coarse and detailed land surfaces on top of one
     // another; their different tessellation then appeared to flicker as the camera moved.
@@ -235,7 +234,7 @@ pub(crate) fn update_far_terrain_hole(
     let inner_half = if hole_filled {
         0.0
     } else {
-        (view_distance as f32 + 0.5) * CHUNK_SIZE + FAR_TERRAIN_INNER_BUFFER
+        far_terrain_hole_half(view_distance)
     };
     let Some(mut material) = materials.get_mut(&render_assets.far_mesh_material) else {
         return;
@@ -247,6 +246,15 @@ pub(crate) fn update_far_terrain_hole(
     state.center_cell = center_cell;
     state.view_distance = view_distance;
     state.hole_filled = hole_filled;
+}
+
+/// Half extent of the land cutout beneath the detail square.
+///
+/// The cutout meets the streamed square without overlap. Coarse and detailed
+/// terrain are sampled at different resolutions; drawing them on top of each
+/// other produces moire-like bands and apparent terrain warping.
+fn far_terrain_hole_half(view_distance: i32) -> f32 {
+    (view_distance as f32 + 0.5) * CHUNK_SIZE
 }
 
 /// Far-terrain extent follows the *actual* map bounds.
@@ -263,4 +271,16 @@ fn far_terrain_spacing(terrain: &WorldTerrain) -> f32 {
     let bounds = terrain.generator.active_map_bounds();
     let size = (bounds.max[0] - bounds.min[0]).max(bounds.max[1] - bounds.min[1]);
     size / (FAR_TERRAIN_RESOLUTION as f32 - 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cutout_meets_detail_square_without_overlap() {
+        let view_distance = 8;
+        let detail_half = (view_distance as f32 + 0.5) * CHUNK_SIZE;
+        assert_eq!(detail_half, far_terrain_hole_half(view_distance));
+    }
 }

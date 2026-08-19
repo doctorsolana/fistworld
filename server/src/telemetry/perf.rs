@@ -255,7 +255,9 @@ pub fn update_server_perf_log(
         villager_total += 1;
         match intent {
             Some(VillagerIntent::Idle) | None => villager_idle += 1,
-            Some(VillagerIntent::Travelling { .. }) => villager_migrating += 1,
+            Some(VillagerIntent::Travelling { .. } | VillagerIntent::ArrivingBySea { .. }) => {
+                villager_migrating += 1
+            }
             Some(
                 VillagerIntent::Resident { .. }
                 | VillagerIntent::Building { .. }

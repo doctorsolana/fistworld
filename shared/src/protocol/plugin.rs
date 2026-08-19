@@ -171,6 +171,8 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<DevCommand>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<RequestGodAccess>()
+            .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<UnitMoveOrder>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
@@ -207,6 +209,8 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<CompanyHistoryResponse>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<DevStatus>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<GodAccessResult>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroMarketResult>()
             .add_direction(NetworkDirection::ServerToClient);

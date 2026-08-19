@@ -1,28 +1,156 @@
 //! Dev-mode gate for god commands.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
-use lightyear::prelude::{MessageReceiver, RemoteId};
+use lightyear::prelude::{MessageReceiver, MessageSender, RemoteId};
 
 use shared::components::{settlement_founding_refusal, Hero, TimeWarp};
-use shared::protocol::DevCommand;
+use shared::protocol::{DevCommand, DevStatus, GodAccessResult, ReliableChannel, RequestGodAccess};
 use shared::spatial::SpatialObstacleGrid;
 use shared::terrain::{world_pos_in_bounds, WorldTerrain};
 
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 
-/// Whether this server honours god commands. Read once from `FISTWORLD_DEV` at startup;
-/// production deployments simply never set the variable.
+/// Administrative configuration read once at startup.
+///
+/// `FISTWORLD_DEV=1` is the convenient local-development mode and grants every
+/// connection. A hosted server leaves that off and supplies a long
+/// `FISTWORLD_GOD_KEY`; individual connections must unlock through the J menu.
 #[derive(Resource)]
-pub struct DevMode(pub bool);
+pub struct DevMode {
+    unrestricted: bool,
+    access_key: Option<String>,
+}
 
 impl Default for DevMode {
     fn default() -> Self {
-        let enabled = parse_dev_flag(std::env::var("FISTWORLD_DEV").ok());
-        if enabled {
+        let unrestricted = parse_dev_flag(std::env::var("FISTWORLD_DEV").ok());
+        let access_key = std::env::var("FISTWORLD_GOD_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| value.len() >= 12);
+        if unrestricted {
             info!("Dev mode: god commands enabled");
+        } else if access_key.is_some() {
+            info!("Hosted God Mode challenge enabled");
+        } else if std::env::var("FISTWORLD_GOD_KEY").is_ok() {
+            warn!("Ignoring FISTWORLD_GOD_KEY shorter than 12 characters");
         }
-        Self(enabled)
+        Self {
+            unrestricted,
+            access_key,
+        }
+    }
+}
+
+impl DevMode {
+    pub fn unrestricted(&self) -> bool {
+        self.unrestricted
+    }
+
+    pub fn allows(&self, peer: lightyear::prelude::PeerId, sessions: &GodAccessSessions) -> bool {
+        self.unrestricted || sessions.granted.contains(&peer)
+    }
+
+    fn key_matches(&self, candidate: &str) -> bool {
+        let Some(expected) = self.access_key.as_deref() else {
+            return false;
+        };
+        // Equal-length constant-work comparison avoids turning the challenge
+        // endpoint into a useful byte-by-byte timing oracle.
+        if expected.len() != candidate.len() {
+            return false;
+        }
+        expected
+            .as_bytes()
+            .iter()
+            .zip(candidate.as_bytes())
+            .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
+            == 0
+    }
+}
+
+/// God grants last only for the current network connection. They deliberately
+/// do not become account/world state: reconnecting requires the key again.
+#[derive(Resource, Default)]
+pub struct GodAccessSessions {
+    granted: bevy::platform::collections::HashSet<lightyear::prelude::PeerId>,
+    failures: bevy::platform::collections::HashMap<lightyear::prelude::PeerId, u8>,
+}
+
+impl GodAccessSessions {
+    pub fn remove(&mut self, peer: lightyear::prelude::PeerId) {
+        self.granted.remove(&peer);
+        self.failures.remove(&peer);
+    }
+}
+
+/// Read-only authorization bundled as one system parameter so large dev
+/// command handlers do not pay an extra top-level Bevy parameter slot.
+#[derive(SystemParam)]
+pub struct GodAccess<'w> {
+    dev: Res<'w, DevMode>,
+    sessions: Res<'w, GodAccessSessions>,
+}
+
+impl GodAccess<'_> {
+    pub fn allows(&self, peer: lightyear::prelude::PeerId) -> bool {
+        self.dev.allows(peer, &self.sessions)
+    }
+}
+
+const MAX_GOD_ACCESS_FAILURES: u8 = 5;
+
+/// Handle the deliberate hosted-server unlock separately from ordinary dev
+/// commands. Failed attempts are bounded per connection to prevent a modified
+/// client from brute-forcing the secret or flooding logs.
+pub fn handle_god_access_requests(
+    dev: Res<DevMode>,
+    mut sessions: ResMut<GodAccessSessions>,
+    mut clients: Query<
+        (
+            &RemoteId,
+            &mut MessageReceiver<RequestGodAccess>,
+            &mut MessageSender<GodAccessResult>,
+            &mut MessageSender<DevStatus>,
+        ),
+        With<ClientOf>,
+    >,
+) {
+    for (remote, mut receiver, mut result_sender, mut status_sender) in clients.iter_mut() {
+        for request in receiver.receive() {
+            let failures = sessions.failures.get(&remote.0).copied().unwrap_or(0);
+            if failures >= MAX_GOD_ACCESS_FAILURES {
+                result_sender.send::<ReliableChannel>(GodAccessResult {
+                    granted: false,
+                    message: "Too many attempts; reconnect before trying again".to_string(),
+                });
+                continue;
+            }
+            if dev.unrestricted() || dev.key_matches(request.key.trim()) {
+                sessions.granted.insert(remote.0);
+                sessions.failures.remove(&remote.0);
+                status_sender.send::<ReliableChannel>(DevStatus { god: true });
+                result_sender.send::<ReliableChannel>(GodAccessResult {
+                    granted: true,
+                    message: "God Mode unlocked for this connection".to_string(),
+                });
+                info!("Hosted God Mode unlocked for {:?}", remote.0);
+            } else {
+                let next = failures.saturating_add(1);
+                sessions.failures.insert(remote.0, next);
+                result_sender.send::<ReliableChannel>(GodAccessResult {
+                    granted: false,
+                    message: if dev.access_key.is_some() {
+                        format!("Access key rejected ({next}/{MAX_GOD_ACCESS_FAILURES})")
+                    } else {
+                        "This server has no hosted God Mode key configured".to_string()
+                    },
+                });
+                warn!("Rejected hosted God Mode attempt from {:?}", remote.0);
+            }
+        }
     }
 }
 
@@ -165,7 +293,7 @@ pub(crate) fn safe_villager_spawn_position(
 
 pub fn handle_dev_commands(
     mut commands: Commands,
-    dev: Res<DevMode>,
+    access: GodAccess,
     terrain: Option<Res<WorldTerrain>>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
     colliders: Option<Res<StaticColliders>>,
@@ -197,7 +325,7 @@ pub fn handle_dev_commands(
     let mut spawned_this_run = bevy::platform::collections::HashSet::new();
     for (remote_id, mut receiver) in client_links.iter_mut() {
         for command in receiver.receive() {
-            if !dev.0 {
+            if !access.allows(remote_id.0) {
                 // A legitimate client never sends these without the grant; log the first
                 // violation per peer, never per message, so a hostile client can't flood
                 // production logs.
@@ -457,6 +585,27 @@ mod tests {
         assert!(!parse_dev_flag(Some("yes".to_string())));
         assert!(!parse_dev_flag(Some(String::new())));
         assert!(!parse_dev_flag(None));
+    }
+
+    #[test]
+    fn hosted_key_requires_an_exact_complete_match() {
+        let dev = DevMode {
+            unrestricted: false,
+            access_key: Some("a-long-hosted-key".to_string()),
+        };
+        assert!(dev.key_matches("a-long-hosted-key"));
+        assert!(!dev.key_matches("a-long-hosted-ke"));
+        assert!(!dev.key_matches("a-long-hosted-key!"));
+        assert!(!dev.key_matches("A-long-hosted-key"));
+    }
+
+    #[test]
+    fn an_unconfigured_hosted_server_rejects_every_challenge() {
+        let dev = DevMode {
+            unrestricted: false,
+            access_key: None,
+        };
+        assert!(!dev.key_matches("a-long-hosted-key"));
     }
 
     #[test]

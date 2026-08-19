@@ -61,6 +61,7 @@ impl Plugin for TerrainPlugin {
                 streaming::update_terrain_material_lod,
                 streaming::ensure_far_terrain_mesh,
                 streaming::update_far_terrain_hole,
+                map_view::sync_detail_visibility,
             )
                 .chain()
                 .in_set(chunks::TerrainUpdateSet)

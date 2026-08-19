@@ -67,6 +67,8 @@ pub struct ToonWaterUniform {
     /// min xz, max xz of the playable rectangle. The visual edge-ocean patch
     /// uses this to remain strictly outside gameplay terrain.
     pub map_bounds: Vec4,
+    /// xy: streamed detail centre; z/w: inner/outer square edge fade.
+    pub detail_bounds: Vec4,
 }
 
 impl Material for ToonWaterMaterial {
@@ -128,12 +130,64 @@ pub(super) fn setup_water_assets(
             storm: Vec4::new(1.0e8, 1.0e8, 0.0, 0.0),
             distance_fade: Vec4::new(WATER_FADE_START, WATER_FADE_END, 0.0, 0.0),
             map_bounds: Vec4::ZERO,
+            detail_bounds: Vec4::ZERO,
         },
         alpha_mode: AlphaMode::Blend,
         double_sided: false,
     });
 
     commands.insert_resource(WaterRenderAssets { material });
+}
+
+/// Keep the finite detailed-water square invisible by fading its outer loaded
+/// chunk into the always-present far water. This follows the quantized terrain
+/// streaming centre, so moving the camera cannot reveal a hard water edge.
+pub(super) fn sync_water_detail_bounds(
+    streaming: Res<crate::terrain::TerrainStreamingState>,
+    cameras: Query<&crate::camera_rts::CommanderCamera>,
+    loaded_water: Res<super::chunks::LoadedWaterChunks>,
+    mut coverage: ResMut<super::chunks::WaterDetailCoverage>,
+    render_assets: Option<Res<WaterRenderAssets>>,
+    mut materials: ResMut<Assets<ToonWaterMaterial>>,
+) {
+    let Some(render_assets) = render_assets else {
+        return;
+    };
+    let Some(center) = streaming.center else {
+        return;
+    };
+    let zoom = cameras.single().map_or(0.0, |camera| camera.zoom);
+    let desired_distance =
+        super::chunks::desired_water_render_distance(streaming.render_distance, zoom);
+    let next = super::chunks::next_water_detail_coverage(
+        *coverage,
+        &loaded_water,
+        center,
+        desired_distance,
+    );
+    if next.center.is_none() {
+        return;
+    }
+    *coverage = next;
+
+    let committed_center = next.center.expect("coverage center checked above");
+    let origin = committed_center.world_pos();
+    let center = Vec2::new(origin.x + CHUNK_SIZE * 0.5, origin.z + CHUNK_SIZE * 0.5);
+    let outer = (next.radius as f32 + 0.5) * CHUNK_SIZE;
+    // Three chunks make the coarse/detailed color difference a broad,
+    // peripheral blend instead of a readable camera-following square.
+    let inner = (outer - CHUNK_SIZE * 3.0).max(0.0);
+    let target = Vec4::new(center.x, center.y, inner, outer);
+
+    let toon_needs_update = materials
+        .get(&render_assets.material)
+        .is_some_and(|material| material.uniform.detail_bounds != target);
+    if toon_needs_update {
+        let Some(mut material) = materials.get_mut(&render_assets.material) else {
+            return;
+        };
+        material.uniform.detail_bounds = target;
+    }
 }
 
 /// Synchronize the playable rectangle used only to clip the visual ocean-edge

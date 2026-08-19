@@ -314,7 +314,7 @@ pub(crate) fn compute_chunk_tangents(
     Some(tangents)
 }
 
-/// Mark far-mesh vertices that a river runs through.
+/// Record the river-water surface for far-mesh vertices that a river runs through.
 ///
 /// At map scale the far mesh has one vertex every ~16 m and a river is ~13 m
 /// wide, so a river usually passes cleanly BETWEEN vertices and colours none of
@@ -323,16 +323,21 @@ pub(crate) fn compute_chunk_tangents(
 /// widening is a rendering decision at map zoom only; the water surface, the
 /// carved channel and everything gameplay touches are untouched.
 ///
-/// Rasterised into a flat mask rather than tested per vertex: 513x513 vertices
+/// Rasterised into a flat field rather than tested per vertex: 513x513 vertices
 /// against ~250 river segments is 66 million distance tests, and stamping the
-/// segments costs a few thousand.
-fn far_river_mask(
+/// segments costs a few thousand. Keeping the surface as well as a boolean is
+/// essential: the map mesh must put the river at water height and tag it as
+/// water, or the moving detail hole removes it at middle zoom.
+fn far_river_surfaces(
     terrain: &shared::terrain::WorldTerrain,
     origin: Vec2,
     spacing: f32,
     resolution: usize,
-) -> Vec<bool> {
-    let mut mask = vec![false; resolution * resolution];
+) -> Vec<Option<f32>> {
+    let mut surfaces = vec![None; resolution * resolution];
+    let Some(ocean) = terrain.water_level() else {
+        return surfaces;
+    };
     // 1.5 vertices either side, so a river always lands on a run of vertices
     // and draws as a continuous line rather than a dotted one.
     let radius = spacing * 1.5;
@@ -342,10 +347,14 @@ fn far_river_mask(
         for window in river.windows(2) {
             let a = Vec2::new(window[0].x, window[0].z);
             let b = Vec2::new(window[1].x, window[1].z);
+            let surface_a = river_surface_height(window[0].y, ocean);
+            let surface_b = river_surface_height(window[1].y, ocean);
             // Walk the segment finely enough that the stamped discs overlap.
             let steps = ((a.distance(b) / (spacing * 0.5)).ceil() as i32).max(1);
             for step in 0..=steps {
-                let p = a.lerp(b, step as f32 / steps as f32);
+                let t = step as f32 / steps as f32;
+                let p = a.lerp(b, t);
+                let surface = surface_a + (surface_b - surface_a) * t;
                 let gx = ((p.x - origin.x) / spacing).round() as i32;
                 let gz = ((p.y - origin.y) / spacing).round() as i32;
                 for dz in -cells..=cells {
@@ -359,14 +368,16 @@ fn far_river_mask(
                             origin.y + cz as f32 * spacing,
                         );
                         if world.distance(p) <= radius {
-                            mask[cz as usize * resolution + cx as usize] = true;
+                            let target = &mut surfaces[cz as usize * resolution + cx as usize];
+                            *target =
+                                Some(target.map_or(surface, |existing| existing.max(surface)));
                         }
                     }
                 }
             }
         }
     }
-    mask
+    surfaces
 }
 
 pub(crate) fn build_far_terrain_mesh(
@@ -375,7 +386,7 @@ pub(crate) fn build_far_terrain_mesh(
     spacing: f32,
     resolution: usize,
 ) -> Mesh {
-    let river_mask = far_river_mask(terrain, origin, spacing, resolution);
+    let river_surfaces = far_river_surfaces(terrain, origin, spacing, resolution);
     let mut positions = Vec::with_capacity(resolution * resolution);
     let mut normals = Vec::with_capacity(resolution * resolution);
     let mut uvs = Vec::with_capacity(resolution * resolution);
@@ -392,17 +403,21 @@ pub(crate) fn build_far_terrain_mesh(
             let normal = terrain.get_normal(world_x, world_z);
             let water_level = terrain.generator.loaded_map().heightmap.water_level;
             let is_ocean = matches!(water_level, Some(level) if height <= level);
+            let river_surface = river_surfaces[zi * resolution + xi];
+            let is_water = is_ocean || river_surface.is_some();
 
             // The far ocean represents the water surface, not the normally-lit
-            // seabed. Keep it just below the animated surface so the detailed
-            // mesh always wins where the dynamic far-terrain hole meets it.
-            let rendered_height = if is_ocean {
-                water_level.unwrap_or(height) - 0.35
+            // seabed. Keep it at one stable height just below the animated
+            // surface; moving it during an LOD transition visibly distorted
+            // rivers and shallow coastlines into dark boxes.
+            let rendered_height = if is_water {
+                river_surface.unwrap_or_else(|| water_level.unwrap_or(height))
+                    + crate::terrain::map_view::FAR_WATER_SURFACE_OFFSET
             } else {
-                height
+                height + crate::terrain::map_view::FAR_LAND_Y_OFFSET
             };
             positions.push([local_x, rendered_height, local_z]);
-            normals.push(if is_ocean {
+            normals.push(if is_water {
                 [0.0, 1.0, 0.0]
             } else {
                 [normal.x, normal.y, normal.z]
@@ -421,10 +436,11 @@ pub(crate) fn build_far_terrain_mesh(
 
             // Rivers first: they sit above sea level, so every branch below
             // would call them land.
-            if river_mask[zi * resolution + xi] {
+            if river_surface.is_some() {
                 // The shallow end of the ocean ramp, so a river reads as the
-                // same substance as the sea it runs into.
-                colors.push([0.42, 0.66, 0.78, 1.0]);
+                // same substance as the sea it runs into. Alpha zero is the
+                // far material's water marker, not transparency.
+                colors.push([0.42, 0.66, 0.78, 0.0]);
                 continue;
             }
 
@@ -540,7 +556,7 @@ pub(crate) fn build_far_terrain_mesh(
             // Alpha is a material marker on this opaque mesh: the far shader
             // shades ocean as unlit water and everything else as ordinary PBR
             // terrain. Interpolation across triangles softens the handoff.
-            colors.push([color.x, color.y, color.z, if is_ocean { 0.0 } else { 1.0 }]);
+            colors.push([color.x, color.y, color.z, if is_water { 0.0 } else { 1.0 }]);
         }
     }
 
@@ -629,5 +645,43 @@ mod tests {
         assert_eq!(bilerp3(corners, 0.0, 0.0), corners[0]);
         assert_eq!(bilerp3(corners, 1.0, 1.0), corners[3]);
         assert_eq!(bilerp3(corners, 0.5, 0.5), [1.0, 3.5, 1.0]);
+    }
+
+    #[test]
+    fn far_river_vertices_are_water_at_the_river_surface() {
+        let terrain = shared::terrain::WorldTerrain::default();
+        let river = terrain
+            .rivers()
+            .iter()
+            .find(|river| river.len() >= 2)
+            .expect("the default map should contain a river");
+        let sample = Vec2::new(river[0].x, river[0].z);
+        let spacing = 16.0;
+        let origin = sample - Vec2::splat(spacing * 2.0);
+        let resolution = 5;
+        let surfaces = far_river_surfaces(&terrain, origin, spacing, resolution);
+        let river_index = surfaces
+            .iter()
+            .position(Option::is_some)
+            .expect("the map-scale river stamp should reach a nearby grid vertex");
+        let river_surface = surfaces[river_index].unwrap();
+
+        let mesh = build_far_terrain_mesh(&terrain, origin, spacing, resolution);
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap() {
+            VertexAttributeValues::Float32x3(values) => values,
+            _ => panic!("unexpected positions"),
+        };
+        let colors = match mesh.attribute(Mesh::ATTRIBUTE_COLOR).unwrap() {
+            VertexAttributeValues::Float32x4(values) => values,
+            _ => panic!("unexpected colors"),
+        };
+
+        assert_eq!(colors[river_index][3], 0.0);
+        assert!(
+            (positions[river_index][1]
+                - (river_surface + crate::terrain::map_view::FAR_WATER_SURFACE_OFFSET))
+                .abs()
+                < 0.001
+        );
     }
 }

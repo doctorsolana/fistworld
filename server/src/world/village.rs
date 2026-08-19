@@ -369,6 +369,9 @@ const BUILD_SECONDS: f32 = shared::components::SETTLEMENT_RAISE_SECONDS;
 pub enum VillagerIntent {
     /// Knows of nowhere to go. Re-checks on the seek tick.
     Idle,
+    /// Has chosen a settlement and is physically sailing into the world. This
+    /// is not residence and does not enter land pathfinding until landfall.
+    ArrivingBySea { settlement: Entity },
     /// Walking to a settlement's hall.
     Travelling { settlement: Entity },
     /// Lives somewhere. The hall is their lodging until houses exist.
@@ -433,6 +436,7 @@ impl VillagerIntent {
     pub fn settlement(&self) -> Option<Entity> {
         match self {
             VillagerIntent::Idle => None,
+            VillagerIntent::ArrivingBySea { settlement } => Some(*settlement),
             VillagerIntent::Travelling { settlement } => Some(*settlement),
             VillagerIntent::Resident { settlement } => Some(*settlement),
             VillagerIntent::Building { settlement, .. } => Some(*settlement),
