@@ -461,14 +461,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let crest_wave = swell_value * 0.72 + detail_wave * 0.28;
     let crest01 = crest_wave * 0.5 + 0.5;
 
-    // A slow wind-drifting noise field. Foam patches built from it were
-    // tried and retired — decoupled from the wave motion they read as white
-    // debris sliding diagonally across the sea — but it still breaks the
-    // crest glow into organic patches below.
-    let wind_dir = vec2<f32>(0.8944272, 0.4472136);
-    let wind_drift = wind_dir * (globals.time * 0.55);
-    let patches = cloud_fbm((in.world_position.xz + wind_drift) * (1.0 / 17.0));
-
     // --- Shoreline: rivers retain the authored depth-phased lap below. Ocean
     // foam instead uses one stable distance field for contact, traveling lines
     // and wash. Noise modulates opacity only, never the line position, so a
@@ -638,19 +630,25 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     base_rgb = mix(base_rgb, sky_tint, fresnel * reflection_strength);
     var alpha = clamp(base.a + fresnel * 0.22, 0.0, 0.97);
 
-    // Fake subsurface scattering: a crest is thin water, and when its slope
-    // faces away from the sun light passes through and the tip glows
-    // sea-glass green. The RTS camera rarely aligns view with -sun, so the
-    // backlit term rides the surface slope rather than the view vector.
+    // Backlit crest glint: sunlight through a thin crest tip glows sea-glass
+    // green. Real seas show this only as brief scattered glints on the
+    // steepest crests — never along the whole wave train — so the term is
+    // hard-gated to ZERO almost everywhere: only the tallest crest tips
+    // inside a slow-drifting dapple field light up, and the ~17m noise also
+    // chops each lit crest into short dashes instead of full-length bars.
+    // (A brightness floor here paints the entire wave lattice as glowing
+    // rows — the same mechanical-rows failure as the retired crest foam.)
+    let wind_dir = vec2<f32>(0.8944272, 0.4472136);
+    let wind_drift = wind_dir * (globals.time * 0.55);
+    let dapple_field = cloud_fbm((in.world_position.xz + wind_drift) * (1.0 / 17.0));
+    let dapple = smoothstep(0.58, 0.85, dapple_field);
     let sun_xz = normalize(material.sun_params.xz + vec2<f32>(1.0e-4, 0.0));
     let away_slope =
         clamp(-(broad_normal.x * sun_xz.x + broad_normal.z * sun_xz.y) * 9.0, 0.0, 1.0);
-    let crest_tip = smoothstep(0.30, 0.72, swell_value);
+    let crest_tip = smoothstep(0.55, 0.90, swell_value);
     let sss = crest_tip * away_slope * open_water * smoothstep(0.45, 0.9, depth)
         * clamp(material.sun_params.w, 0.0, 1.0);
-    // The noise field also breaks the glow into organic patches; tied only
-    // to the crests it formed the same mechanical rows as the old foam.
-    base_rgb = mix(base_rgb, vec3<f32>(0.16, 0.62, 0.58), sss * 0.42 * mix(0.45, 1.0, patches));
+    base_rgb = mix(base_rgb, vec3<f32>(0.16, 0.62, 0.58), sss * 0.40 * dapple);
 
     var color_rgb = mix(base_rgb, material.foam_color.rgb, foam_mask);
 
