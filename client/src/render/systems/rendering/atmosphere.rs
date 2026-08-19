@@ -235,10 +235,34 @@ pub(crate) fn update_atmosphere(
     let elevation = -world_time.sun_phase().cos(); // [-1, 1]
     let sun_height = elevation.max(0.0);
 
-    // Dusty near horizon, clear at noon.
-    let dust_factor = 1.0 - smoothstep(0.15, 0.65, sun_height);
+    // Dusty near the horizon, clear at noon — and clear again at NIGHT.
+    // sun_height clamps to 0 below the horizon, so without the night gate the
+    // dusty preset sat at FULL blend all night and its strong Mie forward
+    // scatter painted a fake amber sunset band on the horizon at midnight.
+    // Fade the dust out as the sun sinks below the horizon; deep night
+    // reverts to the clear preset's dark blue twilight.
+    let night_dust_fade = 1.0 - smoothstep(0.06, 0.22, (-elevation).max(0.0));
+    let dust_factor = (1.0 - smoothstep(0.15, 0.65, sun_height)) * night_dust_fade;
 
-    let blended = blend_atmosphere(media.clear, media.dusty, dust_factor);
+    let mut blended = blend_atmosphere(media.clear, media.dusty, dust_factor);
+    // THIN the whole medium at night. The atmosphere scatters every
+    // directional light (the cool night key included), and along the
+    // horizon's enormous optical depth ANY bright light leaves a
+    // Rayleigh-red residue — a fake amber sunset ring that sat on the
+    // horizon all night at any moon elevation. Reducing the optical depth
+    // itself is the only fix inside this model, and it simultaneously
+    // darkens the dome toward the deep blue-black a night sky should be
+    // (and that stars will eventually need).
+    let night_factor = smoothstep(0.05, 0.35, -elevation);
+    let thin = 1.0 - 0.88 * night_factor;
+    blended.rayleigh_scattering *= thin;
+    blended.mie_scattering *= thin;
+    blended.mie_absorption *= thin;
+    blended.ozone_absorption *= thin;
+    // One key drives the throttled medium rebuilds: dust falls 1->0 across
+    // sunset while night rises 0->1, so the difference moves monotonically
+    // through the whole transition.
+    let medium_key = dust_factor - night_factor;
     // Only deref-mut on real change so change detection stays quiet on
     // plateaus. The radii are identical in both presets, so they never move —
     // which is what keeps the spawn-time planet-center anchor (setup.rs:
@@ -258,14 +282,16 @@ pub(crate) fn update_atmosphere(
     const ATMOSPHERE_BLEND_EPS: f32 = 0.03;
 
     *rebuild_timer += time.delta_secs().max(0.0);
-    let needs_rebuild = (media.last_blend - dust_factor).abs() > ATMOSPHERE_BLEND_EPS;
-    let allow_rebuild = *rebuild_timer >= ATMOSPHERE_REBUILD_INTERVAL || media.last_blend < 0.0;
+    // last_blend sentinel is far outside the key's [-1, 1] range so the
+    // first frame always builds, even when the client joins mid-night.
+    let needs_rebuild = (media.last_blend - medium_key).abs() > ATMOSPHERE_BLEND_EPS;
+    let allow_rebuild = *rebuild_timer >= ATMOSPHERE_REBUILD_INTERVAL || media.last_blend < -5.0;
 
     if needs_rebuild && allow_rebuild {
         if let Some(mut medium) = media_assets.get_mut(&media.active_medium) {
             *medium = scattering_medium_from_preset(blended, "dynamic_atmosphere");
         }
-        media.last_blend = dust_factor;
+        media.last_blend = medium_key;
         *rebuild_timer = 0.0;
     }
 }

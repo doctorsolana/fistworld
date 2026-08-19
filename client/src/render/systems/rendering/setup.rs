@@ -46,7 +46,9 @@ pub fn setup_rendering(
         clear: clear_preset,
         dusty: dusty_preset,
         active_medium: active_medium.clone(),
-        last_blend: -1.0,
+        // Out-of-range sentinel: the medium key spans [-1, 1] (dust - night),
+        // so -1.0 would read as "deep night already built" on a night join.
+        last_blend: -10.0,
     });
 
     let color_grading =

@@ -123,12 +123,18 @@ pub fn update_day_night_cycle(
     // crushing to silhouette. It rises as the sun drops well below horizon.
     let moon_factor = smoothstep(0.05, 0.35, -elevation);
     let fill_illuminance =
-        (lerp_f32(60.0, 11_000.0, day_factor) + 900.0 * twilight_factor + 9_000.0 * moon_factor)
+        (lerp_f32(60.0, 11_000.0, day_factor) + 900.0 * twilight_factor + 7_500.0 * moon_factor)
             * lighting_boost;
-    // The moon rides the antipode of the sun's arc: while the sun is below
-    // the horizon, -sun_dir points down from an elevated moon.
+    // The moon keeps the sun-antipode AZIMUTH but rides HIGH (~63°): the
+    // atmosphere scatters every directional light, and a bright moon near the
+    // horizon Rayleigh-reddens into a fake amber sunset ring that sat on the
+    // horizon all night. A steep moon scatters into a cool blue dome instead,
+    // and the steeper key also models the ground better, which is why the
+    // illuminance drops a notch without the night getting darker.
     let day_fill_dir = Vec3::new(-sun_dir.x, -0.35, -sun_dir.z).normalize_or_zero();
-    let fill_dir = day_fill_dir.lerp(-sun_dir, moon_factor).normalize_or_zero();
+    let moon_azimuth = Vec3::new(sun_dir.x, 0.0, sun_dir.z).normalize_or_zero();
+    let moon_source = (moon_azimuth * 0.45 + Vec3::Y * 0.89).normalize();
+    let fill_dir = day_fill_dir.lerp(-moon_source, moon_factor).normalize_or_zero();
     let fill_rotation = Quat::from_rotation_arc(Vec3::NEG_Z, fill_dir);
     let fill_color = Color::srgb(0.60, 0.72, 0.95);
     for (mut fill_light, mut fill_transform) in fill_query.iter_mut() {
