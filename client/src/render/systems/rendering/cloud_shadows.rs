@@ -19,7 +19,7 @@ use shared::terrain::WorldTerrain;
 
 /// Dominant cloud blob scale: the shaders sample the field at world_xz * this.
 const CLOUD_FIELD_INV_SCALE: f32 = 1.0 / 190.0;
-/// Wind bearing/speed live in `clouds::cloud_wind_offset` (shared with the
+/// Wind bearing/speed live in `clouds::cloud_wind_state` (shared with the
 /// visible deck). 0.30 strength: clearly readable rolling shade — the multiply
 /// lands after full lighting (ambient included), and past ~0.35 it stops
 /// reading as weather and starts reading as dirty ground.
@@ -37,17 +37,9 @@ const COVERAGE_WRITE_STEP: f32 = 0.005;
 const SUN_PROJ_WRITE_STEP: f32 = 0.01;
 const STRENGTH_WRITE_STEP: f32 = 0.005;
 
-/// EXACT copy of the private `hash_to_unit` in clouds.rs — the shadow field's
-/// seed phase must match what the sky derives from the same `CloudSeed`.
-fn hash_to_unit(seed: u64, salt: u64) -> f32 {
-    let mut x = seed ^ salt;
-    x ^= x >> 30;
-    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    x ^= x >> 27;
-    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
-    x ^= x >> 31;
-    (x as f64 / u64::MAX as f64) as f32
-}
+// The shadow field's seed phase must match what the sky derives from the
+// same `CloudSeed`, so both use the one hash in clouds.rs.
+use super::clouds::hash_to_unit;
 
 /// Last cloud-shadow uniforms written to the GPU materials, plus the previous
 /// sun projection so its velocity can be finite-differenced for in-shader
@@ -214,7 +206,6 @@ pub fn sync_cloud_shadow_params(
                 material.uniform.clouds_a = clouds_a;
                 material.uniform.clouds_b = clouds_b;
                 material.uniform.clouds_c = clouds_c;
-                material.uniform.climate = climate;
                 material.uniform.storm = storm;
             }
         }

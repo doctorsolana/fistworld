@@ -37,8 +37,8 @@ pub const WATER_FADE_END: f32 = MAP_VIEW_BLEND_END;
 /// cutting off a still-visible edge.
 pub const WATER_CULL_DISTANCE: f32 = DETAIL_SWITCH_ZOOM + 100.0;
 
-/// Camera-distance band across which the shore-foam washes and crest foam
-/// fade away. Foam features are 1-5m wide; past this range they are heavily
+/// Camera-distance band across which the shore/river foam washes fade
+/// away. Foam features are 1-5m wide; past this range they are heavily
 /// undersampled and read as a solid white rim around every landmass, so they
 /// must be gone before the 1250-1800m water crossfade reveals the far mesh.
 pub const FOAM_FADE_START: f32 = 500.0;

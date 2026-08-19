@@ -1,4 +1,7 @@
-//! Shared broad-water motion used by rendering and server-side buoyancy.
+//! Broad-water motion shared across the client: rendering (toon_water.wgsl
+//! mirrors these functions exactly) and boat buoyancy (client/src/boat.rs
+//! samples heights CPU-side). The server uses the flat authored water plane;
+//! this module lives in `shared` so that can change without moving code.
 
 use std::f32::consts::TAU;
 

@@ -14,9 +14,8 @@
 struct ToonWaterUniform {
     shallow_color: vec4<f32>,
     deep_color: vec4<f32>,
+    // rgb: foam tint, a: foam flow speed (the tint blends by mask, never alpha).
     foam_color: vec4<f32>,
-    // xyz: reserved (legacy crest-disc tuning), w: foam flow speed.
-    foam_params: vec4<f32>,
     // x: foam scale, y/z: shore-distance swell fade, w: near-shore multiplier
     ring_params: vec4<f32>,
     // x: max swell amplitude, y/z: depth fade, w: authoritative clock offset
@@ -34,13 +33,11 @@ struct ToonWaterUniform {
     // x: anchor time (client seconds), z: wind drift speed (client-time
     // units), yw: sun-projection velocity — both extrapolated in-shader.
     clouds_c: vec4<f32>,
-    // Reserved (water skips snow); mirrors the terrain palette lane.
-    climate: vec4<f32>,
     // xy: storm center at the wind anchor, z: storminess, w: reserved.
     storm: vec4<f32>,
     // xy: clean per-pixel distance fade start/end. This replaces Bevy's
     // 4x4 visibility dither, which reads as a dark checkerboard on water.
-    // zw: camera-distance fade for the foam family (washes/crests).
+    // zw: camera-distance fade for the foam family (shore/river washes).
     distance_fade: vec4<f32>,
     // xy: playable min xz, zw: playable max xz. Only the visual map-edge
     // continuation uses this; ordinary water has signed depth <= 1.
@@ -443,7 +440,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let base = mix(material.shallow_color, material.deep_color, depth_banded);
 
     let wave_scale = max(material.ring_params.x, 0.001);
-    let flow_speed = material.foam_params.w;
+    let flow_speed = material.foam_color.a;
     let t = globals.time * flow_speed;
 
     // Use world-space UVs so foam patterns look coherent across chunk boundaries.
@@ -451,16 +448,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let flow_uv = world_uv + vec2<f32>(t * 0.35, -t * 0.22);
 
     // Camera-distance response for the foam family. distance_fade.zw carries
-    // the foam fade band (client/src/water/material.rs): washes and crests are
+    // the foam fade band (client/src/water/material.rs): shore washes are
     // gone well before the 1250-1800m water crossfade begins, so the coarse
     // far-mesh shoreline never fights an aliased bright rim on the way out.
     let view_dist = distance(view.world_position.xyz, in.world_position.xyz);
     let foam_dist_fade =
         1.0 - smoothstep(material.distance_fade.z, material.distance_fade.w, view_dist);
 
-    // Crest foam bands — an OPEN-WATER feature, gated by DISTANCE to the
-    // coast: foam lines own the shore band, then a calm gap, and crests
-    // only fade in ~10-20m out regardless of how steep the bank is.
+    // Open-water gate + crest phase. No foam is built from these (open-water
+    // foam is fully retired below); they only steer the toon crest shading
+    // and the backlit crest glint away from the shore band.
     let open_water = smoothstep(0.35, 0.75, shore_dist) * smoothstep(0.15, 0.4, depth);
     let detail_wave = wave_field(flow_uv, t * 0.8, 6.2831, 1.0);
     let crest_wave = swell_value * 0.72 + detail_wave * 0.28;

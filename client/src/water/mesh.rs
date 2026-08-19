@@ -41,7 +41,6 @@ struct Corner {
 #[derive(Clone, Copy)]
 struct WaterVertex {
     pos: [f32; 3],
-    uv: [f32; 2],
     /// 1 for ocean, 0 for the river core. Stored in vertex color R so the
     /// ocean shoreline can be calmed without changing the river treatment.
     ocean_factor: f32,
@@ -222,7 +221,6 @@ fn shore_curve_points(
 fn add_polygon(
     positions: &mut Vec<[f32; 3]>,
     normals: &mut Vec<[f32; 3]>,
-    uvs: &mut Vec<[f32; 2]>,
     colors: &mut Vec<[f32; 4]>,
     indices: &mut Vec<u32>,
     vertices: &[WaterVertex],
@@ -231,7 +229,6 @@ fn add_polygon(
         add_triangle(
             positions,
             normals,
-            uvs,
             colors,
             indices,
             vertices[0],
@@ -244,7 +241,6 @@ fn add_polygon(
 fn add_triangle(
     positions: &mut Vec<[f32; 3]>,
     normals: &mut Vec<[f32; 3]>,
-    uvs: &mut Vec<[f32; 2]>,
     colors: &mut Vec<[f32; 4]>,
     indices: &mut Vec<u32>,
     a: WaterVertex,
@@ -255,12 +251,12 @@ fn add_triangle(
     positions.push(a.pos);
     positions.push(b.pos);
     positions.push(c.pos);
+    // Placeholder values, but the attribute's PRESENCE is load-bearing: it
+    // enables toon_water.wgsl's VERTEX_NORMALS path, whose analytic swell
+    // normal carries the ocean-shore damping the fragment fallback lacks.
     normals.push([0.0, 1.0, 0.0]);
     normals.push([0.0, 1.0, 0.0]);
     normals.push([0.0, 1.0, 0.0]);
-    uvs.push(a.uv);
-    uvs.push(b.uv);
-    uvs.push(c.uv);
     colors.push([
         a.ocean_factor,
         a.shore_dist,
@@ -292,7 +288,6 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
     let origin_z = origin.z;
     let mut positions = Vec::new();
     let mut normals = Vec::new();
-    let mut uvs = Vec::new();
     let mut colors = Vec::new();
     let mut indices = Vec::new();
     // The water level is no longer one number. Rivers raise it along their
@@ -389,7 +384,6 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
             // Per-vertex height, so a river surface slopes down its valley
             // instead of lying flat like the sea.
             pos: [local_x, level + WATER_SURFACE_OFFSET, local_z],
-            uv: [world_x / CHUNK_SIZE, world_z / CHUNK_SIZE],
             depth_norm: signed_depth_norm.max(0.0),
             signed_depth_norm,
             shore_dist: shore_dist_norm(world_x, world_z),
@@ -505,7 +499,6 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
                     add_polygon(
                         &mut positions,
                         &mut normals,
-                        &mut uvs,
                         &mut colors,
                         &mut indices,
                         vertices,
@@ -580,7 +573,6 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
             add_triangle(
                 &mut positions,
                 &mut normals,
-                &mut uvs,
                 &mut colors,
                 &mut indices,
                 v0,
@@ -590,7 +582,6 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
             add_triangle(
                 &mut positions,
                 &mut normals,
-                &mut uvs,
                 &mut colors,
                 &mut indices,
                 v0,
@@ -616,7 +607,6 @@ pub(super) fn build_water_mesh(terrain: &WorldTerrain, coord: ChunkCoord) -> Opt
         Mesh::ATTRIBUTE_NORMAL,
         VertexAttributeValues::Float32x3(normals),
     );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, VertexAttributeValues::Float32x2(uvs));
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_COLOR,
         VertexAttributeValues::Float32x4(colors),

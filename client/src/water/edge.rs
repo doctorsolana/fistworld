@@ -101,15 +101,15 @@ fn build_ocean_edge_mesh() -> Mesh {
 
     let mut positions = Vec::with_capacity(vertex_count);
     let mut normals = Vec::with_capacity(vertex_count);
-    let mut uvs = Vec::with_capacity(vertex_count);
     let mut colors = Vec::with_capacity(vertex_count);
     for zi in 0..=segments {
         let z = -EDGE_OCEAN_HALF_EXTENT + zi as f32 * EDGE_OCEAN_SPACING;
         for xi in 0..=segments {
             let x = -EDGE_OCEAN_HALF_EXTENT + xi as f32 * EDGE_OCEAN_SPACING;
             positions.push([x, shared::water::WATER_SURFACE_OFFSET, z]);
+            // Placeholder, but the attribute's presence enables the shader's
+            // VERTEX_NORMALS path (see water/mesh.rs add_triangle).
             normals.push([0.0, 1.0, 0.0]);
-            uvs.push([x / CHUNK_SIZE, z / CHUNK_SIZE]);
             // B > 1 is a private marker telling toon_water.wgsl to discard
             // this patch inside the playable rectangle. The other channels
             // select fully deep, far-from-shore ocean behavior.
@@ -141,7 +141,6 @@ fn build_ocean_edge_mesh() -> Mesh {
         Mesh::ATTRIBUTE_NORMAL,
         VertexAttributeValues::Float32x3(normals),
     );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, VertexAttributeValues::Float32x2(uvs));
     mesh.insert_attribute(
         Mesh::ATTRIBUTE_COLOR,
         VertexAttributeValues::Float32x4(colors),

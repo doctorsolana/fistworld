@@ -40,8 +40,8 @@ impl From<&ToonWaterMaterial> for ToonWaterKey {
 pub struct ToonWaterUniform {
     pub shallow_color: LinearRgba,
     pub deep_color: LinearRgba,
+    /// rgb: foam tint, a: foam flow speed (tint blends by mask, not alpha).
     pub foam_color: LinearRgba,
-    pub foam_params: Vec4,
     pub ring_params: Vec4,
     /// x: max swell amplitude, y/z: depth fade, w: server clock offset.
     pub wave_params: Vec4,
@@ -56,10 +56,9 @@ pub struct ToonWaterUniform {
     /// Cloud shadow field: xy sun projection (sun_dir.xz / sun_dir.y),
     /// z shadow strength, w seed phase.
     pub clouds_b: Vec4,
-    /// x: anchor time (client seconds), z: drift speed (client-time units).
+    /// x: anchor time (client seconds), z: drift speed (client-time units),
+    /// yw: sun-projection velocity — the shader extrapolates both per frame.
     pub clouds_c: Vec4,
-    /// Reserved (water skips snow); mirrors the terrain palette lane.
-    pub climate: Vec4,
     /// THE storm system: xy = center at the wind anchor, z = storminess
     /// (0 while clouds are disabled), w: reserved.
     pub storm: Vec4,
@@ -108,9 +107,8 @@ pub(super) fn setup_water_assets(
         uniform: ToonWaterUniform {
             shallow_color: LinearRgba::from_f32_array(WATER_SHALLOW_RGBA),
             deep_color: LinearRgba::from_f32_array(WATER_DEEP_RGBA),
-            foam_color: LinearRgba::new(0.96, 0.98, 1.00, 1.0),
-            // xyz: reserved (legacy crest-disc tuning), w: foam flow speed.
-            foam_params: Vec4::new(0.13, 0.055, 1.0, 0.16),
+            // rgb: foam tint, a: foam flow speed (tint blends by mask, not alpha).
+            foam_color: LinearRgba::new(0.96, 0.98, 1.00, 0.16),
             // x: foam scale, y/z: shore-distance swell fade, w: near-shore swell multiplier
             ring_params: Vec4::new(1.35, 0.03, 0.72, 0.12),
             wave_params: Vec4::new(
@@ -127,7 +125,6 @@ pub(super) fn setup_water_assets(
             clouds_a: Vec4::ZERO,
             clouds_b: Vec4::ZERO,
             clouds_c: Vec4::ZERO,
-            climate: Vec4::ZERO,
             storm: Vec4::new(1.0e8, 1.0e8, 0.0, 0.0),
             distance_fade: Vec4::new(
                 WATER_FADE_START,
