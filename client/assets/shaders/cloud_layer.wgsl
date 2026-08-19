@@ -159,6 +159,19 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Fade the layer out as the camera crosses it so the quad never slices
     // the view mid-screen.
     let crossing_fade = smoothstep(0.0, 80.0, abs(view.world_position.y - CLOUD_LAYER_HEIGHT));
+    // Grazing-angle resolve: from boat/cinematic height the flat deck
+    // compresses into a band of sub-pixel noise dashes just above the horizon
+    // and hard-clips at the quad edge 20 km out. Fade the deck as the view
+    // ray runs parallel to the plane; steep RTS/map-view rays never trigger
+    // this. Presentation only — terrain/water cloud shadows sample the field
+    // directly, not this alpha.
+    let to_frag = in.world_position.xyz - view.world_position;
+    let graze = abs(to_frag.y) / max(length(to_frag), 1.0e-3);
+    let graze_fade = smoothstep(0.05, 0.13, graze);
+    // Independent under-sampling guard: once one pixel spans a large fraction
+    // of the ~190 m blob scale the noise can only alias, whatever the angle.
+    let fp = max(fwidth(world_xz.x), fwidth(world_xz.y));
+    let resolve_fade = 1.0 - smoothstep(40.0, 160.0, fp);
     // Clouds all but vanish at night — a moonless dark sky shows silhouettes,
     // not bright shapes, and the dark world below must stay readable.
     let night_fade = smoothstep(0.0, 0.25, clamp(material.params_b.y, 0.0, 1.0));
@@ -166,7 +179,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Gamma on the shape thins the wide mid-density haze and solidifies cloud
     // cores, so masses read as bodies instead of washes.
     let body = pow(shape, 1.25);
-    let alpha = clamp(body * material.params_b.w * crossing_fade * night_fade, 0.0, 1.0);
+    let alpha = clamp(
+        body * material.params_b.w * crossing_fade * night_fade * graze_fade * resolve_fade,
+        0.0,
+        1.0,
+    );
     // The storm deck is nearly opaque — a translucent dark cloud blends
     // toward whatever ground is under it (snow washed it to pale lavender)
     // and stops reading as a storm at all.
