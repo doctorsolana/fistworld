@@ -388,7 +388,12 @@ impl GraphicsSettings {
             clouds_enabled: true,
             far_terrain_enabled: true,
             props_enabled: true,
-            vsync_enabled: true,
+            // Off on macOS: the compositor already prevents tearing, while
+            // strict FIFO vsync quantizes missed refreshes (60 -> 30 -> 20),
+            // which punishes weaker Macs hardest — a 45fps-capable machine
+            // gets locked to 30. On other platforms tearing is real, so the
+            // safe default stays on. The pause-menu toggle persists per user.
+            vsync_enabled: cfg!(not(target_os = "macos")),
             // Fullscreen-on-play is the shipped default; the toggle persists
             // the player's preference from there.
             fullscreen_enabled: true,
