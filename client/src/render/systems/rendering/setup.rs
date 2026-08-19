@@ -128,22 +128,30 @@ pub fn setup_rendering(
                 Color::srgb(0.88, 0.92, 0.96),
             ),
         },
-        // Measurement verdict (2026-08-19, M-series, 1920x1200, real connected
-        // game): Gaussian's wide per-fragment PCF kernel held the steady state
-        // at ~56-72 fps; Hardware2x2 ran ~87-99 fps — about +50% — and at RTS
-        // zooms the shadow edges read equally well (arguably crisper). Default
-        // is Hardware2x2; FISTFORCE_SHADOW_FILTER=gaussian is the ablation
-        // hook to compare the soft filter again.
-        if std::env::var("FISTFORCE_SHADOW_FILTER").is_ok_and(|v| v == "gaussian") {
-            ShadowFilteringMethod::Gaussian
-        } else {
-            ShadowFilteringMethod::Hardware2x2
+        // Shadow filter verdict, measured 2026-08-19 on the real connected
+        // game (M-series, 1920x1200): Gaussian ~56-72 fps, soft but half the
+        // frame budget; Hardware2x2 ~87-99 fps but hard edges expose
+        // shadow-map texel crawl under the fast 20-minute sun ("wavy" tree
+        // shadows), and quantizing the sun to hide it read as lag. Temporal
+        // (+ TAA below) measured ~85-94 fps with soft stable edges and was
+        // approved in motion — the default. FISTFORCE_SHADOW_FILTER=
+        // gaussian|hw to compare the alternatives.
+        match std::env::var("FISTFORCE_SHADOW_FILTER").as_deref() {
+            Ok("hw") => ShadowFilteringMethod::Hardware2x2,
+            Ok("gaussian") => ShadowFilteringMethod::Gaussian,
+            _ => ShadowFilteringMethod::Temporal,
         },
     ));
     // SSAO is opt-in: a fullscreen AO pass plus a depth/normal prepass is a
     // heavy default on integrated GPUs.
     if settings.ssao_enabled {
         camera.insert(super::settings::default_ssao_settings());
+    }
+    // The temporal shadow filter is noise without TAA accumulating it; the
+    // gaussian/hw ablation values run without TAA, as before.
+    let ablation = std::env::var("FISTFORCE_SHADOW_FILTER");
+    if !matches!(ablation.as_deref(), Ok("gaussian") | Ok("hw")) {
+        camera.insert(bevy::anti_alias::taa::TemporalAntiAliasing::default());
     }
     // Keep this out of the large tuple to avoid tuple-size bundle limits.
 
