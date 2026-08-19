@@ -60,7 +60,10 @@ pub(super) fn clear_atmosphere_preset() -> AtmospherePreset {
         rayleigh_density_exp_scale: 1.0 / 8_000.0,
         rayleigh_scattering: Vec3::new(5.8e-6, 13.6e-6, 33.1e-6),
         mie_density_exp_scale: 1.0 / 1_200.0,
-        mie_scattering: 3.2e-6,
+        // Earth-like 3.2e-6 read as a milky gray-tan wash over the whole sky
+        // under AgX; thinner haze lets the Rayleigh blue through outside the
+        // dusty golden hours.
+        mie_scattering: 2.0e-6,
         mie_absorption: 0.3e-6,
         mie_asymmetry: 0.8,
         ozone_layer_altitude: 25_000.0,
@@ -242,7 +245,10 @@ pub(crate) fn update_atmosphere(
     // Fade the dust out as the sun sinks below the horizon; deep night
     // reverts to the clear preset's dark blue twilight.
     let night_dust_fade = 1.0 - smoothstep(0.06, 0.22, (-elevation).max(0.0));
-    let dust_factor = (1.0 - smoothstep(0.15, 0.65, sun_height)) * night_dust_fade;
+    // 0.12..0.42: golden hour is roughly sunrise+2h / sunset-2h. The old
+    // 0.15..0.65 band kept the sky half-dusty until the sun neared its noon
+    // peak, which washed the whole day gray-brown (must match day_night.rs).
+    let dust_factor = (1.0 - smoothstep(0.12, 0.42, sun_height)) * night_dust_fade;
 
     let mut blended = blend_atmosphere(media.clear, media.dusty, dust_factor);
     // THIN the whole medium at night. The atmosphere scatters every

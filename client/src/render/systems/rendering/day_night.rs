@@ -93,7 +93,9 @@ pub fn update_day_night_cycle(
     // smoothly toward night.
     let sun_illuminance = lux::DIRECT_SUNLIGHT * sun_height.powf(0.6) * day_factor;
     // Keep daylight gently warm, then push low sun into a stronger golden tint.
-    let dust_factor = 1.0 - smoothstep(0.15, 0.65, sun_height);
+    // Must match the atmosphere's dust band (atmosphere.rs): the sky preset,
+    // the sun's golden tint and the dusty fog all clear together mid-morning.
+    let dust_factor = 1.0 - smoothstep(0.12, 0.42, sun_height);
     let warm_sun_color = Color::srgb(1.0, 0.84, 0.62);
     let neutral_sun_color = Color::srgb(1.0, 0.97, 0.90);
     let sun_color = lerp_color(neutral_sun_color, warm_sun_color, dust_factor);
