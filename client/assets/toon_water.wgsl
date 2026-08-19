@@ -461,28 +461,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let crest_wave = swell_value * 0.72 + detail_wave * 0.28;
     let crest01 = crest_wave * 0.5 + 0.5;
 
-    // Organic churn foam, Valheim-style: the patches come from a
-    // wind-drifting world-space noise field and are merely made LIKELIER by
-    // high water and storms — foam locked to the analytic crests renders as
-    // mechanical rows marching in step across the whole sea (tried; read as
-    // a marching band, not an ocean).
+    // A slow wind-drifting noise field. Foam patches built from it were
+    // tried and retired — decoupled from the wave motion they read as white
+    // debris sliding diagonally across the sea — but it still breaks the
+    // crest glow into organic patches below.
     let wind_dir = vec2<f32>(0.8944272, 0.4472136);
     let wind_drift = wind_dir * (globals.time * 0.55);
     let patches = cloud_fbm((in.world_position.xz + wind_drift) * (1.0 / 17.0));
-    let lace = cloud_fbm(
-        (in.world_position.xz - wind_drift * 0.6) * (1.0 / 4.2) + vec2<f32>(37.0, -11.0),
-    );
-    // Waves and weather favor churn without dictating its shape.
-    let crest_favor = 0.62 + 0.38 * crest01;
-    let churn_cover = mix(0.70, 0.52, material.storm.z);
-    let churn_core = smoothstep(churn_cover, churn_cover + 0.14, patches * crest_favor);
-    // Small-scale lace tears each patch open so it reads as sea foam, not
-    // spilled paint.
-    let churn_lace = mix(0.30, 1.0, smoothstep(0.35, 0.68, lace));
-    // Footprint kill: lace is a 2-4m feature; drop churn before it shimmers.
-    let crest_resolve = 1.0
-        - smoothstep(0.7, 1.8, fwidth(in.world_position.x) + fwidth(in.world_position.z));
-    let churn_foam = churn_core * churn_lace * open_water * foam_dist_fade * crest_resolve;
 
     // --- Shoreline: rivers retain the authored depth-phased lap below. Ocean
     // foam instead uses one stable distance field for contact, traveling lines
@@ -616,12 +601,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // Sparkle comes from the sun-glint pass alone — a drifting dot pattern
-    // reads as a texture sliding over the surface, worst at the shore edge.
-    // Crest DISCS are fully retired (they read as suds smeared across the
-    // sea); the thin breaking crest lines carry the wave energy instead.
+    // Open-water foam is fully retired (discs read as suds, crest lines as
+    // marching bands, drifting churn as floating debris — all tried): the
+    // rolling swell, its backlit crests, the sparkle and the wakes carry the
+    // open sea. Foam belongs to shores, rivers and boats.
     let foam_mask = clamp(
-        shore_foam + churn_foam * 0.85 + ripple_foam * 0.85,
+        shore_foam + ripple_foam * 0.85,
         0.0,
         1.0
     );
