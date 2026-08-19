@@ -49,11 +49,16 @@ fn glitter_level(
     if (rnd < 0.90) {
         return 0.0;
     }
+    // Jitter stays within 0.35 so the 0.12-radius dot can never cross its
+    // own cell border (fract() would clip it into a square there).
     let jitter = vec2<f32>(glitter_hash(id + 17.0), glitter_hash(id + 41.0)) - 0.5;
-    let local = fract(world_xz / cell) - 0.5 - jitter * 0.9;
+    let local = fract(world_xz / cell) - 0.5 - jitter * 0.7;
     let d = length(local) * cell;
     let radius = cell * 0.12;
-    let aa = max(fwidth(d), cell * 0.03);
+    // AA width from the SMOOTH world position, never from d: fract() makes
+    // d discontinuous at cell borders, where fwidth(d) explodes and the
+    // bloated smoothstep drew a faint dashed square around every lit cell.
+    let aa = max(max(fwidth(world_xz.x), fwidth(world_xz.y)), cell * 0.03);
     let dot_mask = 1.0 - smoothstep(radius - aa, radius + aa, d);
     // Per-cell pseudo ripple facet. The half-vector specular keeps lit cells
     // concentrated along the sun path without animated surface normals.
