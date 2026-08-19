@@ -2,7 +2,6 @@
 
 use super::atmosphere::default_bloom_settings;
 use super::cloud_layer::CloudLayerPlane;
-use super::clouds::CloudLayer;
 use super::*;
 use crate::camera_rts::CommanderCamera;
 use bevy::pbr::ContactShadows;
@@ -634,7 +633,7 @@ pub fn apply_graphics_settings(
         With<Camera3d>,
     >,
     mut sun_query: Query<&mut DirectionalLight, With<SunLight>>,
-    mut clouds: Query<&mut Visibility, Or<(With<CloudLayer>, With<CloudLayerPlane>)>>,
+    mut clouds: Query<&mut Visibility, With<CloudLayerPlane>>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     monitors: Query<&bevy::window::Monitor, With<bevy::window::PrimaryMonitor>>,
     mut ui_scale: ResMut<UiScale>,

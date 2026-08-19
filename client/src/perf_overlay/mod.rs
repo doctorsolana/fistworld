@@ -299,7 +299,6 @@ pub fn update_debug_overlay(
         Query<&PlayerPosition, With<Player>>,
     )>,
     mut counts_b: ParamSet<(
-        Query<(), With<crate::render::systems::CloudLayer>>,
         Query<(), With<crate::render::systems::CloudLayerPlane>>,
         Query<&crate::camera_rts::CommanderCamera>,
         Query<(&Settlement, &PlayerPosition)>,
@@ -388,7 +387,7 @@ pub fn update_debug_overlay(
             collider_chunks.extend(center.chunks_in_radius(collider_chunk_radius));
         }
         // Camera state first: bug reports lead with "at zoom X near (x, z)".
-        let focus = counts_b.p2().single().ok().map(|cam| {
+        let focus = counts_b.p1().single().ok().map(|cam| {
             lines.push_str(&format!(
                 "Camera: zoom {:.0}m | tilt {:.2} | focus ({:.0}, {:.0})\n",
                 cam.zoom, cam.tilt, cam.focus.x, cam.focus.z,
@@ -449,7 +448,7 @@ pub fn update_debug_overlay(
         }
         if let Some(focus) = focus {
             let nearest = counts_b
-                .p3()
+                .p2()
                 .iter()
                 .map(|(settlement, position)| {
                     let distance =
@@ -485,7 +484,7 @@ pub fn update_debug_overlay(
             }
         }
         lines.push_str(&format!(
-            "Gizmos: {}\nEntities: {:.0}\nChunks: {}\nProps: {}\nCollider chunks: {}\nCollidable props: {} (baked kinds: {})\nCloud layers: {} | Cloud plane: {}\nFrame ms p50/p95/p99: {:.2}/{:.2}/{:.2}\nHitches > {:.1}ms (window): {}\nAssets: meshes {} | materials {} | images {}\n",
+            "Gizmos: {}\nEntities: {:.0}\nChunks: {}\nProps: {}\nCollider chunks: {}\nCollidable props: {} (baked kinds: {})\nCloud plane: {}\nFrame ms p50/p95/p99: {:.2}/{:.2}/{:.2}\nHitches > {:.1}ms (window): {}\nAssets: meshes {} | materials {} | images {}\n",
             if debug_mode.0 { "ON" } else { "OFF" },
             entity_count,
             world.0.chunks.len(),
@@ -494,7 +493,6 @@ pub fn update_debug_overlay(
             collidable_props,
             baked_kinds,
             counts_b.p0().iter().count(),
-            counts_b.p1().iter().count(),
             perf.1.p50_ms,
             perf.1.p95_ms,
             perf.1.p99_ms,
@@ -536,7 +534,6 @@ pub fn update_perf_drop_monitor(
     materials: Res<Assets<StandardMaterial>>,
     images: Res<Assets<Image>>,
     counts_a: Query<(), With<crate::props::EnvironmentProp>>,
-    counts_d: Query<(), With<crate::render::systems::CloudLayer>>,
     counts_e: Query<(), With<crate::render::systems::CloudLayerPlane>>,
 ) {
     monitor.sample_timer += time.delta_secs();
@@ -571,12 +568,11 @@ pub fn update_perf_drop_monitor(
         .unwrap_or(0.0);
 
     info!(
-        "PERF DROP snapshot: fps={:.1} entities={:.0} chunks={} props={} clouds={} cloud_plane={} assets(mesh={}, mat={}, img={})",
+        "PERF DROP snapshot: fps={:.1} entities={:.0} chunks={} props={} cloud_plane={} assets(mesh={}, mat={}, img={})",
         fps,
         entity_count,
         loaded_chunks.chunks.len(),
         counts_a.iter().count(),
-        counts_d.iter().count(),
         counts_e.iter().count(),
         meshes.len(),
         materials.len(),

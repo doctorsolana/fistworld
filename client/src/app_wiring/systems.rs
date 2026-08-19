@@ -97,9 +97,7 @@ fn wire_common_systems(app: &mut App) {
     app.add_systems(
         Update,
         (
-            game_systems::apply_cloud_texture_sampler,
             game_systems::update_cloud_cover,
-            game_systems::update_cloud_layers,
             game_systems::spawn_cloud_plane,
             game_systems::update_cloud_plane,
         )

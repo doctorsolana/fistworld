@@ -14,10 +14,7 @@ pub mod setup;
 pub(crate) use atmosphere::{sync_atmosphere_enabled, update_atmosphere};
 pub use cloud_layer::{spawn_cloud_plane, update_cloud_plane, CloudLayerMaterial, CloudLayerPlane};
 pub use cloud_shadows::sync_cloud_shadow_params;
-pub use clouds::{
-    apply_cloud_texture_sampler, update_cloud_cover, update_cloud_layers, CloudCover,
-    CloudCoverMode, CloudCoverOverride, CloudLayer,
-};
+pub use clouds::{update_cloud_cover, CloudCover, CloudCoverMode, CloudCoverOverride};
 pub use day_night::update_day_night_cycle;
 pub use scaled_target::sync_scene_render_target;
 pub use settings::{
@@ -32,7 +29,7 @@ use bevy::audio::SpatialListener;
 use bevy::camera::{Exposure, Hdr};
 use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::image::{Image, ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor};
+use bevy::image::Image;
 use bevy::light::atmosphere::{Falloff, PhaseFunction, ScatteringMedium, ScatteringTerm};
 use bevy::light::{
     light_consts::lux, Atmosphere, AtmosphereEnvironmentMapLight, CascadeShadowConfig,

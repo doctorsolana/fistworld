@@ -4,7 +4,7 @@ use super::atmosphere::{
     clear_atmosphere_preset, default_bloom_settings, desert_atmosphere_preset,
     desert_atmosphere_settings_perf, scattering_medium_from_preset, AtmosphereMedia,
 };
-use super::clouds::{setup_cloud_layers, CloudCover, CloudCoverOverride, CloudMaterialCache};
+use super::clouds::{CloudCover, CloudCoverOverride};
 use super::*;
 
 /// Near clip plane for the main 3D camera. Small so geometry close to the camera does
@@ -14,10 +14,7 @@ const CAMERA_NEAR_CLIP: f32 = 0.001;
 /// One-time rendering setup.
 pub fn setup_rendering(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     settings: Res<GraphicsSettings>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut scattering_media: ResMut<Assets<ScatteringMedium>>,
     mut images: ResMut<Assets<Image>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -148,13 +145,11 @@ pub fn setup_rendering(
     }
     // Keep this out of the large tuple to avoid tuple-size bundle limits.
 
-    setup_cloud_layers(&mut commands, &asset_server, &mut meshes, &mut materials);
     // init (not insert): the capture harness pre-seeds forced weather in its own
     // Startup system, and a blind insert here clobbers it (flush order between
     // unordered Startup systems put this one last).
     commands.init_resource::<CloudCover>();
     commands.init_resource::<CloudCoverOverride>();
-    commands.insert_resource(CloudMaterialCache::default());
 
     info!("Client rendering initialized with clear sky + dusty sunsets");
 }

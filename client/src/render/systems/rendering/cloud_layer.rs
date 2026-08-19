@@ -250,7 +250,7 @@ pub fn update_cloud_plane(
     let anchor_time = time.elapsed_secs();
     let speed_client = wind_speed * warp;
 
-    // Same day/night cadence as the dome tints in update_cloud_layers.
+    // Same day/night cadence the retired sky dome used for its tints.
     let elevation = -world_time.sun_phase().cos();
     let day_factor = smoothstep(-0.05, 0.15, elevation);
     let twilight = 1.0 - smoothstep(0.12, 0.35, elevation.max(0.0));
