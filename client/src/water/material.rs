@@ -70,8 +70,6 @@ pub struct ToonWaterUniform {
     pub map_bounds: Vec4,
     /// xy: streamed detail centre; z/w: inner/outer square edge fade.
     pub detail_bounds: Vec4,
-    /// x: faceted low-poly normal blend (experiment; FISTWORLD_OCEAN_FACETED).
-    pub style: Vec4,
 }
 
 impl Material for ToonWaterMaterial {
@@ -111,9 +109,7 @@ pub(super) fn setup_water_assets(
             shallow_color: LinearRgba::from_f32_array(WATER_SHALLOW_RGBA),
             deep_color: LinearRgba::from_f32_array(WATER_DEEP_RGBA),
             foam_color: LinearRgba::new(0.96, 0.98, 1.00, 1.0),
-            // x: foam edge width, y: foam smoothness, z: fleck density, w: flow speed
-            // Edge width 0.13 keeps whitecaps as sparse caps on genuine
-            // crests; 0.16 painted wide soft discs across the open sea.
+            // xyz: reserved (legacy crest-disc tuning), w: foam flow speed.
             foam_params: Vec4::new(0.13, 0.055, 1.0, 0.16),
             // x: foam scale, y/z: shore-distance swell fade, w: near-shore swell multiplier
             ring_params: Vec4::new(1.35, 0.03, 0.72, 0.12),
@@ -141,17 +137,6 @@ pub(super) fn setup_water_assets(
             ),
             map_bounds: Vec4::ZERO,
             detail_bounds: Vec4::ZERO,
-            // Opt-in faceted-sea experiment; plain smooth toon water default.
-            style: Vec4::new(
-                if std::env::var("FISTWORLD_OCEAN_FACETED").is_ok_and(|v| v == "1") {
-                    1.0
-                } else {
-                    0.0
-                },
-                0.0,
-                0.0,
-                0.0,
-            ),
         },
         alpha_mode: AlphaMode::Blend,
         double_sided: false,

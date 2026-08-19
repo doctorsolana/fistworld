@@ -15,7 +15,7 @@ struct ToonWaterUniform {
     shallow_color: vec4<f32>,
     deep_color: vec4<f32>,
     foam_color: vec4<f32>,
-    // x: foam edge width, y: foam smoothness, z: cell scale, w: flow speed
+    // xyz: reserved (legacy crest-disc tuning), w: foam flow speed.
     foam_params: vec4<f32>,
     // x: foam scale, y/z: shore-distance swell fade, w: near-shore multiplier
     ring_params: vec4<f32>,
@@ -47,8 +47,6 @@ struct ToonWaterUniform {
     map_bounds: vec4<f32>,
     // xy: streamed detail centre; zw: square edge fade start/end.
     detail_bounds: vec4<f32>,
-    // x: faceted low-poly normal blend (experiment toggle); yzw reserved.
-    style: vec4<f32>,
 };
 
 @group(3) @binding(0) var<uniform> material: ToonWaterUniform;
@@ -74,11 +72,6 @@ fn wave_gradient(p: vec2<f32>, time: f32, freq: f32, speed: f32) -> vec2<f32> {
     let ca = cos(dot(p, dir_a) * freq + time * speed) * freq;
     let cb = cos(dot(p, dir_b) * (freq * 1.37) - time * (speed * 0.83)) * (freq * 1.37);
     return dir_a * ca * 0.62 + dir_b * cb * 0.38;
-}
-
-fn hash12(p: vec2<f32>) -> f32 {
-    let h = dot(p, vec2<f32>(127.1, 311.7));
-    return fract(sin(h) * 43758.5453);
 }
 
 // === Map-scale ocean glitter (EXACT copy in toon_water.wgsl / far_terrain.wgsl — keep in sync) ===
@@ -642,22 +635,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // without any actual reflection rendering.
     let view_vec = normalize(view.world_position.xyz - in.world_position.xyz);
 #ifdef VERTEX_NORMALS
-    var broad_normal = normalize(in.world_normal);
+    let broad_normal = normalize(in.world_normal);
 #else
     let fallback_slope = swell_gradient(in.world_position.xz, wave_time)
         * material.wave_params.x
         * swell_motion_scale(depth, shore_dist);
-    var broad_normal = normalize(vec3<f32>(-fallback_slope.x, 1.0, -fallback_slope.y));
+    let broad_normal = normalize(vec3<f32>(-fallback_slope.x, 1.0, -fallback_slope.y));
 #endif
-    // Faceted low-poly experiment (style.x): exact per-triangle normals via
-    // screen derivatives — world_position is planar per triangle. Blended
-    // back to smooth with distance before 2m facets go sub-pixel and sizzle.
-    if (material.style.x > 0.001) {
-        var face_n = normalize(cross(dpdx(in.world_position.xyz), dpdy(in.world_position.xyz)));
-        face_n = select(-face_n, face_n, face_n.y > 0.0);
-        let facet_keep = 1.0 - smoothstep(150.0, 420.0, view_dist);
-        broad_normal = normalize(mix(broad_normal, face_n, material.style.x * facet_keep));
-    }
     let safe_normal_y = max(abs(broad_normal.y), 0.001);
     let swell_slope = vec2<f32>(-broad_normal.x, -broad_normal.z) / safe_normal_y;
     let ndv = clamp(abs(dot(broad_normal, view_vec)), 0.02, 1.0);
