@@ -6,8 +6,10 @@ use std::f32::consts::TAU;
 pub const WATER_SURFACE_OFFSET: f32 = 0.02;
 /// Terrain depth represented by a fully deep water-mesh vertex.
 pub const WATER_DEPTH_FADE_METERS: f32 = 2.5;
-/// Maximum displacement from the broad offshore swell.
-pub const WATER_DEEP_SWELL_AMPLITUDE: f32 = 0.32;
+/// Maximum displacement from the broad offshore swell. 0.7m of heave gives
+/// the open sea a Valheim-like roll the boat visibly rides; per-wave slopes
+/// stay gentle because the dominant wavelength grew with the amplitude.
+pub const WATER_DEEP_SWELL_AMPLITUDE: f32 = 0.70;
 /// Normalized depth where broad motion begins to appear.
 pub const WATER_SWELL_DEPTH_START: f32 = 0.02;
 /// Normalized depth where broad motion reaches full strength.
@@ -54,18 +56,25 @@ pub fn advance_ocean_seconds(current: f32, dt: f32) -> f32 {
 /// `client/assets/toon_water.wgsl` in sync when tuning this function.
 #[inline]
 pub fn water_swell_unit(world_x: f32, world_z: f32, ocean_seconds: f32) -> f32 {
-    let k_a = TAU / 42.0;
+    // 64m primary: a long rolling swell rather than pond chop. Slopes stay
+    // close to the old 42m/0.32 tuning because the amplitude grew with the
+    // wavelength.
+    let k_a = TAU / 64.0;
     let k_b = TAU / 24.0;
     let k_c = TAU / 13.0;
     let base_omega = TAU / OCEAN_LOOP_SECONDS;
 
-    let phase_a = (world_x * DIR_A_X + world_z * DIR_A_Z) * k_a + ocean_seconds * base_omega * 9.0;
-    let phase_b = (world_x * DIR_B_X + world_z * DIR_B_Z) * k_b - ocean_seconds * base_omega * 14.0;
-    let phase_c = (world_x * DIR_C_X + world_z * DIR_C_Z) * k_c + ocean_seconds * base_omega * 21.0;
+    // Integer harmonics of the 120s loop chosen near true deep-water
+    // dispersion (T ~ sqrt(2*pi*wavelength/g)): the 13m chop bobs every ~3s
+    // and the 24m sea every ~4s, which is what makes the surface visibly
+    // rise and fall up close instead of undulating in slow motion.
+    let phase_a = (world_x * DIR_A_X + world_z * DIR_A_Z) * k_a + ocean_seconds * base_omega * 14.0;
+    let phase_b = (world_x * DIR_B_X + world_z * DIR_B_Z) * k_b - ocean_seconds * base_omega * 31.0;
+    let phase_c = (world_x * DIR_C_X + world_z * DIR_C_Z) * k_c + ocean_seconds * base_omega * 42.0;
 
-    sharp_sin(phase_a, WATER_SWELL_SHARPNESS_A) * 0.58
-        + sharp_sin(phase_b, WATER_SWELL_SHARPNESS_B) * 0.29
-        + phase_c.sin() * 0.13
+    sharp_sin(phase_a, WATER_SWELL_SHARPNESS_A) * 0.52
+        + sharp_sin(phase_b, WATER_SWELL_SHARPNESS_B) * 0.31
+        + phase_c.sin() * 0.17
 }
 
 /// Broad animated surface displacement for physics. Rendering additionally

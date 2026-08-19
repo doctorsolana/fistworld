@@ -244,82 +244,33 @@ fn sharp_sin_slope(phase: f32, sharpness: f32) -> f32 {
     return (cos(phase) + 2.0 * sharpness * sin(2.0 * phase)) / (1.0 + sharpness);
 }
 
-// d2/dphase2 of sharp_sin.
-fn sharp_sin_curve(phase: f32, sharpness: f32) -> f32 {
-    return (-sin(phase) + 4.0 * sharpness * cos(2.0 * phase)) / (1.0 + sharpness);
-}
-
 fn swell_field(world_xz: vec2<f32>, time: f32) -> f32 {
     let dir_a = vec2<f32>(0.8944272, 0.4472136);
     let dir_b = vec2<f32>(-0.3939193, 0.9191450);
     let dir_c = vec2<f32>(0.1961161, -0.9805807);
     let base_omega = TAU / OCEAN_LOOP_SECONDS;
-    let phase_a = dot(world_xz, dir_a) * (TAU / 42.0) + time * base_omega * 9.0;
-    let phase_b = dot(world_xz, dir_b) * (TAU / 24.0) - time * base_omega * 14.0;
-    let phase_c = dot(world_xz, dir_c) * (TAU / 13.0) + time * base_omega * 21.0;
-    return sharp_sin(phase_a, SWELL_SHARP_A) * 0.58
-        + sharp_sin(phase_b, SWELL_SHARP_B) * 0.29
-        + sin(phase_c) * 0.13;
+    let phase_a = dot(world_xz, dir_a) * (TAU / 64.0) + time * base_omega * 14.0;
+    let phase_b = dot(world_xz, dir_b) * (TAU / 24.0) - time * base_omega * 31.0;
+    let phase_c = dot(world_xz, dir_c) * (TAU / 13.0) + time * base_omega * 42.0;
+    return sharp_sin(phase_a, SWELL_SHARP_A) * 0.52
+        + sharp_sin(phase_b, SWELL_SHARP_B) * 0.31
+        + sin(phase_c) * 0.17;
 }
 
 fn swell_gradient(world_xz: vec2<f32>, time: f32) -> vec2<f32> {
     let dir_a = vec2<f32>(0.8944272, 0.4472136);
     let dir_b = vec2<f32>(-0.3939193, 0.9191450);
     let dir_c = vec2<f32>(0.1961161, -0.9805807);
-    let k_a = TAU / 42.0;
+    let k_a = TAU / 64.0;
     let k_b = TAU / 24.0;
     let k_c = TAU / 13.0;
     let base_omega = TAU / OCEAN_LOOP_SECONDS;
-    let phase_a = dot(world_xz, dir_a) * k_a + time * base_omega * 9.0;
-    let phase_b = dot(world_xz, dir_b) * k_b - time * base_omega * 14.0;
-    let phase_c = dot(world_xz, dir_c) * k_c + time * base_omega * 21.0;
-    return dir_a * sharp_sin_slope(phase_a, SWELL_SHARP_A) * k_a * 0.58
-        + dir_b * sharp_sin_slope(phase_b, SWELL_SHARP_B) * k_b * 0.29
-        + dir_c * cos(phase_c) * k_c * 0.13;
-}
-
-// Second spatial derivative along each swell's travel direction, k^2-weighted
-// so the short sharp waves dominate — the height-field analog of the Gerstner
-// Jacobian breaking criterion. Strongly negative = a genuinely sharp crest.
-fn swell_curvature(world_xz: vec2<f32>, time: f32) -> f32 {
-    let dir_a = vec2<f32>(0.8944272, 0.4472136);
-    let dir_b = vec2<f32>(-0.3939193, 0.9191450);
-    let dir_c = vec2<f32>(0.1961161, -0.9805807);
-    let k_a = TAU / 42.0;
-    let k_b = TAU / 24.0;
-    let k_c = TAU / 13.0;
-    let base_omega = TAU / OCEAN_LOOP_SECONDS;
-    let phase_a = dot(world_xz, dir_a) * k_a + time * base_omega * 9.0;
-    let phase_b = dot(world_xz, dir_b) * k_b - time * base_omega * 14.0;
-    let phase_c = dot(world_xz, dir_c) * k_c + time * base_omega * 21.0;
-    return sharp_sin_curve(phase_a, SWELL_SHARP_A) * k_a * k_a * 0.58
-        + sharp_sin_curve(phase_b, SWELL_SHARP_B) * k_b * k_b * 0.29
-        + (-sin(phase_c)) * k_c * k_c * 0.13;
-}
-
-// Normalized 0..1 "breaking crest" signal at one instant: sharp downward
-// curvature of the two SHARPENED swells AND a genuinely elevated surface.
-// The 13m ripple is deliberately excluded — its k^2 dominance would sprinkle
-// foam across the whole sea; breaking belongs to the big waves. The 0.050
-// normalizer is the combined A+B curvature maximum, so ~1.0 means both sharp
-// crests are aligned and at their tightest.
-fn swell_breaking(world_xz: vec2<f32>, time: f32) -> f32 {
-    let dir_a = vec2<f32>(0.8944272, 0.4472136);
-    let dir_b = vec2<f32>(-0.3939193, 0.9191450);
-    let k_a = TAU / 42.0;
-    let k_b = TAU / 24.0;
-    let base_omega = TAU / OCEAN_LOOP_SECONDS;
-    let phase_a = dot(world_xz, dir_a) * k_a + time * base_omega * 9.0;
-    let phase_b = dot(world_xz, dir_b) * k_b - time * base_omega * 14.0;
-    let curve_ab = -(sharp_sin_curve(phase_a, SWELL_SHARP_A) * k_a * k_a * 0.58
-        + sharp_sin_curve(phase_b, SWELL_SHARP_B) * k_b * k_b * 0.29);
-    let curve01 = curve_ab / 0.050;
-    let height = swell_field(world_xz, time);
-    // Hug the B swell's ridge line: its own slope crosses zero exactly on the
-    // crest, so this term narrows the foam from a disc around the peak into a
-    // thin line ALONG the breaking crest.
-    let ridge = 1.0 - smoothstep(0.05, 0.38, abs(sharp_sin_slope(phase_b, SWELL_SHARP_B)));
-    return smoothstep(0.60, 0.88, curve01) * smoothstep(0.50, 0.78, height) * ridge;
+    let phase_a = dot(world_xz, dir_a) * k_a + time * base_omega * 14.0;
+    let phase_b = dot(world_xz, dir_b) * k_b - time * base_omega * 31.0;
+    let phase_c = dot(world_xz, dir_c) * k_c + time * base_omega * 42.0;
+    return dir_a * sharp_sin_slope(phase_a, SWELL_SHARP_A) * k_a * 0.52
+        + dir_b * sharp_sin_slope(phase_b, SWELL_SHARP_B) * k_b * 0.31
+        + dir_c * cos(phase_c) * k_c * 0.17;
 }
 
 fn swell_motion_scale(depth: f32, shore_dist: f32) -> f32 {
@@ -517,34 +468,28 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let crest_wave = swell_value * 0.72 + detail_wave * 0.28;
     let crest01 = crest_wave * 0.5 + 0.5;
 
-    // Breaking crest LINES: thin foam where the surface curvature says a
-    // crest is genuinely sharp (the height-field analog of the Gerstner
-    // Jacobian criterion), re-evaluated at phase lags so foam lingers briefly
-    // behind the traveling crest — persistence without a feedback buffer.
-    let breaking = max(
-        swell_breaking(in.world_position.xz, wave_time),
-        swell_breaking(in.world_position.xz, wave_time - 1.1) * 0.55,
-    );
-    // Streaky breakup stretched along the dominant swell's travel direction,
-    // so the lines read as wind-torn churn instead of contour plots.
+    // Organic churn foam, Valheim-style: the patches come from a
+    // wind-drifting world-space noise field and are merely made LIKELIER by
+    // high water and storms — foam locked to the analytic crests renders as
+    // mechanical rows marching in step across the whole sea (tried; read as
+    // a marching band, not an ocean).
     let wind_dir = vec2<f32>(0.8944272, 0.4472136);
-    let streak_coord = vec2<f32>(
-        dot(in.world_position.xz, wind_dir) * 0.035,
-        dot(in.world_position.xz, vec2<f32>(-wind_dir.y, wind_dir.x)) * 0.22,
+    let wind_drift = wind_dir * (globals.time * 0.55);
+    let patches = cloud_fbm((in.world_position.xz + wind_drift) * (1.0 / 17.0));
+    let lace = cloud_fbm(
+        (in.world_position.xz - wind_drift * 0.6) * (1.0 / 4.2) + vec2<f32>(37.0, -11.0),
     );
-    let streak_noise =
-        smoothstep(0.20, 0.85, 0.5 + 0.5 * wave_field(streak_coord, t * 0.5, 4.0, 1.0));
-    // Footprint kill: these are 1-3m features; drop them before they alias
-    // into shimmer rather than letting them smear (house rule).
+    // Waves and weather favor churn without dictating its shape.
+    let crest_favor = 0.62 + 0.38 * crest01;
+    let churn_cover = mix(0.70, 0.52, material.storm.z);
+    let churn_core = smoothstep(churn_cover, churn_cover + 0.14, patches * crest_favor);
+    // Small-scale lace tears each patch open so it reads as sea foam, not
+    // spilled paint.
+    let churn_lace = mix(0.30, 1.0, smoothstep(0.35, 0.68, lace));
+    // Footprint kill: lace is a 2-4m feature; drop churn before it shimmers.
     let crest_resolve = 1.0
-        - smoothstep(0.5, 1.4, fwidth(in.world_position.x) + fwidth(in.world_position.z));
-    // Noise CUTS the foam into streaky patches (a floor would keep it solid
-    // and read as suds again).
-    let crest_lines = breaking
-        * smoothstep(0.30, 0.75, streak_noise)
-        * open_water
-        * foam_dist_fade
-        * crest_resolve;
+        - smoothstep(0.7, 1.8, fwidth(in.world_position.x) + fwidth(in.world_position.z));
+    let churn_foam = churn_core * churn_lace * open_water * foam_dist_fade * crest_resolve;
 
     // --- Shoreline: rivers retain the authored depth-phased lap below. Ocean
     // foam instead uses one stable distance field for contact, traveling lines
@@ -683,7 +628,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Crest DISCS are fully retired (they read as suds smeared across the
     // sea); the thin breaking crest lines carry the wave energy instead.
     let foam_mask = clamp(
-        shore_foam + crest_lines * 0.55 + ripple_foam * 0.85,
+        shore_foam + churn_foam * 0.85 + ripple_foam * 0.85,
         0.0,
         1.0
     );
@@ -734,7 +679,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let crest_tip = smoothstep(0.30, 0.72, swell_value);
     let sss = crest_tip * away_slope * open_water * smoothstep(0.45, 0.9, depth)
         * clamp(material.sun_params.w, 0.0, 1.0);
-    base_rgb = mix(base_rgb, vec3<f32>(0.16, 0.62, 0.58), sss * 0.42);
+    // The noise field also breaks the glow into organic patches; tied only
+    // to the crests it formed the same mechanical rows as the old foam.
+    base_rgb = mix(base_rgb, vec3<f32>(0.16, 0.62, 0.58), sss * 0.42 * mix(0.45, 1.0, patches));
 
     var color_rgb = mix(base_rgb, material.foam_color.rgb, foam_mask);
 
@@ -753,7 +700,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     grad += vec2<f32>(grad_c.y, -grad_c.x);
     let ripple_normal = normalize(vec3<f32>(-grad.x, 1.0, -grad.y));
     let sun_dir = normalize(material.sun_params.xyz);
-    let sparkle = 0.25 + 0.75 * hash12(floor(in.world_position.xz * 1.7));
+    // SPARSE twinkle mask: amplitude-modulating every 0.6m cell (the old
+    // 0.25+0.75*hash) lit the whole specular lobe into a dashed grid at
+    // oblique views; most cells must contribute nothing at all.
+    let sparkle_cell = floor(in.world_position.xz * 1.7);
+    let sparkle = smoothstep(0.60, 0.80, glitter_hash(sparkle_cell))
+        * (0.35 + 0.65 * glitter_hash(sparkle_cell + 7.0));
     // The analytic ripple field goes sub-pixel past ~150m, where it used to
     // alias into slow moire blobs (its old fix — a flat 0.2 floor — just made
     // the glimmer vanish at middle zoom). Hand it off to the footprint-aware
@@ -765,7 +717,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // the specular footprint; without this trim the near glint reads as a
     // dashed grid at oblique angles.
     let analytic = pow(max(dot(reflect(-view_vec, ripple_normal), sun_dir), 0.0), 130.0)
-        * sparkle * near_fade * 0.8;
+        * sparkle * near_fade;
     let glitter = ocean_glitter(in.world_position.xz, view_vec, sun_dir, globals.time)
         * glitter_fade;
     let glint = min((analytic + glitter) * material.sun_params.w, 1.4);
