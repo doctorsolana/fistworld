@@ -31,6 +31,9 @@ server_data/
 .env
 .env.local
 
+# Private deployment/operator notes (credentials and live server details)
+/docs/FLY-PRIVATE.md
+
 # Local cargo config is normally machine-specific. Keep the shared command
 # aliases while continuing to ignore any other per-machine Cargo files.
 .cargo/*

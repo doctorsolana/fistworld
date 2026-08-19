@@ -36,6 +36,22 @@ flow does not claim durable cross-restart world persistence. Development God Mod
 available: a God-capable client can press `G` even while the new-player creator is open.
 The automated `FISTWORLD_AUTOSPAWN_HERO=1` smoke path also bypasses the mandatory modal.
 
+## Natural NPC arrivals
+
+Natural immigrants reuse the same physical water and land contracts without sharing the
+player-start account flow. If no Moot exists, the director remains dormant: it does not spawn
+a boat, increment its arrival sequence or save up missed arrivals. After the first Moot is
+founded, it schedules the ordinary configured delay before attempting the first arrival.
+
+Before committing an immigrant to a settlement, the server ranks plausible coasts and proves
+that one has a dry overland connection to the Hall entrance. This proof is retained across
+fixed ticks and receives only a small slice of each tick; it never scans every candidate in one
+update. Both successful landfalls and terrain-wide failures are cached. A Hall entrance change
+invalidates its entry, while a known-unreachable settlement is excluded so the immigrant can
+consider another town. Once a landfall is proven, the immigrant sails there in an ephemeral
+Dinghy, disembarks on certified dry ground and joins the ordinary land route and visible Moot
+registration queue.
+
 ## Navigation contract
 
 `Vessel` is the generic server-side opt-in for Dinghies, future merchant ships and war

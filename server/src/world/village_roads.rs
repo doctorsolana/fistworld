@@ -1075,6 +1075,81 @@ pub(crate) fn overland_trade_corridor_exists(
     !survey_a_star(&survey, &mut scratch).is_empty()
 }
 
+/// Retained terrain-only corridor proof for callers which must never run the
+/// complete inter-settlement A* inside one server tick.
+///
+/// Natural immigration uses this while discovering a settlement's permanent
+/// landfall. Ordinary embodied travel has its own obstacle-aware retained
+/// jobs; this smaller public seam deliberately ignores buildings and props in
+/// exactly the same way as [`overland_trade_corridor_exists`].
+pub(crate) struct IncrementalOverlandCorridorSearch {
+    start: Vec2,
+    goal: Vec2,
+    state: SurveySearchState,
+    scratch: SurveyScratch,
+}
+
+impl std::fmt::Debug for IncrementalOverlandCorridorSearch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IncrementalOverlandCorridorSearch")
+            .field("start", &self.start)
+            .field("goal", &self.goal)
+            .field("expanded", &self.state.expanded)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IncrementalCorridorResult {
+    Pending,
+    Reachable,
+    Unreachable,
+}
+
+impl IncrementalOverlandCorridorSearch {
+    pub(crate) fn new(start: Vec2, goal: Vec2) -> Self {
+        Self {
+            start,
+            goal,
+            state: SurveySearchState::default(),
+            scratch: SurveyScratch::default(),
+        }
+    }
+
+    /// Advance one retained search for no more than the caller's wall-time
+    /// slice after the survey's small guaranteed-progress floor. Keeping the
+    /// deadline outside the A* state means a throttled hosted CPU can yield and
+    /// resume without throwing away any expanded cells.
+    pub(crate) fn advance(
+        &mut self,
+        terrain: &WorldTerrain,
+        slice: Duration,
+    ) -> IncrementalCorridorResult {
+        let props = PropBlockers::default();
+        let survey = RoadSurvey {
+            terrain,
+            buildings: &[],
+            live_buildings: None,
+            props: &props,
+            start: self.start,
+            goal: self.goal,
+            min: self.start.min(self.goal) - Vec2::splat(INTERSETTLEMENT_SURVEY_PADDING),
+            max: self.start.max(self.goal) + Vec2::splat(INTERSETTLEMENT_SURVEY_PADDING),
+            max_nodes: INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
+            cell_size: SURVEY_CELL * INTERSETTLEMENT_SURVEY_STRIDE as f32,
+            coarse_stride: 1,
+            fine_endpoint_radius: 0.0,
+        };
+        let deadline = Instant::now() + slice;
+        match resume_survey_a_star(&survey, &mut self.scratch, &mut self.state, Some(deadline)) {
+            SurveySearchResult::Pending => IncrementalCorridorResult::Pending,
+            SurveySearchResult::Found(_) => IncrementalCorridorResult::Reachable,
+            SurveySearchResult::Failed => IncrementalCorridorResult::Unreachable,
+        }
+    }
+}
+
 fn simplify_visible(
     points: &[Vec2],
     survey: &RoadSurvey<'_>,

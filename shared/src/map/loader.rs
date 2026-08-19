@@ -489,6 +489,7 @@ mod tests {
             seed: 2026,
             generator_version: crate::worldgen::WORLDGEN_VERSION,
             half_extent: half,
+            scatter_vegetation: true,
         };
         let grid = recipe.build_grid();
 

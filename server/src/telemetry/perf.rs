@@ -15,17 +15,31 @@ const TARGET_TICK_SECS: f64 = 1.0 / FIXED_TIMESTEP_HZ;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Phase {
+    World,
     Core,
     Navigation,
 }
 
 impl Phase {
-    const COUNT: usize = 2;
+    const COUNT: usize = 3;
 
     fn idx(self) -> usize {
         match self {
-            Phase::Core => 0,
-            Phase::Navigation => 1,
+            Phase::World => 0,
+            Phase::Core => 1,
+            Phase::Navigation => 2,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Phase;
+
+    #[test]
+    fn every_profile_phase_has_backing_storage() {
+        for phase in [Phase::World, Phase::Core, Phase::Navigation] {
+            assert!(phase.idx() < Phase::COUNT);
         }
     }
 }
@@ -148,6 +162,18 @@ pub fn handle_perf_core_phase_begin(mut perf: ResMut<ServerPerfMonitor>) {
     }
 }
 
+pub fn handle_perf_world_phase_begin(mut perf: ResMut<ServerPerfMonitor>) {
+    if perf.enabled {
+        perf.start_phase(Phase::World);
+    }
+}
+
+pub fn handle_perf_world_phase_end(mut perf: ResMut<ServerPerfMonitor>) {
+    if perf.enabled {
+        perf.end_phase(Phase::World);
+    }
+}
+
 pub fn handle_perf_core_phase_end(mut perf: ResMut<ServerPerfMonitor>) {
     if perf.enabled {
         perf.end_phase(Phase::Core);
@@ -195,6 +221,8 @@ pub fn update_server_perf_log(
     let tick_max_ms = perf.tick_max.as_secs_f64() * 1000.0;
     let over_budget_pct = perf.tick_over_budget as f64 * 100.0 / ticks_f;
 
+    let world_avg_ms = perf.phase_sum[Phase::World.idx()].as_secs_f64() * 1000.0 / ticks_f;
+    let world_max_ms = perf.phase_max[Phase::World.idx()].as_secs_f64() * 1000.0;
     let core_avg_ms = perf.phase_sum[Phase::Core.idx()].as_secs_f64() * 1000.0 / ticks_f;
     let core_max_ms = perf.phase_max[Phase::Core.idx()].as_secs_f64() * 1000.0;
     let navigation_avg_ms =
@@ -270,10 +298,12 @@ pub fn update_server_perf_log(
     }
 
     info!(
-        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases core={:.2}/{:.2} navigation={:.2}/{:.2} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} villagers={} idle={} migrating={} settled={} nav_pending={} nav_failed={} migration_cooldown={}",
+        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases world={:.2}/{:.2} core={:.2}/{:.2} navigation={:.2}/{:.2} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} villagers={} idle={} migrating={} settled={} nav_pending={} nav_failed={} migration_cooldown={}",
         tick_avg_ms,
         tick_max_ms,
         over_budget_pct,
+        world_avg_ms,
+        world_max_ms,
         core_avg_ms,
         core_max_ms,
         navigation_avg_ms,

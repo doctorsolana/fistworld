@@ -44,7 +44,7 @@ impl Default for DevMode {
 
 // The hosted server is still an early playtest environment. Four characters
 // keeps accidental unlocks out while allowing a deliberately memorable test
-// key such as `5555`. Raise this before God Mode protects a persistent world.
+// key. Raise this before God Mode protects a persistent world.
 const MIN_HOSTED_GOD_KEY_LENGTH: usize = 4;
 
 fn hosted_access_key(raw: Option<&str>) -> Option<String> {
@@ -610,8 +610,8 @@ mod tests {
 
     #[test]
     fn hosted_playtest_key_accepts_four_characters_but_not_fewer() {
-        assert_eq!(hosted_access_key(Some(" 5555 ")).as_deref(), Some("5555"));
-        assert_eq!(hosted_access_key(Some("555")), None);
+        assert_eq!(hosted_access_key(Some(" test ")).as_deref(), Some("test"));
+        assert_eq!(hosted_access_key(Some("key")), None);
         assert_eq!(hosted_access_key(Some("   ")), None);
         assert_eq!(hosted_access_key(None), None);
     }

@@ -144,7 +144,13 @@ inside the new system, and do not add lab-only ordering to make a test pass.
   plus bounded personal/geographic bias, uses the generic vessel navigator for an ephemeral
   map-edge Dinghy, and only removes the boat after it reaches its certified mooring. The
   passenger then resumes the existing land-route and Moot-queue flow; this is not a second
-  admission implementation. Ordinary worlds enable it by default, labs disable it unless
+  admission implementation. A world without a settlement remains dormant: it creates no
+  arrival, advances no arrival sequence and accumulates no backlog; the normal delay begins
+  after the first Moot exists. Coast-to-Hall viability is resolved incrementally with a
+  retained search budget rather than synchronous candidate scans. Reachable and unreachable
+  results are cached, Hall entrance changes invalidate them, and known-unreachable settlements
+  are skipped so an arrival can consider another town without repeating failed A*. Ordinary
+  worlds enable natural immigration by default, while labs disable it unless
   `FISTWORLD_NATURAL_IMMIGRATION=1` is explicitly supplied. Its startup defaults are three
   arrivals per world day and a 5,000-villager world ceiling; override those with
   `FISTWORLD_IMMIGRANTS_PER_DAY` and `FISTWORLD_WORLD_NPC_CAP`. Seasonal and opportunity

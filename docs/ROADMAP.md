@@ -70,7 +70,10 @@ Phase 0 exit blockers.
       personal preferences and a bounded coast-to-town distance bias, sail an ephemeral
       Dinghy from the map edge, disembark on certified dry ground, then use the ordinary
       embodied land planner and visible Moot registration queue. Seasonal cadence and an
-      eight-voyage ceiling keep the system legible and bounded at high time warp.
+      eight-voyage ceiling keep the system legible and bounded at high time warp. Servers
+      with no Moot remain dormant without accumulating arrivals. Coast-to-Hall proofs retain
+      their A* frontier across budgeted ticks, cache both success and terrain failure, and
+      skip known-unreachable settlements rather than stalling or repeating the failed scan.
 - [x] Deploy to Fly.io and verify a real public client can join, create a Hero and
       starter Dinghy, sail through the ordinary right-click order path, disconnect,
       reconnect, and re-adopt the same live Hero body.

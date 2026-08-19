@@ -23,7 +23,10 @@ use crate::player::boat::{
     BOAT_ARRIVE_EPSILON, HELM_LOCAL,
 };
 use crate::world::village::VillagerIntent;
+#[cfg(test)]
 use crate::world::village_roads::overland_trade_corridor_exists;
+use crate::world::village_roads::{IncrementalCorridorResult, IncrementalOverlandCorridorSearch};
+use std::time::Duration;
 
 const DEFAULT_IMMIGRANTS_PER_DAY: f32 = 3.0;
 const DEFAULT_WORLD_NPC_CAP: usize = 5_000;
@@ -33,6 +36,102 @@ const FIRST_ARRIVAL_DELAY_DAYS: f32 = 0.06;
 const RETRY_DELAY_DAYS: f32 = 0.08;
 const MIN_ATTRACTIVENESS: f32 = 18.0;
 const MAX_ACTIVE_VOYAGES: usize = 8;
+/// Landfall discovery is terrain work, not a reason to suspend an entire
+/// hosted world. One retained A* receives this small slice per fixed tick and
+/// preserves its frontier when it yields.
+const LANDFALL_SEARCH_SLICE: Duration = Duration::from_micros(500);
+const LANDFALL_ENTRANCE_EPSILON_SQ: f32 = 0.01;
+
+#[derive(Clone, Copy, Debug)]
+enum CachedSettlementLandfall {
+    Reachable {
+        entrance: Vec3,
+        voyage: CoastalVoyage,
+    },
+    Unreachable {
+        entrance: Vec3,
+    },
+}
+
+impl CachedSettlementLandfall {
+    fn entrance(self) -> Vec3 {
+        match self {
+            Self::Reachable { entrance, .. } | Self::Unreachable { entrance } => entrance,
+        }
+    }
+
+    fn matches(self, entrance: Vec3) -> bool {
+        self.entrance().distance_squared(entrance) <= LANDFALL_ENTRANCE_EPSILON_SQ
+    }
+}
+
+#[derive(Debug)]
+struct PendingLandfallSearch {
+    settlement: Entity,
+    settlement_name: String,
+    entrance: Vec3,
+    decision_seed: u64,
+    candidates: Vec<CoastalVoyage>,
+    candidate_index: usize,
+    corridor: Option<IncrementalOverlandCorridorSearch>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PendingLandfallResult {
+    Pending,
+    Reachable(CoastalVoyage),
+    Unreachable,
+}
+
+impl PendingLandfallSearch {
+    fn new(
+        choice: &SettlementChoice,
+        decision_seed: u64,
+        coastal_approaches: &[CoastalVoyage],
+    ) -> Self {
+        let mut candidates = coastal_approaches.to_vec();
+        candidates.sort_by(|a, b| {
+            a.landing
+                .xz()
+                .distance_squared(choice.entrance.xz())
+                .total_cmp(&b.landing.xz().distance_squared(choice.entrance.xz()))
+        });
+        Self {
+            settlement: choice.entity,
+            settlement_name: choice.name.clone(),
+            entrance: choice.entrance,
+            decision_seed,
+            candidates,
+            candidate_index: 0,
+            corridor: None,
+        }
+    }
+
+    fn advance(&mut self, terrain: &WorldTerrain) -> PendingLandfallResult {
+        let Some(candidate) = self.candidates.get(self.candidate_index).copied() else {
+            return PendingLandfallResult::Unreachable;
+        };
+        let corridor = self.corridor.get_or_insert_with(|| {
+            IncrementalOverlandCorridorSearch::new(candidate.landing.xz(), self.entrance.xz())
+        });
+        match corridor.advance(terrain, LANDFALL_SEARCH_SLICE) {
+            IncrementalCorridorResult::Pending => PendingLandfallResult::Pending,
+            IncrementalCorridorResult::Reachable => PendingLandfallResult::Reachable(candidate),
+            IncrementalCorridorResult::Unreachable => {
+                self.candidate_index += 1;
+                self.corridor = None;
+                if self.candidate_index >= self.candidates.len() {
+                    PendingLandfallResult::Unreachable
+                } else {
+                    // Starting at most one new A* per fixed tick prevents a
+                    // run of immediately blocked candidates from bypassing
+                    // the caller's intended work budget.
+                    PendingLandfallResult::Pending
+                }
+            }
+        }
+    }
+}
 
 #[derive(Resource, Debug)]
 pub struct NaturalImmigrationDirector {
@@ -43,7 +142,8 @@ pub struct NaturalImmigrationDirector {
     world_npc_cap: usize,
     population_cap_announced: bool,
     coastal_approaches: Vec<CoastalVoyage>,
-    settlement_landfalls: bevy::platform::collections::HashMap<Entity, (Vec3, CoastalVoyage)>,
+    settlement_landfalls: bevy::platform::collections::HashMap<Entity, CachedSettlementLandfall>,
+    pending_landfall: Option<PendingLandfallSearch>,
 }
 
 impl Default for NaturalImmigrationDirector {
@@ -93,6 +193,7 @@ impl Default for NaturalImmigrationDirector {
             population_cap_announced: false,
             coastal_approaches: Vec::new(),
             settlement_landfalls: default(),
+            pending_landfall: None,
         }
     }
 }
@@ -226,23 +327,6 @@ fn seasonal_interval_multiplier(day: u32) -> f32 {
     }
 }
 
-fn choose_coast(
-    terrain: &WorldTerrain,
-    coastal_approaches: &[CoastalVoyage],
-    settlement_entrance: Vec3,
-) -> Option<CoastalVoyage> {
-    let mut ranked = coastal_approaches.to_vec();
-    ranked.sort_by(|a, b| {
-        a.landing
-            .xz()
-            .distance_squared(settlement_entrance.xz())
-            .total_cmp(&b.landing.xz().distance_squared(settlement_entrance.xz()))
-    });
-    ranked.into_iter().find(|approach| {
-        overland_trade_corridor_exists(terrain, approach.landing.xz(), settlement_entrance.xz())
-    })
-}
-
 fn absolute_world_seconds(clock: &WorldTime) -> f64 {
     f64::from(clock.day) * f64::from(clock.cycle_duration()) + f64::from(clock.seconds_in_cycle)
 }
@@ -266,7 +350,7 @@ pub fn plan_natural_immigration(
     mut director: ResMut<NaturalImmigrationDirector>,
     mut villager_seed: ResMut<crate::world::dev::VillagerSeed>,
 ) {
-    if !director.enabled || active.iter().count() >= MAX_ACTIVE_VOYAGES {
+    if !director.enabled {
         return;
     }
     let Some(clock) = clock.iter().next() else {
@@ -274,10 +358,77 @@ pub fn plan_natural_immigration(
     };
     let now = absolute_world_seconds(clock);
     let cycle = f64::from(clock.cycle_duration());
-    if director.next_arrival_world_seconds.is_none() {
-        if settlements.is_empty() {
-            return;
+
+    // A server may run for hours before anyone founds a Moot. Keep the
+    // director entirely dormant in that state and discard any obsolete due
+    // time so the first settlement receives the ordinary initial delay rather
+    // than a burst of accumulated arrivals.
+    if settlements.is_empty() {
+        director.next_arrival_world_seconds = None;
+        director.pending_landfall = None;
+        director.settlement_landfalls.clear();
+        return;
+    }
+    director
+        .settlement_landfalls
+        .retain(|entity, _| settlements.get(*entity).is_ok());
+
+    let mut resumed_decision_seed = None;
+    if let Some(mut pending) = director.pending_landfall.take() {
+        let pending_still_matches =
+            settlements
+                .get(pending.settlement)
+                .is_ok_and(|(_, _, position, rotation, _)| {
+                    let entrance = SettlementBuildingKind::Hall
+                        .entrance_position(position.0, rotation.map_or(0.0, |rotation| rotation.0));
+                    entrance.distance_squared(pending.entrance) <= LANDFALL_ENTRANCE_EPSILON_SQ
+                });
+        if pending_still_matches {
+            match pending.advance(&terrain) {
+                PendingLandfallResult::Pending => {
+                    director.pending_landfall = Some(pending);
+                    return;
+                }
+                PendingLandfallResult::Reachable(voyage) => {
+                    info!(
+                        "Natural immigration certified a landfall for '{}' after checking {} coastal approach(es)",
+                        pending.settlement_name,
+                        pending.candidate_index + 1
+                    );
+                    director.settlement_landfalls.insert(
+                        pending.settlement,
+                        CachedSettlementLandfall::Reachable {
+                            entrance: pending.entrance,
+                            voyage,
+                        },
+                    );
+                    resumed_decision_seed = Some(pending.decision_seed);
+                }
+                PendingLandfallResult::Unreachable => {
+                    warn!(
+                        "Natural immigration found no walkable coastal approach toward '{}'; caching the terrain failure",
+                        pending.settlement_name
+                    );
+                    director.settlement_landfalls.insert(
+                        pending.settlement,
+                        CachedSettlementLandfall::Unreachable {
+                            entrance: pending.entrance,
+                        },
+                    );
+                    director.next_arrival_world_seconds =
+                        Some(now + cycle * f64::from(RETRY_DELAY_DAYS));
+                    return;
+                }
+            }
+        } else {
+            director.settlement_landfalls.remove(&pending.settlement);
         }
+    }
+
+    if active.iter().count() >= MAX_ACTIVE_VOYAGES {
+        return;
+    }
+    if director.next_arrival_world_seconds.is_none() {
         director.next_arrival_world_seconds =
             Some(now + cycle * f64::from(FIRST_ARRIVAL_DELAY_DAYS));
         return;
@@ -314,8 +465,10 @@ pub fn plan_natural_immigration(
         director.population_cap_announced = false;
     }
 
-    director.sequence = director.sequence.wrapping_add(1);
-    let decision_seed = director.sequence ^ (u64::from(clock.day) << 32);
+    let decision_seed = resumed_decision_seed.unwrap_or_else(|| {
+        director.sequence = director.sequence.wrapping_add(1);
+        director.sequence ^ (u64::from(clock.day) << 32)
+    });
     if director.coastal_approaches.is_empty() {
         // Shore discovery scans the authored map edge. Cache that immutable
         // geography once so recurring arrivals never turn it into a periodic
@@ -334,10 +487,18 @@ pub fn plan_natural_immigration(
     };
     let choice = settlements
         .iter()
-        .map(|(entity, settlement, position, rotation, economy)| {
+        .filter_map(|(entity, settlement, position, rotation, economy)| {
             let entrance = SettlementBuildingKind::Hall
                 .entrance_position(position.0, rotation.map_or(0.0, |rotation| rotation.0));
-            SettlementChoice {
+            let cached = director
+                .settlement_landfalls
+                .get(&entity)
+                .copied()
+                .filter(|cached| cached.matches(entrance));
+            if matches!(cached, Some(CachedSettlementLandfall::Unreachable { .. })) {
+                return None;
+            }
+            Some(SettlementChoice {
                 entity,
                 name: settlement.name.clone(),
                 position: position.0,
@@ -350,7 +511,7 @@ pub fn plan_natural_immigration(
                     entry.landing,
                     position.0,
                 ),
-            }
+            })
         })
         .max_by(|a, b| a.score.total_cmp(&b.score));
     let Some(choice) = choice.filter(|choice| choice.score >= MIN_ATTRACTIVENESS) else {
@@ -360,21 +521,20 @@ pub fn plan_natural_immigration(
     let cached_landfall = director
         .settlement_landfalls
         .get(&choice.entity)
-        .filter(|(entrance, _)| entrance.distance_squared(choice.entrance) <= 0.01)
-        .map(|(_, voyage)| *voyage);
-    let voyage = cached_landfall
-        .or_else(|| choose_coast(&terrain, &director.coastal_approaches, choice.entrance));
-    let Some(voyage) = voyage else {
-        warn!(
-            "Natural immigrant could not find a walkable coastal approach toward '{}'",
-            choice.name
-        );
-        director.next_arrival_world_seconds = Some(now + cycle * f64::from(RETRY_DELAY_DAYS));
+        .copied()
+        .filter(|cached| cached.matches(choice.entrance))
+        .and_then(|cached| match cached {
+            CachedSettlementLandfall::Reachable { voyage, .. } => Some(voyage),
+            CachedSettlementLandfall::Unreachable { .. } => None,
+        });
+    let Some(voyage) = cached_landfall else {
+        director.pending_landfall = Some(PendingLandfallSearch::new(
+            &choice,
+            decision_seed,
+            &director.coastal_approaches,
+        ));
         return;
     };
-    director
-        .settlement_landfalls
-        .insert(choice.entity, (choice.entrance, voyage));
     let Some(route) = water_route(&terrain, entry.start.xz(), voyage.mooring) else {
         // Never fall back to an arbitrary entry beach: it may be a dry shelf
         // below a cliff or belong to a different landmass. Waiting for another
@@ -665,6 +825,236 @@ mod tests {
     }
 
     #[test]
+    fn server_without_a_settlement_accumulates_no_arrival_backlog() {
+        let mut app = App::new();
+        app.insert_resource(WorldTerrain::default())
+            .insert_resource(NaturalImmigrationDirector {
+                enabled: true,
+                interval_days: interval_days_for_rate(3.0),
+                next_arrival_world_seconds: Some(0.0),
+                sequence: 0,
+                world_npc_cap: DEFAULT_WORLD_NPC_CAP,
+                population_cap_announced: false,
+                coastal_approaches: Vec::new(),
+                settlement_landfalls: default(),
+                pending_landfall: None,
+            })
+            .insert_resource(crate::world::dev::VillagerSeed::default())
+            .add_systems(Update, plan_natural_immigration);
+        app.world_mut().spawn(WorldTime::new_default());
+
+        for _ in 0..10 {
+            app.update();
+        }
+        {
+            let director = app.world().resource::<NaturalImmigrationDirector>();
+            assert_eq!(director.sequence, 0);
+            assert!(director.next_arrival_world_seconds.is_none());
+            assert!(director.pending_landfall.is_none());
+        }
+
+        app.world_mut().spawn((
+            settlement("First Moot", 0),
+            PlayerPosition(Vec3::ZERO),
+            PlayerRotation(0.0),
+            SettlementEconomy::default(),
+        ));
+        app.update();
+
+        let director = app.world().resource::<NaturalImmigrationDirector>();
+        assert_eq!(director.sequence, 0);
+        assert!(director
+            .next_arrival_world_seconds
+            .is_some_and(|next| next > 0.0));
+        assert!(director.pending_landfall.is_none());
+    }
+
+    #[test]
+    fn failed_landfall_candidates_advance_one_per_slice_and_terminate() {
+        let terrain = WorldTerrain::default();
+        let choice = SettlementChoice {
+            entity: Entity::from_bits(91),
+            name: "Unreachable".to_string(),
+            position: Vec3::ZERO,
+            entrance: Vec3::ZERO,
+            score: 100.0,
+        };
+        let candidates = (0..32)
+            .map(|index| {
+                let outside = 100_000.0 + index as f32 * 10.0;
+                CoastalVoyage {
+                    start: Vec3::new(outside, 0.0, outside),
+                    yaw: 0.0,
+                    mooring: Vec2::new(outside, outside),
+                    landing: Vec3::new(outside, 0.0, outside),
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut pending = PendingLandfallSearch::new(&choice, 1, &candidates);
+
+        for expected_checked in 1..candidates.len() {
+            assert!(matches!(
+                pending.advance(&terrain),
+                PendingLandfallResult::Pending
+            ));
+            assert_eq!(pending.candidate_index, expected_checked);
+        }
+        assert!(matches!(
+            pending.advance(&terrain),
+            PendingLandfallResult::Unreachable
+        ));
+        assert_eq!(pending.candidate_index, candidates.len());
+    }
+
+    #[test]
+    fn cached_unreachable_moot_is_skipped_for_another_settlement() {
+        let terrain = WorldTerrain::default();
+        let approach = CoastalVoyage {
+            start: Vec3::new(-100.0, 0.0, -100.0),
+            yaw: 0.0,
+            mooring: Vec2::new(-90.0, -90.0),
+            landing: Vec3::new(-80.0, 0.0, -80.0),
+        };
+        let mut app = App::new();
+        app.insert_resource(terrain)
+            .insert_resource(NaturalImmigrationDirector {
+                enabled: true,
+                interval_days: interval_days_for_rate(3.0),
+                next_arrival_world_seconds: Some(0.0),
+                sequence: 0,
+                world_npc_cap: DEFAULT_WORLD_NPC_CAP,
+                population_cap_announced: false,
+                coastal_approaches: vec![approach],
+                settlement_landfalls: default(),
+                pending_landfall: None,
+            })
+            .insert_resource(crate::world::dev::VillagerSeed::default())
+            .add_systems(Update, plan_natural_immigration);
+        app.world_mut().spawn(WorldTime::new_default());
+        let blocked_position = Vec3::ZERO;
+        let blocked = app
+            .world_mut()
+            .spawn((
+                settlement("Blocked Moot", 0),
+                PlayerPosition(blocked_position),
+                PlayerRotation(0.0),
+                SettlementEconomy::default(),
+            ))
+            .id();
+        let alternative = app
+            .world_mut()
+            .spawn((
+                settlement("Alternative Moot", 0),
+                PlayerPosition(Vec3::new(300.0, 0.0, 300.0)),
+                PlayerRotation(0.0),
+                SettlementEconomy::default(),
+            ))
+            .id();
+        let blocked_entrance =
+            SettlementBuildingKind::Hall.entrance_position(blocked_position, 0.0);
+        app.world_mut()
+            .resource_mut::<NaturalImmigrationDirector>()
+            .settlement_landfalls
+            .insert(
+                blocked,
+                CachedSettlementLandfall::Unreachable {
+                    entrance: blocked_entrance,
+                },
+            );
+
+        app.update();
+
+        let director = app.world().resource::<NaturalImmigrationDirector>();
+        assert!(matches!(
+            director.settlement_landfalls.get(&blocked),
+            Some(CachedSettlementLandfall::Unreachable { .. })
+        ));
+        assert_eq!(
+            director
+                .pending_landfall
+                .as_ref()
+                .map(|pending| pending.settlement),
+            Some(alternative)
+        );
+    }
+
+    #[test]
+    fn all_candidate_failure_is_cached_across_later_arrival_attempts() {
+        let terrain = WorldTerrain::default();
+        let candidates = (0..24)
+            .map(|index| {
+                let outside = 100_000.0 + index as f32 * 10.0;
+                CoastalVoyage {
+                    start: Vec3::new(outside, 0.0, outside),
+                    yaw: 0.0,
+                    mooring: Vec2::new(outside, outside),
+                    landing: Vec3::new(outside, 0.0, outside),
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut app = App::new();
+        app.insert_resource(terrain)
+            .insert_resource(NaturalImmigrationDirector {
+                enabled: true,
+                interval_days: interval_days_for_rate(3.0),
+                next_arrival_world_seconds: Some(0.0),
+                sequence: 0,
+                world_npc_cap: DEFAULT_WORLD_NPC_CAP,
+                population_cap_announced: false,
+                coastal_approaches: candidates,
+                settlement_landfalls: default(),
+                pending_landfall: None,
+            })
+            .insert_resource(crate::world::dev::VillagerSeed::default())
+            .add_systems(Update, plan_natural_immigration);
+        let clock = app.world_mut().spawn(WorldTime::new_default()).id();
+        let position = Vec3::ZERO;
+        let settlement = app
+            .world_mut()
+            .spawn((
+                settlement("No Coast", 0),
+                PlayerPosition(position),
+                PlayerRotation(0.0),
+                SettlementEconomy::default(),
+            ))
+            .id();
+
+        for _ in 0..64 {
+            app.update();
+            let cached = app
+                .world()
+                .resource::<NaturalImmigrationDirector>()
+                .settlement_landfalls
+                .get(&settlement)
+                .copied();
+            if matches!(cached, Some(CachedSettlementLandfall::Unreachable { .. })) {
+                break;
+            }
+        }
+        {
+            let director = app.world().resource::<NaturalImmigrationDirector>();
+            assert!(matches!(
+                director.settlement_landfalls.get(&settlement),
+                Some(CachedSettlementLandfall::Unreachable { .. })
+            ));
+            assert!(director.pending_landfall.is_none());
+        }
+
+        app.world_mut()
+            .get_mut::<WorldTime>(clock)
+            .expect("test clock disappeared")
+            .day += 1;
+        app.update();
+
+        let director = app.world().resource::<NaturalImmigrationDirector>();
+        assert!(director.pending_landfall.is_none());
+        assert!(matches!(
+            director.settlement_landfalls.get(&settlement),
+            Some(CachedSettlementLandfall::Unreachable { .. })
+        ));
+    }
+
+    #[test]
     fn natural_immigration_stops_at_the_world_npc_cap() {
         let mut app = App::new();
         app.insert_resource(WorldTerrain::default())
@@ -677,6 +1067,7 @@ mod tests {
                 population_cap_announced: false,
                 coastal_approaches: Vec::new(),
                 settlement_landfalls: default(),
+                pending_landfall: None,
             })
             .insert_resource(crate::world::dev::VillagerSeed::default())
             .add_systems(Update, plan_natural_immigration);
@@ -797,6 +1188,7 @@ mod tests {
                 population_cap_announced: false,
                 coastal_approaches,
                 settlement_landfalls: default(),
+                pending_landfall: None,
             })
             .insert_resource(crate::world::dev::VillagerSeed::default())
             .init_resource::<SimulationDelta>()
@@ -818,7 +1210,23 @@ mod tests {
             ))
             .id();
 
-        app.update();
+        let mut arrival_created = false;
+        for _ in 0..2_000 {
+            app.update();
+            let count = app
+                .world_mut()
+                .query_filtered::<Entity, With<NpcArrivalBoat>>()
+                .iter(app.world())
+                .count();
+            if count == 1 {
+                arrival_created = true;
+                break;
+            }
+        }
+        assert!(
+            arrival_created,
+            "bounded landfall discovery never admitted the known-reachable arrival"
+        );
         app.world_mut()
             .resource_mut::<NaturalImmigrationDirector>()
             .enabled = false;

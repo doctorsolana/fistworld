@@ -172,7 +172,13 @@ fn configure_server_fixed_schedule(app: &mut App) {
     app.add_systems(
         FixedUpdate,
         (
-            telemetry::perf::handle_perf_tick_begin.before(world::time::handle_set_time_of_day),
+            telemetry::perf::handle_perf_tick_begin
+                .before(telemetry::perf::handle_perf_world_phase_begin),
+            telemetry::perf::handle_perf_world_phase_begin
+                .before(world::time::handle_set_time_of_day),
+            telemetry::perf::handle_perf_world_phase_end
+                .after(world::navgrid::sync_obstacle_grid)
+                .before(telemetry::perf::handle_perf_core_phase_begin),
             telemetry::perf::handle_perf_core_phase_begin
                 .after(world::navgrid::sync_obstacle_grid)
                 .before(world::village::schedule::VillageSimulationSet::Core),

@@ -115,6 +115,11 @@ fn build_live_map_image(
                             [0.78, 0.78, 0.80],
                             (above - 28.0) / 18.0,
                         ),
+                        // The climate tint below paints the actual snow and
+                        // sand; these bases keep the biome readable through it
+                        // (cold rocky ground, dune sand).
+                        WorldBiome::Snowlands => [0.55, 0.58, 0.60],
+                        WorldBiome::Desert => [0.74, 0.64, 0.44],
                         // Unreachable in practice — the branches above paint
                         // anything at or below the waterline before we get
                         // here. Spelled out anyway, and in sea colours, so that

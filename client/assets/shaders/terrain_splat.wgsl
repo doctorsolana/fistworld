@@ -126,10 +126,10 @@ fn climate_at(world_x: f32, world_z: f32, height: f32, params: vec4<f32>) -> vec
     let wobble = climate_lat_wobble(world_x, params.y);
     let north_lat = max(-world_z / half + wobble, 0.0);
     let south_lat = max(world_z / half + wobble, 0.0);
-    let alt_push = min(max(height, 0.0) * 0.004, 0.30);
+    let alt_push = min(max(height, 0.0) * 0.002, 0.30);
     let eff = north_lat + alt_push;
-    let snow = smoothstep(0.68, 0.78, eff);
-    let frost = smoothstep(0.58, 0.68, eff);
+    let snow = smoothstep(0.68, 0.84, eff);
+    let frost = smoothstep(0.54, 0.70, eff);
     let dry = smoothstep(0.35, 0.70, south_lat - alt_push) * (1.0 - frost);
     return vec3<f32>(snow, frost, dry);
 }
@@ -398,15 +398,26 @@ fn fragment(
                 smoothstep(waterline - 1.0, waterline + 0.3, pbr_input.world_position.y);
             let frost = climate.y * above_water;
             let snow = climate.x * above_water;
+            // TORN snowline: full cover in the core, wind-drift patches only
+            // across the transition band. The wide band un-torn reads as an
+            // airbrushed gradient; a hard per-bump threshold reads as leopard
+            // spots — ~34m fbm tears give one ragged, drifted edge instead.
+            let tear = cloud_fbm(pbr_input.world_position.xz * (1.0 / 34.0));
+            let snow_cover = smoothstep(0.30, 0.72, snow + (tear - 0.5) * 0.55);
             // Frost first: cold, pale, desaturated ground leading the snowline.
             let frost_tone = mix(albedo, vec3<f32>(0.62, 0.66, 0.70), 0.55);
-            albedo = mix(albedo, frost_tone, frost * (1.0 - snow));
+            albedo = mix(albedo, frost_tone, frost * (1.0 - snow_cover));
             // Snow: near-white with a cool shadow tint; steep faces shed it and
             // read as rock, which is what keeps polar cliffs legible.
             let world_normal_c = normalize(pbr_input.world_normal);
             let slope_c = 1.0 - clamp(world_normal_c.y, 0.0, 1.0);
             let snow_keep = 1.0 - smoothstep(0.35, 0.65, slope_c);
-            albedo = mix(albedo, vec3<f32>(0.87, 0.91, 0.97), snow * snow_keep);
+            let snow_final = snow_cover * snow_keep;
+            albedo = mix(albedo, vec3<f32>(0.87, 0.91, 0.97), snow_final);
+            // Snow grain sparkle: rare static bright grains, like the low-poly
+            // art itself (view-tracking glitter belongs to the water).
+            let grain = cloud_hash(floor(pbr_input.world_position.xz * 5.0));
+            albedo += vec3<f32>(0.20) * step(0.988, grain) * snow_final;
             // Desert south: sun-scorched savanna yellowing first, then the
             // deep south settles toward true sand (quadratic so the
             // transition belt stays grassy-gold, not instantly a dune sea).
@@ -414,6 +425,15 @@ fn fragment(
             let dry = climate.z * above_water;
             albedo = mix(albedo, albedo * vec3<f32>(1.14, 1.05, 0.72), dry);
             albedo = mix(albedo, vec3<f32>(0.82, 0.72, 0.50), dry * dry * 0.55);
+            // Dune faces, deep desert only: windward slopes catch the sun,
+            // slip faces hold shadow — the two-tone that makes a dune field
+            // read as dunes rather than as bumpy sand. The prevailing wind
+            // rides palette.climate.zw (zero on non-generated maps).
+            let dune_wind = palette.climate.zw;
+            let lee = smoothstep(-0.12, 0.12, world_normal_c.x * dune_wind.x + world_normal_c.z * dune_wind.y);
+            let dune_face = dry * dry * smoothstep(0.04, 0.14, slope_c);
+            let dune_tone = mix(vec3<f32>(1.08, 1.04, 0.95), vec3<f32>(0.80, 0.74, 0.68), lee);
+            albedo = mix(albedo, albedo * dune_tone, dune_face);
         }
 
         // --- Water interaction ---

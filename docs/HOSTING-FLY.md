@@ -45,7 +45,7 @@ the unrestricted local `FISTWORLD_DEV` flag. To grant yourself God Mode without
 granting every remote player, configure a hosted access key once:
 
 ```bash
-fly secrets set FISTWORLD_GOD_KEY="5555"
+fly secrets set FISTWORLD_GOD_KEY="<private-test-key>" --app fistforce
 ```
 
 In Play mode, press **J**, enter that key in the **Server Admin** prompt and press
@@ -54,6 +54,8 @@ disconnecting locks it again. The server accepts at most five failed attempts pe
 connection, and currently accepts four-character keys for the early playtest period.
 Raise that minimum before the hosted world gains durable state or untrusted testers.
 Do not put the key in `fly.toml` or commit it to the repository.
+The current test key and complete operator runbook belong only in the git-ignored
+local file `docs/FLY-PRIVATE.md`.
 
 After changing the dedicated IP, update `client/assets/servers.ron` so the **Fly.io**
 preset remains accurate.
