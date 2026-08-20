@@ -7,6 +7,7 @@
 //! turns clicks into spawn/move commands.
 
 pub mod control;
+pub mod footprints;
 
 use bevy::animation::{AnimatedBy, AnimationTargetId};
 use bevy::gltf::{Gltf, GltfMaterialName};
@@ -53,6 +54,14 @@ impl Plugin for HeroPlugin {
         app.init_resource::<PorterCartAssets>();
         app.init_resource::<ToolAssets>();
         app.init_resource::<control::WorldPlacementMode>();
+        app.init_resource::<footprints::FootprintPool>();
+        app.init_resource::<footprints::StrideTrackers>();
+        app.add_systems(Startup, footprints::setup_footprint_assets);
+        app.add_systems(
+            Update,
+            (footprints::stamp_footprints, footprints::fade_footprints)
+                .run_if(in_state(crate::states::GameState::Playing)),
+        );
         app.add_systems(
             Update,
             (

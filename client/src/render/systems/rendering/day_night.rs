@@ -23,6 +23,8 @@ pub fn update_day_night_cycle(
     settings: Res<GraphicsSettings>,
     map_blend: Res<MapViewBlend>,
     time: Res<Time>,
+    terrain: Option<Res<shared::terrain::WorldTerrain>>,
+    cameras: Query<&crate::camera_rts::CommanderCamera>,
     mut debug_timer: Local<f32>,
     mut last_fog_key: Local<Option<(f32, f32, f32, f32)>>,
 ) {
@@ -201,9 +203,37 @@ pub fn update_day_night_cycle(
     // wash; dial it out (alpha down, visibility up) exactly as the detail
     // chunks fade so the map stays legible.
     let map_clear = 1.0 - map_blend.0;
-    // Fog is a pure function of these four factors; skip the write (and its
+    // Zone ambience: the fog cools in the frozen north and warms with dust
+    // in the desert south, sampled at the camera focus via the same climate
+    // function everything else reads. QUANTIZED (1/32 steps) before joining
+    // the change-skip key, or panning the camera would defeat the plateau
+    // optimization below.
+    let camera_climate = terrain
+        .as_deref()
+        .zip(cameras.iter().next())
+        .and_then(|(terrain, camera)| {
+            let generated = terrain.generator.loaded_map().definition.generated.as_ref()?;
+            let focus = camera.focus;
+            let height = terrain.get_height(focus.x, focus.z);
+            Some(shared::worldgen::climate_at(
+                generated.seed,
+                focus.x,
+                focus.z,
+                height,
+                generated.half_extent,
+            ))
+        });
+    let quantize = |v: f32| (v * 32.0).round() / 32.0;
+    let zone_cold = quantize(camera_climate.as_ref().map_or(0.0, |c| c.frost));
+    let zone_dry = quantize(camera_climate.as_ref().map_or(0.0, |c| c.dry));
+    // Fog is a pure function of these factors; skip the write (and its
     // change-detection ripple) while they sit on their plateaus.
-    let fog_key = (day_factor, dust_factor, twilight_factor, map_clear);
+    let fog_key = (
+        day_factor,
+        dust_factor + zone_dry * 0.5 + zone_cold * 0.25,
+        twilight_factor,
+        map_clear,
+    );
     if *last_fog_key != Some(fog_key) {
         *last_fog_key = Some(fog_key);
 
@@ -223,6 +253,10 @@ pub fn update_day_night_cycle(
             Color::srgba(0.72, 0.67, 0.56, 0.20),
             Color::srgba(0.05, 0.08, 0.14, 0.26),
         );
+        // The desert breathes heat-dust; the Snowlands hang a cold pale haze.
+        let dust_factor = (dust_factor + zone_dry * 0.5).min(1.0);
+        let cold_fog_color = Color::srgba(0.66, 0.74, 0.84, 0.16);
+        let clear_fog_color = lerp_color(clear_fog_color, cold_fog_color, zone_cold * 0.8);
         let day_fog_color = lerp_color(clear_fog_color, dusty_fog_color, dust_factor);
         let mut fog_color = lerp_color(night_fog_color, day_fog_color, day_factor);
         fog_color.set_alpha(fog_color.alpha() * map_clear);

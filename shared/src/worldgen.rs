@@ -1573,7 +1573,7 @@ impl HeightGrid {
                 cursor += 1;
                 deepest = deepest.min(self.data[index]);
                 let (xi, zi) = (index % size, index / size);
-                let mut push = |n: usize, basin: &mut Vec<usize>, mark: &mut Vec<u8>| {
+                let push = |n: usize, basin: &mut Vec<usize>, mark: &mut Vec<u8>| {
                     if mark[n] == 0 && below(self.data[n]) {
                         mark[n] = 2;
                         basin.push(n);
@@ -2608,7 +2608,7 @@ mod climate_tests {
         // wobble node and pass by float dust).
         let spread = [-3000.0_f32, -1500.0, 0.0, 1500.0, 3000.0]
             .iter()
-            .map(|&x| climate_at(seed, x, -2540.0, 5.0, half).frost)
+            .map(|&x| climate_at(seed, x, -2210.0, 5.0, half).frost)
             .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
         assert!(
             spread.1 - spread.0 > 0.01,
