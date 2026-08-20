@@ -112,10 +112,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         + 0.022 * sin(in.world_position.x * 0.0127 + wind_extra.w * 2.7);
     let north_lat = max(-in.world_position.z / half + wobble, 0.0);
     let south_lat = max(in.world_position.z / half + wobble, 0.0);
-    let alt_push = min(max(in.world_position.y, 0.0) * 0.004, 0.30);
+    let alt_push = min(max(in.world_position.y, 0.0) * 0.002, 0.30);
     let eff = north_lat + alt_push;
-    let snow = smoothstep(0.68, 0.78, eff);
-    let frost = smoothstep(0.58, 0.68, eff);
+    let snow = smoothstep(0.68, 0.84, eff);
+    let frost = smoothstep(0.54, 0.70, eff);
     let dry = smoothstep(0.35, 0.70, south_lat - alt_push) * (1.0 - frost);
     var rgb = pbr_input.material.base_color.rgb;
     let frost_tone = mix(rgb, vec3<f32>(0.72, 0.76, 0.82), 0.45);

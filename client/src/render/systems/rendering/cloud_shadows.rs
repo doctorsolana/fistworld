@@ -158,7 +158,20 @@ pub fn sync_cloud_shadow_params(
                 .map(|g| shared::worldgen::climate_phase(g.seed))
         })
         .unwrap_or(0.0);
-    let climate = Vec4::new(half_extent, climate_phase, 0.0, 0.0);
+    // zw: the seed's prevailing dune wind, for windward/lee dune shading.
+    let dune_dir = terrain
+        .as_ref()
+        .and_then(|terrain| {
+            terrain
+                .generator
+                .loaded_map()
+                .definition
+                .generated
+                .as_ref()
+                .map(|g| shared::worldgen::dune_direction(g.seed))
+        })
+        .unwrap_or(Vec2::ZERO);
+    let climate = Vec4::new(half_extent, climate_phase, dune_dir.x, dune_dir.y);
     // THE storm system: center anchored at this write (shaders extrapolate it
     // with the cloud drift), strength zeroed with clouds disabled so both the
     // rain darkening AND its per-fragment fbm cost vanish with the sky

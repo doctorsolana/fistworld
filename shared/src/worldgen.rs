@@ -462,6 +462,15 @@ pub const CLIMATE_DESERT_LAT: f32 = 0.35;
 /// Width of the desert blend band in southern-latitude units.
 pub const CLIMATE_DESERT_BAND: f32 = 0.35;
 
+/// Prevailing dune wind for a seed: dune crests run perpendicular to this.
+/// Public so the terrain shader's windward/lee dune shading (via a uniform)
+/// agrees with the heightfield's ridges.
+pub fn dune_direction(seed: u64) -> Vec2 {
+    let bits = splitmix64(seed ^ 0xD00E);
+    let angle = ((bits >> 32) as f32 / u32::MAX as f32) * std::f32::consts::TAU;
+    Vec2::new(angle.cos(), angle.sin())
+}
+
 /// Seed-derived phase for the snowline wobble (mirrored to shaders).
 pub fn climate_phase(seed: u64) -> f32 {
     let mut state = seed ^ 0xC11A_7E00;
@@ -956,11 +965,7 @@ impl HeightField {
             lakes: Vec::new(),
             dune_warp: fbm(s(11), 2, 1.0 / 420.0),
             dune_env: fbm(s(12), 2, 1.0 / 760.0),
-            dune_dir: {
-                let bits = splitmix64(seed ^ 0xD00E);
-                let angle = ((bits >> 32) as f32 / u32::MAX as f32) * std::f32::consts::TAU;
-                Vec2::new(angle.cos(), angle.sin())
-            },
+            dune_dir: dune_direction(seed),
             climate_phase: climate_phase(seed),
         };
 
@@ -1490,8 +1495,120 @@ impl HeightGrid {
         // original bed. That produces dry estuary stretches and isolated
         // puddles. The river must be the final terrain operation.
         grid.apply_beach_shelf(field);
+        grid.drain_shallow_puddles();
         grid.carve_rivers(field);
         grid
+    }
+
+    /// Raise shallow inland depressions above the waterline.
+    ///
+    /// The coastal lift parks kilometre-wide flats at 1-3m of elevation, and
+    /// the base noise dips parts of them just below sea level — far inland.
+    /// Each dip fills with ocean-plane water and the low plains read as
+    /// puddle soup (invisible under temperate grass, glaring on bare polar
+    /// snow and desert sand). Flood-fill from the map border marks the real
+    /// ocean; any below-sea region NOT connected to it is a basin. SHALLOW
+    /// basins (< 1.2m at their deepest) are lifted just above the waterline
+    /// with their internal relief preserved; deep basins are intentional
+    /// lakes and keep their water. Runs after the beach shelf (so ocean
+    /// connectivity is judged on the final coast) and before the rivers,
+    /// which stay the last terrain operation and may still carve through.
+    fn drain_shallow_puddles(&mut self) {
+        const PUDDLE_MAX_DEPTH: f32 = 1.2;
+        const DRAINED_FLOOR: f32 = 0.25;
+        let size = self.size;
+        let below = |h: f32| h < SEA_LEVEL;
+
+        // 0 = unvisited, 1 = ocean-connected, 2 = inland basin.
+        let mut mark = vec![0u8; size * size];
+        let mut queue: Vec<usize> = Vec::new();
+        for i in 0..size {
+            for &index in &[
+                i,                       // top row
+                (size - 1) * size + i,   // bottom row
+                i * size,                // left column
+                i * size + (size - 1),   // right column
+            ] {
+                if below(self.data[index]) && mark[index] == 0 {
+                    mark[index] = 1;
+                    queue.push(index);
+                }
+            }
+        }
+        while let Some(index) = queue.pop() {
+            let (xi, zi) = (index % size, index / size);
+            let mut push = |n: usize| {
+                if mark[n] == 0 && below(self.data[n]) {
+                    mark[n] = 1;
+                    queue.push(n);
+                }
+            };
+            if xi > 0 {
+                push(index - 1);
+            }
+            if xi + 1 < size {
+                push(index + 1);
+            }
+            if zi > 0 {
+                push(index - size);
+            }
+            if zi + 1 < size {
+                push(index + size);
+            }
+        }
+
+        // Collect each unconnected basin and lift the shallow ones.
+        let mut basin: Vec<usize> = Vec::new();
+        for start in 0..size * size {
+            if mark[start] != 0 || !below(self.data[start]) {
+                continue;
+            }
+            basin.clear();
+            basin.push(start);
+            mark[start] = 2;
+            let mut cursor = 0;
+            let mut deepest = self.data[start];
+            while cursor < basin.len() {
+                let index = basin[cursor];
+                cursor += 1;
+                deepest = deepest.min(self.data[index]);
+                let (xi, zi) = (index % size, index / size);
+                let mut push = |n: usize, basin: &mut Vec<usize>, mark: &mut Vec<u8>| {
+                    if mark[n] == 0 && below(self.data[n]) {
+                        mark[n] = 2;
+                        basin.push(n);
+                    }
+                };
+                if xi > 0 {
+                    push(index - 1, &mut basin, &mut mark);
+                }
+                if xi + 1 < size {
+                    push(index + 1, &mut basin, &mut mark);
+                }
+                if zi > 0 {
+                    push(index - size, &mut basin, &mut mark);
+                }
+                if zi + 1 < size {
+                    push(index + size, &mut basin, &mut mark);
+                }
+            }
+            if deepest < SEA_LEVEL - PUDDLE_MAX_DEPTH {
+                continue; // a real lake basin: deep water is deliberate
+            }
+            // Lift the basin floor just above the waterline, keeping its
+            // internal relief so the drained ground stays gently dished
+            // rather than laser-flat.
+            let lift = (SEA_LEVEL + DRAINED_FLOOR) - deepest;
+            for &index in &basin {
+                self.data[index] += lift * {
+                    // Feather: cells already near the rim move less than the
+                    // deepest cell, blending into the surrounding plain.
+                    let depth = (SEA_LEVEL - self.data[index]).max(0.0);
+                    let full = (SEA_LEVEL - deepest).max(1.0e-3);
+                    0.35 + 0.65 * (depth / full)
+                };
+            }
+        }
     }
 
     /// Stamp each river's descending bed into the grid.
@@ -2497,5 +2614,41 @@ mod climate_tests {
             spread.1 - spread.0 > 0.01,
             "frost line should wobble: {spread:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod puddle_probe {
+    use super::*;
+
+    #[test]
+    #[ignore = "diagnostic"]
+    fn probe_drained_heights() {
+        let grid = GeneratedWorld {
+            style: WorldStyle::Showcase,
+            seed: 91,
+            generator_version: WORLDGEN_VERSION,
+            half_extent: 4096.0,
+            scatter_vegetation: true,
+        }
+        .build_grid();
+        let mut nan = 0usize;
+        let mut min = f32::MAX;
+        let mut max = f32::MIN;
+        for zi in 0..grid.size {
+            for xi in 0..grid.size {
+                let h = grid.data[zi * grid.size + xi];
+                if !h.is_finite() {
+                    nan += 1;
+                } else {
+                    min = min.min(h);
+                    max = max.max(h);
+                }
+            }
+        }
+        println!("nan={nan} min={min} max={max}");
+        for (x, z) in [(-500.0f32, -3100.0f32), (-1200.0, 2700.0), (-210.0, -170.0)] {
+            println!("h({x},{z}) = {}", grid.height(x, z));
+        }
     }
 }

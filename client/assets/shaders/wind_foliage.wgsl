@@ -199,17 +199,25 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // Signed hemispheres: north (-z) freezes, south (+z) scorches.
     let north_lat = max(-in.world_position.z / half + wobble, 0.0);
     let south_lat = max(in.world_position.z / half + wobble, 0.0);
-    let alt_push = min(max(in.world_position.y, 0.0) * 0.004, 0.30);
+    let alt_push = min(max(in.world_position.y, 0.0) * 0.002, 0.30);
     let eff = north_lat + alt_push;
-    let snow = smoothstep(0.68, 0.78, eff);
-    let frost = smoothstep(0.58, 0.68, eff);
+    let snow = smoothstep(0.68, 0.84, eff);
+    let frost = smoothstep(0.54, 0.70, eff);
     let dry = smoothstep(0.35, 0.70, south_lat - alt_push) * (1.0 - frost);
-    // Frost silvers the foliage; full snow dusts it toward white but keeps
-    // enough of the base hue that species stay distinguishable.
+    // Frost silvers the foliage; snow ACCUMULATES: up-facing canopy faces
+    // whiten hard (a cap of snow sitting on the crown), undersides keep
+    // their dark needles — that split, not a uniform whitewash, is what
+    // makes a tree read as "a tree with snow on it".
     var rgb = pbr_input.material.base_color.rgb;
     let frost_tone = mix(rgb, vec3<f32>(0.72, 0.76, 0.82), 0.45);
     rgb = mix(rgb, frost_tone, frost * 0.7);
-    rgb = mix(rgb, vec3<f32>(0.86, 0.90, 0.96), snow * 0.55);
+    // No normalize here: a degenerate normal would go NaN, and TAA spreads a
+    // single NaN fragment across the whole accumulation history (black
+    // screen). The unnormalized y is close enough for a cap mask.
+    let up = clamp(pbr_input.world_normal.y, 0.0, 1.0);
+    let cap = smoothstep(0.25, 0.75, up);
+    rgb = mix(rgb, vec3<f32>(0.90, 0.93, 0.97), snow * cap * 0.85);
+    rgb = mix(rgb, frost_tone, snow * (1.0 - cap) * 0.35);
     // Desert scorch: canopies dry toward olive-khaki scrub in the south.
     rgb = mix(rgb, vec3<f32>(0.60, 0.55, 0.32), dry * 0.55);
     pbr_input.material.base_color = vec4<f32>(rgb, pbr_input.material.base_color.a);

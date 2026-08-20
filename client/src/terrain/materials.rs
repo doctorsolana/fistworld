@@ -40,6 +40,15 @@ pub struct FarTerrainExtension {
 }
 
 impl MaterialExtension for FarTerrainExtension {
+    // The far mesh underlays the detail terrain by only 5cm. With TAA's
+    // jittered depth prepass, that near-tie flipped the depth winner
+    // per-pixel in world-anchored patches and the far mesh's coarse baked
+    // colors (pale snow/coast tints) bled through the detail ground. Kept
+    // out of the prepass, the detail terrain's prepass depth always wins.
+    fn enable_prepass() -> bool {
+        false
+    }
+
     fn vertex_shader() -> ShaderRef {
         "shaders/far_terrain.wgsl".into()
     }

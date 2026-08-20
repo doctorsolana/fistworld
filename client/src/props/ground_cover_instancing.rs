@@ -57,6 +57,7 @@ pub struct InstancedGrassExtension {
 }
 
 impl MaterialExtension for InstancedGrassExtension {
+
     fn vertex_shader() -> ShaderRef {
         "shaders/instanced_grass.wgsl".into()
     }

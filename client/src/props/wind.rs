@@ -23,6 +23,14 @@ pub struct WindExtension {
 }
 
 impl MaterialExtension for WindExtension {
+    // The vertex shader sways the canopy, and the default prepass renders it
+    // UNSWAYED: with TAA's depth prepass active, the mismatched depths
+    // discarded fragments in wind-sized patches. Skipping the prepass costs
+    // only slight TAA ghosting on swaying leaves.
+    fn enable_prepass() -> bool {
+        false
+    }
+
     fn vertex_shader() -> ShaderRef {
         "shaders/wind_foliage.wgsl".into()
     }
