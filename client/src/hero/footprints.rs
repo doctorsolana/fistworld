@@ -81,30 +81,41 @@ pub fn setup_footprint_assets(
 ) {
     // Rounded oval print. The mesh is authored in XY; stamps rotate it flat.
     let mesh = meshes.add(Ellipse::new(FOOT_OFFSET, 0.17));
-    let mut stage_material = |base: Color, alpha: f32| {
-        let mut color = base.to_srgba();
-        color.alpha = alpha;
+    // A print is a DEPRESSION: it darkens and cools the lit ground beneath
+    // it (trampled snow holds shadow — the same verdict every snow-trail
+    // reference lands on: darken the albedo, never brighten). Multiply
+    // blending inherits the scene lighting for free, so prints dim with the
+    // ground at night instead of glowing like unlit paint.
+    let mut stage_material = |multiplier: Color| {
         materials.add(StandardMaterial {
-            base_color: Color::Srgba(color),
-            // Same contract as the selection ring: constant read at any hour,
-            // and fog_enabled false is MANDATORY or prints desaturate toward
-            // sky blue at exactly the zooms where they should read.
+            base_color: multiplier,
             unlit: true,
+            // fog off, same contract as the selection ring: the multiplier
+            // must not desaturate toward sky blue at distance.
             fog_enabled: false,
-            alpha_mode: AlphaMode::Blend,
+            alpha_mode: AlphaMode::Multiply,
             double_sided: true,
             cull_mode: None,
             depth_bias: 4.0,
             ..default()
         })
     };
-    // Alpha holds strong for most of the life, then eases out — a linear
+    // The fade eases the multiplier back to identity (white = no effect).
+    // Strength holds for most of the life, then releases — a linear
     // fade-from-birth reads as ghosting (footprints research verdict).
-    const ALPHAS: [f32; STAGES] = [0.34, 0.32, 0.30, 0.24, 0.14, 0.06];
-    let snow_tone = Color::srgb(0.52, 0.58, 0.72);
-    let sand_tone = Color::srgb(0.48, 0.38, 0.24);
-    let snow = std::array::from_fn(|i| stage_material(snow_tone, ALPHAS[i]));
-    let sand = std::array::from_fn(|i| stage_material(sand_tone, ALPHAS[i]));
+    const FADE: [f32; STAGES] = [0.0, 0.08, 0.18, 0.38, 0.65, 0.88];
+    let lerp_white = |base: Srgba, t: f32| {
+        Color::srgb(
+            base.red + (1.0 - base.red) * t,
+            base.green + (1.0 - base.green) * t,
+            base.blue + (1.0 - base.blue) * t,
+        )
+    };
+    // Snow depressions read cool blue-grey; sand depressions warm brown.
+    let snow_tone = Srgba::new(0.68, 0.74, 0.90, 1.0);
+    let sand_tone = Srgba::new(0.70, 0.60, 0.48, 1.0);
+    let snow = std::array::from_fn(|i| stage_material(lerp_white(snow_tone, FADE[i])));
+    let sand = std::array::from_fn(|i| stage_material(lerp_white(sand_tone, FADE[i])));
     commands.insert_resource(FootprintAssets { mesh, snow, sand });
 }
 
