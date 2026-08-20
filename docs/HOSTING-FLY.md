@@ -6,9 +6,9 @@ it is not an HTTP service.
 
 ## Cost and lifecycle
 
-- One `shared-cpu-1x` Machine with 512 MB RAM. The ordinary local server currently
-  sits around 115 MB RSS; 256 MB leaves too little room for stress tests, while 512 MB
-  remains inexpensive and gives the simulation useful headroom.
+- One `performance-1x` Machine with one dedicated performance vCPU and 2 GB RAM.
+  This is the current playtest tier; it avoids the long shared-CPU scheduling stalls
+  that made route searches and simulation ticks visibly hitch under village load.
 - One dedicated IPv4 address. Fly requires a dedicated IPv4 address for public UDP
   and bills it separately.
 - No volume. The world and player identities live for exactly one server process;
@@ -67,6 +67,8 @@ fly status
 fly logs
 fly machine list
 fly machine restart <machine-id>  # intentionally resets the current world
+fly machine stop <machine-id>     # pause compute billing; also loses the live world
+fly machine start <machine-id>    # start a new world on the same Machine and IP
 fly deploy                        # also starts a fresh world today
 ```
 
