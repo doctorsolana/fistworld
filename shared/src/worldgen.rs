@@ -445,7 +445,7 @@ pub fn rand01(state: &mut u64) -> f32 {
 
 /// Northern latitude (0 = map middle, 1 = north edge) where the snow band
 /// begins at sea level.
-pub const CLIMATE_SNOW_LAT: f32 = 0.68;
+pub const CLIMATE_SNOW_LAT: f32 = 0.60;
 /// Width of the snow blend band in latitude units. Wide on purpose: with the
 /// old 0.10 band, ordinary 2-5m terrain undulations (via the altitude term)
 /// flipped whole patches across the snowline and the transition shattered

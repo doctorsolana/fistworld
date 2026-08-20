@@ -128,8 +128,8 @@ fn climate_at(world_x: f32, world_z: f32, height: f32, params: vec4<f32>) -> vec
     let south_lat = max(world_z / half + wobble, 0.0);
     let alt_push = min(max(height, 0.0) * 0.002, 0.30);
     let eff = north_lat + alt_push;
-    let snow = smoothstep(0.68, 0.84, eff);
-    let frost = smoothstep(0.54, 0.70, eff);
+    let snow = smoothstep(0.60, 0.76, eff);
+    let frost = smoothstep(0.46, 0.62, eff);
     let dry = smoothstep(0.35, 0.70, south_lat - alt_push) * (1.0 - frost);
     return vec3<f32>(snow, frost, dry);
 }
