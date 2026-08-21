@@ -121,6 +121,7 @@ pub(super) fn close_on_escape_or_backdrop(
     history: Option<Res<crate::ui::history::HistoryPanelTarget>>,
     business: Option<Res<crate::ui::business_management::BusinessManagementTarget>>,
     founding: Option<Res<crate::ui::company_founding::FoundingPageOpen>>,
+    market: Option<Res<crate::ui::market::MarketPageTarget>>,
     mut open: ResMut<EncyclopediaOpen>,
 ) {
     let clicked = guard.0 && mouse.just_pressed(MouseButton::Left);
@@ -133,7 +134,8 @@ pub(super) fn close_on_escape_or_backdrop(
     // encyclopedia closes on it. The X always closes everything.
     let page_open = history.is_some_and(|history| history.0.is_some())
         || business.is_some_and(|business| business.0.is_some())
-        || founding.is_some_and(|founding| founding.0);
+        || founding.is_some_and(|founding| founding.0)
+        || market.is_some_and(|market| market.0.is_some());
     if (keyboard.just_pressed(KeyCode::Escape) && !page_open) || clicked_out || clicked_close {
         open.0 = false;
     }

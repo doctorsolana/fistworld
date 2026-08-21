@@ -127,10 +127,14 @@ pub fn sync_character_objectives(
             CharacterNavigationStatus::Stationary
         };
 
-        if current_objective.copied() != Some(objective)
-            || current_navigation.copied() != Some(navigation)
-        {
-            commands.entity(entity).insert((objective, navigation));
+        // Insert each component on its own: a tuple insert marks BOTH
+        // Changed, so a navigation flip used to re-replicate an unchanged
+        // objective (and vice versa) for every walker.
+        if current_objective.copied() != Some(objective) {
+            commands.entity(entity).insert(objective);
+        }
+        if current_navigation.copied() != Some(navigation) {
+            commands.entity(entity).insert(navigation);
         }
     }
 }

@@ -48,6 +48,34 @@ only what is relevant to it (see §3). This is what the surviving lightyear plum
 already does, so no rewrite is needed — but it means **the server is the bottleneck to
 design around**, not client frame time.
 
+### Never dirty a replicated component you did not change
+
+Replication sends on Bevy's **change flag**, not on a value difference: lightyear (via
+bevy_replicon) re-serialises any component whose change tick moved, even when the new value is
+byte-identical. On the 1,000-villager stress world this was the entire bandwidth problem — the
+server pushed 417 KiB/s to one client while only ~100 villagers were actually walking. Three
+ways a no-op write sneaks in, all measured and all fixed:
+
+1. **Unconditional assignment.** `*activity = Idle` in a state machine that re-asserts its state
+   every tick. Use `activity.set_if_neq(Idle)`; for a plain `&mut T` helper argument, guard with
+   `if *t != v { *t = v }`.
+2. **`Option<Mut<T>>::as_deref_mut()`.** `Mut::deref_mut` calls `set_changed()` *before* your
+   guard decides not to write, so probing an optional component dirties it every tick. Use
+   `as_mut()`, read through `Deref` (`**m`), and deref-mut only on the write path.
+3. **Tuple inserts.** `insert((objective, navigation))` behind an OR-ed guard re-sends whichever
+   member did not change. Insert each component under its own comparison.
+
+Together these took the same world from 417 KiB/s to 233 KiB/s (-44%) with no simulation or
+presentation change. Verify with `CITYSIM_NET_DEBUG=1`, which logs `Server net debug: … KiB/s …
+villager changed/tick pos= rot= motion= …` every 2 s: **changed/tick for a component should track
+the number of entities for which it genuinely changed** — if `motion` exceeds `pos`, or climbs
+while the walker count is flat, something is dirtying it for standing entities. Because the lab
+world grows as it runs, compare two builds at matched `pos=` bands rather than by wall clock.
+
+A change-flag fix compiles identically whether or not it works, so pin each one with a test that
+counts `Changed<T>` inside an `App` and confirm it fails on the unfixed code (see
+`a_villager_waiting_for_a_route_never_dirties_its_replicated_motion` in `server/src/player/hero.rs`).
+
 ## 2. Two-tier simulation — the load-bearing decision
 
 You cannot simulate ten thousand individual soldiers across a realm, and nothing at this

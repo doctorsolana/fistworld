@@ -8,8 +8,8 @@
 use bevy::prelude::*;
 
 use super::*;
-use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
-use crate::ui::modal::{spawn_modal, ModalLayout};
+use crate::ui::foundation::{UiButtonLabel, UiButtonVariant, button_chrome};
+use crate::ui::modal::{ModalLayout, spawn_modal};
 use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE, RADIUS};
 
 const PANEL_SIZE: Vec2 = Vec2::new(1240.0, 820.0);
@@ -31,8 +31,9 @@ pub(super) fn spawn_encyclopedia(
     }
     // Capture runs photograph the world, not the UI — except when a capture
     // explicitly opens this window to verify it.
-    let capture_opts_in =
-        std::env::var("FISTFORCE_CAPTURE_ENCYCLOPEDIA").is_ok_and(|value| !value.trim().is_empty());
+    let capture_opts_in = std::env::var("FISTFORCE_CAPTURE_ENCYCLOPEDIA")
+        .is_ok_and(|value| !value.trim().is_empty())
+        || std::env::var("FISTFORCE_CAPTURE_TRADE").is_ok_and(|value| value == "1");
     if capture.is_some() && !capture_opts_in {
         return;
     }
@@ -532,6 +533,32 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                     ))
                                     .with_child((
                                         Text::new("BUSINESS HISTORY"),
+                                        UiButtonLabel,
+                                        TextFont {
+                                            font_size: FontSize::Px(12.0),
+                                            ..default()
+                                        },
+                                        TextColor(INK),
+                                        Pickable::IGNORE,
+                                    ));
+                                actions
+                                    .spawn((
+                                        crate::ui::market::PlaceMarketAction,
+                                        Button,
+                                        Node {
+                                            display: Display::None,
+                                            width: Val::Px(116.0),
+                                            height: Val::Px(30.0),
+                                            justify_content: JustifyContent::Center,
+                                            align_items: AlignItems::Center,
+                                            border: UiRect::all(Val::Px(1.0)),
+                                            border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                                            ..default()
+                                        },
+                                        button_chrome(UiButtonVariant::Primary),
+                                    ))
+                                    .with_child((
+                                        Text::new("MARKET"),
                                         UiButtonLabel,
                                         TextFont {
                                             font_size: FontSize::Px(12.0),

@@ -2,52 +2,42 @@
 //!
 //! A map click answers only the immediate questions: what is this, is it
 //! occupied/working, and what is in its store? EXPAND opens the durable record
-//! in the encyclopedia. Halls (and future market buildings carrying
-//! [`MootMarket`]) additionally expose a dedicated, read-only trade board.
+//! in the encyclopedia. Halls (and market buildings carrying [`MootMarket`])
+//! additionally route to the settlement's Market encyclopedia page.
 
 use bevy::ecs::system::SystemParam;
 use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
-use bevy::ui::{FocusPolicy, InteractionDisabled};
-use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
+use bevy::ui::FocusPolicy;
 
 use shared::components::{
     BuildingId, BuildingOf, CivicHallLevel, CivicHallUpgradeWorksite, CivicTradeContract,
     CompanyId, CompanyLeadership, ConstructionSite, Household, MootAdministration, OperatedBy,
-    OwnedBy, PersonId, PlayerPosition, PlayerRotation, Settlement, SettlementBuilding,
-    SettlementBuildingKind, SettlementDevelopment, SettlementId, SettlementOpportunityBoard,
-    SettlementPolicies, TradeContractId,
+    OwnedBy, PersonId, PlayerPosition, Settlement, SettlementBuilding, SettlementBuildingKind,
+    SettlementDevelopment, SettlementId, SettlementOpportunityBoard, SettlementPolicies,
+    TradeContractId,
 };
 use shared::economy::{
-    format_money, BusinessAccount, BusinessCondition, BusinessForSale,
-    BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy,
-    BusinessStaffingPolicy, BusinessWagePolicy, CompanyAccount, Good, GoodsInventory, MootMarket,
-    SettlementEconomy, Wallet,
+    BusinessAccount, BusinessCondition, BusinessForSale, BusinessManagementPolicy,
+    BusinessProcurementPolicy, BusinessSalePolicy, BusinessStaffingPolicy, BusinessWagePolicy,
+    CompanyAccount, Good, GoodsInventory, MootMarket, SettlementEconomy, format_money,
 };
-use shared::protocol::{HeroMarketAction, HeroMarketOrder, HeroMarketResult, ReliableChannel};
 
 use crate::selection::Selection;
 use crate::states::GameState;
 use crate::ui::foundation::{
-    button_chrome, layer, retained_scroll, subtree_is_interacting, UiButtonLabel, UiButtonVariant,
-    UiRefreshStamp,
+    UiButtonLabel, UiButtonVariant, button_chrome, layer, subtree_is_interacting,
 };
+#[cfg(test)]
 use crate::ui::good_icon_path;
-use crate::ui::modal::{
-    handle_backdrop_pressed, spawn_modal, update_modal_click_guard, ModalLayout,
-};
 use crate::ui::styles::{
-    plate_shadow, INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE,
-    PLATE_RULE_SOFT, RADIUS,
+    INK, INK_MUTED, LIMEWASH, LIMEWASH_WELL, PLATE_RULE, PLATE_RULE_SOFT, RADIUS, plate_shadow,
 };
 
 pub struct SettlementPanelPlugin;
 
 impl Plugin for SettlementPanelPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TradePanelTarget>();
-        app.init_resource::<TradeClickGuard>();
-        app.init_resource::<TradeFeedback>();
         app.add_systems(OnEnter(GameState::Playing), spawn_compact_panel);
         app.add_systems(OnExit(GameState::Playing), despawn_all);
         app.add_systems(
@@ -57,19 +47,9 @@ impl Plugin for SettlementPanelPlugin {
                     sync_compact_panel,
                     handle_compact_actions,
                     handle_manage_action,
-                    open_nearby_market_on_interact,
-                    ensure_trade_panel,
-                    handle_market_trade_buttons,
                 )
                     .chain(),
-                (
-                    receive_market_trade_results,
-                    sync_trade_feedback,
-                    update_trade_guard,
-                    handle_trade_close,
-                    sync_permit_tray_input_state,
-                )
-                    .chain(),
+                (sync_permit_tray_input_state,).chain(),
             )
                 .chain()
                 .run_if(in_state(GameState::Playing)),
@@ -557,8 +537,16 @@ fn sync_compact_panel(
         .map(|(id, _, account)| (*id, *account))
         .collect();
     let model = selected.and_then(|entity| {
-        if let Ok((_, settlement, hall_level, economy, _administration, development, _policy, opportunities)) =
-            settlements.get(entity)
+        if let Ok((
+            _,
+            settlement,
+            hall_level,
+            economy,
+            _administration,
+            development,
+            _policy,
+            opportunities,
+        )) = settlements.get(entity)
         {
             let inventory = inventories.get(entity).ok();
             let settlement_id = settlement_ids.get(entity).ok().map(|(_, id)| *id);
@@ -619,7 +607,10 @@ fn sync_compact_panel(
             ];
             let mut rows = vec![
                 ("COMMON STORE".to_string(), inventory_summary(inventory)),
-                ("PERMIT MARKET".to_string(), opportunity_summary(opportunities)),
+                (
+                    "PERMIT MARKET".to_string(),
+                    opportunity_summary(opportunities),
+                ),
                 (
                     "TO ADVANCE".to_string(),
                     progression_summary(settlement, development),
@@ -812,13 +803,17 @@ fn sync_compact_panel(
                     format!(
                         "{} / {}",
                         policy.strategy.label(),
-                        if policy.autopilot { "autopilot" } else { "manual" }
+                        if policy.autopilot {
+                            "autopilot"
+                        } else {
+                            "manual"
+                        }
                     ),
                 ));
             }
-            if let Some(account) = account.filter(|account| {
-                account.wage_arrears > 0 || account.tax_arrears > 0
-            }) {
+            if let Some(account) =
+                account.filter(|account| account.wage_arrears > 0 || account.tax_arrears > 0)
+            {
                 rows.push((
                     "DEBT".to_string(),
                     format!(
@@ -889,7 +884,10 @@ fn sync_compact_panel(
                     }
                     .to_string(),
                 ),
-                (good.label().to_uppercase(), format!("{delivered} / {required}")),
+                (
+                    good.label().to_uppercase(),
+                    format!("{delivered} / {required}"),
+                ),
             ];
             let mut rows = Vec::new();
             if let Some(settlement_id) = building_of.get(entity).ok().map(|owner| owner.0) {
@@ -1055,7 +1053,7 @@ fn handle_compact_actions(
     mut tab: ResMut<crate::ui::encyclopedia::EncyclopediaTab>,
     mut selected_place: ResMut<crate::ui::encyclopedia::places::SelectedPlace>,
     mut selected_entry: ResMut<crate::ui::encyclopedia::places::SelectedPlaceEntry>,
-    mut trade_target: ResMut<TradePanelTarget>,
+    mut market_target: ResMut<crate::ui::market::MarketPageTarget>,
     mut property_target: ResMut<crate::ui::property_market::PropertyMarketTarget>,
     expand_buttons: Query<
         &Interaction,
@@ -1123,7 +1121,7 @@ fn handle_compact_actions(
         } else {
             continue;
         };
-        trade_target.0 = None;
+        market_target.0 = None;
         property_target.0 = None;
         selected_place.0 = Some(place_name);
         *selected_entry = entry;
@@ -1148,9 +1146,18 @@ fn handle_compact_actions(
                 .map(|(hall, _, _)| hall)
         });
         if let Some(market) = market {
-            encyclopedia_open.0 = false;
+            let Ok((_, settlement, _)) = settlements.get(market) else {
+                continue;
+            };
             property_target.0 = None;
-            trade_target.0 = Some(market);
+            selected_place.0 = Some(settlement.name.clone());
+            *selected_entry = crate::ui::encyclopedia::places::SelectedPlaceEntry::Overview;
+            *tab = crate::ui::encyclopedia::EncyclopediaTab::Places;
+            encyclopedia_open.0 = true;
+            market_target.0 = Some(crate::ui::market::MarketPage {
+                settlement: market,
+                place: settlement.name.clone(),
+            });
         }
     }
 
@@ -1163,7 +1170,7 @@ fn handle_compact_actions(
         };
         if settlements.get(entity).is_ok() {
             encyclopedia_open.0 = false;
-            trade_target.0 = None;
+            market_target.0 = None;
             property_target.0 = Some(entity);
         }
     }
@@ -1194,860 +1201,6 @@ fn handle_manage_action(
     }
 }
 
-// --- market board ----------------------------------------------------------
-
-#[derive(Resource, Default)]
-pub(crate) struct TradePanelTarget(pub Option<Entity>);
-
-#[derive(Resource, Default)]
-struct TradeClickGuard(bool);
-
-#[derive(Component)]
-struct TradePanelRoot {
-    signature: String,
-    target: Entity,
-}
-
-#[derive(Component)]
-struct TradeBackdrop;
-
-#[derive(Component)]
-struct TradePanel;
-
-#[derive(Component)]
-struct TradeCloseButton;
-
-/// Client prediction is presentation only; the server repeats every ownership,
-/// distance, capacity and cash check before moving a single item.
-#[derive(Component, Clone, Copy)]
-struct MarketTradeButton {
-    market: Entity,
-    good: Good,
-    action: HeroMarketAction,
-    enabled: bool,
-}
-
-#[derive(Component)]
-struct TradeFeedbackText;
-
-#[derive(Component)]
-struct TradeListingViewport;
-
-#[derive(Resource, Default)]
-struct TradeFeedback {
-    message: String,
-    success: bool,
-}
-
-const HERO_MARKET_INTERACTION_RANGE: f32 = 12.0;
-
-fn nearest_public_market_entrance(
-    origin: Vec3,
-    hall_entrance: Vec3,
-    marketplace_entrances: impl IntoIterator<Item = Vec3>,
-) -> Vec3 {
-    let distance_squared =
-        |point: Vec3| Vec2::new(origin.x, origin.z).distance_squared(Vec2::new(point.x, point.z));
-    marketplace_entrances
-        .into_iter()
-        .fold(hall_entrance, |nearest, candidate| {
-            if distance_squared(candidate) < distance_squared(nearest) {
-                candidate
-            } else {
-                nearest
-            }
-        })
-}
-
-fn ensure_trade_panel(
-    mut commands: Commands,
-    time: Res<Time<Real>>,
-    target: Res<TradePanelTarget>,
-    settlements: Query<(
-        &Settlement,
-        &SettlementId,
-        Option<&CivicHallLevel>,
-        &PlayerPosition,
-        Option<&PlayerRotation>,
-    )>,
-    buildings: Query<(
-        &SettlementBuilding,
-        Option<&BuildingOf>,
-        Option<&PlayerPosition>,
-        Option<&PlayerRotation>,
-    )>,
-    inventories: Query<&GoodsInventory>,
-    markets: Query<&MootMarket>,
-    feedback: Res<TradeFeedback>,
-    heroes: Query<(
-        &shared::components::Hero,
-        &PlayerPosition,
-        Option<&GoodsInventory>,
-        Option<&Wallet>,
-    )>,
-    local: Option<Res<crate::camera_rts::LocalPeerId>>,
-    roots: Query<(Entity, &TradePanelRoot, Option<&UiRefreshStamp>)>,
-    asset_server: Res<AssetServer>,
-    children: Query<&Children>,
-    interactions: Query<(&Interaction, Has<crate::ui::foundation::UiRefreshExempt>)>,
-    scrolls: Query<&ScrollPosition, With<TradeListingViewport>>,
-) {
-    let Some(entity) = target.0 else {
-        for (root, ..) in roots.iter() {
-            commands.entity(root).despawn();
-        }
-        return;
-    };
-    let Ok(market) = markets.get(entity) else {
-        for (root, ..) in roots.iter() {
-            commands.entity(root).despawn();
-        }
-        return;
-    };
-    let inventory = inventories.get(entity).ok();
-    let (place, subtitle, treasury, hall_access) =
-        if let Ok((settlement, settlement_id, hall_level, position, rotation)) =
-            settlements.get(entity)
-        {
-            let hall_level = hall_level
-                .copied()
-                .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
-            (
-                settlement.name.clone(),
-                format!(
-                    "{} / {} / PUBLIC EXCHANGE",
-                    settlement.tier.label().to_uppercase(),
-                    hall_level.label()
-                ),
-                Some(settlement.treasury),
-                Some((
-                    *settlement_id,
-                    position.0,
-                    rotation.map_or(0.0, |rotation| rotation.0),
-                )),
-            )
-        } else if let Ok((building, ..)) = buildings.get(entity) {
-            (
-                building.settlement.clone(),
-                format!("{} / LOCAL EXCHANGE", building.kind.label()),
-                None,
-                None,
-            )
-        } else {
-            ("Local".into(), "PUBLIC EXCHANGE".into(), None, None)
-        };
-    let local_hero = local.as_ref().and_then(|local| {
-        heroes
-            .iter()
-            .find(|(hero, ..)| shared::player::peer_id_to_u64(hero.owner) == local.0)
-    });
-    let hero_inventory = local_hero.and_then(|(_, _, inventory, _)| inventory);
-    let hero_wallet = local_hero.and_then(|(_, _, _, wallet)| wallet);
-    let market_position = local_hero.zip(hall_access).map(
-        |((_, hero_position, ..), (settlement_id, hall_position, hall_rotation))| {
-            let hall_entrance =
-                SettlementBuildingKind::Hall.entrance_position(hall_position, hall_rotation);
-            nearest_public_market_entrance(
-                hero_position.0,
-                hall_entrance,
-                buildings
-                    .iter()
-                    .filter(|(building, building_of, ..)| {
-                        building.kind == SettlementBuildingKind::Market
-                            && building_of.is_some_and(|owner| owner.0 == settlement_id)
-                    })
-                    .filter_map(|(building, _, position, rotation)| {
-                        Some(building.kind.entrance_position(position?.0, rotation?.0))
-                    }),
-            )
-        },
-    );
-    let hero_distance = local_hero
-        .zip(market_position)
-        .map(|((_, position, ..), market)| {
-            Vec2::new(position.0.x, position.0.z).distance(Vec2::new(market.x, market.z))
-        });
-    let can_trade = hero_distance.is_some_and(|distance| distance <= HERO_MARKET_INTERACTION_RANGE);
-    let signature = format!(
-        "{entity:?}|{place}|{market:?}|{inventory:?}|{treasury:?}|{hero_inventory:?}|{hero_wallet:?}|{can_trade}|{}|{}",
-        feedback.success,
-        feedback.message,
-    );
-    if roots.iter().any(|(_, root, _)| root.signature == signature) {
-        return;
-    }
-    if roots.iter().any(|(entity, _, stamp)| {
-        subtree_is_interacting(entity, &children, &interactions)
-            || stamp.is_some_and(|stamp| !stamp.is_ready(&time))
-    }) {
-        return;
-    }
-    let retained_scroll = retained_scroll(
-        roots.iter().any(|(_, root, _)| root.target == entity),
-        scrolls.iter().next().map(|position| position.0),
-    );
-    for (root, ..) in roots.iter() {
-        commands.entity(root).despawn();
-    }
-
-    let nodes = spawn_modal(
-        &mut commands,
-        TradePanelRoot {
-            signature: signature.clone(),
-            target: entity,
-        },
-        TradeBackdrop,
-        TradePanel,
-        ModalLayout {
-            panel_size: Vec2::new(900.0, 600.0),
-            panel_padding: 0.0,
-        },
-    );
-    commands
-        .entity(nodes.root)
-        .insert(UiRefreshStamp::now(&time));
-    commands.entity(nodes.panel).insert((
-        Node {
-            width: Val::Px(900.0),
-            height: Val::Px(600.0),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Stretch,
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(RADIUS)),
-            overflow: Overflow::clip(),
-            ..default()
-        },
-        BackgroundColor(LIMEWASH_LIT),
-        BorderColor::all(PLATE_RULE),
-        plate_shadow(),
-    ));
-    commands.entity(nodes.panel).with_children(|panel| {
-        panel
-            .spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    padding: UiRect::axes(Val::Px(22.0), Val::Px(15.0)),
-                    border: UiRect::bottom(Val::Px(1.0)),
-                    ..default()
-                },
-                BackgroundColor(LIMEWASH),
-                BorderColor::all(PLATE_RULE_SOFT),
-            ))
-            .with_children(|header| {
-                header
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(2.0),
-                        ..default()
-                    })
-                    .with_children(|copy| {
-                        copy.spawn((
-                            Text::new(format!("{} MARKET", place.to_uppercase())),
-                            TextFont {
-                                font_size: FontSize::Px(21.0),
-                                ..default()
-                            },
-                            TextColor(INK),
-                        ));
-                        copy.spawn((
-                            Text::new(subtitle),
-                            TextFont {
-                                font_size: FontSize::Px(9.0),
-                                ..default()
-                            },
-                            TextColor(INK_MUTED),
-                        ));
-                    });
-                header
-                    .spawn((
-                        TradeCloseButton,
-                        Button,
-                        Node {
-                            width: Val::Px(30.0),
-                            height: Val::Px(30.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(RADIUS)),
-                            ..default()
-                        },
-                        button_chrome(UiButtonVariant::Ghost),
-                    ))
-                    .with_child((
-                        Text::new("X"),
-                        UiButtonLabel,
-                        TextFont {
-                            font_size: FontSize::Px(11.0),
-                            ..default()
-                        },
-                        TextColor(INK),
-                        Pickable::IGNORE,
-                    ));
-            });
-
-        panel
-            .spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(28.0),
-                padding: UiRect::axes(Val::Px(22.0), Val::Px(13.0)),
-                border: UiRect::bottom(Val::Px(1.0)),
-                ..default()
-            })
-            .with_children(|summary| {
-                spawn_market_stat(
-                    summary,
-                    "MARKET MODEL",
-                    format!(
-                        "{} / private consignment / {}% fee",
-                        market.trade_tier().label(),
-                        market.market_fee_bps() as f32 / 100.0,
-                    ),
-                );
-                spawn_market_stat(
-                    summary,
-                    "LIFETIME VOLUME",
-                    format!("{} coin", format_money(market.total_volume())),
-                );
-                spawn_market_stat(
-                    summary,
-                    "COMMON STORAGE",
-                    inventory.map_or_else(
-                        || "No store".to_string(),
-                        |stock| {
-                            stock.partition_bulk_capacity().map_or_else(
-                                || {
-                                    format!(
-                                        "{} / {} bulk",
-                                        stock.used_bulk(),
-                                        stock.bulk_capacity()
-                                    )
-                                },
-                                |capacity| format!("{capacity} bulk per resource"),
-                            )
-                        },
-                    ),
-                );
-                if let Some(treasury) = treasury {
-                    spawn_market_stat(
-                        summary,
-                        "CIVIC TREASURY",
-                        format!("{} coin", format_money(treasury)),
-                    );
-                }
-                spawn_market_stat(
-                    summary,
-                    "YOUR HERO",
-                    local_hero.map_or_else(
-                        || "Not created".to_string(),
-                        |(_, _, inventory, wallet)| {
-                            format!(
-                                "{} coin / {} bulk / {}",
-                                format_money(wallet.map_or(0, |wallet| wallet.balance())),
-                                inventory.map_or(0, |stock| stock.used_bulk()),
-                                hero_distance.map_or_else(
-                                    || "remote".to_string(),
-                                    |distance| format!("{distance:.1}m away")
-                                )
-                            )
-                        }
-                    ),
-                );
-            });
-
-        panel
-            .spawn((
-                TradeListingViewport,
-                ScrollPosition(retained_scroll),
-                Node {
-                    flex_grow: 1.0,
-                    min_height: Val::Px(0.0),
-                    flex_direction: FlexDirection::Column,
-                    padding: UiRect::axes(Val::Px(22.0), Val::Px(12.0)),
-                    overflow: Overflow::scroll_y(),
-                    scrollbar_width: 8.0,
-                    ..default()
-                },
-            ))
-            .with_children(|table| {
-                spawn_market_header(table);
-                for good in Good::ALL {
-                    spawn_market_row(
-                        table,
-                        &asset_server,
-                        entity,
-                        &place,
-                        good,
-                        inventory,
-                        market,
-                        hero_inventory,
-                        can_trade,
-                    );
-                }
-            });
-
-        panel.spawn((
-            TradeFeedbackText,
-            Text::new(if !feedback.message.is_empty() {
-                feedback.message.as_str()
-            } else if can_trade {
-                "BUY clears real listed stock. POST OFFER consigns physical cargo at the shown ask; it pays nothing until a real buyer clears it."
-            } else {
-                "Select your hero and walk within 12m of the Hall or Marketplace, then press E or reopen this board to trade."
-            }),
-            TextFont {
-                font_size: FontSize::Px(10.0),
-                ..default()
-            },
-            TextColor(if feedback.message.is_empty() {
-                INK_MUTED
-            } else if feedback.success {
-                Color::srgb(0.18, 0.42, 0.22)
-            } else {
-                Color::srgb(0.62, 0.18, 0.14)
-            }),
-            Node {
-                padding: UiRect::axes(Val::Px(22.0), Val::Px(12.0)),
-                border: UiRect::top(Val::Px(1.0)),
-                ..default()
-            },
-            BorderColor::all(PLATE_RULE_SOFT),
-        ));
-    });
-}
-
-fn spawn_market_stat(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String) {
-    parent
-        .spawn(Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(2.0),
-            ..default()
-        })
-        .with_children(|stat| {
-            stat.spawn((
-                Text::new(label),
-                TextFont {
-                    font_size: FontSize::Px(8.0),
-                    ..default()
-                },
-                TextColor(INK_MUTED),
-            ));
-            stat.spawn((
-                Text::new(value),
-                TextFont {
-                    font_size: FontSize::Px(13.0),
-                    ..default()
-                },
-                TextColor(INK),
-            ));
-        });
-}
-
-fn spawn_market_header(parent: &mut ChildSpawnerCommands<'_>) {
-    parent
-        .spawn((
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Px(28.0),
-                align_items: AlignItems::Center,
-                padding: UiRect::horizontal(Val::Px(10.0)),
-                border: UiRect::bottom(Val::Px(1.0)),
-                ..default()
-            },
-            BorderColor::all(PLATE_RULE),
-        ))
-        .with_children(|row| {
-            market_header_cell(row, "GOOD", 180.0, true);
-            market_header_cell(row, "MARKET", 90.0, false);
-            market_header_cell(row, "LAST", 66.0, false);
-            market_header_cell(row, "ASK", 66.0, false);
-            market_header_cell(row, "OFFERS", 82.0, false);
-            market_header_cell(row, "HERO", 58.0, false);
-            market_header_cell(row, "BUY", 68.0, false);
-            market_header_cell(row, "OFFER", 68.0, false);
-            market_header_cell(row, "", 82.0, false);
-        });
-}
-
-fn market_header_cell(parent: &mut ChildSpawnerCommands<'_>, text: &str, width: f32, left: bool) {
-    parent.spawn((
-        Text::new(text),
-        TextFont {
-            font_size: FontSize::Px(8.0),
-            ..default()
-        },
-        TextColor(INK_MUTED),
-        TextLayout::justify(if left { Justify::Left } else { Justify::Right }),
-        Node {
-            width: Val::Px(width),
-            flex_shrink: 0.0,
-            ..default()
-        },
-    ));
-}
-
-fn spawn_market_row(
-    parent: &mut ChildSpawnerCommands<'_>,
-    asset_server: &AssetServer,
-    settlement: Entity,
-    place: &str,
-    good: Good,
-    inventory: Option<&GoodsInventory>,
-    market: &MootMarket,
-    hero_inventory: Option<&GoodsInventory>,
-    can_trade: bool,
-) {
-    let pool = market.pool(good);
-    let stock = inventory.map_or(0, |inventory| inventory.amount(good));
-    let unmet = pool.day.unmet_units();
-    let trade_unlocked = market.can_trade(good);
-    let condition = if !trade_unlocked {
-        format!("UNLOCKS AT {}", good.minimum_market_tier().label())
-    } else if unmet > 0 {
-        format!("{} UNMET TODAY", unmet)
-    } else if stock < pool.target_stock {
-        "SHORT SUPPLY".to_string()
-    } else if pool.target_stock > 0 && stock > pool.target_stock.saturating_mul(2) {
-        "SURPLUS".to_string()
-    } else {
-        "BALANCED".to_string()
-    };
-    parent
-        .spawn((
-            Node {
-                width: Val::Percent(100.0),
-                min_height: Val::Px(58.0),
-                align_items: AlignItems::Center,
-                padding: UiRect::horizontal(Val::Px(10.0)),
-                border: UiRect::bottom(Val::Px(1.0)),
-                ..default()
-            },
-            BorderColor::all(PLATE_RULE_SOFT),
-        ))
-        .with_children(|row| {
-            row.spawn(Node {
-                width: Val::Px(180.0),
-                flex_shrink: 0.0,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(12.0),
-                ..default()
-            })
-            .with_children(|good_cell| {
-                good_cell.spawn((
-                    ImageNode::new(asset_server.load(good_icon_path(good))),
-                    Node {
-                        width: Val::Px(38.0),
-                        height: Val::Px(38.0),
-                        flex_shrink: 0.0,
-                        ..default()
-                    },
-                    Pickable::IGNORE,
-                ));
-                good_cell
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(1.0),
-                        ..default()
-                    })
-                    .with_children(|copy| {
-                        copy.spawn((
-                            Text::new(good.label()),
-                            TextFont {
-                                font_size: FontSize::Px(13.0),
-                                ..default()
-                            },
-                            TextColor(INK),
-                        ));
-                        copy.spawn((
-                            Text::new(condition.clone()),
-                            TextFont {
-                                font_size: FontSize::Px(8.0),
-                                ..default()
-                            },
-                            TextColor(INK_MUTED),
-                        ));
-                    });
-            });
-            market_value_cell(row, format!("{stock} / {}", pool.target_stock), 90.0);
-            market_value_cell(row, format_money(pool.bid), 66.0);
-            market_value_cell(row, format_money(pool.ask), 66.0);
-            let offers = if trade_unlocked {
-                market
-                    .listings()
-                    .iter()
-                    .filter(|listing| listing.good == good)
-                    .count()
-            } else {
-                0
-            };
-            market_value_cell(
-                row,
-                format!("{} / {}u", offers, market.listed_units(good)),
-                82.0,
-            );
-            market_value_cell(
-                row,
-                hero_inventory
-                    .map_or(0, |stock| stock.amount(good))
-                    .to_string(),
-                58.0,
-            );
-            spawn_market_trade_button(
-                row,
-                "BUY 1",
-                MarketTradeButton {
-                    market: settlement,
-                    good,
-                    action: HeroMarketAction::Buy,
-                    enabled: can_trade && trade_unlocked && market.listed_units(good) > 0,
-                },
-            );
-            spawn_market_trade_button(
-                row,
-                "POST 1",
-                MarketTradeButton {
-                    market: settlement,
-                    good,
-                    action: HeroMarketAction::PostSellOrder {
-                        unit_price: market.suggested_price(good),
-                    },
-                    enabled: can_trade
-                        && trade_unlocked
-                        && hero_inventory.is_some_and(|stock| stock.amount(good) > 0),
-                },
-            );
-            row.spawn((
-                crate::ui::history::MarketHistoryButton {
-                    settlement,
-                    place: place.to_string(),
-                    good,
-                },
-                Button,
-                Node {
-                    width: Val::Px(76.0),
-                    height: Val::Px(26.0),
-                    margin: UiRect::left(Val::Px(6.0)),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(RADIUS)),
-                    ..default()
-                },
-                button_chrome(UiButtonVariant::Secondary),
-            ))
-            .with_child((
-                Text::new("HISTORY"),
-                UiButtonLabel,
-                TextFont {
-                    font_size: FontSize::Px(8.0),
-                    ..default()
-                },
-                TextColor(INK),
-                Pickable::IGNORE,
-            ));
-        });
-}
-
-fn spawn_market_trade_button(
-    parent: &mut ChildSpawnerCommands<'_>,
-    label: &str,
-    marker: MarketTradeButton,
-) {
-    let enabled = marker.enabled;
-    let mut button = parent.spawn((
-        marker,
-        Button,
-        Node {
-            width: Val::Px(62.0),
-            height: Val::Px(26.0),
-            margin: UiRect::left(Val::Px(6.0)),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(RADIUS)),
-            ..default()
-        },
-        button_chrome(UiButtonVariant::Secondary),
-    ));
-    if !enabled {
-        button.insert(InteractionDisabled);
-    }
-    button.with_child((
-        Text::new(label),
-        UiButtonLabel,
-        TextFont {
-            font_size: FontSize::Px(8.0),
-            ..default()
-        },
-        TextColor(if enabled { INK } else { INK_MUTED }),
-        Pickable::IGNORE,
-    ));
-}
-
-fn handle_market_trade_buttons(
-    mouse: Res<ButtonInput<MouseButton>>,
-    buttons: Query<(&Interaction, &MarketTradeButton), Changed<Interaction>>,
-    mut senders: Query<
-        &mut MessageSender<HeroMarketOrder>,
-        (With<crate::GameClient>, With<Connected>),
-    >,
-) {
-    for (interaction, order) in buttons.iter() {
-        if !order.enabled
-            || *interaction != Interaction::Pressed
-            || !mouse.just_pressed(MouseButton::Left)
-        {
-            continue;
-        }
-        if let Ok(mut sender) = senders.single_mut() {
-            sender.send::<ReliableChannel>(HeroMarketOrder {
-                market: order.market,
-                good: order.good,
-                action: order.action,
-                units: 1,
-            });
-        }
-    }
-}
-
-fn receive_market_trade_results(
-    mut receivers: Query<
-        &mut MessageReceiver<HeroMarketResult>,
-        (With<crate::GameClient>, With<Connected>),
-    >,
-    mut feedback: ResMut<TradeFeedback>,
-) {
-    for mut receiver in receivers.iter_mut() {
-        for result in receiver.receive() {
-            feedback.message = result.message;
-            feedback.success = result.success;
-        }
-    }
-}
-
-fn sync_trade_feedback(
-    feedback: Res<TradeFeedback>,
-    mut labels: Query<(&mut Text, &mut TextColor), With<TradeFeedbackText>>,
-) {
-    if !feedback.is_changed() || feedback.message.is_empty() {
-        return;
-    }
-    for (mut text, mut colour) in labels.iter_mut() {
-        text.0.clone_from(&feedback.message);
-        colour.0 = if feedback.success {
-            Color::srgb(0.18, 0.42, 0.22)
-        } else {
-            Color::srgb(0.62, 0.18, 0.14)
-        };
-    }
-}
-
-/// Conventional nearby-world interaction. The compact inspection button still
-/// opens a remote read-only board; E opens the settlement's shared exchange
-/// when the embodied hero is at either its Hall or Marketplace counter.
-fn open_nearby_market_on_interact(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    input: Res<crate::input::InputState>,
-    local: Option<Res<crate::camera_rts::LocalPeerId>>,
-    heroes: Query<(&shared::components::Hero, &PlayerPosition)>,
-    halls: Query<
-        (
-            Entity,
-            &SettlementId,
-            &PlayerPosition,
-            Option<&PlayerRotation>,
-        ),
-        With<MootMarket>,
-    >,
-    marketplaces: Query<(
-        &SettlementBuilding,
-        &BuildingOf,
-        &PlayerPosition,
-        &PlayerRotation,
-    )>,
-    mut target: ResMut<TradePanelTarget>,
-) {
-    if !keyboard.just_pressed(KeyCode::KeyE) || input.ui_blocking() {
-        return;
-    }
-    let Some(local) = local else { return };
-    let Some((_, hero_position)) = heroes
-        .iter()
-        .find(|(hero, _)| shared::player::peer_id_to_u64(hero.owner) == local.0)
-    else {
-        return;
-    };
-    target.0 = halls
-        .iter()
-        .filter_map(|(entity, settlement_id, position, rotation)| {
-            let hall_entrance = SettlementBuildingKind::Hall
-                .entrance_position(position.0, rotation.map_or(0.0, |rotation| rotation.0));
-            let counter = nearest_public_market_entrance(
-                hero_position.0,
-                hall_entrance,
-                marketplaces
-                    .iter()
-                    .filter(|(building, building_of, ..)| {
-                        building.kind == SettlementBuildingKind::Market
-                            && building_of.0 == *settlement_id
-                    })
-                    .map(|(building, _, position, rotation)| {
-                        building.kind.entrance_position(position.0, rotation.0)
-                    }),
-            );
-            let distance = Vec2::new(hero_position.0.x, hero_position.0.z)
-                .distance(Vec2::new(counter.x, counter.z));
-            (distance <= HERO_MARKET_INTERACTION_RANGE).then_some((entity, distance))
-        })
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(entity, _)| entity);
-}
-
-fn market_value_cell(parent: &mut ChildSpawnerCommands<'_>, text: String, width: f32) {
-    parent.spawn((
-        Text::new(text),
-        TextFont {
-            font_size: FontSize::Px(12.0),
-            ..default()
-        },
-        TextColor(INK),
-        TextLayout::justify(Justify::Right),
-        Node {
-            width: Val::Px(width),
-            flex_shrink: 0.0,
-            ..default()
-        },
-    ));
-}
-
-fn update_trade_guard(
-    target: Res<TradePanelTarget>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    mut guard: ResMut<TradeClickGuard>,
-) {
-    update_modal_click_guard(target.0.is_some(), &mouse, &mut guard.0);
-}
-
-fn handle_trade_close(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    guard: Res<TradeClickGuard>,
-    backdrop: Query<&Interaction, (With<TradeBackdrop>, Changed<Interaction>)>,
-    close: Query<&Interaction, (With<TradeCloseButton>, Changed<Interaction>)>,
-    mut target: ResMut<TradePanelTarget>,
-) {
-    let clicked = guard.0 && mouse.just_pressed(MouseButton::Left);
-    let clicked_out = clicked && handle_backdrop_pressed(&backdrop);
-    let clicked_close = clicked
-        && close
-            .iter()
-            .any(|interaction| *interaction == Interaction::Pressed);
-    if keyboard.just_pressed(KeyCode::Escape) || clicked_out || clicked_close {
-        target.0 = None;
-    }
-}
-
 fn sync_permit_tray_input_state(
     permits: Res<crate::ui::player_permits::PermitTrayOpen>,
     mut input: ResMut<crate::input::InputState>,
@@ -2057,16 +1210,10 @@ fn sync_permit_tray_input_state(
     }
 }
 
-fn despawn_all(
-    mut commands: Commands,
-    panels: Query<Entity, With<SettlementPanel>>,
-    trade: Query<Entity, With<TradePanelRoot>>,
-    mut target: ResMut<TradePanelTarget>,
-) {
-    for entity in panels.iter().chain(trade.iter()) {
+fn despawn_all(mut commands: Commands, panels: Query<Entity, With<SettlementPanel>>) {
+    for entity in panels.iter() {
         commands.entity(entity).despawn();
     }
-    target.0 = None;
 }
 
 #[cfg(test)]
@@ -2089,9 +1236,11 @@ mod tests {
             }),
         );
         world.flush();
-        assert!(world
-            .get::<Children>(row)
-            .is_some_and(|children| children.len() == 5));
+        assert!(
+            world
+                .get::<Children>(row)
+                .is_some_and(|children| children.len() == 5)
+        );
         let mut expand = world.query_filtered::<Entity, With<InspectExpandButton>>();
         let mut trade = world.query_filtered::<Entity, With<InspectTradeButton>>();
         let mut property = world.query_filtered::<Entity, With<InspectPropertyButton>>();
@@ -2129,20 +1278,5 @@ mod tests {
         }
         assert_eq!(good_icon_path(Good::Flour), "ui/goods/flour.png");
         assert_eq!(good_icon_path(Good::Bread), "ui/goods/bread.png");
-    }
-
-    #[test]
-    fn backdrop_is_the_only_blank_area_that_closes_trade() {
-        let mut world = World::new();
-        world.insert_resource(ButtonInput::<KeyCode>::default());
-        let mut mouse = ButtonInput::<MouseButton>::default();
-        mouse.press(MouseButton::Left);
-        world.insert_resource(mouse);
-        world.insert_resource(TradeClickGuard(true));
-        world.insert_resource(TradePanelTarget(Some(Entity::from_bits(1))));
-        world.spawn((TradeBackdrop, Interaction::None));
-        world.spawn((TradePanel, Interaction::Pressed));
-        world.run_system_once(handle_trade_close).unwrap();
-        assert!(world.resource::<TradePanelTarget>().0.is_some());
     }
 }

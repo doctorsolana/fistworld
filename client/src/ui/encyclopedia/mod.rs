@@ -163,8 +163,9 @@ fn page_is_open(
     history: &crate::ui::history::HistoryPanelTarget,
     business: &crate::ui::business_management::BusinessManagementTarget,
     founding: &crate::ui::company_founding::FoundingPageOpen,
+    market: &crate::ui::market::MarketPageTarget,
 ) -> bool {
-    history.0.is_some() || business.0.is_some() || founding.0
+    history.0.is_some() || business.0.is_some() || founding.0 || market.0.is_some()
 }
 
 /// Show the page host (and hide every tab body) while a page is open, and
@@ -175,12 +176,13 @@ fn sync_page_host(
     business: Res<crate::ui::business_management::BusinessManagementTarget>,
     business_return: Res<crate::ui::business_management::BusinessManagementReturn>,
     founding: Res<crate::ui::company_founding::FoundingPageOpen>,
+    market: Res<crate::ui::market::MarketPageTarget>,
     directory: Res<companies::CompanyDirectory>,
     mut hosts: Query<&mut Node, With<EncyclopediaPageHost>>,
     mut bodies: Query<(&TabBody, &mut Node), Without<EncyclopediaPageHost>>,
     mut labels: Query<&mut Text, With<EncyclopediaPageBackLabel>>,
 ) {
-    let open = page_is_open(&history, &business, &founding);
+    let open = page_is_open(&history, &business, &founding, &market);
     for mut node in hosts.iter_mut() {
         let display = if open { Display::Flex } else { Display::None };
         if node.display != display {
@@ -216,9 +218,11 @@ fn sync_page_host(
                 |name| format!("BACK TO {name}"),
             ),
             HistoryView::World => "BACK TO PLACES".to_string(),
-            HistoryView::Market(_) if target.return_to_trade => "BACK TO MARKET".to_string(),
+            HistoryView::Market(_) if target.return_to_market => "BACK TO MARKET".to_string(),
             _ => format!("BACK TO {}", target.place.to_uppercase()),
         }
+    } else if let Some(target) = market.0.as_ref() {
+        format!("BACK TO {}", target.place.to_uppercase())
     } else {
         "BACK".to_string()
     };
@@ -230,7 +234,7 @@ fn sync_page_host(
 }
 
 /// BACK (or ESC while a page is open) pops the page and restores what it
-/// covered: the company it was opened from, or the market board.
+/// covered: the company it was opened from, or the market page.
 #[allow(clippy::too_many_arguments)]
 fn handle_page_back(
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -241,7 +245,7 @@ fn handle_page_back(
     mut business: ResMut<crate::ui::business_management::BusinessManagementTarget>,
     mut business_return: ResMut<crate::ui::business_management::BusinessManagementReturn>,
     mut founding: ResMut<crate::ui::company_founding::FoundingPageOpen>,
-    mut trade_target: ResMut<crate::ui::settlement_panel::TradePanelTarget>,
+    mut market_target: ResMut<crate::ui::market::MarketPageTarget>,
     mut selected_company: ResMut<companies::SelectedCompany>,
     mut tab: ResMut<EncyclopediaTab>,
 ) {
@@ -267,13 +271,14 @@ fn handle_page_back(
         return;
     }
     if let Some(old) = history.0.take() {
-        if old.return_to_trade {
-            trade_target.0 = old.settlement;
-        }
         if let crate::ui::history::HistoryView::Company(id) = old.view {
             selected_company.0 = Some(id);
             *tab = EncyclopediaTab::Companies;
         }
+        return;
+    }
+    if market_target.0.take().is_some() {
+        *tab = EncyclopediaTab::Places;
     }
 }
 
@@ -284,6 +289,7 @@ fn close_pages_with_encyclopedia(
     mut business: ResMut<crate::ui::business_management::BusinessManagementTarget>,
     mut business_return: ResMut<crate::ui::business_management::BusinessManagementReturn>,
     mut founding: ResMut<crate::ui::company_founding::FoundingPageOpen>,
+    mut market: ResMut<crate::ui::market::MarketPageTarget>,
 ) {
     if history.0.is_some() {
         history.0 = None;
@@ -294,6 +300,9 @@ fn close_pages_with_encyclopedia(
     if business.0.is_some() {
         business.0 = None;
         business_return.0 = None;
+    }
+    if market.0.is_some() {
+        market.0 = None;
     }
 }
 
@@ -694,3 +703,67 @@ pub struct DetailEmptyState;
 
 #[derive(Component)]
 pub struct DetailCard;
+
+#[cfg(test)]
+mod page_tests {
+    use bevy::ecs::system::RunSystemOnce;
+
+    use super::*;
+
+    #[test]
+    fn market_history_back_reveals_market_before_returning_to_place() {
+        let mut world = World::new();
+        let mut keyboard = ButtonInput::<KeyCode>::default();
+        keyboard.press(KeyCode::Escape);
+        world.insert_resource(keyboard);
+        world.insert_resource(ButtonInput::<MouseButton>::default());
+        world.insert_resource(ClickGuard(false));
+        world.insert_resource(crate::ui::history::HistoryPanelTarget(Some(
+            crate::ui::history::HistoryTarget {
+                settlement: Some(Entity::from_bits(1)),
+                place: "Brackwater".into(),
+                view: crate::ui::history::HistoryView::Market(shared::economy::Good::Wood),
+                return_to_market: true,
+            },
+        )));
+        world.insert_resource(crate::ui::business_management::BusinessManagementTarget::default());
+        world.insert_resource(crate::ui::business_management::BusinessManagementReturn::default());
+        world.insert_resource(crate::ui::company_founding::FoundingPageOpen::default());
+        world.insert_resource(crate::ui::market::MarketPageTarget(Some(
+            crate::ui::market::MarketPage {
+                settlement: Entity::from_bits(1),
+                place: "Brackwater".into(),
+            },
+        )));
+        world.insert_resource(companies::SelectedCompany::default());
+        world.insert_resource(EncyclopediaTab::Places);
+
+        world.run_system_once(handle_page_back).unwrap();
+        assert!(
+            world
+                .resource::<crate::ui::history::HistoryPanelTarget>()
+                .0
+                .is_none()
+        );
+        assert!(
+            world
+                .resource::<crate::ui::market::MarketPageTarget>()
+                .0
+                .is_some()
+        );
+
+        world.resource_mut::<ButtonInput<KeyCode>>().clear();
+        world
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        world.resource_mut::<ClickGuard>().0 = true;
+        world.spawn((EncyclopediaPageBack, Interaction::Pressed));
+        world.run_system_once(handle_page_back).unwrap();
+        assert!(
+            world
+                .resource::<crate::ui::market::MarketPageTarget>()
+                .0
+                .is_none()
+        );
+    }
+}

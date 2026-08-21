@@ -717,10 +717,22 @@ pub fn sync_natural_immigrant_passengers(
             continue;
         };
         let helm = boat_position.0 + Quat::from_rotation_y(boat_rotation.0) * HELM_LOCAL;
-        position.0 = helm;
-        rotation.0 = boat_rotation.0;
-        *region = RegionCoord::from_world_pos(helm);
-        *motion = *boat_motion;
+        // Guarded exactly like the player-hero equivalent in
+        // `player/boat.rs`: an unconditional write re-replicates a passenger's
+        // whole transform every tick even while the boat holds its heading.
+        if position.0 != helm {
+            position.0 = helm;
+        }
+        if rotation.0 != boat_rotation.0 {
+            rotation.0 = boat_rotation.0;
+        }
+        let next_region = RegionCoord::from_world_pos(helm);
+        if *region != next_region {
+            *region = next_region;
+        }
+        if *motion != *boat_motion {
+            *motion = *boat_motion;
+        }
         activity.set_if_neq(CharacterActivity::Sitting);
     }
 }

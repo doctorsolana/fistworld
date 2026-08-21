@@ -103,8 +103,8 @@ ordering may use local `ZIndex`.
 Economy values can change every server tick, especially at 10×–100×. Do not rebuild a panel
 at that cadence while the user is interacting with it.
 
-The property market, business management, trade, history, permit tray and compact inspector
-follow the shared rule:
+Compatibility panels which still rebuild structurally (notably history ledgers and the permit
+tray) follow the shared rule:
 
 - compare a screen signature and do nothing when it is unchanged;
 - cap structural refresh to about eight per real second with `UiRefreshStamp`;
@@ -135,7 +135,7 @@ enabled state. The property board (`property_market.rs`) is the reference implem
   `UiRefreshStamp`, and no scroll-position retention hack on this panel. The founding form
   follows the same pattern for its steppers.
 
-Two panels show the *model-driven* variant, which is the shape to copy for anything with many
+Three panels show the *model-driven* variant, which is the shape to copy for anything with many
 rows or optional sections:
 
 - Company controls (`business_management.rs`): the replicated policies fold into a pure
@@ -150,6 +150,10 @@ rows or optional sections:
   bind values, and the card only respawns when the selection or the tile/row *labels* change.
   Detail the card dropped (labour market, policy lines, arrears) lives on the place page behind
   EXPAND.
+- The settlement market (`market.rs`): one stable row exists for every `Good`. Stock, last sale,
+  best offer, today's demand, hero cargo, prices and disabled reasons bind in place. Its only
+  structure key is the settlement entity, so even a 100x economy tick never replaces the BUY,
+  POST or HISTORY controls under the pointer.
 
 Why: the signature-rebuild pattern (format the whole input into a string, despawn and respawn
 on any difference, defer while hovered) produced every UI-feel bug we hit — a +1 press that
@@ -172,12 +176,13 @@ glyph; separate with ` / `.
 
 ## The encyclopedia is one window with pages
 
-Ledgers (`history.rs`) and company controls (`business_management.rs`) are not modals: they
+Markets (`market.rs`), ledgers (`history.rs`) and company controls (`business_management.rs`) are not modals: they
 render inside `EncyclopediaPageHost`, full size, under one BACK bar that names its destination
 ("BACK TO ALDRIC GRAIN & BREAD"). Their target resources (`HistoryPanelTarget`,
 `BusinessManagementTarget`) are the page state; setting one from anywhere — a company record,
-the compact settlement card, the market board — opens the encyclopedia on the matching tab and
-hosts the page next frame. ESC pops a page before it closes the window; the X closes everything
+the compact settlement card, the market page — opens the encyclopedia on the matching tab and
+hosts the page next frame. A market history page covers its owning market without clearing it,
+so BACK reveals the same retained market page and scroll state. ESC pops a page before it closes the window; the X closes everything
 and `close_pages_with_encyclopedia` clears the page targets so nothing reopens itself. New
 pages follow the same shape: spawn into the host, bind in place, no own close.
 The company-founding form (`company_founding.rs`) is the model for an input form: the name and
@@ -218,6 +223,20 @@ BEVY_ASSET_ROOT="$PWD/client/assets" \
 cargo run --profile playtest -p client --bin capture -- \
   --at 0,0 --name property-ui --zoom 160 \
   --out /tmp/fistworld-ui --warmup 90 --settle 30
+```
+
+The equivalent market page fixture is:
+
+```bash
+FISTFORCE_CAPTURE_SETTLEMENT=village \
+FISTFORCE_CAPTURE_TRADE=1 \
+FISTFORCE_CAPTURE_ENCYCLOPEDIA=places \
+FISTFORCE_CAPTURE_HERO=default \
+FISTFORCE_CAPTURE_SELECT=1 \
+BEVY_ASSET_ROOT="$PWD/client/assets" \
+cargo run --profile playtest -p client --bin capture -- \
+  --at 0,0 --name market-ui --zoom 160 \
+  --out /tmp/fistworld-market-ui --warmup 90 --settle 30
 ```
 
 Inspect the result at `/tmp/fistworld-ui/property-ui.png`. `FISTFORCE_CAPTURE_PROPERTY=sale` opens the

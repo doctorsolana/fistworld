@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use shared::components::WorldTime;
 
 use crate::camera_rts::CommanderCamera;
@@ -922,6 +922,13 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                     store.add(shared::economy::Good::Wood, 7);
                     store.add(shared::economy::Good::Stone, 2);
                     let mut market = shared::economy::MootMarket::founding();
+                    let treasury = shared::economy::MarketSeller::Treasury(
+                        shared::components::SettlementId(1),
+                    );
+                    market.consign(treasury, shared::economy::Good::Food, 6, 105);
+                    market.consign(treasury, shared::economy::Good::Wheat, 12, 86);
+                    market.consign(treasury, shared::economy::Good::Wood, 5, 64);
+                    market.consign(treasury, shared::economy::Good::Stone, 2, 285);
                     market.refresh_all(&store);
                     world.entity_mut(hall).insert((
                         store,
@@ -1265,9 +1272,21 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                                 .is_some_and(|settlement| settlement.name == "Brackwater")
                         });
                     if let Some(hall) = hall {
-                        world.insert_resource(crate::ui::settlement_panel::TradePanelTarget(Some(
-                            hall,
+                        world.insert_resource(crate::ui::market::MarketPageTarget(Some(
+                            crate::ui::market::MarketPage {
+                                settlement: hall,
+                                place: "Brackwater".into(),
+                            },
                         )));
+                        world.resource_mut::<crate::ui::encyclopedia::EncyclopediaOpen>().0 = true;
+                        *world.resource_mut::<crate::ui::encyclopedia::EncyclopediaTab>() =
+                            crate::ui::encyclopedia::EncyclopediaTab::Places;
+                        world
+                            .resource_mut::<crate::ui::encyclopedia::places::SelectedPlace>()
+                            .0 = Some("Brackwater".into());
+                        *world.resource_mut::<
+                            crate::ui::encyclopedia::places::SelectedPlaceEntry,
+                        >() = crate::ui::encyclopedia::places::SelectedPlaceEntry::Overview;
                     }
                 }
                 let property_mode = std::env::var("FISTFORCE_CAPTURE_PROPERTY").unwrap_or_default();
@@ -1899,10 +1918,7 @@ fn open_capture_business_management(
 /// `FISTFORCE_CAPTURE_BUSINESS_SCROLL=<px>` scrolls the site-controls page so
 /// its lower sections (meters, input rows) can be photographed.
 fn scroll_capture_business_page(
-    mut bodies: Query<
-        &mut ScrollPosition,
-        With<crate::ui::business_management::BodyScroll>,
-    >,
+    mut bodies: Query<&mut ScrollPosition, With<crate::ui::business_management::BodyScroll>>,
 ) {
     let Some(offset) = std::env::var("FISTFORCE_CAPTURE_BUSINESS_SCROLL")
         .ok()
@@ -1923,6 +1939,7 @@ fn scroll_capture_business_page(
 /// only open this after entering the world, so the delay mirrors actual use.
 fn open_capture_history(
     settlements: Query<(Entity, &shared::components::Settlement)>,
+    market: Res<crate::ui::market::MarketPageTarget>,
     mut target: ResMut<crate::ui::history::HistoryPanelTarget>,
     mut frames: Local<u8>,
 ) {
@@ -1965,7 +1982,8 @@ fn open_capture_history(
             _ => "Brackwater".to_string(),
         },
         view,
-        return_to_trade: false,
+        return_to_market: matches!(view, crate::ui::history::HistoryView::Market(_))
+            && market.0.is_some(),
     });
 }
 

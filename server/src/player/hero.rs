@@ -463,9 +463,15 @@ pub fn step_units(
             && !authored_traversal
             && (pending.is_some() || failed.is_some())
         {
-            if let Some(motion) = motion.as_deref_mut() {
+            // `as_deref_mut()` would call `Mut::deref_mut`, which flags the
+            // component Changed BEFORE the guard below decides not to write —
+            // and lightyear replicates on the flag, not on the value. Reading
+            // through `as_mut()` keeps the read on `Deref`, so a villager
+            // waiting on a route no longer re-sends its stationary velocity
+            // to every client 30 times a second.
+            if let Some(motion) = motion.as_mut() {
                 if motion.is_moving() {
-                    *motion = CharacterMotion::STATIONARY;
+                    **motion = CharacterMotion::STATIONARY;
                 }
             }
             continue;
@@ -654,9 +660,12 @@ pub fn step_units(
             // only once instead of at 60 Hz.
             CharacterMotion::new(Vec3::new(velocity.x, 0.0, velocity.z))
         };
-        if let Some(motion) = motion.as_deref_mut() {
-            if motion_materially_changed(*motion, next_motion) {
-                *motion = next_motion;
+        // `as_mut()`, not `as_deref_mut()`: see the stationary probe above.
+        // The materiality guard only avoids the memory write; it cannot
+        // un-flag a component that `deref_mut` already marked Changed.
+        if let Some(motion) = motion.as_mut() {
+            if motion_materially_changed(**motion, next_motion) {
+                **motion = next_motion;
             }
         } else {
             commands.entity(entity).insert(next_motion);
@@ -1078,5 +1087,59 @@ mod tests {
                 "dir {dir_n:?} => yaw {yaw} => forward {forward2:?}"
             );
         }
+    }
+
+    /// Replication sends on Bevy's *change flag*, not on a value difference, so
+    /// probing a component with `as_deref_mut()` re-sends it every tick even
+    /// when the guard inside declines to write. This pinned ~150 standing
+    /// villagers into every replication packet on the 1,000-villager world.
+    #[test]
+    fn a_villager_waiting_for_a_route_never_dirties_its_replicated_motion() {
+        #[derive(Resource, Default)]
+        struct MotionDirty(usize);
+
+        fn count_dirty(
+            mut dirty: ResMut<MotionDirty>,
+            moved: Query<Entity, Changed<CharacterMotion>>,
+        ) {
+            dirty.0 += moved.iter().count();
+        }
+
+        let mut app = App::new();
+        app.insert_resource(WorldTerrain::default());
+        app.init_resource::<MotionDirty>();
+        app.add_systems(Update, (step_units, count_dirty).chain());
+
+        let waiting = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.0),
+                RegionCoord::default(),
+                CharacterMotion::STATIONARY,
+                MoveTarget(Vec3::new(40.0, 0.0, 0.0)),
+                NavigationRoutePending::new(Vec3::new(40.0, 0.0, 0.0)),
+            ))
+            .id();
+
+        // The spawn itself legitimately marks every component Changed.
+        app.update();
+        app.world_mut().resource_mut::<MotionDirty>().0 = 0;
+
+        for _ in 0..4 {
+            app.update();
+        }
+
+        assert_eq!(
+            app.world().resource::<MotionDirty>().0,
+            0,
+            "a villager standing still while its route is planned re-replicated CharacterMotion"
+        );
+        assert_eq!(
+            app.world().get::<CharacterMotion>(waiting).copied(),
+            Some(CharacterMotion::STATIONARY),
+            "the stationary clamp itself regressed"
+        );
     }
 }

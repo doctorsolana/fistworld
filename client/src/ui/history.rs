@@ -11,9 +11,9 @@ use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
 use shared::components::{BuildingId, CompanyId, Settlement};
 use shared::economy::{
-    format_money, BusinessHistoryArchive, BusinessHistoryDay, CompanyHistoryArchive, Good,
-    SettlementHistoryArchive, SettlementHistoryDay, WorldHistoryArchive, WorldHistoryDay,
-    SETTLEMENT_HISTORY_DAYS,
+    BusinessHistoryArchive, BusinessHistoryDay, CompanyHistoryArchive, Good,
+    SETTLEMENT_HISTORY_DAYS, SettlementHistoryArchive, SettlementHistoryDay, WorldHistoryArchive,
+    WorldHistoryDay, format_money,
 };
 use shared::protocol::{
     CompanyHistoryResponse, ReliableChannel, RequestCompanyHistory, RequestSettlementHistory,
@@ -22,7 +22,7 @@ use shared::protocol::{
 
 use crate::states::GameState;
 use crate::ui::foundation::{
-    selected_button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant,
+    UiButtonLabel, UiButtonStyle, UiButtonVariant, selected_button_chrome,
 };
 use crate::ui::good_icon_path;
 use crate::ui::modal::update_modal_click_guard;
@@ -70,7 +70,7 @@ pub(crate) struct HistoryTarget {
     pub settlement: Option<Entity>,
     pub place: String,
     pub view: HistoryView,
-    pub return_to_trade: bool,
+    pub return_to_market: bool,
 }
 
 #[derive(Resource, Default)]
@@ -117,7 +117,7 @@ pub(crate) struct SettlementHistoryCache {
     company_requested: HashSet<CompanyId>,
 }
 
-/// Button carried by each good row in the live Trade board.
+/// Button carried by each good row in the live Market page.
 #[derive(Component, Clone)]
 pub(crate) struct MarketHistoryButton {
     pub settlement: Entity,
@@ -226,7 +226,7 @@ fn handle_open_buttons(
     settlements: Query<(Entity, &Settlement)>,
     mut target: ResMut<HistoryPanelTarget>,
     mut cache: ResMut<SettlementHistoryCache>,
-    mut trade_target: ResMut<crate::ui::settlement_panel::TradePanelTarget>,
+    mut market_target: ResMut<crate::ui::market::MarketPageTarget>,
     mut buttons: ParamSet<(
         Query<
             (&Interaction, &MarketHistoryButton),
@@ -291,9 +291,8 @@ fn handle_open_buttons(
                 settlement: Some(button.settlement),
                 place: button.place.clone(),
                 view: HistoryView::Market(button.good),
-                return_to_trade: true,
+                return_to_market: true,
             });
-            trade_target.0 = None;
         }
     }
 
@@ -316,7 +315,7 @@ fn handle_open_buttons(
             settlement: Some(entity),
             place: settlement.name.clone(),
             view: HistoryView::Village,
-            return_to_trade: false,
+            return_to_market: false,
         });
     }
     for interaction in buttons.p2().iter() {
@@ -327,7 +326,7 @@ fn handle_open_buttons(
                 settlement: None,
                 place: "World".to_string(),
                 view: HistoryView::World,
-                return_to_trade: false,
+                return_to_market: false,
             });
         }
     }
@@ -339,9 +338,9 @@ fn handle_open_buttons(
                 settlement: Some(button.settlement),
                 place: button.place.clone(),
                 view: HistoryView::Business(button.business),
-                return_to_trade: false,
+                return_to_market: false,
             });
-            trade_target.0 = None;
+            market_target.0 = None;
         }
     }
     for (interaction, button) in buttons.p4().iter() {
@@ -352,9 +351,9 @@ fn handle_open_buttons(
                 settlement: None,
                 place: button.name.clone(),
                 view: HistoryView::Company(button.company),
-                return_to_trade: false,
+                return_to_market: false,
             });
-            trade_target.0 = None;
+            market_target.0 = None;
         }
     }
 }
@@ -457,7 +456,7 @@ fn ensure_history_panel(
         return;
     };
     // Ledgers are encyclopedia pages. Opened from elsewhere (the compact
-    // panel, the market board), the window opens on the matching tab and
+    // panel, the market page), the window opens on the matching tab and
     // hosts the page on the next frame.
     let Ok(host) = hosts.single() else {
         if !encyclopedia_open.0 {
