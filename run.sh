@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run script for Fistworld
-# Usage: ./run.sh [server|client|both|testworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|multi] [--release|--dev]
+# Usage: ./run.sh [server|client|both|testworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|multi] [--release|--dev]
 #
 # BUILD PROFILE. This used to build --release every time, which meant a ten
 # minute wait for a one line change: release turns on thin LTO, which re-links
@@ -53,10 +53,25 @@ STREAM_VILLAGE_LOGS="${FISTWORLD_STREAM_LOGS:-1}"
 
 # The rendered Village Lab is explicit rather than tied to the map id. This
 # preserves `CITYSIM_MAP_ID=village_lab ./run.sh` as an empty god-mode sandbox.
-if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
-    export CITYSIM_MAP_ID="village_lab"
+if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "regionalworld" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
+    if [[ "$MODE" == "regionalworld" ]]; then
+        export CITYSIM_MAP_ID="regional_lab"
+    else
+        export CITYSIM_MAP_ID="village_lab"
+    fi
     export FISTWORLD_VILLAGE_LAB_RUNTIME="${FISTWORLD_VILLAGE_LAB_RUNTIME:-1}"
-    if [[ "$MODE" == "economyworld" ]]; then
+    if [[ "$MODE" == "regionalworld" ]]; then
+        # Four ordinary autonomous settlements on the larger seed-37 map:
+        # fertile coast, frozen poor soil, forest edge and Stone country.
+        # Identical gentle arrivals expose how geography changes investment,
+        # labour, prices and household outcomes without a crowd shock.
+        export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-regional-economy}"
+        export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-10}"
+        export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:-0,0}"
+        export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-1250}"
+        export FISTFORCE_SERVER_PERF="${FISTFORCE_SERVER_PERF:-1}"
+        export FISTFORCE_CLIENT_PERF="${FISTFORCE_CLIENT_PERF:-1}"
+    elif [[ "$MODE" == "economyworld" ]]; then
         export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-economy-soak}"
         export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-10}"
         export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:--95,-120}"
@@ -131,7 +146,7 @@ if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "stoneworld" 
     export RUST_LOG="${FISTWORLD_TESTWORLD_RUST_LOG:-info}"
     export FISTFORCE_AUTOCONNECT="${FISTFORCE_AUTOCONNECT:-LabObserver}"
     CAPTURE_VILLAGE_LOGS=1
-    if [[ "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
+    if [[ "$MODE" == "regionalworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
         VILLAGE_LOG_DIR="${FISTWORLD_RUN_LOG_DIR:-$(pwd)/logs/${MODE}-$(date +%Y%m%d-%H%M%S)}"
     else
         VILLAGE_LOG_DIR="${FISTWORLD_RUN_LOG_DIR:-$(pwd)/logs/${MODE}-$(date +%Y%m%d-%H%M%S)}"
@@ -315,10 +330,10 @@ case $MODE in
         echo -e "${BLUE}Starting client...${NC}"
         cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
         ;;
-    both|testworld|testlab|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|reallab)
+    both|testworld|testlab|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|reallab)
         cleanup_server
-        if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
-            echo -e "${YELLOW}Village Lab: ${FISTWORLD_LAB_SCENARIO}, seed 3, starting at ${FISTWORLD_LAB_WARP}x (HUD: pause / 1x / 10x / 25x / 100x)${NC}"
+        if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "regionalworld" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
+            echo -e "${YELLOW}Village Lab: ${FISTWORLD_LAB_SCENARIO}, map ${CITYSIM_MAP_ID}, starting at ${FISTWORLD_LAB_WARP}x (HUD: pause / 1x / 10x / 25x / 100x)${NC}"
             echo -e "${YELLOW}Logs: ${VILLAGE_LOG_DIR}${NC}"
         fi
         if [[ "$MODE" == "realworld" || "$MODE" == "reallab" ]]; then
@@ -403,11 +418,12 @@ case $MODE in
         echo -e "${GREEN}Client closed. Stopping server...${NC}"
         ;;
     *)
-        echo "Usage: ./run.sh [server|client|both|testworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|multi|windows] [--release|--dev]"
+        echo "Usage: ./run.sh [server|client|both|testworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|multi|windows] [--release|--dev]"
         echo "  server  - Start only the server"
         echo "  client  - Start only the client"
         echo "  both    - Start server then client (default)"
         echo "  testworld - Watch one deterministic logged Village Lab settlement (starts at 1x)"
+        echo "  regionalworld - Watch four contrasting villages grow on the larger regional lab (10x)"
         echo "  stoneworld - Watch Meadow and Stone-rich settlements develop together (starts at 1x)"
         echo "  tradeworld - Watch two villages grow to 35 and create a physical Stone import route (10x)"
         echo "  merchantworld - Watch NPC firms discover a controlled cheap-Bread trade opportunity (10x)"

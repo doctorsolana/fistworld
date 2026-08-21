@@ -228,10 +228,13 @@ it. This is the whole reason §1a exists: production that reads
 `population × profile` cannot express "the wheat farm stopped because the farmer
 died", and that sentence is the point.
 
-`local_resource_quality` is `BiomeField::resources` sampled around the
-settlement and cached at founding — meadows villages pile up food, forest
-villages wood, highlands stone and, on vein sites, iron. Nobody produces
-everything; that gap is the entire reason trade exists.
+`local_resource_quality` is `BiomeField::resources` sampled at the relevant
+plot. Each biome supplies a recognizable base profile, but broad, independently
+seeded soil, timber, and geology fields vary quality smoothly across roughly
+430–640 metre regions. Climate, slope, and mineral veins then modify those
+values. Neighbouring plots therefore remain similar without every meadow farm,
+forest lumber site, or highland quarry receiving an identical score. Nobody
+produces everything; that gap is the entire reason trade exists.
 
 **Prosperity and growth.** One scalar drives the tier ladder:
 

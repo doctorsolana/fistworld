@@ -20,7 +20,7 @@
   generated: Some((
     style: Showcase,
     seed: 91,
-    generator_version: 11,
+    generator_version: 12,
     half_extent: 4096.0,
   )),
   player_spawn: Some((

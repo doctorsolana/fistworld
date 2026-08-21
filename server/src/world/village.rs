@@ -301,14 +301,14 @@ const TIMBER_RETRY_MAX_SECONDS: f64 = 60.0;
 /// How often a settlement considers what it needs next.
 const PERMIT_INTERVAL: f32 = 4.0;
 
-/// How close a villager must get to the Hall forecourt before the visible line
-/// takes ownership of their movement.
+/// Horizontal extent of the Hall's visible front forecourt.
 ///
-/// This is deliberately wider than the exact door offset. Requiring every
-/// migrant to solve a route to one point on the threshold made the occasional
-/// person on the far side of a crowded forecourt fail and cool down while
-/// everyone beside them visibly queued. The queue already owns collision-aware
-/// last-metre movement and its bounded counter fallback.
+/// Distance alone is not sufficient: the Town Hall reservation extends far
+/// behind the founding Moot. A migrant approaching from that side used to
+/// enter this radius, cancel their certified door route, and then need a
+/// second route around the Hall before they could join the line. The arrival
+/// handoff also verifies that the person is in front of the largest supported
+/// Hall shell.
 const ARRIVAL_RADIUS: f32 = 12.0;
 
 /// Physical work-loop tuning. Prices decide whether a transfer can happen, but

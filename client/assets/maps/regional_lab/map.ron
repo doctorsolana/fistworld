@@ -1,0 +1,26 @@
+(
+  map_id: "regional_lab",
+  bounds: (
+    min: (-960.0, -960.0),
+    max: (960.0, 960.0),
+  ),
+  terrain: (
+    // Generated maps rebuild the surface from this compact recipe; no
+    // diagnostic heightmap is shipped for the regional laboratory.
+    heightmap: "height.png",
+    minimap: None,
+    water_level: Some(0.0),
+    height_min: -34.0,
+    height_max: 82.0,
+  ),
+  generated: Some((
+    style: Showcase,
+    seed: 37,
+    generator_version: 12,
+    scatter_vegetation: true,
+    half_extent: 960.0,
+  )),
+  player_spawn: Some((0.0, 8.0, 0.0)),
+  objects: [],
+  blockers: [],
+)

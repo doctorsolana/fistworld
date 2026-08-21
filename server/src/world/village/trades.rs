@@ -271,6 +271,7 @@ pub fn assign_farmer_routines(
     )>,
     roads: Query<(&VillageRoad, &shared::components::RoadOf)>,
     road_requests: Query<(), With<RoadRequest>>,
+    operating_plans: Query<&BusinessOperatingPlan>,
     settlements: Query<(
         Entity,
         &shared::components::SettlementId,
@@ -339,6 +340,18 @@ pub fn assign_farmer_routines(
         let Some(employees) = eligible_by_building.get(building_id) else {
             continue;
         };
+        // An autonomous owner can rationally close a weak or oversupplied
+        // field for the day. Do not make its still-employed farmer enter the
+        // Farmstead, walk to the crop, discover a zero-unit target and walk
+        // straight back out. They remain employed and resume on the first day
+        // whose cached operating plan has real work.
+        if operating_plans
+            .get(farmstead)
+            .is_ok_and(|plan| plan.day == clock.day && plan.remaining(clock.day) == 0)
+        {
+            defer_shift_until_workplace_access(&mut commands, employees, clock.day);
+            continue;
+        }
         let Some(farm_fields) = fields_by_farm.get(building_id) else {
             continue;
         };

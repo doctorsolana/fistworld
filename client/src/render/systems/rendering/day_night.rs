@@ -138,7 +138,9 @@ pub fn update_day_night_cycle(
     let day_fill_dir = Vec3::new(-sun_dir.x, -0.35, -sun_dir.z).normalize_or_zero();
     let moon_azimuth = Vec3::new(sun_dir.x, 0.0, sun_dir.z).normalize_or_zero();
     let moon_source = (moon_azimuth * 0.45 + Vec3::Y * 0.89).normalize();
-    let fill_dir = day_fill_dir.lerp(-moon_source, moon_factor).normalize_or_zero();
+    let fill_dir = day_fill_dir
+        .lerp(-moon_source, moon_factor)
+        .normalize_or_zero();
     let fill_rotation = Quat::from_rotation_arc(Vec3::NEG_Z, fill_dir);
     let fill_color = Color::srgb(0.60, 0.72, 0.95);
     for (mut fill_light, mut fill_transform) in fill_query.iter_mut() {
@@ -208,21 +210,27 @@ pub fn update_day_night_cycle(
     // function everything else reads. QUANTIZED (1/32 steps) before joining
     // the change-skip key, or panning the camera would defeat the plateau
     // optimization below.
-    let camera_climate = terrain
-        .as_deref()
-        .zip(cameras.iter().next())
-        .and_then(|(terrain, camera)| {
-            let generated = terrain.generator.loaded_map().definition.generated.as_ref()?;
-            let focus = camera.focus;
-            let height = terrain.get_height(focus.x, focus.z);
-            Some(shared::worldgen::climate_at(
-                generated.seed,
-                focus.x,
-                focus.z,
-                height,
-                generated.half_extent,
-            ))
-        });
+    let camera_climate =
+        terrain
+            .as_deref()
+            .zip(cameras.iter().next())
+            .and_then(|(terrain, camera)| {
+                let generated = terrain
+                    .generator
+                    .loaded_map()
+                    .definition
+                    .generated
+                    .as_ref()?;
+                let focus = camera.focus;
+                let height = terrain.get_height(focus.x, focus.z);
+                Some(shared::worldgen::climate_at(
+                    generated.seed,
+                    focus.x,
+                    focus.z,
+                    height,
+                    generated.half_extent,
+                ))
+            });
     let quantize = |v: f32| (v * 32.0).round() / 32.0;
     let zone_cold = quantize(camera_climate.as_ref().map_or(0.0, |c| c.frost));
     let zone_dry = quantize(camera_climate.as_ref().map_or(0.0, |c| c.dry));

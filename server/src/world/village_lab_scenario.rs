@@ -54,6 +54,14 @@ const LAB_MEADOW_ANCHOR: Vec2 = Vec2::new(112.0, -158.0);
 const LAB_COLDBARROW_ANCHOR: Vec2 = Vec2::new(-278.0, -428.0);
 const LAB_GREENWOOD_ANCHOR: Vec2 = Vec2::new(-108.0, 220.0);
 const LAB_STONE_ANCHOR: Vec2 = Vec2::new(-390.0, 102.0);
+// Seed 37's larger four-condition laboratory. These points were selected by
+// the exhaustive live validators below, then retained so every subsequent
+// rendered/headless launch proves four known candidates instead of spending
+// nearly two minutes rediscovering the same negative shoreline results.
+const REGIONAL_MEADOW_ANCHOR: Vec2 = Vec2::new(-666.0, -36.0);
+const REGIONAL_COLDBARROW_ANCHOR: Vec2 = Vec2::new(-356.0, -546.0);
+const REGIONAL_GREENWOOD_ANCHOR: Vec2 = Vec2::new(726.0, 256.0);
+const REGIONAL_STONE_ANCHOR: Vec2 = Vec2::new(254.0, 422.0);
 
 /// Server-only marker for the controlled regional-commerce fixture. Ordinary
 /// settlements can never acquire this component, so the artificial supply is
@@ -232,6 +240,9 @@ pub(crate) enum LabScenario {
     StoneComparison,
     TradeComparison,
     MerchantBeacon,
+    /// Four ordinary autonomous settlements on the larger regional lab map:
+    /// fertile coast, frozen poor soil, forest edge, and Stone country.
+    RegionalEconomy,
     TripleStress,
     DenseStress,
 }
@@ -260,10 +271,13 @@ impl LabScenario {
             "merchant-beacon" | "bread-trade" | "merchant-test" | "trade-beacon" => {
                 Self::MerchantBeacon
             }
+            "regional" | "regional-economy" | "four-village" | "four" => {
+                Self::RegionalEconomy
+            }
             "triple" | "triple-stress" | "stress" | "three" => Self::TripleStress,
             "dense" | "dense-stress" | "thousand" | "1000" => Self::DenseStress,
             value => panic!(
-                "unknown FISTWORLD_LAB_SCENARIO '{value}'; use secure, inland-meadow, policy-comparison, poor, dual, economy-soak, stone-comparison, trade-comparison, merchant-beacon, triple-stress, or dense-stress"
+                "unknown FISTWORLD_LAB_SCENARIO '{value}'; use secure, inland-meadow, policy-comparison, poor, dual, economy-soak, stone-comparison, trade-comparison, merchant-beacon, regional-economy, triple-stress, or dense-stress"
             ),
         }
     }
@@ -277,13 +291,18 @@ impl LabScenario {
                 | Self::StoneComparison
                 | Self::TripleStress
                 | Self::DenseStress
+                | Self::RegionalEconomy
         )
     }
 
     pub(crate) fn includes_poor(self) -> bool {
         matches!(
             self,
-            Self::Poor | Self::Dual | Self::EconomySoak | Self::TripleStress
+            Self::Poor
+                | Self::Dual
+                | Self::EconomySoak
+                | Self::TripleStress
+                | Self::RegionalEconomy
         )
     }
 
@@ -296,11 +315,17 @@ impl LabScenario {
     }
 
     pub(crate) fn includes_greenwood(self) -> bool {
-        matches!(self, Self::EconomySoak | Self::TripleStress)
+        matches!(
+            self,
+            Self::EconomySoak | Self::TripleStress | Self::RegionalEconomy
+        )
     }
 
     pub(crate) fn includes_stonefield(self) -> bool {
-        matches!(self, Self::StoneComparison | Self::TradeComparison)
+        matches!(
+            self,
+            Self::StoneComparison | Self::TradeComparison | Self::RegionalEconomy
+        )
     }
 
     pub(crate) fn is_trade_comparison(self) -> bool {
@@ -320,6 +345,23 @@ impl LabScenario {
         self == Self::EconomySoak
     }
 
+    pub(crate) const fn is_regional_economy(self) -> bool {
+        matches!(self, Self::RegionalEconomy)
+    }
+
+    pub(crate) const fn map_id(self) -> &'static str {
+        if self.is_regional_economy() {
+            "regional_lab"
+        } else {
+            "village_lab"
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn audits_money_each_update(self) -> bool {
+        matches!(self, Self::EconomySoak | Self::RegionalEconomy)
+    }
+
     pub(crate) fn is_crowd_stress(self) -> bool {
         matches!(self, Self::TripleStress | Self::DenseStress)
     }
@@ -331,12 +373,14 @@ impl LabScenario {
                 || self.includes_inland_meadow()
                 || self.is_policy_comparison()
                 || self.is_trade_comparison()
-                || self.is_merchant_beacon())
+                || self.is_merchant_beacon()
+                || self.is_regional_economy())
     }
 
     pub(crate) fn residents_per_village(self) -> usize {
         let default = match self {
             Self::EconomySoak => 0,
+            Self::RegionalEconomy => SECURE_VILLAGERS,
             Self::TripleStress => TRIPLE_STRESS_VILLAGERS_PER_VILLAGE,
             Self::DenseStress => DENSE_STRESS_VILLAGERS,
             Self::TradeComparison | Self::MerchantBeacon => TRADE_FOUNDERS_PER_VILLAGE,
@@ -357,6 +401,7 @@ impl LabScenario {
                 | Self::MerchantBeacon
                 | Self::Poor
                 | Self::Dual
+                | Self::RegionalEconomy
         ) {
             std::env::var("FISTWORLD_LAB_FOUNDERS")
                 .ok()
@@ -371,6 +416,7 @@ impl LabScenario {
     pub(crate) fn expected_residents(self) -> usize {
         match self {
             Self::EconomySoak => 0,
+            Self::RegionalEconomy => self.residents_per_village().saturating_mul(4),
             Self::TripleStress => TRIPLE_STRESS_VILLAGERS_PER_VILLAGE * 3,
             Self::DenseStress => DENSE_STRESS_VILLAGERS,
             Self::PolicyComparison => self.residents_per_village().saturating_mul(2),
@@ -436,9 +482,14 @@ pub(crate) fn choose_secure_site(terrain: &WorldTerrain) -> (Vec3, usize, Vec3, 
     // The Village Lab is a fixed generated map. Prefer its known deterministic
     // anchor, but run every real suitability check so a terrain or fishing-rule
     // change invalidates it instead of silently making the scenario dishonest.
-    if map.definition.map_id == "village_lab" {
-        let x = LAB_MEADOW_ANCHOR.x;
-        let z = LAB_MEADOW_ANCHOR.y;
+    let fixed_anchor = match map.definition.map_id.as_str() {
+        "village_lab" => Some(LAB_MEADOW_ANCHOR),
+        "regional_lab" => Some(REGIONAL_MEADOW_ANCHOR),
+        _ => None,
+    };
+    if let Some(anchor) = fixed_anchor {
+        let x = anchor.x;
+        let z = anchor.y;
         let height = terrain.get_height(x, z);
         let slope = slope_at(terrain, x, z);
         let hall = Vec3::new(x, height, z);
@@ -456,7 +507,7 @@ pub(crate) fn choose_secure_site(terrain: &WorldTerrain) -> (Vec3, usize, Vec3, 
             if let Some((hut, rotation, fishing_quality)) =
                 village::find_fishing_site(terrain, hall, &[], &[])
             {
-                let trees = nearby_tree_count(terrain, LAB_MEADOW_ANCHOR, 120.0);
+                let trees = nearby_tree_count(terrain, anchor, 120.0);
                 if trees > 0 && village::lumber_plot_has_reachable_tree(terrain, hall) {
                     return (hall, trees, hut, rotation, fishing_quality, farmland);
                 }
@@ -528,9 +579,14 @@ pub(crate) fn choose_poor_site(
     // exhaustive map search. A negative fishing result is the expensive case,
     // so performing it once rather than for scores of inland candidates is the
     // difference between an immediate lab startup and a timed-out client.
-    if map.definition.map_id == "village_lab" {
-        let x = LAB_COLDBARROW_ANCHOR.x;
-        let z = LAB_COLDBARROW_ANCHOR.y;
+    let fixed_anchor = match map.definition.map_id.as_str() {
+        "village_lab" => Some(LAB_COLDBARROW_ANCHOR),
+        "regional_lab" => Some(REGIONAL_COLDBARROW_ANCHOR),
+        _ => None,
+    };
+    if let Some(anchor) = fixed_anchor {
+        let x = anchor.x;
+        let z = anchor.y;
         let height = terrain.get_height(x, z);
         let hall = Vec3::new(x, height, z);
         let slope = slope_at(terrain, x, z);
@@ -550,7 +606,7 @@ pub(crate) fn choose_poor_site(
             })
             && village::find_fishing_site(terrain, hall, &[], &[]).is_none()
         {
-            let trees = nearby_tree_count(terrain, LAB_COLDBARROW_ANCHOR, 120.0);
+            let trees = nearby_tree_count(terrain, anchor, 120.0);
             if trees > 0 {
                 return (hall, trees, farmland);
             }
@@ -779,9 +835,14 @@ pub(crate) fn choose_stone_site(
         best
     };
 
-    if map.definition.map_id == "village_lab" {
-        let x = LAB_STONE_ANCHOR.x;
-        let z = LAB_STONE_ANCHOR.y;
+    let fixed_anchor = match map.definition.map_id.as_str() {
+        "village_lab" => Some(LAB_STONE_ANCHOR),
+        "regional_lab" => Some(REGIONAL_STONE_ANCHOR),
+        _ => None,
+    };
+    if let Some(anchor) = fixed_anchor {
+        let x = anchor.x;
+        let z = anchor.y;
         let height = terrain.get_height(x, z);
         let slope = slope_at(terrain, x, z);
         let hall = Vec3::new(x, height, z);
@@ -800,7 +861,7 @@ pub(crate) fn choose_stone_site(
             && crate::world::village_roads::overland_trade_corridor_exists(
                 terrain,
                 Vec2::new(away_from.x, away_from.z),
-                LAB_STONE_ANCHOR,
+                anchor,
             )
         {
             return (
@@ -863,11 +924,13 @@ pub(crate) fn choose_stone_site(
 /// A third, temperate inland site for the 600-person stress scenario.
 ///
 /// Unlike the two control sites, Greenwood is selected for room to expand as
-/// well as viable farming and timber. It does not require or forbid fishing:
-/// the ordinary planner remains free to exploit any shore it can actually
-/// reach. The fixed anchor keeps startup cheap, while the scored fallback
-/// makes terrain-generator changes fail honestly instead of silently stacking
-/// two towns inside the 300-metre founding exclusion.
+/// well as viable farming and timber. The compact stress fixture does not
+/// require or forbid fishing, but the four-condition regional economy keeps
+/// Greenwood inland so it remains a meaningful timber/farming contrast to its
+/// deliberately coastal Meadow control. The fixed anchor keeps startup cheap,
+/// while the scored fallback makes terrain-generator changes fail honestly
+/// instead of silently stacking two towns inside the 300-metre founding
+/// exclusion.
 pub(crate) fn choose_greenwood_site(
     terrain: &WorldTerrain,
     away_from: &[Vec3],
@@ -878,6 +941,7 @@ pub(crate) fn choose_greenwood_site(
         .as_deref()
         .expect("village_lab must be a generated map with a biome field");
     let bounds = map.definition.bounds;
+    let regional_inland = map.definition.map_id == "regional_lab";
     let margin = 96.0;
     let minimum_spacing = shared::components::MIN_SETTLEMENT_SPACING + 30.0;
 
@@ -904,11 +968,20 @@ pub(crate) fn choose_greenwood_site(
         (valid, hall, biome, farmland, spacing)
     };
 
-    if map.definition.map_id == "village_lab" {
-        let (valid, hall, _, farmland, _) = inspect(LAB_GREENWOOD_ANCHOR);
+    let fixed_anchor = match map.definition.map_id.as_str() {
+        "village_lab" => Some(LAB_GREENWOOD_ANCHOR),
+        "regional_lab" => Some(REGIONAL_GREENWOOD_ANCHOR),
+        _ => None,
+    };
+    if let Some(anchor) = fixed_anchor {
+        let (valid, hall, _, farmland, _) = inspect(anchor);
         if valid {
-            let trees = nearby_tree_count(terrain, LAB_GREENWOOD_ANCHOR, 120.0);
-            if trees > 0 && village::lumber_plot_has_reachable_tree(terrain, hall) {
+            let trees = nearby_tree_count(terrain, anchor, 120.0);
+            let fishing = village::find_fishing_site(terrain, hall, &[], &[]).is_some();
+            if trees >= if regional_inland { 24 } else { 1 }
+                && village::lumber_plot_has_reachable_tree(terrain, hall)
+                && (!regional_inland || !fishing)
+            {
                 return (hall, trees, farmland);
             }
         }
@@ -944,7 +1017,10 @@ pub(crate) fn choose_greenwood_site(
     for (_, hall, farmland) in candidates.into_iter().take(192) {
         let point = Vec2::new(hall.x, hall.z);
         let trees = nearby_tree_count(terrain, point, 120.0);
-        if trees > 0 && village::lumber_plot_has_reachable_tree(terrain, hall) {
+        if trees >= if regional_inland { 24 } else { 1 }
+            && village::lumber_plot_has_reachable_tree(terrain, hall)
+            && (!regional_inland || village::find_fishing_site(terrain, hall, &[], &[]).is_none())
+        {
             return (hall, trees, farmland);
         }
     }
@@ -1249,6 +1325,30 @@ fn economy_soak_arrival_waves() -> Vec<LabArrivalWave> {
     waves
 }
 
+/// Gentle, identical population pressure for the four-condition regional lab.
+/// Eight founders establish each Moot, then one arrival per town per day lets
+/// firms observe changing demand instead of reacting to one artificial crowd
+/// shock. Each settlement reaches 26 people on day 20 and receives several
+/// quiet days afterward when the canonical 24-day run is used.
+fn regional_economy_arrival_waves() -> Vec<LabArrivalWave> {
+    let mut waves = Vec::new();
+    for day in 3..=20 {
+        for target in [
+            LabArrivalTarget::Meadow,
+            LabArrivalTarget::Coldbarrow,
+            LabArrivalTarget::Greenwood,
+            LabArrivalTarget::Stonefield,
+        ] {
+            waves.push(LabArrivalWave {
+                day,
+                count: 1,
+                target,
+            });
+        }
+    }
+    waves
+}
+
 /// Grow both trade controls at the same measured pace. Starting all seventy
 /// residents on bare ground turns the fixture into a starvation-recovery test
 /// and can postpone the actual Town Works contract indefinitely. Twelve
@@ -1304,6 +1404,9 @@ pub(crate) fn lab_arrival_waves() -> Vec<LabArrivalWave> {
     let scenario = LabScenario::from_environment();
     if scenario.is_economy_soak() {
         return economy_soak_arrival_waves();
+    }
+    if scenario.is_regional_economy() {
+        return regional_economy_arrival_waves();
     }
     if scenario.is_trade_comparison() {
         return trade_comparison_arrival_waves(scenario.residents_per_village());
@@ -1646,6 +1749,41 @@ mod tests {
     }
 
     #[test]
+    fn regional_economy_applies_identical_gentle_growth_to_four_villages() {
+        let waves = regional_economy_arrival_waves();
+        assert_eq!(waves.len(), 18 * 4);
+        assert_eq!(waves.iter().map(|wave| wave.day).min(), Some(3));
+        assert_eq!(waves.iter().map(|wave| wave.day).max(), Some(20));
+        assert!(waves.iter().all(|wave| wave.count == 1));
+
+        for target in [
+            LabArrivalTarget::Meadow,
+            LabArrivalTarget::Coldbarrow,
+            LabArrivalTarget::Greenwood,
+            LabArrivalTarget::Stonefield,
+        ] {
+            let arrivals = waves
+                .iter()
+                .filter(|wave| wave.target == target)
+                .map(|wave| wave.count)
+                .sum::<usize>();
+            assert_eq!(arrivals, 18);
+            assert_eq!(SECURE_VILLAGERS + arrivals, 26);
+        }
+
+        for day in 3..=20 {
+            assert_eq!(
+                waves
+                    .iter()
+                    .filter(|wave| wave.day == day)
+                    .map(|wave| wave.count)
+                    .sum::<usize>(),
+                4
+            );
+        }
+    }
+
+    #[test]
     fn trade_comparison_grows_both_settlements_smoothly_to_thirty_five() {
         let waves = trade_comparison_arrival_waves(TRADE_FOUNDERS_PER_VILLAGE);
         assert_eq!(waves.iter().map(|wave| wave.count).sum::<usize>(), 46);
@@ -1799,10 +1937,12 @@ pub(crate) fn stage_rendered_lab_once(
         return;
     }
 
-    if map_id != "village_lab" {
+    let scenario = LabScenario::from_environment();
+    let expected_map = scenario.map_id();
+    if map_id != expected_map {
         error!(
-            "FISTWORLD_VILLAGE_LAB_RUNTIME requires CITYSIM_MAP_ID=village_lab; refusing to stage it on '{}'",
-            map_id
+            "FISTWORLD_VILLAGE_LAB_RUNTIME scenario {:?} requires CITYSIM_MAP_ID={expected_map}; refusing to stage it on '{map_id}'",
+            scenario,
         );
         *staged = true;
         return;
@@ -1829,7 +1969,6 @@ pub(crate) fn stage_rendered_lab_once(
         return;
     }
 
-    let scenario = LabScenario::from_environment();
     let secure = scenario
         .includes_secure()
         .then(|| choose_secure_site(&terrain));
@@ -1861,6 +2000,11 @@ pub(crate) fn stage_rendered_lab_once(
         }
         if let Some(choice) = poor {
             occupied.push(choice.0);
+        }
+        if scenario.is_regional_economy() {
+            if let Some(choice) = stonefield {
+                occupied.push(choice.0);
+            }
         }
         choose_greenwood_site(&terrain, &occupied)
     });

@@ -12,6 +12,13 @@ comparison is useful. It executes the real server economy, collider, route,
 construction, road, household and work systems without starting rendering or
 networking.
 
+The `regional-economy` scenario uses a separate 1.92-kilometre square seed-37
+map and four ordinary autonomous settlements: a fertile fishing coast, frozen
+poor soil, a forest edge, and Stone country. It is the broad balancing lab for
+the generated resource gradients. Nothing is granted after founding: every
+building, job, item, price and company decision comes from the production
+simulation.
+
 ## Run it
 
 From the workspace root:
@@ -75,6 +82,20 @@ cargo village-lab
 # Watch the identical scenario in the rendered game. It begins at 10x and the
 # HUD can still pause or select another time warp.
 ./run.sh economyworld
+
+# Watch the four-condition regional economy on its larger map. Every town
+# starts with eight founders and receives one newcomer per day on days 3-20.
+# It begins at the gameplay-faithful 10x speed; pause or choose 1x/25x in the
+# HUD when inspecting an individual worker.
+./run.sh regionalworld
+
+# Run the same regional experiment headlessly through day 25. Use 25x for the
+# canonical physical/economic acceptance run: pathfinding, walking, production
+# and queues still receive dense updates, while the test finishes quickly.
+FISTWORLD_LAB_SCENARIO=regional-economy \
+FISTWORLD_LAB_WARP=25 \
+FISTWORLD_LAB_MINUTES=700 \
+cargo village-lab
 
 # Three settlements with 200 founders each at an exact 10x time warp.
 # The 180-minute soak records ranked core, economy, navigation and plot-search
@@ -209,6 +230,8 @@ or `three`. The single-town thousand-person fixture accepts `dense-stress`,
 `dense`, `thousand` or `1000`.
 The long three-village economy fixture accepts `economy-soak`, `economy`,
 `economy50` or `fifty-days`.
+The four-condition regional fixture accepts `regional-economy`, `regional`,
+`four-village` or `four` and automatically selects the `regional_lab` map.
 
 ## The fixed scenarios
 
@@ -251,6 +274,20 @@ surplus to establish a three-day reserve, so it remains a Hamlet. That constrain
 adaptation is part of the control: otherwise identical autonomy responds to
 measured scarcity, but geography still matters instead of every settlement
 converging on the fertile Meadow outcome.
+
+`regional-economy` places Meadow, Coldbarrow, Greenwood and Stonefield far apart
+on the normal generated terrain instead of arranging them as a compact fixture.
+All four use the same policies, founder count and one-person daily growth, making
+their different development paths attributable to geography and owner decisions.
+The run validates every regional anchor through the live farmland, fishing,
+timber, Stone, slope and route checks before spawning a Hall. Its final diagnostics
+include per-settlement poorest/richest/mean wealth, a causal breakdown for each
+local wealth leader, one deterministic resident life-history spotlight per town,
+business production and purchases, market transfers, closing physical stock,
+food creation/consumption, mortality, inventory capacity and exact per-update coin
+conservation. A weak Farmstead whose owner schedules zero output now releases its
+employees for the day; genuinely operating low-quality fields retain fractional
+harvest progress between shifts instead of pretending to work or losing progress.
 
 `stone-comparison` runs ordinary `Lab Meadow` beside `Lab Stonefield`. The latter is
 selected only when its normal settlement work ring contains at least a 55% Stone prospect;

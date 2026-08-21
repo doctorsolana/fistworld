@@ -1026,9 +1026,7 @@ mod tests {
             .flat_map(|start| {
                 let mut targets = approaches
                     .iter()
-                    .filter(|far| {
-                        far.landing.xz().distance(start.landing.xz()) >= 1_200.0
-                    })
+                    .filter(|far| far.landing.xz().distance(start.landing.xz()) >= 1_200.0)
                     .collect::<Vec<_>>();
                 targets.sort_by(|a, b| {
                     a.landing
@@ -1081,7 +1079,10 @@ mod tests {
             slices += 1;
             match result {
                 PendingLandfallResult::Pending => {
-                    assert!(slices < 1_000_000, "landfall certification never terminated");
+                    assert!(
+                        slices < 1_000_000,
+                        "landfall certification never terminated"
+                    );
                 }
                 PendingLandfallResult::Reachable(voyage) => break voyage,
                 PendingLandfallResult::Unreachable => {

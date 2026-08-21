@@ -617,8 +617,7 @@ pub fn save_graphics_settings(
         .unwrap_or_else(GraphicsSettings::shipped_defaults);
     let mut to_save = settings.clone();
     to_save.revert_env_forced(&baseline);
-    let serialized = match ron::ser::to_string_pretty(&to_save, ron::ser::PrettyConfig::default())
-    {
+    let serialized = match ron::ser::to_string_pretty(&to_save, ron::ser::PrettyConfig::default()) {
         Ok(text) => text,
         Err(err) => {
             warn!("Could not serialize graphics settings: {err}");

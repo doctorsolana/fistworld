@@ -12,7 +12,7 @@ use layout::{
     close_map_on_escape, despawn_map_ui, ensure_map_bounds, handle_backdrop_click, spawn_map_ui,
     sync_map_open_state, toggle_map,
 };
-use markers::update_player_marker;
+use markers::{update_camera_viewport, update_player_marker};
 use projection::world_to_map;
 
 use bevy::asset::RenderAssetUsages;
@@ -22,7 +22,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui::UiTransform;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
-use shared::components::{LocalPlayer, PlayerPosition, PlayerRotation};
+use shared::components::{Hero, PlayerPosition, PlayerRotation};
 use shared::map::MapBounds;
 
 use super::modal::{modal_backdrop_chrome, modal_root_chrome, sync_modal_cursor, ModalRoot};
@@ -34,6 +34,7 @@ const MAP_TEX_SIZE: u32 = 512;
 const MAP_PANEL_SIZE: f32 = 512.0;
 const PLAYER_ARROW_SIZE: f32 = 14.0;
 const PLAYER_ARROW_TEX: u32 = 24;
+const VIEWPORT_EDGE_THICKNESS: f32 = 1.5;
 
 pub struct WorldMapPlugin;
 
@@ -58,6 +59,7 @@ impl Plugin for WorldMapPlugin {
                 update_map_image_handle,
                 update_marker_image_handle,
                 update_player_marker,
+                update_camera_viewport.after(crate::camera_rts::update_commander_camera),
             )
                 .run_if(in_state(GameState::Playing)),
         );
@@ -99,3 +101,6 @@ struct MapMarkerLayer;
 
 #[derive(Component)]
 struct MapPlayerMarker;
+
+#[derive(Component)]
+struct MapViewportEdge(u8);

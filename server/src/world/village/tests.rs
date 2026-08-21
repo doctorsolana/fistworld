@@ -1353,7 +1353,7 @@ fn migration_repairs_an_obsolete_hall_centre_target() {
 }
 
 #[test]
-fn a_nearby_failed_migrant_joins_the_forecourt_line_instead_of_cooling_down() {
+fn a_failed_migrant_on_the_front_forecourt_joins_the_line_instead_of_cooling_down() {
     let mut app = village_test_app();
     app.init_resource::<MootQueueClock>();
     app.add_systems(Update, arrive_at_settlement);
@@ -1372,7 +1372,7 @@ fn a_nearby_failed_migrant_joins_the_forecourt_line_instead_of_cooling_down() {
             PlayerRotation(0.0),
         ))
         .id();
-    let position = hall_position + Vec3::new(8.0, -4.0, 0.0);
+    let position = hall_position + Vec3::new(8.0, -4.0, -5.3);
     let goal = SettlementBuildingKind::Hall.entrance_position(hall_position, 0.0);
     let villager = app
         .world_mut()
@@ -1394,6 +1394,175 @@ fn a_nearby_failed_migrant_joins_the_forecourt_line_instead_of_cooling_down() {
     assert!(villager.contains::<MootQueueTicket>());
     assert!(!villager.contains::<MigrationCooldown>());
     assert!(!villager.contains::<NavigationRouteFailed>());
+}
+
+#[test]
+fn rear_hall_upgrade_reservation_cannot_steal_a_migrants_door_route() {
+    let mut app = village_test_app();
+    app.init_resource::<MootQueueClock>();
+    app.add_systems(Update, arrive_at_settlement);
+
+    let hall_position = Vec3::new(120.0, 18.0, -40.0);
+    let hall_rotation = 0.73;
+    let settlement = app
+        .world_mut()
+        .spawn((
+            Settlement {
+                name: "Front Door".to_string(),
+                tier: shared::components::SettlementTier::Hamlet,
+                residents: 0,
+                treasury: 0,
+            },
+            PlayerPosition(hall_position),
+            PlayerRotation(hall_rotation),
+        ))
+        .id();
+    // Local +Z is behind the Hall. Eight metres is inside the future Town
+    // Hall reservation, outside the current Moot shell, and inside the old
+    // radial arrival threshold that prematurely cancelled this route.
+    let rear = shared::rotation::local_to_world_xz(Vec2::new(0.0, 8.0), hall_rotation);
+    let position = hall_position + Vec3::new(rear.x, 0.0, rear.y);
+    let entrance = SettlementBuildingKind::Hall.entrance_position(hall_position, hall_rotation);
+    let villager = app
+        .world_mut()
+        .spawn((
+            PlayerPosition(position),
+            VillagerIntent::Travelling { settlement },
+            MoveTarget(entrance),
+        ))
+        .id();
+
+    app.update();
+
+    let villager = app.world().entity(villager);
+    assert!(villager.get::<MootQueueTicket>().is_none());
+    assert!(villager
+        .get::<MoveTarget>()
+        .is_some_and(|target| target.0.distance_squared(entrance) < 0.01));
+    assert!(matches!(
+        villager.get::<VillagerIntent>(),
+        Some(VillagerIntent::Travelling { settlement: target }) if *target == settlement
+    ));
+}
+
+#[test]
+fn rear_reservation_migrant_walks_around_the_moot_and_clears_the_line_at_one_and_ten_x() {
+    use crate::collision::building_index::{sync_building_spatial_index, BuildingSpatialIndex};
+    use crate::player::hero::step_units;
+    use crate::world::navgrid::{sync_obstacle_grid, ObstacleGridState};
+    use crate::world::pathfinding::PathfindingBudgetSettings;
+    use shared::components::TimeWarp;
+    use shared::region::RegionCoord;
+
+    for warp in [1.0, 10.0] {
+        let mut app = village_test_app();
+        app.init_resource::<Time>();
+        app.init_resource::<MootQueueClock>();
+        app.init_resource::<BuildingSpatialIndex>();
+        app.init_resource::<ObstacleGridState>();
+        app.init_resource::<SpatialObstacleGrid>();
+        app.init_resource::<VillageRoadGraph>();
+        app.insert_resource(PathfindingBudgetSettings {
+            max_requests_per_tick: 8,
+            max_milliseconds_per_tick: 50.0,
+        });
+        app.insert_resource(WorldTerrain::default());
+        app.add_systems(
+            Update,
+            (
+                claim_settlement_hall_obstacles,
+                sync_building_spatial_index,
+                sync_obstacle_grid,
+                arrive_at_settlement,
+                advance_moot_service_queues,
+                recount_residents,
+                crate::world::village_roads::rebuild_village_road_graph,
+                crate::world::village_roads::queue_villager_travel_routes,
+                crate::world::village_roads::plan_villager_travel_routes,
+                step_units,
+            )
+                .chain(),
+        );
+
+        let hall_xz = Vec2::new(1_700.0, 0.0);
+        let hall_y = app
+            .world()
+            .resource::<WorldTerrain>()
+            .get_height(hall_xz.x, hall_xz.y);
+        let hall_position = Vec3::new(hall_xz.x, hall_y, hall_xz.y);
+        let hall_rotation = 0.73;
+        let settlement = app
+            .world_mut()
+            .spawn((
+                Settlement {
+                    name: format!("Rear Approach {warp}x"),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 0,
+                    treasury: 0,
+                },
+                PlayerPosition(hall_position),
+                PlayerRotation(hall_rotation),
+            ))
+            .id();
+        app.world_mut().spawn(TimeWarp::clamped(warp));
+
+        let rear = shared::rotation::local_to_world_xz(Vec2::new(0.0, 8.0), hall_rotation);
+        let rear_xz = hall_xz + rear;
+        let position = Vec3::new(
+            rear_xz.x,
+            app.world()
+                .resource::<WorldTerrain>()
+                .get_height(rear_xz.x, rear_xz.y),
+            rear_xz.y,
+        );
+        let entrance = SettlementBuildingKind::Hall.entrance_position(hall_position, hall_rotation);
+        let villager = app
+            .world_mut()
+            .spawn((
+                CharacterName(format!("RearMigrant{warp}")),
+                CharacterKind::Villager,
+                CharacterActivity::Idle,
+                PlayerPosition(position),
+                PlayerRotation(0.0),
+                RegionCoord::from_world_pos(position),
+                VillagerIntent::Travelling { settlement },
+                MoveTarget(entrance),
+            ))
+            .id();
+
+        let tick = std::time::Duration::from_secs_f32(1.0 / 60.0);
+        for _ in 0..900 {
+            app.world_mut().resource_mut::<Time>().advance_by(tick);
+            app.update();
+            if matches!(
+                app.world().get::<VillagerIntent>(villager),
+                Some(VillagerIntent::Resident { settlement: home }) if *home == settlement
+            ) {
+                break;
+            }
+        }
+
+        assert!(matches!(
+            app.world().get::<VillagerIntent>(villager),
+            Some(VillagerIntent::Resident { settlement: home }) if *home == settlement
+        ), "the {warp}x migrant never reached the front queue from the rear reservation; position={:?} target={:?} pending={} failed={} ticket={:?}",
+            app.world().get::<PlayerPosition>(villager),
+            app.world().get::<MoveTarget>(villager),
+            app.world().get::<NavigationRoutePending>(villager).is_some(),
+            app.world().get::<NavigationRouteFailed>(villager).is_some(),
+            app.world().get::<MootQueueTicket>(villager),
+        );
+        assert_eq!(
+            app.world().get::<Settlement>(settlement).unwrap().residents,
+            1
+        );
+        assert!(app.world().get::<MootQueueTicket>(villager).is_none());
+        assert!(app
+            .world()
+            .get::<NavigationRoutePending>(villager)
+            .is_none());
+        assert!(app.world().get::<NavigationRouteFailed>(villager).is_none());
+    }
 }
 
 #[test]

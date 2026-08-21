@@ -171,13 +171,32 @@ pub(super) fn spawn_map_ui(
                                     position_type: PositionType::Absolute,
                                     left: Val::Px(0.0),
                                     top: Val::Px(0.0),
+                                    overflow: Overflow::clip(),
                                     ..default()
                                 },
                             ))
                             .with_children(|markers| {
+                                // Four tiny UI strips connect the actual
+                                // screen-corner projections. They move without
+                                // rebuilding the map image or a mesh.
+                                for edge in 0..4 {
+                                    markers.spawn((
+                                        MapViewportEdge(edge),
+                                        Node {
+                                            display: Display::None,
+                                            width: Val::Px(1.0),
+                                            height: Val::Px(VIEWPORT_EDGE_THICKNESS),
+                                            position_type: PositionType::Absolute,
+                                            ..default()
+                                        },
+                                        BackgroundColor(Color::srgba(0.965, 0.957, 0.933, 0.88)),
+                                        UiTransform::default(),
+                                    ));
+                                }
                                 markers.spawn((
                                     MapPlayerMarker,
                                     Node {
+                                        display: Display::None,
                                         width: Val::Px(PLAYER_ARROW_SIZE),
                                         height: Val::Px(PLAYER_ARROW_SIZE),
                                         position_type: PositionType::Absolute,

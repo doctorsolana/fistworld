@@ -363,8 +363,7 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
 
             let biome = field.biome(x, z, h, slope);
             let climate = climate_at_with_phase(phase, x, z, h, half_extent);
-            let clump =
-                (clump_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
+            let clump = (clump_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
             let glade_raw =
                 (glade_mask.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
             let copse_raw =

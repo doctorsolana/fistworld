@@ -217,6 +217,15 @@ optional two-climate comparison adds the food-poor frozen control:
 FISTWORLD_LAB_SCENARIO=dual cargo village-lab
 ```
 
+For broader balancing, `regional-economy` runs four towns with identical gentle
+growth under contrasting coast, frozen, forest and Stone conditions on the larger
+generated-gradient map. Watch it at the canonical 10x with `./run.sh regionalworld`,
+or run its accounting and life-history audit headlessly:
+
+```bash
+FISTWORLD_LAB_SCENARIO=regional-economy FISTWORLD_LAB_WARP=25 FISTWORLD_LAB_MINUTES=700 cargo village-lab
+```
+
 The Stone comparison puts a fertile Meadow beside a genuinely Stone-rich control. It checks
 the autonomous Quarry permit, embodied mining and the paid Hall-upgrade material pipeline:
 

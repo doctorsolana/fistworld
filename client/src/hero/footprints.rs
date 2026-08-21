@@ -212,8 +212,7 @@ pub fn stamp_footprints(
         let dx = terrain.get_height(pos.x + SLOPE_STEP, pos.z) - h;
         let dz = terrain.get_height(pos.x, pos.z + SLOPE_STEP) - h;
         let slope = dx.abs().max(dz.abs()) / SLOPE_STEP;
-        let climate =
-            shared::worldgen::climate_at_with_phase(phase, pos.x, pos.z, h, half_extent);
+        let climate = shared::worldgen::climate_at_with_phase(phase, pos.x, pos.z, h, half_extent);
         let snow_keep = 1.0 - ((slope - 0.35) / 0.30).clamp(0.0, 1.0);
         let snow_vis = climate.snow * snow_keep;
         let sand = climate.dry > 0.55;
@@ -222,7 +221,12 @@ pub fn stamp_footprints(
         }
 
         let dir = step / moved;
-        let side = Vec2::new(-dir.y, dir.x) * if tracker.left { FOOT_OFFSET } else { -FOOT_OFFSET };
+        let side = Vec2::new(-dir.y, dir.x)
+            * if tracker.left {
+                FOOT_OFFSET
+            } else {
+                -FOOT_OFFSET
+            };
         let x = pos.x + side.x;
         let z = pos.z + side.y;
         let ground = terrain.get_height(x, z);

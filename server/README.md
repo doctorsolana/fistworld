@@ -173,6 +173,8 @@ cargo village-scale-lab
 ```
 
 Use `./run.sh testworld` for a rendered deterministic village,
+`./run.sh regionalworld` for four gently growing settlements under contrasting
+generated resource conditions,
 `./run.sh stressworld` for three rendered 200-person villages at 10x, and
 `./run.sh denseworld` for one rendered 1,000-person village at 10x. Use
 `./run.sh realworld` for the logged generated-world stress fixture. Full usage and diagnostics are in

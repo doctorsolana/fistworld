@@ -824,8 +824,13 @@ impl LabLifeLedger {
         let mut wealth: Vec<_> = self
             .people
             .values()
+            .filter(|person| person.person_id.is_none_or(|id| !deaths.contains_key(&id)))
             .map(|person| (person.current_money, person.name.as_str()))
             .collect();
+        if wealth.is_empty() {
+            println!("LAB wealth no living residents recorded");
+            return;
+        }
         wealth.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
         let poorest_money = wealth.first().unwrap().0;
         let richest_money = wealth.last().unwrap().0;
@@ -920,6 +925,7 @@ impl LabLifeLedger {
         let mut controlled: Vec<_> = self
             .people
             .values()
+            .filter(|person| person.person_id.is_none_or(|id| !deaths.contains_key(&id)))
             .map(|person| {
                 let (firms, company_equity, profit, withdrawals) = person
                     .person_id
@@ -941,6 +947,105 @@ impl LabLifeLedger {
             })
             .collect();
         controlled.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
+
+        // Geography comparisons are far easier to read settlement by
+        // settlement than through one global top-three table. Net worth uses
+        // the same share-weighted company equity as the global ranking, while
+        // wallet/in/out/profit/holdings explain how each local winner got
+        // there instead of presenting wealth as an unexplained score.
+        let mut by_settlement = std::collections::BTreeMap::<&str, Vec<_>>::new();
+        for row in &controlled {
+            if !row.1.current_residence.is_empty() {
+                by_settlement
+                    .entry(row.1.current_residence.as_str())
+                    .or_default()
+                    .push(row);
+            }
+        }
+        for (settlement, mut residents) in by_settlement {
+            residents.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
+            let poorest = residents[0];
+            let richest = residents[residents.len() - 1];
+            let cohort = self
+                .people
+                .values()
+                .filter(|person| person.current_residence == settlement)
+                .count();
+            let dead = self
+                .people
+                .values()
+                .filter(|person| {
+                    person.current_residence == settlement
+                        && person.person_id.is_some_and(|id| deaths.contains_key(&id))
+                })
+                .count();
+            let mean = residents
+                .iter()
+                .fold(0_u64, |sum, resident| sum.saturating_add(resident.0))
+                / residents.len() as u64;
+            println!(
+                "LAB village wealth settlement='{}' living={} dead={} cohort={} poorest='{}' net_worth={} richest='{}' net_worth={} mean={}",
+                settlement,
+                residents.len(),
+                dead,
+                cohort,
+                poorest.1.name,
+                shared::economy::format_money(poorest.0),
+                richest.1.name,
+                shared::economy::format_money(richest.0),
+                shared::economy::format_money(mean),
+            );
+            println!(
+                "  LAB village richest why name='{}' wallet={} initial={} earned={} spent={} company_equity={} company_profit_share={}{} dividends={} job='{}' status='{}' holdings=[{}]",
+                richest.1.name,
+                shared::economy::format_money(richest.1.current_money),
+                shared::economy::format_money(richest.1.initial_money),
+                shared::economy::format_money(richest.1.money_in),
+                shared::economy::format_money(richest.1.money_out),
+                shared::economy::format_money(richest.2),
+                if richest.3 < 0 { "-" } else { "+" },
+                shared::economy::format_money(richest.3.unsigned_abs()),
+                shared::economy::format_money(richest.4),
+                richest.1.current_job,
+                richest.1.current_status,
+                richest.5,
+            );
+
+            // A deterministic pseudo-random resident gives repeated runs one
+            // comparable biography per town. It is seed-stable but not simply
+            // the first spawned person, so the spotlight samples ordinary
+            // lives rather than always selecting a founder.
+            let settlement_salt = settlement.bytes().fold(0_u64, |hash, byte| {
+                hash.wrapping_mul(1099511628211)
+                    .wrapping_add(u64::from(byte))
+            });
+            let spotlight = residents
+                .iter()
+                .min_by_key(|resident| {
+                    resident.1.person_id.map_or(u64::MAX, |id| {
+                        id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ settlement_salt
+                    })
+                })
+                .copied()
+                .expect("a populated settlement has a spotlight resident");
+            println!(
+                "LAB spotlight settlement='{}' person=#{} '{}' wallet={}->{} health={:.0}->{:.0}/{:.0} job='{}' status='{}' home='{}' hungry={} events={}",
+                settlement,
+                spotlight.1.person_id.map_or(0, |id| id.0),
+                spotlight.1.name,
+                shared::economy::format_money(spotlight.1.initial_money),
+                shared::economy::format_money(spotlight.1.current_money),
+                spotlight.1.initial_health,
+                spotlight.1.current_health,
+                spotlight.1.max_health,
+                spotlight.1.current_job,
+                spotlight.1.current_status,
+                spotlight.1.current_home,
+                spotlight.1.hungry,
+                spotlight.1.events.iter().cloned().collect::<Vec<_>>().join(" -> "),
+            );
+        }
+
         for (side, ranked) in [
             ("poorest", controlled.iter().take(3).collect::<Vec<_>>()),
             (
@@ -1373,6 +1478,11 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
             if let Some(choice) = poor {
                 occupied.push(choice.0);
             }
+            if scenario.is_regional_economy() {
+                if let Some(choice) = stonefield {
+                    occupied.push(choice.0);
+                }
+            }
             choose_greenwood_site(terrain, &occupied)
         });
         (
@@ -1396,7 +1506,8 @@ fn spawn_scenario(world: &mut World, warp: f32, scenario: LabScenario) {
     };
 
     println!(
-        "LAB map=village_lab scenario={scenario:?} villages={} warp={}x",
+        "LAB map={} scenario={scenario:?} villages={} warp={}x",
+        scenario.map_id(),
         usize::from(secure.is_some())
             + usize::from(inland_meadow.is_some())
             + if policy_comparison.is_some() { 2 } else { 0 }
@@ -2273,6 +2384,7 @@ fn print_business_report(world: &mut World) {
                     *id,
                     building.kind,
                     building.settlement.clone(),
+                    building.quality,
                     owner.copied(),
                     operated_by.0,
                     *account,
@@ -2288,15 +2400,18 @@ fn print_business_report(world: &mut World) {
     }
 
     let mut owners: HashMap<PersonId, (u32, HashSet<CompanyId>, i64, u64)> = HashMap::new();
-    for (id, kind, settlement, owner, company, account, management, condition) in businesses {
+    for (id, kind, settlement, quality, owner, company, account, management, condition) in
+        businesses
+    {
         let owner_name = owner
             .and_then(|owner| people.get(&owner.0).map(|person| person.0.as_str()))
             .unwrap_or("public/unresolved");
         println!(
-            "LAB business {}#{} '{}' owner='{}' state={} strategy={} company=#{} company_treasury={} revenue={} expenses={} lifetime_profit={}{} contributed={} capex={} book_value={} withdrawals={} wage_arrears={} tax_arrears={} wage_defaults={} tax_defaults={} listed={}",
+            "LAB business {}#{} '{}' quality={:.0}% owner='{}' state={} strategy={} company=#{} company_treasury={} revenue={} expenses={} lifetime_profit={}{} contributed={} capex={} book_value={} withdrawals={} wage_arrears={} tax_arrears={} wage_defaults={} tax_defaults={} listed={}",
             kind.label(),
             id.0,
             settlement,
+            quality * 100.0,
             owner_name,
             condition.map_or("Unreviewed", |condition| condition.state.label()),
             management.map_or("Unmanaged", |management| management.strategy.label()),
@@ -2399,6 +2514,108 @@ fn print_business_report(world: &mut World) {
             shared::economy::format_money(*withdrawals),
         );
     }
+}
+
+/// Summarise physical stock beside the ledgers which explain how it moved.
+/// Market sales and input purchases are transfers, while production and food
+/// consumption are sources/sinks. Construction and processing remain visible
+/// through their dedicated site/business histories; this report intentionally
+/// does not pretend that a net stock delta alone explains an economy.
+fn print_resource_flow_report(world: &mut World) {
+    let settlements: Vec<_> = world
+        .query::<(Entity, &SettlementId, &Settlement)>()
+        .iter(world)
+        .map(|(entity, id, settlement)| (entity, *id, settlement.name.clone()))
+        .collect();
+    let history = world.resource::<village::history::SettlementHistoryRuntime>();
+    for (entity, settlement_id, name) in settlements {
+        let archive = history.archive(entity, settlement_id, &name);
+        let mut produced = [0_u64; Good::COUNT];
+        let mut sold = [0_u64; Good::COUNT];
+        let mut purchased_inputs = [0_u64; Good::COUNT];
+        for business in &archive.businesses {
+            let Some(output) = business.output_good else {
+                continue;
+            };
+            for day in &business.days {
+                produced[output.index()] =
+                    produced[output.index()].saturating_add(u64::from(day.produced_units));
+                sold[output.index()] =
+                    sold[output.index()].saturating_add(u64::from(day.sold_units));
+                if let Some(recipe) = village::processing_recipe(business.kind) {
+                    purchased_inputs[recipe.input.index()] = purchased_inputs[recipe.input.index()]
+                        .saturating_add(u64::from(day.purchased_input_units));
+                }
+            }
+        }
+        let mut market_bought = [0_u64; Good::COUNT];
+        let mut market_sold = [0_u64; Good::COUNT];
+        let mut food_produced = 0_u64;
+        let mut food_consumed = 0_u64;
+        for day in &archive.days {
+            food_produced = food_produced.saturating_add(u64::from(day.food_produced));
+            food_consumed = food_consumed.saturating_add(u64::from(day.food_consumed));
+            for good in Good::ALL {
+                market_bought[good.index()] = market_bought[good.index()]
+                    .saturating_add(day.market[good.index()].producer_units);
+                market_sold[good.index()] = market_sold[good.index()]
+                    .saturating_add(day.market[good.index()].consumer_units);
+            }
+        }
+        let physical = archive
+            .days
+            .last()
+            .map_or([0; Good::COUNT], |day| day.physical_stock);
+        let rows = Good::ALL
+            .iter()
+            .filter_map(|good| {
+                let index = good.index();
+                let values = (
+                    produced[index],
+                    sold[index],
+                    purchased_inputs[index],
+                    market_bought[index],
+                    market_sold[index],
+                    physical[index],
+                );
+                (values != (0, 0, 0, 0, 0, 0)).then(|| {
+                    format!(
+                        "{}:made{} site_sales{} inputs{} market_in{} market_out{} stock{}",
+                        good.label(),
+                        values.0,
+                        values.1,
+                        values.2,
+                        values.3,
+                        values.4,
+                        values.5,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        println!(
+            "LAB resource flow settlement='{}' recorded_days={} food_created={} food_eaten={} [{}]",
+            name,
+            archive.days.len(),
+            food_produced,
+            food_consumed,
+            rows.join(" | "),
+        );
+    }
+    let overflowing: Vec<_> = world
+        .query::<(Entity, &GoodsInventory)>()
+        .iter(world)
+        .filter_map(|(entity, inventory)| {
+            (inventory.used_bulk() > inventory.bulk_capacity()).then_some((
+                entity,
+                inventory.used_bulk(),
+                inventory.bulk_capacity(),
+            ))
+        })
+        .collect();
+    assert!(
+        overflowing.is_empty(),
+        "physical inventories exceeded their finite capacity: {overflowing:?}"
+    );
 }
 
 /// Print the legal company above its individual operating sites. This makes
@@ -4121,6 +4338,99 @@ fn assert_crowd_stress_outcome(
     );
 }
 
+fn assert_regional_economy_outcome(
+    world: &mut World,
+    evidence: &Evidence,
+    expected_residents: usize,
+) {
+    let expected_names = [
+        "Lab Meadow",
+        "Lab Coldbarrow",
+        "Lab Greenwood",
+        "Lab Stonefield",
+    ];
+    let settlements: HashMap<_, _> = world
+        .query::<(&Settlement, &SettlementEconomy)>()
+        .iter(world)
+        .map(|(settlement, economy)| {
+            (
+                settlement.name.clone(),
+                (settlement.clone(), economy.clone()),
+            )
+        })
+        .collect();
+    assert_eq!(
+        settlements.len(),
+        expected_names.len(),
+        "the regional fixture lost or duplicated a settlement: {:?}",
+        settlements.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        expected_names
+            .iter()
+            .all(|name| settlements.contains_key(*name)),
+        "the regional fixture did not stage all four geographic controls"
+    );
+    let deaths = world.resource::<village::MortalityLedger>().total_deaths as usize;
+    let living = settlements
+        .values()
+        .map(|(settlement, _)| settlement.residents as usize)
+        .sum::<usize>();
+    assert_eq!(
+        living.saturating_add(deaths),
+        expected_residents,
+        "regional residents were lost outside the mortality ledger"
+    );
+    let buildings: Vec<_> = world
+        .query::<&SettlementBuilding>()
+        .iter(world)
+        .map(|building| (building.settlement.clone(), building.kind))
+        .collect();
+    for name in expected_names {
+        assert!(
+            buildings.iter().any(|(settlement, kind)| {
+                settlement == name && *kind == SettlementBuildingKind::House
+            }),
+            "{name} never converted housing demand into a cabin"
+        );
+        assert!(
+            buildings.iter().any(|(settlement, kind)| {
+                settlement == name
+                    && matches!(
+                        kind,
+                        SettlementBuildingKind::Farmstead
+                            | SettlementBuildingKind::FishermansHut
+                            | SettlementBuildingKind::LivestockFarm
+                            | SettlementBuildingKind::LumberjackHut
+                            | SettlementBuildingKind::StoneQuarry
+                    )
+            }),
+            "{name} never opened a geographically grounded extractor"
+        );
+    }
+    assert!(evidence.saw_farming, "regional lab observed no field work");
+    assert!(
+        evidence.saw_chopping,
+        "regional lab observed no timber work"
+    );
+    assert!(
+        evidence.saw_building,
+        "regional lab observed no construction"
+    );
+    assert!(
+        world
+            .query::<&NavigationRouteFailed>()
+            .iter(world)
+            .next()
+            .is_none(),
+        "regional lab ended with an unresolved embodied route failure"
+    );
+    assert!(world
+        .query::<&GoodsInventory>()
+        .iter(world)
+        .all(|inventory| inventory.used_bulk() <= inventory.bulk_capacity()));
+}
+
 fn assert_arrival_stress_outcome(
     world: &mut World,
     evidence: &Evidence,
@@ -4736,11 +5046,11 @@ fn village_simulation_lab() {
     // The terrain loader caches the active map once per process. The cargo
     // alias filters to this one test and runs one thread, so set it before the
     // first WorldTerrain is constructed.
-    std::env::set_var("CITYSIM_MAP_ID", "village_lab");
+    let scenario = LabScenario::from_environment();
+    std::env::set_var("CITYSIM_MAP_ID", scenario.map_id());
     let warp = env_f32("FISTWORLD_LAB_WARP", DEFAULT_LAB_WARP).clamp(1.0, 1000.0);
     let minutes = env_f32("FISTWORLD_LAB_MINUTES", DEFAULT_LAB_MINUTES);
     let verbose = std::env::var("FISTWORLD_LAB_VERBOSE").is_ok_and(|value| value == "1");
-    let scenario = LabScenario::from_environment();
 
     let mut app = App::new();
     configure_lab(&mut app);
@@ -4779,8 +5089,8 @@ fn village_simulation_lab() {
 
     for _ in 0..total_ticks {
         app.world_mut().resource_mut::<Time>().advance_by(wall_step);
-        let money_before =
-            (scenario.is_economy_soak() && money_audit_ready).then(|| money_trace(app.world_mut()));
+        let money_before = (scenario.audits_money_each_update() && money_audit_ready)
+            .then(|| money_trace(app.world_mut()));
         let update_started = Instant::now();
         app.update();
         let update_millis = update_started.elapsed().as_secs_f64() * 1_000.0;
@@ -5083,6 +5393,7 @@ fn village_simulation_lab() {
     print_structure_report(app.world_mut());
     print_civic_report(app.world_mut());
     print_business_report(app.world_mut());
+    print_resource_flow_report(app.world_mut());
     print_company_report(app.world_mut());
     print_trade_report(app.world_mut());
     if scenario.is_crowd_stress() {
@@ -5178,6 +5489,8 @@ fn village_simulation_lab() {
     );
     if scenario.is_economy_soak() {
         assert_economy_soak_outcome(app.world_mut(), &evidence);
+    } else if scenario.is_regional_economy() {
+        assert_regional_economy_outcome(app.world_mut(), &evidence, expected_residents);
     } else if scenario.is_crowd_stress() {
         assert_crowd_stress_outcome(app.world_mut(), &evidence, scenario, expected_residents);
     } else if scenario.is_merchant_beacon() {

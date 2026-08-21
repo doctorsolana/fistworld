@@ -2,6 +2,32 @@
 
 use super::*;
 
+/// Whether an embodied migrant has reached the permanently clear forecourt in
+/// front of the civic Hall.
+///
+/// Every Hall level shares one authored door and front face while growing
+/// backward. Use the largest supported shell plus the villager body clearance
+/// as the boundary, so the founding Moot cannot accept someone from inside the
+/// space reserved for its eventual Town Hall. The broad horizontal radius
+/// still lets a crowded arrival join from either side of the visible line.
+fn reached_visible_moot_forecourt(position: Vec3, hall: Vec3, rotation_y: f32) -> bool {
+    if ground_distance(position, hall) > ARRIVAL_RADIUS {
+        return false;
+    }
+
+    let local = shared::rotation::world_to_local_xz(
+        Vec2::new(position.x - hall.x, position.z - hall.z),
+        rotation_y,
+    );
+    let reserved = shared::components::CivicHallLevel::largest_supported()
+        .building_type()
+        .definition();
+    let reserved_front = reserved.footprint_center.y
+        - reserved.footprint.y * 0.5
+        - crate::world::navgrid::VILLAGER_NAV_RADIUS;
+    local.y <= reserved_front
+}
+
 /// Give every villager an intent, so the rest of the module can assume one.
 ///
 /// Polls rather than reacting to `Added`, for the reason this codebase has now
@@ -210,18 +236,25 @@ pub fn arrive_at_settlement(
             // fighting its queue destination.
             continue;
         }
-        // Terrain height and the Hall's raised foundation are irrelevant to
-        // reaching its forecourt. Comparing full 3-D distance could reject the
-        // lone migrant standing beside everyone else on a steep plot.
-        if ground_distance(position.0, hall.0) > ARRIVAL_RADIUS {
+        let hall_rotation = rotation.map_or(0.0, |rotation| rotation.0);
+        let entrance = SettlementBuildingKind::Hall.entrance_position(hall.0, hall_rotation);
+        // Strategic migrants have no embodied forecourt. Focused tests without
+        // the queue resource likewise preserve the old cheap radial handoff.
+        // A visible migrant must actually reach the permanently clear area in
+        // FRONT of the Hall; entering the radius from behind must not cancel
+        // the certified route that is taking them around the building.
+        let reached_arrival = if strategic || queue_clock.is_none() {
+            ground_distance(position.0, hall.0) <= ARRIVAL_RADIUS
+        } else {
+            reached_visible_moot_forecourt(position.0, hall.0, hall_rotation)
+        };
+        if !reached_arrival {
             if let Some(failed) = route_failed {
                 debug!(
                     "Villager could not migrate to '{}' through {:.1},{:.1}; reconsidering after cooldown",
                     place.name, failed.goal.x, failed.goal.z
                 );
                 *intent = VillagerIntent::Idle;
-                let entrance = SettlementBuildingKind::Hall
-                    .entrance_position(hall.0, rotation.map_or(0.0, |rotation| rotation.0));
                 let cohort_opportunity_version = road_graph.as_deref().map_or(0, |graph| {
                     graph.cohort_route_opportunity_version(Vec2::new(entrance.x, entrance.z))
                 });
@@ -243,8 +276,6 @@ pub fn arrive_at_settlement(
             // centre, and recover if any other system removed the journey. A
             // changed target also wakes the bounded route planner after its
             // previous blocked-route retry limit.
-            let entrance = SettlementBuildingKind::Hall
-                .entrance_position(hall.0, rotation.map_or(0.0, |rotation| rotation.0));
             ensure_move_target(&mut commands, entity, move_target, entrance);
             continue;
         }

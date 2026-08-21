@@ -20,6 +20,16 @@ const MIN_CONCURRENT_SETTLEMENT_WORKSITES: usize = 3;
 const MAX_CONCURRENT_SETTLEMENT_WORKSITES: usize = 12;
 const MAX_SETTLEMENT_SEARCH_RADIUS: f32 = 320.0;
 
+fn has_planned_food_extractor(have: &HashMap<SettlementBuildingKind, usize>) -> bool {
+    [
+        SettlementBuildingKind::Farmstead,
+        SettlementBuildingKind::FishermansHut,
+        SettlementBuildingKind::LivestockFarm,
+    ]
+    .into_iter()
+    .any(|kind| have.get(&kind).copied().unwrap_or(0) > 0)
+}
+
 /// Optional fine-grained permit telemetry used by the deterministic lab.
 ///
 /// Production does not insert this resource, so ordinary server ticks pay no
@@ -146,6 +156,26 @@ mod company_funding_tests {
         funds.record_personal_contribution(contribution, 220);
         assert_eq!(funds.reserve_shortfall, 0);
         assert_eq!(funds.available, 400);
+    }
+
+    #[test]
+    fn every_extractor_kind_closes_the_founders_only_food_fallback() {
+        for kind in [
+            SettlementBuildingKind::Farmstead,
+            SettlementBuildingKind::FishermansHut,
+            SettlementBuildingKind::LivestockFarm,
+        ] {
+            let have = HashMap::from([(kind, 1)]);
+            assert!(
+                has_planned_food_extractor(&have),
+                "{} must count as established food capacity",
+                kind.label()
+            );
+        }
+        assert!(!has_planned_food_extractor(&HashMap::from([(
+            SettlementBuildingKind::House,
+            4,
+        )])));
     }
 }
 
@@ -1183,7 +1213,11 @@ pub fn consider_permits(
             .get(&SettlementBuildingKind::FishermansHut)
             .copied()
             .unwrap_or(0);
-        let initial_food_request = planned_farms + planned_fishers == 0;
+        // Livestock is a complete food extractor too. Omitting it here made
+        // the old founding-shore fallback think a town with an operating
+        // pasture still had no food source, allowing a coastal Fisherman's Hut
+        // search to replace an independently selected House or other permit.
+        let initial_food_request = !has_planned_food_extractor(&have);
         let may_add_complementary_fishing =
             should_try_complementary_fishing(requested, planned_farms, planned_fishers);
 

@@ -551,6 +551,7 @@ pub fn run(config: CaptureConfig) {
             select_capture_place,
             open_capture_business_management,
             open_capture_history,
+            open_capture_world_map,
             position_capture_company_scroll,
             force_capture_drag_box,
             // Before the camera bake, so the pose photographed in frame N is
@@ -562,6 +563,23 @@ pub fn run(config: CaptureConfig) {
     );
 
     app.run();
+}
+
+/// `FISTFORCE_CAPTURE_WORLD_MAP=1` opens the real modal world map during an
+/// offline capture. Combine it with `FISTFORCE_CAPTURE_HERO=default` and
+/// `FISTFORCE_CAPTURE_SELECT=1` to verify the owned-hero arrow and camera
+/// viewport without mouse automation or a live server.
+fn open_capture_world_map(
+    mut map_open: ResMut<crate::ui::world_map::MapOpen>,
+    mut handled: Local<bool>,
+) {
+    if *handled {
+        return;
+    }
+    *handled = true;
+    if std::env::var("FISTFORCE_CAPTURE_WORLD_MAP").is_ok_and(|value| value == "1") {
+        map_open.0 = true;
+    }
 }
 
 /// `FISTFORCE_CAPTURE_DINGHY=underway|sailing|wreck` stages the real runtime
@@ -1916,6 +1934,8 @@ fn open_capture_history(
 /// into the manifest's slot items / skin tones (order as in Humanoid.ron:
 /// bottom, top, hair). Missing or unparsable fields use the manifest default.
 /// `FISTFORCE_CAPTURE_HERO=default` spawns one hero in the declared default.
+/// `FISTFORCE_CAPTURE_HERO_OFFSET=x,z` offsets those heroes from the shot focus,
+/// which is useful for verifying world-space UI such as the minimap marker.
 /// `FISTFORCE_CAPTURE_PORTER_CART=0|1|2` gives that fixture an empty, half or
 /// full cart while `FISTFORCE_CAPTURE_CARRIED` chooses its visible cargo.
 fn spawn_capture_heroes(
@@ -1928,6 +1948,18 @@ fn spawn_capture_heroes(
         return;
     }
     let mut hero_spec = std::env::var("FISTFORCE_CAPTURE_HERO").ok();
+    let hero_offset = std::env::var("FISTFORCE_CAPTURE_HERO_OFFSET")
+        .ok()
+        .and_then(|raw| {
+            let mut parts = raw.split(',').map(|part| part.trim().parse::<f32>());
+            match (parts.next(), parts.next(), parts.next()) {
+                (Some(Ok(x)), Some(Ok(z)), None) if x.is_finite() && z.is_finite() => {
+                    Some(Vec2::new(x, z))
+                }
+                _ => None,
+            }
+        })
+        .unwrap_or(Vec2::ZERO);
     let villager_count = std::env::var("FISTFORCE_CAPTURE_VILLAGERS")
         .ok()
         .and_then(|v| v.parse::<usize>().ok());
@@ -2036,8 +2068,8 @@ fn spawn_capture_heroes(
         if let Some(Some(skin)) = parts.get(manifest.slots.len()) {
             outfit.skin = *skin;
         }
-        let x = base.x + i as f32 * 1.4;
-        let z = base.z;
+        let x = base.x + hero_offset.x + i as f32 * 1.4;
+        let z = base.z + hero_offset.y;
         let pos = Vec3::new(x, terrain.get_height(x, z), z);
         let entity = commands
             .spawn((
