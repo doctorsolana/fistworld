@@ -137,6 +137,13 @@ the compact settlement card, the market board — opens the encyclopedia on the 
 hosts the page next frame. ESC pops a page before it closes the window; the X closes everything
 and `close_pages_with_encyclopedia` clears the page targets so nothing reopens itself. New
 pages follow the same shape: spawn into the host, carry a `UiRefreshStamp` root, no own close.
+The company-founding form (`company_founding.rs`) is the model for an input form: the name and
+capital are a client-side draft, `sync_founding_texts` writes them into the form in place so a
+press shows instantly even while the pointer rests on the button (refresh-gated panels defer
+their rebuild until the pointer leaves), and only FOUND talks to the server. It is both an
+encyclopedia page (COMPANIES › NEW COMPANY; `FISTFORCE_CAPTURE_ENCYCLOPEDIA=founding`) and the
+inline ACTING AS strip on the permit board when you have no company. Capture a populated form
+with `FISTFORCE_CAPTURE_HERO=default FISTFORCE_CAPTURE_HERO_OFFSET=0,0 FISTFORCE_CAPTURE_SELECT=1`.
 
 ## Responsive layout and scrolling
 

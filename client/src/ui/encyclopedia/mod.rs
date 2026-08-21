@@ -114,6 +114,7 @@ impl Plugin for EncyclopediaPlugin {
             Update,
             (
                 companies::handle_company_filter_buttons,
+                companies::handle_new_company_button,
                 companies::handle_company_rows,
                 companies::handle_company_site_buttons,
                 companies::handle_company_person_buttons,
@@ -161,8 +162,9 @@ pub struct EncyclopediaPageBackLabel;
 fn page_is_open(
     history: &crate::ui::history::HistoryPanelTarget,
     business: &crate::ui::business_management::BusinessManagementTarget,
+    founding: &crate::ui::company_founding::FoundingPageOpen,
 ) -> bool {
-    history.0.is_some() || business.0.is_some()
+    history.0.is_some() || business.0.is_some() || founding.0
 }
 
 /// Show the page host (and hide every tab body) while a page is open, and
@@ -172,12 +174,13 @@ fn sync_page_host(
     history: Res<crate::ui::history::HistoryPanelTarget>,
     business: Res<crate::ui::business_management::BusinessManagementTarget>,
     business_return: Res<crate::ui::business_management::BusinessManagementReturn>,
+    founding: Res<crate::ui::company_founding::FoundingPageOpen>,
     directory: Res<companies::CompanyDirectory>,
     mut hosts: Query<&mut Node, With<EncyclopediaPageHost>>,
     mut bodies: Query<(&TabBody, &mut Node), Without<EncyclopediaPageHost>>,
     mut labels: Query<&mut Text, With<EncyclopediaPageBackLabel>>,
 ) {
-    let open = page_is_open(&history, &business);
+    let open = page_is_open(&history, &business, &founding);
     for mut node in hosts.iter_mut() {
         let display = if open { Display::Flex } else { Display::None };
         if node.display != display {
@@ -198,7 +201,9 @@ fn sync_page_host(
             .find(|company| company.id == id)
             .map(|company| company.name.to_uppercase())
     };
-    let label = if business.0.is_some() {
+    let label = if founding.0 {
+        "BACK TO COMPANIES".to_string()
+    } else if business.0.is_some() {
         business_return
             .0
             .and_then(company_name)
@@ -235,6 +240,7 @@ fn handle_page_back(
     mut history: ResMut<crate::ui::history::HistoryPanelTarget>,
     mut business: ResMut<crate::ui::business_management::BusinessManagementTarget>,
     mut business_return: ResMut<crate::ui::business_management::BusinessManagementReturn>,
+    mut founding: ResMut<crate::ui::company_founding::FoundingPageOpen>,
     mut trade_target: ResMut<crate::ui::settlement_panel::TradePanelTarget>,
     mut selected_company: ResMut<companies::SelectedCompany>,
     mut tab: ResMut<EncyclopediaTab>,
@@ -245,6 +251,11 @@ fn handle_page_back(
             .iter()
             .any(|interaction| *interaction == Interaction::Pressed);
     if !clicked && !keyboard.just_pressed(KeyCode::Escape) {
+        return;
+    }
+    if founding.0 {
+        founding.0 = false;
+        *tab = EncyclopediaTab::Companies;
         return;
     }
     if business.0.is_some() {
@@ -272,9 +283,13 @@ fn close_pages_with_encyclopedia(
     mut history: ResMut<crate::ui::history::HistoryPanelTarget>,
     mut business: ResMut<crate::ui::business_management::BusinessManagementTarget>,
     mut business_return: ResMut<crate::ui::business_management::BusinessManagementReturn>,
+    mut founding: ResMut<crate::ui::company_founding::FoundingPageOpen>,
 ) {
     if history.0.is_some() {
         history.0 = None;
+    }
+    if founding.0 {
+        founding.0 = false;
     }
     if business.0.is_some() {
         business.0 = None;

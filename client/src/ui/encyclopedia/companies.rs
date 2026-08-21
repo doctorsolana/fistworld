@@ -243,6 +243,27 @@ pub struct CompanyDetailContent;
 pub struct CompanyCountText;
 #[derive(Component, Clone, Copy)]
 pub struct CompanyFilterButton(pub CompanyFilter);
+
+/// Opens the NEW COMPANY page.
+#[derive(Component)]
+pub struct NewCompanyPageButton;
+
+pub(super) fn handle_new_company_button(
+    guard: Res<ClickGuard>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    buttons: Query<&Interaction, (With<NewCompanyPageButton>, Changed<Interaction>)>,
+    mut page: ResMut<crate::ui::company_founding::FoundingPageOpen>,
+) {
+    if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    if buttons
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        page.0 = true;
+    }
+}
 #[derive(Component, Clone, Copy)]
 pub struct CompanyRow(pub CompanyId);
 #[derive(Component, Clone, Copy)]
@@ -773,15 +794,48 @@ pub(super) fn spawn_companies_tab(body: &mut ChildSpawnerCommands<'_>) {
                         ));
                 }
             });
-            bar.spawn((
-                CompanyCountText,
-                Text::new("0 companies"),
-                TextFont {
-                    font_size: FontSize::Px(13.5),
-                    ..default()
-                },
-                TextColor(INK_MUTED),
-            ));
+            bar.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(14.0),
+                ..default()
+            })
+            .with_children(|right| {
+                right.spawn((
+                    CompanyCountText,
+                    Text::new("0 companies"),
+                    TextFont {
+                        font_size: FontSize::Px(13.5),
+                        ..default()
+                    },
+                    TextColor(INK_MUTED),
+                ));
+                right
+                    .spawn((
+                        NewCompanyPageButton,
+                        Button,
+                        Node {
+                            min_height: Val::Px(36.0),
+                            padding: UiRect::axes(Val::Px(14.0), Val::Px(8.0)),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                            ..default()
+                        },
+                        button_chrome(UiButtonVariant::Primary),
+                    ))
+                    .with_child((
+                        Text::new("NEW COMPANY"),
+                        UiButtonLabel,
+                        TextFont {
+                            font_size: FontSize::Px(14.0),
+                            ..default()
+                        },
+                        TextColor(INK),
+                        Pickable::IGNORE,
+                    ));
+            });
         });
 
         tab.spawn(Node {

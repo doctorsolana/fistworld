@@ -1490,11 +1490,14 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         // grant capability so the unknown-people view can be verified.
         commands.insert_resource(match mode.as_str() {
             "retinue" => crate::ui::encyclopedia::EncyclopediaTab::Retinue,
-            "ledger" | "companies" | "company-stock" | "business" => {
+            "ledger" | "companies" | "company-stock" | "business" | "founding" => {
                 crate::ui::encyclopedia::EncyclopediaTab::Companies
             }
             _ => crate::ui::encyclopedia::EncyclopediaTab::People,
         });
+        if mode == "founding" {
+            commands.insert_resource(crate::ui::company_founding::FoundingPageOpen(true));
+        }
         if matches!(
             mode.as_str(),
             "ledger" | "companies" | "company-stock" | "business"
