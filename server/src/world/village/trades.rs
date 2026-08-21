@@ -537,7 +537,7 @@ pub fn run_farmer_routines(
         }
         if !intent.is_settled() {
             if *activity != CharacterActivity::Idle {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
             }
             continue;
         }
@@ -550,7 +550,7 @@ pub fn run_farmer_routines(
                 .remove::<WorkplaceDoorTransit>()
                 .remove::<BuildingDoorUse>()
                 .remove::<MoveTarget>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         };
         if farm.kind != SettlementBuildingKind::Farmstead || employment.0 != *building_id {
@@ -560,7 +560,7 @@ pub fn run_farmer_routines(
                 .remove::<WorkplaceDoorTransit>()
                 .remove::<BuildingDoorUse>()
                 .remove::<MoveTarget>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
         let Ok((field, attached_to)) = fields.get(routine.field) else {
@@ -593,7 +593,7 @@ pub fn run_farmer_routines(
                 .remove::<TravelRoute>()
                 .remove::<NavigationRoutePending>()
                 .remove::<NavigationRouteFailed>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             if unload_worker_output(&mut inventories, worker, routine.farmstead, Good::Wheat) {
                 warn!(
                     "Farmer {} completed a loaded workplace handoff abstractly after {} failed routes",
@@ -640,7 +640,7 @@ pub fn run_farmer_routines(
                     commands.entity(worker).insert(MoveTarget(farm_entrance));
                 }
                 routine.phase = FarmerPhase::ReturningToFarmstead;
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 continue;
             }
             if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
@@ -666,7 +666,7 @@ pub fn run_farmer_routines(
                 // phase (and any carried Wheat), then let the route planner
                 // try a different certified corridor.
                 commands.entity(worker).insert(MoveTarget(target));
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
             } else {
                 warn!(
                     "Farmer {} discarded stale route failure for {:.1},{:.1} while {:?}",
@@ -679,7 +679,7 @@ pub fn run_farmer_routines(
         if !workday_active {
             match routine.phase {
                 FarmerPhase::Inside { .. } => {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     begin_workplace_exit(
                         &mut commands,
                         worker,
@@ -692,7 +692,7 @@ pub fn run_farmer_routines(
                     continue;
                 }
                 FarmerPhase::WalkingToField { .. } | FarmerPhase::Farming => {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     ensure_move_target(&mut commands, worker, move_target, farm_entrance);
                     routine.phase = FarmerPhase::ReturningToFarmstead;
                     continue;
@@ -759,7 +759,7 @@ pub fn run_farmer_routines(
                         );
                         continue;
                     }
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     begin_workplace_entry(
                         &mut commands,
                         worker,
@@ -775,14 +775,14 @@ pub fn run_farmer_routines(
                 }
             }
             FarmerPhase::Inside { seconds_left } => {
-                *activity = CharacterActivity::Indoors;
+                activity.set_if_neq(CharacterActivity::Indoors);
                 let left = seconds_left - dt;
                 if left > 0.0 {
                     routine.phase = FarmerPhase::Inside { seconds_left: left };
                     continue;
                 }
                 let stand = routine.work_stand;
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 begin_workplace_exit(
                     &mut commands,
                     worker,
@@ -797,14 +797,14 @@ pub fn run_farmer_routines(
                 if ground_distance(position.0, stand) <= WORK_REACH {
                     routine.failed_workplace_routes = 0;
                     commands.entity(worker).remove::<MoveTarget>();
-                    *activity = CharacterActivity::Farming;
+                    activity.set_if_neq(CharacterActivity::Farming);
                     routine.phase = FarmerPhase::Farming;
                 } else {
                     ensure_move_target(&mut commands, worker, move_target, stand);
                 }
             }
             FarmerPhase::Farming => {
-                *activity = CharacterActivity::Farming;
+                activity.set_if_neq(CharacterActivity::Farming);
                 routine.harvest_seconds += dt;
                 let seconds_per_wheat = farmer_seconds_per_wheat(field.quality);
                 if let Ok(mut carrier) = inventories.get_mut(worker) {
@@ -823,7 +823,7 @@ pub fn run_farmer_routines(
                         .saturating_sub(carried)
                         .min(remaining);
                     if needed == 0 {
-                        *activity = CharacterActivity::Idle;
+                        activity.set_if_neq(CharacterActivity::Idle);
                         commands.entity(worker).insert(MoveTarget(farm_entrance));
                         routine.phase = FarmerPhase::ReturningToFarmstead;
                         continue;
@@ -860,7 +860,7 @@ pub fn run_farmer_routines(
                         continue;
                     }
                 }
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands.entity(worker).insert(MoveTarget(farm_entrance));
                 routine.phase = FarmerPhase::ReturningToFarmstead;
             }
@@ -877,7 +877,7 @@ pub fn run_farmer_routines(
                     // A full store is backpressure, not a licence to take
                     // company stock home. Wait at the Farmstead until a porter
                     // frees space, preserving every unit in personal cargo.
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     routine.phase = FarmerPhase::ReturningToFarmstead;
                     continue;
                 }
@@ -891,7 +891,7 @@ pub fn run_farmer_routines(
                     );
                     continue;
                 }
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 begin_workplace_entry(
                     &mut commands,
                     worker,
@@ -1203,7 +1203,7 @@ pub fn run_fishing_routines(
             continue;
         }
         if !intent.is_settled() {
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
         let Ok((hut, hut_position, hut_rotation, building_id, building_of)) = huts.get(routine.hut)
@@ -1217,7 +1217,7 @@ pub fn run_fishing_routines(
                 .remove::<TravelRoute>()
                 .remove::<NavigationRoutePending>()
                 .remove::<MoveTarget>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         };
         if hut.kind != SettlementBuildingKind::FishermansHut || employment.0 != *building_id {
@@ -1228,7 +1228,7 @@ pub fn run_fishing_routines(
                 .remove::<TravelRoute>()
                 .remove::<NavigationRoutePending>()
                 .remove::<MoveTarget>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
         let Ok((pier, pier_position, pier_rotation, attached_to)) = piers.get(routine.pier) else {
@@ -1281,7 +1281,7 @@ pub fn run_fishing_routines(
                 .remove::<NavigationRoutePending>()
                 .remove::<NavigationRouteFailed>()
                 .remove::<PierTraversal>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             if unload_worker_output(&mut inventories, worker, routine.hut, Good::Food) {
                 warn!(
                     "Fisher completed a loaded workplace handoff abstractly after {} failed routes",
@@ -1319,7 +1319,7 @@ pub fn run_fishing_routines(
                     commands.entity(worker).insert(MoveTarget(entrance));
                 }
                 routine.phase = FishingPhase::ReturningToHut;
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
             } else if routine.failed_workplace_routes >= MAX_WORKPLACE_ROUTE_FAILURES
                 || !workday_active
             {
@@ -1339,7 +1339,7 @@ pub fn run_fishing_routines(
             } else {
                 commands.entity(worker).insert(MoveTarget(entrance));
                 routine.phase = FishingPhase::ReturningToHut;
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
             }
             continue;
         }
@@ -1347,7 +1347,7 @@ pub fn run_fishing_routines(
         if !workday_active {
             match routine.phase {
                 FishingPhase::Inside { .. } => {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     begin_workplace_exit(
                         &mut commands,
                         worker,
@@ -1360,7 +1360,7 @@ pub fn run_fishing_routines(
                     continue;
                 }
                 FishingPhase::Fishing | FishingPhase::WalkingToPier => {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     install_fishing_route(
                         &mut commands,
                         worker,
@@ -1443,7 +1443,7 @@ pub fn run_fishing_routines(
                         );
                         continue;
                     }
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     begin_workplace_entry(&mut commands, worker, hut_position.0, entrance, inside);
                     routine.phase = FishingPhase::Inside {
                         seconds_left: INDOOR_REST_SECONDS,
@@ -1453,13 +1453,13 @@ pub fn run_fishing_routines(
                 }
             }
             FishingPhase::Inside { seconds_left } => {
-                *activity = CharacterActivity::Indoors;
+                activity.set_if_neq(CharacterActivity::Indoors);
                 let left = seconds_left - dt;
                 if left > 0.0 {
                     routine.phase = FishingPhase::Inside { seconds_left: left };
                     continue;
                 }
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 begin_workplace_exit(
                     &mut commands,
                     worker,
@@ -1497,12 +1497,12 @@ pub fn run_fishing_routines(
                     if outward.length_squared() > 1e-4 {
                         facing.0 = f32::atan2(-outward.x, -outward.y);
                     }
-                    *activity = CharacterActivity::Fishing;
+                    activity.set_if_neq(CharacterActivity::Fishing);
                     routine.phase = FishingPhase::Fishing;
                 }
             }
             FishingPhase::Fishing => {
-                *activity = CharacterActivity::Fishing;
+                activity.set_if_neq(CharacterActivity::Fishing);
                 routine.catch_seconds += dt;
                 let seconds_per_food = fisher_seconds_per_food(pier.quality);
                 if let Ok(mut carrier) = inventories.get_mut(worker) {
@@ -1514,7 +1514,7 @@ pub fn run_fishing_routines(
                         .saturating_sub(carried)
                         .min(remaining);
                     if needed == 0 {
-                        *activity = CharacterActivity::Idle;
+                        activity.set_if_neq(CharacterActivity::Idle);
                         install_fishing_route(
                             &mut commands,
                             worker,
@@ -1546,7 +1546,7 @@ pub fn run_fishing_routines(
                         continue;
                     }
                 }
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 install_fishing_route(
                     &mut commands,
                     worker,
@@ -1578,7 +1578,7 @@ pub fn run_fishing_routines(
                 let unloaded =
                     unload_worker_output(&mut inventories, worker, routine.hut, Good::Food);
                 if !unloaded {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     routine.phase = FishingPhase::ReturningToHut;
                     continue;
                 }
@@ -1858,7 +1858,7 @@ pub fn run_lumberjack_routines(
         // their ordinary job then resumes from the same physical phase.
         if !intent.is_settled() {
             if *activity != CharacterActivity::Idle {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
             }
             continue;
         }
@@ -1871,7 +1871,7 @@ pub fn run_lumberjack_routines(
                 .remove::<BuildingDoorUse>()
                 .remove::<MoveTarget>();
             if *activity != CharacterActivity::Idle {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
             }
             continue;
         };
@@ -1883,7 +1883,7 @@ pub fn run_lumberjack_routines(
                 .remove::<BuildingDoorUse>()
                 .remove::<MoveTarget>();
             if *activity != CharacterActivity::Idle {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
             }
             continue;
         }
@@ -1910,7 +1910,7 @@ pub fn run_lumberjack_routines(
                 .remove::<TravelRoute>()
                 .remove::<NavigationRoutePending>()
                 .remove::<NavigationRouteFailed>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             if unload_worker_output(&mut inventories, worker, routine.hut, Good::Wood) {
                 warn!(
                     "Woodcutter {} completed a loaded workplace handoff abstractly after {} failed routes",
@@ -1959,7 +1959,7 @@ pub fn run_lumberjack_routines(
                     commands.entity(worker).insert(MoveTarget(hut_entrance));
                 }
                 routine.phase = LumberjackPhase::ReturningToHut;
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
             } else if routine.failed_hut_routes >= MAX_WORKPLACE_ROUTE_FAILURES || !workday_active {
                 warn!(
                     "Woodcutter {} could not reach the hut at {:.1},{:.1} after {} routes; ending the empty-handed shift",
@@ -1982,7 +1982,7 @@ pub fn run_lumberjack_routines(
                     .remove::<NavigationRoutePending>()
                     .remove::<TravelRoute>()
                     .insert(MoveTarget(hut_entrance));
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
             }
             continue;
         }
@@ -1990,7 +1990,7 @@ pub fn run_lumberjack_routines(
         if !workday_active {
             match routine.phase {
                 LumberjackPhase::Inside { .. } => {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     begin_workplace_exit(
                         &mut commands,
                         worker,
@@ -2008,7 +2008,7 @@ pub fn run_lumberjack_routines(
                         .remove::<TravelRoute>()
                         .remove::<NavigationRoutePending>()
                         .remove::<NavigationRouteFailed>();
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     ensure_move_target(&mut commands, worker, move_target, hut_entrance);
                     routine.phase = LumberjackPhase::ReturningToHut;
                     continue;
@@ -2075,7 +2075,7 @@ pub fn run_lumberjack_routines(
                         );
                         continue;
                     }
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     begin_workplace_entry(
                         &mut commands,
                         worker,
@@ -2092,7 +2092,7 @@ pub fn run_lumberjack_routines(
             }
             LumberjackPhase::Inside { seconds_left } => {
                 if *activity != CharacterActivity::Indoors {
-                    *activity = CharacterActivity::Indoors;
+                    activity.set_if_neq(CharacterActivity::Indoors);
                 }
                 let left = seconds_left - dt;
                 if left > 0.0 {
@@ -2128,7 +2128,7 @@ pub fn run_lumberjack_routines(
                     }
                     TreeCandidateLookup::Found { tree, stand } => (tree, stand),
                 };
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 begin_workplace_exit(
                     &mut commands,
                     worker,
@@ -2159,7 +2159,7 @@ pub fn run_lumberjack_routines(
                         .remove::<TravelRoute>()
                         .insert(MoveTarget(hut_entrance));
                     routine.phase = LumberjackPhase::GoingToHut;
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     continue;
                 }
                 if route_pending.is_some_and(NavigationRoutePending::exhausted) {
@@ -2175,7 +2175,7 @@ pub fn run_lumberjack_routines(
                     routine.cycle = routine.cycle.wrapping_add(1);
                     routine.phase = LumberjackPhase::GoingToHut;
                     commands.entity(worker).insert(MoveTarget(hut_entrance));
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     continue;
                 }
                 if ground_distance(position.0, stand) <= WORK_REACH {
@@ -2185,7 +2185,7 @@ pub fn run_lumberjack_routines(
                     if to_tree.length_squared() > 1e-4 {
                         facing.0 = f32::atan2(-to_tree.x, -to_tree.z);
                     }
-                    *activity = CharacterActivity::Chopping;
+                    activity.set_if_neq(CharacterActivity::Chopping);
                     routine.phase = LumberjackPhase::Chopping;
                 } else {
                     ensure_move_target(&mut commands, worker, move_target, stand);
@@ -2193,7 +2193,7 @@ pub fn run_lumberjack_routines(
             }
             LumberjackPhase::Chopping => {
                 if *activity != CharacterActivity::Chopping {
-                    *activity = CharacterActivity::Chopping;
+                    activity.set_if_neq(CharacterActivity::Chopping);
                 }
                 routine.chop_seconds += dt;
                 let required_seconds = lumber_seconds_per_tree(hut.quality);
@@ -2216,7 +2216,7 @@ pub fn run_lumberjack_routines(
                     business_events.record_production(production_day, *building_id, produced);
                 }
                 routine.cycle = routine.cycle.wrapping_add(1);
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands.entity(worker).insert(MoveTarget(hut_entrance));
                 routine.phase = LumberjackPhase::ReturningToHut;
             }
@@ -2230,7 +2230,7 @@ pub fn run_lumberjack_routines(
                 let unloaded =
                     unload_worker_output(&mut inventories, worker, routine.hut, Good::Wood);
                 if !unloaded {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     routine.phase = LumberjackPhase::ReturningToHut;
                     continue;
                 }
@@ -2244,7 +2244,7 @@ pub fn run_lumberjack_routines(
                     );
                     continue;
                 }
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 begin_workplace_entry(
                     &mut commands,
                     worker,
@@ -2776,7 +2776,9 @@ fn finish_farmer_shift(
     routine: &FarmerRoutine,
     activity: &mut CharacterActivity,
 ) {
-    *activity = CharacterActivity::Idle;
+    if *activity != CharacterActivity::Idle {
+        *activity = CharacterActivity::Idle;
+    }
     commands
         .entity(worker)
         .remove::<FarmerRoutine>()
@@ -2803,7 +2805,9 @@ fn finish_fishing_shift(
     routine: &FishingRoutine,
     activity: &mut CharacterActivity,
 ) {
-    *activity = CharacterActivity::Idle;
+    if *activity != CharacterActivity::Idle {
+        *activity = CharacterActivity::Idle;
+    }
     commands
         .entity(worker)
         .remove::<FishingRoutine>()
@@ -2831,7 +2835,9 @@ fn finish_lumberjack_shift(
     routine: &LumberjackRoutine,
     activity: &mut CharacterActivity,
 ) {
-    *activity = CharacterActivity::Idle;
+    if *activity != CharacterActivity::Idle {
+        *activity = CharacterActivity::Idle;
+    }
     commands
         .entity(worker)
         .remove::<LumberjackRoutine>()

@@ -6,7 +6,11 @@ use bevy::prelude::*;
 use lightyear::link::SendPayload;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::*;
-use shared::components::{Player, PlayerPosition, PlayerRotation};
+use shared::components::{
+    CharacterActivity, CharacterKind, CharacterMotion, CharacterNavigationStatus,
+    CharacterObjective, Health, Nutrition, Player, PlayerPosition, PlayerRotation,
+};
+use shared::economy::{GoodsInventory, Wallet};
 use std::collections::HashMap;
 
 #[derive(Default)]
@@ -41,7 +45,24 @@ pub struct ServerNetDebugWindow {
     fixed_samples: u64,
     changed_player_pos_sum: u64,
     changed_player_rot_sum: u64,
+    /// Per-tick change counts for replicated villager components: which ones
+    /// actually drive the send stream at scale.
+    villager_changes: [u64; VILLAGER_PROBES.len()],
 }
+
+/// Replicated villager components sampled by [`sample_replication_change_pressure`].
+const VILLAGER_PROBES: [&str; 10] = [
+    "pos",
+    "rot",
+    "motion",
+    "activity",
+    "objective",
+    "nav",
+    "inventory",
+    "nutrition",
+    "health",
+    "wallet",
+];
 
 impl ServerNetDebugWindow {
     fn ensure_initialized(&mut self, now: f32) -> bool {
@@ -74,6 +95,7 @@ impl ServerNetDebugWindow {
         self.fixed_samples = 0;
         self.changed_player_pos_sum = 0;
         self.changed_player_rot_sum = 0;
+        self.villager_changes = [0; VILLAGER_PROBES.len()];
     }
 }
 
@@ -117,15 +139,90 @@ fn queued_send_packets_and_bytes(link: &mut Link) -> (u32, u32) {
     (packets, bytes)
 }
 
+#[allow(clippy::type_complexity)]
 pub fn sample_replication_change_pressure(
     time: Res<Time>,
     mut debug: ResMut<ServerNetDebugWindow>,
     changed_player_pos: Query<(), (With<Player>, Changed<PlayerPosition>)>,
     changed_player_rot: Query<(), (With<Player>, Changed<PlayerRotation>)>,
+    v_pos: Query<
+        (),
+        (
+            With<CharacterKind>,
+            Without<Player>,
+            Changed<PlayerPosition>,
+        ),
+    >,
+    v_rot: Query<
+        (),
+        (
+            With<CharacterKind>,
+            Without<Player>,
+            Changed<PlayerRotation>,
+        ),
+    >,
+    v_motion: Query<
+        (),
+        (
+            With<CharacterKind>,
+            Without<Player>,
+            Changed<CharacterMotion>,
+        ),
+    >,
+    v_activity: Query<
+        (),
+        (
+            With<CharacterKind>,
+            Without<Player>,
+            Changed<CharacterActivity>,
+        ),
+    >,
+    v_objective: Query<
+        (),
+        (
+            With<CharacterKind>,
+            Without<Player>,
+            Changed<CharacterObjective>,
+        ),
+    >,
+    v_nav: Query<
+        (),
+        (
+            With<CharacterKind>,
+            Without<Player>,
+            Changed<CharacterNavigationStatus>,
+        ),
+    >,
+    v_inventory: Query<
+        (),
+        (
+            With<CharacterKind>,
+            Without<Player>,
+            Changed<GoodsInventory>,
+        ),
+    >,
+    v_nutrition: Query<(), (With<CharacterKind>, Without<Player>, Changed<Nutrition>)>,
+    v_health: Query<(), (With<CharacterKind>, Without<Player>, Changed<Health>)>,
+    v_wallet: Query<(), (With<CharacterKind>, Without<Player>, Changed<Wallet>)>,
 ) {
     let now = time.elapsed_secs();
     if !debug.ensure_initialized(now) {
         return;
+    }
+    let counts = [
+        v_pos.iter().count(),
+        v_rot.iter().count(),
+        v_motion.iter().count(),
+        v_activity.iter().count(),
+        v_objective.iter().count(),
+        v_nav.iter().count(),
+        v_inventory.iter().count(),
+        v_nutrition.iter().count(),
+        v_health.iter().count(),
+        v_wallet.iter().count(),
+    ];
+    for (sum, count) in debug.villager_changes.iter_mut().zip(counts) {
+        *sum = sum.saturating_add(count as u64);
     }
 
     debug.fixed_samples = debug.fixed_samples.saturating_add(1);
@@ -232,8 +329,15 @@ pub fn sample_link_flow_post_send(
     let peak_send_packets = debug.send_packets_peak;
     let peak_recv_queue = debug.recv_queue_peak;
 
+    let fixed = debug.fixed_samples.max(1) as f32;
+    let villager_summary = VILLAGER_PROBES
+        .iter()
+        .zip(debug.villager_changes.iter())
+        .map(|(name, sum)| format!("{name}={:.1}", *sum as f32 / fixed))
+        .collect::<Vec<_>>()
+        .join(" ");
     info!(
-        "Server net debug: clients={} send={:.1} pkt/s {:.1} KiB/s peak_frame={} pkt/{:.1} KiB recv_q_avg={:.2} peak={} | changed/tick player_pos={:.1} player_rot={:.1} | per_client=[{}]",
+        "Server net debug: clients={} send={:.1} pkt/s {:.1} KiB/s peak_frame={} pkt/{:.1} KiB recv_q_avg={:.2} peak={} | changed/tick player_pos={:.1} player_rot={:.1} | villager changed/tick {villager_summary} | per_client=[{}]",
         client_count,
         send_packets_per_sec,
         send_kib_per_sec,

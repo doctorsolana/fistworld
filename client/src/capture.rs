@@ -550,6 +550,7 @@ pub fn run(config: CaptureConfig) {
             select_capture_person,
             select_capture_place,
             open_capture_business_management,
+            scroll_capture_business_page,
             open_capture_history,
             open_capture_world_map,
             position_capture_company_scroll,
@@ -1497,6 +1498,17 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         });
         if mode == "founding" {
             commands.insert_resource(crate::ui::company_founding::FoundingPageOpen(true));
+            // FISTFORCE_CAPTURE_FOUNDING_NAME=<text> photographs the field mid-edit
+            // with that text (empty = just the caret). The stand-in hero is
+            // PersonId 10_000, so the page does not re-seed the draft.
+            if let Ok(name) = std::env::var("FISTFORCE_CAPTURE_FOUNDING_NAME") {
+                commands.insert_resource(crate::ui::company_founding::CompanyFoundingDraft {
+                    founder: Some(shared::components::PersonId(10_000)),
+                    name,
+                    editing_name: true,
+                    ..default()
+                });
+            }
         }
         if matches!(
             mode.as_str(),
@@ -1851,7 +1863,7 @@ fn stage_capture_companies(commands: &mut Commands) {
     });
 }
 
-/// Open the actual site-management modal over the staged company directory.
+/// Open the actual site-controls page over the staged company directory.
 /// This is a rendering fixture only; it does not invent a second UI model.
 fn open_capture_business_management(
     heroes: Query<(&shared::components::Hero, &shared::components::PersonId)>,
@@ -1878,8 +1890,31 @@ fn open_capture_business_management(
     ));
     target.0 = Some(site);
     return_to.0 = Some(shared::components::CompanyId(501));
-    encyclopedia.0 = false;
+    // The controls are an encyclopedia page: keep the window open so the page
+    // host exists (closing it would clear the target again).
+    encyclopedia.0 = true;
     *opened = true;
+}
+
+/// `FISTFORCE_CAPTURE_BUSINESS_SCROLL=<px>` scrolls the site-controls page so
+/// its lower sections (meters, input rows) can be photographed.
+fn scroll_capture_business_page(
+    mut bodies: Query<
+        &mut ScrollPosition,
+        With<crate::ui::business_management::BodyScroll>,
+    >,
+) {
+    let Some(offset) = std::env::var("FISTFORCE_CAPTURE_BUSINESS_SCROLL")
+        .ok()
+        .and_then(|raw| raw.parse::<f32>().ok())
+    else {
+        return;
+    };
+    for mut scroll in bodies.iter_mut() {
+        if scroll.0.y != offset {
+            scroll.0.y = offset;
+        }
+    }
 }
 
 /// Open history after the commander camera has rendered ordinary world frames.
@@ -2197,6 +2232,21 @@ fn spawn_capture_heroes(
         commands.queue(|world: &mut World| {
             let entity = world
                 .query_filtered::<Entity, With<shared::components::Settlement>>()
+                .iter(world)
+                .next();
+            if let Some(entity) = entity {
+                world.resource_mut::<crate::selection::Selection>().entities = vec![entity];
+            }
+        });
+    } else if std::env::var("FISTFORCE_CAPTURE_SELECT").is_ok_and(|v| v == "building") {
+        // Selects the first operating business so the compact card can be
+        // photographed on a building rather than a settlement.
+        commands.queue(|world: &mut World| {
+            let entity = world
+                .query_filtered::<Entity, (
+                    With<shared::components::SettlementBuilding>,
+                    With<shared::economy::BusinessAccount>,
+                )>()
                 .iter(world)
                 .next();
             if let Some(entity) = entity {

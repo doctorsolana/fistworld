@@ -117,6 +117,49 @@ Prefer stable entities plus diff-gated text/state updates for a new complex scre
 rebuild is the compatibility path for the existing data-heavy ledgers, not permission to
 despawn a button under the cursor.
 
+## Build once, bind in place
+
+Bevy UI is retained: the rule for every live panel is **rebuild only on a structural change,
+bind values in place for everything else.** Structure is what exists — which settlement, which
+tab, which cards, whether an acting company exists. A value is a price, a count, a label, an
+enabled state. The property board (`property_market.rs`) is the reference implementation:
+
+- One system, `sync_property_panel`, computes the page model every frame. A short *structure
+  key* (no `Debug` dumps of whole structs) decides whether to respawn the tree; otherwise the
+  system writes values into marked widgets (`PermitPriceText`, `PermitActionLabel`,
+  `ListingFactText`, `ActingCompanyText`, `PropertyTabCount`) and flips button state
+  (`UiButtonStyle.variant`, `InteractionDisabled`, the `PurchasePermitButton` order) in place.
+- The values come from one pure function (`permit_card_values`) used both at spawn and at bind,
+  so the two can never disagree, and it is what the unit tests exercise.
+- Because the widgets under the pointer survive, there is no hover-deferred refresh, no
+  `UiRefreshStamp`, and no scroll-position retention hack on this panel. The founding form
+  follows the same pattern for its steppers.
+
+Two panels show the *model-driven* variant, which is the shape to copy for anything with many
+rows or optional sections:
+
+- Company controls (`business_management.rs`): the replicated policies fold into a pure
+  `ControlsModel` — sections, rows, controls and meters, each with a stable id (`wage`,
+  `cover.Wheat.3`, `input.Wheat`). `structure_key()` is the id sequence; only a change in it
+  respawns the tree. `bind_panel` then writes every value by id into `BoundText` nodes,
+  `BoundButton`s (label, `UiButtonStyle.selected`, and the `Action` order the button will send)
+  and `MeterFill` lanes. Selected choices are filled buttons, not a "SELECTED:" prefix.
+  The unit tests pin the contract: a wage or position change keeps the key; ids are unique.
+- The compact settlement card (`settlement_panel.rs`): `CompactModel` is a title, a handful of
+  key tiles, a few vital rows and the action buttons; `CompactBound` slots (`Tile(i)`, `Row(i)`)
+  bind values, and the card only respawns when the selection or the tile/row *labels* change.
+  Detail the card dropped (labour market, policy lines, arrears) lives on the place page behind
+  EXPAND.
+
+Why: the signature-rebuild pattern (format the whole input into a string, despawn and respawn
+on any difference, defer while hovered) produced every UI-feel bug we hit — a +1 press that
+showed two seconds later, rows that could not be clicked, scroll positions jumping. Rebuilding on
+a float drift also costs real frame time at scale. Panels that still rebuild on change
+(history ledgers) do so because their inputs genuinely change only on an event.
+
+Measure it: `FISTFORCE_CLIENT_PERF=1` logs `ClientPerfUi <system>=calls/rebuilds/ms`; a bound
+panel shows `1r` per open, never `Nr` while you hover or while the world ticks.
+
 ## Type scale and ledgers
 
 The UI scale is derived from the 1600x900 launcher frame, so small captions land at roughly
@@ -136,7 +179,7 @@ render inside `EncyclopediaPageHost`, full size, under one BACK bar that names i
 the compact settlement card, the market board — opens the encyclopedia on the matching tab and
 hosts the page next frame. ESC pops a page before it closes the window; the X closes everything
 and `close_pages_with_encyclopedia` clears the page targets so nothing reopens itself. New
-pages follow the same shape: spawn into the host, carry a `UiRefreshStamp` root, no own close.
+pages follow the same shape: spawn into the host, bind in place, no own close.
 The company-founding form (`company_founding.rs`) is the model for an input form: the name and
 capital are a client-side draft, `sync_founding_texts` writes them into the form in place so a
 press shows instantly even while the pointer rests on the button (refresh-gated panels defer
@@ -180,6 +223,15 @@ cargo run --profile playtest -p client --bin capture -- \
 Inspect the result at `/tmp/fistworld-ui/property-ui.png`. `FISTFORCE_CAPTURE_PROPERTY=sale` opens the
 board on its FOR SALE tab instead of PERMITS. The world must remain visible under
 one dark scrim; no surface may flash to `BUTTON_NORMAL` merely because the pointer entered it.
+
+The compact card and the controls page have fixtures too. Selection fixtures live in the hero
+spawner, so they need a stand-in hero: `FISTFORCE_CAPTURE_HERO=default
+FISTFORCE_CAPTURE_HERO_OFFSET=0,0 FISTFORCE_CAPTURE_SETTLEMENT=village
+FISTFORCE_CAPTURE_SELECT=hall|building` photographs the card on a hall or on the first operating
+business. `FISTFORCE_CAPTURE_ENCYCLOPEDIA=business` (same hero variables) opens the site-controls
+page for the staged windmill; add `FISTFORCE_CAPTURE_BUSINESS_SCROLL=900` (pixels) for its lower
+sections. With `FISTFORCE_CLIENT_PERF=1 FISTFORCE_CLIENT_PERF_INTERVAL_SECS=1` the log should show
+`sync_compact_panel=…/1r` and `ensure_business_panel=…/2r` once, then `0r` every second.
 
 The real J menu and its locked-access state are deterministic visual targets too:
 

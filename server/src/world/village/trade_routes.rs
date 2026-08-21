@@ -2161,7 +2161,7 @@ pub fn run_company_trade_routes(
             route.assigned_caravaner = None;
             route.active_contract = None;
             route.status = TradeRouteStatus::Idle;
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             commands
                 .entity(porter_entity)
                 .remove::<TradeRouteRoutine>()
@@ -2327,7 +2327,7 @@ pub fn run_company_trade_routes(
                 route.status = TradeRouteStatus::InTransit;
                 route.current_stop = 1;
                 routine.phase = TradeRoutePhase::InTransit;
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 let target = projects
                     .iter_mut()
                     .find(|(project, building_of, _, _)| {
@@ -2580,7 +2580,7 @@ pub fn run_merchant_trade_routes(
         else {
             route.status = TradeRouteStatus::Mothballed;
             route.assigned_caravaner = None;
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             commands
                 .entity(porter_entity)
                 .remove::<TradeRouteRoutine>()
@@ -2652,7 +2652,7 @@ pub fn run_merchant_trade_routes(
             route.assigned_caravaner = None;
             route.current_stop = 0;
             route.status = TradeRouteStatus::Idle;
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             commands
                 .entity(porter_entity)
                 .remove::<TradeRouteRoutine>()

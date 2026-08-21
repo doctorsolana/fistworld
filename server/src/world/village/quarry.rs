@@ -103,7 +103,9 @@ fn finish_shift(
     routine: &QuarryRoutine,
     activity: &mut CharacterActivity,
 ) {
-    *activity = CharacterActivity::Idle;
+    if *activity != CharacterActivity::Idle {
+        *activity = CharacterActivity::Idle;
+    }
     commands
         .entity(worker)
         .remove::<QuarryRoutine>()
@@ -330,7 +332,7 @@ pub fn run_quarry_routines(
             workplaces.get(routine.workplace)
         else {
             commands.entity(worker).remove::<QuarryRoutine>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         };
         if building.kind != routine.kind
@@ -346,7 +348,7 @@ pub fn run_quarry_routines(
                 .is_ok_and(|settlement_id| *settlement_id != building_of.0)
         {
             commands.entity(worker).remove::<QuarryRoutine>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
         if routine.production_day != clock.day {
@@ -420,7 +422,7 @@ pub fn run_quarry_routines(
             }
             QuarryPhase::Mining => {
                 if !workday {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     routine.phase = QuarryPhase::EndingShift;
                     continue;
                 }
@@ -442,7 +444,7 @@ pub fn run_quarry_routines(
                     .get_mut(worker)
                     .is_ok_and(|inventory| inventory.free_bulk() >= cycle_bulk);
                 if remaining == 0 || !can_carry {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     routine.phase = QuarryPhase::ReturningToStore;
                     commands.entity(worker).insert(MoveTarget(store));
                     continue;
@@ -489,7 +491,7 @@ pub fn run_quarry_routines(
                         .get_mut(worker)
                         .is_ok_and(|inventory| inventory.amount(Good::Meat) >= 2)
                 {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     routine.phase = QuarryPhase::ReturningToStore;
                     commands.entity(worker).insert(MoveTarget(store));
                 }

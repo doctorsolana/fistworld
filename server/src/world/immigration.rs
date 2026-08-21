@@ -721,7 +721,7 @@ pub fn sync_natural_immigrant_passengers(
         rotation.0 = boat_rotation.0;
         *region = RegionCoord::from_world_pos(helm);
         *motion = *boat_motion;
-        *activity = CharacterActivity::Sitting;
+        activity.set_if_neq(CharacterActivity::Sitting);
     }
 }
 
@@ -783,7 +783,7 @@ pub fn finish_natural_immigrant_voyages(
         position.0 = landing;
         *region = RegionCoord::from_world_pos(landing);
         *motion = CharacterMotion::STATIONARY;
-        *activity = CharacterActivity::Idle;
+        activity.set_if_neq(CharacterActivity::Idle);
 
         if let Ok((hall, hall_rotation)) = halls.get(arrival.settlement) {
             let entrance = SettlementBuildingKind::Hall

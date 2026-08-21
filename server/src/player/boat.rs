@@ -677,7 +677,7 @@ pub fn sync_aboard_heroes(
             *motion = *boat_motion;
         }
         if *activity != CharacterActivity::Sitting {
-            *activity = CharacterActivity::Sitting;
+            activity.set_if_neq(CharacterActivity::Sitting);
         }
     }
 }
@@ -760,7 +760,7 @@ pub fn handle_disembark_requests(
             }
             *region = RegionCoord::from_world_pos(ground);
             *motion = CharacterMotion::STATIONARY;
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             commands.entity(hero_entity).remove::<AboardBoat>();
             commands
                 .entity(request.boat)

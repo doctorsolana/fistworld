@@ -291,7 +291,7 @@ pub fn run_civic_hall_upgrade_projects(
                     .remove::<crate::world::village_roads::NavigationRoutePending>()
                     .remove::<crate::world::village_roads::NavigationRouteFailed>();
                 if let Ok((_, _, _, _, mut activity, ..)) = civic_workers.get_mut(builder) {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                 }
                 if let Ok((_, _, mut runtime)) = sets.p2().get_mut(project_entity) {
                     runtime.builder = None;
@@ -404,14 +404,14 @@ pub fn run_civic_hall_upgrade_projects(
                 .remove::<crate::world::village_roads::TravelRoute>()
                 .remove::<crate::world::village_roads::NavigationRoutePending>()
                 .remove::<crate::world::village_roads::NavigationRouteFailed>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             if let Ok((_, _, mut runtime)) = sets.p2().get_mut(project_entity) {
                 runtime.builder = None;
             }
             continue;
         }
         if ground_distance(position.0, stand) > work_reach {
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             crate::world::village::ensure_move_target(&mut commands, builder, move_target, stand);
             continue;
         }
@@ -426,7 +426,7 @@ pub fn run_civic_hall_upgrade_projects(
             // Character art faces local -Z, matching ordinary building crews.
             facing.0 = f32::atan2(-hall_direction.x, -hall_direction.z);
         }
-        *activity = CharacterActivity::Building;
+        activity.set_if_neq(CharacterActivity::Building);
 
         if !raising {
             if let Ok((mut site, _, mut runtime)) = sets.p2().get_mut(project_entity) {
@@ -483,7 +483,7 @@ pub fn run_civic_hall_upgrade_projects(
             .remove::<crate::world::village_roads::TravelRoute>()
             .remove::<crate::world::village_roads::NavigationRoutePending>()
             .remove::<crate::world::village_roads::NavigationRouteFailed>();
-        *activity = CharacterActivity::Idle;
+        activity.set_if_neq(CharacterActivity::Idle);
         commands.entity(project_entity).despawn();
     }
 }

@@ -5,6 +5,7 @@
 //! development decisions. Both boards use the same visual ledger language.
 
 use bevy::ecs::system::SystemParam;
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
 
@@ -22,12 +23,11 @@ use shared::economy::{
 use crate::camera_rts::LocalPeerId;
 use crate::states::GameState;
 use crate::ui::company_founding::{
-    spawn_founding_form, suggested_company_name, suggested_founding_capital, CompanyFoundingDraft,
-    CompanyFoundingFeedback, FoundingFormView, OpenCompanyFounding,
+    CompanyFoundingDraft, CompanyFoundingFeedback, OpenCompanyFounding,
 };
 use crate::ui::foundation::{
-    button_chrome, retained_scroll, selected_button_chrome, subtree_is_interacting, UiButtonLabel,
-    UiButtonVariant, UiRefreshExempt, UiRefreshStamp,
+    button_chrome, selected_button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant,
+    UiRefreshExempt,
 };
 use crate::ui::modal::{
     handle_backdrop_pressed, spawn_modal, update_modal_click_guard, ModalLayout,
@@ -62,7 +62,7 @@ impl Plugin for PropertyMarketPlugin {
             (
                 handle_company_context_buttons,
                 handle_property_tab_buttons,
-                ensure_property_panel,
+                sync_property_panel,
                 update_property_guard,
                 handle_property_close,
             )
@@ -90,28 +90,199 @@ struct PropertyTabButton(PropertyMarketTab);
 
 /// Refresh-gated panel state that would otherwise push
 /// [`ensure_property_panel`] past Bevy's system parameter limit.
+/// The board's bound widgets. The tree is built once per page (see
+/// [`PropertyPanelRoot`]) and these queries write the live values into it
+/// every frame. No signature strings, no hover deferral, no scroll hacks:
+/// the widgets under the pointer are the same entities from frame to frame.
 #[derive(SystemParam)]
 struct PropertyPanelUi<'w, 's> {
-    roots: Query<
+    roots: Query<'w, 's, (Entity, &'static PropertyPanelRoot)>,
+    #[allow(clippy::type_complexity)]
+    texts: Query<
+        'w,
+        's,
+        (
+            &'static mut Text,
+            AnyOf<(
+                &'static PermitPriceText,
+                &'static PermitDemandText,
+                &'static PermitActionLabel,
+                &'static ListingFactText,
+                &'static ActingCompanyText,
+                &'static PropertyTabCount,
+            )>,
+        ),
+    >,
+    #[allow(clippy::type_complexity)]
+    actions: Query<
         'w,
         's,
         (
             Entity,
-            &'static PropertyPanelRoot,
-            Option<&'static UiRefreshStamp>,
-        ),
-    >,
-    children: Query<'w, 's, &'static Children>,
-    interactions: Query<'w, 's, (&'static Interaction, Has<UiRefreshExempt>)>,
-    viewport_scrolls: ParamSet<
-        'w,
-        's,
-        (
-            Query<'w, 's, &'static ScrollPosition, With<PermitListingViewport>>,
-            Query<'w, 's, &'static ScrollPosition, With<PropertyListingViewport>>,
+            &'static PermitActionButton,
+            &'static mut UiButtonStyle,
+            Has<InteractionDisabled>,
+            Option<&'static PurchasePermitButton>,
         ),
     >,
     tab: Res<'w, PropertyMarketTab>,
+    perf: Res<'w, crate::ui::perf::UiPerf>,
+}
+
+// Bind markers: each names the one value its Text shows.
+#[derive(Component)]
+struct PermitPriceText(SettlementBuildingKind);
+#[derive(Component)]
+struct PermitDemandText(SettlementBuildingKind);
+#[derive(Component)]
+struct PermitActionButton(SettlementBuildingKind);
+#[derive(Component)]
+struct PermitActionLabel(SettlementBuildingKind);
+#[derive(Component, Clone, Copy)]
+struct ListingFactText {
+    index: usize,
+    field: ListingField,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListingField {
+    Asking,
+    Listed,
+    Status,
+}
+#[derive(Component)]
+struct ActingCompanyText;
+#[derive(Component)]
+struct PropertyTabCount(PropertyMarketTab);
+
+/// Everything on a permit card that can change while the card stays.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PermitCardValues {
+    price_text: String,
+    demand_text: String,
+    action_label: String,
+    enabled: bool,
+    purchase: Option<PurchasePermitButton>,
+}
+
+fn tab_label(tab: PropertyMarketTab, permits: usize, listings: usize) -> String {
+    match tab {
+        PropertyMarketTab::Permits => format!("PERMITS  {permits}"),
+        PropertyMarketTab::ForSale => format!("FOR SALE  {listings}"),
+    }
+}
+
+fn acting_company_text(acting: &ActingCompanyView) -> String {
+    format!("{}  /  {} coin", acting.name, format_money(acting.cash))
+}
+
+fn listing_fact(listing: &PropertyMarketListing, day: u32, field: ListingField) -> String {
+    let age = day.saturating_sub(listing.listed_day);
+    let exposure_left = PROPERTY_MARKET_EXPOSURE_DAYS.saturating_sub(age);
+    match field {
+        ListingField::Asking => format!("{} coin", format_money(listing.asking_price)),
+        ListingField::Listed => format!("Day {}", listing.listed_day),
+        ListingField::Status => {
+            if exposure_left > 0 {
+                format!(
+                    "Public for {exposure_left} more day{}",
+                    if exposure_left == 1 { "" } else { "s" }
+                )
+            } else {
+                "Open to investors".into()
+            }
+        }
+    }
+}
+
+/// The Hall prices the permit for THIS purchaser when the order lands; if the
+/// fee moved since the card was drawn, the Hall answers with the exact figure,
+/// the card's price and button rebind, and one more press confirms.
+#[allow(clippy::too_many_arguments)]
+fn permit_card_values(
+    hall: Entity,
+    settlement: SettlementId,
+    opportunity: PermitMarketOpportunity,
+    policy: Option<&SettlementPolicies>,
+    quote: Option<&shared::protocol::HeroPermitQuote>,
+    has_hero: bool,
+    hero_nearby: bool,
+    hero_balance: u64,
+    acting_company: Option<&ActingCompanyView>,
+    price_context: &PriceContext,
+) -> PermitCardValues {
+    let kind = opportunity.kind;
+    let estimate = offer_price_for(opportunity, policy, price_context);
+    let business_permit = kind != SettlementBuildingKind::House;
+    let selected_company = business_permit
+        .then(|| acting_company.map(|company| company.id))
+        .flatten();
+    // The Hall's own answer for this purchaser outranks the local estimate.
+    let exact = quote.filter(|quote| {
+        quote.settlement == settlement && quote.kind == kind && quote.company == selected_company
+    });
+    let fee = exact.map_or(estimate, |quote| quote.fee);
+    let price_text = if fee == 0 {
+        "Free".to_string()
+    } else {
+        format!("{} coin", format_money(fee))
+    };
+    let demand_text = format!(
+        "{} / {}",
+        signal_label(opportunity.score),
+        opportunity.score
+    );
+    let privately_available = kind.minimum_player_permit_tier().is_some();
+    let available = if business_permit {
+        acting_company.map_or(0, |company| company.cash)
+    } else {
+        hero_balance
+    };
+    let (action_label, purchase): (String, Option<PurchasePermitButton>) = if !privately_available {
+        ("NOT FOR SALE".into(), None)
+    } else if !has_hero {
+        ("CREATE A HERO FIRST".into(), None)
+    } else if !hero_nearby {
+        ("WALK TO THE HALL TO BUY".into(), None)
+    } else if business_permit && acting_company.is_none() {
+        ("FOUND A COMPANY FIRST".into(), None)
+    } else if available < fee {
+        (
+            format!("NEED {} MORE COIN", format_money(fee - available)),
+            None,
+        )
+    } else {
+        let verb = if kind == SettlementBuildingKind::House {
+            "CLAIM PLOT"
+        } else {
+            "BUY"
+        };
+        let price = if fee == 0 {
+            "FREE".to_string()
+        } else {
+            format!("{} COIN", format_money(fee))
+        };
+        let label = if exact.is_some_and(|quote| quote.fee != estimate) {
+            format!("PRICE CHANGED  /  {verb} FOR {price}")
+        } else {
+            format!("{verb}  /  {price}")
+        };
+        (
+            label,
+            Some(PurchasePermitButton {
+                hall,
+                kind,
+                company: selected_company,
+                fee,
+            }),
+        )
+    };
+    PermitCardValues {
+        price_text,
+        demand_text,
+        action_label,
+        enabled: purchase.is_some(),
+        purchase,
+    }
 }
 
 /// What the client can see of the Hall's person-specific pricing inputs, so
@@ -181,9 +352,12 @@ impl PropertyHoldings<'_, '_> {
 #[derive(Resource, Default)]
 pub(crate) struct PropertyClickGuard(pub bool);
 
+/// The board is rebuilt only when its STRUCTURE changes (which settlement,
+/// which tab, which cards exist, whether an acting company exists). Values
+/// inside that structure are bound in place by [`sync_property_panel`].
 #[derive(Component)]
 struct PropertyPanelRoot {
-    signature: String,
+    structure: String,
     target: Entity,
 }
 
@@ -321,13 +495,12 @@ fn handle_company_context_buttons(
     }
 }
 
-fn ensure_property_panel(
+#[allow(clippy::too_many_arguments)]
+fn sync_property_panel(
     mut commands: Commands,
-    time: Res<Time<Real>>,
     mut target: ResMut<PropertyMarketTarget>,
     quote: Res<PendingPermitQuote>,
     mut active_company: ResMut<ActiveCompany>,
-    mut founding: ResMut<CompanyFoundingDraft>,
     founding_feedback: Res<CompanyFoundingFeedback>,
     local: Option<Res<LocalPeerId>>,
     settlements: Query<(
@@ -352,8 +525,9 @@ fn ensure_property_panel(
     mut ui: PropertyPanelUi,
     holdings: PropertyHoldings,
 ) {
+    let mut _ui_scope = ui.perf.scope("sync_property_panel");
     let Some(entity) = target.0 else {
-        for (root, ..) in ui.roots.iter() {
+        for (root, _) in ui.roots.iter() {
             commands.entity(root).despawn();
         }
         return;
@@ -368,7 +542,7 @@ fn ensure_property_panel(
         policy,
     )) = settlements.get(entity)
     else {
-        for (root, ..) in ui.roots.iter() {
+        for (root, _) in ui.roots.iter() {
             commands.entity(root).despawn();
         }
         target.0 = None;
@@ -418,18 +592,6 @@ fn ensure_property_panel(
     } else if mastered_companies.is_empty() && !founding_feedback.success {
         active_company.0 = None;
     }
-    if let Some((_, person, name, ..)) = local_hero {
-        if founding.founder != Some(*person) || founding.name.is_empty() {
-            founding.founder = Some(*person);
-            founding.name = suggested_company_name(&name.0, mastered_companies.len());
-            founding.initial_capital = suggested_founding_capital(hero_balance);
-            founding.editing_name = false;
-            founding.pending = false;
-        }
-    }
-    if mastered_companies.is_empty() && has_hero && active_company.0.is_none() {
-        founding.visible = true;
-    }
     let acting_company = active_company.0.and_then(|selected| {
         mastered_companies
             .iter()
@@ -443,128 +605,193 @@ fn ensure_property_panel(
         ledger,
     );
     let tab = *ui.tab;
-    let signature = format!(
-        "{entity:?}|{settlement_id:?}|{settlement:?}|{hall_level:?}|{permit_offers:?}|{property_listings:?}|{policy:?}|{day}|{has_hero}|{hero_nearby}|{hero_balance}|{mastered_companies:?}|{tab:?}|{price_context:?}|{:?}|{:?}|{:?}|{:?}",
-        active_company.0,
-        *founding,
-        *founding_feedback,
-        quote.0,
-    );
-    if ui
-        .roots
-        .iter()
-        .any(|(_, root, _)| root.signature == signature)
-    {
-        return;
-    }
-    if ui.roots.iter().any(|(entity, _, stamp)| {
-        subtree_is_interacting(entity, &ui.children, &ui.interactions)
-            || stamp.is_some_and(|stamp| !stamp.is_ready(&time))
-    }) {
-        return;
-    }
-    let same_target = ui.roots.iter().any(|(_, root, _)| root.target == entity);
-    let permit_scroll = retained_scroll(
-        same_target,
-        ui.viewport_scrolls
-            .p0()
+
+    // Structure: what exists. Values live in the bound widgets below.
+    let structure = format!(
+        "{entity:?}|{}|{}|{}|{tab:?}|{has_hero}|{:?}|{}|{:?}|{:?}|{}|{}",
+        settlement.name,
+        settlement.tier.label(),
+        hall_level.label(),
+        acting_company.map(|company| company.id),
+        mastered_companies.len(),
+        permit_offers
             .iter()
-            .next()
-            .map(|position| position.0),
-    );
-    let property_scroll = retained_scroll(
-        same_target,
-        ui.viewport_scrolls
-            .p1()
+            .map(|offer| (
+                offer.kind,
+                offer.subsidized,
+                offer.requires_independent_owner
+            ))
+            .collect::<Vec<_>>(),
+        property_listings
             .iter()
-            .next()
-            .map(|position| position.0),
+            .map(|listing| (
+                listing.kind,
+                listing.listed_day,
+                listing.stage,
+                listing.reason
+            ))
+            .collect::<Vec<_>>(),
+        founding_feedback.message,
+        founding_feedback.success,
     );
-    for (root, ..) in ui.roots.iter() {
-        commands.entity(root).despawn();
+    let quote = quote.0.as_ref();
+    let mut card_values: HashMap<SettlementBuildingKind, PermitCardValues> = HashMap::default();
+    for opportunity in permit_offers {
+        card_values.insert(
+            opportunity.kind,
+            permit_card_values(
+                entity,
+                *settlement_id,
+                *opportunity,
+                policy,
+                quote,
+                has_hero,
+                hero_nearby,
+                hero_balance,
+                acting_company,
+                &price_context,
+            ),
+        );
     }
 
-    let nodes = spawn_modal(
-        &mut commands,
-        PropertyPanelRoot {
-            signature: signature.clone(),
-            target: entity,
-        },
-        PropertyBackdrop,
-        PropertyPanel,
-        ModalLayout {
-            panel_size: Vec2::new(960.0, 700.0),
-            panel_padding: 0.0,
-        },
-    );
-    commands
-        .entity(nodes.root)
-        .insert(UiRefreshStamp::now(&time));
-    commands.entity(nodes.panel).insert((
-        Node {
-            width: Val::Vw(90.0),
-            max_width: Val::Px(960.0),
-            height: Val::Vh(86.0),
-            max_height: Val::Px(700.0),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Stretch,
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(RADIUS)),
-            overflow: Overflow::clip(),
-            ..default()
-        },
-        BackgroundColor(LIMEWASH_LIT),
-        BorderColor::all(PLATE_RULE),
-        plate_shadow(),
-    ));
-    commands.entity(nodes.panel).with_children(|panel| {
-        spawn_header(
-            panel,
-            &settlement.name,
-            settlement.tier.label(),
-            hall_level.label(),
+    let built = ui
+        .roots
+        .iter()
+        .any(|(_, root)| root.target == entity && root.structure == structure);
+    if !built {
+        for (root, _) in ui.roots.iter() {
+            commands.entity(root).despawn();
+        }
+        _ui_scope.rebuilt();
+        let nodes = spawn_modal(
+            &mut commands,
+            PropertyPanelRoot {
+                structure,
+                target: entity,
+            },
+            PropertyBackdrop,
+            PropertyPanel,
+            ModalLayout {
+                panel_size: Vec2::new(960.0, 700.0),
+                panel_padding: 0.0,
+            },
         );
-        spawn_company_context(
-            panel,
-            entity,
-            &settlement.name,
-            &mastered_companies,
-            acting_company,
-            hero_balance,
-            &founding,
-            &founding_feedback,
-            has_hero,
-            hero_nearby,
-        );
-        spawn_tab_bar(panel, tab, permit_offers.len(), property_listings.len());
-        panel
-            .spawn(Node {
-                flex_grow: 1.0,
-                min_height: Val::Px(0.0),
+        commands.entity(nodes.panel).insert((
+            Node {
+                width: Val::Vw(90.0),
+                max_width: Val::Px(960.0),
+                height: Val::Vh(86.0),
+                max_height: Val::Px(700.0),
                 flex_direction: FlexDirection::Column,
-                padding: UiRect::axes(Val::Px(22.0), Val::Px(14.0)),
+                align_items: AlignItems::Stretch,
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                overflow: Overflow::clip(),
                 ..default()
-            })
-            .with_children(|body| match tab {
-                PropertyMarketTab::Permits => spawn_permit_list(
-                    body,
-                    entity,
-                    *settlement_id,
-                    permit_offers,
-                    policy,
-                    quote.0.as_ref(),
-                    has_hero,
-                    hero_nearby,
-                    hero_balance,
-                    acting_company,
-                    &price_context,
-                    permit_scroll,
-                ),
-                PropertyMarketTab::ForSale => {
-                    spawn_property_list(body, property_listings, day, property_scroll)
+            },
+            BackgroundColor(LIMEWASH_LIT),
+            BorderColor::all(PLATE_RULE),
+            plate_shadow(),
+        ));
+        commands.entity(nodes.panel).with_children(|panel| {
+            spawn_header(
+                panel,
+                &settlement.name,
+                settlement.tier.label(),
+                hall_level.label(),
+            );
+            spawn_company_context(
+                panel,
+                &mastered_companies,
+                acting_company,
+                &founding_feedback,
+                has_hero,
+            );
+            spawn_tab_bar(panel, tab, permit_offers.len(), property_listings.len());
+            panel
+                .spawn(Node {
+                    flex_grow: 1.0,
+                    min_height: Val::Px(0.0),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::axes(Val::Px(22.0), Val::Px(14.0)),
+                    ..default()
+                })
+                .with_children(|body| match tab {
+                    PropertyMarketTab::Permits => {
+                        spawn_permit_list(body, permit_offers, &card_values)
+                    }
+                    PropertyMarketTab::ForSale => spawn_property_list(body, property_listings, day),
+                });
+        });
+        return;
+    }
+
+    // Bind: write only what changed, into the widgets that already exist.
+    let acting_text = acting_company.map(acting_company_text);
+    for (mut text, (price, demand, label, listing, acting, tab_count)) in ui.texts.iter_mut() {
+        let next = if let Some(PermitPriceText(kind)) = price {
+            card_values
+                .get(kind)
+                .map(|values| values.price_text.clone())
+        } else if let Some(PermitDemandText(kind)) = demand {
+            card_values
+                .get(kind)
+                .map(|values| values.demand_text.clone())
+        } else if let Some(PermitActionLabel(kind)) = label {
+            card_values
+                .get(kind)
+                .map(|values| values.action_label.clone())
+        } else if let Some(fact) = listing {
+            property_listings
+                .get(fact.index)
+                .map(|listing| listing_fact(listing, day, fact.field))
+        } else if acting.is_some() {
+            acting_text.clone()
+        } else if let Some(PropertyTabCount(which)) = tab_count {
+            Some(tab_label(
+                *which,
+                permit_offers.len(),
+                property_listings.len(),
+            ))
+        } else {
+            None
+        };
+        if let Some(next) = next {
+            if text.0 != next {
+                text.0 = next;
+            }
+        }
+    }
+    for (button, PermitActionButton(kind), mut style, disabled, purchase) in ui.actions.iter_mut() {
+        let Some(values) = card_values.get(kind) else {
+            continue;
+        };
+        let variant = if values.enabled {
+            UiButtonVariant::Primary
+        } else {
+            UiButtonVariant::Secondary
+        };
+        if style.variant != variant {
+            style.variant = variant;
+        }
+        if values.enabled == disabled {
+            if values.enabled {
+                commands.entity(button).remove::<InteractionDisabled>();
+            } else {
+                commands.entity(button).insert(InteractionDisabled);
+            }
+        }
+        if purchase.copied() != values.purchase {
+            match values.purchase {
+                Some(purchase) => {
+                    commands.entity(button).insert(purchase);
                 }
-            });
-    });
+                None => {
+                    commands.entity(button).remove::<PurchasePermitButton>();
+                }
+            }
+        }
+    }
 }
 
 fn spawn_header(panel: &mut ChildSpawnerCommands<'_>, place: &str, tier: &str, hall: &str) {
@@ -641,15 +868,10 @@ fn spawn_header(panel: &mut ChildSpawnerCommands<'_>, place: &str, tier: &str, h
 #[allow(clippy::too_many_arguments)]
 fn spawn_company_context(
     panel: &mut ChildSpawnerCommands<'_>,
-    hall: Entity,
-    place: &str,
     mastered: &[ActingCompanyView],
     acting: Option<&ActingCompanyView>,
-    wallet: u64,
-    founding: &CompanyFoundingDraft,
     feedback: &CompanyFoundingFeedback,
     has_hero: bool,
-    hero_nearby: bool,
 ) {
     panel
         .spawn((
@@ -677,19 +899,7 @@ fn spawn_company_context(
                 ));
                 return;
             }
-            if founding.visible {
-                spawn_founding_form(
-                    context,
-                    &FoundingFormView {
-                        draft: founding,
-                        feedback,
-                        wallet,
-                        hall: hero_nearby.then_some((hall, place)),
-                        existing: mastered.len(),
-                        show_cancel: !mastered.is_empty(),
-                    },
-                );
-            } else if let Some(acting) = acting {
+            if let Some(acting) = acting {
                 context
                     .spawn(Node {
                         width: Val::Percent(100.0),
@@ -710,11 +920,8 @@ fn spawn_company_context(
                             context_button(row, CycleActingCompany(-1), "<");
                         }
                         row.spawn((
-                            Text::new(format!(
-                                "{}  /  {} coin",
-                                acting.name,
-                                format_money(acting.cash)
-                            )),
+                            ActingCompanyText,
+                            Text::new(acting_company_text(acting)),
                             TextFont {
                                 font_size: FontSize::Px(T_BUTTON),
                                 ..default()
@@ -738,8 +945,33 @@ fn spawn_company_context(
                         }
                         context_button(row, OpenCompanyFounding, "NEW COMPANY");
                     });
+            } else {
+                // No company to act for: offer the one door to the founding
+                // screen, nothing else.
+                context
+                    .spawn(Node {
+                        width: Val::Percent(100.0),
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(12.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        row.spawn((
+                            Text::new("ACTING AS  /  no company yet"),
+                            TextFont {
+                                font_size: FontSize::Px(T_BUTTON),
+                                ..default()
+                            },
+                            TextColor(INK_MUTED),
+                            Node {
+                                flex_grow: 1.0,
+                                ..default()
+                            },
+                        ));
+                        context_button(row, OpenCompanyFounding, "CREATE A COMPANY");
+                    });
             }
-            if !feedback.message.is_empty() && !founding.visible {
+            if !feedback.message.is_empty() {
                 context.spawn((
                     Text::new(feedback.message.clone()),
                     TextFont {
@@ -807,10 +1039,8 @@ fn spawn_tab_bar(
             BorderColor::all(PLATE_RULE_SOFT),
         ))
         .with_children(|bar| {
-            for (target, label) in [
-                (PropertyMarketTab::Permits, format!("PERMITS  {permits}")),
-                (PropertyMarketTab::ForSale, format!("FOR SALE  {listings}")),
-            ] {
+            for target in [PropertyMarketTab::Permits, PropertyMarketTab::ForSale] {
+                let label = tab_label(target, permits, listings);
                 let selected = target == tab;
                 bar.spawn((
                     PropertyTabButton(target),
@@ -828,6 +1058,7 @@ fn spawn_tab_bar(
                     selected_button_chrome(UiButtonVariant::Tab, selected),
                 ))
                 .with_child((
+                    PropertyTabCount(target),
                     Text::new(label),
                     UiButtonLabel,
                     TextFont {
@@ -841,24 +1072,13 @@ fn spawn_tab_bar(
         });
 }
 
-#[allow(clippy::too_many_arguments)]
 fn spawn_permit_list(
     body: &mut ChildSpawnerCommands<'_>,
-    hall: Entity,
-    settlement: SettlementId,
     opportunities: &[PermitMarketOpportunity],
-    policy: Option<&SettlementPolicies>,
-    quote: Option<&shared::protocol::HeroPermitQuote>,
-    has_hero: bool,
-    hero_nearby: bool,
-    hero_balance: u64,
-    acting_company: Option<&ActingCompanyView>,
-    price_context: &PriceContext,
-    scroll: Vec2,
+    card_values: &HashMap<SettlementBuildingKind, PermitCardValues>,
 ) {
     body.spawn((
         PermitListingViewport,
-        ScrollPosition(scroll),
         Node {
             flex_grow: 1.0,
             min_height: Val::Px(0.0),
@@ -875,19 +1095,9 @@ fn spawn_permit_list(
             spawn_empty_state(list, "No permits for sale right now.");
         } else {
             for opportunity in opportunities {
-                spawn_permit_card(
-                    list,
-                    hall,
-                    settlement,
-                    *opportunity,
-                    policy,
-                    quote,
-                    has_hero,
-                    hero_nearby,
-                    hero_balance,
-                    acting_company,
-                    price_context,
-                );
+                if let Some(values) = card_values.get(&opportunity.kind) {
+                    spawn_permit_card(list, *opportunity, values);
+                }
             }
         }
     });
@@ -897,11 +1107,9 @@ fn spawn_property_list(
     body: &mut ChildSpawnerCommands<'_>,
     listings: &[PropertyMarketListing],
     day: u32,
-    scroll: Vec2,
 ) {
     body.spawn((
         PropertyListingViewport,
-        ScrollPosition(scroll),
         Node {
             flex_grow: 1.0,
             min_height: Val::Px(0.0),
@@ -917,37 +1125,21 @@ fn spawn_property_list(
         if listings.is_empty() {
             spawn_empty_state(list, "No buildings for sale right now.");
         } else {
-            for listing in listings {
-                spawn_property_card(list, *listing, day);
+            for (index, listing) in listings.iter().enumerate() {
+                spawn_property_card(list, index, listing, day);
             }
         }
     });
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Spawn a card with its bound widgets; the values passed here are the same
+/// ones [`sync_property_panel`] keeps writing afterwards.
 fn spawn_permit_card(
     parent: &mut ChildSpawnerCommands<'_>,
-    hall: Entity,
-    settlement: SettlementId,
     opportunity: PermitMarketOpportunity,
-    policy: Option<&SettlementPolicies>,
-    quote: Option<&shared::protocol::HeroPermitQuote>,
-    has_hero: bool,
-    hero_nearby: bool,
-    hero_balance: u64,
-    acting_company: Option<&ActingCompanyView>,
-    price_context: &PriceContext,
+    values: &PermitCardValues,
 ) {
     let kind = opportunity.kind;
-    let estimate = offer_price_for(opportunity, policy, price_context);
-    let permit_company = (kind != SettlementBuildingKind::House)
-        .then(|| acting_company.map(|company| company.id))
-        .flatten();
-    // The Hall's own answer for this purchaser outranks the local estimate.
-    let exact = quote.filter(|quote| {
-        quote.settlement == settlement && quote.kind == kind && quote.company == permit_company
-    });
-    let price = exact.map_or(estimate, |quote| quote.fee);
     parent
         .spawn((
             Node {
@@ -1007,23 +1199,17 @@ fn spawn_permit_card(
                 ..default()
             })
             .with_children(|facts| {
-                spawn_inline_fact(
+                spawn_bound_fact(
                     facts,
                     "PRICE",
-                    if price == 0 {
-                        "Free".into()
-                    } else {
-                        format!("{} coin", format_money(price))
-                    },
+                    values.price_text.clone(),
+                    PermitPriceText(kind),
                 );
-                spawn_inline_fact(
+                spawn_bound_fact(
                     facts,
                     "DEMAND",
-                    format!(
-                        "{} / {}",
-                        signal_label(opportunity.score),
-                        opportunity.score
-                    ),
+                    values.demand_text.clone(),
+                    PermitDemandText(kind),
                 );
                 spawn_inline_fact(facts, "WOOD", kind.construction_wood_required().to_string());
                 let capacity = if kind.housing_capacity() > 0 {
@@ -1033,89 +1219,20 @@ fn spawn_permit_card(
                 };
                 spawn_inline_fact(facts, "CAPACITY", capacity);
             });
-            spawn_permit_action(
-                card,
-                hall,
-                kind,
-                estimate,
-                exact,
-                has_hero,
-                hero_nearby,
-                hero_balance,
-                acting_company,
-            );
+            spawn_permit_action(card, kind, values);
         });
 }
 
-/// One big button that says what happens when you press it. The Hall prices
-/// the permit for THIS purchaser when the order lands; if the fee moved since
-/// the card was drawn, the Hall answers with the exact figure, the card
-/// redraws with it, and one more press confirms. No separate quote step.
-#[allow(clippy::too_many_arguments)]
+/// One big button that says what happens when you press it. Its label,
+/// enabled state and purchase order are bound: they follow the live price
+/// without the card ever being rebuilt under the pointer.
 fn spawn_permit_action(
     card: &mut ChildSpawnerCommands<'_>,
-    hall: Entity,
     kind: SettlementBuildingKind,
-    estimate: u64,
-    quote: Option<&shared::protocol::HeroPermitQuote>,
-    has_hero: bool,
-    hero_nearby: bool,
-    hero_balance: u64,
-    acting_company: Option<&ActingCompanyView>,
+    values: &PermitCardValues,
 ) {
-    let privately_available = kind.minimum_player_permit_tier().is_some();
-    let business_permit = kind != SettlementBuildingKind::House;
-    let selected_company = business_permit
-        .then(|| acting_company.map(|company| company.id))
-        .flatten();
-    let fee = quote.map_or(estimate, |quote| quote.fee);
-    let available = if business_permit {
-        acting_company.map_or(0, |company| company.cash)
-    } else {
-        hero_balance
-    };
-    let (label, marker): (String, Option<PurchasePermitButton>) = if !privately_available {
-        ("NOT FOR SALE".into(), None)
-    } else if !has_hero {
-        ("CREATE A HERO FIRST".into(), None)
-    } else if !hero_nearby {
-        ("WALK TO THE HALL TO BUY".into(), None)
-    } else if business_permit && acting_company.is_none() {
-        ("FOUND A COMPANY FIRST".into(), None)
-    } else if available < fee {
-        (
-            format!("NEED {} MORE COIN", format_money(fee - available)),
-            None,
-        )
-    } else {
-        let verb = if kind == SettlementBuildingKind::House {
-            "CLAIM PLOT"
-        } else {
-            "BUY"
-        };
-        let price = if fee == 0 {
-            "FREE".to_string()
-        } else {
-            format!("{} COIN", format_money(fee))
-        };
-        let label = if quote.is_some_and(|quote| quote.fee != estimate) {
-            format!("PRICE CHANGED  /  {verb} FOR {price}")
-        } else {
-            format!("{verb}  /  {price}")
-        };
-        (
-            label,
-            Some(PurchasePermitButton {
-                hall,
-                kind,
-                company: selected_company,
-                fee,
-            }),
-        )
-    };
-
-    let enabled = marker.is_some();
     let mut button = card.spawn((
+        PermitActionButton(kind),
         Button,
         Node {
             width: Val::Percent(100.0),
@@ -1128,37 +1245,37 @@ fn spawn_permit_action(
             border_radius: BorderRadius::all(Val::Px(RADIUS)),
             ..default()
         },
-        button_chrome(if enabled {
+        button_chrome(if values.enabled {
             UiButtonVariant::Primary
         } else {
             UiButtonVariant::Secondary
         }),
     ));
-    if !enabled {
+    if !values.enabled {
         button.insert(InteractionDisabled);
     }
-    if let Some(marker) = marker {
-        button.insert(marker);
+    if let Some(purchase) = values.purchase {
+        button.insert(purchase);
     }
     button.with_child((
-        Text::new(label),
+        PermitActionLabel(kind),
+        Text::new(values.action_label.clone()),
         UiButtonLabel,
         TextFont {
             font_size: FontSize::Px(T_BUTTON),
             ..default()
         },
-        TextColor(if enabled { INK } else { INK_MUTED }),
+        TextColor(if values.enabled { INK } else { INK_MUTED }),
         Pickable::IGNORE,
     ));
 }
 
 fn spawn_property_card(
     parent: &mut ChildSpawnerCommands<'_>,
-    listing: PropertyMarketListing,
+    index: usize,
+    listing: &PropertyMarketListing,
     day: u32,
 ) {
-    let age = day.saturating_sub(listing.listed_day);
-    let exposure_left = PROPERTY_MARKET_EXPOSURE_DAYS.saturating_sub(age);
     parent
         .spawn((
             Node {
@@ -1207,24 +1324,18 @@ fn spawn_property_card(
                 ..default()
             })
             .with_children(|facts| {
-                spawn_inline_fact(
-                    facts,
-                    "ASKING",
-                    format!("{} coin", format_money(listing.asking_price)),
-                );
-                spawn_inline_fact(facts, "LISTED", format!("Day {}", listing.listed_day));
-                spawn_inline_fact(
-                    facts,
-                    "STATUS",
-                    if exposure_left > 0 {
-                        format!(
-                            "Public for {exposure_left} more day{}",
-                            if exposure_left == 1 { "" } else { "s" }
-                        )
-                    } else {
-                        "Open to investors".into()
-                    },
-                );
+                for (label, field) in [
+                    ("ASKING", ListingField::Asking),
+                    ("LISTED", ListingField::Listed),
+                    ("STATUS", ListingField::Status),
+                ] {
+                    spawn_bound_fact(
+                        facts,
+                        label,
+                        listing_fact(listing, day, field),
+                        ListingFactText { index, field },
+                    );
+                }
             });
         });
 }
@@ -1252,6 +1363,17 @@ fn spawn_badge(parent: &mut ChildSpawnerCommands<'_>, label: &str) {
 }
 
 fn spawn_inline_fact(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String) {
+    spawn_bound_fact(parent, label, value, ());
+}
+
+/// A label over a value; `marker` goes on the value's Text so a bind system
+/// can keep it current.
+fn spawn_bound_fact(
+    parent: &mut ChildSpawnerCommands<'_>,
+    label: &str,
+    value: String,
+    marker: impl Bundle,
+) {
     parent
         .spawn(Node {
             flex_direction: FlexDirection::Column,
@@ -1268,6 +1390,7 @@ fn spawn_inline_fact(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: 
                 TextColor(INK_MUTED),
             ));
             fact.spawn((
+                marker,
                 Text::new(value),
                 TextFont {
                     font_size: FontSize::Px(T_VALUE),
@@ -1416,21 +1539,8 @@ mod tests {
         let mut world = World::new();
         let root = world.spawn_empty().id();
         world.commands().entity(root).with_children(|body| {
-            spawn_permit_list(
-                body,
-                Entity::PLACEHOLDER,
-                SettlementId(1),
-                &[],
-                None,
-                None,
-                false,
-                false,
-                0,
-                None,
-                &PriceContext::default(),
-                Vec2::ZERO,
-            );
-            spawn_property_list(body, &[], 0, Vec2::ZERO);
+            spawn_permit_list(body, &[], &HashMap::default());
+            spawn_property_list(body, &[], 0);
         });
         world.flush();
 
@@ -1465,25 +1575,26 @@ mod tests {
             name: "Oakfell Farms".into(),
             cash: 1_000,
         };
+        let opportunity = PermitMarketOpportunity {
+            kind: SettlementBuildingKind::Farmstead,
+            score: 73,
+            subsidized: true,
+            requires_independent_owner: false,
+        };
+        let values = permit_card_values(
+            hall,
+            SettlementId(4),
+            opportunity,
+            None,
+            Some(&quote),
+            true,
+            true,
+            1_000,
+            Some(&acting),
+            &PriceContext::default(),
+        );
         world.commands().entity(root).with_children(|body| {
-            spawn_permit_card(
-                body,
-                hall,
-                SettlementId(4),
-                PermitMarketOpportunity {
-                    kind: SettlementBuildingKind::Farmstead,
-                    score: 73,
-                    subsidized: true,
-                    requires_independent_owner: false,
-                },
-                None,
-                Some(&quote),
-                true,
-                true,
-                1_000,
-                Some(&acting),
-                &PriceContext::default(),
-            );
+            spawn_permit_card(body, opportunity, &values);
         });
         world.flush();
 
@@ -1522,20 +1633,20 @@ mod tests {
         };
         let expected = offer_price_for(opportunity, None, &context);
         assert!(expected > offer_price_for(opportunity, None, &PriceContext::default()));
+        let values = permit_card_values(
+            hall,
+            SettlementId(2),
+            opportunity,
+            None,
+            None,
+            true,
+            true,
+            0,
+            Some(&acting),
+            &context,
+        );
         world.commands().entity(root).with_children(|body| {
-            spawn_permit_card(
-                body,
-                hall,
-                SettlementId(2),
-                opportunity,
-                None,
-                None,
-                true,
-                true,
-                0,
-                Some(&acting),
-                &context,
-            );
+            spawn_permit_card(body, opportunity, &values);
         });
         world.flush();
 

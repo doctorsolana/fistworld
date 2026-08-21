@@ -317,7 +317,7 @@ pub fn run_construction_material_logistics(
                 .remove::<ConstructionMaterialRoutine>()
                 .remove::<PlayerConstructionAssignment>()
                 .remove::<MoveTarget>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
         // Ordinary builders stop for the night, but an explicit player order
@@ -335,7 +335,7 @@ pub fn run_construction_material_logistics(
                 .remove::<ConstructionMaterialRoutine>()
                 .remove::<PlayerConstructionAssignment>()
                 .remove::<MoveTarget>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         };
         if site.stage != BuildStage::Supplying {
@@ -496,7 +496,7 @@ pub fn run_construction_material_logistics(
             .map(|inventory| inventory.amount(Good::Wood))
             .unwrap_or(0);
         if delivered >= required {
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             commands
                 .entity(builder)
                 .remove::<ConstructionMaterialRoutine>()
@@ -551,7 +551,7 @@ pub fn run_construction_material_logistics(
 
         match routine.phase {
             ConstructionMaterialPhase::Seeking => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 if carried_wood > 0 {
                     commands.entity(builder).remove::<ambient::AmbientRoutine>();
                     routine.phase = begin_material_delivery(
@@ -729,7 +729,7 @@ pub fn run_construction_material_logistics(
                 routine.phase = ConstructionMaterialPhase::WalkingToTree { tree, stand };
             }
             ConstructionMaterialPhase::UnloadingAtHall { hall, entrance } => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 if ground_distance(position.0, entrance) > WORK_REACH {
                     ensure_move_target(&mut commands, builder, move_target, entrance);
                     continue;
@@ -765,7 +765,7 @@ pub fn run_construction_material_logistics(
                 routine.phase = ConstructionMaterialPhase::Seeking;
             }
             ConstructionMaterialPhase::CollectingFromStore { source, entrance } => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 if ground_distance(position.0, entrance) > WORK_REACH {
                     ensure_move_target(&mut commands, builder, move_target, entrance);
                     continue;
@@ -880,7 +880,7 @@ pub fn run_construction_material_logistics(
                 }
             }
             ConstructionMaterialPhase::WalkingToTree { tree, stand } => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 if ground_distance(position.0, stand) <= WORK_REACH {
                     routine.failed_tree_routes = 0;
                     routine.tree_retry_after = 0.0;
@@ -889,7 +889,7 @@ pub fn run_construction_material_logistics(
                     if to_tree.length_squared() > 1e-4 {
                         facing.0 = f32::atan2(-to_tree.x, -to_tree.z);
                     }
-                    *activity = CharacterActivity::Chopping;
+                    activity.set_if_neq(CharacterActivity::Chopping);
                     routine.phase = ConstructionMaterialPhase::Chopping {
                         tree,
                         seconds_left: CHOP_SECONDS,
@@ -899,7 +899,7 @@ pub fn run_construction_material_logistics(
                 }
             }
             ConstructionMaterialPhase::Chopping { tree, seconds_left } => {
-                *activity = CharacterActivity::Chopping;
+                activity.set_if_neq(CharacterActivity::Chopping);
                 let left = seconds_left - dt;
                 if left > 0.0 {
                     routine.phase = ConstructionMaterialPhase::Chopping {
@@ -917,7 +917,7 @@ pub fn run_construction_material_logistics(
                     carrier.add(Good::Wood, remaining.min(SELF_SUPPLY_TREE_YIELD));
                 }
                 routine.cycle = routine.cycle.wrapping_add(1);
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 routine.phase = begin_material_delivery(
                     &mut commands,
                     builder,
@@ -928,7 +928,7 @@ pub fn run_construction_material_logistics(
                 );
             }
             ConstructionMaterialPhase::ApproachingDeliveryAccess { entry, .. } => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 if ground_distance(position.0, entry) > WORK_REACH {
                     ensure_move_target(&mut commands, builder, move_target, entry);
                     continue;
@@ -943,7 +943,7 @@ pub fn run_construction_material_logistics(
                 );
             }
             ConstructionMaterialPhase::Delivering { destination } => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 if ground_distance(position.0, destination) > WORK_REACH {
                     ensure_move_target(&mut commands, builder, move_target, destination);
                     continue;
@@ -988,7 +988,7 @@ pub fn run_construction_material_logistics(
                 }
             }
             ConstructionMaterialPhase::LeavingDeliveryAccess { exit } => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 if ground_distance(position.0, exit) > WORK_REACH {
                     ensure_move_target(&mut commands, builder, move_target, exit);
                     continue;
@@ -1054,7 +1054,7 @@ pub fn advance_construction(
             // building belonging to nowhere.
             if let Some(builder) = under.builder {
                 if let Ok(mut activity) = activities.get_mut(builder) {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                 }
             }
             release_builder(&mut commands, &mut intents, under.builder, None);
@@ -1232,7 +1232,7 @@ pub fn advance_construction(
             BuildStage::Raising { seconds_left } => {
                 if let Some(builder) = under.builder {
                     if let Ok(mut activity) = activities.get_mut(builder) {
-                        *activity = CharacterActivity::Building;
+                        activity.set_if_neq(CharacterActivity::Building);
                     }
                 }
                 let left = seconds_left - world_dt;
@@ -1317,7 +1317,7 @@ pub fn advance_construction(
                             .remove::<ConstructionMaterialRoutine>()
                             .remove::<PlayerConstructionAssignment>();
                         if let Ok(mut activity) = activities.get_mut(builder) {
-                            *activity = CharacterActivity::Idle;
+                            activity.set_if_neq(CharacterActivity::Idle);
                         }
                     } else {
                         // The person who raised the building owns the last piece of

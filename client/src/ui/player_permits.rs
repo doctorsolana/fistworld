@@ -146,7 +146,7 @@ struct PlacementPreview {
     road_locked: bool,
 }
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PurchasePermitButton {
     pub hall: Entity,
     pub kind: SettlementBuildingKind,

@@ -467,7 +467,7 @@ pub fn run_tavern_routines(
             TavernWorkerPhase::Entering => {}
             TavernWorkerPhase::Serving => *activity = CharacterActivity::Indoors,
             TavernWorkerPhase::Leaving if transit.is_none() => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands
                     .entity(worker)
                     .remove::<TavernWorkerRoutine>()
@@ -595,11 +595,11 @@ pub fn run_tavern_routines(
                     }
                 }
                 routine.phase = TavernVisitPhase::Dining;
-                *activity = CharacterActivity::Indoors;
+                activity.set_if_neq(CharacterActivity::Indoors);
             }
             TavernVisitPhase::Entering => {}
             TavernVisitPhase::Dining => {
-                *activity = CharacterActivity::Indoors;
+                activity.set_if_neq(CharacterActivity::Indoors);
                 routine.dining_seconds -= dt;
                 if routine.dining_seconds <= 0.0 {
                     begin_workplace_exit(&mut commands, visitor, at.0, entrance, inside, entrance);
@@ -607,7 +607,7 @@ pub fn run_tavern_routines(
                 }
             }
             TavernVisitPhase::Leaving if transit.is_none() => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 let status = if routine.served {
                     PlannedLeisureStatus::Completed
                 } else if meal_is_affordable(

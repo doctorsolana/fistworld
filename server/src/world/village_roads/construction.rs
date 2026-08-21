@@ -376,7 +376,7 @@ pub fn plan_requested_roads(
             *intent = VillagerIntent::Resident {
                 settlement: request.settlement,
             };
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
         if survey_used {
@@ -862,7 +862,7 @@ pub fn plan_requested_roads(
             *intent = VillagerIntent::Resident {
                 settlement: request.settlement,
             };
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         };
 
@@ -901,7 +901,7 @@ pub fn plan_requested_roads(
             settlement: request.settlement,
             road,
         };
-        *activity = CharacterActivity::Idle;
+        activity.set_if_neq(CharacterActivity::Idle);
         // The connector is a new navigation owner. A failed household,
         // ambient, or construction destination left on the actor makes
         // movement deliberately sleep, so adopting the road must clear every
@@ -1059,7 +1059,7 @@ pub fn build_village_roads(
             continue;
         }
         let Ok((mut road, road_of, connector, mut clearance)) = roads.get_mut(routine.road) else {
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             *intent = VillagerIntent::Resident {
                 settlement: routine.settlement,
             };
@@ -1143,7 +1143,7 @@ pub fn build_village_roads(
                     if direction.length_squared() > 1e-4 {
                         facing.0 = f32::atan2(-direction.x, -direction.y);
                     }
-                    *activity = CharacterActivity::Building;
+                    activity.set_if_neq(CharacterActivity::Building);
                     routine.phase = RoadBuildPhase::Working {
                         point,
                         seconds_left: ROAD_BUILD_SECONDS,
@@ -1177,7 +1177,7 @@ pub fn build_village_roads(
                 *intent = VillagerIntent::Resident {
                     settlement: routine.settlement,
                 };
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands.entity(builder).remove::<RoadBuilderRoutine>();
                 if next_attempt < MAX_ROAD_SURVEY_ATTEMPTS {
                     if let Some(building) = building {
@@ -1230,7 +1230,7 @@ pub fn build_village_roads(
                     if to_tree.length_squared() > 1e-4 {
                         facing.0 = f32::atan2(-to_tree.x, -to_tree.y);
                     }
-                    *activity = CharacterActivity::Chopping;
+                    activity.set_if_neq(CharacterActivity::Chopping);
                     routine.phase = RoadBuildPhase::ChoppingTree {
                         point,
                         tree,
@@ -1294,7 +1294,7 @@ pub fn build_village_roads(
 
         match routine.phase {
             RoadBuildPhase::GoingTo { point } => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 let point = point.min(road.points.len() - 1);
                 let xz = road.points[point];
                 if point >= usize::from(road.built_through) {
@@ -1351,7 +1351,7 @@ pub fn build_village_roads(
                     if direction.length_squared() > 1e-4 {
                         facing.0 = f32::atan2(-direction.x, -direction.y);
                     }
-                    *activity = CharacterActivity::Building;
+                    activity.set_if_neq(CharacterActivity::Building);
                     // Arrival and the first work slice happen in the same
                     // fixed tick. Deferring the subtraction until next tick
                     // discarded almost the entire time slice at 100x-1000x,
@@ -1406,7 +1406,7 @@ pub fn build_village_roads(
                 radius,
                 ..
             } => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 let target = Vec3::new(stand.x, terrain.get_height(stand.x, stand.y), stand.y);
                 if ground_distance(position.0, target) > ROAD_REACH {
                     ensure_move_target(&mut commands, builder, move_target, target);
@@ -1417,7 +1417,7 @@ pub fn build_village_roads(
                 if to_tree.length_squared() > 1e-4 {
                     facing.0 = f32::atan2(-to_tree.x, -to_tree.y);
                 }
-                *activity = CharacterActivity::Chopping;
+                activity.set_if_neq(CharacterActivity::Chopping);
                 routine.phase = RoadBuildPhase::ChoppingTree {
                     point,
                     tree,
@@ -1431,7 +1431,7 @@ pub fn build_village_roads(
                 radius,
                 seconds_left,
             } => {
-                *activity = CharacterActivity::Chopping;
+                activity.set_if_neq(CharacterActivity::Chopping);
                 commands.entity(builder).remove::<MoveTarget>();
                 let left = seconds_left - dt;
                 if left > 0.0 {
@@ -1455,7 +1455,7 @@ pub fn build_village_roads(
                     "Village '{}': {} cleared a tree at {:.1},{:.1} for the road (live collider removed: {})",
                     road.settlement, road.builder, tree.x, tree.y, removed_live_collider
                 );
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 routine.phase = RoadBuildPhase::GoingTo { point };
                 let xz = road.points[point.min(road.points.len() - 1)];
                 commands.entity(builder).insert(MoveTarget(Vec3::new(
@@ -1468,7 +1468,7 @@ pub fn build_village_roads(
                 point,
                 seconds_left,
             } => {
-                *activity = CharacterActivity::Building;
+                activity.set_if_neq(CharacterActivity::Building);
                 commands.entity(builder).remove::<MoveTarget>();
                 let left = seconds_left - dt;
                 if left > 0.0 {
@@ -1498,7 +1498,7 @@ pub fn build_village_roads(
                         routine.settlement,
                     );
                 } else {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     routine.phase = RoadBuildPhase::GoingTo { point: next };
                     // Movement runs later in the fixed schedule, so publish
                     // the next physical destination now. Waiting for another
@@ -1536,7 +1536,9 @@ fn finish_road_builder(
     settlement: Entity,
 ) {
     *intent = VillagerIntent::Resident { settlement };
-    *activity = CharacterActivity::Idle;
+    if *activity != CharacterActivity::Idle {
+        *activity = CharacterActivity::Idle;
+    }
     commands
         .entity(builder)
         .remove::<RoadBuilderRoutine>()

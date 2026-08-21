@@ -1219,7 +1219,7 @@ pub fn run_internal_deliveries(
             let Some(candidate) = candidates.into_iter().next() else {
                 continue;
             };
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             commands.entity(porter_entity).insert((
                 InternalDeliveryRoutine {
                     supplier: candidate.supplier,
@@ -1311,7 +1311,7 @@ pub fn run_internal_deliveries(
                     .kind
                     .entrance_position(receiver_at.0, receiver_rotation.0);
                 routine.phase = InternalDeliveryPhase::Delivering;
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands.entity(porter_entity).insert(MoveTarget(entrance));
             }
             InternalDeliveryPhase::Delivering => {
@@ -1389,7 +1389,7 @@ pub fn run_internal_deliveries(
                 }
                 routine.reserved_units = routine.reserved_units.saturating_sub(delivered);
                 if routine.reserved_units == 0 {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     commands
                         .entity(porter_entity)
                         .remove::<InternalDeliveryRoutine>()
@@ -1883,7 +1883,7 @@ pub fn run_market_collections(
                         }
                     }
                     if carrier.is_empty() {
-                        *activity = CharacterActivity::Indoors;
+                        activity.set_if_neq(CharacterActivity::Indoors);
                         commands.entity(porter_entity).remove::<MoveTarget>();
                     }
                     continue;
@@ -1914,7 +1914,7 @@ pub fn run_market_collections(
                         );
                     }
                 }
-                *activity = CharacterActivity::Indoors;
+                activity.set_if_neq(CharacterActivity::Indoors);
                 commands.entity(porter_entity).remove::<MoveTarget>();
                 continue;
             }
@@ -1926,7 +1926,7 @@ pub fn run_market_collections(
             // Otherwise a busy large-town market can starve its only road
             // worker forever after a connector resurvey.
             if assigned_road_repair {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands.entity(porter_entity).remove::<MoveTarget>();
                 continue;
             }
@@ -2122,7 +2122,7 @@ pub fn run_market_collections(
                     let moved = hall_store.transfer_to(&mut carrier, good, purchase.trade.units);
                     debug_assert_eq!(moved, purchase.trade.units);
                     business_events.record_market_purchase(day, *settlement_id, purchase.fills);
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     commands
                         .entity(porter_entity)
                         .remove::<FarmerRoutine>()
@@ -2287,12 +2287,12 @@ pub fn run_market_collections(
                 if self_hauling_business.is_some() {
                     continue;
                 }
-                *activity = CharacterActivity::Indoors;
+                activity.set_if_neq(CharacterActivity::Indoors);
                 commands.entity(porter_entity).remove::<MoveTarget>();
                 continue;
             };
             let return_counter = nearest_counter(entrance);
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             commands
                 .entity(porter_entity)
                 .remove::<FarmerRoutine>()
@@ -2359,7 +2359,7 @@ pub fn run_market_collections(
                         .remove::<MoveTarget>();
                     continue;
                 }
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands
                     .entity(porter_entity)
                     .insert(MoveTarget(routine.counter));
@@ -2381,7 +2381,7 @@ pub fn run_market_collections(
                         routine.unit_price,
                     );
                 }
-                *activity = CharacterActivity::Indoors;
+                activity.set_if_neq(CharacterActivity::Indoors);
                 commands
                     .entity(porter_entity)
                     .remove::<MarketCollectionRoutine>()
@@ -2408,7 +2408,7 @@ pub fn run_market_collections(
                 let delivered =
                     carrier.transfer_to(&mut store, routine.good, routine.reserved_units);
                 if delivered == routine.reserved_units {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     commands
                         .entity(porter_entity)
                         .remove::<MarketCollectionRoutine>()

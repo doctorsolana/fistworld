@@ -331,7 +331,7 @@ pub(crate) fn advance_moot_service_queues(
             else {
                 continue;
             };
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             if ticket.is_ready() {
                 continue;
             }
@@ -374,7 +374,7 @@ pub(crate) fn advance_moot_service_queues(
             {
                 if let Some(ahead) = ahead_position {
                     if ground_distance(position.0, ahead) > 0.05 {
-                        rotation.0 = facing_toward(position.0, ahead);
+                        rotation.set_if_neq(PlayerRotation(facing_toward(position.0, ahead)));
                     }
                 }
                 ticket.state = MootQueueState::Queued;
@@ -453,7 +453,7 @@ pub(crate) fn advance_moot_service_queues(
                 .remove::<MoveTarget>()
                 .remove::<MootQueueTransit>()
                 .remove::<NavigationRoutePending>();
-            rotation.0 = facing_toward(position.0, ahead_target);
+            rotation.set_if_neq(PlayerRotation(facing_toward(position.0, ahead_target)));
             if rank != 0 {
                 ticket.state = MootQueueState::Queued;
                 continue;
@@ -594,7 +594,7 @@ pub(crate) fn run_moot_meal_collections(
                     .remove::<NavigationRouteFailed>();
             }
             MootMealPhase::Carrying { destination } => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 if route_failed.is_some() {
                     carrier.remove(meal.good, 1);
                     nutrition.record_meal(meal.meal_day);
@@ -614,18 +614,18 @@ pub(crate) fn run_moot_meal_collections(
                 carrier.remove(meal.good, 1);
                 nutrition.record_meal(meal.meal_day);
                 let hall_position = halls.get(meal.hall).map_or(position.0, |hall| hall.0 .0);
-                rotation.0 = facing_toward(position.0, hall_position);
-                *activity = CharacterActivity::Sitting;
+                rotation.set_if_neq(PlayerRotation(facing_toward(position.0, hall_position)));
+                activity.set_if_neq(CharacterActivity::Sitting);
                 meal.phase = MootMealPhase::Eating {
                     seconds_left: COMMONS_MEAL_SECONDS,
                 };
                 commands.entity(person).remove::<MoveTarget>();
             }
             MootMealPhase::Eating { mut seconds_left } => {
-                *activity = CharacterActivity::Sitting;
+                activity.set_if_neq(CharacterActivity::Sitting);
                 seconds_left -= simulation_time.world_seconds();
                 if seconds_left <= 0.0 {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     commands.entity(person).remove::<MootMealRoutine>();
                 } else {
                     meal.phase = MootMealPhase::Eating { seconds_left };

@@ -467,7 +467,7 @@ pub fn run_household_shopping(
             }
             continue;
         }
-        *activity = CharacterActivity::Idle;
+        activity.set_if_neq(CharacterActivity::Idle);
         match routine.phase {
             HouseholdShoppingPhase::GoingToMarket => {
                 if let Some(ticket) = queue_ticket {
@@ -837,7 +837,7 @@ pub fn run_household_schedules(
             };
             let door =
                 SettlementBuildingKind::House.entrance_position(home_position.0, home_rotation.0);
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             let workplace_threshold = workplace_transit
                 .map(|transit| (transit.building, transit.door, transit.inside))
                 .or_else(|| {
@@ -966,7 +966,7 @@ pub fn run_household_schedules(
 
         let Ok((_, building, home_position, home_rotation, household)) = homes.get(routine.home)
         else {
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             commands
                 .entity(villager)
                 .remove::<HomeRoutine>()
@@ -983,7 +983,7 @@ pub fn run_household_schedules(
                 .iter()
                 .any(|resident| resident == person_id)
         {
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             commands
                 .entity(villager)
                 .remove::<HomeRoutine>()
@@ -1029,7 +1029,7 @@ pub fn run_household_schedules(
                 // trip after three certified route failures. Ordinary homes
                 // still walk through the threshold and animate their door.
                 position.0 = inside;
-                *activity = CharacterActivity::Indoors;
+                activity.set_if_neq(CharacterActivity::Indoors);
                 commands
                     .entity(villager)
                     .remove::<BuildingDoorUse>()
@@ -1047,7 +1047,7 @@ pub fn run_household_schedules(
                     // villager back to work on the following daylight tick.
                 }
                 HomePhase::GoingToDoor | HomePhase::OpeningToEnter { .. } => {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     commands
                         .entity(villager)
                         .remove::<HomeRoutine>()
@@ -1058,7 +1058,7 @@ pub fn run_household_schedules(
                         .remove::<NavigationRouteFailed>();
                 }
                 HomePhase::Entering => {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     commands
                         .entity(villager)
                         .remove::<TravelRoute>()
@@ -1068,7 +1068,7 @@ pub fn run_household_schedules(
                     routine.phase = HomePhase::Leaving;
                 }
                 HomePhase::Sleeping => {
-                    *activity = CharacterActivity::Indoors;
+                    activity.set_if_neq(CharacterActivity::Indoors);
                     commands
                         .entity(villager)
                         .insert(door_use)
@@ -1078,7 +1078,7 @@ pub fn run_household_schedules(
                     };
                 }
                 HomePhase::OpeningToLeave { seconds_left } => {
-                    *activity = CharacterActivity::Indoors;
+                    activity.set_if_neq(CharacterActivity::Indoors);
                     commands
                         .entity(villager)
                         .insert(door_use)
@@ -1087,13 +1087,13 @@ pub fn run_household_schedules(
                     if left > 0.0 {
                         routine.phase = HomePhase::OpeningToLeave { seconds_left: left };
                     } else {
-                        *activity = CharacterActivity::Idle;
+                        activity.set_if_neq(CharacterActivity::Idle);
                         commands.entity(villager).insert(MoveTarget(outside));
                         routine.phase = HomePhase::Leaving;
                     }
                 }
                 HomePhase::Leaving => {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     commands.entity(villager).insert(door_use);
                     let still_inside_blocker = obstacles.as_deref().is_some_and(|grid| {
                         grid.point_blocked(Vec2::new(position.0.x, position.0.z))
@@ -1119,10 +1119,10 @@ pub fn run_household_schedules(
             HomePhase::LeavingWorkplace => {
                 // `run_workplace_door_transits` owns this threshold and changes
                 // the phase after the worker reaches the exterior door.
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
             }
             HomePhase::GoingToDoor => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 if ground_distance(position.0, door) <= DOOR_REACH {
                     routine.failed_routes = 0;
                     commands
@@ -1141,7 +1141,7 @@ pub fn run_household_schedules(
                 }
             }
             HomePhase::OpeningToEnter { seconds_left } => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands
                     .entity(villager)
                     .insert(door_use)
@@ -1155,11 +1155,11 @@ pub fn run_household_schedules(
                 }
             }
             HomePhase::Entering => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands.entity(villager).insert(door_use);
                 if ground_distance(position.0, inside) <= DOOR_REACH {
                     routine.failed_routes = 0;
-                    *activity = CharacterActivity::Indoors;
+                    activity.set_if_neq(CharacterActivity::Indoors);
                     commands
                         .entity(villager)
                         .remove::<BuildingDoorUse>()
@@ -1170,7 +1170,7 @@ pub fn run_household_schedules(
                 }
             }
             HomePhase::Sleeping => {
-                *activity = CharacterActivity::Indoors;
+                activity.set_if_neq(CharacterActivity::Indoors);
                 commands
                     .entity(villager)
                     .remove::<BuildingDoorUse>()
@@ -1179,7 +1179,7 @@ pub fn run_household_schedules(
             HomePhase::OpeningToLeave { .. } | HomePhase::Leaving => {
                 // A debug jump back into night while leaving turns them around
                 // cleanly rather than stranding them in an impossible phase.
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands
                     .entity(villager)
                     .insert((door_use, MoveTarget(inside)));

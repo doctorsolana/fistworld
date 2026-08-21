@@ -19,7 +19,7 @@ use shared::components::{
     SettlementPolicies, TradeContractId,
 };
 use shared::economy::{
-    business_working_capital, format_money, BusinessAccount, BusinessCondition, BusinessForSale,
+    format_money, BusinessAccount, BusinessCondition, BusinessForSale,
     BusinessManagementPolicy, BusinessProcurementPolicy, BusinessSalePolicy,
     BusinessStaffingPolicy, BusinessWagePolicy, CompanyAccount, Good, GoodsInventory, MootMarket,
     SettlementEconomy, Wallet,
@@ -37,7 +37,8 @@ use crate::ui::modal::{
     handle_backdrop_pressed, spawn_modal, update_modal_click_guard, ModalLayout,
 };
 use crate::ui::styles::{
-    plate_shadow, INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, PLATE_RULE, PLATE_RULE_SOFT, RADIUS,
+    plate_shadow, INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE,
+    PLATE_RULE_SOFT, RADIUS,
 };
 
 pub struct SettlementPanelPlugin;
@@ -87,6 +88,15 @@ struct SettlementPanelBody;
 #[derive(Component, Default)]
 struct PanelSignature(String);
 
+/// A text slot of the compact card whose value is bound in place.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+enum CompactBound {
+    Title,
+    Subtitle,
+    Tile(usize),
+    Row(usize),
+}
+
 #[derive(Component)]
 struct InspectExpandButton;
 
@@ -109,6 +119,7 @@ struct CompactPanelUi<'w, 's> {
         With<SettlementPanel>,
     >,
     bodies: Query<'w, 's, Entity, With<SettlementPanelBody>>,
+    texts: Query<'w, 's, (&'static CompactBound, &'static mut Text)>,
     children: Query<'w, 's, &'static Children>,
     interactions: Query<
         'w,
@@ -170,11 +181,11 @@ fn spawn_compact_panel(mut commands: Commands) {
             position_type: PositionType::Absolute,
             left: Val::Px(12.0),
             bottom: Val::Px(12.0),
-            width: Val::Px(286.0),
+            width: Val::Px(344.0),
             max_height: Val::Vh(82.0),
             display: Display::None,
             flex_direction: FlexDirection::Column,
-            padding: UiRect::all(Val::Px(12.0)),
+            padding: UiRect::all(Val::Px(14.0)),
             border: UiRect::all(Val::Px(1.0)),
             border_radius: BorderRadius::all(Val::Px(RADIUS)),
             overflow: Overflow::clip(),
@@ -190,7 +201,7 @@ fn spawn_compact_panel(mut commands: Commands) {
                 min_height: Val::Px(0.0),
                 flex_shrink: 1.0,
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(6.0),
+                row_gap: Val::Px(8.0),
                 overflow: Overflow::scroll_y(),
                 scrollbar_width: 8.0,
                 ..default()
@@ -199,68 +210,121 @@ fn spawn_compact_panel(mut commands: Commands) {
     ));
 }
 
-fn title(commands: &mut Commands, name: String, subtitle: String) -> Entity {
+fn spawn_header(commands: &mut Commands, model: &CompactModel) -> Entity {
     commands
         .spawn((
             Node {
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(1.0),
-                padding: UiRect::bottom(Val::Px(5.0)),
+                row_gap: Val::Px(2.0),
+                padding: UiRect::bottom(Val::Px(8.0)),
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
             BorderColor::all(PLATE_RULE_SOFT),
             children![
                 (
-                    Text::new(name),
+                    CompactBound::Title,
+                    Text::new(model.title.clone()),
                     TextFont {
-                        font_size: FontSize::Px(18.0),
+                        font_size: FontSize::Px(20.0),
                         ..default()
                     },
                     TextColor(INK),
                 ),
                 (
-                    Text::new(subtitle),
+                    CompactBound::Subtitle,
+                    Text::new(model.subtitle.clone()),
                     TextFont {
-                        font_size: FontSize::Px(9.0),
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(INK_MUTED),
-                    Node {
-                        width: Val::Px(90.0),
-                        flex_shrink: 0.0,
-                        ..default()
-                    },
                 ),
             ],
         ))
         .id()
 }
 
-fn line(commands: &mut Commands, label: impl Into<String>, value: impl Into<String>) -> Entity {
+/// Key figures as a two-column grid of tiles.
+fn spawn_tiles(commands: &mut Commands, tiles: &[(String, String)]) -> Entity {
+    let grid = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Px(6.0),
+            row_gap: Val::Px(6.0),
+            ..default()
+        })
+        .id();
+    commands.entity(grid).with_children(|grid| {
+        for (index, (label, value)) in tiles.iter().enumerate() {
+            grid.spawn((
+                Node {
+                    flex_basis: Val::Percent(47.0),
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(2.0),
+                    padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                    ..default()
+                },
+                BackgroundColor(LIMEWASH_WELL),
+                BorderColor::all(PLATE_RULE_SOFT),
+                children![
+                    (
+                        Text::new(label.clone()),
+                        TextFont {
+                            font_size: FontSize::Px(11.0),
+                            ..default()
+                        },
+                        TextColor(INK_MUTED),
+                    ),
+                    (
+                        CompactBound::Tile(index),
+                        Text::new(value.clone()),
+                        TextFont {
+                            font_size: FontSize::Px(16.0),
+                            ..default()
+                        },
+                        TextColor(INK),
+                    ),
+                ],
+            ));
+        }
+    });
+    grid
+}
+
+fn spawn_line(commands: &mut Commands, index: usize, label: &str, value: &str) -> Entity {
     commands
         .spawn((
             Node {
                 width: Val::Percent(100.0),
                 justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::Center,
+                align_items: AlignItems::FlexStart,
                 column_gap: Val::Px(12.0),
                 ..default()
             },
             children![
                 (
-                    Text::new(label.into()),
+                    Text::new(label.to_string()),
                     TextFont {
-                        font_size: FontSize::Px(10.0),
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(INK_MUTED),
+                    Node {
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
                 ),
                 (
-                    Text::new(value.into()),
+                    CompactBound::Row(index),
+                    Text::new(value.to_string()),
                     TextFont {
-                        font_size: FontSize::Px(12.0),
+                        font_size: FontSize::Px(14.0),
                         ..default()
                     },
                     TextColor(INK),
@@ -320,7 +384,7 @@ fn spawn_card_button<M: Component>(parent: &mut ChildSpawnerCommands<'_>, marker
             marker,
             Button,
             Node {
-                height: Val::Px(29.0),
+                height: Val::Px(32.0),
                 padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
@@ -334,7 +398,7 @@ fn spawn_card_button<M: Component>(parent: &mut ChildSpawnerCommands<'_>, marker
             Text::new(label),
             UiButtonLabel,
             TextFont {
-                font_size: FontSize::Px(10.0),
+                font_size: FontSize::Px(13.0),
                 ..default()
             },
             TextColor(INK),
@@ -374,98 +438,6 @@ fn inventory_summary(inventory: Option<&GoodsInventory>) -> String {
                 format!("{contents} / {capacity} bulk per resource")
             })
     }
-}
-
-fn compact_unrest(economy: Option<&SettlementEconomy>) -> String {
-    economy.map_or_else(
-        || "Awaiting first daily reading".to_string(),
-        |economy| {
-            let trend = if economy.unrest_change.abs() <= 0.05 {
-                "steady".to_string()
-            } else {
-                format!(
-                    "{} {:+.1}",
-                    economy.unrest_trend_label(),
-                    economy.unrest_change,
-                )
-            };
-            format!(
-                "{:.0}/100 {} / {trend} / pressure {:.0} (hunger {:.1}, homes {:.1}, wages {:.1})",
-                economy.unrest,
-                economy.unrest_label(),
-                economy.unrest_target,
-                economy.unrest_hunger_pressure,
-                economy.unrest_housing_pressure,
-                economy.unrest_wage_pressure,
-            )
-        },
-    )
-}
-
-fn compact_food_security(economy: Option<&SettlementEconomy>) -> String {
-    economy.map_or_else(
-        || "Awaiting first daily reading".to_string(),
-        |economy| {
-            let state = if economy.unmet_food > 0 {
-                "CRISIS"
-            } else if economy.reserve_days < 1.0 {
-                "SHORTAGE RISK"
-            } else if economy.reserve_days < shared::economy::FOOD_SECURITY_TARGET_DAYS {
-                "FRAGILE"
-            } else {
-                "SECURE"
-            };
-            format!(
-                "{state} / {:.1} days / {:.1} produced vs {:.1} consumed",
-                economy.reserve_days,
-                economy.recent_food_production,
-                economy.recent_food_consumption,
-            )
-        },
-    )
-}
-
-fn compact_hardship(
-    economy: Option<&SettlementEconomy>,
-    residents: u32,
-) -> (String, String, String, String) {
-    economy.map_or_else(
-        || {
-            let waiting = "Awaiting first daily reading".to_string();
-            (waiting.clone(), waiting.clone(), waiting.clone(), waiting)
-        },
-        |economy| {
-            let percent = |count: u32| {
-                if residents == 0 {
-                    0.0
-                } else {
-                    count as f32 / residents as f32 * 100.0
-                }
-            };
-            (
-                format!(
-                    "{} of {residents} unfed ({:.0}%)",
-                    economy.unmet_food,
-                    percent(economy.unmet_food),
-                ),
-                format!(
-                    "{} homeless ({:.0}%) / {} beds",
-                    economy.homeless_residents,
-                    percent(economy.homeless_residents),
-                    economy.housing_capacity,
-                ),
-                format!(
-                    "{} actively seeking ({:.0}%) / {} vacancies",
-                    economy.job_seekers,
-                    percent(u32::from(economy.job_seekers)),
-                    economy
-                        .private_vacant_jobs
-                        .saturating_add(economy.civic_vacant_jobs),
-                ),
-                format!("{} current workers", economy.unpaid_workers),
-            )
-        },
-    )
 }
 
 fn opportunity_summary(board: Option<&SettlementOpportunityBoard>) -> String {
@@ -526,7 +498,7 @@ fn progression_summary(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn sync_compact_panel(
     mut commands: Commands,
     selection: Res<Selection>,
@@ -584,235 +556,130 @@ fn sync_compact_panel(
         .iter()
         .map(|(id, _, account)| (*id, *account))
         .collect();
-    let fact = selected.and_then(|entity| {
-        if let Ok((
-            _,
-            settlement,
-            hall_level,
-            economy,
-            administration,
-            development,
-            policy,
-            opportunities,
-        )) = settlements.get(entity)
+    let model = selected.and_then(|entity| {
+        if let Ok((_, settlement, hall_level, economy, _administration, development, _policy, opportunities)) =
+            settlements.get(entity)
         {
             let inventory = inventories.get(entity).ok();
-            let next = opportunity_summary(opportunities);
             let settlement_id = settlement_ids.get(entity).ok().map(|(_, id)| *id);
-            let import_contracts = settlement_id.map_or_else(
-                || "None".to_string(),
-                |settlement_id| {
-                    let mut imports: Vec<_> = trade_contracts
-                        .iter()
-                        .filter(|(_, contract)| {
-                            contract.destination == settlement_id && contract.status.is_active()
-                        })
-                        .map(|(id, contract)| {
-                            let status = if contract.origin.is_none()
-                                && contract.status
-                                    == shared::components::TradeContractStatus::Open
-                            {
-                                "Awaiting listed supply"
-                            } else {
-                                contract.status.label()
-                            };
-                            format!(
-                                "#{} {} {}/{} / {} / escrow {} coin",
-                                id.0,
-                                contract.good.label(),
-                                contract.delivered_units,
-                                contract.requested_units,
-                                status,
-                                format_money(contract.escrow_cash),
-                            )
-                        })
-                        .collect();
-                    imports.sort();
-                    if imports.is_empty() {
-                        "None".to_string()
-                    } else {
-                        imports.join(" / ")
-                    }
-                },
-            );
-            let mut private_cash = 0u64;
-            let mut private_wage_arrears = 0u64;
-            let mut private_tax_arrears = 0u64;
-            let mut counted_companies = std::collections::HashSet::new();
-            for (owner, account, _, _, _, _, _, _, _, operated_by) in business_economies.iter() {
-                if settlement_id.is_none()
-                    || !owner.is_some_and(|owner| Some(owner.0) == settlement_id)
-                {
-                    continue;
-                }
-                if let Some(account) = account {
-                    private_wage_arrears =
-                        private_wage_arrears.saturating_add(account.wage_arrears);
-                    private_tax_arrears =
-                        private_tax_arrears.saturating_add(account.tax_arrears);
-                }
-                if let Some(company) = operated_by.map(|operation| operation.0) {
-                    if counted_companies.insert(company) {
-                        private_cash = private_cash.saturating_add(
-                            company_accounts.get(&company).map_or(0, |account| account.cash),
-                        );
-                    }
-                }
-            }
-            let purchasable_food = markets.get(entity).map_or(0, MootMarket::listed_edible_units);
             let hall_level = hall_level
                 .copied()
                 .unwrap_or_else(|| CivicHallLevel::for_tier(settlement.tier));
-            let (hunger, housing, work_seekers, unpaid_workers) =
-                compact_hardship(economy, settlement.residents);
-            return Some((
-                format!(
-                    "hall|{:?}|{:?}|{}|{}|{}|{:?}|{:?}|{}",
-                    settlement,
-                    hall_level,
-                    inventory_summary(inventory),
-                    next,
-                    markets.get(entity).is_ok(),
-                    (economy, administration, development),
-                    policy,
-                    import_contracts,
+            let residents = settlement.residents;
+            let percent = |count: u32| {
+                if residents == 0 {
+                    0.0
+                } else {
+                    count as f32 / residents as f32 * 100.0
+                }
+            };
+            let waiting = || "Pending".to_string();
+            let tiles = vec![
+                ("RESIDENTS".to_string(), residents.to_string()),
+                (
+                    "UNREST".to_string(),
+                    economy.map_or_else(waiting, |economy| {
+                        format!("{:.0} {}", economy.unrest, economy.unrest_label())
+                    }),
                 ),
-                CompactModel {
-                    title: settlement.name.to_uppercase(),
-                    subtitle: format!(
-                        "{} / {}",
-                        settlement.tier.label().to_uppercase(),
-                        hall_level.label()
-                    ),
-                    rows: vec![
-                        ("RESIDENTS".into(), settlement.residents.to_string()),
-                        ("UNREST".into(), compact_unrest(economy)),
-                        ("FOOD SECURITY".into(), compact_food_security(economy)),
-                        ("HUNGER".into(), hunger),
-                        ("HOUSING".into(), housing),
-                        ("UNEMPLOYMENT".into(), work_seekers),
-                        ("UNPAID WORKERS".into(), unpaid_workers),
-                        (
-                            "TREASURY".into(),
-                            format!("{} coin", format_money(settlement.treasury)),
-                        ),
-                        ("COMMON STORE".into(), inventory_summary(inventory)),
-                        ("PERMIT MARKET".into(), next),
-                        ("IMPORT CONTRACTS".into(), import_contracts),
-                        (
-                            "TO ADVANCE".into(),
-                            progression_summary(settlement, development),
-                        ),
-                        (
-                            "PUBLIC JOBS".into(),
-                            administration.map_or_else(
-                                || "Administration starting".to_string(),
-                                |office| {
-                                    let (worker_target, guard_target) = policy.map_or(
-                                        (
-                                            settlement.tier.public_worker_positions(),
-                                            settlement.tier.public_guard_positions(),
-                                        ),
-                                        |policy| policy.staffing_posture.targets(settlement.tier),
-                                    );
-                                    let stewards = if office.city_workers.is_empty() {
-                                        office
-                                            .lead_steward
-                                            .as_deref()
-                                            .unwrap_or("vacant")
-                                            .to_string()
-                                    } else {
-                                        office.city_workers.join(", ")
-                                    };
-                                    format!(
-                                        "Reeve {} / Moot Stewards {} ({}/{}) / guards {}/{}",
-                                        office.reeve.as_deref().unwrap_or("vacant"),
-                                        stewards,
-                                        office.city_workers.len(),
-                                        worker_target,
-                                        office.guards.len(),
-                                        guard_target,
-                                    )
-                                },
-                            ),
-                        ),
-                        (
-                            "CIVIC POLICY".into(),
-                            policy.map_or_else(
-                                || "Awaiting charter".to_string(),
-                                |policy| {
-                                    format!(
-                                        "{} / {:.1}% market / {:.1}% profit levy / {}",
-                                        policy.strategy.label(),
-                                        policy.market_fee_bps as f32 / 100.0,
-                                        policy.business_profit_tax_bps as f32 / 100.0,
-                                        if policy.autopilot { "auto" } else { "manual" },
-                                    )
-                                },
-                            ),
-                        ),
-                        (
-                            "SOCIAL / GROWTH POLICY".into(),
-                            policy.map_or_else(
-                                || "Awaiting charter".to_string(),
-                                |policy| {
-                                    format!(
-                                        "Relief {} / food {}d / payroll {}d / staffing {} / permit subsidy {:.1}%",
-                                        policy.poor_relief.label(),
-                                        policy.food_reserve_target_days,
-                                        policy.civic_payroll_reserve_days,
-                                        policy.staffing_posture.label(),
-                                        policy.business_permit_subsidy_bps as f32 / 100.0,
-                                    )
-                                },
-                            ),
-                        ),
-                        (
-                            "CIVIC WAGE ARREARS".into(),
-                            administration.map_or_else(
-                                || "None recorded".to_string(),
-                                |office| format!("{} coin", format_money(office.wage_arrears)),
-                            ),
-                        ),
-                        (
-                            "LABOUR MARKET".into(),
-                            economy.map_or_else(
-                                || "Awaiting first reading".to_string(),
-                                |economy| {
-                                    format!(
-                                        "Private {}/{} ({} vacant), civic {}/{} ({} vacant), {} seeking; best opening {} coin/day",
-                                        economy.private_filled_jobs,
-                                        economy.private_job_positions,
-                                        economy.private_vacant_jobs,
-                                        economy.civic_filled_jobs,
-                                        economy.civic_job_positions,
-                                        economy.civic_vacant_jobs,
-                                        economy.job_seekers,
-                                        format_money(economy.best_open_private_wage),
-                                    )
-                                },
-                            ),
-                        ),
-                        (
-                            "COMPANY TREASURIES / ARREARS".into(),
-                            format!(
-                                "{} / {} wage / {} tax coin",
-                                format_money(private_cash),
-                                format_money(private_wage_arrears),
-                                format_money(private_tax_arrears),
-                            ),
-                        ),
-                        (
-                            "PURCHASABLE FOOD".into(),
-                            format!("{purchasable_food} listed units"),
-                        ),
-                    ],
-                    trade: markets.get(entity).is_ok(),
-                    property: true,
-                    manage: false,
-                    business_history: None,
-                },
-            ));
+                (
+                    "FOOD".to_string(),
+                    economy.map_or_else(waiting, |economy| {
+                        format!(
+                            "{} / {:.1} days",
+                            food_security_state(economy),
+                            economy.reserve_days
+                        )
+                    }),
+                ),
+                (
+                    "UNEMPLOYMENT".to_string(),
+                    economy.map_or_else(waiting, |economy| {
+                        format!(
+                            "{} seeking ({:.0}%)",
+                            economy.job_seekers,
+                            percent(u32::from(economy.job_seekers))
+                        )
+                    }),
+                ),
+                (
+                    "HOMELESS".to_string(),
+                    economy.map_or_else(waiting, |economy| {
+                        format!(
+                            "{} ({:.0}%)",
+                            economy.homeless_residents,
+                            percent(economy.homeless_residents)
+                        )
+                    }),
+                ),
+                (
+                    "TREASURY".to_string(),
+                    format!("{} coin", format_money(settlement.treasury)),
+                ),
+            ];
+            let mut rows = vec![
+                ("COMMON STORE".to_string(), inventory_summary(inventory)),
+                ("PERMIT MARKET".to_string(), opportunity_summary(opportunities)),
+                (
+                    "TO ADVANCE".to_string(),
+                    progression_summary(settlement, development),
+                ),
+            ];
+            if let Some(economy) = economy.filter(|economy| economy.unmet_food > 0) {
+                rows.push((
+                    "UNFED".to_string(),
+                    format!("{} of {residents} residents", economy.unmet_food),
+                ));
+            }
+            if let Some(economy) = economy.filter(|economy| economy.unpaid_workers > 0) {
+                rows.push((
+                    "UNPAID WORKERS".to_string(),
+                    economy.unpaid_workers.to_string(),
+                ));
+            }
+            if let Some(settlement_id) = settlement_id {
+                let mut imports: Vec<_> = trade_contracts
+                    .iter()
+                    .filter(|(_, contract)| {
+                        contract.destination == settlement_id && contract.status.is_active()
+                    })
+                    .map(|(id, contract)| {
+                        let status = if contract.origin.is_none()
+                            && contract.status == shared::components::TradeContractStatus::Open
+                        {
+                            "awaiting supply"
+                        } else {
+                            contract.status.label()
+                        };
+                        format!(
+                            "#{} {} {}/{} ({status})",
+                            id.0,
+                            contract.good.label(),
+                            contract.delivered_units,
+                            contract.requested_units,
+                        )
+                    })
+                    .collect();
+                imports.sort();
+                if !imports.is_empty() {
+                    rows.push(("IMPORTS".to_string(), imports.join(" / ")));
+                }
+            }
+            return Some(CompactModel {
+                kind: "hall",
+                title: settlement.name.to_uppercase(),
+                subtitle: format!(
+                    "{} / {}",
+                    settlement.tier.label().to_uppercase(),
+                    hall_level.label().to_uppercase()
+                ),
+                tiles,
+                rows,
+                trade: markets.get(entity).is_ok(),
+                property: true,
+                manage: false,
+                business_history: None,
+            });
         }
         if let Ok(building) = buildings.get(entity) {
             let public_hall = (building.kind == SettlementBuildingKind::Market)
@@ -838,10 +705,9 @@ fn sync_compact_panel(
                 condition,
                 for_sale,
                 operated_by,
-            ) =
-                business_economies
-                    .get(entity)
-                    .unwrap_or((None, None, None, None, None, None, None, None, None, None));
+            ) = business_economies
+                .get(entity)
+                .unwrap_or((None, None, None, None, None, None, None, None, None, None));
             let company_account = operated_by
                 .and_then(|operation| company_accounts.get(&operation.0))
                 .copied();
@@ -868,261 +734,140 @@ fn sync_compact_panel(
                     business,
                 })
             });
-            let occupancy = if building.kind.housing_capacity() > 0 {
-                (
+            let mut tiles = Vec::new();
+            if building.kind.housing_capacity() > 0 {
+                tiles.push((
                     "BEDS".to_string(),
                     format!(
                         "{} / {}",
                         household.map_or(0, |home| home.residents.len()),
                         building.kind.housing_capacity()
                     ),
-                )
+                ));
             } else {
-                (
+                let target = staffing
+                    .copied()
+                    .unwrap_or_else(|| BusinessStaffingPolicy::new(building.kind.positions()))
+                    .target_for(building.kind);
+                tiles.push((
                     "STAFF".to_string(),
-                    format!(
-                        "{} employed / {} open / {} max",
-                        building.workers.len(),
-                        staffing
-                            .copied()
-                            .unwrap_or_else(|| {
-                                BusinessStaffingPolicy::new(building.kind.positions())
-                            })
-                            .target_for(building.kind),
-                        building.kind.positions()
-                    ),
-                )
-            };
-            let local_market = building_of.get(entity).ok().and_then(|owner| {
-                settlement_ids
-                    .iter()
-                    .find(|(_, id)| **id == owner.0)
-                    .and_then(|(hall, _)| markets.get(hall).ok())
-            });
-            let held_stock = inventory.map(|inventory| {
-                Good::ALL.map(|good| inventory.amount(good))
-            });
-            let capital = match (wage_policy, management, procurement) {
-                (Some(wage), Some(management), Some(procurement)) => business_working_capital(
-                    staffing
-                        .copied()
-                        .unwrap_or_else(|| {
-                            BusinessStaffingPolicy::new(building.kind.positions())
-                        })
-                        .target_for(building.kind),
-                    wage,
-                    management,
-                    procurement,
-                    held_stock.as_ref(),
-                    local_market,
-                ),
-                _ => Default::default(),
-            };
-            let mut rows = vec![
-                (
-                    "OWNER".into(),
-                    for_sale.map_or_else(
-                        || {
-                            building
-                                .owner
-                                .clone()
-                                .unwrap_or_else(|| "The settlement".into())
-                        },
-                        |listing| {
-                            format!(
-                                "FOR SALE — {} coin / {}",
-                                format_money(listing.asking_price),
-                                listing.reason.label(),
-                            )
-                        },
-                    ),
-                ),
-                occupancy,
-            ];
+                    format!("{} of {} posts", building.workers.len(), target),
+                ));
+            }
+            if let Some(condition) = condition {
+                tiles.push(("BUSINESS".to_string(), condition.state.label().to_string()));
+            }
             if let Some(label) = building.kind.site_quality_label() {
-                rows.push((
-                    label.into(),
+                tiles.push((
+                    label.to_uppercase(),
                     format!("{:.0}%", building.quality * 100.0),
                 ));
             }
-            rows.extend([
-                ("STORE".into(), inventory_summary(inventory)),
-                (
-                    "BUSINESS".into(),
-                    condition.map_or_else(
-                        || "Not a business".into(),
-                        |condition| condition.state.label().into(),
+            if let Some(wage) = wage_policy {
+                tiles.push((
+                    "DAILY WAGE".to_string(),
+                    format!("{} coin", format_money(wage.daily_wage)),
+                ));
+            }
+            if let Some(account) = account {
+                let profit = account.previous_day.profit();
+                tiles.push((
+                    "YESTERDAY".to_string(),
+                    format!(
+                        "{}{} coin",
+                        if profit < 0 { "-" } else { "+" },
+                        format_money(profit.unsigned_abs())
                     ),
+                ));
+                tiles.push((
+                    "COMPANY CASH".to_string(),
+                    format!(
+                        "{} coin",
+                        format_money(company_account.map_or(0, |company| company.cash))
+                    ),
+                ));
+            }
+            let mut rows = vec![(
+                "OWNER".to_string(),
+                for_sale.map_or_else(
+                    || {
+                        building
+                            .owner
+                            .clone()
+                            .unwrap_or_else(|| "The settlement".into())
+                    },
+                    |listing| {
+                        format!(
+                            "FOR SALE / {} coin / {}",
+                            format_money(listing.asking_price),
+                            listing.reason.label(),
+                        )
+                    },
                 ),
-                (
-                    "OWNER STRATEGY".into(),
-                    management.map_or_else(
-                        || "None".into(),
-                        |policy| {
+            )];
+            rows.push(("STORE".to_string(), inventory_summary(inventory)));
+            if let Some(policy) = management {
+                rows.push((
+                    "STRATEGY".to_string(),
+                    format!(
+                        "{} / {}",
+                        policy.strategy.label(),
+                        if policy.autopilot { "autopilot" } else { "manual" }
+                    ),
+                ));
+            }
+            if let Some(account) = account.filter(|account| {
+                account.wage_arrears > 0 || account.tax_arrears > 0
+            }) {
+                rows.push((
+                    "DEBT".to_string(),
+                    format!(
+                        "{} wage / {} tax coin",
+                        format_money(account.wage_arrears),
+                        format_money(account.tax_arrears),
+                    ),
+                ));
+            }
+            if let Some(policy) = sale_policy {
+                rows.push((
+                    "SALE OFFER".to_string(),
+                    format!(
+                        "{} coin each / {} day reserve",
+                        format_money(policy.asking_unit_price),
+                        policy.company_reserve_days,
+                    ),
+                ));
+            }
+            if let Some(policy) = procurement {
+                let orders = Good::ALL
+                    .into_iter()
+                    .filter_map(|good| {
+                        let rule = policy.rule(good);
+                        rule.enabled.then(|| {
                             format!(
-                                "{} / {}",
-                                policy.strategy.label(),
-                                if policy.autopilot {
-                                    "autopilot"
-                                } else {
-                                    "manual"
-                                }
+                                "{} {} target @ max {}",
+                                good.label(),
+                                rule.target_units,
+                                format_money(rule.maximum_unit_price)
                             )
-                        },
-                    ),
-                ),
-                (
-                    "COMPANY CASH / SITE WAGE / TAX DEBT".into(),
-                    account.map_or_else(
-                        || "Not a business".into(),
-                        |account| {
-                            format!(
-                                "{} / {} / {} coin",
-                                format_money(company_account.map_or(0, |company| company.cash)),
-                                format_money(account.wage_arrears),
-                                format_money(account.tax_arrears),
-                            )
-                        },
-                    ),
-                ),
-                (
-                    "WAGE / TAX DEFAULTS".into(),
-                    account.map_or_else(
-                        || "Not a business".into(),
-                        |account| {
-                            format!(
-                                "{} / {} coin",
-                                format_money(account.defaulted_wages),
-                                format_money(account.defaulted_taxes),
-                            )
-                        },
-                    ),
-                ),
-                (
-                    "SITE REQUIREMENT / COMPANY FREE".into(),
-                    account.map_or_else(
-                        || "Not a business".into(),
-                        |account| {
-                            format!(
-                                "{} / {} coin",
-                                format_money(capital.total_with_liabilities(account)),
-                                format_money(company_account.map_or(0, |company| {
-                                    company
-                                        .cash
-                                        .saturating_sub(company.wage_arrears)
-                                        .saturating_sub(company.tax_arrears)
-                                        .saturating_sub(capital.total())
-                                })),
-                            )
-                        },
-                    ),
-                ),
-                (
-                    "YESTERDAY P&L".into(),
-                    account.map_or_else(
-                        || "Not a business".into(),
-                        |account| {
-                            let profit = account.previous_day.profit();
-                            format!(
-                                "revenue {} / costs {} / {}{} coin",
-                                format_money(account.previous_day.gross_revenue),
-                                format_money(account.previous_day.operating_expenses()),
-                                if profit < 0 { "-" } else { "+" },
-                                format_money(profit.unsigned_abs())
-                            )
-                        },
-                    ),
-                ),
-                (
-                    "SALE OFFER".into(),
-                    sale_policy.map_or_else(
-                        || "None".into(),
-                        |policy| {
-                            format!(
-                                "{} coin each / {} day company reserve ({} units) / collect up to {}",
-                                format_money(policy.asking_unit_price),
-                                policy.company_reserve_days,
-                                policy.company_reserve_units,
-                                policy.max_units_per_collection,
-                            )
-                        },
-                    ),
-                ),
-                (
-                    "DAILY WAGE".into(),
-                    wage_policy.map_or_else(
-                        || "Not a business".into(),
-                        |policy| {
-                            format!(
-                                "{} coin / {}{}",
-                                format_money(policy.daily_wage),
-                                if policy.automatic {
-                                    "owner auto"
-                                } else {
-                                    "owner set"
-                                },
-                                if policy.vacancy_days > 0 {
-                                    format!(" / vacant {}d", policy.vacancy_days)
-                                } else {
-                                    String::new()
-                                }
-                            )
-                        },
-                    ),
-                ),
-                (
-                    "INPUT ORDERS".into(),
-                    procurement.map_or_else(
-                        || "None".into(),
-                        |policy| {
-                            let orders = Good::ALL
-                                .into_iter()
-                                .filter_map(|good| {
-                                    let rule = policy.rule(good);
-                                    rule.enabled.then(|| {
-                                        format!(
-                                            "{} <{} -> {} @ max {}",
-                                            good.label(),
-                                            rule.reorder_below,
-                                            rule.target_units,
-                                            format_money(rule.maximum_unit_price)
-                                        )
-                                    })
-                                })
-                                .collect::<Vec<_>>();
-                            if orders.is_empty() {
-                                "No purchased inputs".into()
-                            } else {
-                                orders.join(" / ")
-                            }
-                        },
-                    ),
-                ),
-            ]);
-            return Some((
-                format!(
-                    "building|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
-                    building,
-                    inventory_summary(inventory),
-                    household,
-                    account,
-                    sale_policy,
-                    wage_policy,
-                    management,
-                    procurement,
-                    condition,
-                    for_sale,
-                ),
-                CompactModel {
-                    title: building.kind.label().to_string(),
-                    subtitle: building.settlement.to_uppercase(),
-                    rows,
-                    trade: public_hall.is_some() || markets.get(entity).is_ok(),
-                    property: false,
-                    manage: account.is_some() && ownership.can_open(entity, local_person),
-                    business_history,
-                },
-            ));
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                if !orders.is_empty() {
+                    rows.push(("INPUT ORDERS".to_string(), orders.join(" / ")));
+                }
+            }
+            return Some(CompactModel {
+                kind: "building",
+                title: building.kind.label().to_uppercase(),
+                subtitle: building.settlement.to_uppercase(),
+                tiles,
+                rows,
+                trade: public_hall.is_some() || markets.get(entity).is_ok(),
+                property: false,
+                manage: account.is_some() && ownership.can_open(entity, local_person),
+                business_history,
+            });
         }
         if let Ok((site, for_sale, site_owner, hall_upgrade)) = sites.get(entity) {
             let (good, required) = hall_upgrade.map_or(
@@ -1132,9 +877,9 @@ fn sync_compact_panel(
             let delivered = inventories
                 .get(entity)
                 .map_or(0, |inventory| inventory.amount(good));
-            let mut rows = vec![
+            let tiles = vec![
                 (
-                    "STATUS".into(),
+                    "STATUS".to_string(),
                     if site.raising {
                         "Raising frame"
                     } else if delivered >= required {
@@ -1142,10 +887,11 @@ fn sync_compact_panel(
                     } else {
                         "Awaiting materials"
                     }
-                    .into(),
+                    .to_string(),
                 ),
                 (good.label().to_uppercase(), format!("{delivered} / {required}")),
             ];
+            let mut rows = Vec::new();
             if let Some(settlement_id) = building_of.get(entity).ok().map(|owner| owner.0) {
                 if let Some((id, contract)) = trade_contracts.iter().find(|(_, contract)| {
                     contract.destination == settlement_id
@@ -1153,23 +899,22 @@ fn sync_compact_panel(
                         && contract.status.is_active()
                 }) {
                     rows.push((
-                        "INBOUND CONTRACT".into(),
+                        "INBOUND CONTRACT".to_string(),
                         format!(
-                            "#{} / {} / {}/{} delivered / {} coin escrow",
+                            "#{} / {} / {}/{} delivered",
                             id.0,
                             contract.status.label(),
                             contract.delivered_units,
                             contract.requested_units,
-                            format_money(contract.escrow_cash),
                         ),
                     ));
                 }
             }
             if let Some(listing) = for_sale {
                 rows.push((
-                    "TAKEOVER".into(),
+                    "TAKEOVER".to_string(),
                     format!(
-                        "FOR SALE — {} coin / {}",
+                        "FOR SALE / {} coin / {}",
                         format_money(listing.asking_price),
                         listing.reason.label(),
                     ),
@@ -1180,54 +925,63 @@ fn sync_compact_panel(
                 .is_some_and(|(owner, person)| owner.0 == person)
             {
                 rows.push((
-                    "YOUR ORDER".into(),
-                    "Select your hero, then right-click this worksite".into(),
+                    "YOUR ORDER".to_string(),
+                    "Select your hero, then right-click this worksite".to_string(),
                 ));
             }
-            return Some((
-                format!(
-                    "site|{:?}|{delivered}|{:?}|{:?}",
-                    site, for_sale, site_owner
-                ),
-                CompactModel {
-                    title: format!("{} WORKSITE", site.kind.label()),
-                    subtitle: site.settlement.to_uppercase(),
-                    rows,
-                    trade: false,
-                    property: false,
-                    manage: false,
-                    business_history: None,
-                },
-            ));
+            return Some(CompactModel {
+                kind: "site",
+                title: format!("{} WORKSITE", site.kind.label().to_uppercase()),
+                subtitle: site.settlement.to_uppercase(),
+                tiles,
+                rows,
+                trade: false,
+                property: false,
+                manage: false,
+                business_history: None,
+            });
         }
         let _ = positions.get(entity).ok()?;
         None
     });
-
-    let Some((next_signature, model)) = fact else {
+    let Some(model) = model else {
         if node.display != Display::None {
             ui.panels.single_mut().unwrap().1.display = Display::None;
         }
         return;
     };
-    if signature.0 == next_signature && node.display == Display::Flex {
+    let structure = model.structure_key(selected);
+    if signature.0 == structure && node.display == Display::Flex {
+        // Same structure: bind the values into the existing slots.
+        for (bound, mut text) in ui.texts.iter_mut() {
+            let value = match bound {
+                CompactBound::Title => &model.title,
+                CompactBound::Subtitle => &model.subtitle,
+                CompactBound::Tile(index) => &model.tiles[*index].1,
+                CompactBound::Row(index) => &model.rows[*index].1,
+            };
+            if text.0 != *value {
+                text.0 = value.clone();
+            }
+        }
         return;
     }
     if subtree_is_interacting(panel_entity, &ui.children, &ui.interactions) {
         return;
     }
-
     let (_, mut node, mut signature) = ui.panels.single_mut().unwrap();
     node.display = Display::Flex;
-    signature.0 = next_signature;
+    signature.0 = structure;
     let Ok(body) = ui.bodies.single() else {
         return;
     };
     _ui_scope.rebuilt();
     commands.entity(body).despawn_related::<Children>();
-    let mut children = vec![title(&mut commands, model.title, model.subtitle)];
-    for (label, value) in model.rows {
-        children.push(line(&mut commands, label, value));
+    let header = spawn_header(&mut commands, &model);
+    let tiles = spawn_tiles(&mut commands, &model.tiles);
+    let mut children = vec![header, tiles];
+    for (index, (label, value)) in model.rows.iter().enumerate() {
+        children.push(spawn_line(&mut commands, index, label, value));
     }
     children.push(action_row(
         &mut commands,
@@ -1239,14 +993,54 @@ fn sync_compact_panel(
     commands.entity(body).add_children(&children);
 }
 
+fn food_security_state(economy: &SettlementEconomy) -> &'static str {
+    if economy.unmet_food > 0 {
+        "CRISIS"
+    } else if economy.reserve_days < 1.0 {
+        "SHORT"
+    } else if economy.reserve_days < shared::economy::FOOD_SECURITY_TARGET_DAYS {
+        "FRAGILE"
+    } else {
+        "SECURE"
+    }
+}
+
+/// The compact card as data: a few key tiles, a few vital rows, and the
+/// actions that lead to the full record. Values bind in place; only the
+/// [`CompactModel::structure_key`] decides a respawn.
 struct CompactModel {
+    kind: &'static str,
     title: String,
     subtitle: String,
+    tiles: Vec<(String, String)>,
     rows: Vec<(String, String)>,
     trade: bool,
     property: bool,
     manage: bool,
     business_history: Option<crate::ui::history::BusinessHistoryButton>,
+}
+
+impl CompactModel {
+    fn structure_key(&self, target: Option<Entity>) -> String {
+        let mut key = format!("{}|{target:?}|", self.kind);
+        for (label, _) in &self.tiles {
+            key.push_str(label);
+            key.push(',');
+        }
+        key.push('|');
+        for (label, _) in &self.rows {
+            key.push_str(label);
+            key.push(',');
+        }
+        key.push_str(&format!(
+            "|{}{}{}|{:?}",
+            self.trade,
+            self.property,
+            self.manage,
+            self.business_history.as_ref().map(|button| button.business)
+        ));
+        key
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -537,14 +537,14 @@ pub fn run_ambient_routines(
                 // queued work target on the same deferred-command boundary.
                 // This previously left a nearly supplied priority site at
                 // 9/10 Wood while every other builder politely waited.
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 clear_owned_movement(&mut commands, entity);
                 continue;
             }
             _ => {
                 if routine.is_some() {
                     if *activity == CharacterActivity::Sitting {
-                        *activity = CharacterActivity::Idle;
+                        activity.set_if_neq(CharacterActivity::Idle);
                     }
                     // A real active work/build/home routine now owns any destination.
                     commands.entity(entity).remove::<AmbientRoutine>();
@@ -556,7 +556,7 @@ pub fn run_ambient_routines(
         if busy.get(entity).is_ok() {
             if routine.is_some() {
                 if *activity == CharacterActivity::Sitting {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                 }
                 commands.entity(entity).remove::<AmbientRoutine>();
             }
@@ -567,7 +567,7 @@ pub fn run_ambient_routines(
         if !needs_ambient_life {
             if routine.is_some() {
                 if *activity == CharacterActivity::Sitting {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                 }
                 clear_owned_movement(&mut commands, entity);
             }
@@ -585,7 +585,7 @@ pub fn run_ambient_routines(
         if !tactical {
             if routine.is_some() {
                 if *activity == CharacterActivity::Sitting {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                 }
                 clear_owned_movement(&mut commands, entity);
             }
@@ -639,7 +639,7 @@ pub fn run_ambient_routines(
                 continue;
             }
             decisions += 1;
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             if super::ground_distance(position.0, destination) <= AMBIENT_REACH {
                 commands
                     .entity(entity)
@@ -732,18 +732,18 @@ pub fn run_ambient_routines(
         match routine.phase {
             AmbientPhase::NightPending { destination } => {
                 let _ = destination;
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 routine.phase = AmbientPhase::Waiting { seconds_left: 1.0 };
                 routine.next_world_seconds = now + 1.0;
             }
             AmbientPhase::NightShelter { destination } => {
                 let _ = destination;
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 routine.phase = AmbientPhase::Waiting { seconds_left: 1.0 };
                 routine.next_world_seconds = now + 1.0;
             }
             AmbientPhase::Waiting { seconds_left } => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
@@ -796,7 +796,7 @@ pub fn run_ambient_routines(
                 rest_seconds,
                 travel_seconds_left,
             } => {
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 if route_failed
                     .is_some_and(|failed| failed.goal.distance_squared(destination) <= 0.01)
                 {
@@ -879,7 +879,7 @@ pub fn run_ambient_routines(
                     };
                     routine.next_world_seconds = now + f64::from(left);
                 } else {
-                    *activity = CharacterActivity::Idle;
+                    activity.set_if_neq(CharacterActivity::Idle);
                     let seed = stable_hash(&name.0)
                         ^ person_id.map_or(entity.to_bits(), |person_id| person_id.0)
                         ^ u64::from(routine.cycle);

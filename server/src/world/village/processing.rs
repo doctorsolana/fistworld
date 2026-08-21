@@ -212,7 +212,9 @@ fn finish_shift(
     routine: &ProcessingRoutine,
     activity: &mut CharacterActivity,
 ) {
-    *activity = CharacterActivity::Idle;
+    if *activity != CharacterActivity::Idle {
+        *activity = CharacterActivity::Idle;
+    }
     commands
         .entity(worker)
         .remove::<ProcessingRoutine>()
@@ -301,7 +303,7 @@ pub fn run_processing_routines(
             workplaces.get_mut(routine.workplace)
         else {
             commands.entity(worker).remove::<ProcessingRoutine>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         };
         if processing_recipe(building.kind) != Some(routine.recipe)
@@ -310,7 +312,7 @@ pub fn run_processing_routines(
             || !intent.is_settled()
         {
             commands.entity(worker).remove::<ProcessingRoutine>();
-            *activity = CharacterActivity::Idle;
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
         if routine.production_day != clock.day {
@@ -357,10 +359,10 @@ pub fn run_processing_routines(
                 routine.failed_routes = 0;
                 begin_workplace_entry(&mut commands, worker, at.0, entrance, inside);
                 routine.phase = ProcessingPhase::Working;
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
             }
             ProcessingPhase::Working => {
-                *activity = CharacterActivity::Indoors;
+                activity.set_if_neq(CharacterActivity::Indoors);
                 let recipe = routine.recipe;
                 let remaining = plan
                     .as_deref()

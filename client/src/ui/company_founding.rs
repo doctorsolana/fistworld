@@ -70,8 +70,6 @@ pub(crate) struct CompanyFoundingDraft {
     pub name: String,
     pub initial_capital: u64,
     pub editing_name: bool,
-    /// The inline form on the permit board is expanded.
-    pub visible: bool,
     pub pending: bool,
 }
 
@@ -82,7 +80,6 @@ impl Default for CompanyFoundingDraft {
             name: String::new(),
             initial_capital: 10 * PENNIES_PER_COIN,
             editing_name: false,
-            visible: false,
             pending: false,
         }
     }
@@ -109,12 +106,9 @@ pub(crate) struct FoundCompanyButton {
     pub hall: Entity,
 }
 
-/// Expands the inline form on the permit board.
+/// Takes you to the NEW COMPANY page (closing whatever panel held the button).
 #[derive(Component)]
 pub(crate) struct OpenCompanyFounding;
-
-#[derive(Component)]
-pub(crate) struct CancelCompanyFounding;
 
 #[derive(Component)]
 struct FoundingNameText;
@@ -131,7 +125,6 @@ pub(crate) type FoundingControl = Or<(
     With<CompanyNameField>,
     With<AdjustFoundingCapital>,
     With<OpenCompanyFounding>,
-    With<CancelCompanyFounding>,
     With<FoundCompanyButton>,
 )>;
 
@@ -152,15 +145,14 @@ pub(crate) fn suggested_founding_capital(available: u64) -> u64 {
 }
 
 fn name_text(draft: &CompanyFoundingDraft) -> String {
-    format!(
-        "{}{}",
-        if draft.name.is_empty() {
-            "Type a company name"
-        } else {
-            draft.name.as_str()
-        },
-        if draft.editing_name { " |" } else { "" }
-    )
+    // The caret sits flush against the last character; an empty field shows
+    // only the caret while editing and a placeholder when not.
+    match (draft.name.is_empty(), draft.editing_name) {
+        (true, true) => "|".to_string(),
+        (true, false) => "Type a company name".to_string(),
+        (false, true) => format!("{}|", draft.name),
+        (false, false) => draft.name.clone(),
+    }
 }
 
 fn capital_text(draft: &CompanyFoundingDraft) -> String {
@@ -176,7 +168,6 @@ pub(crate) struct FoundingFormView<'a> {
     /// The Hall the hero stands at, if any. Founding needs one.
     pub hall: Option<(Entity, &'a str)>,
     pub existing: usize,
-    pub show_cancel: bool,
 }
 
 /// The founding form. Big fields, one primary action, no explanatory prose.
@@ -348,9 +339,6 @@ pub(crate) fn spawn_founding_form(parent: &mut ChildSpawnerCommands<'_>, view: &
                     TextColor(INK),
                     Pickable::IGNORE,
                 ));
-                if view.show_cancel && !draft.pending {
-                    step_button(row, CancelCompanyFounding, "CANCEL");
-                }
             });
 
             if !view.feedback.message.is_empty() {
@@ -470,7 +458,6 @@ fn handle_founding_buttons(
             Option<&CompanyNameField>,
             Option<&AdjustFoundingCapital>,
             Option<&OpenCompanyFounding>,
-            Option<&CancelCompanyFounding>,
             Option<&FoundCompanyButton>,
         ),
         (Changed<Interaction>, FoundingControl),
@@ -490,13 +477,17 @@ fn handle_founding_buttons(
         &mut MessageSender<HeroCompanyFoundingOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
+    mut page: ResMut<FoundingPageOpen>,
+    mut property_target: ResMut<crate::ui::property_market::PropertyMarketTarget>,
+    mut encyclopedia_open: ResMut<EncyclopediaOpen>,
+    mut tab: ResMut<EncyclopediaTab>,
 ) {
     // Whichever window hosts the form armed its own click guard.
     let clicked =
         (property_guard.0 || encyclopedia_guard.0) && mouse.just_pressed(MouseButton::Left);
     let mut clicked_name = false;
     let mut any_pressed = false;
-    for (interaction, name, adjust, open, cancel, found) in buttons.iter_mut() {
+    for (interaction, name, adjust, open, found) in buttons.iter_mut() {
         if !clicked || *interaction != Interaction::Pressed {
             continue;
         }
@@ -515,7 +506,7 @@ fn handle_founding_buttons(
             .filter(|(_, leadership)| leadership.master == *person)
             .count();
         if open.is_some() {
-            draft.visible = true;
+            // One screen for founding: leave the board, open the page.
             start_draft(
                 &mut draft,
                 &mut feedback,
@@ -524,12 +515,10 @@ fn handle_founding_buttons(
                 existing,
                 balance,
             );
-            continue;
-        }
-        if cancel.is_some() {
-            draft.visible = false;
-            draft.editing_name = false;
-            feedback.message.clear();
+            property_target.0 = None;
+            page.0 = true;
+            encyclopedia_open.0 = true;
+            *tab = EncyclopediaTab::Companies;
             continue;
         }
         if let Some(adjust) = adjust {
@@ -648,7 +637,6 @@ fn receive_company_founding_results(
             feedback.success = result.success;
             if result.success {
                 active.0 = result.company;
-                draft.visible = false;
                 draft.editing_name = false;
                 draft.name.clear();
                 if page.0 {
@@ -686,8 +674,10 @@ fn ensure_founding_page(
     interactions: Query<(&Interaction, Has<UiRefreshExempt>)>,
     mut encyclopedia_open: ResMut<EncyclopediaOpen>,
     mut tab: ResMut<EncyclopediaTab>,
+    mut was_open: Local<bool>,
 ) {
     if !page.0 {
+        *was_open = false;
         for (root, ..) in roots.iter() {
             commands.entity(root).despawn();
         }
@@ -710,8 +700,12 @@ fn ensure_founding_page(
             .filter(|(_, leadership)| leadership.master == *person)
             .count()
     });
+    // Seed the draft when the page opens or the founder changes -- and only
+    // then. Backspacing the name to nothing must leave it empty, not reset it.
+    let just_opened = !*was_open;
+    *was_open = true;
     if let Some((_, person, hero_name, ..)) = hero {
-        if draft.founder != Some(*person) || draft.name.is_empty() {
+        if just_opened || draft.founder != Some(*person) {
             start_draft(
                 &mut draft,
                 &mut feedback,
@@ -780,7 +774,6 @@ fn ensure_founding_page(
                 wallet,
                 hall,
                 existing,
-                show_cancel: false,
             },
         );
     });

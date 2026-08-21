@@ -991,7 +991,7 @@ pub fn run_workplace_door_transits(
                     transit.phase = WorkplaceDoorPhase::Opening { seconds_left: left };
                     continue;
                 }
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands.entity(worker).insert(MoveTarget(target));
                 transit.phase = WorkplaceDoorPhase::Crossing;
             }
@@ -1002,7 +1002,7 @@ pub fn run_workplace_door_transits(
                         exterior_door_clearance_position(transit.building, transit.door)
                     }
                 };
-                *activity = CharacterActivity::Idle;
+                activity.set_if_neq(CharacterActivity::Idle);
                 // The entrance marker itself is outside the inflated building
                 // blocker, but DOOR_REACH extends slightly back through the
                 // wall. Do not release collision immunity from a leaving
@@ -1021,7 +1021,7 @@ pub fn run_workplace_door_transits(
 
                 let destination = transit.destination_after_exit;
                 if transit.direction == WorkplaceDoorDirection::Entering {
-                    *activity = CharacterActivity::Indoors;
+                    activity.set_if_neq(CharacterActivity::Indoors);
                 }
                 let mut worker_commands = commands.entity(worker);
                 worker_commands
