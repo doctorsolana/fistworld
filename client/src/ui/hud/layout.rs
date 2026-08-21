@@ -198,6 +198,7 @@ fn god_plate() -> impl Bundle {
             hairline(),
             spawn_hero_button(),
             spawn_npc_button(),
+            spawn_immigrant_boat_button(),
             found_village_button(),
             god_notice(),
             hairline(),
@@ -376,6 +377,35 @@ fn spawn_npc_button() -> impl Bundle {
             Text::new("SPAWN VILLAGER"),
             TextFont {
                 font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(INK),
+        )],
+    )
+}
+
+/// Launch one real natural immigrant and follow the voyage. This is a God-mode
+/// world-testing instrument on every playable map.
+fn spawn_immigrant_boat_button() -> impl Bundle {
+    (
+        SpawnImmigrantBoatButton,
+        Button,
+        Node {
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(2.0)),
+            ..default()
+        },
+        button_chrome(UiButtonVariant::Secondary),
+        children![(
+            SpawnImmigrantBoatLabel,
+            UiButtonLabel,
+            Text::new("SPAWN IMMIGRANT BOAT"),
+            TextFont {
+                font_size: FontSize::Px(10.0),
                 ..default()
             },
             TextColor(INK),

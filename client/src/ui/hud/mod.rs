@@ -37,6 +37,7 @@ impl Plugin for HudPlugin {
         app.init_resource::<GodCapability>();
         app.init_resource::<HudMode>();
         app.init_resource::<GodNotice>();
+        app.init_resource::<ImmigrantBoatWatch>();
         // A fresh connection must not inherit a stale god grant.
         app.add_systems(OnEnter(GameState::Connecting), reset_dev_grant);
         app.add_systems(Update, receive_dev_status);
@@ -50,6 +51,7 @@ impl Plugin for HudPlugin {
                 handle_warp_buttons,
                 handle_spawn_hero_button,
                 actions::handle_spawn_npc_button,
+                actions::handle_immigrant_boat_button,
                 actions::handle_found_village_button,
                 actions::handle_selection_expand_button,
                 sync_clock_chip,
@@ -58,7 +60,9 @@ impl Plugin for HudPlugin {
                 style_warp_buttons,
                 sync_spawn_hero_button,
                 state_sync::sync_spawn_npc_button,
+                state_sync::sync_immigrant_boat_button,
                 state_sync::sync_found_village_button,
+                actions::watch_immigrant_boat.after(crate::camera_rts::update_commander_camera),
                 tick_god_notice,
                 state_sync::sync_selection_plate,
                 state_sync::sync_selection_box,
@@ -78,6 +82,29 @@ impl Plugin for HudPlugin {
 pub struct GodNotice {
     pub text: String,
     pub seconds_left: f32,
+}
+
+/// Village Lab camera state for an explicitly requested physical immigrant.
+/// Existing boats are remembered so a click follows the boat it created, not
+/// an older voyage that happens to still be offshore.
+#[derive(Resource, Default)]
+pub(super) struct ImmigrantBoatWatch {
+    waiting: bool,
+    following: Option<Entity>,
+    known: bevy::platform::collections::HashSet<Entity>,
+    waited_seconds: f32,
+}
+
+impl ImmigrantBoatWatch {
+    fn active(&self) -> bool {
+        self.waiting || self.following.is_some()
+    }
+
+    fn clear(&mut self) {
+        self.waiting = false;
+        self.following = None;
+        self.waited_seconds = 0.0;
+    }
 }
 
 impl GodNotice {
@@ -173,6 +200,12 @@ struct SpawnNpcButton;
 
 #[derive(Component)]
 struct SpawnNpcLabel;
+
+#[derive(Component)]
+struct SpawnImmigrantBoatButton;
+
+#[derive(Component)]
+struct SpawnImmigrantBoatLabel;
 
 #[derive(Component)]
 struct FoundVillageButton;

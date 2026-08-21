@@ -444,6 +444,23 @@ pub fn handle_dev_commands(
                         "Dev: villager {entity:?} spawned at {safe_position:?} (requested {pos:?})"
                     );
                 }
+                DevCommand::SpawnImmigrantBoat => {
+                    if settlements.is_empty() {
+                        info!("Dev: immigrant boat needs at least one Moot to choose");
+                        continue;
+                    }
+                    let requesting_peer = remote_id.0;
+                    commands.queue(move |world: &mut World| {
+                        let accepted = world
+                            .resource_mut::<crate::world::immigration::NaturalImmigrationDirector>()
+                            .request_manual_arrival();
+                        if accepted {
+                            info!("Dev: queued an immigrant boat for {requesting_peer:?}");
+                        } else {
+                            warn!("Dev: immigrant boat request queue is full");
+                        }
+                    });
+                }
                 DevCommand::SetAffiliation { person, banner } => {
                     // Reject out-of-range indices rather than storing one: a
                     // stored bad index renders as UNAFFILIATED and would look

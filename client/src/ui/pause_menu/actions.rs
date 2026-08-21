@@ -195,7 +195,7 @@ pub(super) fn handle_slider_steps(
                     let display_mode = settings.display_mode();
                     if display_mode == DisplayMode::Borderless {
                         info!(
-                            "Borderless fullscreen uses the monitor's native resolution; select Windowed or Fullscreen to change it"
+                            "Borderless fullscreen uses the monitor's native resolution; select Windowed or Exclusive Fullscreen to change it"
                         );
                         continue;
                     }
@@ -232,7 +232,7 @@ pub(super) fn handle_slider_steps(
                 }
                 SliderControl::RenderScale => {
                     // 3D resolution scale: GPU cost scales with the square.
-                    let steps = [0.5, 0.58, 0.66, 0.75, 0.85, 1.0];
+                    let steps = [0.5, 0.55, 0.6, 0.66, 0.75, 0.85, 1.0];
                     let current_idx = steps
                         .iter()
                         .position(|&x| (x - settings.render_scale).abs() < 0.03)

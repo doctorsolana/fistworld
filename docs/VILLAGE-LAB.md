@@ -762,6 +762,15 @@ mouse wheel to zoom, right-drag to orbit, and the HUD speed buttons to pause or
 switch between 1x, 10x, 25x and 100x whenever you want. The launcher prints a
 timestamped `logs/testworld-*` directory containing `server.log` and
 `client.log`, and enables compact authoritative village diagnostics by default.
+
+In God mode, **SPAWN IMMIGRANT BOAT** launches one newcomer from a randomized
+valid map-edge coast through the production immigration pipeline. It preserves
+the currently selected simulation speed, follows the new dinghy automatically,
+and leaves the camera at landfall so the disembark and ordinary walk to the
+Moot queue are visible. Press Escape or the same button to stop following. The
+same control is available in God mode on normal worlds; a one-shot launch does
+not enable recurring immigration or alter its calendar.
+
 Use 25x when 10x is too slow but individual work and delivery cycles should
 remain easy to follow. Use 100x only for a supplementary coarse soak: the 10x
 run remains authoritative whenever correct ordering or visible physical work

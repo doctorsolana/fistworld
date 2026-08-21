@@ -23,6 +23,46 @@ pub struct PlayerInput {
     pub view_radius: f32,
 }
 
+/// Camera pose restored when an account reconnects to the same running world.
+///
+/// This is deliberately presentation state rather than a player-body position:
+/// the commander camera can be watching somewhere entirely different from the
+/// hero they control.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+pub struct CommanderView {
+    pub focus: Vec3,
+    pub yaw: f32,
+    pub zoom: f32,
+}
+
+/// The client pads its visible ground radius by this amount for replication.
+/// Keeping the relationship shared also lets the server recover the exact RTS
+/// zoom from the most recent [`PlayerInput`] when it takes a reconnect snapshot.
+pub const COMMANDER_VIEW_RADIUS_SCALE: f32 = 1.35;
+
+/// Normal first-session RTS camera distance in metres.
+pub const DEFAULT_COMMANDER_ZOOM: f32 = 280.0;
+
+impl PlayerInput {
+    /// Convert a validated input sample into the presentation state retained
+    /// for reconnects. Invalid client values are ignored rather than allowed
+    /// to poison a session profile.
+    pub fn commander_view(&self) -> Option<CommanderView> {
+        if !self.focus.is_finite()
+            || !self.yaw.is_finite()
+            || !self.view_radius.is_finite()
+            || self.view_radius <= 0.0
+        {
+            return None;
+        }
+        Some(CommanderView {
+            focus: self.focus,
+            yaw: self.yaw,
+            zoom: self.view_radius / COMMANDER_VIEW_RADIUS_SCALE,
+        })
+    }
+}
+
 /// Message sent from client to request firing a weapon.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 pub enum TimeOfDayPreset {
@@ -71,6 +111,10 @@ pub enum DevCommand {
     /// a name and stand there, so the encyclopedia and selection have real
     /// non-player people to list before settlements exist to produce them.
     SpawnNpc { pos: Vec3 },
+    /// Ask the world to launch one immigrant through the complete
+    /// ocean-voyage, landfall, overland migration, and Moot queue pipeline.
+    /// This remains server-authorized God-mode tooling.
+    SpawnImmigrantBoat,
     /// Set a character's banner through its durable identity. The encyclopedia
     /// can address people outside interest range because its roster carries
     /// PersonId even when the embodied entity is not replicated.
@@ -513,6 +557,10 @@ pub enum NameSubmissionResult {
         /// Whether play must begin in the character creator. Existing live or
         /// restored heroes skip it and resume exactly where they were.
         needs_hero_creation: bool,
+        /// The exact commander camera from the player's last connection.
+        /// New accounts receive `None` because their opening voyage owns the
+        /// initial camera presentation.
+        commander_view: Option<CommanderView>,
     },
     /// Name rejected, must try again
     Rejected {
@@ -646,13 +694,52 @@ mod tests {
     }
 
     #[test]
+    fn reconnect_result_roundtrips_the_exact_commander_view() {
+        let result = NameSubmissionResult::Accepted {
+            profile_loaded: true,
+            needs_hero_creation: false,
+            commander_view: Some(CommanderView {
+                focus: Vec3::new(-831.5, 14.0, 204.25),
+                yaw: -1.125,
+                zoom: 742.0,
+            }),
+        };
+
+        let bytes = bincode::serialize(&result).unwrap();
+        let decoded: NameSubmissionResult = bincode::deserialize(&bytes).unwrap();
+
+        assert_eq!(decoded, result);
+    }
+
+    #[test]
+    fn commander_input_recovers_zoom_for_a_reconnect_snapshot() {
+        let input = PlayerInput {
+            focus: Vec3::new(20.0, 3.0, -90.0),
+            yaw: 0.75,
+            view_radius: 640.0 * COMMANDER_VIEW_RADIUS_SCALE,
+        };
+
+        assert_eq!(
+            input.commander_view(),
+            Some(CommanderView {
+                focus: input.focus,
+                yaw: input.yaw,
+                zoom: 640.0,
+            })
+        );
+    }
+
+    #[test]
     fn dev_command_roundtrips() {
-        let command = DevCommand::SetTimeWarp(64.0);
+        for command in [
+            DevCommand::SetTimeWarp(64.0),
+            DevCommand::SpawnImmigrantBoat,
+        ] {
+            let bytes = bincode::serialize(&command).unwrap();
+            let decoded: DevCommand = bincode::deserialize(&bytes).unwrap();
 
-        let bytes = bincode::serialize(&command).unwrap();
-        let decoded: DevCommand = bincode::deserialize(&bytes).unwrap();
-
-        assert_eq!(decoded, command);
+            assert_eq!(decoded, command);
+        }
     }
 
     #[test]

@@ -6,12 +6,42 @@ pub(super) fn reset_dev_grant(
     mut capability: ResMut<GodCapability>,
     mut mode: ResMut<HudMode>,
     mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
+    mut immigrant_watch: ResMut<ImmigrantBoatWatch>,
 ) {
     capability.0 = false;
     *mode = HudMode::Play;
     // A stale armed placement surviving a reconnect would fire on the first
     // innocent click of the new session.
     *placement = crate::hero::control::WorldPlacementMode::None;
+    immigrant_watch.clear();
+}
+
+/// Keep the arrival launcher's label and active treatment in sync with its
+/// camera watcher. The containing God panel owns access and visibility.
+pub(super) fn sync_immigrant_boat_button(
+    watch: Res<ImmigrantBoatWatch>,
+    mut buttons: Query<&mut UiButtonStyle, With<SpawnImmigrantBoatButton>>,
+    mut labels: Query<&mut Text, With<SpawnImmigrantBoatLabel>>,
+) {
+    let label = if watch.following.is_some() {
+        "STOP WATCHING BOAT"
+    } else if watch.waiting {
+        "FINDING IMMIGRANT BOAT…"
+    } else {
+        "SPAWN IMMIGRANT BOAT"
+    };
+    for mut style in buttons.iter_mut() {
+        style.variant = if watch.active() {
+            UiButtonVariant::Developer
+        } else {
+            UiButtonVariant::Secondary
+        };
+    }
+    for mut text in labels.iter_mut() {
+        if text.0 != label {
+            text.0 = label.to_string();
+        }
+    }
 }
 
 pub(super) fn receive_dev_status(

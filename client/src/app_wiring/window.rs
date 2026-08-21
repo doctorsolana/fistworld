@@ -47,12 +47,12 @@ pub(crate) fn apply_window_mode(
                 DisplayResolution::new(monitor.physical_width, monitor.physical_height)
             })
         }
-        DisplayMode::Fullscreen => {
+        DisplayMode::ExclusiveFullscreen => {
             let exact = monitor.and_then(|monitor| best_fullscreen_video_mode(monitor, resolution));
             let output_resolution = exact.map_or_else(
                 || {
                     let supported = available_display_resolutions(
-                        DisplayMode::Fullscreen,
+                        DisplayMode::ExclusiveFullscreen,
                         monitor,
                         resolution,
                     )
@@ -176,7 +176,7 @@ mod tests {
             &mut window,
             &mut ui_scale,
             Some(&monitor_with_modes()),
-            DisplayMode::Fullscreen,
+            DisplayMode::ExclusiveFullscreen,
             DisplayResolution::new(1920, 1080),
         );
 
@@ -196,7 +196,7 @@ mod tests {
             &mut window,
             &mut ui_scale,
             Some(&monitor_with_modes()),
-            DisplayMode::Fullscreen,
+            DisplayMode::ExclusiveFullscreen,
             DisplayResolution::new(1600, 900),
         );
 

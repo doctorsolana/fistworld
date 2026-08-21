@@ -180,15 +180,19 @@ incremental compilation. Use it for normal play and iteration.
 Open **Pause → Graphics** to choose a conventional display mode and output resolution:
 
 - **Windowed** uses the selected physical client-area resolution.
-- **Borderless** uses the desktop's current/native resolution, as required by the windowing
-  system. Choose **Fullscreen** when you want a lower true output resolution.
-- **Fullscreen** uses an exact video mode reported by the active monitor. When several modes
-  share a resolution, the client selects the highest refresh rate and then bit depth.
+- **Borderless Fullscreen** uses the desktop's current/native resolution. It is the default and
+  preserves ordinary macOS Command-Tab, Mission Control and Spaces behavior.
+- **Exclusive Fullscreen** changes the monitor to an exact video mode reported by the operating
+  system. When several modes share a resolution, the client selects the highest refresh rate and
+  then bit depth. On macOS this mode takes control of the display, so normal app/Space switching
+  is unavailable until the game leaves exclusive mode.
 
 Mode and resolution changes apply immediately and show a 15-second **Keep / Revert** prompt.
 They are not saved until confirmed, and automatically return to the last working setting if
 the countdown expires. **3D Render Scale** is independent: it lowers only the world render
-target while keeping the window and UI sharp.
+target while keeping the window and UI sharp. macOS defaults to 60% because a Retina borderless
+window contains substantially more physical pixels; 55% and 60% are both available as explicit
+steps alongside the higher-quality settings.
 
 The same panel also exposes **3D Grass Renderer**. **Chunked** is the production default: it
 preserves the same deterministic 1x grass placement, authored blades, climate colour, wind,
@@ -255,6 +259,8 @@ To watch the same one-village fixture through the real server, network and rende
 
 It starts at 1x. Use the HUD to pause or switch between 1x, 10x, 25x and 100x. Each run
 prints a timestamped `logs/testworld-*` directory containing its server and client logs.
+God mode also exposes **SPAWN IMMIGRANT BOAT**, which preserves the selected speed and follows
+one real random-coast arrival through sailing, disembarkation and the walk to the Moot queue.
 See [VILLAGE-LAB.md](docs/VILLAGE-LAB.md) for scenarios, overrides, expected evidence and
 failure diagnosis.
 
@@ -337,8 +343,8 @@ The full lab is intentionally ignored by ordinary `cargo test` runs.
 | `FISTFORCE_CLIENT_PERF=1` | Emit rolling client frame-time diagnostics |
 | `FISTFORCE_SERVER_PERF=1` | Emit server tick and phase diagnostics |
 | `FISTFORCE_GRASS_STRESS_DENSITY=<1..32>` | Capture/profiling-only grass density multiplier; normal gameplay remains 1x |
-| `FISTFORCE_DISPLAY_MODE=windowed\|borderless\|fullscreen` | Override the saved display mode for this run |
-| `FISTFORCE_RESOLUTION=<width>x<height>` | Override Windowed/Fullscreen output resolution |
+| `FISTFORCE_DISPLAY_MODE=windowed\|borderless\|exclusive` | Override the saved display mode for this run (`fullscreen` remains an alias for exclusive) |
+| `FISTFORCE_RESOLUTION=<width>x<height>` | Override Windowed/Exclusive Fullscreen output resolution |
 | `FISTFORCE_RENDER_SCALE=<0.5..1.0>` | Override the independent 3D render-target scale |
 
 ## Architecture in one minute

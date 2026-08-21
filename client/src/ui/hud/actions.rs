@@ -143,6 +143,92 @@ pub(super) fn handle_spawn_npc_button(
     }
 }
 
+/// Ask the server for one production-path immigrant voyage without disturbing
+/// the simulation speed the player deliberately selected.
+pub(super) fn handle_immigrant_boat_button(
+    mut watch: ResMut<ImmigrantBoatWatch>,
+    mut notice: ResMut<GodNotice>,
+    mut senders: Query<&mut MessageSender<DevCommand>, (With<crate::GameClient>, With<Connected>)>,
+    buttons: Query<&Interaction, (With<SpawnImmigrantBoatButton>, Changed<Interaction>)>,
+) {
+    for interaction in buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        if watch.active() {
+            watch.clear();
+            notice.show("Stopped following the immigrant voyage");
+            continue;
+        }
+        let Ok(mut sender) = senders.single_mut() else {
+            notice.show("The server is not connected");
+            continue;
+        };
+        sender.send::<ReliableChannel>(DevCommand::SpawnImmigrantBoat);
+        watch.waiting = true;
+        watch.waited_seconds = 0.0;
+        notice.show("Finding a random coast and launching an immigrant…");
+    }
+}
+
+/// Acquire the newly replicated dinghy, keep it centred during the voyage,
+/// then leave the camera at the beach so the player sees the villager step
+/// ashore and begin the ordinary walk toward the Moot Hall.
+pub(super) fn watch_immigrant_boat(
+    time: Res<Time>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut watch: ResMut<ImmigrantBoatWatch>,
+    boats: Query<
+        (Entity, &shared::components::PlayerPosition),
+        With<shared::components::ImmigrantArrivalBoat>,
+    >,
+    mut cameras: Query<&mut crate::camera_rts::CommanderCamera>,
+    mut notice: ResMut<GodNotice>,
+) {
+    const WATCH_ZOOM: f32 = 82.0;
+    const WAIT_TIMEOUT_SECONDS: f32 = 30.0;
+
+    if watch.active() && keyboard.just_pressed(KeyCode::Escape) {
+        watch.clear();
+        notice.show("Stopped following the immigrant voyage");
+    }
+
+    let live = boats.iter().map(|(entity, _)| entity).collect::<Vec<_>>();
+    if let Some(following) = watch.following {
+        if let Ok((_, position)) = boats.get(following) {
+            for mut camera in cameras.iter_mut() {
+                camera.focus = position.0;
+                camera.focus_target = position.0;
+            }
+        } else {
+            watch.following = None;
+            notice.show("Immigrant ashore — now walking to the Moot Hall");
+        }
+    } else if watch.waiting {
+        watch.waited_seconds += time.delta_secs();
+        if let Some((boat, position)) = boats
+            .iter()
+            .find(|(entity, _)| !watch.known.contains(entity))
+        {
+            watch.waiting = false;
+            watch.following = Some(boat);
+            for mut camera in cameras.iter_mut() {
+                camera.focus = position.0;
+                camera.focus_target = position.0;
+                camera.zoom = WATCH_ZOOM.clamp(camera.zoom_min, camera.zoom_max);
+                camera.zoom_target = camera.zoom;
+            }
+            notice.show("Following the immigrant boat — Escape or the button stops watching");
+        } else if watch.waited_seconds >= WAIT_TIMEOUT_SECONDS {
+            watch.clear();
+            notice.show("No voyage launched — found a Moot and try again");
+        }
+    }
+
+    watch.known.retain(|entity| live.contains(entity));
+    watch.known.extend(live);
+}
+
 /// Arm settlement founding. Disarms the other placements: only one thing can be
 /// waiting on the next click.
 pub(super) fn handle_found_village_button(

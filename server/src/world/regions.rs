@@ -11,7 +11,9 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
-use shared::components::{CommandedBy, Hero, Player, PlayerBoat, PlayerPosition};
+use shared::components::{
+    CommandedBy, Hero, ImmigrantArrivalBoat, Player, PlayerBoat, PlayerPosition,
+};
 use shared::region::{view_radius_to_rings, RegionCoord, SimLevel, REGION_SIZE};
 use shared::terrain::WorldTerrain;
 
@@ -241,6 +243,15 @@ fn entity_is_owned_by_peer(
                 .is_some_and(|(account, owner)| account == owner.0.as_str()))
 }
 
+fn enters_region_interest(
+    immigrant_arrival: bool,
+    owned_by_client: bool,
+    regions: &HashSet<RegionCoord>,
+    coord: RegionCoord,
+) -> bool {
+    immigrant_arrival || owned_by_client || regions.contains(&coord)
+}
+
 pub fn apply_region_visibility(
     mut commands: Commands,
     interest: Res<ClientInterest>,
@@ -253,6 +264,7 @@ pub fn apply_region_visibility(
             Option<&Hero>,
             Option<&CommandedBy>,
             Has<PlayerBoat>,
+            Has<ImmigrantArrivalBoat>,
         ),
         With<Replicate>,
     >,
@@ -265,7 +277,7 @@ pub fn apply_region_visibility(
         senders.retain(|sender, _| interest.by_client.contains_key(sender));
     }
 
-    for (entity, coord, hero, commanded_by, player_boat) in replicated.iter() {
+    for (entity, coord, hero, commanded_by, player_boat, immigrant_arrival) in replicated.iter() {
         let entity_state = applied.entry(entity).or_default();
 
         for (client, regions) in interest.by_client.iter() {
@@ -283,7 +295,13 @@ pub fn apply_region_visibility(
                     player_boat,
                 )
             });
-            let inside = owned_by_client || regions.contains(coord);
+            // A lab observer cannot move its camera to a randomized map-edge
+            // arrival until it knows where that boat is. Natural dinghies are
+            // globally visible for this bootstrap; their hard server cap of
+            // eight keeps this trivial, while passengers and all ordinary
+            // region entities retain normal interest filtering.
+            let inside =
+                enters_region_interest(immigrant_arrival, owned_by_client, regions, *coord);
 
             let should_be_visible = match entity_state.get(client) {
                 // First sighting of this (entity, sender) pair: set both states
@@ -292,7 +310,8 @@ pub fn apply_region_visibility(
                 // Widen the boundary for entities already visible so a camera hovering
                 // on a region edge does not thrash spawn/despawn on the client.
                 Some(true) => {
-                    owned_by_client
+                    immigrant_arrival
+                        || owned_by_client
                         || regions
                             .iter()
                             .any(|r| r.ring_distance(*coord) <= INTEREST_EXIT_MARGIN_RINGS)
@@ -636,5 +655,14 @@ mod tests {
             Some(&owner),
             true,
         ));
+    }
+
+    #[test]
+    fn immigrant_dinghy_bootstraps_visibility_outside_the_camera_region() {
+        let watched = HashSet::from_iter([RegionCoord::new(0, 0)]);
+        let map_edge = RegionCoord::new(20, -20);
+
+        assert!(enters_region_interest(true, false, &watched, map_edge));
+        assert!(!enters_region_interest(false, false, &watched, map_edge));
     }
 }

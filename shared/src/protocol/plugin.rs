@@ -8,13 +8,13 @@ use crate::components::{
     CivicHallLevel, CivicHallUpgradeWorksite, CivicTradeContract, CloudSeed, CommandedBy, Company,
     CompanyId, CompanyLeadership, CompanyOwnership, CompanyShareMarket, CompanyTradeRoute,
     ConstructionSite, EmployedAt, FarmField, FishingPier, Health, Hero, HeroOutfit, Household,
-    LivesAt, LivestockPasture, MarketLevel, MootAdministration, Nutrition, Occupation, OperatedBy,
-    OwnedBy, PersonId, Player, PlayerBoat, PlayerPermitLedger, PlayerPosition, PlayerProgression,
-    PlayerRotation, Residence, ResidentOf, Settlement, SettlementBuilding, SettlementDevelopment,
-    SettlementId, SettlementOpportunityBoard, SettlementPolicies, SettlementPropertyBoard,
-    SettlementSummary, TimeWarp, TradeContractId, TradeRouteHistory, TradeRouteId,
-    TradeRouteSchedule, Vessel, VillageRoad, WorkStatus, WorkplaceOperation, WorldTime,
-    WreckedVessel,
+    ImmigrantArrivalBoat, LivesAt, LivestockPasture, MarketLevel, MootAdministration, Nutrition,
+    Occupation, OperatedBy, OwnedBy, PersonId, Player, PlayerBoat, PlayerPermitLedger,
+    PlayerPosition, PlayerProgression, PlayerRotation, Residence, ResidentOf, Settlement,
+    SettlementBuilding, SettlementDevelopment, SettlementId, SettlementOpportunityBoard,
+    SettlementPolicies, SettlementPropertyBoard, SettlementSummary, TimeWarp, TradeContractId,
+    TradeRouteHistory, TradeRouteId, TradeRouteSchedule, Vessel, VillageRoad, WorkStatus,
+    WorkplaceOperation, WorldTime, WreckedVessel,
 };
 use crate::economy::{
     BusinessAccount, BusinessCondition, BusinessForSale, BusinessLiquidation,
@@ -44,6 +44,7 @@ impl Plugin for ProtocolPlugin {
         // === HERO (embodied character; server-authoritative position) ===
         app.component::<Hero>().replicate();
         app.component::<PlayerBoat>().replicate();
+        app.component::<ImmigrantArrivalBoat>().replicate();
         app.component::<Vessel>().replicate();
         app.component::<WreckedVessel>().replicate();
         app.component::<AboardBoat>().replicate();

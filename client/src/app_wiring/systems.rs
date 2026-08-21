@@ -116,6 +116,7 @@ fn wire_common_systems(app: &mut App) {
 
 /// Gameplay wiring: top-down commander camera + world visuals.
 fn wire_game_systems(app: &mut App) {
+    app.init_resource::<camera_rts::PendingCommanderView>();
     // Spawn world visuals and the perf overlay when entering gameplay
     app.add_systems(
         OnEnter(GameState::Playing),

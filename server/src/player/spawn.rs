@@ -179,11 +179,13 @@ pub fn handle_player_name_submission(
 
             profiles.peer_to_name.insert(peer_id, name_lower.clone());
             profiles.name_to_peer.insert(name_lower.clone(), peer_id);
+            let commander_view = profile_loaded.then(|| profile.commander_view());
             profiles.profiles.insert(name_lower, profile);
 
             sender.send::<ReliableChannel>(NameSubmissionResult::Accepted {
                 profile_loaded,
                 needs_hero_creation: !has_hero,
+                commander_view,
             });
             dev_sender.send::<ReliableChannel>(DevStatus {
                 god: dev.allows(peer_id, &god_sessions),

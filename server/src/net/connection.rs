@@ -10,6 +10,7 @@ use shared::components::{
     PlayerProgression, PlayerRotation,
 };
 use shared::player_profile::PlayerProfile;
+use shared::protocol::DEFAULT_COMMANDER_ZOOM;
 
 use crate::net::input::ClientInputs;
 use crate::persistence::profiles::PlayerProfiles;
@@ -166,11 +167,25 @@ pub fn handle_disconnections(
             .remove::<crate::world::village_roads::NavigationRouteFailed>();
     }
 
+    let previous = profiles.profiles.get(&name_lower);
+    // The replicated commander entity can be one fixed tick behind the final
+    // input when a transport disconnect is observed. Prefer that exact final
+    // client view so even a quick pan immediately before leaving is retained.
+    let latest_view = inputs
+        .latest
+        .get(&peer_id)
+        .and_then(|input| input.commander_view());
     let profile = PlayerProfile {
         player_name: display_name,
         hero: hero_state,
-        position: [pos.0.x, pos.0.y, pos.0.z],
-        rotation: rot.0,
+        position: latest_view
+            .map(|view| view.focus.to_array())
+            .unwrap_or([pos.0.x, pos.0.y, pos.0.z]),
+        rotation: latest_view.map_or(rot.0, |view| view.yaw),
+        zoom: latest_view
+            .map(|view| view.zoom)
+            .or_else(|| previous.map(|profile| profile.zoom))
+            .unwrap_or(DEFAULT_COMMANDER_ZOOM),
         level: progression.level,
         prestige: progression.prestige,
         reputation: progression.reputation,

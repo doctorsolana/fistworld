@@ -268,7 +268,7 @@ mod tests {
         previous.set_display_mode(DisplayMode::Windowed);
         previous.display_resolution = DisplayResolution::new(1600, 900);
         let mut candidate = previous.clone();
-        candidate.set_display_mode(DisplayMode::Fullscreen);
+        candidate.set_display_mode(DisplayMode::ExclusiveFullscreen);
         candidate.display_resolution = DisplayResolution::new(1920, 1200);
 
         let mut app = App::new();

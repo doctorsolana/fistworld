@@ -1548,6 +1548,7 @@ fn desired_body_animation(
     activity: Option<CharacterActivity>,
     carrying: bool,
     carting: bool,
+    motion: Option<CharacterMotion>,
 ) -> (Option<AnimationNodeIndex>, f32, bool) {
     // A seated character can be translated by a moving parent such as a
     // vessel. That world-space speed is not locomotion: the feet must remain
@@ -1558,9 +1559,19 @@ fn desired_body_animation(
 
     // Different start/stop thresholds keep small replicated speed noise from
     // continually restarting idle and walk.
-    let was_walking = anim.current_body.is_some() && anim.current_body == anim.walk;
-    let moving = visual.speed > if was_walking { 0.10 } else { 0.24 };
-    let stride_speed = (visual.speed / HERO_MOVE_SPEED).clamp(0.4, 1.6);
+    let current = anim.current_body;
+    let was_locomoting = current.is_some()
+        && (current == anim.walk || current == anim.carry || current == anim.pull);
+    let observed_speed = visual
+        .speed
+        .max(motion.map_or(0.0, |motion| motion.velocity.length()));
+    // Replicated motion is authoritative while a route is active. Visual
+    // speed remains an important fallback for one-tick warp arrivals and
+    // interpolation catch-up, where the server may already be stationary even
+    // though the body is still visibly covering ground.
+    let moving = motion.is_some_and(CharacterMotion::is_moving)
+        || visual.speed > if was_locomoting { 0.10 } else { 0.24 };
+    let stride_speed = (observed_speed / HERO_MOVE_SPEED).clamp(0.4, 1.6);
 
     if carting {
         return (
@@ -1603,10 +1614,11 @@ fn drive_hero_locomotion(
         Option<&CharacterActivity>,
         Option<&CarriedLoad>,
         Option<&PorterCartState>,
+        Option<&CharacterMotion>,
     )>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    for (visual, mut anim, inherited, activity, carried, cart) in heroes.iter_mut() {
+    for (visual, mut anim, inherited, activity, carried, cart, motion) in heroes.iter_mut() {
         let hidden = inherited.is_some_and(|visibility| !visibility.get())
             || activity.is_some_and(|activity| *activity == CharacterActivity::Indoors);
         let Ok(mut player) = players.get_mut(anim.player) else {
@@ -1627,8 +1639,14 @@ fn drive_hero_locomotion(
 
         let carting = cart.is_some();
         let carrying = !carting && carried.is_some_and(|load| !load.is_empty());
-        let (desired, speed, freeze_at_contact) =
-            desired_body_animation(visual, &anim, activity.copied(), carrying, carting);
+        let (desired, speed, freeze_at_contact) = desired_body_animation(
+            visual,
+            &anim,
+            activity.copied(),
+            carrying,
+            carting,
+            motion.copied(),
+        );
         let Some(desired) = desired else {
             continue;
         };
@@ -1983,6 +2001,7 @@ mod carried_tests {
             Some(CharacterActivity::Sitting),
             false,
             false,
+            None,
         );
 
         assert_eq!(clip, Some(sit));
@@ -2086,7 +2105,7 @@ mod carried_tests {
     }
 
     #[test]
-    fn an_active_porter_cart_uses_pull_instead_of_the_hand_carry_clip() {
+    fn an_active_porter_cart_walks_even_before_visual_interpolation_reports_speed() {
         let mut world = World::new();
         world.insert_resource(Time::<()>::default());
         let idle = AnimationNodeIndex::new(0);
@@ -2096,9 +2115,7 @@ mod carried_tests {
         player.play(idle).repeat().set_weight(1.0);
         let player_entity = world.spawn(player).id();
         world.spawn((
-            HeroVisual {
-                speed: HERO_MOVE_SPEED,
-            },
+            HeroVisual { speed: 0.0 },
             HeroAnim {
                 player: player_entity,
                 idle: Some(idle),
@@ -2120,6 +2137,7 @@ mod carried_tests {
                 appearance: Some(CarriedAppearance::WoodBundle),
             },
             PorterCartState { load_slots: 2 },
+            CharacterMotion::new(Vec3::new(0.0, 0.0, -HERO_MOVE_SPEED)),
         ));
 
         world.run_system_once(drive_hero_locomotion).unwrap();
@@ -2131,7 +2149,9 @@ mod carried_tests {
         world.run_system_once(drive_hero_locomotion).unwrap();
 
         let player = world.get::<AnimationPlayer>(player_entity).unwrap();
-        assert_eq!(player.animation(pull).unwrap().weight(), 1.0);
+        let active_pull = player.animation(pull).unwrap();
+        assert_eq!(active_pull.weight(), 1.0);
+        assert_eq!(active_pull.speed(), 1.0);
         assert!(player.animation(carry).is_none());
         assert!(player.animation(idle).is_none());
         assert_eq!(player.playing_animations().count(), 1);

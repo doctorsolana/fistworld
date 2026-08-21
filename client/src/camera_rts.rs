@@ -12,7 +12,9 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 
 use lightyear::prelude::*;
-use shared::protocol::{InputChannel, PlayerInput};
+use shared::protocol::{
+    CommanderView, InputChannel, PlayerInput, COMMANDER_VIEW_RADIUS_SCALE, DEFAULT_COMMANDER_ZOOM,
+};
 use shared::terrain::WorldTerrain;
 
 /// Resend the view at least this often even when the camera is still, so a dropped
@@ -51,6 +53,13 @@ pub struct CursorTerrainOverride(pub Vec2);
 /// non-1.0 render scale -- exactly the kind of bug that ships unnoticed.
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct CursorRay(pub Option<Ray3d>);
+
+/// A reconnect response arrives while the client is still on the name screen,
+/// before gameplay has necessarily attached an RTS controller to the camera.
+/// Hold the view for that state transition and consume it on the first playing
+/// frame (or immediately when reconnecting with an existing controller).
+#[derive(Resource, Debug, Default)]
+pub struct PendingCommanderView(pub Option<CommanderView>);
 
 /// How fast the camera catches up to what the input asked for, as a time
 /// constant in seconds: after `tau` the remaining error is down to ~37%.
@@ -113,7 +122,7 @@ impl Default for CommanderCamera {
             .ok()
             .and_then(|raw| raw.parse::<f32>().ok())
             .filter(|z| z.is_finite())
-            .unwrap_or(280.0);
+            .unwrap_or(DEFAULT_COMMANDER_ZOOM);
         let start_focus = std::env::var("FISTFORCE_START_FOCUS")
             .ok()
             .and_then(|raw| {
@@ -155,13 +164,23 @@ impl Default for CommanderCamera {
 
 pub fn ensure_commander_camera_controller(
     mut commands: Commands,
-    mut cameras: Query<(Entity, &mut Transform), (With<Camera3d>, Without<CommanderCamera>)>,
+    mut cameras: Query<(Entity, &mut Transform, Option<&mut CommanderCamera>), With<Camera3d>>,
     terrain: Option<Res<WorldTerrain>>,
+    mut pending: ResMut<PendingCommanderView>,
 ) {
-    for (entity, mut transform) in cameras.iter_mut() {
+    for (entity, mut transform, controller) in cameras.iter_mut() {
+        if let Some(mut controller) = controller {
+            if let Some(view) = pending.0.take() {
+                restore_commander_view(&mut transform, &mut controller, view, terrain.as_deref());
+            }
+            continue;
+        }
         let mut controller = CommanderCamera::default();
         if let Some(terrain) = terrain.as_deref() {
             controller.focus.y = terrain.get_height(controller.focus.x, controller.focus.z);
+        }
+        if let Some(view) = pending.0.take() {
+            restore_commander_view(&mut transform, &mut controller, view, terrain.as_deref());
         }
         // Start converged, or the camera would visibly ease in from the origin
         // on the first frame.
@@ -169,6 +188,37 @@ pub fn ensure_commander_camera_controller(
         apply_commander_transform(&mut transform, &controller, terrain.as_deref());
         commands.entity(entity).insert(controller);
     }
+}
+
+/// Apply a server-restored view atomically, with both rendered values and
+/// smoothing targets converged so reconnecting cannot visibly fly in from the
+/// menu camera or an earlier world position.
+fn restore_commander_view(
+    transform: &mut Transform,
+    controller: &mut CommanderCamera,
+    view: CommanderView,
+    terrain: Option<&WorldTerrain>,
+) {
+    if !view.focus.is_finite() || !view.yaw.is_finite() || !view.zoom.is_finite() {
+        return;
+    }
+
+    let mut focus = view.focus;
+    if let Some(terrain) = terrain {
+        let bounds = terrain.generator.active_map_bounds();
+        focus.x = focus.x.clamp(bounds.min[0], bounds.max[0]);
+        focus.z = focus.z.clamp(bounds.min[1], bounds.max[1]);
+        focus.y = terrain.get_height(focus.x, focus.z);
+    }
+    let zoom = view.zoom.clamp(controller.zoom_min, controller.zoom_max);
+    controller.focus = focus;
+    controller.focus_target = focus;
+    controller.yaw = view.yaw;
+    controller.yaw_target = view.yaw;
+    controller.zoom = zoom;
+    controller.zoom_target = zoom;
+    controller.tilt = commander_tilt_for_zoom(zoom, controller.zoom_min, controller.zoom_max);
+    apply_commander_transform(transform, controller, terrain);
 }
 
 pub fn update_commander_camera(
@@ -489,7 +539,7 @@ pub fn send_commander_view(
         focus: controller.focus,
         // Ground covered by the view grows with camera distance; pad it so content exists
         // slightly beyond the frame rather than popping in at the screen edge.
-        view_radius: controller.zoom * 1.35,
+        view_radius: controller.zoom * COMMANDER_VIEW_RADIUS_SCALE,
     };
 
     *heartbeat += time.delta_secs();
@@ -514,6 +564,33 @@ mod tests {
 
         input.encyclopedia_open = true;
         assert!(!commander_accepts_world_input(&input));
+    }
+
+    #[test]
+    fn reconnect_restores_focus_yaw_and_zoom_without_a_camera_fly_in() {
+        let mut controller = CommanderCamera::default();
+        let mut transform = Transform::IDENTITY;
+        let view = CommanderView {
+            focus: Vec3::new(-830.0, 17.0, 205.0),
+            yaw: 1.2,
+            zoom: 735.0,
+        };
+
+        restore_commander_view(&mut transform, &mut controller, view, None);
+
+        assert_eq!(controller.focus, view.focus);
+        assert_eq!(controller.focus_target, view.focus);
+        assert_eq!(controller.yaw, view.yaw);
+        assert_eq!(controller.yaw_target, view.yaw);
+        assert_eq!(controller.zoom, view.zoom);
+        assert_eq!(controller.zoom_target, view.zoom);
+        let expected_tilt =
+            commander_tilt_for_zoom(view.zoom, controller.zoom_min, controller.zoom_max);
+        assert_eq!(controller.tilt, expected_tilt);
+
+        let mut expected_transform = Transform::IDENTITY;
+        apply_commander_transform(&mut expected_transform, &controller, None);
+        assert_eq!(transform, expected_transform);
     }
 
     #[test]

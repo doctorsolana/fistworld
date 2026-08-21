@@ -138,6 +138,23 @@ pub(super) fn spawn_graphics_panel(
                 SliderControl::DisplayMode,
                 settings.display_mode().label(),
             );
+            panel.spawn((
+                Text::new(if cfg!(target_os = "macos") {
+                    "Borderless keeps Command-Tab and Spaces available. Exclusive changes the monitor resolution."
+                } else {
+                    "Borderless keeps the desktop video mode. Exclusive changes the monitor resolution."
+                }),
+                TextFont {
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
+                TextColor(INK_INVERSE_MUTED),
+                Node {
+                    max_width: Val::Px(430.0),
+                    margin: UiRect::bottom(Val::Px(12.0)),
+                    ..default()
+                },
+            ));
             spawn_slider(
                 panel,
                 "Resolution",

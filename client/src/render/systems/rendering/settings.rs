@@ -8,29 +8,29 @@ use bevy::pbr::ContactShadows;
 use bevy::window::{Monitor, VideoMode};
 
 /// Player-facing display mode. `Borderless` deliberately uses the monitor's
-/// current/native mode; only `Fullscreen` is allowed to change the monitor's
-/// video mode and therefore apply a lower physical resolution.
+/// current/native mode; only `ExclusiveFullscreen` is allowed to change the
+/// monitor's video mode and therefore apply a lower physical resolution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum DisplayMode {
     Windowed,
     Borderless,
-    Fullscreen,
+    ExclusiveFullscreen,
 }
 
 impl DisplayMode {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Windowed => "Windowed",
-            Self::Borderless => "Borderless",
-            Self::Fullscreen => "Fullscreen",
+            Self::Borderless => "Borderless Fullscreen",
+            Self::ExclusiveFullscreen => "Exclusive Fullscreen",
         }
     }
 
     pub const fn next(self) -> Self {
         match self {
             Self::Windowed => Self::Borderless,
-            Self::Borderless => Self::Fullscreen,
-            Self::Fullscreen => Self::Fullscreen,
+            Self::Borderless => Self::ExclusiveFullscreen,
+            Self::ExclusiveFullscreen => Self::ExclusiveFullscreen,
         }
     }
 
@@ -38,7 +38,7 @@ impl DisplayMode {
         match self {
             Self::Windowed => Self::Windowed,
             Self::Borderless => Self::Windowed,
-            Self::Fullscreen => Self::Borderless,
+            Self::ExclusiveFullscreen => Self::Borderless,
         }
     }
 }
@@ -121,7 +121,7 @@ pub fn available_display_resolutions(
                 )]
             })
             .unwrap_or_else(|| vec![current]),
-        DisplayMode::Fullscreen => monitor
+        DisplayMode::ExclusiveFullscreen => monitor
             .map(|monitor| {
                 monitor
                     .video_modes
@@ -266,7 +266,7 @@ pub struct GraphicsSettings {
     /// 3D resolution scale. The scene renders into an offscreen target of
     /// `window_physical_size * render_scale` and is upscaled to the window, so
     /// GPU fragment cost scales with the square of this value. UI stays native.
-    /// Range: 0.5-1.0. Default: 0.75.
+    /// Range: 0.5-1.0. Default: 0.60 on macOS, 0.75 elsewhere.
     pub render_scale: f32,
     /// Screen-space ambient occlusion (fullscreen pass + depth/normal prepass).
     /// Expensive on integrated GPUs. Default: off.
@@ -378,7 +378,15 @@ impl GraphicsSettings {
     /// settings file (see [`revert_env_forced`]).
     fn shipped_defaults() -> Self {
         Self {
-            render_scale: 0.75,
+            // Borderless fullscreen keeps normal macOS app/Space switching,
+            // but its native Retina output is much larger than the common
+            // exclusive modes. A 60% 3D target keeps the default workload
+            // sensible while the HUD remains native-resolution and crisp.
+            render_scale: if cfg!(target_os = "macos") {
+                0.60
+            } else {
+                0.75
+            },
             ssao_enabled: false,
             shadow_quality: ShadowQuality::Medium,
             foliage_cutout_enabled: true,
@@ -414,7 +422,7 @@ impl GraphicsSettings {
         match (self.fullscreen_enabled, self.exclusive_fullscreen_enabled) {
             (false, _) => DisplayMode::Windowed,
             (true, false) => DisplayMode::Borderless,
-            (true, true) => DisplayMode::Fullscreen,
+            (true, true) => DisplayMode::ExclusiveFullscreen,
         }
     }
 
@@ -428,7 +436,7 @@ impl GraphicsSettings {
                 self.fullscreen_enabled = true;
                 self.exclusive_fullscreen_enabled = false;
             }
-            DisplayMode::Fullscreen => {
+            DisplayMode::ExclusiveFullscreen => {
                 self.fullscreen_enabled = true;
                 self.exclusive_fullscreen_enabled = true;
             }
@@ -485,7 +493,7 @@ impl GraphicsSettings {
                 "windowed" | "window" => Some(DisplayMode::Windowed),
                 "borderless" | "borderless-fullscreen" => Some(DisplayMode::Borderless),
                 "fullscreen" | "exclusive" | "exclusive-fullscreen" => {
-                    Some(DisplayMode::Fullscreen)
+                    Some(DisplayMode::ExclusiveFullscreen)
                 }
                 _ => None,
             };
@@ -933,10 +941,10 @@ mod tests {
         assert_eq!(borderless.display_mode(), DisplayMode::Borderless);
 
         let mut settings = borderless;
-        settings.set_display_mode(DisplayMode::Fullscreen);
+        settings.set_display_mode(DisplayMode::ExclusiveFullscreen);
         assert!(settings.fullscreen_enabled);
         assert!(settings.exclusive_fullscreen_enabled);
-        assert_eq!(settings.display_mode(), DisplayMode::Fullscreen);
+        assert_eq!(settings.display_mode(), DisplayMode::ExclusiveFullscreen);
     }
 
     #[test]
@@ -968,7 +976,7 @@ mod tests {
         };
         assert_eq!(
             available_display_resolutions(
-                DisplayMode::Fullscreen,
+                DisplayMode::ExclusiveFullscreen,
                 Some(&monitor),
                 DisplayResolution::new(1600, 900),
             ),
@@ -988,7 +996,7 @@ mod tests {
         original.set_display_mode(DisplayMode::Windowed);
         original.display_resolution = DisplayResolution::new(1600, 900);
         let mut candidate = original.clone();
-        candidate.set_display_mode(DisplayMode::Fullscreen);
+        candidate.set_display_mode(DisplayMode::ExclusiveFullscreen);
         candidate.display_resolution = DisplayResolution::new(1920, 1080);
 
         let mut pending = PendingDisplayChange::new(&original);

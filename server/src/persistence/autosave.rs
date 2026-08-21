@@ -6,7 +6,9 @@ use shared::components::{
     PlayerRotation,
 };
 use shared::player_profile::PlayerProfile;
+use shared::protocol::DEFAULT_COMMANDER_ZOOM;
 
+use crate::net::input::ClientInputs;
 use crate::persistence::profiles::PlayerProfiles;
 
 /// How often to refresh connection-independent session profiles (seconds).
@@ -15,6 +17,7 @@ const AUTO_SAVE_INTERVAL: f32 = 30.0;
 /// Periodically refresh all connected players' reconnect snapshots.
 pub fn update_periodic_player_save(
     mut profiles: ResMut<PlayerProfiles>,
+    inputs: Res<ClientInputs>,
     players: Query<(
         &Player,
         &PlayerPosition,
@@ -55,6 +58,11 @@ pub fn update_periodic_player_save(
         });
         let attributes = hero_snapshot.map(|(_, _, _, _, attributes, _)| *attributes);
 
+        let previous = profiles.profiles.get(name_lower);
+        let latest_view = inputs
+            .latest
+            .get(&player.client_id)
+            .and_then(|input| input.commander_view());
         let profile = PlayerProfile {
             hero: hero_state,
             player_name: profiles
@@ -62,8 +70,14 @@ pub fn update_periodic_player_save(
                 .get(name_lower)
                 .map(|p| p.player_name.clone())
                 .unwrap_or_else(|| name_lower.clone()),
-            position: [pos.0.x, pos.0.y, pos.0.z],
-            rotation: rot.0,
+            position: latest_view
+                .map(|view| view.focus.to_array())
+                .unwrap_or([pos.0.x, pos.0.y, pos.0.z]),
+            rotation: latest_view.map_or(rot.0, |view| view.yaw),
+            zoom: latest_view
+                .map(|view| view.zoom)
+                .or_else(|| previous.map(|profile| profile.zoom))
+                .unwrap_or(DEFAULT_COMMANDER_ZOOM),
             level: progression.level,
             prestige: progression.prestige,
             reputation: progression.reputation,

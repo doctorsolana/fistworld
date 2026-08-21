@@ -128,6 +128,14 @@ pub struct Hero {
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct PlayerBoat;
 
+/// A temporary dinghy carrying a naturally arriving villager.
+///
+/// This replicated marker lets clients present and follow the real physical
+/// immigration journey without inferring ownership from the more general
+/// [`PlayerBoat`] vessel marker. The server removes the whole boat at landfall.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ImmigrantArrivalBoat;
+
 /// Any water-going vehicle using the shared vessel navigation/sailing stack.
 /// Starter dinghies, merchant ships and warships differ in their additional
 /// components and hull parameters, not in whether water is navigable.

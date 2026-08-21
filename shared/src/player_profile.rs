@@ -5,6 +5,7 @@
 //! restarting the server deliberately starts a fresh world.
 
 use crate::player::SPAWN_POSITION;
+use crate::protocol::{CommanderView, DEFAULT_COMMANDER_ZOOM};
 /// Compact account/commander snapshot retained for the running session.
 #[derive(Debug, Clone)]
 pub struct PlayerProfile {
@@ -19,6 +20,8 @@ pub struct PlayerProfile {
     pub position: [f32; 3],
     /// Camera yaw in radians.
     pub rotation: f32,
+    /// Camera distance from its focus point in metres.
+    pub zoom: f32,
 
     // === Hero ===
     /// The player's embodied character, if they have one.
@@ -115,6 +118,7 @@ impl PlayerProfile {
             // Spawn at default spawn position
             position: SPAWN_POSITION,
             rotation: 0.0,
+            zoom: DEFAULT_COMMANDER_ZOOM,
             hero: None,
 
             // Progression defaults
@@ -138,5 +142,14 @@ impl PlayerProfile {
             self.intelligence.min(100) as u8,
             self.charm.min(100) as u8,
         )
+    }
+
+    /// Reconnect-safe commander presentation state.
+    pub fn commander_view(&self) -> CommanderView {
+        CommanderView {
+            focus: bevy::prelude::Vec3::from(self.position),
+            yaw: self.rotation,
+            zoom: self.zoom,
+        }
     }
 }

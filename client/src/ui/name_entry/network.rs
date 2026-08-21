@@ -19,6 +19,7 @@ pub(super) fn handle_name_submission_result(
     mut creator_purpose: ResMut<crate::ui::hero_creator::HeroCreatorPurpose>,
     mut cinematic: ResMut<crate::boat::OpeningCinematic>,
     selected: Res<crate::hero::control::SelectedOutfit>,
+    mut pending_view: ResMut<crate::camera_rts::PendingCommanderView>,
 ) {
     let Ok((client_entity, mut receiver, mut create_sender)) = client_query.single_mut() else {
         return;
@@ -29,7 +30,9 @@ pub(super) fn handle_name_submission_result(
             NameSubmissionResult::Accepted {
                 profile_loaded,
                 needs_hero_creation,
+                commander_view,
             } => {
+                pending_view.0 = commander_view;
                 if profile_loaded {
                     info!("Name accepted! Loaded existing profile");
                 } else {
