@@ -748,6 +748,34 @@ Launch the real server and rendered client with one village already staged:
 ./run.sh testworld
 ```
 
+For permit, company and management-screen testing against an already developed
+settlement, use:
+
+```bash
+./run.sh uxworld
+```
+
+`uxworld` opens at 1x over **Lab UX City**, a deterministic City-tier fixture
+with 500 already admitted residents and 125 completed four-person homes. It
+also prepares a paved market, church, Farms, livestock holdings, Lumberjack
+Huts, Quarries, Windmills, Bakeries, Storage Halls and Taverns. Seventy normal
+NPC companies own the private sites; most are small owner-led firms while the
+first twelve span a Farmstead, Windmill and Bakery. These are real runtime
+settlements, people, buildings, inventories, roads, companies and ownership
+relationships, so the ordinary UI and simulation take over as soon as the
+fixture is staged.
+
+After the normal local hero-creation flow, the hero starts on land beside the
+City Hall in this fixture only. That makes it quick to test incorporating a
+company, choosing the active company, browsing permit/property listings,
+placing a permitted plot, changing wages or strategy, inspecting stock and
+reading business/company ledgers. Prepared stock, treasury money and company
+working capital deliberately prevent the opening screen from being dominated
+by startup scarcity; use the organic scenarios for economic balance evidence.
+The launcher records both process logs under `logs/uxworld-*` and keeps their
+startup volume out of the terminal by default. Set
+`FISTWORLD_STREAM_LOGS=1 ./run.sh uxworld` when live trace output is useful.
+
 To watch all three 200-person settlements together, already framed by the
 opening camera and starting at 10x:
 

@@ -6,6 +6,7 @@
 
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
+use bevy::ui::UiTransform;
 use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
 use shared::components::{BuildingId, CompanyId, Settlement};
@@ -24,12 +25,9 @@ use crate::ui::foundation::{
     selected_button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant,
 };
 use crate::ui::good_icon_path;
-use crate::ui::modal::{
-    handle_backdrop_pressed, spawn_modal, update_modal_click_guard, ModalLayout,
-};
+use crate::ui::modal::update_modal_click_guard;
 use crate::ui::styles::{
-    plate_shadow, INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE,
-    PLATE_RULE_SOFT, RADIUS,
+    INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE, PLATE_RULE_SOFT, RADIUS,
 };
 
 pub struct HistoryPlugin;
@@ -160,22 +158,18 @@ struct HistoryPanelRoot {
 }
 
 #[derive(Component)]
-struct HistoryBackdrop;
-
-#[derive(Component)]
 struct HistoryPanel;
 
 #[derive(Component)]
 struct HistoryViewport;
 
-#[derive(Component)]
-struct HistoryCloseButton;
-
 #[derive(Component, Clone, Copy)]
 struct HistoryRangeButton(HistoryRange);
 
-const CHART_WIDTH: f32 = 408.0;
-const CHART_HEIGHT: f32 = 112.0;
+const CHART_WIDTH: f32 = 548.0;
+const CHART_HEIGHT: f32 = 160.0;
+/// Stroke of a chart line, in logical pixels.
+const LINE_THICKNESS: f32 = 2.0;
 // UI dots are deliberately downsampled from the retained 365 raw days. Sixty
 // columns preserve the year-long shape without turning one modal into several
 // thousand separate Bevy UI quads.
@@ -418,20 +412,11 @@ fn request_open_history(
     }
 }
 
-#[allow(clippy::type_complexity)]
 fn handle_history_controls(
-    keyboard: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     guard: Res<HistoryClickGuard>,
-    mut target: ResMut<HistoryPanelTarget>,
     mut range: ResMut<HistoryRange>,
-    mut trade_target: ResMut<crate::ui::settlement_panel::TradePanelTarget>,
-    backdrop: Query<&Interaction, (With<HistoryBackdrop>, Changed<Interaction>)>,
-    close: Query<&Interaction, (With<HistoryCloseButton>, Changed<Interaction>)>,
-    mut range_buttons: Query<
-        (&Interaction, &HistoryRangeButton, &mut UiButtonStyle),
-        Without<HistoryCloseButton>,
-    >,
+    mut range_buttons: Query<(&Interaction, &HistoryRangeButton, &mut UiButtonStyle)>,
 ) {
     let clicked = guard.0 && mouse.just_pressed(MouseButton::Left);
     let requested = range_buttons
@@ -443,21 +428,6 @@ fn handle_history_controls(
     }
     for (_, HistoryRangeButton(next), mut style) in range_buttons.iter_mut() {
         style.selected = *range == *next;
-    }
-
-    let close_requested = keyboard.just_pressed(KeyCode::Escape)
-        || (clicked && handle_backdrop_pressed(&backdrop))
-        || (clicked
-            && close
-                .iter()
-                .any(|interaction| *interaction == Interaction::Pressed));
-    if !close_requested {
-        return;
-    }
-    if let Some(old) = target.0.take() {
-        if old.return_to_trade {
-            trade_target.0 = old.settlement;
-        }
     }
 }
 
@@ -476,10 +446,26 @@ fn ensure_history_panel(
     children: Query<&Children>,
     interactions: Query<(&Interaction, Has<crate::ui::foundation::UiRefreshExempt>)>,
     scrolls: Query<&ScrollPosition, With<HistoryViewport>>,
+    hosts: Query<Entity, With<crate::ui::encyclopedia::EncyclopediaPageHost>>,
+    mut encyclopedia_open: ResMut<crate::ui::encyclopedia::EncyclopediaOpen>,
+    mut tab: ResMut<crate::ui::encyclopedia::EncyclopediaTab>,
 ) {
     let Some(target) = target.0.as_ref() else {
         for (root, ..) in roots.iter() {
             commands.entity(root).despawn();
+        }
+        return;
+    };
+    // Ledgers are encyclopedia pages. Opened from elsewhere (the compact
+    // panel, the market board), the window opens on the matching tab and
+    // hosts the page on the next frame.
+    let Ok(host) = hosts.single() else {
+        if !encyclopedia_open.0 {
+            encyclopedia_open.0 = true;
+            *tab = match target.view {
+                HistoryView::Company(_) => crate::ui::encyclopedia::EncyclopediaTab::Companies,
+                _ => crate::ui::encyclopedia::EncyclopediaTab::Places,
+            };
         }
         return;
     };
@@ -548,39 +534,28 @@ fn ensure_history_panel(
         commands.entity(root).despawn();
     }
 
-    let nodes = spawn_modal(
-        &mut commands,
-        HistoryPanelRoot {
-            signature: signature.clone(),
-            target: target.clone(),
-        },
-        HistoryBackdrop,
-        HistoryPanel,
-        ModalLayout {
-            panel_size: Vec2::new(960.0, 680.0),
-            panel_padding: 0.0,
-        },
-    );
-    commands
-        .entity(nodes.root)
-        .insert(crate::ui::foundation::UiRefreshStamp::now(&time));
-    commands.entity(nodes.panel).insert((
-        Node {
-            width: Val::Px(960.0),
-            height: Val::Px(680.0),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Stretch,
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(RADIUS)),
-            overflow: Overflow::clip(),
-            ..default()
-        },
-        BackgroundColor(LIMEWASH_LIT),
-        BorderColor::all(PLATE_RULE),
-        plate_shadow(),
-    ));
-
-    commands.entity(nodes.panel).with_children(|panel| {
+    let panel_entity = commands
+        .spawn((
+            HistoryPanelRoot {
+                signature: signature.clone(),
+                target: target.clone(),
+            },
+            HistoryPanel,
+            crate::ui::foundation::UiRefreshStamp::now(&time),
+            Node {
+                width: Val::Percent(100.0),
+                flex_grow: 1.0,
+                min_height: Val::Px(0.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Stretch,
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BackgroundColor(LIMEWASH_LIT),
+        ))
+        .id();
+    commands.entity(host).add_child(panel_entity);
+    commands.entity(panel_entity).with_children(|panel| {
         spawn_header(panel, target, business_archive);
         spawn_range_bar(panel, *range, count, first_day, last_day);
         panel
@@ -686,16 +661,14 @@ fn spawn_header(
     target: &HistoryTarget,
     business: Option<&BusinessHistoryArchive>,
 ) {
-    let (title, subtitle, close_label) = match target.view {
+    let (title, subtitle) = match target.view {
         HistoryView::World => (
             "WORLD HISTORY".to_string(),
             "ALL SETTLEMENTS / POPULATION / WEALTH / WELFARE".to_string(),
-            "X",
         ),
         HistoryView::Village => (
             format!("{} HISTORY", target.place.to_uppercase()),
             "SETTLEMENT WEALTH / WELFARE / CAPACITY".to_string(),
-            "X",
         ),
         HistoryView::Market(good) => (
             format!(
@@ -704,7 +677,6 @@ fn spawn_header(
                 good.label().to_uppercase()
             ),
             "MARKET HISTORY / QUOTES AND EXECUTED PRICES".to_string(),
-            "BACK",
         ),
         HistoryView::Business(id) => (
             business.map_or_else(
@@ -727,7 +699,6 @@ fn spawn_header(
                     )
                 },
             ),
-            "X",
         ),
         HistoryView::Company(id) => (
             format!("{} LEDGER", target.place.to_uppercase()),
@@ -735,7 +706,6 @@ fn spawn_header(
                 "COMPANY #{} / ALL SETTLEMENTS / INTERNAL TRANSFERS ELIMINATED",
                 id.0
             ),
-            "X",
         ),
     };
     parent
@@ -762,7 +732,7 @@ fn spawn_header(
                     copy.spawn((
                         Text::new(title),
                         TextFont {
-                            font_size: FontSize::Px(21.0),
+                            font_size: FontSize::Px(24.0),
                             ..default()
                         },
                         TextColor(INK),
@@ -770,38 +740,12 @@ fn spawn_header(
                     copy.spawn((
                         Text::new(subtitle),
                         TextFont {
-                            font_size: FontSize::Px(9.0),
+                            font_size: FontSize::Px(12.5),
                             ..default()
                         },
                         TextColor(INK_MUTED),
                     ));
                 });
-            header
-                .spawn((
-                    HistoryCloseButton,
-                    Button,
-                    Node {
-                        min_width: Val::Px(if close_label == "X" { 30.0 } else { 54.0 }),
-                        height: Val::Px(30.0),
-                        padding: UiRect::horizontal(Val::Px(9.0)),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(RADIUS)),
-                        ..default()
-                    },
-                    selected_button_chrome(UiButtonVariant::Ghost, false),
-                ))
-                .with_child((
-                    Text::new(close_label),
-                    UiButtonLabel,
-                    TextFont {
-                        font_size: FontSize::Px(10.0),
-                        ..default()
-                    },
-                    TextColor(INK),
-                    Pickable::IGNORE,
-                ));
         });
 }
 
@@ -853,7 +797,7 @@ fn spawn_range_bar(
                             Text::new(range.label()),
                             UiButtonLabel,
                             TextFont {
-                                font_size: FontSize::Px(9.0),
+                                font_size: FontSize::Px(12.5),
                                 ..default()
                             },
                             TextColor(INK),
@@ -873,7 +817,7 @@ fn spawn_range_bar(
             bar.spawn((
                 Text::new(span),
                 TextFont {
-                    font_size: FontSize::Px(9.0),
+                    font_size: FontSize::Px(12.5),
                     ..default()
                 },
                 TextColor(INK_MUTED),
@@ -885,7 +829,7 @@ fn spawn_empty_history(parent: &mut ChildSpawnerCommands<'_>, text: &str) {
     parent.spawn((
         Text::new(text.to_string()),
         TextFont {
-            font_size: FontSize::Px(13.0),
+            font_size: FontSize::Px(16.0),
             ..default()
         },
         TextColor(INK_MUTED),
@@ -1730,7 +1674,7 @@ fn spawn_market_history(
                     copy.spawn((
                         Text::new(format!("{} MARKET", good.label().to_uppercase())),
                         TextFont {
-                            font_size: FontSize::Px(18.0),
+                            font_size: FontSize::Px(22.0),
                             ..default()
                         },
                         TextColor(INK),
@@ -1738,7 +1682,7 @@ fn spawn_market_history(
                     copy.spawn((
                         Text::new("Executed prices are distinct from public quotes"),
                         TextFont {
-                            font_size: FontSize::Px(9.0),
+                            font_size: FontSize::Px(12.5),
                             ..default()
                         },
                         TextColor(INK_MUTED),
@@ -2447,8 +2391,12 @@ fn spawn_stat_strip(parent: &mut ChildSpawnerCommands<'_>, stats: &[(&str, Strin
             Node {
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Row,
-                justify_content: JustifyContent::SpaceBetween,
-                padding: UiRect::axes(Val::Px(14.0), Val::Px(11.0)),
+                // Wrap instead of crushing: a long policy string takes a
+                // second row rather than squeezing every other figure.
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: Val::Px(32.0),
+                row_gap: Val::Px(12.0),
+                padding: UiRect::axes(Val::Px(16.0), Val::Px(12.0)),
                 border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
@@ -2461,13 +2409,14 @@ fn spawn_stat_strip(parent: &mut ChildSpawnerCommands<'_>, stats: &[(&str, Strin
                     .spawn(Node {
                         flex_direction: FlexDirection::Column,
                         row_gap: Val::Px(2.0),
+                        min_width: Val::Px(120.0),
                         ..default()
                     })
                     .with_children(|stat| {
                         stat.spawn((
                             Text::new((*label).to_string()),
                             TextFont {
-                                font_size: FontSize::Px(8.0),
+                                font_size: FontSize::Px(11.5),
                                 ..default()
                             },
                             TextColor(INK_MUTED),
@@ -2475,7 +2424,7 @@ fn spawn_stat_strip(parent: &mut ChildSpawnerCommands<'_>, stats: &[(&str, Strin
                         stat.spawn((
                             Text::new(value.clone()),
                             TextFont {
-                                font_size: FontSize::Px(12.0),
+                                font_size: FontSize::Px(15.0),
                                 ..default()
                             },
                             TextColor(INK),
@@ -2530,11 +2479,11 @@ fn spawn_chart(parent: &mut ChildSpawnerCommands<'_>, title: &str, unit: &str, s
     parent
         .spawn((
             Node {
-                width: Val::Px(440.0),
-                height: Val::Px(176.0),
+                width: Val::Px(578.0),
+                height: Val::Px(236.0),
                 flex_direction: FlexDirection::Column,
                 flex_shrink: 0.0,
-                padding: UiRect::all(Val::Px(10.0)),
+                padding: UiRect::all(Val::Px(12.0)),
                 border: UiRect::all(Val::Px(1.0)),
                 row_gap: Val::Px(6.0),
                 ..default()
@@ -2553,7 +2502,7 @@ fn spawn_chart(parent: &mut ChildSpawnerCommands<'_>, title: &str, unit: &str, s
                 heading.spawn((
                     Text::new(title.to_string()),
                     TextFont {
-                        font_size: FontSize::Px(10.0),
+                        font_size: FontSize::Px(13.5),
                         ..default()
                     },
                     TextColor(INK),
@@ -2561,7 +2510,7 @@ fn spawn_chart(parent: &mut ChildSpawnerCommands<'_>, title: &str, unit: &str, s
                 heading.spawn((
                     Text::new(format!("{max:.1} {unit}")),
                     TextFont {
-                        font_size: FontSize::Px(8.0),
+                        font_size: FontSize::Px(11.5),
                         ..default()
                     },
                     TextColor(INK_MUTED),
@@ -2584,8 +2533,8 @@ fn spawn_chart(parent: &mut ChildSpawnerCommands<'_>, title: &str, unit: &str, s
                         .with_children(|entry| {
                             entry.spawn((
                                 Node {
-                                    width: Val::Px(6.0),
-                                    height: Val::Px(6.0),
+                                    width: Val::Px(9.0),
+                                    height: Val::Px(9.0),
                                     ..default()
                                 },
                                 BackgroundColor(item.color),
@@ -2593,7 +2542,7 @@ fn spawn_chart(parent: &mut ChildSpawnerCommands<'_>, title: &str, unit: &str, s
                             entry.spawn((
                                 Text::new(item.label),
                                 TextFont {
-                                    font_size: FontSize::Px(7.5),
+                                    font_size: FontSize::Px(11.0),
                                     ..default()
                                 },
                                 TextColor(INK_MUTED),
@@ -2628,27 +2577,82 @@ fn spawn_chart(parent: &mut ChildSpawnerCommands<'_>, title: &str, unit: &str, s
                 for (series_index, item) in series.iter().enumerate() {
                     let values = &sampled[series_index];
                     let denominator = values.len().saturating_sub(1).max(1) as f32;
+                    let point = |index: usize, value: f64| {
+                        Vec2::new(
+                            index as f32 / denominator * (CHART_WIDTH - 4.0) + 2.0,
+                            (value / max).clamp(0.0, 1.0) as f32 * (CHART_HEIGHT - 4.0) + 2.0,
+                        )
+                    };
+                    // A line, not a scatter: consecutive samples join, and a
+                    // gap in the record breaks the line rather than bridging it.
+                    let mut previous: Option<Vec2> = None;
                     for (index, value) in values.iter().enumerate() {
                         let Some(value) = value else {
+                            previous = None;
                             continue;
                         };
-                        let x = index as f32 / denominator * (CHART_WIDTH - 4.0);
-                        let y = (*value / max).clamp(0.0, 1.0) as f32 * (CHART_HEIGHT - 4.0);
-                        plot.spawn((
-                            Node {
-                                position_type: PositionType::Absolute,
-                                left: Val::Px(x),
-                                bottom: Val::Px(y),
-                                width: Val::Px(3.0),
-                                height: Val::Px(3.0),
-                                ..default()
-                            },
-                            BackgroundColor(item.color),
-                        ));
+                        let current = point(index, *value);
+                        match previous {
+                            Some(start) => spawn_chart_segment(plot, start, current, item.color),
+                            None => spawn_chart_mark(plot, current, item.color),
+                        }
+                        previous = Some(current);
                     }
                 }
             });
         });
+}
+
+/// A straight run between two samples: a thin node rotated about its centre.
+/// Coordinates are plot space, origin bottom-left, y up. UI y grows downward,
+/// so a rising run is a counter-clockwise screen rotation.
+fn spawn_chart_segment(plot: &mut ChildSpawnerCommands<'_>, start: Vec2, end: Vec2, color: Color) {
+    // Bevy clips a rotated node by its UNROTATED rect, so a long steep run
+    // can swing out past a scroll viewport's edge. Short pieces bound that
+    // overshoot to a few pixels, which the page padding hides.
+    const MAX_PIECE: f32 = 8.0;
+    let delta = end - start;
+    let length = delta.length().max(LINE_THICKNESS);
+    let pieces = (length / MAX_PIECE).ceil().max(1.0) as usize;
+    for piece in 0..pieces {
+        let from = start + delta * (piece as f32 / pieces as f32);
+        let to = start + delta * ((piece + 1) as f32 / pieces as f32);
+        let piece_delta = to - from;
+        // A pixel of overlap hides the seam between pieces.
+        let piece_length = (piece_delta.length() + 1.0).max(LINE_THICKNESS);
+        let centre = (from + to) * 0.5;
+        plot.spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(centre.x - piece_length * 0.5),
+                bottom: Val::Px(centre.y - LINE_THICKNESS * 0.5),
+                width: Val::Px(piece_length),
+                height: Val::Px(LINE_THICKNESS),
+                ..default()
+            },
+            UiTransform {
+                rotation: Rot2::radians(-piece_delta.y.atan2(piece_delta.x)),
+                ..default()
+            },
+            BackgroundColor(color),
+        ));
+    }
+}
+
+/// The first sample after a gap has no run to join; mark it so a lone day
+/// still shows.
+fn spawn_chart_mark(plot: &mut ChildSpawnerCommands<'_>, at: Vec2, color: Color) {
+    plot.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(at.x - LINE_THICKNESS),
+            bottom: Val::Px(at.y - LINE_THICKNESS),
+            width: Val::Px(LINE_THICKNESS * 2.0),
+            height: Val::Px(LINE_THICKNESS * 2.0),
+            ..default()
+        },
+        BackgroundColor(color),
+    ));
 }
 
 fn sample_values(values: &[Option<f64>], limit: usize) -> Vec<Option<f64>> {
@@ -2981,7 +2985,7 @@ fn spawn_table_title(parent: &mut ChildSpawnerCommands<'_>, title: &str, note: &
             row.spawn((
                 Text::new(title.to_string()),
                 TextFont {
-                    font_size: FontSize::Px(11.0),
+                    font_size: FontSize::Px(14.0),
                     ..default()
                 },
                 TextColor(INK),
@@ -2989,7 +2993,7 @@ fn spawn_table_title(parent: &mut ChildSpawnerCommands<'_>, title: &str, note: &
             row.spawn((
                 Text::new(note.to_string()),
                 TextFont {
-                    font_size: FontSize::Px(8.0),
+                    font_size: FontSize::Px(11.5),
                     ..default()
                 },
                 TextColor(INK_MUTED),

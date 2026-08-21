@@ -117,6 +117,27 @@ Prefer stable entities plus diff-gated text/state updates for a new complex scre
 rebuild is the compatibility path for the existing data-heavy ledgers, not permission to
 despawn a button under the cursor.
 
+## Type scale and ledgers
+
+The UI scale is derived from the 1600x900 launcher frame, so small captions land at roughly
+6 pt on a Retina laptop. Panels declare a type scale at the top of their module (title 22,
+heading 17, value 15, button 14, body 13.5, label 11-12) and nothing a player must read to make a
+decision sits below body size. Place pages lead with key-figure tiles, then grouped sections
+(`group_rows` in `encyclopedia/places.rs`); history charts draw real lines
+(`spawn_chart_segment` rotates a thin node with `UiTransform`). The UI font has no middle-dot
+glyph; separate with ` / `.
+
+## The encyclopedia is one window with pages
+
+Ledgers (`history.rs`) and company controls (`business_management.rs`) are not modals: they
+render inside `EncyclopediaPageHost`, full size, under one BACK bar that names its destination
+("BACK TO ALDRIC GRAIN & BREAD"). Their target resources (`HistoryPanelTarget`,
+`BusinessManagementTarget`) are the page state; setting one from anywhere — a company record,
+the compact settlement card, the market board — opens the encyclopedia on the matching tab and
+hosts the page next frame. ESC pops a page before it closes the window; the X closes everything
+and `close_pages_with_encyclopedia` clears the page targets so nothing reopens itself. New
+pages follow the same shape: spawn into the host, carry a `UiRefreshStamp` root, no own close.
+
 ## Responsive layout and scrolling
 
 - Large panels use viewport-relative width/height plus pixel maxima. The global UI scale keeps
@@ -149,7 +170,8 @@ cargo run --profile playtest -p client --bin capture -- \
   --out /tmp/fistworld-ui --warmup 90 --settle 30
 ```
 
-Inspect the result at `/tmp/fistworld-ui/property-ui.png`. The world must remain visible under
+Inspect the result at `/tmp/fistworld-ui/property-ui.png`. `FISTFORCE_CAPTURE_PROPERTY=sale` opens the
+board on its FOR SALE tab instead of PERMITS. The world must remain visible under
 one dark scrim; no surface may flash to `BUTTON_NORMAL` merely because the pointer entered it.
 
 The real J menu and its locked-access state are deterministic visual targets too:

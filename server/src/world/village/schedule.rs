@@ -123,9 +123,13 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 super::tag_villager_intent,
                 super::seek_settlement,
                 super::arrive_at_settlement,
-                world::identity::reconcile_stable_world_relationships,
-                world::identity::reconcile_stable_adjunct_relationships,
-                world::identity::reconcile_stable_road_relationships,
+                (
+                    world::identity::reconcile_stable_world_relationships,
+                    world::identity::reconcile_stable_adjunct_relationships,
+                    world::identity::reconcile_stable_road_relationships,
+                    world::village_lab_scenario::finalize_ux_fixture_companies,
+                )
+                    .chain(),
                 super::recount_residents,
                 super::ensure_village_finances,
                 super::ensure_civic_accounts,

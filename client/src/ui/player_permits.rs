@@ -147,13 +147,6 @@ struct PlacementPreview {
 }
 
 #[derive(Component)]
-pub(crate) struct RequestPermitQuoteButton {
-    pub hall: Entity,
-    pub kind: SettlementBuildingKind,
-    pub company: Option<CompanyId>,
-}
-
-#[derive(Component)]
 pub(crate) struct PurchasePermitButton {
     pub hall: Entity,
     pub kind: SettlementBuildingKind,
@@ -279,7 +272,9 @@ fn receive_permit_results(
             controls.submission_pending = false;
             notice.show(now, result.success, result.message.clone());
             match result.outcome {
-                HeroPermitOutcome::Quote(received) if result.success => {
+                // A price-changed answer to a purchase is also a quote: keep it
+                // so the card redraws with the exact fee for one more press.
+                HeroPermitOutcome::Quote(received) => {
                     quote.0 = Some(received);
                 }
                 HeroPermitOutcome::Purchased {
@@ -326,11 +321,7 @@ fn receive_permit_results(
 
 fn handle_property_permit_buttons(
     time: Res<Time>,
-    quote_buttons: Query<(&Interaction, &RequestPermitQuoteButton), Changed<Interaction>>,
-    purchase_buttons: Query<
-        (&Interaction, &PurchasePermitButton),
-        (Changed<Interaction>, Without<RequestPermitQuoteButton>),
-    >,
+    purchase_buttons: Query<(&Interaction, &PurchasePermitButton), Changed<Interaction>>,
     mut clients: Query<
         &mut MessageSender<HeroPermitOrder>,
         (With<crate::GameClient>, With<Connected>),
@@ -338,21 +329,6 @@ fn handle_property_permit_buttons(
     mut notice: ResMut<PermitNotice>,
 ) {
     let now = time.elapsed_secs_f64();
-    for (interaction, request) in quote_buttons.iter() {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        if !send_permit_action(
-            HeroPermitAction::RequestQuote {
-                hall: request.hall,
-                kind: request.kind,
-                company: request.company,
-            },
-            &mut clients,
-        ) {
-            notice.show(now, false, "Permit office is not connected yet.");
-        }
-    }
     for (interaction, purchase) in purchase_buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;
@@ -854,6 +830,20 @@ fn predicted_site_quality(
         })
 }
 
+/// Building plots whose output quality can be predicted directly from the
+/// local biome resource profile. Fishing quality is intentionally excluded:
+/// it depends on the rotated pier reaching broad open water and is calculated
+/// authoritatively by the server after placement.
+fn displays_land_yield_quality(kind: SettlementBuildingKind) -> bool {
+    matches!(
+        kind,
+        SettlementBuildingKind::Farmstead
+            | SettlementBuildingKind::LivestockFarm
+            | SettlementBuildingKind::LumberjackHut
+            | SettlementBuildingKind::StoneQuarry
+    )
+}
+
 fn predicted_slope(terrain: &shared::terrain::WorldTerrain, point: Vec2) -> f32 {
     const STEP: f32 = 3.0;
     let here = terrain.get_height(point.x, point.y);
@@ -1104,11 +1094,8 @@ fn predict_permit_placement(
         band = PreviewBand::Invalid;
         reason = invalid;
     }
-    let quality = matches!(
-        permit.kind,
-        SettlementBuildingKind::Farmstead | SettlementBuildingKind::LumberjackHut
-    )
-    .then(|| predicted_site_quality(terrain, permit.kind, position));
+    let quality = displays_land_yield_quality(permit.kind)
+        .then(|| predicted_site_quality(terrain, permit.kind, position));
     preview.value = Some(PlacementPreview {
         permit: permit.id,
         kind: permit.kind,
@@ -1430,7 +1417,7 @@ fn ensure_permit_notice(
         .with_child((
             Text::new(notice.message.clone()),
             TextFont {
-                font_size: FontSize::Px(10.0),
+                font_size: FontSize::Px(13.5),
                 ..default()
             },
             TextColor(INK_INVERSE),
@@ -1751,6 +1738,31 @@ fn cleanup_permit_ui(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_dependent_plots_show_their_land_quality() {
+        for kind in [
+            SettlementBuildingKind::Farmstead,
+            SettlementBuildingKind::LivestockFarm,
+            SettlementBuildingKind::LumberjackHut,
+            SettlementBuildingKind::StoneQuarry,
+        ] {
+            assert!(
+                displays_land_yield_quality(kind),
+                "{kind:?} should show its local yield quality while placing"
+            );
+            assert!(kind.site_quality_label().is_some());
+        }
+
+        assert!(!displays_land_yield_quality(
+            SettlementBuildingKind::FishermansHut
+        ));
+        assert!(!displays_land_yield_quality(SettlementBuildingKind::Bakery));
+        assert_eq!(
+            SettlementBuildingKind::StoneQuarry.site_quality_label(),
+            Some("STONE QUALITY")
+        );
+    }
 
     #[test]
     fn disconnected_road_is_not_a_snap_candidate() {

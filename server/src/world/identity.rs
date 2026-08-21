@@ -228,7 +228,7 @@ impl WorldIdAllocator {
         id
     }
 
-    fn settlement(&mut self) -> SettlementId {
+    pub(crate) fn settlement(&mut self) -> SettlementId {
         let id = SettlementId(self.next_settlement);
         self.next_settlement = self.next_settlement.saturating_add(1);
         id

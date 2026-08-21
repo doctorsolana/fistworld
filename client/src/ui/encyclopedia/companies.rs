@@ -382,7 +382,18 @@ pub(super) fn refresh_company_directory(
     local: Option<Res<crate::camera_rts::LocalPeerId>>,
     known_people: Res<KnownPeople>,
     mut directory: ResMut<CompanyDirectory>,
+    ui_perf: Res<crate::ui::perf::UiPerf>,
+    time: Res<Time>,
+    mut last_run: Local<Option<f32>>,
 ) {
+    let mut _ui_scope = ui_perf.scope("refresh_company_directory");
+    // A snapshot clones every company's books. Twice a second is plenty for
+    // a ledger view and drops the per-frame allocation churn at scale.
+    let now = time.elapsed_secs();
+    if last_run.is_some_and(|last| now - last < COMPANY_SNAPSHOT_INTERVAL_SECS) {
+        return;
+    }
+    *last_run = Some(now);
     let mut names: HashMap<PersonId, String> = known_people
         .records
         .iter()
@@ -685,6 +696,7 @@ pub(super) fn refresh_company_directory(
         local_wallet,
     };
     if *directory != next {
+        _ui_scope.rebuilt();
         *directory = next;
     }
 }
@@ -753,7 +765,7 @@ pub(super) fn spawn_companies_tab(body: &mut ChildSpawnerCommands<'_>) {
                             Text::new(filter.label()),
                             UiButtonLabel,
                             TextFont {
-                                font_size: FontSize::Px(9.5),
+                                font_size: FontSize::Px(13.0),
                                 ..default()
                             },
                             TextColor(INK_MUTED),
@@ -765,7 +777,7 @@ pub(super) fn spawn_companies_tab(body: &mut ChildSpawnerCommands<'_>) {
                 CompanyCountText,
                 Text::new("0 companies"),
                 TextFont {
-                    font_size: FontSize::Px(10.0),
+                    font_size: FontSize::Px(13.5),
                     ..default()
                 },
                 TextColor(INK_MUTED),
@@ -784,7 +796,7 @@ pub(super) fn spawn_companies_tab(body: &mut ChildSpawnerCommands<'_>) {
                 .spawn((
                     CompanyListViewport,
                     Node {
-                        width: Val::Px(326.0),
+                        width: Val::Px(340.0),
                         min_height: Val::Px(0.0),
                         flex_shrink: 0.0,
                         flex_direction: FlexDirection::Column,
@@ -928,16 +940,15 @@ pub(super) fn handle_company_management_buttons(
     buttons: Query<(&Interaction, &CompanyManagementButton), Changed<Interaction>>,
     mut target: ResMut<crate::ui::business_management::BusinessManagementTarget>,
     mut return_to: ResMut<crate::ui::business_management::BusinessManagementReturn>,
-    mut open: ResMut<EncyclopediaOpen>,
 ) {
     if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
     for (interaction, button) in buttons.iter() {
         if *interaction == Interaction::Pressed {
+            // Opens as a page inside this window; the window stays open.
             target.0 = Some(button.site);
             return_to.0 = Some(button.company);
-            open.0 = false;
         }
     }
 }
@@ -1385,12 +1396,29 @@ pub(super) fn rebuild_company_view(
     mut count_text: Query<&mut Text, With<CompanyCountText>>,
     feedback: Res<CompanyPolicyFeedback>,
     editor: Res<TradeRouteEditorState>,
+    ui_perf: Res<crate::ui::perf::UiPerf>,
+    mut last_rows: Local<Option<u64>>,
+    mut last_detail: Local<Option<u64>>,
+    mut ledgers: Query<(&CompanyRowLedger, &mut Text), Without<CompanyCountText>>,
 ) {
-    if !directory.is_changed()
+    let mut _ui_scope = ui_perf.scope("rebuild_company_view");
+    // Closing the window despawns these containers; reopening respawns them
+    // childless while the Locals still remember the last build. A childless
+    // container must fill regardless of what changed.
+    let fresh = portfolio
+        .single()
+        .is_ok_and(|(_, children)| children.is_none())
+        || list.single().is_ok_and(|(_, children)| children.is_none())
+        || detail
+            .single()
+            .is_ok_and(|(_, children)| children.is_none());
+    if !fresh
+        && !directory.is_changed()
         && !filter.is_changed()
         && !selected.is_changed()
         && !feedback.is_changed()
         && !editor.is_changed()
+        && last_rows.is_some()
     {
         return;
     }
@@ -1411,17 +1439,29 @@ pub(super) fn rebuild_company_view(
         };
     }
 
+    // Each region rebuilds only when ITS inputs move. The directory snapshot
+    // changes whenever any company's books tick -- constantly, in a living
+    // economy -- but a list row shows only name, status and your shares, and
+    // must not be torn down because a stranger met payroll. A container with
+    // no children is freshly respawned and always fills.
     if let Ok((entity, children)) = portfolio.single() {
-        clear_children(&mut commands, children);
-        commands
-            .entity(entity)
-            .with_children(|parent| spawn_portfolio(parent, &directory));
+        if directory.is_changed() || children.is_none() {
+            _ui_scope.rebuilt();
+            clear_children(&mut commands, children);
+            commands
+                .entity(entity)
+                .with_children(|parent| spawn_portfolio(parent, &directory));
+        }
     }
+    let rows_signature = company_rows_signature(&visible, *filter, directory.local_person);
     if let Ok((entity, children)) = list.single() {
-        clear_children(&mut commands, children);
-        commands.entity(entity).with_children(|parent| {
-            if visible.is_empty() {
-                spawn_empty(
+        if children.is_none() || *last_rows != Some(rows_signature) {
+            *last_rows = Some(rows_signature);
+            _ui_scope.rebuilt();
+            clear_children(&mut commands, children);
+            commands.entity(entity).with_children(|parent| {
+                if visible.is_empty() {
+                    spawn_empty(
                     parent,
                     match *filter {
                         CompanyFilter::All => "No companies exist yet.",
@@ -1431,37 +1471,102 @@ pub(super) fn rebuild_company_view(
                         CompanyFilter::SharesForSale => "No company shares are currently offered.",
                     },
                 );
-            } else {
-                for company in visible {
-                    spawn_company_row(parent, company, directory.local_person);
-                }
-            }
-        });
-    }
-    if let Ok((entity, children)) = detail.single() {
-        clear_children(&mut commands, children);
-        commands.entity(entity).with_children(|parent| {
-            let company = selected
-                .0
-                .and_then(|id| directory.records.iter().find(|company| company.id == id));
-            if let Some(company) = company {
-                if let Some(draft) = editor
-                    .draft
-                    .as_ref()
-                    .filter(|draft| draft.company == company.id)
-                {
-                    spawn_trade_route_editor(parent, company, &directory, draft, &editor);
                 } else {
-                    spawn_company_detail(parent, company, &directory, &feedback, &editor);
+                    for company in &visible {
+                        spawn_company_row(parent, company, directory.local_person);
+                    }
                 }
-            } else {
-                spawn_empty(
-                    parent,
-                    "Select a company to inspect its ownership and books.",
-                );
-            }
-        });
+            });
+        }
     }
+    // The ledger line moves with every snapshot; rewrite it in place rather
+    // than tearing down hundreds of rows twice a second.
+    if directory.is_changed() {
+        let by_id: HashMap<CompanyId, &CompanyRecord> = directory
+            .records
+            .iter()
+            .map(|company| (company.id, company))
+            .collect();
+        for (CompanyRowLedger(id), mut text) in ledgers.iter_mut() {
+            if let Some(company) = by_id.get(id) {
+                let line = company_ledger_line(company);
+                if text.0 != line {
+                    text.0 = line;
+                }
+            }
+        }
+    }
+    let company = selected
+        .0
+        .and_then(|id| directory.records.iter().find(|company| company.id == id));
+    let detail_signature = company_detail_signature(company, &directory);
+    if let Ok((entity, children)) = detail.single() {
+        if children.is_none()
+            || selected.is_changed()
+            || feedback.is_changed()
+            || editor.is_changed()
+            || *last_detail != Some(detail_signature)
+        {
+            *last_detail = Some(detail_signature);
+            _ui_scope.rebuilt();
+            clear_children(&mut commands, children);
+            commands.entity(entity).with_children(|parent| {
+                if let Some(company) = company {
+                    if let Some(draft) = editor
+                        .draft
+                        .as_ref()
+                        .filter(|draft| draft.company == company.id)
+                    {
+                        spawn_trade_route_editor(parent, company, &directory, draft, &editor);
+                    } else {
+                        spawn_company_detail(parent, company, &directory, &feedback, &editor);
+                    }
+                } else {
+                    spawn_empty(
+                        parent,
+                        "Select a company to inspect its ownership and books.",
+                    );
+                }
+            });
+        }
+    }
+}
+
+/// How often the company directory re-snapshots the replicated books.
+const COMPANY_SNAPSHOT_INTERVAL_SECS: f32 = 0.5;
+
+/// Hash of exactly what [`spawn_company_row`] renders, in display order.
+fn company_rows_signature(
+    visible: &[&CompanyRecord],
+    filter: CompanyFilter,
+    local_person: Option<PersonId>,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (filter as u8).hash(&mut hasher);
+    visible.len().hash(&mut hasher);
+    for company in visible {
+        company.id.hash(&mut hasher);
+        company.name.hash(&mut hasher);
+        company.status().hash(&mut hasher);
+        company.master.hash(&mut hasher);
+        local_person
+            .map(|person| company.shares_owned_by(person))
+            .hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// The detail pane shows the selected company's live books, so it legitimately
+/// follows every snapshot of THAT record -- and nothing else's.
+fn company_detail_signature(company: Option<&CompanyRecord>, directory: &CompanyDirectory) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    format!("{company:?}").hash(&mut hasher);
+    format!("{:?}", directory.settlements).hash(&mut hasher);
+    directory.local_person.hash(&mut hasher);
+    directory.local_wallet.hash(&mut hasher);
+    hasher.finish()
 }
 
 pub(super) fn style_company_controls(
@@ -1519,7 +1624,7 @@ fn spawn_portfolio(parent: &mut ChildSpawnerCommands<'_>, directory: &CompanyDir
                 "PORTFOLIO UNAVAILABLE  /  Spawn or select your Hero to identify personal holdings. The company directory remains usable.",
             ),
             TextFont {
-                font_size: FontSize::Px(10.0),
+                font_size: FontSize::Px(13.5),
                 ..default()
             },
             TextColor(INK_MUTED),
@@ -1595,7 +1700,7 @@ fn portfolio_card(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: Str
             card.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: FontSize::Px(8.5),
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
                 TextColor(INK_MUTED),
@@ -1603,7 +1708,7 @@ fn portfolio_card(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: Str
             card.spawn((
                 Text::new(value),
                 TextFont {
-                    font_size: FontSize::Px(14.0),
+                    font_size: FontSize::Px(17.0),
                     ..default()
                 },
                 TextColor(INK),
@@ -1611,12 +1716,35 @@ fn portfolio_card(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: Str
             card.spawn((
                 Text::new(note),
                 TextFont {
-                    font_size: FontSize::Px(7.5),
+                    font_size: FontSize::Px(11.0),
                     ..default()
                 },
                 TextColor(INK_MUTED),
             ));
         });
+}
+
+/// The one line of a company row that moves with every books snapshot. It is
+/// rewritten in place by [`rebuild_company_view`]; everything else on the row
+/// is covered by [`company_rows_signature`].
+#[derive(Component)]
+pub(super) struct CompanyRowLedger(CompanyId);
+
+fn company_ledger_line(company: &CompanyRecord) -> String {
+    format!(
+        "{} site{}  /  {} route{}  /  {} cash  /  today {}{}",
+        company.sites.len(),
+        if company.sites.len() == 1 { "" } else { "s" },
+        company.routes.len(),
+        if company.routes.len() == 1 { "" } else { "s" },
+        format_money(company.account.cash),
+        if company.account.current_day.profit() < 0 {
+            "-"
+        } else {
+            "+"
+        },
+        format_money(company.account.current_day.profit().unsigned_abs()),
+    )
 }
 
 fn spawn_company_row(
@@ -1650,7 +1778,7 @@ fn spawn_company_row(
                 line.spawn((
                     Text::new(company.name.clone()),
                     TextFont {
-                        font_size: FontSize::Px(12.5),
+                        font_size: FontSize::Px(15.5),
                         ..default()
                     },
                     TextColor(INK),
@@ -1658,7 +1786,7 @@ fn spawn_company_row(
                 line.spawn((
                     Text::new(company.status()),
                     TextFont {
-                        font_size: FontSize::Px(8.0),
+                        font_size: FontSize::Px(11.5),
                         ..default()
                     },
                     TextColor(if company.status() == "AT RISK" {
@@ -1669,22 +1797,10 @@ fn spawn_company_row(
                 ));
             });
             row.spawn((
-                Text::new(format!(
-                    "{} site{}  /  {} route{}  /  {} cash  /  today {}{}",
-                    company.sites.len(),
-                    if company.sites.len() == 1 { "" } else { "s" },
-                    company.routes.len(),
-                    if company.routes.len() == 1 { "" } else { "s" },
-                    format_money(company.account.cash),
-                    if company.account.current_day.profit() < 0 {
-                        "-"
-                    } else {
-                        "+"
-                    },
-                    format_money(company.account.current_day.profit().unsigned_abs()),
-                )),
+                CompanyRowLedger(company.id),
+                Text::new(company_ledger_line(company)),
                 TextFont {
-                    font_size: FontSize::Px(8.5),
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
                 TextColor(INK_MUTED),
@@ -1702,7 +1818,7 @@ fn spawn_company_row(
                         }
                     )),
                     TextFont {
-                        font_size: FontSize::Px(8.5),
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(EMBER),
@@ -1738,7 +1854,7 @@ fn spawn_company_detail(
                     copy.spawn((
                         Text::new(company.name.clone()),
                         TextFont {
-                            font_size: FontSize::Px(22.0),
+                            font_size: FontSize::Px(26.0),
                             ..default()
                         },
                         TextColor(INK),
@@ -1751,7 +1867,7 @@ fn spawn_company_detail(
                             company.status(),
                         )),
                         TextFont {
-                            font_size: FontSize::Px(9.0),
+                            font_size: FontSize::Px(12.5),
                             ..default()
                         },
                         TextColor(EMBER),
@@ -1919,7 +2035,7 @@ fn spawn_company_detail(
                                 format_money(directory.local_wallet.unwrap_or(0))
                             )),
                             TextFont {
-                                font_size: FontSize::Px(9.0),
+                                font_size: FontSize::Px(12.5),
                                 ..default()
                             },
                             TextColor(INK_MUTED),
@@ -2018,7 +2134,7 @@ fn spawn_company_detail(
                         "A staffed Storage Hall is required before this company can open a route."
                     }),
                     TextFont {
-                        font_size: FontSize::Px(8.5),
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(INK_MUTED),
@@ -2042,7 +2158,7 @@ fn spawn_company_detail(
     spawn_section_title(
         parent,
         "OPERATING SITES",
-        "select a site to open its full place record",
+        "Each site is its own building page in PLACES; VIEW DETAILS opens it",
     );
     if company.sites.is_empty() {
         spawn_note(parent, "This company has no operating site.");
@@ -2075,7 +2191,7 @@ fn spawn_company_detail(
                         holder.name.clone()
                     }),
                     TextFont {
-                        font_size: FontSize::Px(10.5),
+                        font_size: FontSize::Px(14.0),
                         ..default()
                     },
                     TextColor(INK),
@@ -2088,7 +2204,7 @@ fn spawn_company_detail(
                         f32::from(holder.shares) / 10.0
                     )),
                     TextFont {
-                        font_size: FontSize::Px(10.0),
+                        font_size: FontSize::Px(13.5),
                         ..default()
                     },
                     TextColor(INK_MUTED),
@@ -2213,7 +2329,7 @@ fn spawn_branch_card(
                     branch.bulk_capacity,
                 )),
                 TextFont {
-                    font_size: FontSize::Px(9.5),
+                    font_size: FontSize::Px(13.0),
                     ..default()
                 },
                 TextColor(EMBER),
@@ -2242,7 +2358,7 @@ fn spawn_branch_card(
                                 policy.retain_units,
                             )),
                             TextFont {
-                                font_size: FontSize::Px(9.0),
+                                font_size: FontSize::Px(12.5),
                                 ..default()
                             },
                             TextColor(INK),
@@ -2254,7 +2370,7 @@ fn spawn_branch_card(
                                 "HOLD ALL"
                             }),
                             TextFont {
-                                font_size: FontSize::Px(8.0),
+                                font_size: FontSize::Px(11.5),
                                 ..default()
                             },
                             TextColor(INK_MUTED),
@@ -2368,7 +2484,7 @@ fn branch_policy_button(
             Text::new(label),
             UiButtonLabel,
             TextFont {
-                font_size: FontSize::Px(8.0),
+                font_size: FontSize::Px(11.5),
                 ..default()
             },
             TextColor(INK),
@@ -2451,7 +2567,7 @@ fn spawn_route_card(
                                 route.good.label().to_uppercase()
                             )),
                             TextFont {
-                                font_size: FontSize::Px(12.0),
+                                font_size: FontSize::Px(15.0),
                                 ..default()
                             },
                             TextColor(INK),
@@ -2463,7 +2579,7 @@ fn spawn_route_card(
                                 route.warehouse_name.to_uppercase()
                             )),
                             TextFont {
-                                font_size: FontSize::Px(8.0),
+                                font_size: FontSize::Px(11.5),
                                 ..default()
                             },
                             TextColor(INK_MUTED),
@@ -2472,7 +2588,7 @@ fn spawn_route_card(
                 header.spawn((
                     Text::new(route.status.label().to_uppercase()),
                     TextFont {
-                        font_size: FontSize::Px(8.5),
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(if route.status == TradeRouteStatus::Mothballed {
@@ -2497,7 +2613,7 @@ fn spawn_route_card(
                         timeline.spawn((
                             Text::new("→"),
                             TextFont {
-                                font_size: FontSize::Px(14.0),
+                                font_size: FontSize::Px(17.0),
                                 ..default()
                             },
                             TextColor(INK_MUTED),
@@ -2537,7 +2653,7 @@ fn spawn_route_card(
                                     stop.settlement_name.to_uppercase()
                                 )),
                                 TextFont {
-                                    font_size: FontSize::Px(8.0),
+                                    font_size: FontSize::Px(11.5),
                                     ..default()
                                 },
                                 TextColor(INK),
@@ -2545,7 +2661,7 @@ fn spawn_route_card(
                             stop_card.spawn((
                                 Text::new(stop.action.label().to_uppercase()),
                                 TextFont {
-                                    font_size: FontSize::Px(7.5),
+                                    font_size: FontSize::Px(11.0),
                                     ..default()
                                 },
                                 TextColor(EMBER),
@@ -2584,7 +2700,7 @@ fn spawn_route_card(
                     facts.spawn((
                         Text::new(text),
                         TextFont {
-                            font_size: FontSize::Px(8.0),
+                            font_size: FontSize::Px(11.5),
                             ..default()
                         },
                         TextColor(INK_MUTED),
@@ -2600,7 +2716,7 @@ fn spawn_route_card(
                         format_money(route.maximum_purchase_price),
                     )),
                     TextFont {
-                        font_size: FontSize::Px(8.5),
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(INK_MUTED),
@@ -2627,7 +2743,7 @@ fn spawn_route_card(
                         },
                     )),
                     TextFont {
-                        font_size: FontSize::Px(8.5),
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(INK_MUTED),
@@ -2638,7 +2754,7 @@ fn spawn_route_card(
                 card.spawn((
                     Text::new("No completed circuit yet."),
                     TextFont {
-                        font_size: FontSize::Px(8.0),
+                        font_size: FontSize::Px(11.5),
                         ..default()
                     },
                     TextColor(INK_MUTED),
@@ -2657,7 +2773,7 @@ fn spawn_route_card(
                             trip.travel_world_seconds as f32 / 60.0,
                         )),
                         TextFont {
-                            font_size: FontSize::Px(7.8),
+                            font_size: FontSize::Px(11.0),
                             ..default()
                         },
                         TextColor(INK_MUTED),
@@ -2783,7 +2899,7 @@ fn spawn_trade_route_editor(
                             "NEW CARAVAN ROUTE".to_string()
                         }),
                         TextFont {
-                            font_size: FontSize::Px(21.0),
+                            font_size: FontSize::Px(24.0),
                             ..default()
                         },
                         TextColor(INK),
@@ -2794,7 +2910,7 @@ fn spawn_trade_route_editor(
                             company.name.to_uppercase()
                         )),
                         TextFont {
-                            font_size: FontSize::Px(8.5),
+                            font_size: FontSize::Px(12.0),
                             ..default()
                         },
                         TextColor(EMBER),
@@ -2861,7 +2977,7 @@ fn spawn_trade_route_editor(
                     card.spawn((
                         Text::new("HOME STORAGE HALL"),
                         TextFont {
-                            font_size: FontSize::Px(8.0),
+                            font_size: FontSize::Px(11.5),
                             ..default()
                         },
                         TextColor(INK_MUTED),
@@ -2880,7 +2996,7 @@ fn spawn_trade_route_editor(
                             },
                         )),
                         TextFont {
-                            font_size: FontSize::Px(10.0),
+                            font_size: FontSize::Px(13.5),
                             ..default()
                         },
                         TextColor(INK),
@@ -2925,7 +3041,7 @@ fn spawn_trade_route_editor(
                             if draft.cargo_target == 1 { "" } else { "S" }
                         )),
                         TextFont {
-                            font_size: FontSize::Px(10.0),
+                            font_size: FontSize::Px(13.5),
                             ..default()
                         },
                         TextColor(INK),
@@ -2973,7 +3089,7 @@ fn spawn_trade_route_editor(
                     }
                 )),
                 TextFont {
-                    font_size: FontSize::Px(9.5),
+                    font_size: FontSize::Px(13.0),
                     ..default()
                 },
                 TextColor(INK),
@@ -3034,7 +3150,7 @@ fn spawn_trade_route_editor(
                     lane.spawn((
                         Text::new("→"),
                         TextFont {
-                            font_size: FontSize::Px(16.0),
+                            font_size: FontSize::Px(19.0),
                             ..default()
                         },
                         TextColor(INK_MUTED),
@@ -3061,7 +3177,7 @@ fn spawn_trade_route_editor(
                             if index == 0 { "HOME" } else { "TOWN" }
                         )),
                         TextFont {
-                            font_size: FontSize::Px(7.5),
+                            font_size: FontSize::Px(11.0),
                             ..default()
                         },
                         TextColor(EMBER),
@@ -3069,7 +3185,7 @@ fn spawn_trade_route_editor(
                     stop_card.spawn((
                         Text::new(settlement_name(stop.settlement).to_uppercase()),
                         TextFont {
-                            font_size: FontSize::Px(10.0),
+                            font_size: FontSize::Px(13.5),
                             ..default()
                         },
                         TextColor(INK),
@@ -3081,7 +3197,7 @@ fn spawn_trade_route_editor(
                         stop_card.spawn((
                             Text::new("LOCAL MOOT — BUILD A MARKETPLACE"),
                             TextFont {
-                                font_size: FontSize::Px(7.0),
+                                font_size: FontSize::Px(11.0),
                                 ..default()
                             },
                             TextColor(EMBER),
@@ -3109,7 +3225,7 @@ fn spawn_trade_route_editor(
                     stop_card.spawn((
                         Text::new(stop.action.label().to_uppercase()),
                         TextFont {
-                            font_size: FontSize::Px(8.0),
+                            font_size: FontSize::Px(11.5),
                             ..default()
                         },
                         TextColor(INK_MUTED),
@@ -3246,7 +3362,7 @@ fn spawn_site_card(
                         site.settlement.to_uppercase()
                     )),
                     TextFont {
-                        font_size: FontSize::Px(10.5),
+                        font_size: FontSize::Px(14.0),
                         ..default()
                     },
                     TextColor(INK),
@@ -3255,7 +3371,7 @@ fn spawn_site_card(
                 line.spawn((
                     Text::new(site.state.label().to_uppercase()),
                     TextFont {
-                        font_size: FontSize::Px(8.0),
+                        font_size: FontSize::Px(11.5),
                         ..default()
                     },
                     TextColor(INK_MUTED),
@@ -3273,7 +3389,7 @@ fn spawn_site_card(
                     signed_money(site.current_day.profit()),
                 )),
                 TextFont {
-                    font_size: FontSize::Px(8.5),
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
                 TextColor(INK_MUTED),
@@ -3289,7 +3405,7 @@ fn spawn_site_card(
                         format_money(site.wage_arrears.saturating_add(site.tax_arrears)),
                     )),
                     TextFont {
-                        font_size: FontSize::Px(8.5),
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(INK_MUTED),
@@ -3311,7 +3427,7 @@ fn spawn_site_card(
                         site.input_target,
                     )),
                     TextFont {
-                        font_size: FontSize::Px(8.5),
+                        font_size: FontSize::Px(12.0),
                         ..default()
                     },
                     TextColor(INK_MUTED),
@@ -3358,7 +3474,7 @@ fn detail_button<M: Component>(parent: &mut ChildSpawnerCommands<'_>, marker: M,
             Text::new(label),
             UiButtonLabel,
             TextFont {
-                font_size: FontSize::Px(8.0),
+                font_size: FontSize::Px(11.5),
                 ..default()
             },
             TextColor(INK),
@@ -3387,7 +3503,7 @@ fn detail_stat(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String
             card.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: FontSize::Px(8.0),
+                    font_size: FontSize::Px(11.5),
                     ..default()
                 },
                 TextColor(INK_MUTED),
@@ -3395,7 +3511,7 @@ fn detail_stat(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String
             card.spawn((
                 Text::new(value),
                 TextFont {
-                    font_size: FontSize::Px(12.0),
+                    font_size: FontSize::Px(15.0),
                     ..default()
                 },
                 TextColor(INK),
@@ -3417,7 +3533,7 @@ fn spawn_section_title(parent: &mut ChildSpawnerCommands<'_>, title: &str, note:
             row.spawn((
                 Text::new(title),
                 TextFont {
-                    font_size: FontSize::Px(10.0),
+                    font_size: FontSize::Px(13.5),
                     ..default()
                 },
                 TextColor(EMBER),
@@ -3425,7 +3541,7 @@ fn spawn_section_title(parent: &mut ChildSpawnerCommands<'_>, title: &str, note:
             row.spawn((
                 Text::new(note),
                 TextFont {
-                    font_size: FontSize::Px(7.5),
+                    font_size: FontSize::Px(11.0),
                     ..default()
                 },
                 TextColor(INK_MUTED),
@@ -3450,7 +3566,7 @@ fn key_value(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String) 
             row.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: FontSize::Px(8.0),
+                    font_size: FontSize::Px(11.5),
                     ..default()
                 },
                 TextColor(INK_MUTED),
@@ -3463,7 +3579,7 @@ fn key_value(parent: &mut ChildSpawnerCommands<'_>, label: &str, value: String) 
             row.spawn((
                 Text::new(value),
                 TextFont {
-                    font_size: FontSize::Px(9.5),
+                    font_size: FontSize::Px(13.0),
                     ..default()
                 },
                 TextColor(INK),
@@ -3481,7 +3597,7 @@ fn spawn_note(parent: &mut ChildSpawnerCommands<'_>, text: &str) {
     parent.spawn((
         Text::new(text),
         TextFont {
-            font_size: FontSize::Px(9.5),
+            font_size: FontSize::Px(13.0),
             ..default()
         },
         TextColor(INK_MUTED),
@@ -3492,7 +3608,7 @@ fn spawn_empty(parent: &mut ChildSpawnerCommands<'_>, text: &str) {
     parent.spawn((
         Text::new(text),
         TextFont {
-            font_size: FontSize::Px(11.0),
+            font_size: FontSize::Px(14.0),
             ..default()
         },
         TextColor(INK_MUTED),

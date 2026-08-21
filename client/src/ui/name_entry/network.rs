@@ -53,8 +53,18 @@ pub(super) fn handle_name_submission_result(
                     std::env::var("FISTWORLD_AUTOSPAWN_HERO").is_ok_and(|value| value == "1");
                 let automated_voyage =
                     std::env::var("FISTWORLD_AUTOCREATE_VOYAGE").is_ok_and(|value| value == "1");
+                let ux_fixture = std::env::var("FISTWORLD_UX_TOWN").is_ok_and(|value| {
+                    matches!(
+                        value.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on"
+                    )
+                });
                 if needs_hero_creation && automated_voyage {
-                    cinematic.arm();
+                    if ux_fixture {
+                        cinematic.cancel();
+                    } else {
+                        cinematic.arm();
+                    }
                     create_sender.send::<ReliableChannel>(shared::protocol::CreateHero {
                         outfit: selected.0,
                     });
@@ -62,7 +72,11 @@ pub(super) fn handle_name_submission_result(
                 } else if needs_hero_creation && !automated_god_spawn {
                     *creator_purpose = crate::ui::hero_creator::HeroCreatorPurpose::NewPlayerVoyage;
                     creator_open.0 = true;
-                    cinematic.arm();
+                    if ux_fixture {
+                        cinematic.cancel();
+                    } else {
+                        cinematic.arm();
+                    }
                 }
             }
             NameSubmissionResult::Rejected { reason } => {

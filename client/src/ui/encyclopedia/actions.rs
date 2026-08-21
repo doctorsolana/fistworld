@@ -118,6 +118,8 @@ pub(super) fn close_on_escape_or_backdrop(
     mouse: Res<ButtonInput<MouseButton>>,
     backdrop: Query<&Interaction, (With<EncyclopediaBackdrop>, Changed<Interaction>)>,
     close_button: Query<&Interaction, (With<EncyclopediaCloseButton>, Changed<Interaction>)>,
+    history: Option<Res<crate::ui::history::HistoryPanelTarget>>,
+    business: Option<Res<crate::ui::business_management::BusinessManagementTarget>>,
     mut open: ResMut<EncyclopediaOpen>,
 ) {
     let clicked = guard.0 && mouse.just_pressed(MouseButton::Left);
@@ -126,7 +128,11 @@ pub(super) fn close_on_escape_or_backdrop(
         && close_button
             .iter()
             .any(|interaction| *interaction == Interaction::Pressed);
-    if keyboard.just_pressed(KeyCode::Escape) || clicked_out || clicked_close {
+    // ESC pops an open page first (see `handle_page_back`); only a bare
+    // encyclopedia closes on it. The X always closes everything.
+    let page_open = history.is_some_and(|history| history.0.is_some())
+        || business.is_some_and(|business| business.0.is_some());
+    if (keyboard.just_pressed(KeyCode::Escape) && !page_open) || clicked_out || clicked_close {
         open.0 = false;
     }
 }

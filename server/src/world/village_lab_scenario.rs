@@ -11,10 +11,13 @@ use lightyear::prelude::{NetworkTarget, Replicate};
 
 use shared::components::{
     CharacterActivity, CharacterName, CivicStrategy, MootAdministration, PlayerPosition,
-    PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind, SettlementId,
-    SettlementTier, TimeWarp, VillageRoad, WorldTime,
+    PlayerRotation, Residence, RoadClass, RoadSurface, Settlement, SettlementBuilding,
+    SettlementBuildingKind, SettlementId, SettlementTier, TimeWarp, VillageRoad, WorldTime,
 };
-use shared::economy::{Good, GoodsInventory, MarketSeller, MootMarket, SettlementEconomy};
+use shared::economy::{
+    BusinessAccount, Good, GoodsInventory, MarketSeller, MarketTradeTier, MootMarket,
+    SettlementEconomy, PENNIES_PER_COIN,
+};
 use shared::terrain::{ChunkCoord, WorldTerrain, CHUNK_SIZE};
 use shared::worldgen::WorldBiome;
 
@@ -24,6 +27,7 @@ pub(crate) const SECURE_VILLAGERS: usize = 8;
 pub(crate) const POOR_VILLAGERS: usize = 8;
 pub(crate) const TRIPLE_STRESS_VILLAGERS_PER_VILLAGE: usize = 200;
 pub(crate) const DENSE_STRESS_VILLAGERS: usize = 1_000;
+pub(crate) const UX_TOWN_RESIDENTS: usize = 500;
 pub(crate) const TRADE_FOUNDERS_PER_VILLAGE: usize = 12;
 pub(crate) const TRADE_TARGET_RESIDENTS_PER_VILLAGE: usize = 35;
 /// A bounded shelf which is restored once per lab day. It behaves like an
@@ -62,6 +66,17 @@ const REGIONAL_MEADOW_ANCHOR: Vec2 = Vec2::new(-666.0, -36.0);
 const REGIONAL_COLDBARROW_ANCHOR: Vec2 = Vec2::new(-356.0, -546.0);
 const REGIONAL_GREENWOOD_ANCHOR: Vec2 = Vec2::new(726.0, 256.0);
 const REGIONAL_STONE_ANCHOR: Vec2 = Vec2::new(254.0, 422.0);
+
+/// Server-only ownership handoff for the mature rendered UX fixture.
+///
+/// Buildings are staged before stable person ids exist. The shared identity
+/// pass assigns those ids, then `finalize_ux_fixture_companies` creates real
+/// companies and attaches every marked site before ordinary business setup.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct UxFixtureBusiness {
+    settlement: SettlementId,
+    owner_group: u16,
+}
 
 /// Server-only marker for the controlled regional-commerce fixture. Ordinary
 /// settlements can never acquire this component, so the artificial supply is
@@ -1527,6 +1542,400 @@ fn spawn_runtime_village(
     settlement_entity
 }
 
+fn seed_ux_business_inventory(kind: SettlementBuildingKind, inventory: &mut GoodsInventory) {
+    match kind {
+        SettlementBuildingKind::Farmstead => {
+            inventory.add(Good::Wheat, 20);
+        }
+        SettlementBuildingKind::LivestockFarm => {
+            inventory.add(Good::Meat, 12);
+            inventory.add(Good::Wool, 8);
+        }
+        SettlementBuildingKind::LumberjackHut => {
+            inventory.add(Good::Wood, 16);
+        }
+        SettlementBuildingKind::StoneQuarry => {
+            inventory.add(Good::Stone, 16);
+        }
+        SettlementBuildingKind::Windmill => {
+            inventory.add(Good::Flour, 16);
+        }
+        SettlementBuildingKind::Bakery => {
+            inventory.add(Good::Bread, 24);
+        }
+        SettlementBuildingKind::StorageHall => {
+            inventory.add(Good::Wood, 12);
+            inventory.add(Good::Stone, 12);
+            inventory.add(Good::Flour, 12);
+        }
+        SettlementBuildingKind::Tavern => {
+            inventory.add(Good::Bread, 8);
+            inventory.add(Good::Meat, 8);
+        }
+        _ => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_ux_fixture_building(
+    commands: &mut Commands,
+    terrain: &WorldTerrain,
+    settlement_id: SettlementId,
+    settlement_name: &str,
+    hall: Vec3,
+    kind: SettlementBuildingKind,
+    owner_group: Option<u16>,
+    sequence: usize,
+    occupied: &mut Vec<(Vec3, f32)>,
+    roads: &mut Vec<VillageRoad>,
+    colliders: Option<&crate::collision::library::StaticColliders>,
+    derived: Option<&crate::collision::library::DerivedColliderLibrary>,
+) -> Option<(Entity, Vec3, f32)> {
+    let (minimum_radius, maximum_radius) = match kind {
+        SettlementBuildingKind::Market | SettlementBuildingKind::Church => (32.0, 90.0),
+        SettlementBuildingKind::House => (38.0, 190.0),
+        SettlementBuildingKind::Windmill
+        | SettlementBuildingKind::Bakery
+        | SettlementBuildingKind::StorageHall
+        | SettlementBuildingKind::Tavern => (82.0, 235.0),
+        SettlementBuildingKind::Farmstead
+        | SettlementBuildingKind::LivestockFarm
+        | SettlementBuildingKind::LumberjackHut
+        | SettlementBuildingKind::StoneQuarry => (155.0, 312.0),
+        SettlementBuildingKind::FishermansHut | SettlementBuildingKind::Hall => return None,
+    };
+    let road_refs: Vec<_> = roads.iter().collect();
+    for attempt in 0..768_usize {
+        // Two irrational strides form a deterministic low-discrepancy search.
+        // It fills the whole permitted band without producing conspicuous
+        // same-angle rings or making the fixture depend on thread timing.
+        let sample = sequence
+            .wrapping_mul(977)
+            .wrapping_add(attempt.wrapping_mul(37)) as f32
+            + 1.0;
+        let radial = (sample * 0.754_877_7).fract().sqrt();
+        let angle = std::f32::consts::TAU * (sample * 0.569_840_3).fract();
+        let radius = minimum_radius + (maximum_radius - minimum_radius) * radial;
+        let x = hall.x + angle.cos() * radius;
+        let z = hall.z + angle.sin() * radius;
+        let position = Vec3::new(x, terrain.get_height(x, z), z);
+        let toward_hall = Vec2::new(hall.x - x, hall.z - z).normalize_or_zero();
+        let rotation = (-toward_hall.x).atan2(-toward_hall.y);
+        let Ok(approval) = village::validate_manual_plot(
+            terrain,
+            hall,
+            kind,
+            position,
+            rotation,
+            occupied,
+            &road_refs,
+            &[],
+            &[],
+            colliders,
+            derived,
+        ) else {
+            continue;
+        };
+
+        let mut inventory = GoodsInventory::new(kind.storage_bulk_capacity());
+        seed_ux_business_inventory(kind, &mut inventory);
+        let building = commands
+            .spawn((
+                SettlementBuilding {
+                    kind,
+                    settlement: settlement_name.to_string(),
+                    owner: None,
+                    quality: approval.quality,
+                    workers: Vec::new(),
+                },
+                shared::components::BuildingOf(settlement_id),
+                inventory,
+                PlayerPosition(approval.position),
+                PlayerRotation(approval.rotation),
+                shared::building::PlacedBuilding {
+                    building_type: kind.art(),
+                    rotation: approval.rotation,
+                },
+                shared::building::BuildingPosition(approval.position),
+                Replicate::to_clients(NetworkTarget::All),
+            ))
+            .id();
+        if let Some(owner_group) = owner_group {
+            commands.entity(building).insert((
+                UxFixtureBusiness {
+                    settlement: settlement_id,
+                    owner_group,
+                },
+                // Starting liquidity lives in the company created by the
+                // finalizer. Keep the site ledger empty so it cannot debit the
+                // resident's personal purse while fixture ownership is wired.
+                BusinessAccount::default(),
+            ));
+        }
+        if approval.road_access.len() >= 2 {
+            let mut road = VillageRoad {
+                settlement: settlement_name.to_string(),
+                builder: "UX fixture".to_string(),
+                built_through: u16::try_from(approval.road_access.len()).unwrap_or(u16::MAX),
+                points: approval.road_access,
+                width: 2.5,
+                reserved_width: RoadClass::Lane.initial_reserved_width(),
+                surface: RoadSurface::Stone,
+                class: RoadClass::Lane,
+                stone_committed: 0,
+            };
+            road.stone_committed = road.stone_required();
+            commands.spawn((
+                road.clone(),
+                shared::components::RoadOf(settlement_id),
+                crate::world::village_roads::RoadConnectorFor { building },
+                Replicate::to_clients(NetworkTarget::All),
+            ));
+            roads.push(road);
+        }
+        occupied.push((approval.position, kind.clearance()));
+        return Some((building, approval.position, approval.rotation));
+    }
+    warn!(
+        "UX fixture could not place {} #{} inside the mature city charter",
+        kind.label(),
+        sequence
+    );
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_runtime_ux_town(
+    commands: &mut Commands,
+    terrain: &WorldTerrain,
+    villager_seed: &mut crate::world::dev::VillagerSeed,
+    ids: &mut crate::world::identity::WorldIdAllocator,
+    hall: Vec3,
+    colliders: Option<&crate::collision::library::StaticColliders>,
+    derived: Option<&crate::collision::library::DerivedColliderLibrary>,
+) -> Entity {
+    const NAME: &str = "Lab UX City";
+    let settlement_id = ids.settlement();
+    let mut hall_inventory = GoodsInventory::new_partitioned(shared::economy::capacity::HALL);
+    let opening_bread = hall_inventory.add(Good::Bread, shared::economy::capacity::HALL);
+    let mut market = MootMarket::founding();
+    market.unlock_trade_tier(MarketTradeTier::PavedMarketplace);
+    market.consign(
+        MarketSeller::Treasury(settlement_id),
+        Good::Bread,
+        opening_bread,
+        Good::Bread.base_price(),
+    );
+    let settlement_entity = commands
+        .spawn((
+            settlement_id,
+            Settlement {
+                name: NAME.to_string(),
+                tier: SettlementTier::City,
+                residents: UX_TOWN_RESIDENTS as u32,
+                treasury: 500 * PENNIES_PER_COIN,
+            },
+            hall_inventory,
+            market,
+            shared::components::SettlementPolicies::default(),
+            PlayerPosition(hall),
+            PlayerRotation(0.0),
+            Replicate::to_clients(NetworkTarget::All),
+        ))
+        .id();
+
+    let mut occupied = vec![(hall, 18.0)];
+    let mut roads = Vec::new();
+    let mut homes = Vec::with_capacity(UX_TOWN_RESIDENTS.div_ceil(4));
+    let mut sequence = 0_usize;
+    let mut placed = 0_usize;
+    let mut place = |kind: SettlementBuildingKind, owner_group: Option<u16>| {
+        let result = spawn_ux_fixture_building(
+            commands,
+            terrain,
+            settlement_id,
+            NAME,
+            hall,
+            kind,
+            owner_group,
+            sequence,
+            &mut occupied,
+            &mut roads,
+            colliders,
+            derived,
+        );
+        sequence += 1;
+        placed += usize::from(result.is_some());
+        if kind == SettlementBuildingKind::House {
+            if let Some((_, position, rotation)) = result {
+                homes.push((position, rotation));
+            }
+        }
+    };
+
+    // Civic frontage and complete housing make every management panel useful
+    // immediately. The ordinary household system assigns the 500 stable people
+    // to these cabins on its first pass.
+    place(SettlementBuildingKind::Market, None);
+    place(SettlementBuildingKind::Church, None);
+    for _ in 0..UX_TOWN_RESIDENTS.div_ceil(4) {
+        place(SettlementBuildingKind::House, None);
+    }
+
+    // The first twelve owners are deliberately vertically integrated across a
+    // Farmstead, Windmill and Bakery. Remaining groups are mostly one-trade
+    // firms, producing a useful mix of tiny companies and multi-site ledgers.
+    for owner in 0..40_u16 {
+        place(SettlementBuildingKind::Farmstead, Some(owner));
+    }
+    for owner in 40..50_u16 {
+        place(SettlementBuildingKind::LivestockFarm, Some(owner));
+    }
+    for owner in 50..58_u16 {
+        place(SettlementBuildingKind::LumberjackHut, Some(owner));
+    }
+    for owner in 58..62_u16 {
+        place(SettlementBuildingKind::StoneQuarry, Some(owner));
+    }
+    for owner in 0..12_u16 {
+        place(SettlementBuildingKind::Windmill, Some(owner));
+    }
+    for owner in 0..12_u16 {
+        place(SettlementBuildingKind::Bakery, Some(owner));
+    }
+    for owner in 62..66_u16 {
+        place(SettlementBuildingKind::StorageHall, Some(owner));
+    }
+    for owner in 66..70_u16 {
+        place(SettlementBuildingKind::Tavern, Some(owner));
+    }
+
+    let mut residents_spawned = 0_usize;
+    for resident_index in 0..UX_TOWN_RESIDENTS {
+        villager_seed.0 = villager_seed.0.wrapping_add(1);
+        let (home, home_rotation) = homes
+            .get(resident_index / 4)
+            .copied()
+            .unwrap_or((hall, 0.0));
+        let entrance = SettlementBuildingKind::House.entrance_position(home, home_rotation);
+        let outward = Vec2::new(entrance.x - home.x, entrance.z - home.z).normalize_or_zero();
+        let x = entrance.x + outward.x * 0.8;
+        let z = entrance.z + outward.y * 0.8;
+        let requested = Vec3::new(x, terrain.get_height(x, z), z);
+        let Some(position) = crate::world::dev::safe_villager_spawn_position(
+            requested,
+            villager_seed.0,
+            terrain,
+            None,
+            colliders,
+            derived,
+        ) else {
+            warn!(
+                "UX fixture skipped resident {}: no navigable ground near the civic forecourt",
+                villager_seed.0
+            );
+            continue;
+        };
+        let resident =
+            crate::player::hero::spawn_villager(commands, terrain, villager_seed.0, position);
+        commands.entity(resident).insert((
+            Residence(NAME.to_string()),
+            shared::components::ResidentOf(settlement_id),
+            village::VillagerIntent::Resident {
+                settlement: settlement_entity,
+            },
+        ));
+        residents_spawned += 1;
+    }
+
+    info!(
+        "Mature UX fixture staged: city='{}' residents={}/{} completed_buildings={} completed_roads={} opening_bread={} treasury={} coin",
+        NAME,
+        residents_spawned,
+        UX_TOWN_RESIDENTS,
+        placed,
+        roads.len(),
+        opening_bread,
+        shared::economy::format_money(500 * PENNIES_PER_COIN),
+    );
+    settlement_entity
+}
+
+/// Complete the staged fixture's ownership after the shared stable-id pass.
+/// This runs inside the normal identity/economy chain, so the resulting firms
+/// are indistinguishable from ordinary NPC companies to every gameplay UI.
+pub(crate) fn finalize_ux_fixture_companies(
+    mut commands: Commands,
+    mut ids: ResMut<crate::world::identity::WorldIdAllocator>,
+    world_time: Query<&WorldTime>,
+    people: Query<(
+        &shared::components::PersonId,
+        &CharacterName,
+        &shared::components::ResidentOf,
+    )>,
+    markers: Query<&UxFixtureBusiness>,
+    mut businesses: Query<
+        (Entity, &UxFixtureBusiness, &mut SettlementBuilding),
+        Without<shared::components::OperatedBy>,
+    >,
+) {
+    if markers.is_empty() {
+        return;
+    }
+    let settlement_id = markers.iter().next().map(|marker| marker.settlement);
+    let Some(settlement_id) = settlement_id else {
+        return;
+    };
+    let mut residents: Vec<_> = people
+        .iter()
+        .filter(|(_, _, resident_of)| resident_of.0 == settlement_id)
+        .map(|(person, name, _)| (*person, name.0.clone()))
+        .collect();
+    residents.sort_unstable_by_key(|(person, _)| person.0);
+    if residents.is_empty() {
+        return;
+    }
+
+    let groups: std::collections::BTreeSet<_> =
+        markers.iter().map(|marker| marker.owner_group).collect();
+    let day = world_time.iter().next().map_or(0, |clock| clock.day);
+    let mut companies = std::collections::BTreeMap::new();
+    for group in groups {
+        let (owner, owner_name) = &residents[usize::from(group) % residents.len()];
+        let company = ids.company();
+        commands.spawn(village::new_company_bundle(
+            company,
+            format!("{} & Company {}", owner_name, group + 1),
+            day,
+            *owner,
+            50 * PENNIES_PER_COIN,
+            50 * PENNIES_PER_COIN,
+        ));
+        companies.insert(group, (company, *owner, owner_name.clone()));
+    }
+
+    let mut attached = 0_usize;
+    for (entity, marker, mut building) in &mut businesses {
+        let Some((company, owner, owner_name)) = companies.get(&marker.owner_group) else {
+            continue;
+        };
+        building.owner = Some(owner_name.clone());
+        commands
+            .entity(entity)
+            .insert((
+                shared::components::OwnedBy(*owner),
+                shared::components::OperatedBy(*company),
+            ))
+            .remove::<UxFixtureBusiness>();
+        attached += 1;
+    }
+    info!(
+        "Mature UX fixture ownership ready: companies={} private_sites={}",
+        companies.len(),
+        attached
+    );
+}
+
 fn spawn_runtime_villagers(
     commands: &mut Commands,
     terrain: &WorldTerrain,
@@ -1585,6 +1994,9 @@ pub(crate) fn stage_rendered_lab_arrivals(
     mut state: Local<RenderedLabArrivalState>,
 ) {
     if !enabled_flag("FISTWORLD_VILLAGE_LAB_RUNTIME") {
+        return;
+    }
+    if enabled_flag("FISTWORLD_UX_TOWN") {
         return;
     }
     if LabScenario::from_environment().is_crowd_stress() {
@@ -1859,9 +2271,12 @@ mod tests {
 pub(crate) fn stage_rendered_lab_once(
     mut commands: Commands,
     terrain: Res<WorldTerrain>,
+    colliders: Option<Res<crate::collision::library::StaticColliders>>,
+    derived: Option<Res<crate::collision::library::DerivedColliderLibrary>>,
     settlements: Query<&Settlement>,
     mut warps: Query<&mut TimeWarp>,
     mut villager_seed: ResMut<crate::world::dev::VillagerSeed>,
+    mut ids: ResMut<crate::world::identity::WorldIdAllocator>,
     mut staged: Local<bool>,
 ) {
     if *staged {
@@ -1933,6 +2348,50 @@ pub(crate) fn stage_rendered_lab_once(
         info!(
             "Realworld Village Lab ready at ({:.1}, {:.1}): {} residents, empty store, normal policy, {}x",
             hall.x, hall.z, residents, factor
+        );
+        return;
+    }
+
+    if enabled_flag("FISTWORLD_UX_TOWN") {
+        if map_id != "village_lab" {
+            error!(
+                "FISTWORLD_UX_TOWN requires CITYSIM_MAP_ID=village_lab; refusing to stage it on '{map_id}'"
+            );
+            *staged = true;
+            return;
+        }
+        let Some(mut warp) = warps.iter_mut().next() else {
+            return;
+        };
+        if settlements
+            .iter()
+            .any(|settlement| settlement.name == "Lab UX City")
+        {
+            warn!("Mature UX fixture already exists; skipping duplicate staging");
+            *staged = true;
+            return;
+        }
+        let (hall, trees, farmland) = choose_inland_meadow_site(&terrain);
+        spawn_runtime_ux_town(
+            &mut commands,
+            &terrain,
+            &mut villager_seed,
+            &mut ids,
+            hall,
+            colliders.as_deref(),
+            derived.as_deref(),
+        );
+        let factor = lab_warp();
+        *warp = TimeWarp::clamped(factor);
+        *staged = true;
+        info!(
+            "Rendered mature UX city ready at ({:.1}, {:.1}): {} residents, farmland {:.0}%, nearby trees {}, {}x",
+            hall.x,
+            hall.z,
+            UX_TOWN_RESIDENTS,
+            farmland * 100.0,
+            trees,
+            factor,
         );
         return;
     }

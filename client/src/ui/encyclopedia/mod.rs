@@ -47,6 +47,7 @@ impl Plugin for EncyclopediaPlugin {
             (
                 actions::toggle_encyclopedia,
                 actions::update_click_guard,
+                auto_open_for_diagnostics.run_if(auto_open_requested),
                 state_sync::sync_input_state,
                 state_sync::receive_character_roster,
                 state_sync::learn_visible_characters,
@@ -87,9 +88,10 @@ impl Plugin for EncyclopediaPlugin {
                 actions::handle_person_rows,
                 actions::handle_banner_buttons,
                 actions::handle_retinue_button,
-                actions::close_on_escape_or_backdrop,
+                // Nested pairs: Bevy's system tuples stop at 20 elements.
+                (actions::close_on_escape_or_backdrop, handle_page_back).chain(),
                 state_sync::rebuild_people_list,
-                state_sync::sync_tab_visuals,
+                (state_sync::sync_tab_visuals, sync_page_host).chain(),
                 state_sync::sync_filter_visuals,
                 state_sync::sync_detail_panel,
                 state_sync::sync_banner_controls,
@@ -134,7 +136,8 @@ impl Plugin for EncyclopediaPlugin {
         );
         app.add_systems(
             Update,
-            layout::despawn_encyclopedia.run_if(encyclopedia_closed),
+            (layout::despawn_encyclopedia, close_pages_with_encyclopedia)
+                .run_if(encyclopedia_closed),
         );
         app.add_systems(OnEnter(GameState::MainMenu), close_on_main_menu);
     }
@@ -142,6 +145,142 @@ impl Plugin for EncyclopediaPlugin {
 
 #[derive(Resource, Default)]
 pub struct EncyclopediaOpen(pub bool);
+
+/// The encyclopedia is one window with pages. Ledgers and company controls
+/// are not separate modals: they render inside this host, full size, with a
+/// BACK bar above them, and ESC pops a page before it closes the window.
+#[derive(Component)]
+pub struct EncyclopediaPageHost;
+
+#[derive(Component)]
+pub struct EncyclopediaPageBack;
+
+#[derive(Component)]
+pub struct EncyclopediaPageBackLabel;
+
+fn page_is_open(
+    history: &crate::ui::history::HistoryPanelTarget,
+    business: &crate::ui::business_management::BusinessManagementTarget,
+) -> bool {
+    history.0.is_some() || business.0.is_some()
+}
+
+/// Show the page host (and hide every tab body) while a page is open, and
+/// name the BACK button's destination.
+#[allow(clippy::too_many_arguments)]
+fn sync_page_host(
+    history: Res<crate::ui::history::HistoryPanelTarget>,
+    business: Res<crate::ui::business_management::BusinessManagementTarget>,
+    business_return: Res<crate::ui::business_management::BusinessManagementReturn>,
+    directory: Res<companies::CompanyDirectory>,
+    mut hosts: Query<&mut Node, With<EncyclopediaPageHost>>,
+    mut bodies: Query<(&TabBody, &mut Node), Without<EncyclopediaPageHost>>,
+    mut labels: Query<&mut Text, With<EncyclopediaPageBackLabel>>,
+) {
+    let open = page_is_open(&history, &business);
+    for mut node in hosts.iter_mut() {
+        let display = if open { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    if open {
+        for (_, mut node) in bodies.iter_mut() {
+            if node.display != Display::None {
+                node.display = Display::None;
+            }
+        }
+    }
+    let company_name = |id: shared::components::CompanyId| {
+        directory
+            .records
+            .iter()
+            .find(|company| company.id == id)
+            .map(|company| company.name.to_uppercase())
+    };
+    let label = if business.0.is_some() {
+        business_return
+            .0
+            .and_then(company_name)
+            .map_or_else(|| "BACK".to_string(), |name| format!("BACK TO {name}"))
+    } else if let Some(target) = history.0.as_ref() {
+        use crate::ui::history::HistoryView;
+        match target.view {
+            HistoryView::Company(id) => company_name(id).map_or_else(
+                || "BACK TO COMPANIES".to_string(),
+                |name| format!("BACK TO {name}"),
+            ),
+            HistoryView::World => "BACK TO PLACES".to_string(),
+            HistoryView::Market(_) if target.return_to_trade => "BACK TO MARKET".to_string(),
+            _ => format!("BACK TO {}", target.place.to_uppercase()),
+        }
+    } else {
+        "BACK".to_string()
+    };
+    for mut text in labels.iter_mut() {
+        if text.0 != label {
+            text.0 = label.clone();
+        }
+    }
+}
+
+/// BACK (or ESC while a page is open) pops the page and restores what it
+/// covered: the company it was opened from, or the market board.
+#[allow(clippy::too_many_arguments)]
+fn handle_page_back(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    guard: Res<ClickGuard>,
+    buttons: Query<&Interaction, (With<EncyclopediaPageBack>, Changed<Interaction>)>,
+    mut history: ResMut<crate::ui::history::HistoryPanelTarget>,
+    mut business: ResMut<crate::ui::business_management::BusinessManagementTarget>,
+    mut business_return: ResMut<crate::ui::business_management::BusinessManagementReturn>,
+    mut trade_target: ResMut<crate::ui::settlement_panel::TradePanelTarget>,
+    mut selected_company: ResMut<companies::SelectedCompany>,
+    mut tab: ResMut<EncyclopediaTab>,
+) {
+    let clicked = guard.0
+        && mouse.just_pressed(MouseButton::Left)
+        && buttons
+            .iter()
+            .any(|interaction| *interaction == Interaction::Pressed);
+    if !clicked && !keyboard.just_pressed(KeyCode::Escape) {
+        return;
+    }
+    if business.0.is_some() {
+        business.0 = None;
+        if let Some(company) = business_return.0.take() {
+            selected_company.0 = Some(company);
+            *tab = EncyclopediaTab::Companies;
+        }
+        return;
+    }
+    if let Some(old) = history.0.take() {
+        if old.return_to_trade {
+            trade_target.0 = old.settlement;
+        }
+        if let crate::ui::history::HistoryView::Company(id) = old.view {
+            selected_company.0 = Some(id);
+            *tab = EncyclopediaTab::Companies;
+        }
+    }
+}
+
+/// Closing the window closes its pages too; a page target left set would
+/// otherwise reopen the window next frame to host itself.
+fn close_pages_with_encyclopedia(
+    mut history: ResMut<crate::ui::history::HistoryPanelTarget>,
+    mut business: ResMut<crate::ui::business_management::BusinessManagementTarget>,
+    mut business_return: ResMut<crate::ui::business_management::BusinessManagementReturn>,
+) {
+    if history.0.is_some() {
+        history.0 = None;
+    }
+    if business.0.is_some() {
+        business.0 = None;
+        business_return.0 = None;
+    }
+}
 
 /// Armed once the left button has been released since the window opened.
 /// See [`crate::ui::modal::update_modal_click_guard`].
@@ -158,6 +297,59 @@ fn encyclopedia_closed(open: Res<EncyclopediaOpen>) -> bool {
 
 fn close_on_main_menu(mut open: ResMut<EncyclopediaOpen>) {
     open.0 = false;
+}
+
+/// Diagnostics: `FISTFORCE_OPEN_ENCYCLOPEDIA=people|places|retinue|companies`
+/// opens the window on that tab a few seconds into gameplay, so a perf run
+/// can exercise the panels on a machine with no input automation.
+fn auto_open_requested(mut cached: Local<Option<bool>>) -> bool {
+    // Cached once: the flag is static for the process, and the opener must
+    // not hold `ResMut` access every frame of every ordinary session.
+    *cached.get_or_insert_with(|| std::env::var("FISTFORCE_OPEN_ENCYCLOPEDIA").is_ok())
+}
+
+fn auto_open_for_diagnostics(
+    time: Res<Time>,
+    capture: Option<Res<crate::capture::CaptureConfig>>,
+    input_state: Res<crate::input::InputState>,
+    mut open: ResMut<EncyclopediaOpen>,
+    mut tab: ResMut<EncyclopediaTab>,
+    mut armed_at: Local<Option<f32>>,
+    mut done: Local<bool>,
+) {
+    if *done {
+        return;
+    }
+    // Capture runs never spawn the window (see `spawn_encyclopedia`), so
+    // flagging it open there would only leave a ghost modal blocking input.
+    if capture.is_some() {
+        *done = true;
+        return;
+    }
+    let Ok(raw) = std::env::var("FISTFORCE_OPEN_ENCYCLOPEDIA") else {
+        *done = true;
+        return;
+    };
+    let target = match raw.trim().to_ascii_lowercase().as_str() {
+        "people" => EncyclopediaTab::People,
+        "places" => EncyclopediaTab::Places,
+        "retinue" => EncyclopediaTab::Retinue,
+        "companies" => EncyclopediaTab::Companies,
+        _ => {
+            *done = true;
+            return;
+        }
+    };
+    let now = time.elapsed_secs();
+    let armed = *armed_at.get_or_insert(now);
+    // Same rule as the N key: never open over another modal.
+    if now - armed < 5.0 || input_state.ui_blocking() {
+        return;
+    }
+    open.0 = true;
+    *tab = target;
+    *done = true;
+    info!("FISTFORCE_OPEN_ENCYCLOPEDIA: opened the {target:?} tab");
 }
 
 /// Which tab is showing. PEOPLE is the working one; the other two are

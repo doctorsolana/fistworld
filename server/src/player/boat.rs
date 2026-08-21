@@ -14,7 +14,7 @@ use std::collections::{BinaryHeap, VecDeque};
 
 use shared::components::{
     AboardBoat, CharacterActivity, CharacterMotion, CloudSeed, CommandedBy, PlayerBoat,
-    PlayerPosition, PlayerRotation, Vessel, WorldTime, WreckedVessel,
+    PlayerPosition, PlayerRotation, SettlementBuildingKind, Vessel, WorldTime, WreckedVessel,
 };
 use shared::protocol::{CreateHero, DisembarkBoat};
 use shared::region::RegionCoord;
@@ -426,6 +426,11 @@ pub fn handle_create_hero_requests(
     mut hero_index: ResMut<HeroIndex>,
     heroes: Query<&shared::components::Hero>,
     boats: Query<&CommandedBy, With<PlayerBoat>>,
+    settlements: Query<(
+        &shared::components::Settlement,
+        &PlayerPosition,
+        Option<&PlayerRotation>,
+    )>,
     mut clients: Query<(&RemoteId, &mut MessageReceiver<CreateHero>), With<ClientOf>>,
 ) {
     for (remote, mut receiver) in clients.iter_mut() {
@@ -439,7 +444,30 @@ pub fn handle_create_hero_requests(
             {
                 continue;
             }
-            let Some((position, yaw)) = starting_voyage(&terrain, &account) else {
+            let ux_fixture = std::env::var("FISTWORLD_UX_TOWN").is_ok_and(|raw| {
+                matches!(
+                    raw.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            });
+            let ux_start = ux_fixture
+                .then(|| {
+                    settlements.iter().find_map(|(settlement, hall, rotation)| {
+                        (settlement.name == "Lab UX City").then(|| {
+                            let yaw = rotation.map_or(0.0, |rotation| rotation.0);
+                            let door = SettlementBuildingKind::Hall.entrance_position(hall.0, yaw);
+                            let outward =
+                                Vec2::new(door.x - hall.0.x, door.z - hall.0.z).normalize_or_zero();
+                            let x = door.x + outward.x * 4.0;
+                            let z = door.z + outward.y * 4.0;
+                            (Vec3::new(x, terrain.get_height(x, z), z), yaw)
+                        })
+                    })
+                })
+                .flatten();
+            let opening_voyage = ux_start.is_none();
+            let Some((position, yaw)) = ux_start.or_else(|| starting_voyage(&terrain, &account))
+            else {
                 warn!(
                     "Cannot create hero for '{account}': active map has no reachable edge voyage"
                 );
@@ -466,6 +494,12 @@ pub fn handle_create_hero_requests(
                     .unwrap_or_default(),
                 shared::components::Health::default(),
             );
+            if !opening_voyage {
+                info!(
+                    "UX fixture created '{account}' beside Lab UX City: hero={hero:?} at={position:?}"
+                );
+                continue;
+            }
             // `spawn_hero` terrain-snaps ordinary land starts. Override that
             // here with the exact waterline/helm position in the same command
             // queue; the latter insert is authoritative.

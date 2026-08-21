@@ -28,7 +28,7 @@ use shared::economy::{
 use super::*;
 use crate::ui::foundation::{button_chrome, UiButtonStyle, UiButtonVariant};
 use crate::ui::hud::GodCapability;
-use crate::ui::styles::{INK, INK_MUTED};
+use crate::ui::styles::{EMBER, INK, INK_MUTED};
 
 /// One settlement the player knows about.
 #[derive(Clone, Debug)]
@@ -302,6 +302,18 @@ pub struct PlaceDetailSubtitle;
 pub struct PlaceDetailLine(pub usize);
 
 #[derive(Component, Clone, Copy)]
+pub struct PlaceDetailTile(pub usize);
+
+#[derive(Component, Clone, Copy)]
+pub struct PlaceDetailTileLabel(pub usize);
+
+#[derive(Component, Clone, Copy)]
+pub struct PlaceDetailTileValue(pub usize);
+
+#[derive(Component, Clone, Copy)]
+pub struct PlaceBackToCompanyLabel;
+
+#[derive(Component, Clone, Copy)]
 pub struct PlaceDetailLabel(pub usize);
 
 #[derive(Component, Clone, Copy)]
@@ -365,7 +377,18 @@ pub(super) fn learn_settlements(
         Option<&CivicHallUpgradeWorksite>,
     )>,
     mut places: ResMut<KnownPlaces>,
+    ui_perf: Res<crate::ui::perf::UiPerf>,
+    time: Res<Time>,
+    mut last_run: Local<Option<f32>>,
 ) {
+    let mut _ui_scope = ui_perf.scope("learn_settlements");
+    // This pass snapshots every building of every settlement. Twice a second
+    // keeps the places tab and compact panel current without a per-frame tax.
+    let now = time.elapsed_secs();
+    if last_run.is_some_and(|last| now - last < 0.5) {
+        return;
+    }
+    *last_run = Some(now);
     let company_accounts: std::collections::HashMap<CompanyId, shared::economy::CompanyAccount> =
         companies
             .iter()
@@ -741,22 +764,32 @@ pub(super) fn rebuild_place_list(
     content: Query<Entity, With<PlacesListContent>>,
     existing: Query<Entity, Or<(With<PlaceRow>, With<PlaceBuildingRow>)>>,
     mut count_text: Query<&mut Text, With<PlaceCountText>>,
-    mut last: Local<Option<usize>>,
+    mut last: Local<Option<u64>>,
+    ui_perf: Res<crate::ui::perf::UiPerf>,
 ) {
-    let signature = places.records.len();
-    if !places.is_changed() && !selected.is_changed() && *last == Some(signature) {
+    let mut _ui_scope = ui_perf.scope("rebuild_place_list");
+    // Same rule as the people list: rows render a handful of slow facts
+    // (name, tier, building count, and the expanded place's building labels),
+    // while `KnownPlaces` moves every time a storehouse count ticks. Rebuild
+    // on the ROW projection, not on the registry. A fresh container always fills.
+    let fresh = existing.is_empty();
+    if !places.is_changed() && !selected.is_changed() && !fresh && last.is_some() {
         return;
     }
-    *last = Some(signature);
+    let ordered = places.ordered();
+    let signature = place_rows_signature(&ordered, selected.0.as_deref());
+    if !fresh && *last == Some(signature) {
+        return;
+    }
 
     let Ok(content_entity) = content.single() else {
         return;
     };
+    *last = Some(signature);
+    _ui_scope.rebuilt();
     for row in existing.iter() {
         commands.entity(row).despawn();
     }
-
-    let ordered = places.ordered();
 
     // Drop a selection that no longer exists.
     if let Some(name) = selected.0.clone() {
@@ -791,7 +824,7 @@ pub(super) fn rebuild_place_list(
                 PlaceRow(String::new()),
                 Text::new("No places known yet"),
                 TextFont {
-                    font_size: FontSize::Px(12.0),
+                    font_size: FontSize::Px(15.0),
                     ..default()
                 },
                 TextColor(INK_MUTED),
@@ -829,6 +862,28 @@ pub(super) fn rebuild_place_list(
     });
 }
 
+/// Hash of exactly what the place rows render: every row's name, tier and
+/// building count, plus the expanded place's building labels and summaries.
+fn place_rows_signature(ordered: &[&PlaceRecord], selected: Option<&str>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    selected.hash(&mut hasher);
+    ordered.len().hash(&mut hasher);
+    for record in ordered {
+        record.name.hash(&mut hasher);
+        record.tier.label().hash(&mut hasher);
+        record.buildings.len().hash(&mut hasher);
+        if selected == Some(record.name.as_str()) {
+            record.hall_level.label().hash(&mut hasher);
+            for (index, building) in record.buildings.iter().enumerate() {
+                building_label(record, index).hash(&mut hasher);
+                building_tree_summary(building).hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
+
 fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, expanded: bool) {
     list.spawn((
         Button,
@@ -848,7 +903,7 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
         row.spawn((
             Text::new(if expanded { "-" } else { "+" }),
             TextFont {
-                font_size: FontSize::Px(11.0),
+                font_size: FontSize::Px(14.0),
                 ..default()
             },
             TextColor(INK_MUTED),
@@ -861,7 +916,7 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
         row.spawn((
             Text::new(record.name.clone()),
             TextFont {
-                font_size: FontSize::Px(13.0),
+                font_size: FontSize::Px(16.0),
                 ..default()
             },
             TextColor(INK),
@@ -877,7 +932,7 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
                 record.buildings.len() + 1
             )),
             TextFont {
-                font_size: FontSize::Px(9.0),
+                font_size: FontSize::Px(12.5),
                 ..default()
             },
             TextColor(INK_MUTED),
@@ -915,7 +970,7 @@ fn spawn_place_building_row(
         row.spawn((
             Text::new(label.to_string()),
             TextFont {
-                font_size: FontSize::Px(11.0),
+                font_size: FontSize::Px(14.0),
                 ..default()
             },
             TextColor(INK),
@@ -927,7 +982,7 @@ fn spawn_place_building_row(
         row.spawn((
             Text::new(summary.to_string()),
             TextFont {
-                font_size: FontSize::Px(8.0),
+                font_size: FontSize::Px(11.5),
                 ..default()
             },
             TextColor(INK_MUTED),
@@ -1026,7 +1081,9 @@ pub(super) fn handle_back_to_company(
 
 pub(super) fn sync_back_to_company(
     return_to: Res<companies::CompanyDrilldownReturn>,
+    directory: Res<companies::CompanyDirectory>,
     mut buttons: Query<&mut Node, With<PlaceBackToCompanyAction>>,
+    mut labels: Query<&mut Text, With<PlaceBackToCompanyLabel>>,
 ) {
     for mut node in buttons.iter_mut() {
         node.display = if return_to.0.is_some() {
@@ -1034,6 +1091,20 @@ pub(super) fn sync_back_to_company(
         } else {
             Display::None
         };
+    }
+    // Name the destination: "BACK TO ALDRIC GRAIN & BREAD" says where you are
+    // in a way "BACK TO COMPANY" never could.
+    let label = return_to
+        .0
+        .and_then(|id| directory.records.iter().find(|company| company.id == id))
+        .map_or_else(
+            || "BACK TO COMPANY".to_string(),
+            |company| format!("BACK TO {}", company.name.to_uppercase()),
+        );
+    for mut text in labels.iter_mut() {
+        if text.0 != label {
+            text.0 = label.clone();
+        }
     }
 }
 
@@ -1084,11 +1155,35 @@ pub(super) fn sync_place_detail(
     mut line_text: Query<
         (
             &mut Text,
+            &mut TextFont,
+            &mut TextColor,
             Option<&PlaceDetailLabel>,
             Option<&PlaceDetailValue>,
         ),
         (
             Or<(With<PlaceDetailLabel>, With<PlaceDetailValue>)>,
+            Without<PlaceDetailName>,
+            Without<PlaceDetailSubtitle>,
+        ),
+    >,
+    mut tiles: Query<
+        (&PlaceDetailTile, &mut Node),
+        (
+            Without<PlaceDetailCard>,
+            Without<PlaceDetailEmptyState>,
+            Without<PlaceDetailLine>,
+        ),
+    >,
+    mut tile_text: Query<
+        (
+            &mut Text,
+            Option<&PlaceDetailTileLabel>,
+            Option<&PlaceDetailTileValue>,
+        ),
+        (
+            Or<(With<PlaceDetailTileLabel>, With<PlaceDetailTileValue>)>,
+            Without<PlaceDetailLabel>,
+            Without<PlaceDetailValue>,
             Without<PlaceDetailName>,
             Without<PlaceDetailSubtitle>,
         ),
@@ -1125,8 +1220,8 @@ pub(super) fn sync_place_detail(
             text.0 = model.subtitle.clone();
         }
     }
-    for (PlaceDetailLine(index), mut node) in lines.iter_mut() {
-        let display = if *index < model.rows.len() {
+    for (PlaceDetailTile(index), mut node) in tiles.iter_mut() {
+        let display = if *index < model.tiles.len() {
             Display::Flex
         } else {
             Display::None
@@ -1135,20 +1230,68 @@ pub(super) fn sync_place_detail(
             node.display = display;
         }
     }
-    for (mut text, label, value) in line_text.iter_mut() {
+    for (mut text, label, value) in tile_text.iter_mut() {
         let index = label
             .map(|part| part.0)
             .or_else(|| value.map(|part| part.0));
-        let Some((row_label, row_value)) = index.and_then(|index| model.rows.get(index)) else {
+        let Some((tile_label, tile_value)) = index.and_then(|index| model.tiles.get(index)) else {
             continue;
         };
         let next = if label.is_some() {
-            row_label
+            tile_label
         } else {
-            row_value
+            tile_value
         };
         if text.0 != *next {
             text.0 = next.clone();
+        }
+    }
+    for (PlaceDetailLine(index), mut node) in lines.iter_mut() {
+        let row = model.rows.get(*index);
+        let display = if row.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != display {
+            node.display = display;
+        }
+        // A section heading sits on its own, with air above it and no rule.
+        let section = matches!(row, Some(DetailRow::Section(_)));
+        let padding = if section {
+            UiRect::new(Val::Px(0.0), Val::Px(0.0), Val::Px(22.0), Val::Px(4.0))
+        } else {
+            UiRect::vertical(Val::Px(9.0))
+        };
+        if node.padding != padding {
+            node.padding = padding;
+        }
+        let border = UiRect::bottom(Val::Px(if section { 0.0 } else { 1.0 }));
+        if node.border != border {
+            node.border = border;
+        }
+    }
+    for (mut text, mut font, mut color, label, value) in line_text.iter_mut() {
+        let index = label
+            .map(|part| part.0)
+            .or_else(|| value.map(|part| part.0));
+        let Some(row) = index.and_then(|index| model.rows.get(index)) else {
+            continue;
+        };
+        let (next, next_size, next_color) = match (row, label.is_some()) {
+            (DetailRow::Section(name), true) => (name.clone(), 13.0, EMBER),
+            (DetailRow::Section(_), false) => (String::new(), 16.0, INK),
+            (DetailRow::Line(row_label, _), true) => (row_label.clone(), 13.5, INK_MUTED),
+            (DetailRow::Line(_, row_value), false) => (row_value.clone(), 16.0, INK),
+        };
+        if text.0 != next {
+            text.0 = next;
+        }
+        if font.font_size != FontSize::Px(next_size) {
+            font.font_size = FontSize::Px(next_size);
+        }
+        if color.0 != next_color {
+            color.0 = next_color;
         }
     }
 }
@@ -1226,7 +1369,211 @@ pub(super) fn sync_place_business_history_action(
 struct PlaceDetailModel {
     title: String,
     subtitle: String,
-    rows: Vec<(String, String)>,
+    /// The numbers a player scans first: big, few, on top.
+    tiles: Vec<(String, String)>,
+    rows: Vec<DetailRow>,
+}
+
+impl PlaceDetailModel {
+    /// Label / value pairs only, section headings skipped.
+    #[cfg(test)]
+    fn lines(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.rows.iter().filter_map(|row| match row {
+            DetailRow::Line(label, value) => Some((label.as_str(), value.as_str())),
+            DetailRow::Section(_) => None,
+        })
+    }
+}
+
+/// One row of the detail ledger: a section heading, or a label / value pair.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum DetailRow {
+    Section(String),
+    Line(String, String),
+}
+
+/// Order the flat ledger into named sections. Each table entry names a
+/// section and the labels that belong to it; labels keep their original
+/// relative order, and anything the table does not mention lands in a final
+/// DETAILS section so no fact is ever silently dropped.
+fn group_rows(rows: Vec<(String, String)>, sections: &[(&str, &[&str])]) -> Vec<DetailRow> {
+    let mut remaining: Vec<Option<(String, String)>> = rows.into_iter().map(Some).collect();
+    let mut out = Vec::new();
+    for (section, labels) in sections {
+        let mut members = Vec::new();
+        for slot in remaining.iter_mut() {
+            if slot
+                .as_ref()
+                .is_some_and(|(label, _)| labels.contains(&label.as_str()))
+            {
+                let (label, value) = slot.take().unwrap();
+                members.push(DetailRow::Line(label, value));
+            }
+        }
+        if !members.is_empty() {
+            out.push(DetailRow::Section((*section).to_string()));
+            out.extend(members);
+        }
+    }
+    let leftovers: Vec<DetailRow> = remaining
+        .into_iter()
+        .flatten()
+        .map(|(label, value)| DetailRow::Line(label, value))
+        .collect();
+    if !leftovers.is_empty() {
+        out.push(DetailRow::Section("DETAILS".to_string()));
+        out.extend(leftovers);
+    }
+    out
+}
+
+const OVERVIEW_SECTIONS: &[(&str, &[&str])] = &[
+    (
+        "PEOPLE",
+        &[
+            "RESIDENTS",
+            "HOUSING",
+            "UNEMPLOYMENT",
+            "HUNGER",
+            "UNPAID WORKERS",
+        ],
+    ),
+    (
+        "STABILITY",
+        &["UNREST", "UNREST PRESSURES", "FOOD SECURITY"],
+    ),
+    ("ECONOMY", &["TREASURY", "COMMON STORE"]),
+    ("GROWTH", &["STRUCTURES", "TO ADVANCE", "LOCATION"]),
+];
+
+const HALL_SECTIONS: &[(&str, &[&str])] = &[
+    (
+        "OFFICE",
+        &[
+            "OWNER",
+            "SERVICES",
+            "REEVE",
+            "MOOT STEWARDS",
+            "PUBLIC POSITIONS",
+            "CIVIC WAGE ARREARS",
+        ],
+    ),
+    (
+        "POLICY",
+        &[
+            "CIVIC POLICY",
+            "SOCIAL / GROWTH POLICY",
+            "PERMIT POLICY",
+            "POOR RELIEF",
+        ],
+    ),
+    (
+        "PERMITS & WORKS",
+        &[
+            "PERMIT MARKET",
+            "APPROVED WORKS",
+            "LAYOUT CHARTER",
+            "ROAD AUDIT",
+            "ROAD MATERIALS",
+            "DEFENCE RESERVES",
+        ],
+    ),
+    (
+        "MARKET",
+        &[
+            "TREASURY",
+            "COMMON STORE",
+            "MARKET MODEL",
+            "LIFETIME TRADE",
+            "LABOUR MARKET",
+            "PURCHASABLE / AT BUSINESSES",
+            "LOCAL COMPANY TREASURIES",
+            "BUSINESS ARREARS",
+        ],
+    ),
+    ("LOCATION", &["LOCATION"]),
+];
+
+const BUILDING_SECTIONS: &[(&str, &[&str])] = &[
+    (
+        "OWNERSHIP",
+        &[
+            "OWNER",
+            "PURPOSE",
+            "COMPANY TREASURY",
+            "SITE REQUIREMENT / COMPANY FREE",
+        ],
+    ),
+    (
+        "PEOPLE",
+        &["BEDS", "HOUSEHOLD", "STAFFING", "WORKERS", "WAGE OFFER"],
+    ),
+    (
+        "BUSINESS",
+        &[
+            "BUSINESS STATUS",
+            "MANAGEMENT",
+            "LIABILITIES",
+            "YESTERDAY P&L",
+            "LIFETIME RESULT",
+        ],
+    ),
+    ("TRADE", &["SALE POLICY", "INPUT ORDERS"]),
+    ("LOCATION", &["LOCATION"]),
+];
+
+/// The six figures that describe a town at a glance.
+fn town_tiles(place: &PlaceRecord) -> Vec<(String, String)> {
+    let economy = place.economy.as_ref();
+    let population = if place.residents == 0 {
+        "None yet".to_string()
+    } else {
+        place.residents.to_string()
+    };
+    let unemployment = economy.map_or_else(
+        || "-".to_string(),
+        |economy| {
+            format!(
+                "{:.0}%",
+                resident_share(u32::from(economy.job_seekers), place.residents)
+            )
+        },
+    );
+    let prosperity = economy.map_or_else(
+        || "-".to_string(),
+        |economy| format!("{:.0}", economy.prosperity),
+    );
+    let food = economy.map_or_else(
+        || "-".to_string(),
+        |economy| {
+            let state = if economy.unmet_food > 0 {
+                "Crisis"
+            } else if economy.reserve_days < 1.0 {
+                "Short"
+            } else if economy.reserve_days < shared::economy::FOOD_SECURITY_TARGET_DAYS {
+                "Fragile"
+            } else {
+                "Secure"
+            };
+            format!("{state}, {:.1} days", economy.reserve_days)
+        },
+    );
+    let unrest = economy.map_or_else(
+        || "-".to_string(),
+        |economy| format!("{:.0}  {}", economy.unrest, economy.unrest_label()),
+    );
+    let treasury = format!("{} coin", format_money(place.treasury));
+    [
+        ("POPULATION", population),
+        ("UNEMPLOYMENT", unemployment),
+        ("PROSPERITY", prosperity),
+        ("FOOD", food),
+        ("UNREST", unrest),
+        ("TREASURY", treasury),
+    ]
+    .into_iter()
+    .map(|(label, value)| (label.to_string(), value))
+    .collect()
 }
 
 fn resident_share(count: u32, residents: u32) -> f32 {
@@ -1415,49 +1762,53 @@ fn place_detail_model(
             PlaceDetailModel {
                 title: place.name.clone(),
                 subtitle: format!("{status} / SETTLEMENT OVERVIEW"),
-                rows: vec![
-                    ("RESIDENTS".into(), residents),
-                    ("UNREST".into(), unrest_summary(place.economy.as_ref())),
-                    (
-                        "UNREST PRESSURES".into(),
-                        unrest_pressure_summary(place.economy.as_ref()),
-                    ),
-                    (
-                        "FOOD SECURITY".into(),
-                        food_security_summary(place.economy.as_ref()),
-                    ),
-                    (
-                        "HUNGER".into(),
-                        hunger_summary(place.economy.as_ref(), place.residents),
-                    ),
-                    (
-                        "UNEMPLOYMENT".into(),
-                        work_seekers_summary(place.economy.as_ref(), place.residents),
-                    ),
-                    (
-                        "HOUSING".into(),
-                        housing_summary(place.economy.as_ref(), place.residents),
-                    ),
-                    (
-                        "UNPAID WORKERS".into(),
-                        unpaid_workers_summary(place.economy.as_ref()),
-                    ),
-                    ("STRUCTURES".into(), structures),
-                    (
-                        "COMMON STORE".into(),
-                        inventory_summary(
-                            place.inventory_used,
-                            place.inventory_capacity,
-                            &place.inventory,
+                tiles: town_tiles(place),
+                rows: group_rows(
+                    vec![
+                        ("RESIDENTS".into(), residents),
+                        ("UNREST".into(), unrest_summary(place.economy.as_ref())),
+                        (
+                            "UNREST PRESSURES".into(),
+                            unrest_pressure_summary(place.economy.as_ref()),
                         ),
-                    ),
-                    (
-                        "TREASURY".into(),
-                        format!("{} coin", format_money(place.treasury)),
-                    ),
-                    ("TO ADVANCE".into(), advance),
-                    ("LOCATION".into(), location(place.position)),
-                ],
+                        (
+                            "FOOD SECURITY".into(),
+                            food_security_summary(place.economy.as_ref()),
+                        ),
+                        (
+                            "HUNGER".into(),
+                            hunger_summary(place.economy.as_ref(), place.residents),
+                        ),
+                        (
+                            "UNEMPLOYMENT".into(),
+                            work_seekers_summary(place.economy.as_ref(), place.residents),
+                        ),
+                        (
+                            "HOUSING".into(),
+                            housing_summary(place.economy.as_ref(), place.residents),
+                        ),
+                        (
+                            "UNPAID WORKERS".into(),
+                            unpaid_workers_summary(place.economy.as_ref()),
+                        ),
+                        ("STRUCTURES".into(), structures),
+                        (
+                            "COMMON STORE".into(),
+                            inventory_summary(
+                                place.inventory_used,
+                                place.inventory_capacity,
+                                &place.inventory,
+                            ),
+                        ),
+                        (
+                            "TREASURY".into(),
+                            format!("{} coin", format_money(place.treasury)),
+                        ),
+                        ("TO ADVANCE".into(), advance),
+                        ("LOCATION".into(), location(place.position)),
+                    ],
+                    OVERVIEW_SECTIONS,
+                ),
             }
         }
         SelectedPlaceEntry::Hall => {
@@ -1663,7 +2014,8 @@ fn place_detail_model(
             PlaceDetailModel {
                 title: place.hall_level.label().to_string(),
                 subtitle: format!("{} / CIVIC & MARKET RECORD", place.name.to_uppercase()),
-                rows: vec![
+                tiles: town_tiles(place),
+                rows: group_rows(vec![
                     ("OWNER".into(), "The settlement common".into()),
                     (
                         "SERVICES".into(),
@@ -1766,7 +2118,7 @@ fn place_detail_model(
                         ),
                     ),
                     ("LOCATION".into(), location(place.position)),
-                ],
+                ], HALL_SECTIONS),
             }
         }
         SelectedPlaceEntry::Building(index) => {
@@ -2082,8 +2434,19 @@ fn place_detail_model(
             rows.push(("LOCATION".into(), location(building.position)));
             PlaceDetailModel {
                 title: building_label(place, index),
-                subtitle: format!("{} / BUILDING RECORD", place.name.to_uppercase()),
-                rows,
+                // A building page must never be mistaken for the company that
+                // runs it: the subtitle names the owner and the town, and the
+                // company page is one click back.
+                subtitle: match building.owner.as_deref() {
+                    Some(owner) if building.for_sale.is_none() => format!(
+                        "ONE SITE OF {}  /  IN {}",
+                        owner.to_uppercase(),
+                        place.name.to_uppercase()
+                    ),
+                    _ => format!("BUILDING IN {}", place.name.to_uppercase()),
+                },
+                tiles: Vec::new(),
+                rows: group_rows(rows, BUILDING_SECTIONS),
             }
         }
     }
@@ -2228,15 +2591,14 @@ mod tests {
         assert_eq!(model.title, "Brackwater");
         assert_eq!(model.subtitle, "VILLAGE / SETTLEMENT OVERVIEW");
         let structures = model
-            .rows
-            .iter()
-            .find(|(label, _)| label == "STRUCTURES")
-            .map(|(_, value)| value.as_str());
+            .lines()
+            .find(|(label, _)| *label == "STRUCTURES")
+            .map(|(_, value)| value);
         assert_eq!(
             structures,
             Some("2 completed / 1 wheat field / 0 fishing piers")
         );
-        assert!(model.rows.iter().all(|(_, value)| !value.contains("Ada")));
+        assert!(model.lines().all(|(_, value)| !value.contains("Ada")));
     }
 
     #[test]
@@ -2274,16 +2636,15 @@ mod tests {
             "UNPAID WORKERS",
         ] {
             assert!(
-                model.rows.iter().any(|(actual, _)| actual == label),
+                model.lines().any(|(actual, _)| actual == label),
                 "missing {label}"
             );
         }
-        assert!(model.rows.iter().any(|(label, value)| {
+        assert!(model.lines().any(|(label, value)| {
             label == "UNREST" && value.contains("Uneasy") && value.contains("rising")
         }));
         assert!(model
-            .rows
-            .iter()
+            .lines()
             .any(|(label, value)| label == "HUNGER" && value.contains("50%")));
     }
 
@@ -2291,18 +2652,17 @@ mod tests {
     fn selecting_a_building_produces_its_own_detail_sheet() {
         let model = place_detail_model(&explorer_place(), SelectedPlaceEntry::Building(0), true);
         assert_eq!(model.title, "FARMSTEAD");
-        assert_eq!(model.subtitle, "BRACKWATER / BUILDING RECORD");
+        // The subtitle names the owner and the town, so a site page can never
+        // be mistaken for the company page it was opened from.
+        assert_eq!(model.subtitle, "ONE SITE OF ADA  /  IN BRACKWATER");
         assert!(model
-            .rows
-            .iter()
+            .lines()
             .any(|(label, value)| label == "OWNER" && value == "Ada"));
         assert!(model
-            .rows
-            .iter()
+            .lines()
             .any(|(label, value)| label == "FARMLAND QUALITY" && value == "76%"));
         assert!(model
-            .rows
-            .iter()
+            .lines()
             .any(|(label, value)| label == "STORE" && value.contains("Wheat 4")));
     }
 
@@ -2311,17 +2671,11 @@ mod tests {
         let mut place = explorer_place();
         place.buildings[0].kind = SettlementBuildingKind::Windmill;
         let mill = place_detail_model(&place, SelectedPlaceEntry::Building(0), true);
-        assert!(mill
-            .rows
-            .iter()
-            .all(|(label, _)| !label.contains("QUALITY")));
+        assert!(mill.lines().all(|(label, _)| !label.contains("QUALITY")));
 
         place.buildings[0].kind = SettlementBuildingKind::Bakery;
         let bakery = place_detail_model(&place, SelectedPlaceEntry::Building(0), true);
-        assert!(bakery
-            .rows
-            .iter()
-            .all(|(label, _)| !label.contains("QUALITY")));
+        assert!(bakery.lines().all(|(label, _)| !label.contains("QUALITY")));
     }
 
     #[test]
@@ -2360,7 +2714,7 @@ mod tests {
             "LOCAL PROFIT LEVY",
         ] {
             assert!(
-                model.rows.iter().any(|(actual, _)| actual == label),
+                model.lines().any(|(actual, _)| actual == label),
                 "missing {label}"
             );
         }

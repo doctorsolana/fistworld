@@ -646,10 +646,28 @@ pub fn handle_hero_permit_orders(
 
                     if let HeroPermitAction::Purchase { quoted_fee, .. } = order.action {
                         if quoted_fee != price.fee {
-                            sender.send::<ReliableChannel>(reject(
-                                None,
-                                "The permit quote changed; review the current price again.",
-                            ));
+                            // Not a refusal: answer with the exact fee so the
+                            // card redraws and one more press confirms it.
+                            sender.send::<ReliableChannel>(HeroPermitResult {
+                                success: false,
+                                outcome: HeroPermitOutcome::Quote(HeroPermitQuote {
+                                    settlement: *settlement_id,
+                                    settlement_name: settlement.name.clone(),
+                                    kind,
+                                    fee: price.fee,
+                                    recommended_working_capital: price
+                                        .recommended_working_capital,
+                                    wallet_balance: wallet.balance(),
+                                    company,
+                                    company_cash: company
+                                        .map_or(0, |company| company_finance.cash(company)),
+                                }),
+                                message: format!(
+                                    "The {} permit is now {} coin. Press again to buy at that price.",
+                                    kind.label(),
+                                    format_money(price.fee)
+                                ),
+                            });
                             continue;
                         }
                         let paid = if let Some(company) = company {

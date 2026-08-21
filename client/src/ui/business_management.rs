@@ -25,12 +25,9 @@ use crate::ui::foundation::{
     button_chrome, retained_scroll, subtree_is_interacting, UiButtonLabel, UiButtonVariant,
     UiRefreshStamp,
 };
-use crate::ui::modal::{
-    handle_backdrop_pressed, spawn_modal, update_modal_click_guard, ModalLayout,
-};
+use crate::ui::modal::update_modal_click_guard;
 use crate::ui::styles::{
-    plate_shadow, INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE,
-    PLATE_RULE_SOFT, RADIUS,
+    INK, INK_MUTED, LIMEWASH, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE_SOFT, RADIUS,
 };
 
 pub struct BusinessManagementPlugin;
@@ -50,8 +47,6 @@ impl Plugin for BusinessManagementPlugin {
                 update_guard,
                 handle_action_buttons,
                 handle_share_draft_buttons,
-                handle_back_to_company,
-                handle_close,
                 sync_input_state,
             )
                 .chain()
@@ -85,15 +80,29 @@ struct Root {
 }
 
 #[derive(Component)]
-struct Backdrop;
-#[derive(Component)]
 struct Panel;
 #[derive(Component)]
-struct Close;
-#[derive(Component)]
-struct BackToCompany;
-#[derive(Component)]
 struct BodyScroll;
+
+/// Refresh-gated panel state plus the encyclopedia host this page renders
+/// into; bundled so `ensure_panel` stays under Bevy's parameter limit.
+#[derive(bevy::ecs::system::SystemParam)]
+struct ManagementPanelUi<'w, 's> {
+    roots: Query<'w, 's, (Entity, &'static Root, Option<&'static UiRefreshStamp>)>,
+    body_scroll: Query<'w, 's, &'static ScrollPosition, With<BodyScroll>>,
+    children: Query<'w, 's, &'static Children>,
+    interactions: Query<
+        'w,
+        's,
+        (
+            &'static Interaction,
+            Has<crate::ui::foundation::UiRefreshExempt>,
+        ),
+    >,
+    hosts: Query<'w, 's, Entity, With<crate::ui::encyclopedia::EncyclopediaPageHost>>,
+    encyclopedia_open: ResMut<'w, crate::ui::encyclopedia::EncyclopediaOpen>,
+    tab: ResMut<'w, crate::ui::encyclopedia::EncyclopediaTab>,
+}
 
 #[derive(Component, Clone, Copy)]
 struct Action(HeroBusinessAction);
@@ -158,14 +167,29 @@ fn ensure_panel(
     )>,
     people: Query<(&PersonId, &CharacterName)>,
     heroes: Query<(&Hero, &PersonId, Option<&Wallet>)>,
-    roots: Query<(Entity, &Root, Option<&UiRefreshStamp>)>,
-    body_scroll: Query<&ScrollPosition, With<BodyScroll>>,
-    children: Query<&Children>,
-    interactions: Query<(&Interaction, Has<crate::ui::foundation::UiRefreshExempt>)>,
+    mut ui: ManagementPanelUi,
 ) {
+    let ManagementPanelUi {
+        roots,
+        body_scroll,
+        children,
+        interactions,
+        hosts,
+        encyclopedia_open,
+        tab,
+    } = &mut ui;
     let Some(entity) = target.0 else {
         for (root, ..) in roots.iter() {
             commands.entity(root).despawn();
+        }
+        return;
+    };
+    // Company controls are an encyclopedia page: open the window on the
+    // companies tab if needed and host the page next frame.
+    let Ok(host) = hosts.single() else {
+        if !encyclopedia_open.0 {
+            encyclopedia_open.0 = true;
+            **tab = crate::ui::encyclopedia::EncyclopediaTab::Companies;
         }
         return;
     };
@@ -230,40 +254,28 @@ fn ensure_panel(
         commands.entity(root).despawn();
     }
 
-    let modal = spawn_modal(
-        &mut commands,
-        Root {
-            signature,
-            target: entity,
-        },
-        Backdrop,
-        Panel,
-        ModalLayout {
-            panel_size: Vec2::new(760.0, 720.0),
-            panel_padding: 0.0,
-        },
-    );
-    commands
-        .entity(modal.root)
-        .insert(UiRefreshStamp::now(&time));
-    commands.entity(modal.panel).insert((
-        Node {
-            width: Val::Vw(86.0),
-            max_width: Val::Px(760.0),
-            height: Val::Vh(84.0),
-            max_height: Val::Px(720.0),
-            flex_direction: FlexDirection::Column,
-            align_items: AlignItems::Stretch,
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(RADIUS)),
-            overflow: Overflow::clip(),
-            ..default()
-        },
-        BackgroundColor(LIMEWASH_LIT),
-        BorderColor::all(PLATE_RULE),
-        plate_shadow(),
-    ));
-    commands.entity(modal.panel).with_children(|panel| {
+    let panel_entity = commands
+        .spawn((
+            Root {
+                signature,
+                target: entity,
+            },
+            Panel,
+            UiRefreshStamp::now(&time),
+            Node {
+                width: Val::Percent(100.0),
+                flex_grow: 1.0,
+                min_height: Val::Px(0.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Stretch,
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BackgroundColor(LIMEWASH_LIT),
+        ))
+        .id();
+    commands.entity(host).add_child(panel_entity);
+    commands.entity(panel_entity).with_children(|panel| {
         panel
             .spawn((
                 Node {
@@ -313,18 +325,6 @@ fn ensure_panel(
                             },
                             TextColor(INK_MUTED),
                         ));
-                    });
-                header
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(6.0),
-                        ..default()
-                    })
-                    .with_children(|actions| {
-                        if return_to.0.is_some() {
-                            button(actions, BackToCompany, "BACK TO COMPANY");
-                        }
-                        button(actions, Close, "X");
                     });
             });
 
@@ -1339,51 +1339,6 @@ fn update_guard(
     mut guard: ResMut<BusinessClickGuard>,
 ) {
     update_modal_click_guard(target.0.is_some(), &mouse, &mut guard.0);
-}
-
-fn handle_back_to_company(
-    guard: Res<BusinessClickGuard>,
-    buttons: Query<&Interaction, (With<BackToCompany>, Changed<Interaction>)>,
-    mut target: ResMut<BusinessManagementTarget>,
-    mut return_to: ResMut<BusinessManagementReturn>,
-    mut encyclopedia_open: ResMut<crate::ui::encyclopedia::EncyclopediaOpen>,
-    mut tab: ResMut<crate::ui::encyclopedia::EncyclopediaTab>,
-    mut selected: ResMut<crate::ui::encyclopedia::companies::SelectedCompany>,
-) {
-    if !guard.0
-        || !buttons
-            .iter()
-            .any(|interaction| *interaction == Interaction::Pressed)
-    {
-        return;
-    }
-    let Some(company) = return_to.0.take() else {
-        return;
-    };
-    target.0 = None;
-    selected.0 = Some(company);
-    *tab = crate::ui::encyclopedia::EncyclopediaTab::Companies;
-    encyclopedia_open.0 = true;
-}
-
-fn handle_close(
-    guard: Res<BusinessClickGuard>,
-    close: Query<&Interaction, (With<Close>, Changed<Interaction>)>,
-    backdrop: Query<&Interaction, (With<Backdrop>, Changed<Interaction>)>,
-    mut target: ResMut<BusinessManagementTarget>,
-    mut return_to: ResMut<BusinessManagementReturn>,
-) {
-    if !guard.0 {
-        return;
-    }
-    if close
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-        || handle_backdrop_pressed(&backdrop)
-    {
-        target.0 = None;
-        return_to.0 = None;
-    }
 }
 
 fn sync_input_state(

@@ -1269,7 +1269,13 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                         )));
                     }
                 }
-                if std::env::var("FISTFORCE_CAPTURE_PROPERTY").is_ok_and(|value| value == "1") {
+                let property_mode = std::env::var("FISTFORCE_CAPTURE_PROPERTY").unwrap_or_default();
+                if matches!(property_mode.as_str(), "1" | "permits" | "sale") {
+                    if property_mode == "sale" {
+                        world.insert_resource(
+                            crate::ui::property_market::PropertyMarketTab::ForSale,
+                        );
+                    }
                     let hall = world
                         .query_filtered::<Entity, With<shared::components::Settlement>>()
                         .iter(world)

@@ -52,17 +52,23 @@ impl Plugin for SettlementPanelPlugin {
         app.add_systems(
             Update,
             (
-                sync_compact_panel,
-                handle_compact_actions,
-                handle_manage_action,
-                open_nearby_market_on_interact,
-                ensure_trade_panel,
-                handle_market_trade_buttons,
-                receive_market_trade_results,
-                sync_trade_feedback,
-                update_trade_guard,
-                handle_trade_close,
-                sync_permit_tray_input_state,
+                (
+                    sync_compact_panel,
+                    handle_compact_actions,
+                    handle_manage_action,
+                    open_nearby_market_on_interact,
+                    ensure_trade_panel,
+                    handle_market_trade_buttons,
+                )
+                    .chain(),
+                (
+                    receive_market_trade_results,
+                    sync_trade_feedback,
+                    update_trade_guard,
+                    handle_trade_close,
+                    sync_permit_tray_input_state,
+                )
+                    .chain(),
             )
                 .chain()
                 .run_if(in_state(GameState::Playing)),
@@ -95,6 +101,7 @@ struct InspectManageButton;
 
 #[derive(SystemParam)]
 struct CompactPanelUi<'w, 's> {
+    perf: Res<'w, crate::ui::perf::UiPerf>,
     panels: Query<
         'w,
         's,
@@ -566,6 +573,7 @@ fn sync_compact_panel(
     >,
     mut ui: CompactPanelUi,
 ) {
+    let mut _ui_scope = ui.perf.scope("sync_compact_panel");
     let Ok((panel_entity, node, signature)) = ui.panels.single() else {
         return;
     };
@@ -1215,6 +1223,7 @@ fn sync_compact_panel(
     let Ok(body) = ui.bodies.single() else {
         return;
     };
+    _ui_scope.rebuilt();
     commands.entity(body).despawn_related::<Children>();
     let mut children = vec![title(&mut commands, model.title, model.subtitle)];
     for (label, value) in model.rows {

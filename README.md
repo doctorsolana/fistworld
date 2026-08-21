@@ -273,6 +273,20 @@ one real random-coast arrival through sailing, disembarkation and the walk to th
 See [VILLAGE-LAB.md](docs/VILLAGE-LAB.md) for scenarios, overrides, expected evidence and
 failure diagnosis.
 
+For player-management UX work, open the prepared mature-city fixture instead:
+
+```bash
+./run.sh uxworld
+```
+
+It starts at 1x beside a City with 500 admitted residents, 125 completed homes, a paved
+market, civic services and a varied private economy. Seventy ordinary NPC companies own its
+prepared businesses, including single-site firms and farm–windmill–bakery groups, so permit,
+company, ownership, strategy, salary, inventory, market and ledger screens have useful data
+immediately. Create the local hero normally; in this fixture only, the hero begins beside the
+City Hall. The prepared opening capital and stock make this a deterministic UX/stress fixture,
+not an economy-balancing baseline. Logs are written under `logs/uxworld-*`.
+
 Use `./run.sh stressworld` to watch the three 200-person settlements together.
 It starts at 10x with a wide camera, enables server/client performance telemetry,
 and records both processes under `logs/stressworld-*`. Logs stay out of the
@@ -349,7 +363,8 @@ The full lab is intentionally ignored by ordinary `cargo test` runs.
 | `CITYSIM_TERRAIN_COLLIDER_MAX_LOAD_PER_TICK=<n>` | Collider chunks spawned per fixed tick |
 | `CITYSIM_TERRAIN_COLLIDER_RESOLUTION=<n>` | Heightfield resolution per collider chunk |
 | `FISTFORCE_AUTOCONNECT=<name>` | Skip local login/name entry |
-| `FISTFORCE_CLIENT_PERF=1` | Emit rolling client frame-time diagnostics |
+| `FISTFORCE_CLIENT_PERF=1` | Emit rolling client frame-time diagnostics (`ClientPerf`) plus per-panel UI work counts (`ClientPerfUi`: calls / rebuilds / ms per panel system) |
+| `FISTFORCE_OPEN_ENCYCLOPEDIA=people\|places\|retinue\|companies` | Diagnostics: open the encyclopedia on that tab a few seconds into gameplay, for perf runs without input automation |
 | `FISTFORCE_SERVER_PERF=1` | Emit server tick and phase diagnostics |
 | `FISTFORCE_GRASS_STRESS_DENSITY=<1..32>` | Capture/profiling-only grass density multiplier; normal gameplay remains 1x |
 | `FISTFORCE_DISPLAY_MODE=windowed\|borderless\|exclusive` | Override the saved display mode for this run (`fullscreen` remains an alias for exclusive) |

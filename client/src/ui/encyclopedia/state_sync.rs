@@ -42,6 +42,9 @@ type VisiblePersonFacts<'a> = (
     Option<&'a shared::components::PersonId>,
 );
 
+/// How often the visible-people fact pass re-reads the world.
+const PERSON_FACTS_INTERVAL_SECS: f32 = 0.25;
+
 /// The camera must not pan and world clicks must not fire underneath.
 pub(super) fn sync_input_state(open: Res<EncyclopediaOpen>, mut input_state: ResMut<InputState>) {
     if input_state.encyclopedia_open != open.0 {
@@ -147,7 +150,9 @@ pub(super) fn learn_visible_characters(
         Added<shared::components::CharacterName>,
     >,
     mut people: ResMut<KnownPeople>,
+    ui_perf: Res<crate::ui::perf::UiPerf>,
 ) {
+    let mut _ui_scope = ui_perf.scope("learn_visible_characters");
     for (name, kind, affiliation, commanded, person_id) in seen.iter() {
         let affiliation = affiliation.copied().unwrap_or_default();
         let kind = match kind {
@@ -226,7 +231,64 @@ pub(super) fn refresh_visible_person_facts(
         &shared::components::MootAdministration,
     )>,
     mut people: ResMut<KnownPeople>,
+    ui_perf: Res<crate::ui::perf::UiPerf>,
+    time: Res<Time>,
+    mut last_run: Local<Option<f32>>,
 ) {
+    let mut _ui_scope = ui_perf.scope("refresh_visible_person_facts");
+    // Facts feed text readouts: four refreshes a second read identically to
+    // sixty, and every refresh that finds a change marks the registry
+    // changed, which is what the list and detail panes key their work on.
+    let now = time.elapsed_secs();
+    if last_run.is_some_and(|last| now - last < PERSON_FACTS_INTERVAL_SECS) {
+        return;
+    }
+    *last_run = Some(now);
+
+    // Index once per pass. The per-person linear scans this replaces were
+    // O(people x buildings x workers) for employment and O(people^2) for the
+    // registry lookup -- a thousand residents made them a per-frame tax.
+    let person_by_id: std::collections::HashMap<shared::components::PersonId, usize> = people
+        .records
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| record.id.is_assigned())
+        .map(|(index, record)| (record.id, index))
+        .collect();
+    let person_by_name: std::collections::HashMap<String, usize> = people
+        .records
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| !record.id.is_assigned())
+        .map(|(index, record)| (record.name.clone(), index))
+        .collect();
+    let building_entries: Vec<_> = buildings.iter().collect();
+    let mut building_by_id = std::collections::HashMap::new();
+    let mut building_by_worker: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    for (index, (building, building_id, _, _)) in building_entries.iter().enumerate() {
+        if let Some(id) = building_id {
+            building_by_id.entry(**id).or_insert(index);
+        }
+        for worker in &building.workers {
+            building_by_worker.entry(worker.as_str()).or_insert(index);
+        }
+    }
+    let household_entries: Vec<_> = households.iter().collect();
+    let mut household_by_id = std::collections::HashMap::new();
+    let mut household_by_resident: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    for (index, (_, building_id, household)) in household_entries.iter().enumerate() {
+        if let Some(id) = building_id {
+            household_by_id.entry(**id).or_insert(index);
+        }
+        for resident in &household.residents {
+            household_by_resident
+                .entry(resident.as_str())
+                .or_insert(index);
+        }
+    }
+
     for (
         name,
         residence,
@@ -245,12 +307,11 @@ pub(super) fn refresh_visible_person_facts(
         person_id,
     ) in seen.iter()
     {
-        let employment = buildings.iter().find(|(building, building_id, _, _)| {
-            employed_at.map_or_else(
-                || building.workers.iter().any(|worker| worker == &name.0),
-                |job| building_id.is_some_and(|id| *id == job.0),
-            )
-        });
+        let employment = match employed_at {
+            Some(job) => building_by_id.get(&job.0),
+            None => building_by_worker.get(name.0.as_str()),
+        }
+        .map(|&index| building_entries[index]);
         let workplace = employment.map(|(building, _, _, _)| {
             format!("{} in {}", building.kind.label(), building.settlement)
         });
@@ -299,20 +360,11 @@ pub(super) fn refresh_visible_person_facts(
             workplace.or_else(|| civic_employment.as_ref().map(|(place, _)| place.clone()));
         let next_daily_wage =
             next_daily_wage.or_else(|| civic_employment.and_then(|(_, wage)| wage));
-        let home = households
-            .iter()
-            .find(|(_, building_id, household)| {
-                lives_at.map_or_else(
-                    || {
-                        household
-                            .residents
-                            .iter()
-                            .any(|resident| resident == &name.0)
-                    },
-                    |home| building_id.is_some_and(|id| *id == home.0),
-                )
-            })
-            .map(|(building, _, _)| format!("Cabin in {}", building.settlement));
+        let home = match lives_at {
+            Some(home) => household_by_id.get(&home.0),
+            None => household_by_resident.get(name.0.as_str()),
+        }
+        .map(|&index| format!("Cabin in {}", household_entries[index].0.settlement));
         let next_residence = residence.map(|residence| residence.0.clone());
         let next_occupation = occupation
             .and_then(|occupation| occupation.0.clone())
@@ -330,12 +382,13 @@ pub(super) fn refresh_visible_person_facts(
         let next_inventory = inventory.cloned();
         let next_carried = carried.copied();
 
-        let Some(current) = people.records.iter().find(|record| {
-            person_id.is_some_and(|id| record.id == *id)
-                || (!record.id.is_assigned() && record.name == name.0)
-        }) else {
+        let Some(index) = person_id
+            .and_then(|id| person_by_id.get(id).copied())
+            .or_else(|| person_by_name.get(name.0.as_str()).copied())
+        else {
             continue;
         };
+        let current = &people.records[index];
         let changed = current.residence != next_residence
             || current.home != home
             || current.occupation != next_occupation
@@ -357,10 +410,8 @@ pub(super) fn refresh_visible_person_facts(
         if !changed {
             continue;
         }
-        if let Some(record) = people.records.iter_mut().find(|record| {
-            person_id.is_some_and(|id| record.id == *id)
-                || (!record.id.is_assigned() && record.name == name.0)
-        }) {
+        {
+            let record = &mut people.records[index];
             if let Some(id) = person_id {
                 record.id = *id;
             }
@@ -424,23 +475,36 @@ pub(super) fn rebuild_people_list(
     content: Query<Entity, With<PeopleListContent>>,
     existing_rows: Query<Entity, With<PersonRow>>,
     mut count_text: Query<&mut Text, With<PeopleCountText>>,
-    mut last: Local<Option<(usize, PeopleFilter, bool)>>,
+    mut last: Local<Option<u64>>,
+    ui_perf: Res<crate::ui::perf::UiPerf>,
 ) {
-    let signature = (people.records.len(), *filter, god.0);
+    let mut _ui_scope = ui_perf.scope("rebuild_people_list");
+    // A row shows only slow-moving facts: name, kind, banner, occupation,
+    // online, known. The registry itself changes several times a second while
+    // a thousand villagers walk, eat and earn, and keying this on
+    // `is_changed()` tore down and respawned every row at that rate: measured
+    // at 1,000 residents, 127 rebuilds in 127 frames and a 6 ms frame became
+    // 75 ms. Hash the ROW projection and rebuild only when it moves; a fresh
+    // (just respawned) list container always rebuilds.
+    let fresh = existing_rows.is_empty();
     let dirty = people.is_changed() || filter.is_changed() || god.is_changed();
-    if !dirty && *last == Some(signature) {
+    if !dirty && !fresh && last.is_some() {
         return;
     }
-    *last = Some(signature);
+    let visible = people.visible(*filter, god.0);
+    let signature = people_rows_signature(&visible);
+    if !fresh && *last == Some(signature) {
+        return;
+    }
 
     let Ok(content_entity) = content.single() else {
         return;
     };
+    *last = Some(signature);
+    _ui_scope.rebuilt();
     for row in existing_rows.iter() {
         commands.entity(row).despawn();
     }
-
-    let visible = people.visible(*filter, god.0);
 
     // Drop a selection the filter just hid, so the detail pane never describes
     // someone who is no longer listed.
@@ -469,7 +533,7 @@ pub(super) fn rebuild_people_list(
                 PersonRow(String::new()),
                 Text::new("No one here yet"),
                 TextFont {
-                    font_size: FontSize::Px(12.0),
+                    font_size: FontSize::Px(15.0),
                     ..default()
                 },
                 TextColor(INK_MUTED),
@@ -484,6 +548,23 @@ pub(super) fn rebuild_people_list(
             spawn_person_row(list, record);
         }
     });
+}
+
+/// Hash of exactly what [`spawn_person_row`] renders, in display order.
+fn people_rows_signature(visible: &[&PersonRecord]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    visible.len().hash(&mut hasher);
+    for record in visible {
+        record.name.hash(&mut hasher);
+        record.is_self.hash(&mut hasher);
+        record.known.hash(&mut hasher);
+        record.online.hash(&mut hasher);
+        (record.kind == PersonKind::Villager).hash(&mut hasher);
+        record.occupation.hash(&mut hasher);
+        record.affiliation.label().hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) {
@@ -526,7 +607,7 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
                 record.name.clone()
             }),
             TextFont {
-                font_size: FontSize::Px(13.0),
+                font_size: FontSize::Px(16.0),
                 ..default()
             },
             TextColor(name_color),
@@ -550,7 +631,7 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
                 "UNKNOWN".to_string()
             }),
             TextFont {
-                font_size: FontSize::Px(9.0),
+                font_size: FontSize::Px(12.5),
                 ..default()
             },
             TextColor(if record.known {
@@ -650,7 +731,9 @@ pub(super) fn sync_detail_panel(
     mut name_text: Query<&mut Text, (With<DetailName>, Without<DetailSubtitle>)>,
     mut subtitle: Query<&mut Text, (With<DetailSubtitle>, Without<DetailName>)>,
     mut stats: Query<(&DetailStat, &mut Text), (Without<DetailName>, Without<DetailSubtitle>)>,
+    ui_perf: Res<crate::ui::perf::UiPerf>,
 ) {
+    let mut _ui_scope = ui_perf.scope("sync_detail_panel");
     let record = selected.0.as_deref().and_then(|name| people.find(name));
 
     let show_card = record.is_some();

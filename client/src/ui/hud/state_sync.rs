@@ -289,7 +289,9 @@ pub(super) fn sync_selection_plate(
         Query<&mut Node, (With<SelectionExpandButton>, Without<SelectionPlate>)>,
     )>,
     visuals: Query<&crate::hero::HeroVisual>,
+    ui_perf: Res<crate::ui::perf::UiPerf>,
 ) {
+    let mut _ui_scope = ui_perf.scope("sync_selection_plate");
     let count = selection.len();
     // A selected SETTLEMENT is not a unit and gets its own panel. Without this
     // the plate would stay up showing whoever was selected before, because the
