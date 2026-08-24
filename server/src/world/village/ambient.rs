@@ -7,7 +7,7 @@
 //! ordinary movement reuses the cached village-road routing layer. Regions
 //! nobody observes receive no ambient orders at all.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use shared::components::{
@@ -23,7 +23,7 @@ use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 use crate::player::hero::{navigation_segment_clear, MoveTarget};
 use crate::world::regions::RegionRegistry;
 use crate::world::village_roads::{
-    NavigationRouteFailed, NavigationRoutePending, RoadBuilderRoutine, TravelRoute,
+    NavigationLoad, NavigationRouteFailed, NavigationRoutePending, RoadBuilderRoutine, TravelRoute,
 };
 
 use super::{
@@ -41,7 +41,18 @@ const ROADSIDE_MARGIN: f32 = 0.62;
 /// low-priority routes and made unemployed residents appear stuck at home
 /// while pathfinding caught up.
 const MAX_AMBIENT_WALK_DISTANCE: f32 = 46.0;
+/// A person who has just registered at the Hall gets one wider first walk so
+/// a whole immigration wave does not occupy the same handful of forecourt
+/// verges. Later leisure remains neighbourhood-local for routing cost.
+const ARRIVAL_DISPERSAL_DISTANCE: f32 = 82.0;
+const ARRIVAL_DISPERSAL_MIN_DISTANCE: f32 = 18.0;
+const AMBIENT_OCCUPANCY_CELL: f32 = 1.65;
 const MAX_AMBIENT_TRAVEL_SECONDS: f32 = 60.0;
+/// Visible flavour is admitted, not batch-decided. Every resident keeps an
+/// independent mind and deadline, but only this many optional journeys per
+/// settlement may occupy the expensive tactical route queue simultaneously.
+/// Night shelter, work, food and other real needs bypass this cosmetic cap.
+const MAX_ACTIVE_AMBIENT_ROUTES_PER_SETTLEMENT: usize = 96;
 /// Shared monotonic world-time base for independent per-person deadlines.
 #[derive(Resource, Default)]
 pub struct AmbientClock {
@@ -76,12 +87,29 @@ pub struct AmbientRoutine {
     /// advanced only when its independent deadline is due.
     last_world_seconds: f64,
     next_world_seconds: f64,
+    /// The first optional journey after residency should leave the civic
+    /// forecourt. This is consumed as soon as a destination is admitted.
+    disperse_arrival: bool,
     phase: AmbientPhase,
 }
 
+/// A newly admitted resident's first straight, pre-certified walk away from
+/// the civic forecourt. It bypasses the global A* queue just like a queue step,
+/// but remains separate from Moot service ownership so stale markers can be
+/// cleaned without affecting a real line.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct AmbientDirectTransit;
+
 impl AmbientRoutine {
+    pub(crate) const fn settlement(&self) -> Entity {
+        self.settlement
+    }
+
     pub(crate) const fn objective(&self) -> shared::components::CharacterObjective {
         use shared::components::CharacterObjective;
+        if self.disperse_arrival {
+            return CharacterObjective::SettlingIntoTown;
+        }
         match self.phase {
             AmbientPhase::Waiting { .. } | AmbientPhase::Resting { .. } => {
                 CharacterObjective::Resting
@@ -105,6 +133,7 @@ enum AmbientPhase {
         sitting: bool,
         rest_seconds: f32,
         travel_seconds_left: f32,
+        route_started: bool,
     },
     Resting {
         seconds_left: f32,
@@ -338,7 +367,22 @@ fn clear_owned_movement(commands: &mut Commands, entity: Entity) {
         .remove::<MoveTarget>()
         .remove::<TravelRoute>()
         .remove::<NavigationRoutePending>()
-        .remove::<NavigationRouteFailed>();
+        .remove::<NavigationRouteFailed>()
+        .remove::<AmbientDirectTransit>();
+}
+
+fn direct_ambient_segment_is_safe(
+    origin: Vec2,
+    destination: Vec2,
+    terrain: &WorldTerrain,
+    obstacles: Option<&SpatialObstacleGrid>,
+    colliders: Option<&StaticColliders>,
+    derived: Option<&DerivedColliderLibrary>,
+) -> bool {
+    if !navigation_segment_clear(origin, destination, obstacles, colliders, derived) {
+        return false;
+    }
+    crate::player::hero::terrain_segment_walkable(terrain, origin, destination)
 }
 
 fn select_ambient_spot(
@@ -369,11 +413,13 @@ fn choose_spot(
     origin: Vec2,
     spots: &[AmbientSpot],
     prefer_market: bool,
+    disperse_arrival: bool,
+    occupied: &HashSet<(i32, i32)>,
     terrain: &WorldTerrain,
     obstacles: Option<&SpatialObstacleGrid>,
     colliders: Option<&StaticColliders>,
     derived: Option<&DerivedColliderLibrary>,
-) -> Option<(Vec3, f32, bool, f32)> {
+) -> Option<(Vec3, f32, bool, f32, bool)> {
     if spots.is_empty() {
         return None;
     }
@@ -384,10 +430,48 @@ fn choose_spot(
     // choose the same first verge. Distance checks are deliberately cheap;
     // collider validation only runs for points inside the neighbourhood.
     let start = seed as usize % spots.len();
-    let spot = select_ambient_spot(start, spots, prefer_market, |spot| {
-        origin.distance_squared(spot.point) <= MAX_AMBIENT_WALK_DISTANCE.powi(2)
+    let max_distance = if disperse_arrival {
+        ARRIVAL_DISPERSAL_DISTANCE
+    } else {
+        MAX_AMBIENT_WALK_DISTANCE
+    };
+    let eligible = |spot: AmbientSpot, require_departure_distance: bool| {
+        let distance_squared = origin.distance_squared(spot.point);
+        distance_squared <= max_distance.powi(2)
+            && (!require_departure_distance
+                || distance_squared >= ARRIVAL_DISPERSAL_MIN_DISTANCE.powi(2))
+            && !ambient_place_occupied(occupied, spot.point)
             && point_is_safe(spot.point, terrain, obstacles, colliders, derived)
-    })?;
+    };
+    // Most short roadside strolls need no A*: if the same live static
+    // collision and terrain rules certify the straight segment, embodied
+    // movement can follow it directly. This is both cheaper and more lively
+    // than making every unemployed resident wait behind freight for a planner
+    // to rediscover the same straight line. Difficult corners still fall back
+    // to the ordinary shared road/path queue below.
+    let direct = select_ambient_spot(start, spots, prefer_market, |spot| {
+        eligible(spot, disperse_arrival)
+            && direct_ambient_segment_is_safe(
+                origin, spot.point, terrain, obstacles, colliders, derived,
+            )
+    });
+    let (spot, direct_transit) = if let Some(spot) = direct {
+        (spot, true)
+    } else if disperse_arrival {
+        // Prefer an actual departure from the Hall neighbourhood. Tiny or
+        // roadless hamlets may not have such a point yet, so retain a local
+        // fallback instead of leaving a resident permanently undecided.
+        select_ambient_spot(start, spots, prefer_market, |spot| eligible(spot, true))
+            .or_else(|| {
+                select_ambient_spot(start, spots, prefer_market, |spot| eligible(spot, false))
+            })
+            .map(|spot| (spot, false))?
+    } else {
+        (
+            select_ambient_spot(start, spots, prefer_market, |spot| eligible(spot, false))?,
+            false,
+        )
+    };
     let point = Vec3::new(
         spot.point.x,
         terrain.get_height(spot.point.x, spot.point.y),
@@ -395,7 +479,19 @@ fn choose_spot(
     );
     let sitting = !mix(seed ^ 0x0a11_ce55).is_multiple_of(3);
     let rest = duration(seed ^ 0x5eed, 12.0, 32.0);
-    Some((point, spot.facing, sitting, rest))
+    Some((point, spot.facing, sitting, rest, direct_transit))
+}
+
+fn ambient_occupancy_cell(point: Vec2) -> (i32, i32) {
+    (
+        (point.x / AMBIENT_OCCUPANCY_CELL).floor() as i32,
+        (point.y / AMBIENT_OCCUPANCY_CELL).floor() as i32,
+    )
+}
+
+fn ambient_place_occupied(occupied: &HashSet<(i32, i32)>, point: Vec2) -> bool {
+    let (x, y) = ambient_occupancy_cell(point);
+    (-1..=1).any(|dx| (-1..=1).any(|dy| occupied.contains(&(x + dx, y + dy))))
 }
 
 /// Give unemployed or unhoused residents a little visible life when observed.
@@ -406,9 +502,12 @@ fn choose_spot(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn run_ambient_routines(
     simulation_time: crate::world::simulation_time::SimulationTime,
-    mut ambient_clock: ResMut<AmbientClock>,
-    mut spot_cache: ResMut<AmbientSpotCache>,
-    mut diagnostics: Option<ResMut<AmbientDiagnostics>>,
+    runtime: (
+        ResMut<AmbientClock>,
+        ResMut<AmbientSpotCache>,
+        Option<ResMut<AmbientDiagnostics>>,
+        Option<Res<NavigationLoad>>,
+    ),
     world_time: Query<&WorldTime>,
     terrain: Option<Res<WorldTerrain>>,
     regions: Option<Res<RegionRegistry>>,
@@ -466,7 +565,7 @@ pub fn run_ambient_routines(
             &PlayerPosition,
             &mut PlayerRotation,
             &RegionCoord,
-            &VillagerIntent,
+            Ref<VillagerIntent>,
             (&Occupation, Option<&WorkStatus>),
             Option<&PersonId>,
             Option<&HomeAssignment>,
@@ -474,7 +573,11 @@ pub fn run_ambient_routines(
             Option<&ConstructionMaterialRoutine>,
             &mut CharacterActivity,
             Option<&MoveTarget>,
-            Option<&NavigationRouteFailed>,
+            (
+                Option<&NavigationRouteFailed>,
+                Option<&TravelRoute>,
+                Has<NavigationRoutePending>,
+            ),
             Option<&mut AmbientRoutine>,
         ),
         (
@@ -484,9 +587,19 @@ pub fn run_ambient_routines(
     >,
     mut commands: Commands,
 ) {
+    let (mut ambient_clock, mut spot_cache, mut diagnostics, navigation_load) = runtime;
     ambient_clock.world_seconds_elapsed += f64::from(simulation_time.world_seconds());
     let pass_started = diagnostics.as_ref().map(|_| std::time::Instant::now());
     let mut decisions = 0usize;
+    let mut ambient_admitted: HashMap<Entity, usize> = navigation_load
+        .as_deref()
+        .map(|load| {
+            load.ambient_by_settlement
+                .iter()
+                .map(|(settlement, count)| (*settlement, *count))
+                .collect()
+        })
+        .unwrap_or_default();
     let any_tactical_observer = regions
         .as_ref()
         .is_none_or(|registry| registry.tactical_count() > 0);
@@ -507,6 +620,28 @@ pub fn run_ambient_routines(
         }
     }
 
+    // Positions and already selected destinations are one cheap spatial
+    // reservation set. It prevents independent ambient minds from choosing
+    // the same verge without introducing pairwise crowd simulation.
+    let mut ambient_occupied: HashMap<Entity, HashSet<(i32, i32)>> = HashMap::new();
+    for (_, _, position, _, _, intent, _, _, _, _, _, _, move_target, _, routine) in
+        villagers.iter_mut()
+    {
+        let VillagerIntent::Resident { settlement } = *intent else {
+            continue;
+        };
+        let occupied = ambient_occupied.entry(settlement).or_default();
+        occupied.insert(ambient_occupancy_cell(Vec2::new(
+            position.0.x,
+            position.0.z,
+        )));
+        if routine.is_some() {
+            if let Some(target) = move_target {
+                occupied.insert(ambient_occupancy_cell(Vec2::new(target.0.x, target.0.z)));
+            }
+        }
+    }
+
     for (
         entity,
         name,
@@ -521,13 +656,15 @@ pub fn run_ambient_routines(
         construction,
         mut activity,
         move_target,
-        route_failed,
+        (route_failed, travel_route, route_pending),
         routine,
     ) in villagers.iter_mut()
     {
+        let newly_resident =
+            intent.is_changed() && matches!(*intent, VillagerIntent::Resident { .. });
         let waiting_builder =
             construction.is_some_and(|routine| routine.is_waiting_for_materials());
-        let settlement = match intent {
+        let settlement = match &*intent {
             VillagerIntent::Resident { settlement } => *settlement,
             VillagerIntent::Building { .. } if waiting_builder => {
                 // Waiting for the settlement's material turn is still a
@@ -537,8 +674,18 @@ pub fn run_ambient_routines(
                 // queued work target on the same deferred-command boundary.
                 // This previously left a nearly supplied priority site at
                 // 9/10 Wood while every other builder politely waited.
-                activity.set_if_neq(CharacterActivity::Idle);
-                clear_owned_movement(&mut commands, entity);
+                //
+                // Clear that stale ambient movement exactly ONCE - while the
+                // ambient routine is still attached - then stand aside. An
+                // unconditional per-tick clear also deleted construction's
+                // own wait-at-own-worksite order, pinning every stock-denied
+                // builder in an overlapping pile wherever they entered the
+                // wait (usually the hall counter).
+                if routine.is_some() {
+                    activity.set_if_neq(CharacterActivity::Idle);
+                    clear_owned_movement(&mut commands, entity);
+                    commands.entity(entity).remove::<AmbientRoutine>();
+                }
                 continue;
             }
             _ => {
@@ -627,6 +774,7 @@ pub fn run_ambient_routines(
                         cycle: 0,
                         last_world_seconds: now,
                         next_world_seconds: now + f64::from(delay),
+                        disperse_arrival: false,
                         phase: AmbientPhase::NightPending { destination },
                     });
                 }
@@ -658,6 +806,7 @@ pub fn run_ambient_routines(
                         cycle: 0,
                         last_world_seconds: now,
                         next_world_seconds: now + 30.0,
+                        disperse_arrival: false,
                         phase: AmbientPhase::NightShelter { destination },
                     });
                 }
@@ -674,6 +823,7 @@ pub fn run_ambient_routines(
                         cycle: 0,
                         last_world_seconds: now,
                         next_world_seconds: now + f64::from(MAX_AMBIENT_TRAVEL_SECONDS),
+                        disperse_arrival: false,
                         phase: AmbientPhase::NightShelter { destination },
                     });
                 }
@@ -695,12 +845,20 @@ pub fn run_ambient_routines(
         let Some(mut routine) = routine else {
             let identity_seed = person_id.map_or(entity.to_bits(), |person_id| person_id.0);
             let seed = stable_hash(&name.0) ^ identity_seed;
-            let wait = duration(seed, 2.0, 12.0);
+            let wait = if newly_resident {
+                // Still one independent deadline per person: at 10x this is
+                // at most 0.875 real seconds, while a mass arrival does not
+                // wake as one visible or computational pulse.
+                duration(seed ^ 0x6172_7269_7661_6c, 0.15, 8.75)
+            } else {
+                duration(seed, 2.0, 12.0)
+            };
             commands.entity(entity).insert(AmbientRoutine {
                 settlement,
                 cycle: 0,
                 last_world_seconds: now,
                 next_world_seconds: now + f64::from(wait),
+                disperse_arrival: newly_resident,
                 phase: AmbientPhase::Waiting { seconds_left: wait },
             });
             continue;
@@ -756,7 +914,29 @@ pub fn run_ambient_routines(
                     routine.next_world_seconds = now + f64::from(left);
                     continue;
                 }
-                let Some((destination, rest_facing, sitting, rest_seconds)) =
+                let active_for_settlement = ambient_admitted.entry(settlement).or_default();
+                if *active_for_settlement >= MAX_ACTIVE_AMBIENT_ROUTES_PER_SETTLEMENT
+                    && !routine.disperse_arrival
+                {
+                    // Keep the personal timeline independent and retry after
+                    // a deterministic pause. No MoveTarget means this waiting
+                    // resident consumes no route-planner work while the town
+                    // is already visually busy.
+                    let identity_seed = person_id.map_or(entity.to_bits(), |person_id| person_id.0);
+                    let retry = duration(
+                        identity_seed ^ u64::from(routine.cycle) ^ 0x6164_6d69_7373_696f,
+                        4.0,
+                        12.0,
+                    );
+                    routine.phase = AmbientPhase::Waiting {
+                        seconds_left: retry,
+                    };
+                    routine.next_world_seconds = now + f64::from(retry);
+                    continue;
+                }
+                let occupied = ambient_occupied.entry(settlement).or_default();
+                let disperse_arrival = routine.disperse_arrival;
+                let Some((destination, rest_facing, sitting, rest_seconds, direct_transit)) =
                     spot_cache.by_settlement.get(&settlement).and_then(|spots| {
                         choose_spot(
                             &name.0,
@@ -765,6 +945,8 @@ pub fn run_ambient_routines(
                             Vec2::new(position.0.x, position.0.z),
                             spots,
                             work_status.is_some_and(|status| *status == WorkStatus::Chilling),
+                            disperse_arrival,
+                            occupied,
                             &terrain,
                             obstacles.as_deref(),
                             colliders.as_deref(),
@@ -776,18 +958,49 @@ pub fn run_ambient_routines(
                     routine.next_world_seconds = now + 12.0;
                     continue;
                 };
+                if *active_for_settlement >= MAX_ACTIVE_AMBIENT_ROUTES_PER_SETTLEMENT
+                    && !direct_transit
+                {
+                    // Arrival dispersal may exceed the optional-route cap only
+                    // when it is a collision/terrain-certified straight walk
+                    // that creates no A* request. A dense forecourt with no
+                    // such corridor waits cheaply instead of flooding the
+                    // committed path queue.
+                    let identity_seed = person_id.map_or(entity.to_bits(), |person_id| person_id.0);
+                    let retry = duration(
+                        identity_seed ^ u64::from(routine.cycle) ^ 0x6172_7269_7661_6c,
+                        1.0,
+                        3.0,
+                    );
+                    routine.phase = AmbientPhase::Waiting {
+                        seconds_left: retry,
+                    };
+                    routine.next_world_seconds = now + f64::from(retry);
+                    continue;
+                }
+                occupied.insert(ambient_occupancy_cell(Vec2::new(
+                    destination.x,
+                    destination.z,
+                )));
                 super::ensure_move_target(&mut commands, entity, move_target, destination);
+                if direct_transit {
+                    commands.entity(entity).insert(AmbientDirectTransit);
+                } else {
+                    commands.entity(entity).remove::<AmbientDirectTransit>();
+                }
+                *active_for_settlement += 1;
                 routine.phase = AmbientPhase::Walking {
                     destination,
                     facing: rest_facing,
                     sitting,
                     rest_seconds,
                     travel_seconds_left: MAX_AMBIENT_TRAVEL_SECONDS,
+                    route_started: false,
                 };
                 // Movement completion is an event: `step_units` removes the
                 // MoveTarget on arrival, which wakes this routine on the next
                 // update. The deadline is only a stuck-travel circuit breaker.
-                routine.next_world_seconds = now + f64::from(MAX_AMBIENT_TRAVEL_SECONDS);
+                routine.next_world_seconds = now + 1.0;
             }
             AmbientPhase::Walking {
                 destination,
@@ -795,6 +1008,7 @@ pub fn run_ambient_routines(
                 sitting,
                 rest_seconds,
                 travel_seconds_left,
+                route_started,
             } => {
                 activity.set_if_neq(CharacterActivity::Idle);
                 if route_failed
@@ -809,7 +1023,8 @@ pub fn run_ambient_routines(
                         .remove::<MoveTarget>()
                         .remove::<TravelRoute>()
                         .remove::<NavigationRoutePending>()
-                        .remove::<NavigationRouteFailed>();
+                        .remove::<NavigationRouteFailed>()
+                        .remove::<AmbientDirectTransit>();
                     routine.phase = AmbientPhase::Waiting { seconds_left: 4.0 };
                     routine.next_world_seconds = now + 4.0;
                     continue;
@@ -820,7 +1035,9 @@ pub fn run_ambient_routines(
                         .remove::<MoveTarget>()
                         .remove::<TravelRoute>()
                         .remove::<NavigationRoutePending>()
-                        .remove::<NavigationRouteFailed>();
+                        .remove::<NavigationRouteFailed>()
+                        .remove::<AmbientDirectTransit>();
+                    routine.disperse_arrival = false;
                     facing.0 = rest_facing;
                     *activity = if sitting {
                         CharacterActivity::Sitting
@@ -834,6 +1051,35 @@ pub fn run_ambient_routines(
                     routine.next_world_seconds = now + f64::from(rest_seconds);
                     continue;
                 }
+                if !route_started {
+                    if travel_route.is_some() {
+                        // The stuck timer starts when a route actually exists,
+                        // not while this low-priority request waits behind a
+                        // farmer or porter in the bounded planner.
+                        routine.phase = AmbientPhase::Walking {
+                            destination,
+                            facing: rest_facing,
+                            sitting,
+                            rest_seconds,
+                            travel_seconds_left: MAX_AMBIENT_TRAVEL_SECONDS,
+                            route_started: true,
+                        };
+                        routine.next_world_seconds = now + f64::from(MAX_AMBIENT_TRAVEL_SECONDS);
+                        continue;
+                    }
+                    if route_pending || move_target.is_some() {
+                        routine.phase = AmbientPhase::Walking {
+                            destination,
+                            facing: rest_facing,
+                            sitting,
+                            rest_seconds,
+                            travel_seconds_left,
+                            route_started: false,
+                        };
+                        routine.next_world_seconds = now + 1.0;
+                        continue;
+                    }
+                }
                 let left = travel_seconds_left - dt;
                 if left <= 0.0 {
                     commands
@@ -841,7 +1087,8 @@ pub fn run_ambient_routines(
                         .remove::<MoveTarget>()
                         .remove::<TravelRoute>()
                         .remove::<NavigationRoutePending>()
-                        .remove::<NavigationRouteFailed>();
+                        .remove::<NavigationRouteFailed>()
+                        .remove::<AmbientDirectTransit>();
                     routine.phase = AmbientPhase::Waiting { seconds_left: 4.0 };
                     routine.next_world_seconds = now + 4.0;
                 } else {
@@ -852,6 +1099,7 @@ pub fn run_ambient_routines(
                         sitting,
                         rest_seconds,
                         travel_seconds_left: left,
+                        route_started,
                     };
                     routine.next_world_seconds = now + f64::from(left);
                 }
@@ -865,7 +1113,8 @@ pub fn run_ambient_routines(
                     .remove::<MoveTarget>()
                     .remove::<TravelRoute>()
                     .remove::<NavigationRoutePending>()
-                    .remove::<NavigationRouteFailed>();
+                    .remove::<NavigationRouteFailed>()
+                    .remove::<AmbientDirectTransit>();
                 *activity = if sitting {
                     CharacterActivity::Sitting
                 } else {
@@ -895,6 +1144,19 @@ pub fn run_ambient_routines(
             .pass_milliseconds
             .push(started.elapsed().as_secs_f64() * 1_000.0);
         diagnostics.decisions_per_pass.push(decisions);
+    }
+}
+
+/// Any real job, queue, household or strategic handoff may pre-empt the short
+/// arrival walk. Remove its bypass marker after the owning AmbientRoutine is
+/// gone so the new authoritative destination enters ordinary routing in the
+/// same activity/navigation chain.
+pub fn cleanup_orphaned_direct_transit(
+    mut commands: Commands,
+    orphaned: Query<Entity, (With<AmbientDirectTransit>, Without<AmbientRoutine>)>,
+) {
+    for entity in orphaned.iter() {
+        commands.entity(entity).remove::<AmbientDirectTransit>();
     }
 }
 
@@ -952,6 +1214,42 @@ mod tests {
     }
 
     #[test]
+    fn clear_local_ambient_walk_bypasses_the_global_path_queue() {
+        let terrain = WorldTerrain::default();
+        let spots = [AmbientSpot {
+            point: Vec2::new(1_728.0, -24.0),
+            facing: 0.0,
+            market: false,
+        }];
+        let mut routine = AmbientRoutine {
+            settlement: Entity::from_bits(1),
+            cycle: 0,
+            last_world_seconds: 0.0,
+            next_world_seconds: 0.0,
+            disperse_arrival: false,
+            phase: AmbientPhase::Waiting { seconds_left: 0.0 },
+        };
+
+        let (_, _, _, _, direct) = choose_spot(
+            "Ada",
+            7,
+            &mut routine,
+            Vec2::new(1_700.0, -6.0),
+            &spots,
+            false,
+            false,
+            &HashSet::new(),
+            &terrain,
+            None,
+            None,
+            None,
+        )
+        .expect("the flat clear roadside point should be usable");
+
+        assert!(direct);
+    }
+
+    #[test]
     fn failed_optional_walk_is_abandoned_without_stranding_the_resident() {
         let mut app = App::new();
         app.init_resource::<Time>();
@@ -996,12 +1294,14 @@ mod tests {
                     cycle: 1,
                     last_world_seconds: 0.0,
                     next_world_seconds: 0.0,
+                    disperse_arrival: false,
                     phase: AmbientPhase::Walking {
                         destination,
                         facing: 0.0,
                         sitting: true,
                         rest_seconds: 12.0,
                         travel_seconds_left: MAX_AMBIENT_TRAVEL_SECONDS,
+                        route_started: false,
                     },
                 },
             ))
@@ -1019,6 +1319,150 @@ mod tests {
             resident.get::<AmbientRoutine>().unwrap().phase,
             AmbientPhase::Waiting { .. }
         ));
+    }
+
+    #[test]
+    fn saturated_town_defers_optional_walk_without_erasing_the_individual_mind() {
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.init_resource::<AmbientClock>();
+        app.init_resource::<AmbientSpotCache>();
+        app.insert_resource(WorldTerrain::default());
+        app.add_systems(Update, run_ambient_routines);
+        app.world_mut().spawn((
+            WorldTime::new_default(),
+            shared::components::TimeWarp::clamped(10.0),
+        ));
+        let hall = app
+            .world_mut()
+            .spawn((
+                Settlement {
+                    name: "Busyford".to_string(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 1_000,
+                    treasury: 0,
+                },
+                shared::components::SettlementId(81),
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.0),
+            ))
+            .id();
+        let mut load = NavigationLoad::default();
+        load.ambient_by_settlement
+            .insert(hall, MAX_ACTIVE_AMBIENT_ROUTES_PER_SETTLEMENT);
+        app.insert_resource(load);
+        let resident = app
+            .world_mut()
+            .spawn((
+                CharacterName("Patient Ada".to_string()),
+                PersonId(81),
+                CharacterKind::Villager,
+                PlayerPosition(Vec3::new(0.0, 0.0, -8.0)),
+                PlayerRotation(0.0),
+                RegionCoord::default(),
+                VillagerIntent::Resident { settlement: hall },
+                Occupation::default(),
+                CharacterActivity::Idle,
+                AmbientRoutine {
+                    settlement: hall,
+                    cycle: 3,
+                    last_world_seconds: 0.0,
+                    next_world_seconds: 0.0,
+                    disperse_arrival: false,
+                    phase: AmbientPhase::Waiting { seconds_left: 0.0 },
+                },
+            ))
+            .id();
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+        app.update();
+
+        let resident = app.world().entity(resident);
+        assert!(resident.get::<MoveTarget>().is_none());
+        assert!(matches!(
+            resident.get::<AmbientRoutine>().unwrap().phase,
+            AmbientPhase::Waiting { seconds_left } if seconds_left >= 4.0
+        ));
+    }
+
+    #[test]
+    fn optional_travel_timeout_starts_after_route_admission_not_while_pending() {
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.init_resource::<AmbientClock>();
+        app.init_resource::<AmbientSpotCache>();
+        app.insert_resource(WorldTerrain::default());
+        app.add_systems(Update, run_ambient_routines);
+        app.world_mut().spawn((
+            WorldTime::new_default(),
+            shared::components::TimeWarp::clamped(10.0),
+        ));
+        let hall = app
+            .world_mut()
+            .spawn((
+                Settlement {
+                    name: "Queueford".to_string(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 1,
+                    treasury: 0,
+                },
+                shared::components::SettlementId(82),
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.0),
+            ))
+            .id();
+        let destination = Vec3::new(30.0, 0.0, 8.0);
+        let resident = app
+            .world_mut()
+            .spawn((
+                CharacterName("Waiting Bea".to_string()),
+                PersonId(82),
+                CharacterKind::Villager,
+                PlayerPosition(Vec3::new(0.0, 0.0, -8.0)),
+                PlayerRotation(0.0),
+                RegionCoord::default(),
+                VillagerIntent::Resident { settlement: hall },
+                Occupation::default(),
+                CharacterActivity::Idle,
+                MoveTarget(destination),
+                NavigationRoutePending::new(destination),
+                AmbientRoutine {
+                    settlement: hall,
+                    cycle: 1,
+                    last_world_seconds: 0.0,
+                    next_world_seconds: 0.0,
+                    disperse_arrival: false,
+                    phase: AmbientPhase::Walking {
+                        destination,
+                        facing: 0.0,
+                        sitting: false,
+                        rest_seconds: 8.0,
+                        travel_seconds_left: MAX_AMBIENT_TRAVEL_SECONDS,
+                        route_started: false,
+                    },
+                },
+            ))
+            .id();
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(1.0));
+        app.update();
+
+        assert!(matches!(
+            app.world().get::<AmbientRoutine>(resident).unwrap().phase,
+            AmbientPhase::Walking {
+                travel_seconds_left,
+                route_started: false,
+                ..
+            } if travel_seconds_left == MAX_AMBIENT_TRAVEL_SECONDS
+        ));
+        assert!(app
+            .world()
+            .get::<NavigationRoutePending>(resident)
+            .is_some());
     }
 
     #[test]
@@ -1103,6 +1547,121 @@ mod tests {
             busiest < 60,
             "{busiest} minds woke together; personal deadlines visibly re-batched the crowd"
         );
+    }
+
+    #[test]
+    fn newly_admitted_residents_disperse_from_the_hall_to_distinct_roadside_places() {
+        let mut app = App::new();
+        app.init_resource::<Time>();
+        app.init_resource::<AmbientClock>();
+        app.init_resource::<AmbientSpotCache>();
+        app.insert_resource(WorldTerrain::default());
+        app.add_systems(Update, run_ambient_routines);
+        app.world_mut().spawn((
+            WorldTime::new_default(),
+            shared::components::TimeWarp::clamped(10.0),
+        ));
+        let settlement_id = shared::components::SettlementId(91);
+        let hall_position = {
+            let terrain = app.world().resource::<WorldTerrain>();
+            Vec3::new(1_700.0, terrain.get_height(1_700.0, 0.0), 0.0)
+        };
+        let hall = app
+            .world_mut()
+            .spawn((
+                Settlement {
+                    name: "Arrivalford".to_string(),
+                    tier: shared::components::SettlementTier::Hamlet,
+                    residents: 12,
+                    treasury: 0,
+                },
+                settlement_id,
+                PlayerPosition(hall_position),
+                PlayerRotation(0.0),
+            ))
+            .id();
+        app.world_mut().spawn((
+            VillageRoad {
+                settlement: "Arrivalford".to_string(),
+                builder: "Test".to_string(),
+                points: vec![
+                    Vec2::new(1_700.0, -5.2),
+                    Vec2::new(1_700.0, -24.0),
+                    Vec2::new(1_728.0, -24.0),
+                    Vec2::new(1_756.0, -24.0),
+                ],
+                built_through: 4,
+                width: 2.6,
+                reserved_width: shared::components::RoadClass::Lane.initial_reserved_width(),
+                surface: default(),
+                class: default(),
+                stone_committed: 0,
+            },
+            shared::components::RoadOf(settlement_id),
+        ));
+        let residents: Vec<_> = (0..12)
+            .map(|index| {
+                app.world_mut()
+                    .spawn((
+                        CharacterName(format!("Arrival {index}")),
+                        PersonId(index + 1),
+                        CharacterKind::Villager,
+                        PlayerPosition(Vec3::new(1_700.0, hall_position.y, -6.0)),
+                        PlayerRotation(0.0),
+                        RegionCoord::default(),
+                        VillagerIntent::Resident { settlement: hall },
+                        Occupation::default(),
+                        CharacterActivity::Idle,
+                    ))
+                    .id()
+            })
+            .collect();
+
+        // First pass observes the changed Resident intent and installs an
+        // independent arrival deadline. Ten world seconds makes every one of
+        // those 0.15..8.75 second deadlines due on the second pass.
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+        app.update();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(1.0));
+        app.update();
+
+        let destinations: Vec<_> = residents
+            .iter()
+            .filter_map(|resident| {
+                app.world()
+                    .get::<MoveTarget>(*resident)
+                    .map(|target| target.0)
+            })
+            .collect();
+        assert_eq!(destinations.len(), residents.len());
+        assert!(residents.iter().all(|resident| {
+            app.world().get::<AmbientDirectTransit>(*resident).is_some()
+                && app
+                    .world()
+                    .get::<NavigationRoutePending>(*resident)
+                    .is_none()
+        }));
+        assert!(residents.iter().all(|resident| {
+            app.world()
+                .get::<AmbientRoutine>(*resident)
+                .is_some_and(|routine| {
+                    routine.objective() == shared::components::CharacterObjective::SettlingIntoTown
+                })
+        }));
+        assert!(destinations.iter().all(|destination| {
+            Vec2::new(destination.x, destination.z).distance(Vec2::new(1_700.0, -6.0))
+                >= ARRIVAL_DISPERSAL_MIN_DISTANCE
+        }));
+        for (index, destination) in destinations.iter().enumerate() {
+            let cell = ambient_occupancy_cell(Vec2::new(destination.x, destination.z));
+            assert!(destinations[index + 1..]
+                .iter()
+                .all(|other| { ambient_occupancy_cell(Vec2::new(other.x, other.z)) != cell }));
+        }
     }
 
     #[test]

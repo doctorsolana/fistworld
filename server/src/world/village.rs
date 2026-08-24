@@ -78,8 +78,9 @@ pub use households::{
 #[cfg(test)]
 pub(crate) use moot_services::PermitPickupRoutine;
 pub(crate) use moot_services::{
-    advance_moot_service_queues, complete_moot_permit_pickups, run_moot_meal_collections,
-    MootMealRoutine, MootQueueClock, MootQueueTicket, MootQueueTransit, MootServiceKind,
+    advance_moot_service_queues, complete_moot_permit_pickups, enqueue_moot_service,
+    run_moot_meal_collections, MootMealRoutine, MootQueueClock, MootQueueTicket, MootQueueTransit,
+    MootServiceKind,
 };
 pub use mortality::{
     acquire_businesses_for_sale, advance_nutrition_health, apply_nutrition_condition,
@@ -95,10 +96,11 @@ pub use planning::{consider_permits, find_fishing_site, PermitPlanningDiagnostic
 #[cfg(test)]
 use planning::{find_site_with_plan, planned_road_access_path, slope_at};
 pub(crate) use planning::{
-    road_access_blockers_for_plot, validate_manual_plot, ManualPlotApproval,
+    road_access_blockers_for_plot, validate_manual_plot, ManualPlotApproval, RoadAccessBlocker,
 };
 pub use population::{
-    arrive_at_settlement, recount_residents, seek_settlement, tag_villager_intent,
+    advance_immigration_departures, arrive_at_settlement, recount_residents, seek_settlement,
+    tag_villager_intent,
 };
 pub(crate) use processing::ProcessorWorkProgress;
 pub use processing::{
@@ -297,6 +299,41 @@ const MIGRATION_RETRY_MAX_SECONDS: f64 = 120.0;
 /// resource into hundreds of full route searches per second.
 const TIMBER_RETRY_BASE_SECONDS: f64 = 2.0;
 const TIMBER_RETRY_MAX_SECONDS: f64 = 60.0;
+
+/// One in-game night before a parked site looks for wood again, escalating to
+/// two full days. World seconds, so the pause reads the same at every warp.
+const SUPPLY_GIVE_UP_BASE_SECONDS: f64 = 240.0;
+const SUPPLY_GIVE_UP_MAX_SECONDS: f64 = 1920.0;
+
+/// A parked construction site whose supply search was exhausted: no
+/// purchasable market Wood AND twelve consecutive failed tree candidates.
+/// Its builder was released back to ordinary resident life (sleep, meals,
+/// employment, leisure all resume) instead of standing at the plot forever;
+/// `recover_orphaned_construction` re-drafts a builder - often the same
+/// person, if still free - once `retry_after` passes. Same give-up-and-retry
+/// shape as [`MigrationCooldown`].
+#[derive(Component, Debug, Clone, Copy)]
+pub struct ConstructionSupplyCooldown {
+    pub(crate) retry_after: f64,
+    pub(crate) failures: u8,
+}
+
+impl ConstructionSupplyCooldown {
+    pub(crate) fn after_give_up(previous: Option<&Self>, now: f64) -> Self {
+        let failures = previous.map_or(1, |previous| previous.failures.saturating_add(1));
+        let exponent = u32::from(failures.saturating_sub(1)).min(3);
+        let delay = (SUPPLY_GIVE_UP_BASE_SECONDS * 2_f64.powi(exponent as i32))
+            .min(SUPPLY_GIVE_UP_MAX_SECONDS);
+        Self {
+            retry_after: now + delay,
+            failures,
+        }
+    }
+
+    pub(crate) fn blocks(&self, now: f64) -> bool {
+        now < self.retry_after
+    }
+}
 
 /// How often a settlement considers what it needs next.
 const PERMIT_INTERVAL: f32 = 4.0;
@@ -572,13 +609,32 @@ pub(crate) struct BusinessProjectAccounting {
 #[derive(Debug, Clone, Copy)]
 enum ConstructionMaterialPhase {
     Seeking,
-    UnloadingAtHall { hall: Entity, entrance: Vec3 },
-    CollectingFromStore { source: Entity, entrance: Vec3 },
-    WalkingToTree { tree: Vec3, stand: Vec3 },
-    Chopping { tree: Vec3, seconds_left: f32 },
-    ApproachingDeliveryAccess { entry: Vec3 },
-    Delivering { destination: Vec3 },
-    LeavingDeliveryAccess { exit: Vec3 },
+    UnloadingAtHall {
+        hall: Entity,
+        entrance: Vec3,
+    },
+    CollectingFromStore {
+        source: Entity,
+        entrance: Vec3,
+        reserved_units: u32,
+    },
+    WalkingToTree {
+        tree: Vec3,
+        stand: Vec3,
+    },
+    Chopping {
+        tree: Vec3,
+        seconds_left: f32,
+    },
+    ApproachingDeliveryAccess {
+        entry: Vec3,
+    },
+    Delivering {
+        destination: Vec3,
+    },
+    LeavingDeliveryAccess {
+        exit: Vec3,
+    },
 }
 
 /// Server-only detail for one woodcutter's routine.
@@ -750,6 +806,10 @@ pub struct MarketCollectionRoutine {
     reserved_units: u32,
     unit_price: u64,
     phase: MarketCollectionPhase,
+    /// A loaded public-market trip may try one genuinely different counter.
+    /// If that also fails, outgoing stock returns to its source business
+    /// instead of alternating between two unreachable doors forever.
+    fallback_counter_attempted: bool,
 }
 
 /// One private same-company shipment performed by a municipal Moot Steward.
@@ -780,6 +840,7 @@ enum InternalDeliveryPhase {
 enum MarketCollectionPhase {
     GoingToBusiness,
     ReturningToHall,
+    ReturningToBusinessAfterFailedSale,
     DeliveringInput,
     ReturningFailedInput,
 }

@@ -26,7 +26,7 @@ use shared::terrain::WorldTerrain;
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 use crate::world::navgrid::VILLAGER_PROP_RADIUS;
 use crate::world::village::{
-    ConstructionMaterialRoutine, PlayerConstructionAssignment, UnderConstruction,
+    ConstructionMaterialRoutine, MootQueueTicket, PlayerConstructionAssignment, UnderConstruction,
 };
 use crate::world::village_roads::{
     NavigationObstacleEscape, NavigationRouteFailed, NavigationRoutePending, TravelRoute,
@@ -49,6 +49,136 @@ pub struct MoveTarget(pub Vec3);
 /// they also cannot perform work, train or earn active-character rewards.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct OfflineHero;
+
+const CROWD_CELL_SIZE: f32 = 2.5;
+const CROWD_SEPARATION_RADIUS: f32 = 1.25;
+const MAX_CROWD_NEIGHBORS: usize = 12;
+
+#[derive(Clone, Copy)]
+struct CrowdAgent {
+    entity: Entity,
+    point: Vec2,
+}
+
+/// Rebuilt once per navigation frame and shared by every mover. Local crowd
+/// flavour is therefore O(n) to index and bounded per actor, rather than an
+/// O(n²) all-pairs avoidance pass. It changes only the embodied steering; the
+/// authoritative task, route and destination remain untouched.
+#[derive(Resource, Default)]
+pub struct TacticalCrowdGrid {
+    cells: HashMap<(i32, i32), Vec<CrowdAgent>>,
+}
+
+fn crowd_cell(point: Vec2) -> (i32, i32) {
+    (
+        (point.x / CROWD_CELL_SIZE).floor() as i32,
+        (point.y / CROWD_CELL_SIZE).floor() as i32,
+    )
+}
+
+pub fn rebuild_tactical_crowd_grid(
+    mut grid: Option<ResMut<TacticalCrowdGrid>>,
+    movers: Query<
+        (),
+        (
+            With<MoveTarget>,
+            With<CharacterKind>,
+            Without<OfflineHero>,
+            Without<crate::world::village::strategic::StrategicPerson>,
+        ),
+    >,
+    people: Query<
+        (Entity, &PlayerPosition),
+        (
+            With<CharacterKind>,
+            Without<OfflineHero>,
+            Without<crate::world::village::strategic::StrategicPerson>,
+        ),
+    >,
+) {
+    let Some(grid) = grid.as_deref_mut() else {
+        return;
+    };
+    // Only movers consult the grid; an idle town pays nothing for crowd
+    // flavour instead of re-indexing every standing villager 60x a second.
+    if movers.is_empty() {
+        if !grid.cells.is_empty() {
+            grid.cells.clear();
+        }
+        return;
+    }
+    grid.cells.clear();
+    for (entity, position) in people.iter() {
+        let point = Vec2::new(position.0.x, position.0.z);
+        grid.cells
+            .entry(crowd_cell(point))
+            .or_default()
+            .push(CrowdAgent { entity, point });
+    }
+}
+
+fn separated_direction(
+    grid: &TacticalCrowdGrid,
+    entity: Entity,
+    current: Vec2,
+    preferred: Vec2,
+) -> Vec2 {
+    let cell = crowd_cell(current);
+    let mut separation = Vec2::ZERO;
+    let mut neighbors = 0usize;
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            let Some(agents) = grid.cells.get(&(cell.0 + dx, cell.1 + dz)) else {
+                continue;
+            };
+            for other in agents {
+                if other.entity == entity {
+                    continue;
+                }
+                let delta = current - other.point;
+                let distance_squared = delta.length_squared();
+                if distance_squared >= CROWD_SEPARATION_RADIUS * CROWD_SEPARATION_RADIUS {
+                    continue;
+                }
+                let away = if distance_squared > 1.0e-5 {
+                    delta / distance_squared.sqrt()
+                } else {
+                    // Give exact overlaps a stable, pair-symmetric direction
+                    // so a burst fans out instead of choosing one shared side.
+                    let a = entity.to_bits().min(other.entity.to_bits());
+                    let b = entity.to_bits().max(other.entity.to_bits());
+                    let mixed = a
+                        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        .wrapping_add(b.rotate_left(23));
+                    let angle = (mixed as u32) as f32 / u32::MAX as f32 * std::f32::consts::TAU;
+                    let direction = Vec2::new(angle.cos(), angle.sin());
+                    if entity.to_bits() == a {
+                        direction
+                    } else {
+                        -direction
+                    }
+                };
+                let strength =
+                    1.0 - (distance_squared.sqrt() / CROWD_SEPARATION_RADIUS).clamp(0.0, 1.0);
+                separation += away * strength;
+                neighbors += 1;
+                if neighbors >= MAX_CROWD_NEIGHBORS {
+                    break;
+                }
+            }
+            if neighbors >= MAX_CROWD_NEIGHBORS {
+                break;
+            }
+        }
+        if neighbors >= MAX_CROWD_NEIGHBORS {
+            break;
+        }
+    }
+    if separation.length_squared() <= 1.0e-5 {
+        return preferred;
+    }
+    (preferred + separation.normalize() * 0.35).normalize_or_zero()
+}
 
 fn motion_materially_changed(current: CharacterMotion, next: CharacterMotion) -> bool {
     current.is_moving() != next.is_moving()
@@ -397,6 +527,7 @@ pub fn step_units(
     derived: Option<Res<DerivedColliderLibrary>>,
     simulation_time: crate::world::simulation_time::SimulationTime,
     mut road_graph: Option<ResMut<VillageRoadGraph>>,
+    crowd_grid: Option<Res<TacticalCrowdGrid>>,
     mut reported_route_collisions: Local<HashSet<Entity>>,
     // `With<CharacterKind>` is load-bearing, not decoration: the commander
     // camera anchor carries the identical PlayerPosition + PlayerRotation +
@@ -417,6 +548,8 @@ pub fn step_units(
             Option<&NavigationObstacleEscape>,
             Option<&BuildingDoorUse>,
             Option<&crate::world::village::PierTraversal>,
+            Has<MootQueueTicket>,
+            Has<crate::world::village::ambient::AmbientDirectTransit>,
         ),
         (
             With<CharacterKind>,
@@ -433,6 +566,10 @@ pub fn step_units(
     // 100x button made everything EXCEPT the thing you were watching go faster.
     // The arrival clamp below is what keeps a huge step from overshooting.
     let dt = simulation_time.world_seconds();
+    let current_geometry_version = crate::world::village_roads::navigation_geometry_version(
+        obstacles.as_deref(),
+        colliders.as_deref(),
+    );
 
     for (
         entity,
@@ -448,6 +585,8 @@ pub fn step_units(
         obstacle_escape,
         door_use,
         pier_traversal,
+        queueing,
+        ambient_direct,
     ) in units.iter_mut()
     {
         let start_position = pos.0;
@@ -491,6 +630,10 @@ pub fn step_units(
             Vec2::new(route.goal.x, route.goal.z).distance_squared(final_goal) < 0.01
                 && !route.waypoints.is_empty()
         });
+        let route_geometry_is_current = use_route
+            && route.as_ref().is_some_and(|route| {
+                route.geometry_version != 0 && route.geometry_version == current_geometry_version
+            });
         if !use_route && route.is_some() {
             commands.entity(entity).remove::<TravelRoute>();
         }
@@ -529,7 +672,7 @@ pub fn step_units(
 
             let speed = HERO_MOVE_SPEED * if on_road { ROAD_SPEED_MULTIPLIER } else { 1.0 };
             let step = (speed * remaining_seconds).min(distance);
-            let direction = to_goal / distance;
+            let preferred_direction = to_goal / distance;
             let reaches_goal = step + HERO_ARRIVE_EPSILON >= distance;
             // Clamp the last leg to the certified waypoint itself. Rebuilding
             // that point as `current + normalized * distance` can land a few
@@ -537,17 +680,43 @@ pub fn step_units(
             // spots intentionally sit tight against obstacle boundaries, so
             // that microscopic overshoot was rejected and re-planned forever
             // even though the exact route endpoint was clear.
-            let proposed = if reaches_goal {
+            let base_proposed = if reaches_goal {
                 goal
             } else {
-                current + direction * step
+                current + preferred_direction * step
             };
             let building_obstacles = (!escaping_building)
                 .then_some(obstacles.as_deref())
                 .flatten();
+            let mut direction = preferred_direction;
+            let mut proposed = base_proposed;
+            if !reaches_goal
+                && !queueing
+                && !ambient_direct
+                && !authored_traversal
+                && distance > CROWD_SEPARATION_RADIUS
+            {
+                if let Some(grid) = crowd_grid.as_deref() {
+                    let steered = separated_direction(grid, entity, current, preferred_direction);
+                    if steered.length_squared() > 0.5 {
+                        let candidate = current + steered * step;
+                        if navigation_segment_clear(
+                            current,
+                            candidate,
+                            building_obstacles,
+                            colliders.as_deref(),
+                            derived.as_deref(),
+                        ) {
+                            direction = steered;
+                            proposed = candidate;
+                        }
+                    }
+                }
+            }
             if *kind == CharacterKind::Villager
                 && door_use.is_none()
                 && pier_traversal.is_none()
+                && !route_geometry_is_current
                 && !navigation_segment_clear(
                     current,
                     proposed,
@@ -574,16 +743,13 @@ pub fn step_units(
                     );
                     eprintln!(
                         "LAB movement rejected certified route entity={entity:?} at={:.1},{:.1} proposed={:.1},{:.1} goal={:.1},{:.1} route={route_progress} building_blocked={building_blocked} prop_blocked={prop_blocked}",
-                        current.x,
-                        current.y,
-                        proposed.x,
-                        proposed.y,
-                        final_goal.x,
-                        final_goal.y,
+                        current.x, current.y, proposed.x, proposed.y, final_goal.x, final_goal.y,
                     );
                 }
                 let mut entity_commands = commands.entity(entity);
-                entity_commands.remove::<TravelRoute>();
+                entity_commands
+                    .remove::<TravelRoute>()
+                    .remove::<crate::world::village::ambient::AmbientDirectTransit>();
                 if use_route {
                     // This segment was part of a route certified against an
                     // earlier world snapshot. A newly completed building (or
@@ -593,7 +759,8 @@ pub fn step_units(
                     // critical destination receives a fresh survey rather
                     // than the stale path again.
                     if let Some(graph) = road_graph.as_deref_mut() {
-                        graph.invalidate_tactical_routes_after_embodied_rejection();
+                        graph
+                            .invalidate_tactical_routes_after_embodied_rejection(current, proposed);
                     }
                     entity_commands
                         .remove::<NavigationRoutePending>()
@@ -679,9 +846,61 @@ pub fn step_units(
                 .remove::<MoveTarget>()
                 .remove::<TravelRoute>()
                 .remove::<NavigationRoutePending>()
-                .remove::<NavigationObstacleEscape>();
+                .remove::<NavigationObstacleEscape>()
+                .remove::<crate::world::village::ambient::AmbientDirectTransit>();
         }
     }
+}
+
+/// Enforce the movement/animation invariant after every tactical movement
+/// pass: an embodied villager without a destination is stationary.
+///
+/// Activity systems deliberately remove `MoveTarget` when somebody reaches a
+/// queue place, begins waiting, starts an indoor action, or abandons a route.
+/// Such removals can happen before `step_units`, whose mover query naturally
+/// no longer sees that character. Without this final pass the last replicated
+/// velocity survived indefinitely and clients rendered a stationary person
+/// walking in place. Boats are excluded because an embarked character's
+/// motion is authored by the vessel synchronization systems.
+pub fn settle_villagers_without_targets(
+    mut villagers: Query<
+        (&CharacterKind, &mut CharacterMotion),
+        (
+            Without<MoveTarget>,
+            Without<AboardBoat>,
+            Without<OfflineHero>,
+            Without<crate::world::village::strategic::StrategicPerson>,
+        ),
+    >,
+) {
+    for (kind, mut motion) in villagers.iter_mut() {
+        if *kind == CharacterKind::Villager && motion.is_moving() {
+            *motion = CharacterMotion::STATIONARY;
+        }
+    }
+}
+
+/// Straight-segment terrain certification shared by every A*-free walk
+/// (ambient strolls, immigration counter exits): rejects water and any
+/// sampled rise steeper than 0.48 m per 0.75 m step. Collision clearance is
+/// a separate concern - callers pair this with [`navigation_segment_clear`].
+pub(crate) fn terrain_segment_walkable(
+    terrain: &shared::terrain::WorldTerrain,
+    start: Vec2,
+    end: Vec2,
+) -> bool {
+    let steps = (start.distance(end) / 0.75).ceil().max(1.0) as usize;
+    let mut previous_height = terrain.get_height(start.x, start.y);
+    (1..=steps).all(|step| {
+        let point = start.lerp(end, step as f32 / steps as f32);
+        if terrain.get_water_height(point.x, point.y).is_some() {
+            return false;
+        }
+        let height = terrain.get_height(point.x, point.y);
+        let walkable = (height - previous_height).abs() <= 0.48;
+        previous_height = height;
+        walkable
+    })
 }
 
 #[cfg(test)]
@@ -689,6 +908,36 @@ mod tests {
     use super::*;
     use crate::world::village_roads::{RouteWaypoint, TravelRoute};
     use shared::components::TimeWarp;
+
+    #[test]
+    fn removing_a_villager_target_also_stops_the_walking_animation() {
+        let mut app = App::new();
+        app.add_systems(Update, settle_villagers_without_targets);
+        let villager = app
+            .world_mut()
+            .spawn((CharacterKind::Villager, CharacterMotion::new(Vec3::X)))
+            .id();
+        let moving_hero = app
+            .world_mut()
+            .spawn((CharacterKind::Hero, CharacterMotion::new(Vec3::X)))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            *app.world()
+                .entity(villager)
+                .get::<CharacterMotion>()
+                .unwrap(),
+            CharacterMotion::STATIONARY
+        );
+        assert!(app
+            .world()
+            .entity(moving_hero)
+            .get::<CharacterMotion>()
+            .unwrap()
+            .is_moving());
+    }
 
     /// Time warp scales hero movement, and the arrival clamp is what makes that
     /// safe: a 100x step is far larger than the remaining distance, so without
@@ -723,6 +972,46 @@ mod tests {
             CharacterMotion::new(Vec3::new(0.0, 0.0, HERO_MOVE_SPEED))
         ));
         assert!(motion_materially_changed(east, CharacterMotion::STATIONARY));
+    }
+
+    #[test]
+    fn overlapped_movers_receive_bounded_individual_crowd_steering() {
+        let mut app = App::new();
+        app.insert_resource(WorldTerrain::default());
+        app.init_resource::<TacticalCrowdGrid>();
+        app.add_systems(Update, (rebuild_tactical_crowd_grid, step_units).chain());
+        app.world_mut().spawn(TimeWarp::clamped(1.0));
+        let goal = Vec3::new(20.0, 0.0, 0.0);
+        let first = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.0),
+                RegionCoord::default(),
+                MoveTarget(goal),
+            ))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((
+                CharacterKind::Villager,
+                PlayerPosition(Vec3::ZERO),
+                PlayerRotation(0.0),
+                RegionCoord::default(),
+                MoveTarget(goal),
+            ))
+            .id();
+
+        app.update();
+
+        let a = app.world().get::<PlayerPosition>(first).unwrap().0;
+        let b = app.world().get::<PlayerPosition>(second).unwrap().0;
+        assert!(a.x > 0.0 && b.x > 0.0, "steering stopped forward travel");
+        assert!(
+            a.distance_squared(b) > 1.0e-6,
+            "overlapped villagers chose the same embodied step"
+        );
     }
 
     #[test]
@@ -780,6 +1069,7 @@ mod tests {
                     goal,
                     waypoints,
                     next: 0,
+                    geometry_version: 0,
                 },
             ))
             .id();
@@ -899,6 +1189,7 @@ mod tests {
                         on_road: false,
                     }],
                     next: 0,
+                    geometry_version: 0,
                 },
             ))
             .id();

@@ -448,12 +448,24 @@ pub enum HeroPermitAction {
     Surrender {
         permit: crate::components::PermitId,
     },
+    /// Buy a listed for-sale business or unfinished worksite off the hall's
+    /// property board. The board replicates no entity ids, so the listing is
+    /// identified by (hall, kind, position); `asking_price` is the price the
+    /// buyer SAW - the server refuses politely if it changed.
+    BuyListedProperty {
+        hall: Entity,
+        kind: crate::components::SettlementBuildingKind,
+        position: Vec3,
+        asking_price: u64,
+    },
 }
 
 impl bevy::ecs::entity::MapEntities for HeroPermitAction {
     fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
         match self {
-            Self::RequestQuote { hall, .. } | Self::Purchase { hall, .. } => {
+            Self::RequestQuote { hall, .. }
+            | Self::Purchase { hall, .. }
+            | Self::BuyListedProperty { hall, .. } => {
                 *hall = mapper.get_mapped(*hall);
             }
             Self::Place { .. } | Self::Surrender { .. } => {}
@@ -499,6 +511,10 @@ pub enum HeroPermitOutcome {
     Surrendered {
         permit: crate::components::PermitId,
         refunded: u64,
+    },
+    /// A listed business or worksite changed hands.
+    PropertyPurchased {
+        settlement_name: String,
     },
     Rejected {
         permit: Option<crate::components::PermitId>,

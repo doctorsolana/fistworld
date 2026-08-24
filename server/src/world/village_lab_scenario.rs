@@ -48,6 +48,10 @@ const DEFAULT_DAILY_ARRIVAL_DAYS: u32 = 0;
 const DEFAULT_DAILY_ARRIVAL_START_DAY: u32 = 1;
 const DEFAULT_DAILY_ARRIVAL_INTERVAL_DAYS: u32 = 1;
 const MAX_LAB_ARRIVALS: usize = 5_000;
+const STUCK_WATCH_SAMPLE_SECONDS: f32 = 0.5;
+const STUCK_WATCH_REPORT_SECONDS: f32 = 10.0;
+const STUCK_WATCH_WORLD_SECONDS: f64 = 180.0;
+const STUCK_WATCH_PROGRESS_METERS: f32 = 0.35;
 const DEFAULT_REALWORLD_VILLAGERS: usize = 32;
 const DEFAULT_REALWORLD_POINT: Vec2 = Vec2::new(-346.0, 306.0);
 // Seed 3's two laboratory anchors. They are still validated against the live
@@ -1159,6 +1163,7 @@ fn lab_second_wave_day() -> u32 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LabArrivalTarget {
+    UxCity,
     Meadow,
     Stonefield,
     FrugalMeadow,
@@ -1170,6 +1175,7 @@ pub(crate) enum LabArrivalTarget {
 impl LabArrivalTarget {
     pub(crate) const fn settlement_name(self) -> &'static str {
         match self {
+            Self::UxCity => "Lab UX City",
             Self::Meadow => "Lab Meadow",
             Self::Stonefield => "Lab Stonefield",
             Self::FrugalMeadow => "Lab Frugal",
@@ -1182,6 +1188,7 @@ impl LabArrivalTarget {
     #[cfg(test)]
     pub(crate) const fn resident_prefix(self) -> &'static str {
         match self {
+            Self::UxCity => "Ux",
             Self::Meadow => "Meadow",
             Self::Stonefield => "Stone",
             Self::FrugalMeadow => "Frugal",
@@ -1193,6 +1200,7 @@ impl LabArrivalTarget {
 
     pub(crate) const fn seed_salt(self) -> u64 {
         match self {
+            Self::UxCity => 0x5558_4349,
             Self::Meadow => 0x4d45_4144,
             Self::Stonefield => 0x5354_4f4e,
             Self::FrugalMeadow => 0x4652_5547,
@@ -1449,7 +1457,9 @@ pub(crate) fn lab_arrival_waves() -> Vec<LabArrivalWave> {
         .and_then(|raw| raw.parse::<u32>().ok())
         .unwrap_or(DEFAULT_DAILY_ARRIVAL_INTERVAL_DAYS)
         .clamp(1, 10_000);
-    let targets: &[LabArrivalTarget] = if scenario.is_policy_comparison() {
+    let targets: &[LabArrivalTarget] = if enabled_flag("FISTWORLD_UX_STRESS") {
+        &[LabArrivalTarget::UxCity]
+    } else if scenario.is_policy_comparison() {
         &[
             LabArrivalTarget::FrugalMeadow,
             LabArrivalTarget::MutualAidMeadow,
@@ -1588,7 +1598,8 @@ fn spawn_ux_fixture_building(
     sequence: usize,
     occupied: &mut Vec<(Vec3, f32)>,
     roads: &mut Vec<VillageRoad>,
-    colliders: Option<&crate::collision::library::StaticColliders>,
+    access_blockers: &mut Vec<village::RoadAccessBlocker>,
+    mut colliders: Option<&mut crate::collision::library::StaticColliders>,
     derived: Option<&crate::collision::library::DerivedColliderLibrary>,
 ) -> Option<(Entity, Vec3, f32)> {
     let (minimum_radius, maximum_radius) = match kind {
@@ -1630,12 +1641,41 @@ fn spawn_ux_fixture_building(
             occupied,
             &road_refs,
             &[],
-            &[],
-            colliders,
+            access_blockers,
+            colliders.as_deref(),
             derived,
         ) else {
             continue;
         };
+        // A mature fixture is only useful when it obeys the same transport
+        // invariant as an organically grown settlement. Never stage a shell
+        // whose validator somehow returned no physical connector.
+        if approval.road_access.len() < 2 {
+            continue;
+        }
+        let reserved_width = RoadClass::Lane.initial_reserved_width();
+        if colliders
+            .as_deref()
+            .zip(derived)
+            .is_some_and(|(props, shapes)| {
+                !crate::world::village_roads::road_access_is_clear_of_permanent_props(
+                    &approval.road_access,
+                    reserved_width,
+                    props,
+                    shapes,
+                )
+            })
+        {
+            continue;
+        }
+        if let (Some(props), Some(shapes)) = (colliders.as_deref_mut(), derived) {
+            crate::world::village_roads::clear_completed_road_trees(
+                &approval.road_access,
+                2.5,
+                props,
+                shapes,
+            );
+        }
 
         let mut inventory = GoodsInventory::new(kind.storage_bulk_capacity());
         seed_ux_business_inventory(kind, &mut inventory);
@@ -1672,27 +1712,38 @@ fn spawn_ux_fixture_building(
                 BusinessAccount::default(),
             ));
         }
-        if approval.road_access.len() >= 2 {
-            let mut road = VillageRoad {
-                settlement: settlement_name.to_string(),
-                builder: "UX fixture".to_string(),
-                built_through: u16::try_from(approval.road_access.len()).unwrap_or(u16::MAX),
-                points: approval.road_access,
-                width: 2.5,
-                reserved_width: RoadClass::Lane.initial_reserved_width(),
-                surface: RoadSurface::Stone,
-                class: RoadClass::Lane,
-                stone_committed: 0,
-            };
-            road.stone_committed = road.stone_required();
-            commands.spawn((
-                road.clone(),
-                shared::components::RoadOf(settlement_id),
-                crate::world::village_roads::RoadConnectorFor { building },
-                Replicate::to_clients(NetworkTarget::All),
-            ));
-            roads.push(road);
-        }
+        let mut road = VillageRoad {
+            settlement: settlement_name.to_string(),
+            builder: "UX fixture".to_string(),
+            built_through: u16::try_from(approval.road_access.len()).unwrap_or(u16::MAX),
+            points: approval.road_access,
+            width: 2.5,
+            reserved_width,
+            surface: RoadSurface::Stone,
+            class: RoadClass::Lane,
+            stone_committed: 0,
+        };
+        road.stone_committed = road.stone_required();
+        commands.spawn((
+            road.clone(),
+            shared::components::RoadOf(settlement_id),
+            crate::world::village_roads::RoadConnectorFor { building },
+            Replicate::to_clients(NetworkTarget::All),
+        ));
+        roads.push(road);
+        access_blockers.extend(village::road_access_blockers_for_plot(
+            kind,
+            approval.position,
+            approval.rotation,
+        ));
+        debug_assert!(crate::world::village_roads::building_has_connected_road(
+            kind,
+            approval.position,
+            approval.rotation,
+            hall,
+            0.0,
+            &roads.iter().collect::<Vec<_>>(),
+        ));
         occupied.push((approval.position, kind.clearance()));
         return Some((building, approval.position, approval.rotation));
     }
@@ -1711,7 +1762,7 @@ fn spawn_runtime_ux_town(
     villager_seed: &mut crate::world::dev::VillagerSeed,
     ids: &mut crate::world::identity::WorldIdAllocator,
     hall: Vec3,
-    colliders: Option<&crate::collision::library::StaticColliders>,
+    mut colliders: Option<&mut crate::collision::library::StaticColliders>,
     derived: Option<&crate::collision::library::DerivedColliderLibrary>,
 ) -> Entity {
     const NAME: &str = "Lab UX City";
@@ -1746,6 +1797,7 @@ fn spawn_runtime_ux_town(
 
     let mut occupied = vec![(hall, 18.0)];
     let mut roads = Vec::new();
+    let mut access_blockers = Vec::new();
     let mut homes = Vec::with_capacity(UX_TOWN_RESIDENTS.div_ceil(4));
     let mut sequence = 0_usize;
     let mut placed = 0_usize;
@@ -1761,7 +1813,8 @@ fn spawn_runtime_ux_town(
             sequence,
             &mut occupied,
             &mut roads,
-            colliders,
+            &mut access_blockers,
+            colliders.as_deref_mut(),
             derived,
         );
         sequence += 1;
@@ -1827,7 +1880,7 @@ fn spawn_runtime_ux_town(
             villager_seed.0,
             terrain,
             None,
-            colliders,
+            colliders.as_deref(),
             derived,
         ) else {
             warn!(
@@ -1857,6 +1910,11 @@ fn spawn_runtime_ux_town(
         roads.len(),
         opening_bread,
         shared::economy::format_money(500 * PENNIES_PER_COIN),
+    );
+    debug_assert_eq!(
+        roads.len(),
+        placed,
+        "every staged UX building must have a completed Hall-connected road"
     );
     settlement_entity
 }
@@ -1996,7 +2054,7 @@ pub(crate) fn stage_rendered_lab_arrivals(
     if !enabled_flag("FISTWORLD_VILLAGE_LAB_RUNTIME") {
         return;
     }
-    if enabled_flag("FISTWORLD_UX_TOWN") {
+    if enabled_flag("FISTWORLD_UX_TOWN") && !enabled_flag("FISTWORLD_UX_STRESS") {
         return;
     }
     if LabScenario::from_environment().is_crowd_stress() {
@@ -2271,7 +2329,7 @@ mod tests {
 pub(crate) fn stage_rendered_lab_once(
     mut commands: Commands,
     terrain: Res<WorldTerrain>,
-    colliders: Option<Res<crate::collision::library::StaticColliders>>,
+    mut colliders: Option<ResMut<crate::collision::library::StaticColliders>>,
     derived: Option<Res<crate::collision::library::DerivedColliderLibrary>>,
     settlements: Query<&Settlement>,
     mut warps: Query<&mut TimeWarp>,
@@ -2378,7 +2436,7 @@ pub(crate) fn stage_rendered_lab_once(
             &mut villager_seed,
             &mut ids,
             hall,
-            colliders.as_deref(),
+            colliders.as_deref_mut(),
             derived.as_deref(),
         );
         let factor = lab_warp();
@@ -2673,6 +2731,7 @@ struct VillageTraceCounts {
     immigration_queue: usize,
     permit_queue: usize,
     food_queue: usize,
+    construction_queue: usize,
     carried_food: u32,
     carried_wheat: u32,
     carried_flour: u32,
@@ -2741,6 +2800,7 @@ pub(crate) fn log_rendered_village_diagnostics(
             village::MootServiceKind::HouseholdShopping
             | village::MootServiceKind::PersonalMeal
             | village::MootServiceKind::PoorRelief => counts.food_queue += 1,
+            village::MootServiceKind::ConstructionMaterial => counts.construction_queue += 1,
         }
     }
     let mut unaffiliated = 0usize;
@@ -2887,7 +2947,7 @@ pub(crate) fn log_rendered_village_diagnostics(
             complete_roads += usize::from(road.is_complete());
         }
         info!(
-            "VillageTrace '{}' day={} tier={:?} pop={} embodied={} immigrating={} failed_immigrants={} buildings={} sites={} roads={}/{} moving={} working={} farming={} fishing={} chopping={} routines={}/{}/{}/{} moot_queue={} immigration_queue={} permit_queue={} food_queue={} indoors={} routed={} route_pending={} route_failed={} exhausted={} hall_fish={} hall_wheat={} hall_flour={} hall_bread={} hall_wood={} workplace_fish={} workplace_wheat={} workplace_flour={} workplace_bread={} workplace_wood={} carried_fish={} carried_wheat={} carried_flour={} carried_bread={} carried_wood={} listed_fish={} listed_wheat={} listed_flour={} listed_bread={} listed_wood={} reserve_days={:.2} steward={} audit_roadless={} audit_disconnected={} audit_pending={} wage_arrears={} unaffiliated={}",
+            "VillageTrace '{}' day={} tier={:?} pop={} embodied={} immigrating={} failed_immigrants={} buildings={} sites={} roads={}/{} moving={} working={} farming={} fishing={} chopping={} routines={}/{}/{}/{} moot_queue={} immigration_queue={} permit_queue={} food_queue={} construction_queue={} indoors={} routed={} route_pending={} route_failed={} exhausted={} hall_fish={} hall_wheat={} hall_flour={} hall_bread={} hall_wood={} workplace_fish={} workplace_wheat={} workplace_flour={} workplace_bread={} workplace_wood={} carried_fish={} carried_wheat={} carried_flour={} carried_bread={} carried_wood={} listed_fish={} listed_wheat={} listed_flour={} listed_bread={} listed_wood={} reserve_days={:.2} steward={} audit_roadless={} audit_disconnected={} audit_pending={} wage_arrears={} unaffiliated={}",
             settlement.name,
             day,
             settlement.tier,
@@ -2912,6 +2972,7 @@ pub(crate) fn log_rendered_village_diagnostics(
             counts.immigration_queue,
             counts.permit_queue,
             counts.food_queue,
+            counts.construction_queue,
             counts.indoors,
             counts.routed,
             counts.route_pending,
@@ -2946,6 +3007,379 @@ pub(crate) fn log_rendered_village_diagnostics(
             administration.map_or(0, |administration| administration.pending_road_buildings),
             administration.map_or(0, |administration| administration.wage_arrears),
             unaffiliated,
+        );
+    }
+}
+
+#[derive(Debug)]
+struct StuckActorObservation {
+    position: Vec3,
+    target: Option<Vec3>,
+    objective: shared::components::CharacterObjective,
+    expected_progress: bool,
+    best_target_distance: f32,
+    last_progress_world_seconds: f64,
+    last_report_world_seconds: f64,
+}
+
+#[derive(Default)]
+pub(crate) struct StuckActorWatchState {
+    actors: std::collections::HashMap<shared::components::PersonId, StuckActorObservation>,
+    last_sample: Option<std::time::Instant>,
+    last_summary: Option<std::time::Instant>,
+}
+
+fn objective_expects_position_progress(objective: shared::components::CharacterObjective) -> bool {
+    use shared::components::CharacterObjective as Objective;
+    // Exhaustive on purpose: adding a CharacterObjective variant must not
+    // compile until it is filed as travel (progress required) or in-place
+    // (standing still is legitimate) - a silent watchdog blind spot is the
+    // exact bug class this diagnostic exists to catch.
+    match objective {
+        // Travel: standing still here for game-hours is a stall.
+        Objective::SailingToSettlement
+        | Objective::TravellingToSettlement
+        | Objective::CarryingConstructionWood
+        | Objective::GoingHome
+        | Objective::LeavingHome
+        | Objective::GoingHouseholdShopping
+        | Objective::ReturningWithHouseholdFood
+        | Objective::CollectingMarketGoods
+        | Objective::DeliveringMarketGoods
+        | Objective::GoingToFarm
+        | Objective::ReturningHarvest
+        | Objective::GoingFishing
+        | Objective::ReturningCatch
+        | Objective::GoingToLumberWork
+        | Objective::ReturningTimber
+        | Objective::GoingToProcessingWork
+        | Objective::GoingToQuarryWork
+        | Objective::ReturningStone
+        | Objective::GoingToLivestockWork
+        | Objective::ReturningLivestockProducts
+        | Objective::GoingToTavern
+        | Objective::LeavingTavern
+        | Objective::OpeningTavern
+        | Objective::EndingWorkShift
+        | Objective::SettlingIntoTown
+        | Objective::WalkingAroundTown
+        | Objective::WalkingToDestination
+        | Objective::CollectingCompanyInputs
+        | Objective::DeliveringCompanyInputs
+        | Objective::GoingToTradeRoutePickup
+        | Objective::HaulingInterSettlementCargo
+        | Objective::ReturningFromTradeRoute => true,
+        // In place: queues, station work, rest and idling.
+        Objective::Idle
+        | Objective::LookingForSettlement
+        | Objective::WaitingToRetryMigration
+        | Objective::QueuedForImmigration
+        | Objective::RegisteringImmigration
+        | Objective::LeavingImmigrationCounter
+        | Objective::QueuedForPermit
+        | Objective::CollectingPermit
+        | Objective::QueuedForHouseholdFood
+        | Objective::QueuedForPersonalFood
+        | Objective::QueuedForPoorRelief
+        | Objective::CollectingFood
+        | Objective::Eating
+        | Objective::FindingConstructionWood
+        | Objective::QueuedForConstructionWood
+        | Objective::CollectingConstructionWood
+        | Objective::ConstructingBuilding
+        | Objective::BuildingRoad
+        | Objective::ClearingRoadTree
+        | Objective::EnteringHome
+        | Objective::Sleeping
+        | Objective::Farming
+        | Objective::Fishing
+        | Objective::ChoppingTimber
+        | Objective::MillingFlour
+        | Objective::BakingBread
+        | Objective::QuarryingStone
+        | Objective::TendingLivestock
+        | Objective::WaitingForTavernService
+        | Objective::EatingAtTavern
+        | Objective::ServingAtTavern
+        | Objective::Resting
+        | Objective::ShelteringAtMoot
+        | Objective::OffDuty
+        | Objective::LookingForWork => false,
+    }
+}
+
+#[cfg(test)]
+mod stuck_watch_tests {
+    use super::objective_expects_position_progress;
+    use shared::components::CharacterObjective as Objective;
+
+    #[test]
+    fn only_travel_objectives_require_position_progress() {
+        assert!(objective_expects_position_progress(
+            Objective::DeliveringMarketGoods
+        ));
+        assert!(objective_expects_position_progress(
+            Objective::ReturningHarvest
+        ));
+        assert!(objective_expects_position_progress(
+            Objective::HaulingInterSettlementCargo
+        ));
+
+        assert!(!objective_expects_position_progress(
+            Objective::QueuedForImmigration
+        ));
+        assert!(!objective_expects_position_progress(Objective::Farming));
+        assert!(!objective_expects_position_progress(Objective::Sleeping));
+    }
+}
+
+/// Causal, opt-in evidence for actors who visually appear frozen.
+///
+/// Aggregate `VillageTrace` can say that ten people are not moving, but not
+/// whether they are sleeping, waiting in a real queue, carrying orphaned
+/// freight, looping around an obstacle or waiting forever for a route. This
+/// watchdog samples only twice per real second and retains one compact record
+/// per person, so a 1,000-person 10x reproduction stays representative of the
+/// production workload rather than becoming a profiler for its own logging.
+#[allow(clippy::type_complexity)]
+pub(crate) fn watch_stuck_village_actors(
+    world_time: Query<&WorldTime>,
+    actors: Query<
+        (
+            &shared::components::PersonId,
+            &CharacterName,
+            &PlayerPosition,
+            Option<&CharacterActivity>,
+            Option<&shared::components::CharacterObjective>,
+            Option<&shared::components::CharacterNavigationStatus>,
+            Option<&GoodsInventory>,
+            (
+                Option<&crate::player::hero::MoveTarget>,
+                Option<&crate::world::village_roads::TravelRoute>,
+                Option<&crate::world::village_roads::NavigationRoutePending>,
+                Option<&crate::world::village_roads::NavigationRouteFailed>,
+            ),
+            (
+                Option<&village::MootSteward>,
+                Option<&village::CompanyPorter>,
+                Option<&village::MarketCollectionRoutine>,
+                Option<&village::InternalDeliveryRoutine>,
+                Option<&village::TradeRouteRoutine>,
+            ),
+        ),
+        With<village::VillagerIntent>,
+    >,
+    mut state: Local<StuckActorWatchState>,
+) {
+    if !enabled_flag("FISTWORLD_STUCK_WATCH") {
+        return;
+    }
+    let real_now = std::time::Instant::now();
+    if state.last_sample.is_some_and(|last| {
+        real_now.saturating_duration_since(last).as_secs_f32() < STUCK_WATCH_SAMPLE_SECONDS
+    }) {
+        return;
+    }
+    state.last_sample = Some(real_now);
+    let Some(clock) = world_time.iter().next() else {
+        return;
+    };
+    let world_now = f64::from(clock.day) * f64::from(clock.cycle_duration())
+        + f64::from(clock.seconds_in_cycle);
+    let emit_summary = state.last_summary.is_none_or(|last| {
+        real_now.saturating_duration_since(last).as_secs_f32() >= STUCK_WATCH_REPORT_SECONDS
+    });
+    if emit_summary {
+        state.last_summary = Some(real_now);
+    }
+
+    let mut seen = std::collections::HashSet::with_capacity(actors.iter().len());
+    let mut expected_to_move = 0_usize;
+    let mut porters = 0_usize;
+    let mut suspicious = 0_usize;
+    let mut suspicious_porters = 0_usize;
+    let mut suspicious_ambient = 0_usize;
+    let mut suspicious_committed = 0_usize;
+    let mut porter_details = 0_usize;
+    let mut committed_details = 0_usize;
+    let mut ambient_details = 0_usize;
+
+    for (
+        person,
+        name,
+        position,
+        activity,
+        objective,
+        navigation,
+        inventory,
+        (move_target, travel_route, route_pending, route_failed),
+        (moot_steward, company_porter, market_collection, internal_delivery, trade_route),
+    ) in actors.iter()
+    {
+        seen.insert(*person);
+        let objective = objective.copied().unwrap_or_default();
+        let navigation = navigation.copied().unwrap_or_default();
+        let porter = moot_steward.is_some() || company_porter.is_some();
+        porters += usize::from(porter);
+        let freight_routine =
+            market_collection.is_some() || internal_delivery.is_some() || trade_route.is_some();
+        let loaded_porter = porter && inventory.is_some_and(|inventory| inventory.used_bulk() > 0);
+        let motion_expected = objective_expects_position_progress(objective);
+        let missing_navigation = freight_routine
+            && matches!(
+                navigation,
+                shared::components::CharacterNavigationStatus::Stationary
+            );
+        let orphaned_load = loaded_porter
+            && !freight_routine
+            && matches!(
+                navigation,
+                shared::components::CharacterNavigationStatus::Stationary
+            );
+        let candidate = motion_expected || missing_navigation || orphaned_load;
+        expected_to_move += usize::from(candidate);
+
+        let target = move_target
+            .map(|target| target.0)
+            .or_else(|| travel_route.map(|route| route.goal))
+            .or_else(|| route_pending.map(|pending| pending.goal))
+            .or_else(|| route_failed.map(|failed| failed.goal));
+        let target_distance = target.map_or(0.0, |target| position.0.distance(target));
+        let observation = state
+            .actors
+            .entry(*person)
+            .or_insert_with(|| StuckActorObservation {
+                position: position.0,
+                target,
+                objective,
+                expected_progress: candidate,
+                best_target_distance: target_distance,
+                last_progress_world_seconds: world_now,
+                last_report_world_seconds: f64::NEG_INFINITY,
+            });
+        let objective_changed = observation.objective != objective;
+        let target_changed = match (observation.target, target) {
+            (Some(previous), Some(current)) => previous.distance_squared(current) > 0.5_f32.powi(2),
+            (None, None) => false,
+            _ => true,
+        };
+        let changed_motion_owner = objective_changed || target_changed;
+        let made_position_progress = position.0.distance_squared(observation.position)
+            >= STUCK_WATCH_PROGRESS_METERS.powi(2);
+        let made_target_progress = target.is_some()
+            && !target_changed
+            && target_distance + STUCK_WATCH_PROGRESS_METERS < observation.best_target_distance;
+
+        // A destination change is not physical progress. Otherwise an
+        // ambient timeout or porter fallback can alternate targets forever
+        // while continually erasing the evidence that the actor never moved.
+        if !candidate
+            || !observation.expected_progress
+            || made_position_progress
+            || made_target_progress
+        {
+            observation.last_progress_world_seconds = world_now;
+        }
+        if changed_motion_owner {
+            observation.best_target_distance = target_distance;
+        } else if target.is_some() {
+            observation.best_target_distance =
+                observation.best_target_distance.min(target_distance);
+        }
+        observation.position = position.0;
+        observation.target = target;
+        observation.objective = objective;
+        observation.expected_progress = candidate;
+
+        let stalled_for = (world_now - observation.last_progress_world_seconds).max(0.0);
+        if !candidate || stalled_for < STUCK_WATCH_WORLD_SECONDS {
+            continue;
+        }
+        suspicious += 1;
+        suspicious_porters += usize::from(porter);
+        let ambient_stall = matches!(
+            objective,
+            shared::components::CharacterObjective::WalkingAroundTown
+                | shared::components::CharacterObjective::Resting
+        );
+        suspicious_ambient += usize::from(ambient_stall);
+        suspicious_committed += usize::from(!ambient_stall);
+        let has_detail_slot = if porter {
+            porter_details < 8
+        } else if ambient_stall {
+            ambient_details < 4
+        } else {
+            committed_details < 12
+        };
+        let report_actor = emit_summary
+            && has_detail_slot
+            && world_now - observation.last_report_world_seconds >= STUCK_WATCH_WORLD_SECONDS / 2.0;
+        if !report_actor {
+            continue;
+        }
+        observation.last_report_world_seconds = world_now;
+        if porter {
+            porter_details += 1;
+        } else if ambient_stall {
+            ambient_details += 1;
+        } else {
+            committed_details += 1;
+        }
+        let porter_role = if moot_steward.is_some() {
+            "moot-steward"
+        } else if company_porter.is_some() {
+            "company-porter"
+        } else {
+            "no"
+        };
+        let routine = market_collection
+            .map(|routine| format!("market={routine:?}"))
+            .or_else(|| internal_delivery.map(|routine| format!("internal={routine:?}")))
+            .or_else(|| trade_route.map(|routine| format!("trade={routine:?}")))
+            .unwrap_or_else(|| "none".to_string());
+        let reason = if route_failed.is_some() {
+            "route-failed"
+        } else if route_pending.is_some() {
+            "route-planning"
+        } else if missing_navigation {
+            "freight-routine-without-navigation"
+        } else if orphaned_load {
+            "loaded-porter-without-routine"
+        } else {
+            "no-position-progress"
+        };
+        warn!(
+            "StuckWatch actor=#{} '{}' stalled_world={:.0}s reason={} objective='{}' navigation={:?} activity={:?} porter={} cargo_bulk={} position={:.1},{:.1} target={} routine={}",
+            person.0,
+            name.0,
+            stalled_for,
+            reason,
+            objective.label(),
+            navigation,
+            activity.copied().unwrap_or_default(),
+            porter_role,
+            inventory.map_or(0, GoodsInventory::used_bulk),
+            position.0.x,
+            position.0.z,
+            target.map_or_else(
+                || "none".to_string(),
+                |target| format!("{:.1},{:.1} ({:.1}m)", target.x, target.z, target_distance),
+            ),
+            routine,
+        );
+    }
+    state.actors.retain(|person, _| seen.contains(person));
+    if emit_summary {
+        info!(
+            "StuckWatch summary actors={} expected_progress={} suspicious={} committed={} ambient={} porters={} suspicious_porters={} threshold_world={:.0}s",
+            seen.len(),
+            expected_to_move,
+            suspicious,
+            suspicious_committed,
+            suspicious_ambient,
+            porters,
+            suspicious_porters,
+            STUCK_WATCH_WORLD_SECONDS,
         );
     }
 }

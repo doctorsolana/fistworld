@@ -108,6 +108,7 @@ struct PropertyPanelUi<'w, 's> {
                 &'static PermitDemandText,
                 &'static PermitActionLabel,
                 &'static ListingFactText,
+                &'static ListingActionLabel,
                 &'static ActingCompanyText,
                 &'static PropertyTabCount,
             )>,
@@ -124,6 +125,20 @@ struct PropertyPanelUi<'w, 's> {
             Has<InteractionDisabled>,
             Option<&'static PurchasePermitButton>,
         ),
+        Without<ListingActionButton>,
+    >,
+    #[allow(clippy::type_complexity)]
+    listing_actions: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static ListingActionButton,
+            &'static mut UiButtonStyle,
+            Has<InteractionDisabled>,
+            Option<&'static PurchaseListingButton>,
+        ),
+        Without<PermitActionButton>,
     >,
     tab: Res<'w, PropertyMarketTab>,
     perf: Res<'w, crate::ui::perf::UiPerf>,
@@ -628,13 +643,20 @@ fn sync_property_panel(
                 listing.kind,
                 listing.listed_day,
                 listing.stage,
-                listing.reason
+                listing.reason,
+                // Identity: two same-day listings of one kind must not swap
+                // silently under an index-keyed BUY payload.
+                listing.position.to_array().map(f32::to_bits),
             ))
             .collect::<Vec<_>>(),
         founding_feedback.message,
         founding_feedback.success,
     );
     let quote = quote.0.as_ref();
+    let listing_values: Vec<ListingCardValues> = property_listings
+        .iter()
+        .map(|listing| listing_card_values(entity, listing, has_hero, hero_nearby, hero_balance))
+        .collect();
     let mut card_values: HashMap<SettlementBuildingKind, PermitCardValues> = HashMap::default();
     for opportunity in permit_offers {
         card_values.insert(
@@ -720,7 +742,9 @@ fn sync_property_panel(
                     PropertyMarketTab::Permits => {
                         spawn_permit_list(body, permit_offers, &card_values)
                     }
-                    PropertyMarketTab::ForSale => spawn_property_list(body, property_listings, day),
+                    PropertyMarketTab::ForSale => {
+                        spawn_property_list(body, property_listings, day, &listing_values)
+                    }
                 });
         });
         return;
@@ -728,7 +752,9 @@ fn sync_property_panel(
 
     // Bind: write only what changed, into the widgets that already exist.
     let acting_text = acting_company.map(acting_company_text);
-    for (mut text, (price, demand, label, listing, acting, tab_count)) in ui.texts.iter_mut() {
+    for (mut text, (price, demand, label, listing, listing_action, acting, tab_count)) in
+        ui.texts.iter_mut()
+    {
         let next = if let Some(PermitPriceText(kind)) = price {
             card_values
                 .get(kind)
@@ -745,6 +771,10 @@ fn sync_property_panel(
             property_listings
                 .get(fact.index)
                 .map(|listing| listing_fact(listing, day, fact.field))
+        } else if let Some(ListingActionLabel(index)) = listing_action {
+            listing_values
+                .get(*index)
+                .map(|values| values.action_label.clone())
         } else if acting.is_some() {
             acting_text.clone()
         } else if let Some(PropertyTabCount(which)) = tab_count {
@@ -788,6 +818,38 @@ fn sync_property_panel(
                 }
                 None => {
                     commands.entity(button).remove::<PurchasePermitButton>();
+                }
+            }
+        }
+    }
+    for (button, ListingActionButton(index), mut style, disabled, purchase) in
+        ui.listing_actions.iter_mut()
+    {
+        let Some(values) = listing_values.get(*index) else {
+            continue;
+        };
+        let variant = if values.enabled {
+            UiButtonVariant::Primary
+        } else {
+            UiButtonVariant::Secondary
+        };
+        if style.variant != variant {
+            style.variant = variant;
+        }
+        if values.enabled == disabled {
+            if values.enabled {
+                commands.entity(button).remove::<InteractionDisabled>();
+            } else {
+                commands.entity(button).insert(InteractionDisabled);
+            }
+        }
+        if purchase.copied() != values.purchase {
+            match values.purchase {
+                Some(purchase) => {
+                    commands.entity(button).insert(purchase);
+                }
+                None => {
+                    commands.entity(button).remove::<PurchaseListingButton>();
                 }
             }
         }
@@ -1107,6 +1169,7 @@ fn spawn_property_list(
     body: &mut ChildSpawnerCommands<'_>,
     listings: &[PropertyMarketListing],
     day: u32,
+    values: &[ListingCardValues],
 ) {
     body.spawn((
         PropertyListingViewport,
@@ -1126,7 +1189,7 @@ fn spawn_property_list(
             spawn_empty_state(list, "No buildings for sale right now.");
         } else {
             for (index, listing) in listings.iter().enumerate() {
-                spawn_property_card(list, index, listing, day);
+                spawn_property_card(list, index, listing, day, values.get(index));
             }
         }
     });
@@ -1226,6 +1289,61 @@ fn spawn_permit_card(
 /// One big button that says what happens when you press it. Its label,
 /// enabled state and purchase order are bound: they follow the live price
 /// without the card ever being rebuilt under the pointer.
+/// The BUY button on one FOR SALE card, indexed like the card's bound facts.
+#[derive(Component, Clone, Copy)]
+struct ListingActionButton(usize);
+
+#[derive(Component, Clone, Copy)]
+struct ListingActionLabel(usize);
+
+/// Payload for a for-sale purchase: the board replicates no ids, so the
+/// listing travels to the server as (hall, kind, position) plus the price the
+/// player saw.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PurchaseListingButton {
+    pub hall: Entity,
+    pub kind: SettlementBuildingKind,
+    pub position: Vec3,
+    pub asking_price: u64,
+}
+
+struct ListingCardValues {
+    action_label: String,
+    enabled: bool,
+    purchase: Option<PurchaseListingButton>,
+}
+
+/// Purchases are personal, exactly like the NPC takeover path: the hero pays
+/// and the price becomes the firm's working capital.
+fn listing_card_values(
+    hall: Entity,
+    listing: &PropertyMarketListing,
+    has_hero: bool,
+    hero_nearby: bool,
+    hero_balance: u64,
+) -> ListingCardValues {
+    let price = listing.asking_price;
+    let (enabled, action_label) = if !has_hero {
+        (false, "CREATE YOUR HERO FIRST".to_string())
+    } else if !hero_nearby {
+        (false, "MOVE YOUR HERO TO THE HALL".to_string())
+    } else if hero_balance < price {
+        (false, format!("NEED {} COIN", format_money(price)))
+    } else {
+        (true, format!("BUY / {} COIN", format_money(price)))
+    };
+    ListingCardValues {
+        action_label,
+        enabled,
+        purchase: enabled.then_some(PurchaseListingButton {
+            hall,
+            kind: listing.kind,
+            position: listing.position,
+            asking_price: price,
+        }),
+    }
+}
+
 fn spawn_permit_action(
     card: &mut ChildSpawnerCommands<'_>,
     kind: SettlementBuildingKind,
@@ -1275,6 +1393,7 @@ fn spawn_property_card(
     index: usize,
     listing: &PropertyMarketListing,
     day: u32,
+    values: Option<&ListingCardValues>,
 ) {
     parent
         .spawn((
@@ -1337,6 +1456,45 @@ fn spawn_property_card(
                     );
                 }
             });
+            if let Some(values) = values {
+                let mut button = card.spawn((
+                    ListingActionButton(index),
+                    Button,
+                    Node {
+                        width: Val::Percent(100.0),
+                        min_height: Val::Px(46.0),
+                        margin: UiRect::top(Val::Px(4.0)),
+                        padding: UiRect::axes(Val::Px(14.0), Val::Px(10.0)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                        ..default()
+                    },
+                    button_chrome(if values.enabled {
+                        UiButtonVariant::Primary
+                    } else {
+                        UiButtonVariant::Secondary
+                    }),
+                ));
+                if !values.enabled {
+                    button.insert(InteractionDisabled);
+                }
+                if let Some(purchase) = values.purchase {
+                    button.insert(purchase);
+                }
+                button.with_child((
+                    ListingActionLabel(index),
+                    Text::new(values.action_label.clone()),
+                    UiButtonLabel,
+                    TextFont {
+                        font_size: FontSize::Px(T_BUTTON),
+                        ..default()
+                    },
+                    TextColor(if values.enabled { INK } else { INK_MUTED }),
+                    Pickable::IGNORE,
+                ));
+            }
         });
 }
 
@@ -1486,6 +1644,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn listing_buy_button_enables_only_with_a_funded_hero_at_the_hall() {
+        let hall = Entity::from_bits(1);
+        let listing = PropertyMarketListing {
+            kind: SettlementBuildingKind::Bakery,
+            stage: shared::components::PropertyListingStage::CompletedBusiness,
+            asking_price: 425,
+            listed_day: 2,
+            reason: shared::economy::BusinessSaleReason::Insolvent,
+            position: Vec3::new(3.0, 0.0, 4.0),
+        };
+        let ready = listing_card_values(hall, &listing, true, true, 1_000);
+        assert!(ready.enabled);
+        assert_eq!(ready.action_label, "BUY / 4.25 COIN");
+        let purchase = ready.purchase.expect("payload");
+        assert_eq!(purchase.asking_price, 425);
+        assert_eq!(purchase.position, listing.position);
+
+        assert!(!listing_card_values(hall, &listing, true, true, 100).enabled);
+        assert!(!listing_card_values(hall, &listing, true, false, 1_000).enabled);
+        assert!(!listing_card_values(hall, &listing, false, false, 1_000).enabled);
+        assert!(listing_card_values(hall, &listing, true, false, 1_000)
+            .purchase
+            .is_none());
+    }
+
+    #[test]
     fn company_context_styling_cannot_capture_an_unrelated_backdrop() {
         let mut world = World::new();
         let backdrop = world
@@ -1540,7 +1724,7 @@ mod tests {
         let root = world.spawn_empty().id();
         world.commands().entity(root).with_children(|body| {
             spawn_permit_list(body, &[], &HashMap::default());
-            spawn_property_list(body, &[], 0);
+            spawn_property_list(body, &[], 0, &[]);
         });
         world.flush();
 

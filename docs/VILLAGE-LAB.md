@@ -763,7 +763,10 @@ NPC companies own the private sites; most are small owner-led firms while the
 first twelve span a Farmstead, Windmill and Bakery. These are real runtime
 settlements, people, buildings, inventories, roads, companies and ownership
 relationships, so the ordinary UI and simulation take over as soon as the
-fixture is staged.
+fixture is staged. Fixture placement uses the same permanent plot blockers as
+runtime planning. Its already-completed roads reject rocks and other permanent
+props, clear intersecting trees through the durable prop-removal record, and
+therefore cannot create a visually convenient but tactically impossible street.
 
 After the normal local hero-creation flow, the hero starts on land beside the
 City Hall in this fixture only. That makes it quick to test incorporating a
@@ -775,6 +778,46 @@ by startup scarcity; use the organic scenarios for economic balance evidence.
 The launcher records both process logs under `logs/uxworld-*` and keeps their
 startup volume out of the terminal by default. Set
 `FISTWORLD_STREAM_LOGS=1 ./run.sh uxworld` when live trace output is useful.
+
+### 500-to-1,000 resident congestion reproduction
+
+Use the prepared City as the baseline for a repeatable immigration and logistics shock:
+
+```bash
+./run.sh uxstressworld
+```
+
+`uxstressworld` runs at 10x. Its initial 500 residents use the same bodies, jobs, companies,
+inventories, routes and schedules as `uxworld`. On scenario day 2 it creates 500 ordinary
+prospective immigrants south of the City Hall. They are not inserted directly into households
+or jobs: they must choose the settlement, form the real immigration queue, register, seek work
+and housing, and generate normal construction and freight demand.
+
+Registration is also a physical handoff rather than an invisible state flip. The two Moot lanes
+advance one place at a time and only the active person leaves the counter. Once clear, every new
+resident receives an independently staggered first destination at least 18 metres away. Clear
+terrain uses a collision-certified direct walk which creates no A* request; difficult geometry
+falls back to the normal priority planner. Their work, household or food routine may pre-empt that
+temporary dispersal at any time. This prevents a rapidly cleared line from depositing everyone on
+the same counter point without turning a 1,000-person shock into 1,000 simultaneous route searches.
+
+The mode also enables the low-frequency `StuckWatch`. It samples each embodied villager twice
+per real second but reports only actors who make no meaningful physical progress for three
+world minutes. Changing destinations does not erase that clock, so target-churn livelocks are
+also exposed. Queue service, working in place, sleep and other legitimate stationary activities
+are excluded. Each warning includes stable
+person identity, objective, navigation state, cargo, porter role, position, destination and
+freight routine, so a visual stall can be traced to routing, ownership or state-machine logic.
+The usual aggregate `VillageTrace` and performance telemetry remain enabled, and both process
+logs are saved under `logs/uxstressworld-*`.
+
+The shock size and timing can be overridden without changing the scenario:
+
+```bash
+FISTWORLD_LAB_DAY_TWO_ARRIVALS=1000 ./run.sh uxstressworld
+FISTWORLD_LAB_ARRIVAL_DAY=3 ./run.sh uxstressworld
+FISTWORLD_STREAM_LOGS=1 ./run.sh uxstressworld
+```
 
 To watch all three 200-person settlements together, already framed by the
 opening camera and starting at 10x:
@@ -900,11 +943,18 @@ longer than a short local walk try the completed road graph before paying for di
 the bounded direct search remains a fallback for new plots awaiting their
 connector. Long fallback A* retains its frontier and resumes across server
 ticks rather than overrunning the tick budget. A retained search advances at
-least eight cells per visit, which bounds a 2,400-cell negative proof to five
-real seconds at 60 Hz instead of letting one exceptional commute hold the
-committed lane for forty seconds. Committed migration, work,
-shopping and construction routes are served ahead of cosmetic ambient routes,
-with fair rotation inside each lane. Authored doorway traversal remains
+least 24 cells per visit, while the shared time budget still prevents one
+exceptional commute from holding a server tick. Requests are separated into
+caravan, essential loaded-delivery/home, committed work/migration, leisure and
+ambient lanes. Weighted rotation preserves throughput and fairness, and
+real-time queue-age promotion prevents committed or leisure work from starving;
+cosmetic ambient requests never displace gameplay work. The planner normally
+uses a four-millisecond/32-request allowance, lends five milliseconds to a
+16-request committed backlog and six milliseconds once 64 committed requests
+accumulate; this converts available tick headroom into shorter queues without
+making ambient work urgent. The first planner slot always belongs to real
+committed work, even if weighted rotation selected leisure or ambience for that
+tick. Authored doorway traversal remains
 authoritative over stale route requests. Migration admission is limited to eight
 people per quarter real second at every warp, so unpausing a crowd cannot publish
 hundreds of route jobs on one update. Those migrants still enter a separate visible
@@ -927,6 +977,49 @@ defensively recovers any unchanged `MoveTarget` left without a route, pending
 request, failure or backoff. Final worksite diagnostics show the active route
 waypoint (`next/length@position`) and Moot transit/ticket pair so either
 regression is visible immediately.
+
+High-population routing shares work at both ends of the pipeline. Nearby actors
+with the same committed destination may reuse a certified route cohort, and the
+road graph retains bounded reverse shortest-path trees for up to 64 recent
+destination nodes. A workplace, Hall or home approached by many different
+origins therefore pays for one graph search rather than one Dijkstra per person.
+An embodied collision rejection invalidates only tactical routes close to the
+rejected segment, not the whole world cache. `VillageRoutePerf` reports the
+five-lane pending peaks and reverse-tree count so a recurrence is visible in an
+ordinary rendered run.
+
+Multi-tick local and regional searches retain their frontier while unrelated
+buildings, roads or props change elsewhere in a growing town. They search an
+immutable snapshot, then must pass final certification against current live
+collision before installation. A stale blocked result starts again from the
+new snapshot. This prevents continuous construction from resetting a distant
+porter or worker forever without allowing travel through new geometry.
+
+Optional street life is admitted per settlement rather than in synchronized
+global batches. At most 96 ambient walks per settlement can own live navigation
+work at once; additional residents keep their individual deterministic decision
+deadline and retry after a short stagger. No identity, need, job, inventory or
+economic decision is batched or discarded. An ambient walk's stuck clock starts
+only after its route is installed, so waiting behind essential freight is not
+misdiagnosed as failed movement.
+
+Local embodied separation uses a tactical spatial grid rebuilt once per
+navigation tick. Each mover considers at most twelve nearby actors, yielding
+stable pair-symmetric separation without an all-pairs crowd pass. Hall queues
+and authored door traversals retain their explicit choreography. Certified
+routes also carry the building/prop geometry version: unchanged geometry does
+not need to be rescanned on every tiny movement step, while any geometry change
+immediately restores the authoritative collision check.
+
+Private Tavern visits use the same visible discipline without turning every
+resident into a doorway route. A Tavern reserves its guest capacity before
+travel begins, admits only that bounded cohort, and assigns the exterior cohort
+stable FIFO places at 1.6-metre spacing. The empty place moves backward through
+the line as the head enters. Newly generated same-day leisure plans are spread
+through the remaining opening hours, so a large immigration cohort does not
+inherit one overdue Tavern appointment. Finally, the navigation schedule forces
+any embodied villager without a movement target to publish stationary motion;
+waiting at a queue place can therefore never retain a walking-in-place animation.
 
 Road planning reserves every permitted worksite and both future Farmstead
 fields, not only completed shells. This prevents the ordering race where a
@@ -1070,10 +1163,17 @@ use exponential real-time backoff. Scarce hall Wood finishes the worksite
 closest to completion instead of being spread across every simultaneous permit.
 Builders genuinely blocked on materials may rest locally and go home at night;
 their worksite remains reserved and resumes as soon as stock or reachable timber
-becomes available.
+becomes available. When sellable Wood is already in the Hall, assigned builders
+use a separate visible freight line and physically carry bounded loads to their
+own sites. This is gameplay logistics rather than a path-planner wait: the trace's
+`construction_queue` counts that line separately from `route_pending`, and the
+half-second handoff runs independently of immigration, permits and food service.
 `VillageRoutePerf` adds the route-planner breakdown every ten real seconds:
-cache hits, queue peak and budget yields, surveys and expanded nodes, memoization
-hit rates, stage timings and maximum planner-call time. Useful
+cache hits, queue peak by priority, adaptive budget peak, oldest committed wait,
+budget yields, surveys and expanded nodes, memoization hit rates, stage timings
+and maximum planner-call time. The normal server allowance is 4ms/32 requests;
+committed backlogs can temporarily borrow 5–6ms, while small aged queues receive
+only a 4.5ms boost so one hostile route cannot slow the whole simulation. Useful
 overrides are:
 
 ```bash

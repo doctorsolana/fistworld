@@ -35,7 +35,7 @@ use crate::input::InputState;
 /// containing that unit. Getting this wrong gives a selection box that is
 /// subtly offset only at non-1.0 render scale: near-invisible in testing and
 /// infuriating in play.
-fn world_to_window(
+pub(crate) fn world_to_window(
     camera: &Camera,
     camera_transform: &GlobalTransform,
     window_size: Vec2,

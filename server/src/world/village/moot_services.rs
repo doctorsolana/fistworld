@@ -30,12 +30,14 @@ const PERMIT_SERVICE_SECONDS: f32 = 3.0;
 const IMMIGRATION_SERVICE_SECONDS: f32 = 2.0;
 const SHOPPING_SERVICE_SECONDS: f32 = 1.0;
 const MEAL_SERVICE_SECONDS: f32 = 1.0;
+const CONSTRUCTION_MATERIAL_SERVICE_SECONDS: f32 = 0.5;
 const COMMONS_MEAL_SECONDS: f32 = 18.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum MootServiceLane {
     Immigration,
     Resident,
+    Freight,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +47,7 @@ pub(crate) enum MootServiceKind {
     HouseholdShopping,
     PersonalMeal,
     PoorRelief,
+    ConstructionMaterial,
 }
 
 impl MootServiceKind {
@@ -54,6 +57,7 @@ impl MootServiceKind {
             Self::Permit | Self::HouseholdShopping | Self::PersonalMeal | Self::PoorRelief => {
                 MootServiceLane::Resident
             }
+            Self::ConstructionMaterial => MootServiceLane::Freight,
         }
     }
 
@@ -63,6 +67,7 @@ impl MootServiceKind {
             Self::Permit => PERMIT_SERVICE_SECONDS,
             Self::HouseholdShopping => SHOPPING_SERVICE_SECONDS,
             Self::PersonalMeal | Self::PoorRelief => MEAL_SERVICE_SECONDS,
+            Self::ConstructionMaterial => CONSTRUCTION_MATERIAL_SERVICE_SECONDS,
         }
     }
 
@@ -73,6 +78,7 @@ impl MootServiceKind {
             Self::HouseholdShopping => "household shopping",
             Self::PersonalMeal => "food purchase",
             Self::PoorRelief => "Poor Relief",
+            Self::ConstructionMaterial => "construction material pickup",
         }
     }
 }
@@ -97,6 +103,10 @@ pub(crate) struct MootQueueTicket {
 }
 
 impl MootQueueTicket {
+    pub(crate) const fn serial(self) -> u64 {
+        self.serial
+    }
+
     pub(crate) fn is_ready(self) -> bool {
         self.state == MootQueueState::Ready
     }
@@ -115,6 +125,12 @@ impl MootQueueTicket {
             (MootServiceKind::HouseholdShopping, _) => CharacterObjective::QueuedForHouseholdFood,
             (MootServiceKind::PersonalMeal, _) => CharacterObjective::QueuedForPersonalFood,
             (MootServiceKind::PoorRelief, _) => CharacterObjective::QueuedForPoorRelief,
+            (MootServiceKind::ConstructionMaterial, false) => {
+                CharacterObjective::QueuedForConstructionWood
+            }
+            (MootServiceKind::ConstructionMaterial, true) => {
+                CharacterObjective::CollectingConstructionWood
+            }
         }
     }
 }
@@ -210,6 +226,18 @@ fn local_queue_slot(lane: MootServiceLane, index: usize) -> Vec2 {
     let side = match lane {
         MootServiceLane::Immigration => -1.0,
         MootServiceLane::Resident => 1.0,
+        MootServiceLane::Freight => {
+            if index == 0 {
+                return Vec2::new(13.0, QUEUE_SERVICE_Z - 0.5);
+            }
+            let offset = index - 1;
+            let row = offset / QUEUE_ROW_LENGTH;
+            let column = offset % QUEUE_ROW_LENGTH;
+            return Vec2::new(
+                13.0 + row as f32 * QUEUE_SPACING,
+                QUEUE_FIRST_ROW_Z - (column + 1) as f32 * QUEUE_SPACING,
+            );
+        }
     };
     if index == 0 {
         return Vec2::new(side * 1.25, QUEUE_SERVICE_Z);
@@ -723,6 +751,32 @@ mod tests {
     }
 
     #[test]
+    fn freight_line_has_distinct_places_outside_the_public_queues() {
+        let mut public_slots = Vec::new();
+        for lane in [MootServiceLane::Immigration, MootServiceLane::Resident] {
+            for index in 0..30 {
+                public_slots.push(local_queue_slot(lane, index));
+            }
+        }
+
+        let freight_slots: Vec<_> = (0..18)
+            .map(|index| local_queue_slot(MootServiceLane::Freight, index))
+            .collect();
+        for (index, slot) in freight_slots.iter().copied().enumerate() {
+            assert!(
+                freight_slots[index + 1..]
+                    .iter()
+                    .all(|other| other.distance(slot) > 1.0),
+                "freight slot {index} overlaps another freight place"
+            );
+            assert!(
+                public_slots.iter().all(|other| other.distance(slot) > 1.0),
+                "freight slot {index} overlaps a resident or immigration place"
+            );
+        }
+    }
+
+    #[test]
     fn rotated_queue_uses_the_authored_hall_frame() {
         let hall = Vec3::new(20.0, 3.0, -7.0);
         let yaw = std::f32::consts::FRAC_PI_2;
@@ -1054,6 +1108,7 @@ mod tests {
             Update,
             (
                 arrive_at_settlement,
+                advance_immigration_departures,
                 advance_moot_service_queues,
                 recount_residents,
             )
@@ -1117,7 +1172,33 @@ mod tests {
         );
 
         app.update();
+        assert!(app.world().get::<MootQueueTicket>(immigrant).is_some());
+        assert!(app
+            .world()
+            .get::<super::population::ImmigrationDeparture>(immigrant)
+            .is_some());
+        assert!(matches!(
+            app.world().get::<VillagerIntent>(immigrant),
+            Some(VillagerIntent::Travelling { settlement }) if *settlement == hall_entity
+        ));
+        assert_eq!(
+            app.world()
+                .get::<Settlement>(hall_entity)
+                .unwrap()
+                .residents,
+            0
+        );
+
+        let departure = app.world().get::<MoveTarget>(immigrant).unwrap().0;
+        app.world_mut()
+            .entity_mut(immigrant)
+            .insert(PlayerPosition(departure));
+        app.update();
         assert!(app.world().get::<MootQueueTicket>(immigrant).is_none());
+        assert!(app
+            .world()
+            .get::<super::population::ImmigrationDeparture>(immigrant)
+            .is_none());
         assert!(matches!(
             app.world().get::<VillagerIntent>(immigrant),
             Some(VillagerIntent::Resident { settlement }) if *settlement == hall_entity
@@ -1154,6 +1235,7 @@ mod tests {
                 sync_building_spatial_index,
                 sync_obstacle_grid,
                 arrive_at_settlement,
+                advance_immigration_departures,
                 advance_moot_service_queues,
                 step_units,
                 recount_residents,
@@ -1191,6 +1273,7 @@ mod tests {
             .id();
         app.world_mut().spawn(TimeWarp::clamped(10.0));
 
+        let mut immigrants = Vec::with_capacity(100);
         for rank in 0..100 {
             let position = world_slot(
                 hall_position,
@@ -1199,29 +1282,37 @@ mod tests {
                 rank,
                 Some(app.world().resource::<WorldTerrain>()),
             );
-            app.world_mut().spawn((
-                CharacterKind::Villager,
-                CharacterActivity::Idle,
-                PlayerPosition(position),
-                PlayerRotation(0.0),
-                RegionCoord::from_world_pos(position),
-                VillagerIntent::Travelling {
-                    settlement: hall_entity,
-                },
-                MootQueueTicket {
-                    hall: hall_entity,
-                    serial: rank as u64 + 1,
-                    kind: MootServiceKind::Immigration,
-                    state: MootQueueState::Queued,
-                    failed_routes: 0,
-                    head_wait_seconds: 0.0,
-                    head_best_distance: f32::INFINITY,
-                },
-            ));
+            let immigrant = app
+                .world_mut()
+                .spawn((
+                    CharacterKind::Villager,
+                    CharacterActivity::Idle,
+                    PlayerPosition(position),
+                    PlayerRotation(0.0),
+                    RegionCoord::from_world_pos(position),
+                    VillagerIntent::Travelling {
+                        settlement: hall_entity,
+                    },
+                    MootQueueTicket {
+                        hall: hall_entity,
+                        serial: rank as u64 + 1,
+                        kind: MootServiceKind::Immigration,
+                        state: MootQueueState::Queued,
+                        failed_routes: 0,
+                        head_wait_seconds: 0.0,
+                        head_best_distance: f32::INFINITY,
+                    },
+                ))
+                .id();
+            immigrants.push(immigrant);
         }
 
         let tick = std::time::Duration::from_secs_f32(1.0 / 60.0);
-        for step in 0..4_500 {
+        // Registration, the visible two-second counter service, and the
+        // protected walk out of the forecourt all consume world time. Give a
+        // hundred-person 10x line a little over eighteen world minutes; the
+        // old instant-residency test only needed twelve and a half.
+        for step in 0..6_500 {
             if step == 1_200 {
                 // The settlement entity, door and every queue ticket survive
                 // an in-place civic upgrade. The larger shell grows backward;
@@ -1237,18 +1328,70 @@ mod tests {
             }
             app.world_mut().resource_mut::<Time>().advance_by(tick);
             app.update();
+            // This is a focused counter/upgrade test rather than a complete
+            // village schedule. In production the independently staggered
+            // ambient, job and household systems immediately take admitted
+            // residents away from the compact forecourt. Model that downstream
+            // ownership here so a hundred finished residents cannot fill every
+            // departure place and turn this into an unrelated ambient test.
+            for (index, immigrant) in immigrants.iter().copied().enumerate() {
+                let admitted = matches!(
+                    app.world().get::<VillagerIntent>(immigrant),
+                    Some(VillagerIntent::Resident { settlement }) if *settlement == hall_entity
+                ) && app
+                    .world()
+                    .get::<super::population::ImmigrationDeparture>(immigrant)
+                    .is_none();
+                if admitted {
+                    let column = index % 20;
+                    let row = index / 20;
+                    let x = hall_position.x + 45.0 + column as f32 * 2.0;
+                    let z = hall_position.z - 24.0 + row as f32 * 2.0;
+                    let y = app.world().resource::<WorldTerrain>().get_height(x, z);
+                    app.world_mut()
+                        .entity_mut(immigrant)
+                        .insert(PlayerPosition(Vec3::new(x, y, z)));
+                }
+            }
+            let active_departures = {
+                let world = app.world_mut();
+                world
+                    .query::<&super::population::ImmigrationDeparture>()
+                    .iter(world)
+                    .count()
+            };
+            assert!(
+                active_departures <= 1,
+                "the FIFO counter released {active_departures} immigrants before its head cleared"
+            );
         }
 
-        let (residents, queue_tickets, pending, failed) = {
+        let (residents, queue_tickets, pending, failed, final_positions) = {
             let world = app.world_mut();
             (
                 world.get::<Settlement>(hall_entity).unwrap().residents,
                 world.query::<&MootQueueTicket>().iter(world).count(),
                 world.query::<&NavigationRoutePending>().iter(world).count(),
                 world.query::<&NavigationRouteFailed>().iter(world).count(),
+                world
+                    .query::<(&CharacterKind, &PlayerPosition)>()
+                    .iter(world)
+                    .filter_map(|(kind, position)| {
+                        (*kind == CharacterKind::Villager).then_some(position.0)
+                    })
+                    .collect::<Vec<_>>(),
             )
         };
         assert_eq!((residents, queue_tickets, pending, failed), (100, 0, 0, 0));
+        for (index, position) in final_positions.iter().enumerate() {
+            for other in &final_positions[index + 1..] {
+                let distance = ground_distance(*position, *other);
+                assert!(
+                    distance > 1.4,
+                    "two admitted immigrants remained stacked at {position:?} and {other:?} (distance {distance:.3})"
+                );
+            }
+        }
         assert_eq!(
             app.world()
                 .resource::<MootQueueClock>()

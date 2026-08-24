@@ -137,6 +137,7 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
     app.add_plugins(crate::boat::BoatPlugin);
     app.add_plugins(crate::selection::SelectionPlugin);
     app.add_plugins(crate::settlement::SettlementPlugin);
+    app.add_plugins(ui::settlement_names::SettlementNamesPlugin);
     app.add_plugins(ui::HeroCreatorPlugin);
     app.add_plugins(ui::EncyclopediaPlugin);
     app.add_plugins(ui::CompanyFoundingPlugin);

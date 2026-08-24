@@ -930,7 +930,12 @@ pub fn recover_orphaned_construction(
     mut commands: Commands,
     listings: Query<(), With<BusinessForSale>>,
     player_projects: Query<(), With<crate::player::permits::PlayerConstructionProject>>,
-    mut sites: Query<(Entity, &mut UnderConstruction)>,
+    world_time: Query<&WorldTime>,
+    mut sites: Query<(
+        Entity,
+        &mut UnderConstruction,
+        Option<&ConstructionSupplyCooldown>,
+    )>,
     living: Query<(), (With<CharacterKind>, With<Health>)>,
     mut residents: Query<(
         Entity,
@@ -942,8 +947,11 @@ pub fn recover_orphaned_construction(
         &Health,
     )>,
 ) {
+    let now = world_time.iter().next().map_or(0.0, |clock| {
+        f64::from(clock.day) * f64::from(clock.cycle_duration()) + f64::from(clock.seconds_in_cycle)
+    });
     let mut claimed = HashSet::new();
-    for (site_entity, mut site) in sites.iter_mut() {
+    for (site_entity, mut site, supply_cooldown) in sites.iter_mut() {
         if site
             .builder
             .is_some_and(|builder| living.get(builder).is_ok())
@@ -952,6 +960,12 @@ pub fn recover_orphaned_construction(
         }
         site.builder = None;
         if listings.get(site_entity).is_ok() || player_projects.get(site_entity).is_ok() {
+            continue;
+        }
+        // A supply-starved site rests until its give-up cooldown passes; only
+        // then is a builder (often the released one, if still free) re-drafted
+        // to check the market and the woodland again.
+        if supply_cooldown.is_some_and(|cooldown| cooldown.blocks(now)) {
             continue;
         }
         let replacement = residents

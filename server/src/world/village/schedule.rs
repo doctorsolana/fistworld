@@ -123,6 +123,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                 super::tag_villager_intent,
                 super::seek_settlement,
                 super::arrive_at_settlement,
+                super::advance_immigration_departures,
                 (
                     world::identity::reconcile_stable_world_relationships,
                     world::identity::reconcile_stable_adjunct_relationships,
@@ -274,7 +275,11 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
                         super::run_market_collections,
                     )
                         .chain(),
-                    super::ambient::run_ambient_routines,
+                    (
+                        super::ambient::run_ambient_routines,
+                        super::ambient::cleanup_orphaned_direct_transit,
+                    )
+                        .chain(),
                     super::apply_business_events,
                     player::hero::sync_hero_attributes_to_player_progression,
                     (
@@ -306,7 +311,9 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             world::village_roads::queue_villager_travel_routes,
             world::village_roads::retry_failed_routes_after_obstacle_change,
             world::village_roads::plan_villager_travel_routes,
+            player::hero::rebuild_tactical_crowd_grid,
             player::hero::step_units,
+            player::hero::settle_villagers_without_targets,
         )
             .chain()
             .in_set(VillageSimulationSet::Navigation),

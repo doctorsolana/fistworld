@@ -202,9 +202,13 @@ pub(crate) fn safe_villager_spawn_position(
     // A burst of villagers receives a small deterministic disc distribution,
     // preventing a hundred identical starts while keeping them close to the
     // player's click.
-    let scatter_index = (seed % 97) as f32;
-    let scatter_radius = scatter_index.sqrt() * 0.48;
-    let scatter_angle = seed as f32 * GOLDEN_ANGLE;
+    // Keep enough unique low-discrepancy starts for a full stress burst. The
+    // old 97-slot disc repeated exact positions during a few hundred-person
+    // spawn, so newcomers began stacked and appeared to share one frozen
+    // mind before immigration had even started.
+    let scatter_index = (seed % 4_096) as f32;
+    let scatter_radius = scatter_index.sqrt() * 0.52;
+    let scatter_angle = (seed % 16_777_216) as f32 * GOLDEN_ANGLE;
     let centre = Vec2::new(requested.x, requested.z)
         + Vec2::new(scatter_angle.cos(), scatter_angle.sin()) * scatter_radius;
     let mut rejected = [0usize; 5];
@@ -682,5 +686,28 @@ mod tests {
         assert!(safe.is_finite());
         assert!(!obstacles.point_blocked(Vec2::new(safe.x, safe.z)));
         assert!(safe.distance(requested) > 14.0);
+    }
+
+    #[test]
+    fn large_spawn_burst_does_not_repeat_the_old_ninety_seven_positions() {
+        let terrain = WorldTerrain::default();
+        let requested = Vec3::new(1_700.0, terrain.get_height(1_700.0, 0.0), 0.0);
+        let positions: std::collections::HashSet<_> = (1..=512)
+            .map(|seed| {
+                let position =
+                    safe_villager_spawn_position(requested, seed, &terrain, None, None, None)
+                        .expect("open ground should accept every deterministic scatter point");
+                (
+                    (position.x * 100.0).round() as i32,
+                    (position.z * 100.0).round() as i32,
+                )
+            })
+            .collect();
+
+        assert!(
+            positions.len() >= 500,
+            "512-person burst collapsed into only {} starts",
+            positions.len()
+        );
     }
 }

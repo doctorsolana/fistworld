@@ -26,6 +26,7 @@ fn porter_cart_presentation_follows_real_freight_and_real_load_bulk() {
                 reserved_units: 24,
                 unit_price: Good::Wood.base_price(),
                 phase: MarketCollectionPhase::GoingToBusiness,
+                fallback_counter_attempted: false,
             },
         ))
         .id();
@@ -1474,6 +1475,7 @@ fn rear_reservation_migrant_walks_around_the_moot_and_clears_the_line_at_one_and
                 sync_building_spatial_index,
                 sync_obstacle_grid,
                 arrive_at_settlement,
+                advance_immigration_departures,
                 advance_moot_service_queues,
                 recount_residents,
                 crate::world::village_roads::rebuild_village_road_graph,
@@ -1531,7 +1533,9 @@ fn rear_reservation_migrant_walks_around_the_moot_and_clears_the_line_at_one_and
             .id();
 
         let tick = std::time::Duration::from_secs_f32(1.0 / 60.0);
-        for _ in 0..900 {
+        // Includes the route around the reserved Hall shell, FIFO service,
+        // and the protected post-registration walk out of the forecourt.
+        for _ in 0..1_800 {
             app.world_mut().resource_mut::<Time>().advance_by(tick);
             app.update();
             if matches!(
@@ -2138,6 +2142,7 @@ fn failed_market_route_releases_a_construction_supplier_to_gather_wood() {
             phase: ConstructionMaterialPhase::CollectingFromStore {
                 source: settlement,
                 entrance,
+                reserved_units: 4,
             },
         },
         MoveTarget(entrance),
@@ -2270,6 +2275,7 @@ fn public_construction_buys_private_wood_and_pays_its_business_owner() {
             phase: ConstructionMaterialPhase::CollectingFromStore {
                 source: hall,
                 entrance: hall_entrance,
+                reserved_units: 4,
             },
         },
     ));
@@ -4686,9 +4692,61 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
     );
     app.world_mut()
         .entity_mut(porter)
+        .insert(NavigationRouteFailed {
+            goal: hall_entrance,
+        });
+    app.update();
+    assert_eq!(
+        app.world()
+            .entity(porter)
+            .get::<MarketCollectionRoutine>()
+            .unwrap()
+            .phase,
+        MarketCollectionPhase::ReturningToBusinessAfterFailedSale,
+        "two unreachable public counters must reverse the physical collection instead of ping-ponging forever"
+    );
+    assert_eq!(
+        app.world().entity(porter).get::<MoveTarget>().unwrap().0,
+        hut_entrance,
+    );
+    app.world_mut()
+        .entity_mut(porter)
         .get_mut::<PlayerPosition>()
         .unwrap()
-        .0 = hall_entrance;
+        .0 = hut_entrance;
+    app.update();
+    assert_eq!(
+        app.world()
+            .entity(hut)
+            .get::<GoodsInventory>()
+            .unwrap()
+            .amount(Good::Wood),
+        45,
+        "the seller must physically recover an undeliverable consignment"
+    );
+    assert!(app
+        .world()
+        .entity(porter)
+        .get::<MarketCollectionRoutine>()
+        .is_none());
+
+    // A later collection remains possible after geometry changes. Let the
+    // same steward collect again and complete it through the Marketplace.
+    app.update();
+    app.update();
+    assert_eq!(
+        app.world()
+            .entity(porter)
+            .get::<GoodsInventory>()
+            .unwrap()
+            .amount(Good::Wood),
+        24,
+    );
+    app.world_mut()
+        .entity_mut(porter)
+        .get_mut::<PlayerPosition>()
+        .unwrap()
+        .0 = market_entrance;
     app.update();
     let world = app.world();
     assert_eq!(
@@ -4744,6 +4802,7 @@ fn a_moot_steward_collects_a_bounded_load_while_the_woodcutter_keeps_working() {
             reserved_units: 1,
             unit_price: 0,
             phase: MarketCollectionPhase::DeliveringInput,
+            fallback_counter_attempted: false,
         },
         NavigationRouteFailed { goal: hut_entrance },
         MoveTarget(hut_entrance),
@@ -7387,4 +7446,142 @@ fn houses_sit_closer_to_the_hall_than_workplaces() {
     assert!(house_min < wood_min);
     assert!(house_max < farm_max);
     assert!(house_max < wood_max);
+}
+/// The give-up path must fully hand the person back to ordinary resident
+/// life and park the site: a builder pinned "finding wood" forever was the
+/// exact fear this mechanism exists to remove.
+#[test]
+fn a_starved_supplier_returns_to_resident_life_and_parks_the_site() {
+    use bevy::ecs::system::RunSystemOnce;
+
+    let mut world = World::new();
+    let settlement = world.spawn_empty().id();
+    let builder = world
+        .spawn((
+            CharacterName("Odo".to_string()),
+            VillagerIntent::Idle,
+            CharacterActivity::Idle,
+        ))
+        .id();
+    let site = world
+        .spawn(UnderConstruction {
+            kind: SettlementBuildingKind::House,
+            position: Vec3::ZERO,
+            rotation: 0.0,
+            owner: Some("Odo".to_string()),
+            owner_id: Some(shared::components::PersonId(7)),
+            builder: Some(builder),
+            settlement,
+            settlement_id: shared::components::SettlementId(1),
+            stand: Vec3::ZERO,
+            failed_stand_routes: 0,
+            stage: BuildStage::Supplying,
+            quality: 0.5,
+        })
+        .id();
+    world
+        .entity_mut(builder)
+        .insert(ConstructionMaterialRoutine::new(site));
+
+    world
+        .run_system_once(
+            move |mut commands: Commands,
+                  mut sites: Query<&mut UnderConstruction>,
+                  names: Query<&CharacterName>| {
+                let mut site_view = sites.get_mut(site).unwrap();
+                super::construction::give_up_starved_supply(
+                    &mut commands,
+                    builder,
+                    names.get(builder).unwrap(),
+                    site,
+                    &mut site_view,
+                    None,
+                    100.0,
+                );
+            },
+        )
+        .unwrap();
+
+    assert_eq!(world.get::<UnderConstruction>(site).unwrap().builder, None);
+    let cooldown = world
+        .get::<ConstructionSupplyCooldown>(site)
+        .expect("the parked site must carry a give-up cooldown");
+    assert_eq!(cooldown.failures, 1);
+    assert!(cooldown.blocks(100.0) && !cooldown.blocks(100.0 + 100_000.0));
+    assert!(
+        world.get::<ConstructionMaterialRoutine>(builder).is_none(),
+        "the material routine must be released"
+    );
+    assert!(matches!(
+        world.get::<VillagerIntent>(builder),
+        Some(VillagerIntent::Resident { settlement: s }) if *s == settlement
+    ));
+}
+
+/// A parked site rests until its cooldown passes, then the ordinary orphan
+/// recovery re-drafts a free resident to try the market and woodland again.
+#[test]
+fn a_parked_site_is_re_drafted_only_after_its_cooldown_expires() {
+    use bevy::ecs::system::RunSystemOnce;
+    use shared::components::{CharacterKind, Health};
+
+    let mut world = World::new();
+    world.spawn(WorldTime::new_default());
+    let settlement = world.spawn_empty().id();
+    let free_resident = world
+        .spawn((
+            CharacterKind::Villager,
+            Health::default(),
+            VillagerIntent::Resident { settlement },
+            WorkStatus::LookingForWork,
+        ))
+        .id();
+    let site = world
+        .spawn((
+            UnderConstruction {
+                kind: SettlementBuildingKind::House,
+                position: Vec3::ZERO,
+                rotation: 0.0,
+                owner: None,
+                owner_id: None,
+                builder: None,
+                settlement,
+                settlement_id: shared::components::SettlementId(1),
+                stand: Vec3::ZERO,
+                failed_stand_routes: 0,
+                stage: BuildStage::Supplying,
+                quality: 0.5,
+            },
+            // WorldTime starts at day 0, second 0, so this cooldown is live.
+            ConstructionSupplyCooldown {
+                retry_after: 10_000.0,
+                failures: 1,
+            },
+        ))
+        .id();
+
+    world
+        .run_system_once(super::mortality::recover_orphaned_construction)
+        .unwrap();
+    assert_eq!(
+        world.get::<UnderConstruction>(site).unwrap().builder,
+        None,
+        "a resting site must not be re-drafted while its cooldown blocks"
+    );
+
+    world.entity_mut(site).insert(ConstructionSupplyCooldown {
+        retry_after: 0.0,
+        failures: 1,
+    });
+    world
+        .run_system_once(super::mortality::recover_orphaned_construction)
+        .unwrap();
+    assert_eq!(
+        world.get::<UnderConstruction>(site).unwrap().builder,
+        Some(free_resident),
+        "an expired cooldown must let recovery re-draft a free resident"
+    );
+    assert!(world
+        .get::<ConstructionMaterialRoutine>(free_resident)
+        .is_some());
 }

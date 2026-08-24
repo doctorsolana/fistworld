@@ -322,6 +322,10 @@ fn receive_permit_results(
 fn handle_property_permit_buttons(
     time: Res<Time>,
     purchase_buttons: Query<(&Interaction, &PurchasePermitButton), Changed<Interaction>>,
+    listing_buttons: Query<
+        (&Interaction, &super::property_market::PurchaseListingButton),
+        Changed<Interaction>,
+    >,
     mut clients: Query<
         &mut MessageSender<HeroPermitOrder>,
         (With<crate::GameClient>, With<Connected>),
@@ -329,6 +333,22 @@ fn handle_property_permit_buttons(
     mut notice: ResMut<PermitNotice>,
 ) {
     let now = time.elapsed_secs_f64();
+    for (interaction, purchase) in listing_buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        if !send_permit_action(
+            HeroPermitAction::BuyListedProperty {
+                hall: purchase.hall,
+                kind: purchase.kind,
+                position: purchase.position,
+                asking_price: purchase.asking_price,
+            },
+            &mut clients,
+        ) {
+            notice.show(now, false, "Permit office is not connected yet.");
+        }
+    }
     for (interaction, purchase) in purchase_buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;

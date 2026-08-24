@@ -29,6 +29,8 @@ use super::*;
 use crate::ui::foundation::{button_chrome, UiButtonStyle, UiButtonVariant};
 use crate::ui::hud::GodCapability;
 use crate::ui::styles::{EMBER, INK, INK_MUTED};
+use lightyear::prelude::{Connected, MessageSender};
+use shared::protocol::{HeroConstructionOrder, ReliableChannel};
 
 /// One settlement the player knows about.
 #[derive(Clone, Debug)]
@@ -264,6 +266,9 @@ pub enum SelectedPlaceEntry {
     Overview,
     Hall,
     Building(usize),
+    /// A construction site, addressed by its replicated entity: worksites are
+    /// transient and have no stable index in the place snapshot.
+    Worksite(Entity),
 }
 
 // --- markers ---------------------------------------------------------------
@@ -1130,6 +1135,33 @@ pub(super) fn sync_place_detail(
     selected: Res<SelectedPlace>,
     selected_entry: Res<SelectedPlaceEntry>,
     god: Res<GodCapability>,
+    worksites: Query<(
+        &shared::components::ConstructionSite,
+        Option<&shared::economy::GoodsInventory>,
+        Option<&shared::components::CivicHallUpgradeWorksite>,
+        Option<&shared::economy::BusinessForSale>,
+    )>,
+    mut assign_buttons: Query<
+        (&mut Node, &mut AssignHeroToWorksite),
+        (
+            With<WorksiteAssignButton>,
+            Without<PlaceDetailCard>,
+            Without<PlaceDetailEmptyState>,
+            Without<PlaceDetailLine>,
+            Without<PlaceDetailTile>,
+        ),
+    >,
+    mut action_rows: Query<
+        &mut Node,
+        (
+            With<PlaceActionsRow>,
+            Without<WorksiteAssignButton>,
+            Without<PlaceDetailCard>,
+            Without<PlaceDetailEmptyState>,
+            Without<PlaceDetailLine>,
+            Without<PlaceDetailTile>,
+        ),
+    >,
     mut card: Query<
         &mut Node,
         (
@@ -1209,7 +1241,53 @@ pub(super) fn sync_place_detail(
         return;
     };
 
-    let model = place_detail_model(record, *selected_entry, god.0);
+    let live_worksite = match *selected_entry {
+        SelectedPlaceEntry::Worksite(site) => worksites.get(site).ok().map(|data| (site, data)),
+        _ => None,
+    };
+    let model = match live_worksite {
+        Some((_, (site, inventory, upgrade, for_sale))) => {
+            let (good, required) = upgrade.map_or(
+                (
+                    shared::economy::Good::Wood,
+                    site.kind.construction_wood_required(),
+                ),
+                |upgrade| (upgrade.material, upgrade.material_required),
+            );
+            let delivered = inventory.map_or(0, |inventory| inventory.amount(good));
+            worksite_detail_model(site, delivered, required, good, for_sale)
+        }
+        // A finished (despawned) worksite falls back to the place overview.
+        None if matches!(*selected_entry, SelectedPlaceEntry::Worksite(_)) => {
+            place_detail_model(record, SelectedPlaceEntry::Overview, god.0)
+        }
+        None => place_detail_model(record, *selected_entry, god.0),
+    };
+    let on_worksite = matches!(*selected_entry, SelectedPlaceEntry::Worksite(_));
+    for mut node in action_rows.iter_mut() {
+        let display = if on_worksite {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    for (mut node, mut assign) in assign_buttons.iter_mut() {
+        let display = if live_worksite.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != display {
+            node.display = display;
+        }
+        let target = live_worksite.map(|(site, _)| site);
+        if assign.0 != target {
+            assign.0 = target;
+        }
+    }
     for mut text in name_text.iter_mut() {
         if text.0 != model.title {
             text.0 = model.title.clone();
@@ -1363,6 +1441,100 @@ pub(super) fn sync_place_business_history_action(
             }
             (None, None) => {}
         }
+    }
+}
+
+/// The place-level action strip (MARKET, SETTLEMENT HISTORY, ...) at the top
+/// of the detail card; hidden while a worksite entry is open - those actions
+/// belong to the place, and with the short worksite tile row they would
+/// overlap the tiles.
+#[derive(Component)]
+pub(crate) struct PlaceActionsRow;
+
+/// The pre-spawned SEND MY HERO button on the place detail card; visible only
+/// while a worksite entry is open. The payload is bound in place.
+#[derive(Component)]
+pub(crate) struct WorksiteAssignButton;
+
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AssignHeroToWorksite(pub Option<Entity>);
+
+fn worksite_detail_model(
+    site: &shared::components::ConstructionSite,
+    delivered: u32,
+    required: u32,
+    good: shared::economy::Good,
+    for_sale: Option<&shared::economy::BusinessForSale>,
+) -> PlaceDetailModel {
+    let status = if site.raising {
+        "Raising the frame"
+    } else if delivered >= required {
+        "Ready to build"
+    } else {
+        "Awaiting materials"
+    };
+    let mut rows = vec![
+        DetailRow::Section("WORKSITE".into()),
+        DetailRow::Line(
+            "MATERIALS".into(),
+            format!("{delivered} of {required} {} delivered", good.label()),
+        ),
+        DetailRow::Line(
+            "CREW".into(),
+            "The village drafts a free resident; send your own hero below to supply and build it yourself".into(),
+        ),
+    ];
+    if let Some(listing) = for_sale {
+        rows.push(DetailRow::Line(
+            "FOR SALE".into(),
+            format!(
+                "{} coin / {}",
+                shared::economy::format_money(listing.asking_price),
+                listing.reason.label(),
+            ),
+        ));
+    }
+    PlaceDetailModel {
+        title: format!("{} WORKSITE", site.kind.label().to_uppercase()),
+        subtitle: format!(
+            "{} / {}",
+            site.settlement.to_uppercase(),
+            status.to_uppercase()
+        ),
+        tiles: vec![
+            ("STATUS".into(), status.to_string()),
+            (
+                good.label().to_uppercase(),
+                format!("{delivered} / {required}"),
+            ),
+        ],
+        rows,
+    }
+}
+
+/// Send the local hero to supply and raise the open worksite. The server
+/// validates ownership and reachability and answers through the permit
+/// notice ([`HeroConstructionResult`]).
+pub(super) fn handle_worksite_assign_button(
+    guard: Res<ClickGuard>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    buttons: Query<(&Interaction, &AssignHeroToWorksite), Changed<Interaction>>,
+    mut clients: Query<
+        &mut MessageSender<HeroConstructionOrder>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+) {
+    if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    for (interaction, assign) in buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let (Some(site), Ok(mut sender)) = (assign.0, clients.single_mut()) else {
+            continue;
+        };
+        sender.send::<ReliableChannel>(HeroConstructionOrder { site });
     }
 }
 
@@ -2121,6 +2293,12 @@ fn place_detail_model(
                 ], HALL_SECTIONS),
             }
         }
+        // Live worksite entries are rendered by `worksite_detail_model` in
+        // `sync_place_detail`; a stale entity reaching this pure fn falls back
+        // to the overview.
+        SelectedPlaceEntry::Worksite(_) => {
+            place_detail_model(place, SelectedPlaceEntry::Overview, exact_location)
+        }
         SelectedPlaceEntry::Building(index) => {
             let Some(building) = place.buildings.get(index) else {
                 return place_detail_model(place, SelectedPlaceEntry::Overview, exact_location);
@@ -2493,6 +2671,30 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
+
+    #[test]
+    fn a_worksite_page_reports_materials_and_reads_as_a_site_not_a_place() {
+        let site = shared::components::ConstructionSite {
+            kind: shared::components::SettlementBuildingKind::House,
+            settlement: "Brackwater".to_string(),
+            raising: false,
+            rotation: 0.0,
+            stand: Vec3::ZERO,
+        };
+        let model = worksite_detail_model(&site, 4, 10, shared::economy::Good::Wood, None);
+        assert_eq!(model.title, "HOUSE WORKSITE");
+        assert_eq!(model.subtitle, "BRACKWATER / AWAITING MATERIALS");
+        assert!(model
+            .tiles
+            .iter()
+            .any(|(label, value)| label == "WOOD" && value == "4 / 10"));
+        let raising = shared::components::ConstructionSite {
+            raising: true,
+            ..site
+        };
+        let model = worksite_detail_model(&raising, 10, 10, shared::economy::Good::Wood, None);
+        assert_eq!(model.subtitle, "BRACKWATER / RAISING THE FRAME");
+    }
 
     #[test]
     fn places_are_ordered_biggest_first() {

@@ -19,7 +19,7 @@ pub use construction::{build_village_roads, plan_requested_roads};
 use routing::graph_key;
 pub use routing::{
     plan_villager_travel_routes, queue_villager_travel_routes, rebuild_village_road_graph,
-    retry_failed_routes_after_obstacle_change, VillageRoadGraph,
+    retry_failed_routes_after_obstacle_change, NavigationLoad, VillageRoadGraph,
 };
 
 pub(crate) fn road_point_key(point: Vec2) -> (i32, i32) {
@@ -57,8 +57,8 @@ use crate::player::hero::MoveTarget;
 use crate::world::navgrid::{NAVIGATION_SAMPLE_STEP, VILLAGER_NAV_RADIUS, VILLAGER_PROP_RADIUS};
 use crate::world::village::{
     ambient::AmbientRoutine, FarmerRoutine, FishingRoutine, HomeRoutine, HouseholdShoppingRoutine,
-    LumberjackRoutine, MarketCollectionRoutine, MootQueueTicket, MootSteward, PierTraversal,
-    UnderConstruction, VillagerIntent, CHOP_SECONDS,
+    InternalDeliveryRoutine, LumberjackRoutine, MarketCollectionRoutine, MootQueueTicket,
+    MootSteward, PierTraversal, TradeRouteRoutine, UnderConstruction, VillagerIntent, CHOP_SECONDS,
 };
 use crate::{
     collision::library::{DerivedColliderLibrary, StaticColliders},
@@ -128,6 +128,12 @@ const AGENT_SURVEY_MAX_NODES: usize = 400;
 /// that preserves the cheap common case while avoiding false failures on the
 /// settlement's outer envelope.
 const EXTENDED_LOCAL_SURVEY_MAX_NODES: usize = 2_400;
+/// Cross-town fallback searches use four-metre-ish middle steps while keeping
+/// authored doors and their surrounding streets at full resolution. Every
+/// coarse edge is still line-certified, so this removes redundant A* cells
+/// rather than allowing a route to jump over collision.
+const EXTENDED_LOCAL_SURVEY_STRIDE: i32 = 2;
+const EXTENDED_LOCAL_FINE_ENDPOINT_RADIUS: f32 = 24.0;
 /// A company caravan is the one embodied actor which deliberately crosses
 /// between otherwise disconnected settlement road networks. Its route is
 /// still collision-certified and solved incrementally under the ordinary
@@ -136,10 +142,11 @@ const EXTENDED_LOCAL_SURVEY_MAX_NODES: usize = 2_400;
 const INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES: usize = 24_000;
 /// A retained long-distance A* must make enough progress that one difficult
 /// commute cannot remain at zero expansion merely because preparation spent
-/// this tick's deadline. Eight cells keep that overrun bounded; the fair
+/// this tick's deadline. Twenty-four cells keep that overrun bounded while
+/// avoiding near-zero retained jobs; the fair
 /// cursor rotates retained jobs, while transaction-specific failure recovery
 /// remains the owning routine's responsibility.
-const MIN_INCREMENTAL_ROUTE_CELLS_PER_SLICE: usize = 8;
+const MIN_INCREMENTAL_ROUTE_CELLS_PER_SLICE: usize = 24;
 const EXTENDED_LOCAL_SURVEY_MIN_DISTANCE: f32 = 48.0;
 // Mature settlements can legitimately place an outer workplace more than
 // 200 m from a resident's cabin. Keep a finite direct-search envelope for
@@ -182,7 +189,7 @@ const ROAD_ROUTE_CANDIDATE_POOL: usize = 16;
 /// Connector surveys are full terrain A* searches. Rank several graph options
 /// cheaply, but only survey the best couple so one unreachable villager cannot
 /// monopolise a server tick trying every road combination.
-const AGENT_ROAD_CANDIDATES_TO_SURVEY: usize = 8;
+const AGENT_ROAD_CANDIDATES_TO_SURVEY: usize = 2;
 const ROAD_MAX_WEIGHTED_DETOUR: f32 = 1.35;
 /// A failed embodied route is deterministic until the road/building/prop
 /// geometry or destination changes. Keep retries on real time so a work
@@ -418,6 +425,18 @@ pub struct TravelRoute {
     pub goal: Vec3,
     pub waypoints: Vec<RouteWaypoint>,
     pub next: usize,
+    /// Collision snapshot which certified these waypoints. Zero denotes a
+    /// legacy/test route and retains conservative per-step validation.
+    pub geometry_version: u64,
+}
+
+pub(crate) fn navigation_geometry_version(
+    obstacles: Option<&SpatialObstacleGrid>,
+    colliders: Option<&StaticColliders>,
+) -> u64 {
+    let building_version = obstacles.map_or(0, |grid| grid.version);
+    let prop_version = colliders.map_or(0, |props| props.version);
+    building_version ^ prop_version.rotate_left(29) ^ 0x9E37_79B9_7F4A_7C15
 }
 
 /// A changed destination waits here until its one-time route is ready. Units
@@ -1387,6 +1406,56 @@ fn static_collider_overlaps_segment_filtered(
         }
     }
     false
+}
+
+/// A prepared completed road must obey the same permanent-prop rule as an
+/// embodied road survey. Trees may be cleared by the crew; rocks may not.
+pub(crate) fn road_access_is_clear_of_permanent_props(
+    points: &[Vec2],
+    reserved_width: f32,
+    colliders: &StaticColliders,
+    derived: &DerivedColliderLibrary,
+) -> bool {
+    let clearance = reserved_width * 0.5 + 0.15;
+    points.windows(2).all(|segment| {
+        !static_collider_overlaps_segment_filtered(
+            colliders, derived, segment[0], segment[1], clearance, false,
+        )
+    })
+}
+
+/// Apply the durable result of the tree-clearing work already implied by a
+/// mature fixture's completed road. Organic roads still use the visible axe
+/// routine; this helper exists only so a staged old city has the same physical
+/// collider truth on its first simulated day.
+pub(crate) fn clear_completed_road_trees(
+    points: &[Vec2],
+    road_width: f32,
+    colliders: &mut StaticColliders,
+    derived: &DerivedColliderLibrary,
+) -> usize {
+    let clearance = road_width * 0.5 + 0.15;
+    let trees: Vec<_> = colliders
+        .instances
+        .iter()
+        .filter(|(_, instance)| instance.kind.is_road_clearable())
+        .filter_map(|(id, instance)| {
+            let shape = derived.by_kind.get(&instance.kind)?;
+            let point = Vec2::new(instance.position.x, instance.position.z);
+            let radius = shape.horizontal_radius * instance.scale + clearance;
+            points
+                .windows(2)
+                .any(|segment| {
+                    point_segment_distance_squared(point, segment[0], segment[1]) < radius * radius
+                })
+                .then_some((*id, point))
+        })
+        .collect();
+    for (id, point) in &trees {
+        colliders.mark_road_tree_cleared(*point);
+        colliders.remove_instance(*id);
+    }
+    trees.len()
 }
 
 pub(crate) fn navigation_point_is_clear_of_props(

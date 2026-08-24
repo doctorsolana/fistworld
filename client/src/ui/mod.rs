@@ -60,6 +60,7 @@ pub mod perf;
 pub mod player_permits;
 pub mod property_market;
 pub mod scroll;
+pub mod settlement_names;
 pub mod settlement_panel;
 pub mod styles;
 pub mod world_map;

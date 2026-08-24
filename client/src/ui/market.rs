@@ -15,15 +15,15 @@ use shared::components::{
     BuildingOf, CivicHallLevel, PlayerPosition, PlayerRotation, Settlement, SettlementBuilding,
     SettlementBuildingKind, SettlementId,
 };
-use shared::economy::{Good, GoodsInventory, MootMarket, Wallet, format_money};
+use shared::economy::{format_money, Good, GoodsInventory, MootMarket, Wallet};
 use shared::protocol::{HeroMarketAction, HeroMarketOrder, HeroMarketResult, ReliableChannel};
 
 use crate::states::GameState;
 use crate::ui::encyclopedia::{
-    EncyclopediaOpen, EncyclopediaPageHost, EncyclopediaTab,
     places::{SelectedPlace, SelectedPlaceEntry},
+    EncyclopediaOpen, EncyclopediaPageHost, EncyclopediaTab,
 };
-use crate::ui::foundation::{UiButtonLabel, UiButtonStyle, UiButtonVariant, button_chrome};
+use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant};
 use crate::ui::good_icon_path;
 use crate::ui::styles::{
     INK, INK_MUTED, LIMEWASH, LIMEWASH_DETAIL, LIMEWASH_LIT, LIMEWASH_WELL, PLATE_RULE_SOFT,

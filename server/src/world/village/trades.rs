@@ -1105,6 +1105,7 @@ fn install_fishing_route(
                     })
                     .collect(),
                 next: 0,
+                geometry_version: 0,
             },
             traversal,
         ));

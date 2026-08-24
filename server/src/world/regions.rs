@@ -234,13 +234,15 @@ fn entity_is_owned_by_peer(
     account: Option<&str>,
     hero: Option<&Hero>,
     commanded_by: Option<&CommandedBy>,
-    player_boat: bool,
 ) -> bool {
+    // Anything sworn to this account - the hero itself, the starter boat,
+    // and every retinue villager - stays replicated to its commander no
+    // matter where the camera looks: your own people must never wink out of
+    // your clan roster, and LOCATE must always know where they are.
     hero.is_some_and(|hero| hero.owner == peer)
-        || (player_boat
-            && account
-                .zip(commanded_by)
-                .is_some_and(|(account, owner)| account == owner.0.as_str()))
+        || account
+            .zip(commanded_by)
+            .is_some_and(|(account, owner)| account == owner.0.as_str())
 }
 
 fn enters_region_interest(
@@ -277,7 +279,7 @@ pub fn apply_region_visibility(
         senders.retain(|sender, _| interest.by_client.contains_key(sender));
     }
 
-    for (entity, coord, hero, commanded_by, player_boat, immigrant_arrival) in replicated.iter() {
+    for (entity, coord, hero, commanded_by, _player_boat, immigrant_arrival) in replicated.iter() {
         let entity_state = applied.entry(entity).or_default();
 
         for (client, regions) in interest.by_client.iter() {
@@ -292,7 +294,6 @@ pub fn apply_region_visibility(
                     profiles.peer_to_name.get(&remote.0).map(String::as_str),
                     hero,
                     commanded_by,
-                    player_boat,
                 )
             });
             // A lab observer cannot move its camera to a randomized map-edge
@@ -621,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn owned_hero_and_boat_bypass_camera_region_interest() {
+    fn owned_hero_boat_and_retinue_bypass_camera_region_interest() {
         let peer = PeerId::Netcode(77);
         let other = PeerId::Netcode(88);
         let hero = Hero { owner: peer };
@@ -631,29 +632,27 @@ mod tests {
             peer,
             Some("hilda"),
             Some(&hero),
-            None,
-            false,
+            None
         ));
         assert!(!entity_is_owned_by_peer(
             other,
             Some("alwin"),
             Some(&hero),
             None,
-            false,
         ));
+        // Any commanded character - boat or retinue villager - belongs to its
+        // commander's interest, and to nobody else's.
         assert!(entity_is_owned_by_peer(
             peer,
             Some("hilda"),
             None,
             Some(&owner),
-            true,
         ));
         assert!(!entity_is_owned_by_peer(
             peer,
             Some("alwin"),
             None,
             Some(&owner),
-            true,
         ));
     }
 

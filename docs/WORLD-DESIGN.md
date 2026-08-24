@@ -1095,9 +1095,11 @@ are local door-to-door village paths, not Phase 5's regional caravan network and
 not Phase 6's group flow fields.
 
 An embodied trip still needs short connectors from its actual position to that
-graph and back. Destination changes therefore enter a two-lane bounded queue:
-committed migration, production, shopping and construction work is served before
-cosmetic ambient wandering, with fair round-robin service within each lane. Routes have
+graph and back. Destination changes therefore enter a five-priority bounded queue:
+caravans, essential freight/home journeys and committed work are served before
+leisure and cosmetic ambient wandering, with fair service inside each class. Every
+loaded tick reserves its first planner slot for real simulation work; cheap cache
+hits and remaining headroom continue into leisure and ambient movement. Routes have
 a real CPU-time budget, compare the obstacle-safe direct route against up to eight
 candidate road routes assembled from nearby graph joins, and prefer the road whenever its speed-weighted detour remains
 sensible. The complete certified route is cached by its exact endpoints and its
@@ -1115,13 +1117,11 @@ repeated home/work/market commutes become lookups without reusing an unsafe
     prop-streaming chunks. A final live broadphase check
 remains mandatory on every reuse. Stable navigation-building
 blockers are rebuilt only when placed buildings change, and each A* survey reuses
-its allocated search memory and memoizes repeated geometry samples. Extended
-direct A* keeps its frontier between ticks and yields at the wall-clock deadline,
-so a difficult route cannot turn the nominal 2 ms allowance into one multi-second
-server tick. Each retained search nevertheless expands at least eight cells per
-visit; at 60 Hz its 2,400-cell hard cap therefore resolves in at most five real
-seconds instead of holding every committed journey behind a forty-second
-one-cell-per-tick proof. This is not
+its allocated search memory and memoizes repeated geometry samples. Extended direct
+A* keeps its frontier between ticks and yields at the wall-clock deadline, so a
+difficult route cannot turn the planner allowance into one multi-second server
+tick. Each retained search nevertheless receives a one-millisecond slice and
+expands at least 24 cells per visit. This is not
 per-frame pathfinding: plain waypoints are followed until the destination changes.
 Building footprints and deterministic baked-tree/rock radii block the survey; the
 movement step samples the live broadphase again so a 100x step or a new obstacle
@@ -1129,14 +1129,24 @@ cannot tunnel through it. An active open-door threshold is the only intentional
 exception.
 
 The live server reports `VillageRoutePerf` every ten real seconds while routing is
-active. It separates cache hit rate, pending-queue peak, budget yields, survey and
-expanded-node counts, geometry-memo hit rates, blocker/prop/direct/graph/connector/
-certification time, and maximum planner-call time. The default planner allowance is
-2ms per server tick (`CITYSIM_PATHFINDING_MILLISECONDS_PER_TICK`), plus a request
-ceiling (`CITYSIM_PATHFINDING_REQUESTS_PER_TICK`). At least one request is served so
-    an individually difficult route cannot leave the queue permanently stuck. Repeated
+active. It separates cache hit rate, pending-queue peak by priority, budget yields,
+survey and expanded-node counts, geometry-memo hit rates, blocker/prop/direct/graph/
+connector/certification time, maximum planner-call time, peak adaptive allowance
+and oldest committed wait. The default planner allowance is 4ms and 32 requests per
+server tick (`CITYSIM_PATHFINDING_MILLISECONDS_PER_TICK` and
+`CITYSIM_PATHFINDING_REQUESTS_PER_TICK`). A backlog of 16 or 64 committed routes may
+borrow five or six milliseconds respectively; a small route waiting two real seconds
+receives a modest 4.5ms boost rather than reserving most of every future tick. At least
+one committed request is served first so an individually difficult route cannot leave
+the queue permanently stuck. Repeated
     failures for the same two-metre destination cell are coalesced into one warning per
     five real seconds, preserving the diagnosis without letting a crowd flood the log.
+
+Short optional roadside walks usually bypass A* completely. Their straight segment is
+pre-certified against the same terrain, water, building and prop collision used by the
+planner, then embodied movement follows it directly; difficult corners still enter the
+ordinary low-priority queue. This keeps a visible city lively without spending its
+navigation budget rediscovering hundreds of simple 20–40 metre straight lines.
 
 A permitted construction plot is already a navigation reservation. Road surveys
 avoid the future shell and both unpublished Farmstead fields, closing the race in

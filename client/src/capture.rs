@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use shared::components::WorldTime;
 
 use crate::camera_rts::CommanderCamera;
@@ -1513,8 +1513,38 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
             "ledger" | "companies" | "company-stock" | "business" | "founding" => {
                 crate::ui::encyclopedia::EncyclopediaTab::Companies
             }
+            "retinue" => crate::ui::encyclopedia::EncyclopediaTab::Retinue,
             _ => crate::ui::encyclopedia::EncyclopediaTab::People,
         });
+        if mode == "retinue" {
+            // A photographable clan: claim the account name the roster rows
+            // compare against, then swear three staged villagers to it. Pair
+            // with FISTFORCE_CAPTURE_HERO=default FISTFORCE_CAPTURE_SELECT=1
+            // for the hero row itself.
+            commands.insert_resource(crate::ui::name_entry::PlayerNameInput {
+                name: "Wanderer".to_string(),
+                submitted: true,
+            });
+            for (index, (name, occupation, offset)) in [
+                ("Odo Sverreson", "Fisher", Vec3::new(6.0, 0.0, 4.0)),
+                ("Brenna the Mason", "Mason", Vec3::new(-5.0, 0.0, 7.0)),
+                ("Wystan the Elder", "Farmer", Vec3::new(2.0, 0.0, -6.0)),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                commands.spawn((
+                    shared::components::CharacterName(name.to_string()),
+                    shared::components::PersonId(9_100 + index as u64),
+                    shared::components::CharacterKind::Villager,
+                    shared::components::PlayerPosition(offset),
+                    shared::components::CharacterActivity::Idle,
+                    shared::components::CharacterObjective::WalkingAroundTown,
+                    shared::components::Occupation(Some(occupation.to_string())),
+                    shared::components::CommandedBy("wanderer".to_string()),
+                ));
+            }
+        }
         if mode == "founding" {
             commands.insert_resource(crate::ui::company_founding::FoundingPageOpen(true));
             // FISTFORCE_CAPTURE_FOUNDING_NAME=<text> photographs the field mid-edit
@@ -2405,6 +2435,9 @@ fn select_capture_place(
     places: Res<crate::ui::encyclopedia::places::KnownPlaces>,
     mut selected: ResMut<crate::ui::encyclopedia::places::SelectedPlace>,
     mut entry: ResMut<crate::ui::encyclopedia::places::SelectedPlaceEntry>,
+    mut commands: Commands,
+    mut staged_worksite: Local<Option<Entity>>,
+    sites: Query<Entity, With<shared::components::ConstructionSite>>,
 ) {
     let Ok(wanted) = std::env::var("FISTFORCE_CAPTURE_SELECT_PLACE") else {
         return;
@@ -2419,7 +2452,31 @@ fn select_capture_place(
     let Ok(building) = std::env::var("FISTFORCE_CAPTURE_SELECT_BUILDING") else {
         return;
     };
-    if building.eq_ignore_ascii_case("overview") {
+    if building.eq_ignore_ascii_case("worksite") {
+        // The staged places snapshot has no live site entities; spawn one so
+        // the worksite page (status, materials, SEND MY HERO) can be
+        // photographed offline.
+        let site = sites.iter().next().or(*staged_worksite).unwrap_or_else(|| {
+            let mut inventory =
+                shared::economy::GoodsInventory::new(shared::economy::capacity::VILLAGER);
+            inventory.add(shared::economy::Good::Wood, 4);
+            let site = commands
+                .spawn((
+                    shared::components::ConstructionSite {
+                        kind: shared::components::SettlementBuildingKind::House,
+                        settlement: place.name.clone(),
+                        raising: false,
+                        rotation: 0.0,
+                        stand: Vec3::ZERO,
+                    },
+                    inventory,
+                ))
+                .id();
+            *staged_worksite = Some(site);
+            site
+        });
+        *entry = crate::ui::encyclopedia::places::SelectedPlaceEntry::Worksite(site);
+    } else if building.eq_ignore_ascii_case("overview") {
         *entry = crate::ui::encyclopedia::places::SelectedPlaceEntry::Overview;
     } else if building.eq_ignore_ascii_case("hall")
         || building.eq_ignore_ascii_case(shared::components::SettlementBuildingKind::Hall.label())

@@ -129,6 +129,7 @@ impl StrategicTravel {
             goal: self.goal,
             waypoints: self.waypoints.iter().skip(self.next).copied().collect(),
             next: 0,
+            geometry_version: 0,
         }
     }
 }
@@ -1745,6 +1746,7 @@ mod tests {
                 },
             ],
             next: 0,
+            geometry_version: 0,
         };
         let mut travel = StrategicTravel::from_tactical(goal, Some(&tactical), 0.0);
         let mut position = Vec3::ZERO;

@@ -287,6 +287,24 @@ immediately. Create the local hero normally; in this fixture only, the hero begi
 City Hall. The prepared opening capital and stock make this a deterministic UX/stress fixture,
 not an economy-balancing baseline. Logs are written under `logs/uxworld-*`.
 
+To reproduce large-city congestion with ordinary gameplay systems, run:
+
+```bash
+./run.sh uxstressworld
+```
+
+This starts the same 500-resident City at 10x, lets its jobs and logistics establish, then
+spawns 500 ordinary prospective immigrants on day 2. They must queue, immigrate, seek work and
+housing, and trigger normal private development. An opt-in causal watchdog records actors who
+fail to advance toward an unchanged goal for three world minutes, including their objective,
+route state, cargo and active porter routine. The scenario also records navigation priority
+peaks, shared-destination route reuse and ambient admission, making it the primary regression
+for mass-arrival and stationary-porter bugs. Both process logs are retained under
+`logs/uxstressworld-*`. The mode is driven by two opt-in switches that also
+work on any other map: `FISTWORLD_UX_STRESS=1` (the stress arrival wave) and
+`FISTWORLD_STUCK_WATCH=1` (the low-frequency no-progress watchdog - log
+output only, no simulation effect).
+
 Use `./run.sh stressworld` to watch the three 200-person settlements together.
 It starts at 10x with a wide camera, enables server/client performance telemetry,
 and records both processes under `logs/stressworld-*`. Logs stay out of the
@@ -382,7 +400,11 @@ The full lab is intentionally ignored by ordinary `cargo test` runs.
 - `SettlementSummary` is globally visible; halls, buildings, markets, roads, fields and
   piers are region-scoped detail joined by stable IDs.
 - Tactical village travel uses bounded obstacle surveys plus a cached shared road graph.
-  Future large commanded groups still require regional flow fields.
+  Repeated destinations share bounded reverse shortest-path trees and committed route cohorts;
+  optional ambient travel has a per-settlement admission budget, while essential freight,
+  work, migration and home trips retain priority and age-based fairness. Embodied crowd
+  separation uses a local spatial grid instead of an all-pairs pass. Future large commanded
+  groups still require regional flow fields.
 - Player, hero and commanded-NPC state currently persists only for the lifetime of the
   running server process. Restarting starts clean; durable settlement/world saves remain a
   later, explicitly versioned feature.

@@ -46,6 +46,7 @@ pub fn sync_character_objectives(
             Option<&NavigationRouteFailed>,
             Option<&CharacterObjective>,
             Option<&CharacterNavigationStatus>,
+            Option<&population::ImmigrationDeparture>,
         ),
     )>,
 ) {
@@ -84,6 +85,7 @@ pub fn sync_character_objectives(
             route_failed,
             current_objective,
             current_navigation,
+            immigration_departure,
         ),
     ) in people.iter()
     {
@@ -95,6 +97,7 @@ pub fn sync_character_objectives(
             intent,
             migration_cooldown,
             queue,
+            immigration_departure,
             meal,
             permit,
             construction,
@@ -144,6 +147,7 @@ fn objective_for(
     intent: Option<&VillagerIntent>,
     migration_cooldown: Option<&MigrationCooldown>,
     queue: Option<&moot_services::MootQueueTicket>,
+    immigration_departure: Option<&population::ImmigrationDeparture>,
     meal: Option<&moot_services::MootMealRoutine>,
     permit: Option<&moot_services::PermitPickupRoutine>,
     construction: Option<&ConstructionMaterialRoutine>,
@@ -166,6 +170,9 @@ fn objective_for(
     work_status: Option<&WorkStatus>,
     moving: bool,
 ) -> CharacterObjective {
+    if immigration_departure.is_some() {
+        return CharacterObjective::LeavingImmigrationCounter;
+    }
     if let Some(queue) = queue {
         return queue.objective();
     }
@@ -251,6 +258,7 @@ fn objective_for(
         return match collection.phase {
             MarketCollectionPhase::GoingToBusiness => CharacterObjective::CollectingMarketGoods,
             MarketCollectionPhase::ReturningToHall
+            | MarketCollectionPhase::ReturningToBusinessAfterFailedSale
             | MarketCollectionPhase::DeliveringInput
             | MarketCollectionPhase::ReturningFailedInput => {
                 CharacterObjective::DeliveringMarketGoods

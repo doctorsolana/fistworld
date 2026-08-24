@@ -18,20 +18,20 @@ use shared::components::{
     TradeContractId,
 };
 use shared::economy::{
-    BusinessAccount, BusinessCondition, BusinessForSale, BusinessManagementPolicy,
+    format_money, BusinessAccount, BusinessCondition, BusinessForSale, BusinessManagementPolicy,
     BusinessProcurementPolicy, BusinessSalePolicy, BusinessStaffingPolicy, BusinessWagePolicy,
-    CompanyAccount, Good, GoodsInventory, MootMarket, SettlementEconomy, format_money,
+    CompanyAccount, Good, GoodsInventory, MootMarket, SettlementEconomy,
 };
 
 use crate::selection::Selection;
 use crate::states::GameState;
 use crate::ui::foundation::{
-    UiButtonLabel, UiButtonVariant, button_chrome, layer, subtree_is_interacting,
+    button_chrome, layer, subtree_is_interacting, UiButtonLabel, UiButtonVariant,
 };
 #[cfg(test)]
 use crate::ui::good_icon_path;
 use crate::ui::styles::{
-    INK, INK_MUTED, LIMEWASH, LIMEWASH_WELL, PLATE_RULE, PLATE_RULE_SOFT, RADIUS, plate_shadow,
+    plate_shadow, INK, INK_MUTED, LIMEWASH, LIMEWASH_WELL, PLATE_RULE, PLATE_RULE_SOFT, RADIUS,
 };
 
 pub struct SettlementPanelPlugin;
@@ -1116,7 +1116,7 @@ fn handle_compact_actions(
         } else if let Ok((site, _)) = sites.get(entity) {
             (
                 site.settlement.clone(),
-                crate::ui::encyclopedia::places::SelectedPlaceEntry::Overview,
+                crate::ui::encyclopedia::places::SelectedPlaceEntry::Worksite(entity),
             )
         } else {
             continue;
@@ -1236,11 +1236,9 @@ mod tests {
             }),
         );
         world.flush();
-        assert!(
-            world
-                .get::<Children>(row)
-                .is_some_and(|children| children.len() == 5)
-        );
+        assert!(world
+            .get::<Children>(row)
+            .is_some_and(|children| children.len() == 5));
         let mut expand = world.query_filtered::<Entity, With<InspectExpandButton>>();
         let mut trade = world.query_filtered::<Entity, With<InspectTradeButton>>();
         let mut property = world.query_filtered::<Entity, With<InspectPropertyButton>>();

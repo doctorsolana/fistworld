@@ -114,6 +114,32 @@ fn farmstead_permit_allows_a_clearable_tree_but_rejects_a_rock_in_its_door_apron
 }
 
 #[test]
+fn mature_fixture_roads_reject_rocks_and_durably_clear_trees() {
+    let points = [Vec2::new(-4.0, 0.0), Vec2::new(4.0, 0.0)];
+    let (mut trees, tree_shapes) = one_static_prop(PropKind::BroadleafLargeA, Vec3::ZERO, 0.9);
+    assert!(road_access_is_clear_of_permanent_props(
+        &points,
+        RoadClass::Lane.initial_reserved_width(),
+        &trees,
+        &tree_shapes,
+    ));
+    assert_eq!(
+        clear_completed_road_trees(&points, 2.5, &mut trees, &tree_shapes),
+        1,
+    );
+    assert!(trees.instances.is_empty());
+    assert!(trees.road_tree_was_cleared(Vec2::ZERO));
+
+    let (rocks, rock_shapes) = one_static_prop(PropKind::BoulderA, Vec3::ZERO, 0.9);
+    assert!(!road_access_is_clear_of_permanent_props(
+        &points,
+        RoadClass::Lane.initial_reserved_width(),
+        &rocks,
+        &rock_shapes,
+    ));
+}
+
+#[test]
 fn farm_field_reservation_rejects_props_inside_its_rotated_rows() {
     let rotation = 0.63;
     let center = Vec2::new(20.0, -10.0);
@@ -1005,19 +1031,57 @@ fn graph_reuses_one_cached_route_for_both_directions() {
 }
 
 #[test]
+fn many_origins_share_one_destination_road_tree() {
+    let mut graph = VillageRoadGraph::default();
+    graph.nodes = vec![
+        RoadGraphNode {
+            point: Vec2::ZERO,
+            edges: vec![(1, 5.0)],
+        },
+        RoadGraphNode {
+            point: Vec2::X * 5.0,
+            edges: vec![(0, 5.0), (2, 5.0)],
+        },
+        RoadGraphNode {
+            point: Vec2::X * 10.0,
+            edges: vec![(1, 5.0)],
+        },
+    ];
+
+    assert_eq!(graph.shortest_path(0, 2), Some(vec![0, 1, 2]));
+    assert_eq!(graph.shortest_path(1, 2), Some(vec![1, 2]));
+    assert_eq!(
+        graph.destination_trees.len(),
+        1,
+        "a second commuter to the same door rebuilt Dijkstra"
+    );
+}
+
+#[test]
 fn embodied_route_rejection_discards_stale_tactical_answers() {
     let mut graph = VillageRoadGraph::default();
     let start = Vec2::new(2.0, 4.0);
     let goal = Vec2::new(18.0, -6.0);
     let route = [(start, false), (goal, false)];
     graph.cache_tactical_route(start, goal, &route, true);
+    let unrelated_start = Vec2::new(200.0, 200.0);
+    let unrelated_goal = Vec2::new(220.0, 200.0);
+    graph.cache_tactical_route(
+        unrelated_start,
+        unrelated_goal,
+        &[(unrelated_start, false), (unrelated_goal, false)],
+        true,
+    );
     assert!(graph.tactical_route(start, goal).is_some());
     assert!(graph.tactical_route(goal, start).is_some());
 
-    graph.invalidate_tactical_routes_after_embodied_rejection();
+    graph.invalidate_tactical_routes_after_embodied_rejection(start, goal);
 
     assert!(graph.tactical_route(start, goal).is_none());
     assert!(graph.tactical_route(goal, start).is_none());
+    assert!(graph
+        .tactical_route(unrelated_start, unrelated_goal)
+        .is_some());
 }
 
 #[test]

@@ -44,6 +44,83 @@ pub struct PlayerConstructionProject {
     pub owner: shared::components::PersonId,
 }
 
+/// Transfer a listed property to its buyer. Mirrors the NPC takeover in
+/// `mortality::acquire_businesses_for_sale` exactly: the price was already
+/// debited from the buyer and becomes the firm's own capital - there is no
+/// seller to pay. Returns Err WITHOUT mutating anything if the target no
+/// longer looks like a listed property, so the caller can refund.
+pub(crate) fn apply_listed_property_purchase(
+    world: &mut World,
+    target: Entity,
+    buyer: shared::components::PersonId,
+    buyer_name: &str,
+    price: u64,
+) -> Result<(), &'static str> {
+    use shared::economy::{
+        BusinessAccount, BusinessCondition, BusinessForSale, BusinessLiquidation,
+        BusinessSalePolicy, BusinessState,
+    };
+
+    if world.get::<BusinessForSale>(target).is_none() {
+        return Err("the listing is already gone");
+    }
+    if world.get::<UnderConstruction>(target).is_some() {
+        let existing = world
+            .get::<crate::world::village::InheritedBusinessCapital>(target)
+            .map_or(0, |capital| capital.0);
+        let Some(mut site) = world.get_mut::<UnderConstruction>(target) else {
+            return Err("the worksite vanished");
+        };
+        site.owner = Some(buyer_name.to_string());
+        site.owner_id = Some(buyer);
+        site.builder = None;
+        world
+            .entity_mut(target)
+            .insert((
+                crate::world::village::InheritedBusinessCapital(existing.saturating_add(price)),
+                PlayerConstructionProject { owner: buyer },
+            ))
+            .remove::<BusinessForSale>();
+        return Ok(());
+    }
+    // Validate before mutating: a partial transfer after the capital
+    // contribution would otherwise mint money on the refund path.
+    if world.get::<BusinessAccount>(target).is_none()
+        || world.get::<BusinessCondition>(target).is_none()
+        || world.get::<SettlementBuilding>(target).is_none()
+    {
+        return Err("the listed building is missing its business components");
+    }
+    let (wage_arrears, tax_arrears) = {
+        let mut account = world.get_mut::<BusinessAccount>(target).unwrap();
+        account.contribute_capital(price);
+        (account.wage_arrears, account.tax_arrears)
+    };
+    {
+        let mut condition = world.get_mut::<BusinessCondition>(target).unwrap();
+        condition.state = if wage_arrears > 0 || tax_arrears > 0 {
+            BusinessState::Distressed
+        } else {
+            BusinessState::New
+        };
+        condition.insolvent_days = 0;
+        condition.cash_tight_days = 0;
+        condition.opened_day = u32::MAX;
+        condition.operating_days = 0;
+        condition.liquidation_days = 0;
+    }
+    if let Some(mut sale) = world.get_mut::<BusinessSalePolicy>(target) {
+        sale.collection_enabled = true;
+    }
+    world.get_mut::<SettlementBuilding>(target).unwrap().owner = Some(buyer_name.to_string());
+    world
+        .entity_mut(target)
+        .insert(shared::components::OwnedBy(buyer))
+        .remove::<BusinessForSale>()
+        .remove::<BusinessLiquidation>();
+    Ok(())
+}
+
 #[derive(Resource, Debug)]
 pub struct PermitIdAllocator {
     next: u64,
@@ -89,6 +166,10 @@ pub struct PlayerPermitWorld<'w, 's> {
             Option<&'static BusinessProjectAccounting>,
         ),
     >,
+    /// Read-only view of everything on the property market; the transfer
+    /// itself runs in a deferred world closure so this system's other
+    /// building queries stay conflict-free.
+    sales: Query<'w, 's, (Entity, &'static shared::economy::BusinessForSale)>,
     roads: Query<
         'w,
         's,
@@ -742,6 +823,118 @@ pub fn handle_hero_permit_orders(
                         });
                     }
                 }
+                HeroPermitAction::BuyListedProperty {
+                    hall,
+                    kind,
+                    position,
+                    asking_price,
+                } => {
+                    let Ok((_, settlement_id, settlement, hall_position, ..)) =
+                        settlements.get_mut(hall)
+                    else {
+                        sender.send::<ReliableChannel>(reject(
+                            None,
+                            "That is not a settlement Hall.",
+                        ));
+                        continue;
+                    };
+                    let distance = Vec2::new(hero_position.0.x, hero_position.0.z)
+                        .distance(Vec2::new(hall_position.0.x, hall_position.0.z));
+                    if distance > HERO_PERMIT_INTERACTION_RANGE {
+                        sender.send::<ReliableChannel>(reject(
+                            None,
+                            format!(
+                                "Move your hero closer to {} Hall ({distance:.1}m / {:.0}m).",
+                                settlement.name, HERO_PERMIT_INTERACTION_RANGE
+                            ),
+                        ));
+                        continue;
+                    }
+                    // The board replicates no entity ids: resolve the listing
+                    // back through (settlement, kind, position).
+                    let target = world.sales.iter().find_map(|(entity, sale)| {
+                        if let Ok((building, building_of, building_position, ..)) =
+                            world.buildings.get(entity)
+                        {
+                            return (building.kind == kind
+                                && building_of.0 == *settlement_id
+                                && building_position.0.distance_squared(position) < 0.25)
+                                .then_some((entity, *sale, false));
+                        }
+                        if let Ok((_, site, _)) = world.pending.get(entity) {
+                            return (site.kind == kind
+                                && site.settlement_id == *settlement_id
+                                && site.position.distance_squared(position) < 0.25)
+                                .then_some((entity, *sale, true));
+                        }
+                        None
+                    });
+                    let Some((target, sale, is_worksite)) = target else {
+                        sender.send::<ReliableChannel>(reject(
+                            None,
+                            "That property is no longer for sale.",
+                        ));
+                        continue;
+                    };
+                    if sale.asking_price != asking_price {
+                        sender.send::<ReliableChannel>(reject(
+                            None,
+                            format!(
+                                "The asking price is now {} coin. Press again to buy at that price.",
+                                format_money(sale.asking_price)
+                            ),
+                        ));
+                        continue;
+                    }
+                    if !wallet.debit(sale.asking_price) {
+                        sender.send::<ReliableChannel>(reject(
+                            None,
+                            format!(
+                                "Buying this costs {} coin; you have {}.",
+                                format_money(sale.asking_price),
+                                format_money(wallet.balance())
+                            ),
+                        ));
+                        continue;
+                    }
+                    let buyer = *person_id;
+                    let buyer_hero = hero_entity;
+                    let buyer_name = hero_name.0.clone();
+                    let price = sale.asking_price;
+                    commands.queue(move |world: &mut World| {
+                        if let Err(reason) =
+                            apply_listed_property_purchase(world, target, buyer, &buyer_name, price)
+                        {
+                            // The listing vanished on this very tick's other
+                            // commands; give the money back.
+                            if let Some(mut wallet) = world.get_mut::<Wallet>(buyer_hero) {
+                                wallet.credit(price);
+                            }
+                            warn!("Property purchase rolled back: {reason}");
+                        }
+                    });
+                    sender.send::<ReliableChannel>(HeroPermitResult {
+                        success: true,
+                        outcome: HeroPermitOutcome::PropertyPurchased {
+                            settlement_name: settlement.name.clone(),
+                        },
+                        message: if is_worksite {
+                            format!(
+                                "You bought the unfinished {} in {} for {} coin. Send your hero to finish building it.",
+                                kind.label(),
+                                settlement.name,
+                                format_money(price)
+                            )
+                        } else {
+                            format!(
+                                "You bought the {} in {} for {} coin. The price becomes the firm's working capital.",
+                                kind.label(),
+                                settlement.name,
+                                format_money(price)
+                            )
+                        },
+                    });
+                }
                 HeroPermitAction::Surrender { permit } => {
                     let Some(index) = ledger.permits.iter().position(|entry| entry.id == permit)
                     else {
@@ -1233,5 +1426,153 @@ mod tests {
         assert_eq!(settlement.treasury, 425);
         assert_eq!(account.current_day.permit_income, 175);
         assert_eq!(account.lifetime_income, 175);
+    }
+}
+
+#[cfg(test)]
+mod property_purchase_tests {
+    use super::*;
+    use shared::economy::{
+        BusinessAccount, BusinessCondition, BusinessForSale, BusinessSalePolicy,
+        BusinessSaleReason, BusinessState,
+    };
+
+    #[test]
+    fn buying_a_listed_business_transfers_it_and_capitalises_the_price() {
+        let mut world = World::new();
+        let target = world
+            .spawn((
+                SettlementBuilding {
+                    kind: shared::components::SettlementBuildingKind::Bakery,
+                    settlement: "Brackwater".to_string(),
+                    owner: Some("Old Owner".to_string()),
+                    quality: 1.0,
+                    workers: vec![],
+                },
+                BusinessAccount::default(),
+                BusinessCondition {
+                    state: BusinessState::ForSale,
+                    insolvent_days: 4,
+                    ..Default::default()
+                },
+                BusinessSalePolicy {
+                    collection_enabled: false,
+                    ..Default::default()
+                },
+                BusinessForSale {
+                    previous_owner: shared::components::PersonId(9),
+                    asking_price: 425,
+                    listed_day: 3,
+                    reason: BusinessSaleReason::Insolvent,
+                },
+            ))
+            .id();
+
+        apply_listed_property_purchase(
+            &mut world,
+            target,
+            shared::components::PersonId(77),
+            "Aldric",
+            425,
+        )
+        .expect("purchase applies");
+
+        assert!(world.get::<BusinessForSale>(target).is_none());
+        assert_eq!(
+            world
+                .get::<shared::components::OwnedBy>(target)
+                .map(|o| o.0),
+            Some(shared::components::PersonId(77))
+        );
+        let building = world.get::<SettlementBuilding>(target).unwrap();
+        assert_eq!(building.owner.as_deref(), Some("Aldric"));
+        let condition = world.get::<BusinessCondition>(target).unwrap();
+        assert_eq!(condition.state, BusinessState::New);
+        assert_eq!(condition.insolvent_days, 0);
+        assert!(
+            world
+                .get::<BusinessSalePolicy>(target)
+                .unwrap()
+                .collection_enabled
+        );
+        let account = world.get::<BusinessAccount>(target).unwrap();
+        assert_eq!(account.contributed_capital, 425);
+    }
+
+    #[test]
+    fn buying_a_listed_worksite_makes_it_a_player_project_with_escrowed_capital() {
+        let mut world = World::new();
+        let settlement = world.spawn_empty().id();
+        let target = world
+            .spawn((
+                UnderConstruction {
+                    kind: shared::components::SettlementBuildingKind::Windmill,
+                    position: Vec3::new(5.0, 0.0, 5.0),
+                    rotation: 0.0,
+                    owner: None,
+                    owner_id: None,
+                    builder: None,
+                    settlement,
+                    settlement_id: SettlementId(1),
+                    stand: Vec3::ZERO,
+                    failed_stand_routes: 0,
+                    stage: crate::world::village::BuildStage::Supplying,
+                    quality: 0.5,
+                },
+                BusinessForSale {
+                    previous_owner: shared::components::PersonId(9),
+                    asking_price: 250,
+                    listed_day: 3,
+                    reason: BusinessSaleReason::OwnerDied,
+                },
+            ))
+            .id();
+
+        apply_listed_property_purchase(
+            &mut world,
+            target,
+            shared::components::PersonId(77),
+            "Aldric",
+            250,
+        )
+        .expect("purchase applies");
+
+        assert!(world.get::<BusinessForSale>(target).is_none());
+        let site = world.get::<UnderConstruction>(target).unwrap();
+        assert_eq!(site.owner_id, Some(shared::components::PersonId(77)));
+        assert_eq!(site.builder, None);
+        assert_eq!(
+            world
+                .get::<crate::world::village::InheritedBusinessCapital>(target)
+                .map(|capital| capital.0),
+            Some(250)
+        );
+        assert_eq!(
+            world
+                .get::<PlayerConstructionProject>(target)
+                .map(|project| project.owner),
+            Some(shared::components::PersonId(77))
+        );
+    }
+
+    #[test]
+    fn a_vanished_listing_refuses_without_mutating() {
+        let mut world = World::new();
+        let target = world.spawn(BusinessAccount::default()).id();
+        assert!(apply_listed_property_purchase(
+            &mut world,
+            target,
+            shared::components::PersonId(1),
+            "Nobody",
+            100,
+        )
+        .is_err());
+        assert_eq!(
+            world
+                .get::<BusinessAccount>(target)
+                .unwrap()
+                .contributed_capital,
+            0
+        );
     }
 }

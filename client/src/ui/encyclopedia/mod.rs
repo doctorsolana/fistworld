@@ -16,6 +16,7 @@ pub mod actions;
 pub mod companies;
 pub mod layout;
 pub mod places;
+pub mod retinue;
 pub mod state_sync;
 
 use bevy::prelude::*;
@@ -100,7 +101,12 @@ impl Plugin for EncyclopediaPlugin {
                 // the following frame.
                 (places::handle_place_rows, places::handle_back_to_company).chain(),
                 places::rebuild_place_list,
-                (places::sync_place_detail, places::sync_back_to_company).chain(),
+                (
+                    places::sync_place_detail,
+                    places::sync_back_to_company,
+                    places::handle_worksite_assign_button,
+                )
+                    .chain(),
                 places::sync_place_business_history_action,
                 places::style_place_rows,
                 state_sync::sync_retinue_button,
@@ -133,6 +139,19 @@ impl Plugin for EncyclopediaPlugin {
                 .after(layout::spawn_encyclopedia)
                 .run_if(encyclopedia_open)
                 .run_if(companies::company_tab_active)
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.add_systems(
+            Update,
+            (
+                retinue::handle_locate_buttons,
+                retinue::rebuild_retinue_list,
+                retinue::bind_retinue_status,
+            )
+                .chain()
+                .after(layout::spawn_encyclopedia)
+                .run_if(encyclopedia_open)
+                .run_if(retinue::retinue_tab_active)
                 .run_if(in_state(GameState::Playing)),
         );
         app.add_systems(
@@ -739,18 +758,14 @@ mod page_tests {
         world.insert_resource(EncyclopediaTab::Places);
 
         world.run_system_once(handle_page_back).unwrap();
-        assert!(
-            world
-                .resource::<crate::ui::history::HistoryPanelTarget>()
-                .0
-                .is_none()
-        );
-        assert!(
-            world
-                .resource::<crate::ui::market::MarketPageTarget>()
-                .0
-                .is_some()
-        );
+        assert!(world
+            .resource::<crate::ui::history::HistoryPanelTarget>()
+            .0
+            .is_none());
+        assert!(world
+            .resource::<crate::ui::market::MarketPageTarget>()
+            .0
+            .is_some());
 
         world.resource_mut::<ButtonInput<KeyCode>>().clear();
         world
@@ -759,11 +774,9 @@ mod page_tests {
         world.resource_mut::<ClickGuard>().0 = true;
         world.spawn((EncyclopediaPageBack, Interaction::Pressed));
         world.run_system_once(handle_page_back).unwrap();
-        assert!(
-            world
-                .resource::<crate::ui::market::MarketPageTarget>()
-                .0
-                .is_none()
-        );
+        assert!(world
+            .resource::<crate::ui::market::MarketPageTarget>()
+            .0
+            .is_none());
     }
 }

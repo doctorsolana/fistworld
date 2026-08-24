@@ -1545,6 +1545,7 @@ pub fn run_market_collections(
                     .entry((routine.hall, routine.good))
                     .or_default() += routine.reserved_units;
             }
+            MarketCollectionPhase::ReturningToBusinessAfterFailedSale => {}
             MarketCollectionPhase::DeliveringInput => {
                 *reserved_input
                     .entry((routine.business, routine.good))
@@ -1763,6 +1764,44 @@ pub fn run_market_collections(
                             | MarketCollectionPhase::ReturningFailedInput
                     ) =>
                 {
+                    if active.fallback_counter_attempted {
+                        if active.phase == MarketCollectionPhase::ReturningToHall {
+                            let Ok((_, source, _, source_at, source_rotation, ..)) =
+                                businesses.get(active.business)
+                            else {
+                                // The seller vanished while its stock was in
+                                // transit. Preserve the load and its durable
+                                // negative route result for the generic
+                                // recovery path rather than spinning here.
+                                commands
+                                    .entity(porter_entity)
+                                    .remove::<MarketCollectionRoutine>();
+                                continue;
+                            };
+                            let source_entrance = source
+                                .kind
+                                .entrance_position(source_at.0, source_rotation.0);
+                            active.phase =
+                                MarketCollectionPhase::ReturningToBusinessAfterFailedSale;
+                            warn!(
+                                "Market porter could not reach either public counter; returning the unsold {:?} to its source business",
+                                active.good,
+                            );
+                            commands
+                                .entity(porter_entity)
+                                .remove::<TravelRoute>()
+                                .remove::<NavigationRoutePending>()
+                                .remove::<NavigationRouteFailed>()
+                                .remove::<crate::world::village_roads::NavigationRouteBackoff>()
+                                .insert(MoveTarget(source_entrance));
+                        }
+                        // Buyer-owned cargo returning from a failed input
+                        // delivery has no source title to reverse. Keep the
+                        // second counter's normal circuit-breaker intact; the
+                        // route retry system will wake it with backoff instead
+                        // of this routine ping-ponging every frame.
+                        continue;
+                    }
                     // Once stock is physically aboard it must reach the shared
                     // store, but it need not use the counter which rejected a
                     // route. Prefer the closest other public entrance. This
@@ -1777,6 +1816,7 @@ pub fn run_market_collections(
                         })
                         .unwrap_or(active.counter);
                     active.counter = fallback;
+                    active.fallback_counter_attempted = true;
                     warn!(
                         "Market porter rerouting a loaded return from failed public counter {:.1},{:.1} to {:.1},{:.1}",
                         failed.goal.x, failed.goal.z, fallback.x, fallback.z,
@@ -1787,6 +1827,14 @@ pub fn run_market_collections(
                         .remove::<NavigationRoutePending>()
                         .remove::<NavigationRouteFailed>()
                         .insert(MoveTarget(fallback));
+                }
+                Some(active)
+                    if active.phase
+                        == MarketCollectionPhase::ReturningToBusinessAfterFailedSale =>
+                {
+                    // The return-to-source route owns its normal exponential
+                    // backoff. Consuming the same failure here would create a
+                    // new retry loop under permanently invalid geometry.
                 }
                 Some(active) if active.phase == MarketCollectionPhase::DeliveringInput => {
                     // Payment and title already changed hands at pickup. If
@@ -2145,6 +2193,7 @@ pub fn run_market_collections(
                                 reserved_units: moved,
                                 unit_price: 0,
                                 phase: MarketCollectionPhase::DeliveringInput,
+                                fallback_counter_attempted: false,
                             },
                             MoveTarget(entrance),
                         ));
@@ -2315,6 +2364,7 @@ pub fn run_market_collections(
                         reserved_units: offered,
                         unit_price,
                         phase: MarketCollectionPhase::GoingToBusiness,
+                        fallback_counter_attempted: false,
                     },
                     MoveTarget(entrance),
                 ));
@@ -2382,6 +2432,31 @@ pub fn run_market_collections(
                     );
                 }
                 activity.set_if_neq(CharacterActivity::Indoors);
+                commands
+                    .entity(porter_entity)
+                    .remove::<MarketCollectionRoutine>()
+                    .remove::<MoveTarget>();
+            }
+            MarketCollectionPhase::ReturningToBusinessAfterFailedSale => {
+                let Ok((_, building, _, at, rotation, mut store, ..)) =
+                    businesses.get_mut(routine.business)
+                else {
+                    // The source disappeared after both public counters
+                    // failed. Leave the physical cargo aboard and let the
+                    // generic orphan-load recovery own it next tick.
+                    commands
+                        .entity(porter_entity)
+                        .remove::<MarketCollectionRoutine>()
+                        .remove::<MoveTarget>();
+                    continue;
+                };
+                let entrance = building.kind.entrance_position(at.0, rotation.0);
+                if ground_distance(position.0, entrance) > WORK_REACH {
+                    ensure_move_target(&mut commands, porter_entity, move_target, entrance);
+                    continue;
+                }
+                carrier.transfer_to(&mut store, routine.good, routine.reserved_units);
+                activity.set_if_neq(CharacterActivity::Idle);
                 commands
                     .entity(porter_entity)
                     .remove::<MarketCollectionRoutine>()

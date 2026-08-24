@@ -86,6 +86,7 @@ pub(crate) fn configure_bootstrap(app: &mut App) {
             world::village_lab_scenario::stage_rendered_lab_once,
             world::village_lab_scenario::stage_rendered_lab_arrivals,
             world::village_lab_scenario::log_rendered_village_diagnostics,
+            world::village_lab_scenario::watch_stuck_village_actors,
         )
             .chain()
             .run_if(server_is_started),

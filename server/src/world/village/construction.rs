@@ -19,6 +19,70 @@ fn material_stock_may_supply(
     owns_priority || available_wood >= settlement_outstanding
 }
 
+/// A builder who has not actually secured Wood has no reason to occupy the
+/// public counter. Wait at that builder's own worksite while market stock,
+/// priority or the staggered tree proof changes. One site has one builder, so
+/// this is naturally distributed and requires no crowd reservation system.
+/// Both supply channels are dead: no purchasable market Wood and twelve
+/// exhausted tree candidates. Release this person to ordinary resident life
+/// (sleep, meals, employment, leisure all resume through the normal systems)
+/// instead of pinning them at the plot indefinitely. The site keeps its
+/// delivered materials and parks under [`ConstructionSupplyCooldown`];
+/// `recover_orphaned_construction` re-drafts a builder when it expires.
+pub(super) fn give_up_starved_supply(
+    commands: &mut Commands,
+    builder: Entity,
+    name: &CharacterName,
+    site_entity: Entity,
+    site: &mut UnderConstruction,
+    previous: Option<&ConstructionSupplyCooldown>,
+    now: f64,
+) {
+    warn!(
+        "Village supplier {} has no wood source for the {}; returning to normal life while the site rests",
+        name.0,
+        site.kind.label(),
+    );
+    site.builder = None;
+    commands
+        .entity(site_entity)
+        .insert(ConstructionSupplyCooldown::after_give_up(previous, now));
+    commands
+        .entity(builder)
+        .insert(VillagerIntent::Resident {
+            settlement: site.settlement,
+        })
+        .remove::<ConstructionMaterialRoutine>()
+        .remove::<MootQueueTicket>()
+        .remove::<MootQueueTransit>()
+        .remove::<MoveTarget>()
+        .remove::<TravelRoute>()
+        .remove::<NavigationRoutePending>()
+        .remove::<NavigationRouteFailed>();
+}
+
+fn wait_at_own_worksite(
+    commands: &mut Commands,
+    builder: Entity,
+    position: Vec3,
+    move_target: Option<&MoveTarget>,
+    stand: Vec3,
+) {
+    if ground_distance(position, stand) > WORK_REACH {
+        ensure_move_target(commands, builder, move_target, stand);
+    } else if move_target.is_some() {
+        // Queue the removals only on the transition into waiting, never every
+        // tick (the moot queue documents the same discipline): many waiting
+        // builders must not each queue four no-op commands per tick.
+        commands
+            .entity(builder)
+            .remove::<MoveTarget>()
+            .remove::<TravelRoute>()
+            .remove::<NavigationRoutePending>()
+            .remove::<NavigationRouteFailed>();
+    }
+}
+
 fn delivery_access_points(
     terrain: &WorldTerrain,
     access: Option<&PlannedRoadAccess>,
@@ -72,6 +136,7 @@ fn begin_material_delivery(
                     goal: destination,
                     waypoints,
                     next: 0,
+                    geometry_version: 0,
                 },
             ));
         ConstructionMaterialPhase::Delivering { destination }
@@ -119,6 +184,7 @@ fn begin_material_egress(
                 goal: exit,
                 waypoints,
                 next: 0,
+                geometry_version: 0,
             },
         ));
     ConstructionMaterialPhase::LeavingDeliveryAccess { exit }
@@ -158,6 +224,7 @@ pub fn run_construction_material_logistics(
     derived: Option<Res<DerivedColliderLibrary>>,
     obstacles: Option<Res<SpatialObstacleGrid>>,
     world_time: Query<&WorldTime>,
+    mut queue_clock: Option<ResMut<MootQueueClock>>,
     mut business_events: ResMut<BusinessEventQueue>,
     mut commands: Commands,
     mut settlements: Query<
@@ -180,6 +247,9 @@ pub fn run_construction_material_logistics(
             Option<&mut shared::components::ConstructionSite>,
             &PlayerPosition,
             Option<&PlannedRoadAccess>,
+            Option<&ConstructionSupplyCooldown>,
+            bevy::ecs::query::Has<crate::player::permits::PlayerConstructionProject>,
+            bevy::ecs::query::Has<shared::economy::BusinessForSale>,
         ),
         Without<CharacterKind>,
     >,
@@ -208,9 +278,10 @@ pub fn run_construction_material_logistics(
             &mut CharacterActivity,
             &mut ConstructionMaterialRoutine,
             Option<&MoveTarget>,
+            Option<&TravelRoute>,
             Option<&NavigationRouteFailed>,
+            Option<&MootQueueTicket>,
             Option<&mut Wallet>,
-            Option<&ambient::AmbientRoutine>,
         ),
         (
             With<CharacterKind>,
@@ -253,7 +324,7 @@ pub fn run_construction_material_logistics(
     // their delivery.
     let mut material_priority: HashMap<Entity, (u32, u64, Entity)> = HashMap::new();
     let mut material_outstanding: HashMap<Entity, u32> = HashMap::new();
-    for (site_entity, site, _, _, _) in sites.iter_mut() {
+    for (site_entity, site, _, _, _, _, _, _) in sites.iter_mut() {
         if site.stage != BuildStage::Supplying {
             continue;
         }
@@ -281,6 +352,22 @@ pub fn run_construction_material_logistics(
         }
     }
 
+    // Stock is not removed until a builder physically reaches the counter,
+    // but it must be claimed before the walk begins. Otherwise every worksite
+    // sees the same abundant snapshot and a crowd arrives for units already
+    // promised to the people ahead of it.
+    let mut reserved_store_wood: HashMap<Entity, u32> = HashMap::new();
+    for builder in builders.iter_mut() {
+        if let ConstructionMaterialPhase::CollectingFromStore {
+            source,
+            reserved_units,
+            ..
+        } = builder.9.phase
+        {
+            *reserved_store_wood.entry(source).or_default() += reserved_units;
+        }
+    }
+
     for (
         builder,
         person_id,
@@ -293,9 +380,10 @@ pub fn run_construction_material_logistics(
         mut activity,
         mut routine,
         move_target,
-        route_failed,
+        travel_route,
+        mut route_failed,
+        queue_ticket,
         mut wallet,
-        ambient_routine,
     ) in builders.iter_mut()
     {
         if home_routine.is_some() {
@@ -316,6 +404,8 @@ pub fn run_construction_material_logistics(
                 .entity(builder)
                 .remove::<ConstructionMaterialRoutine>()
                 .remove::<PlayerConstructionAssignment>()
+                .remove::<MootQueueTicket>()
+                .remove::<MootQueueTransit>()
                 .remove::<MoveTarget>();
             activity.set_if_neq(CharacterActivity::Idle);
             continue;
@@ -325,15 +415,42 @@ pub fn run_construction_material_logistics(
         // and delivering materials overnight instead of remaining frozen in
         // the last visible activity until dawn.
         if !daylight && !player_assigned {
+            // The moot queue advances all night while this system - the only
+            // consumer of Ready freight tickets - sleeps. Dissolve the line
+            // at nightfall instead of leaving a Ready head frozen at the
+            // counter with everyone queued behind it until dawn; the ticket
+            // and its stock reservation are re-earned in the morning.
+            if queue_ticket.is_some() {
+                commands
+                    .entity(builder)
+                    .remove::<MootQueueTicket>()
+                    .remove::<MootQueueTransit>();
+                if matches!(
+                    routine.phase,
+                    ConstructionMaterialPhase::CollectingFromStore { .. }
+                ) {
+                    routine.phase = ConstructionMaterialPhase::Seeking;
+                }
+            }
             continue;
         }
-        let Ok((_, mut site, mut site_view, _site_position, planned_access)) =
-            sites.get_mut(routine.site)
+        let Ok((
+            _,
+            mut site,
+            mut site_view,
+            _site_position,
+            planned_access,
+            supply_cooldown,
+            site_is_player_project,
+            site_listed_for_sale,
+        )) = sites.get_mut(routine.site)
         else {
             commands
                 .entity(builder)
                 .remove::<ConstructionMaterialRoutine>()
                 .remove::<PlayerConstructionAssignment>()
+                .remove::<MootQueueTicket>()
+                .remove::<MootQueueTransit>()
                 .remove::<MoveTarget>();
             activity.set_if_neq(CharacterActivity::Idle);
             continue;
@@ -341,8 +458,23 @@ pub fn run_construction_material_logistics(
         if site.stage != BuildStage::Supplying {
             commands
                 .entity(builder)
-                .remove::<ConstructionMaterialRoutine>();
+                .remove::<ConstructionMaterialRoutine>()
+                .remove::<MootQueueTicket>()
+                .remove::<MootQueueTransit>();
             continue;
+        }
+
+        // A Hall pickup uses the shared visible FIFO line. Its movement and
+        // route recovery belong to the queue until the counter says Ready;
+        // interpreting those markers as a failed material route would eject
+        // the builder from the line every frame.
+        if queue_ticket.is_some()
+            && matches!(
+                routine.phase,
+                ConstructionMaterialPhase::CollectingFromStore { .. }
+            )
+        {
+            route_failed = None;
         }
 
         if let Some(failed) = route_failed {
@@ -497,9 +629,14 @@ pub fn run_construction_material_logistics(
             .unwrap_or(0);
         if delivered >= required {
             activity.set_if_neq(CharacterActivity::Idle);
+            // Release the hall freight-lane ticket too: a builder whose site
+            // was topped up externally while they queued would otherwise hold
+            // a Ready ticket forever and jam every later pickup at this hall.
             commands
                 .entity(builder)
                 .remove::<ConstructionMaterialRoutine>()
+                .remove::<MootQueueTicket>()
+                .remove::<MootQueueTransit>()
                 .insert(MoveTarget(site.stand));
             continue;
         }
@@ -540,6 +677,40 @@ pub fn run_construction_material_logistics(
             .get(builder)
             .map(|inventory| inventory.amount(Good::Wood))
             .unwrap_or(0);
+
+        // Once Wood changes hands, retain the ready freight ticket until the
+        // delivery route is actually installed (or the builder has physically
+        // reached a very close target). This keeps one body at the counter,
+        // gives pathfinding a stable start instead of a crowd-shoved pile, and
+        // only then lets the next freight applicant advance.
+        let holding_freight_counter = queue_ticket.is_some_and(|ticket| {
+            ticket.kind == MootServiceKind::ConstructionMaterial
+                && carried_wood > 0
+                && !matches!(
+                    routine.phase,
+                    ConstructionMaterialPhase::CollectingFromStore { .. }
+                )
+        });
+        if holding_freight_counter {
+            let phase_target = match routine.phase {
+                ConstructionMaterialPhase::ApproachingDeliveryAccess { entry } => Some(entry),
+                ConstructionMaterialPhase::Delivering { destination } => Some(destination),
+                ConstructionMaterialPhase::LeavingDeliveryAccess { exit } => Some(exit),
+                _ => None,
+            };
+            let route_ready = travel_route.is_some()
+                || route_failed.is_some()
+                || phase_target
+                    .is_some_and(|target| ground_distance(position.0, target) <= WORK_REACH);
+            if route_ready {
+                commands
+                    .entity(builder)
+                    .remove::<MootQueueTicket>()
+                    .remove::<MootQueueTransit>();
+            } else {
+                continue;
+            }
+        }
         let carries_other_goods = inventories.get(builder).is_ok_and(|inventory| {
             Good::ALL
                 .iter()
@@ -616,10 +787,15 @@ pub fn run_construction_material_logistics(
                     .get(hall_entity)
                     .is_ok_and(|inventory| {
                         now >= routine.store_retry_after
-                            && inventory.amount(Good::Wood) > 0
+                            && inventory.amount(Good::Wood)
+                                > reserved_store_wood.get(&hall_entity).copied().unwrap_or(0)
                             && affordable
                     })
                     .then_some((hall_entity, public_store_entrance));
+                // A give-up must know the market was REALLY dry this tick -
+                // nothing purchasable at any price for this owner - not merely
+                // inside the post-failure store-route backoff window.
+                let market_durably_dry = source.is_none() && now >= routine.store_retry_after;
                 if let Some((source, entrance)) = source {
                     let available_wood = inventories
                         .get(hall_entity)
@@ -640,27 +816,72 @@ pub fn run_construction_material_logistics(
                         available_wood,
                         outstanding,
                     ) {
-                        if ambient_routine.is_some() {
-                            continue;
-                        }
-                        if ground_distance(position.0, public_store_entrance) > WORK_REACH {
-                            ensure_move_target(
-                                &mut commands,
-                                builder,
-                                move_target,
-                                public_store_entrance,
-                            );
-                        }
+                        commands.entity(builder).remove::<ambient::AmbientRoutine>();
+                        wait_at_own_worksite(
+                            &mut commands,
+                            builder,
+                            position.0,
+                            move_target,
+                            site.stand,
+                        );
+                        continue;
+                    }
+                    let available_unreserved = available_wood
+                        .saturating_sub(reserved_store_wood.get(&source).copied().unwrap_or(0));
+                    let carry_room = inventories
+                        .get(builder)
+                        .map(|inventory| inventory.free_bulk() / Good::Wood.bulk_per_unit())
+                        .unwrap_or(0);
+                    let reserved_units = required
+                        .saturating_sub(delivered)
+                        .min(carry_room)
+                        .min(available_unreserved);
+                    if reserved_units == 0 {
+                        wait_at_own_worksite(
+                            &mut commands,
+                            builder,
+                            position.0,
+                            move_target,
+                            site.stand,
+                        );
                         continue;
                     }
                     commands.entity(builder).remove::<ambient::AmbientRoutine>();
-                    ensure_move_target(&mut commands, builder, move_target, entrance);
-                    routine.phase =
-                        ConstructionMaterialPhase::CollectingFromStore { source, entrance };
+                    *reserved_store_wood.entry(source).or_default() += reserved_units;
+                    routine.phase = ConstructionMaterialPhase::CollectingFromStore {
+                        source,
+                        entrance,
+                        reserved_units,
+                    };
+                    if let Some(clock) = queue_clock.as_deref_mut() {
+                        // The stock remains physically in the Hall until this
+                        // applicant reaches the counter. The shared line gives
+                        // every builder a distinct position and fast 0.5s
+                        // handover instead of letting a dozen bodies occupy
+                        // the exact authored door marker.
+                        enqueue_moot_service(
+                            &mut commands,
+                            clock,
+                            builder,
+                            hall_entity,
+                            MootServiceKind::ConstructionMaterial,
+                        );
+                    } else {
+                        // Focused tests assembled without the queue resource
+                        // retain the direct physical pickup seam.
+                        ensure_move_target(&mut commands, builder, move_target, entrance);
+                    }
                     continue;
                 }
 
                 if now < routine.tree_retry_after || tree_proof_used {
+                    wait_at_own_worksite(
+                        &mut commands,
+                        builder,
+                        position.0,
+                        move_target,
+                        site.stand,
+                    );
                     continue;
                 }
                 commands.entity(builder).remove::<ambient::AmbientRoutine>();
@@ -685,18 +906,43 @@ pub fn run_construction_material_logistics(
                         // The immutable 5x5-chunk prop search is filled a few
                         // chunks per tick. Do not count cache preparation as a
                         // failed tree or impose a gameplay backoff.
+                        wait_at_own_worksite(
+                            &mut commands,
+                            builder,
+                            position.0,
+                            move_target,
+                            site.stand,
+                        );
                         continue;
                     }
                     TreeCandidateLookup::Unavailable => {
                         // No locally valid stand for this deterministic
                         // candidate. Back off rather than retrying a sparse
                         // grove at the server tick rate.
-                        postpone_construction_tree_search(&mut routine, now);
-                        ensure_move_target(
+                        let widened = postpone_construction_tree_search(&mut routine, now);
+                        if widened
+                            && market_durably_dry
+                            && !player_assigned
+                            && !site_is_player_project
+                            && !site_listed_for_sale
+                        {
+                            give_up_starved_supply(
+                                &mut commands,
+                                builder,
+                                name,
+                                routine.site,
+                                &mut site,
+                                supply_cooldown,
+                                now,
+                            );
+                            continue;
+                        }
+                        wait_at_own_worksite(
                             &mut commands,
                             builder,
+                            position.0,
                             move_target,
-                            public_store_entrance,
+                            site.stand,
                         );
                         continue;
                     }
@@ -715,13 +961,36 @@ pub fn run_construction_material_logistics(
                     Vec2::new(stand.x, stand.z),
                 ) {
                     let widened = postpone_construction_tree_search(&mut routine, now);
+                    if widened
+                        && market_durably_dry
+                        && !player_assigned
+                        && !site_is_player_project
+                        && !site_listed_for_sale
+                    {
+                        give_up_starved_supply(
+                            &mut commands,
+                            builder,
+                            name,
+                            routine.site,
+                            &mut site,
+                            supply_cooldown,
+                            now,
+                        );
+                        continue;
+                    }
                     if widened {
                         warn!(
                             "Village supplier {} found no reachable timber after twelve candidates; waiting for market stock or terrain change",
                             name.0
                         );
                     }
-                    ensure_move_target(&mut commands, builder, move_target, hall_entrance);
+                    wait_at_own_worksite(
+                        &mut commands,
+                        builder,
+                        position.0,
+                        move_target,
+                        site.stand,
+                    );
                     continue;
                 }
                 routine.tree_retry_after = 0.0;
@@ -764,19 +1033,30 @@ pub fn run_construction_material_logistics(
                 }
                 routine.phase = ConstructionMaterialPhase::Seeking;
             }
-            ConstructionMaterialPhase::CollectingFromStore { source, entrance } => {
+            ConstructionMaterialPhase::CollectingFromStore {
+                source,
+                entrance,
+                reserved_units,
+            } => {
                 activity.set_if_neq(CharacterActivity::Idle);
-                if ground_distance(position.0, entrance) > WORK_REACH {
+                if let Some(ticket) = queue_ticket {
+                    if ticket.kind != MootServiceKind::ConstructionMaterial || !ticket.is_ready() {
+                        continue;
+                    }
+                } else if ground_distance(position.0, entrance) > WORK_REACH {
                     ensure_move_target(&mut commands, builder, move_target, entrance);
                     continue;
                 }
-                commands.entity(builder).remove::<MoveTarget>();
+                commands
+                    .entity(builder)
+                    .remove::<MootQueueTransit>()
+                    .remove::<MoveTarget>();
                 let remaining = required.saturating_sub(delivered);
                 let moved = if let Ok([mut source_store, mut carrier]) =
                     inventories.get_many_mut([source, builder])
                 {
                     let carry_room = carrier.free_bulk() / Good::Wood.bulk_per_unit();
-                    let requested = remaining.min(carry_room);
+                    let requested = remaining.min(carry_room).min(reserved_units);
                     if site.owner_id.is_none() {
                         let budget = crate::world::village::civic::civic_discretionary_budget(
                             &settlement,
@@ -876,7 +1156,14 @@ pub fn run_construction_material_logistics(
                         planned_access,
                     );
                 } else {
+                    // Nothing changed hands (listings sold out under the
+                    // reservation, or funds fell short at the counter).
+                    // Back off before seeking again - an instant re-queue
+                    // can cycle a wood-less builder through the freight line
+                    // forever without a single delivery.
+                    commands.entity(builder).remove::<MootQueueTicket>();
                     routine.phase = ConstructionMaterialPhase::Seeking;
+                    postpone_construction_store_route(&mut routine, now);
                 }
             }
             ConstructionMaterialPhase::WalkingToTree { tree, stand } => {

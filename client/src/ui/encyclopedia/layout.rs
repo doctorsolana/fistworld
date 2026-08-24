@@ -8,8 +8,8 @@
 use bevy::prelude::*;
 
 use super::*;
-use crate::ui::foundation::{UiButtonLabel, UiButtonVariant, button_chrome};
-use crate::ui::modal::{ModalLayout, spawn_modal};
+use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
+use crate::ui::modal::{spawn_modal, ModalLayout};
 use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE, RADIUS};
 
 const PANEL_SIZE: Vec2 = Vec2::new(1240.0, 820.0);
@@ -224,13 +224,7 @@ fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
         .with_children(|body| {
             spawn_people_tab(body);
             spawn_places_tab(body);
-            spawn_placeholder_tab(
-                body,
-                EncyclopediaTab::Retinue,
-                "NO RETINUE YET",
-                "The people who answer to you appear here: the ones you hire, \
-                 marry into, or inherit. You start alone.",
-            );
+            super::retinue::spawn_retinue_tab(body);
             super::companies::spawn_companies_tab(body);
             // Pages (ledgers, company controls) render here, full size, under
             // one BACK bar. See `EncyclopediaPageHost`.
@@ -477,16 +471,19 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                     ..default()
                                 },
                             ));
-                            card.spawn(Node {
-                                align_self: AlignSelf::FlexEnd,
-                                flex_direction: FlexDirection::Row,
-                                flex_wrap: FlexWrap::Wrap,
-                                justify_content: JustifyContent::FlexEnd,
-                                column_gap: Val::Px(7.0),
-                                row_gap: Val::Px(7.0),
-                                margin: UiRect::bottom(Val::Px(10.0)),
-                                ..default()
-                            })
+                            card.spawn((
+                                super::places::PlaceActionsRow,
+                                Node {
+                                    align_self: AlignSelf::FlexEnd,
+                                    flex_direction: FlexDirection::Row,
+                                    flex_wrap: FlexWrap::Wrap,
+                                    justify_content: JustifyContent::FlexEnd,
+                                    column_gap: Val::Px(7.0),
+                                    row_gap: Val::Px(7.0),
+                                    margin: UiRect::bottom(Val::Px(10.0)),
+                                    ..default()
+                                },
+                            ))
                             .with_children(|actions| {
                                 actions
                                     .spawn((
@@ -644,6 +641,34 @@ fn spawn_places_tab(body: &mut ChildSpawnerCommands<'_>) {
                                     ));
                                 }
                             });
+                            card.spawn((
+                                super::places::WorksiteAssignButton,
+                                super::places::AssignHeroToWorksite(None),
+                                Button,
+                                Node {
+                                    display: Display::None,
+                                    height: Val::Px(40.0),
+                                    align_items: AlignItems::Center,
+                                    justify_content: JustifyContent::Center,
+                                    margin: UiRect::bottom(Val::Px(6.0)),
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    border_radius: BorderRadius::all(Val::Px(RADIUS)),
+                                    ..default()
+                                },
+                                crate::ui::foundation::button_chrome(
+                                    crate::ui::foundation::UiButtonVariant::Primary,
+                                ),
+                                children![(
+                                    Text::new("SEND MY HERO TO BUILD THIS"),
+                                    crate::ui::foundation::UiButtonLabel,
+                                    TextFont {
+                                        font_size: FontSize::Px(14.0),
+                                        ..default()
+                                    },
+                                    TextColor(INK),
+                                    Pickable::IGNORE,
+                                )],
+                            ));
                             for index in 0..PLACE_DETAIL_LINES {
                                 card.spawn((
                                     PlaceDetailLine(index),

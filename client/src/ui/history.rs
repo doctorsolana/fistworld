@@ -11,9 +11,9 @@ use lightyear::prelude::{Connected, MessageReceiver, MessageSender};
 
 use shared::components::{BuildingId, CompanyId, Settlement};
 use shared::economy::{
-    BusinessHistoryArchive, BusinessHistoryDay, CompanyHistoryArchive, Good,
-    SETTLEMENT_HISTORY_DAYS, SettlementHistoryArchive, SettlementHistoryDay, WorldHistoryArchive,
-    WorldHistoryDay, format_money,
+    format_money, BusinessHistoryArchive, BusinessHistoryDay, CompanyHistoryArchive, Good,
+    SettlementHistoryArchive, SettlementHistoryDay, WorldHistoryArchive, WorldHistoryDay,
+    SETTLEMENT_HISTORY_DAYS,
 };
 use shared::protocol::{
     CompanyHistoryResponse, ReliableChannel, RequestCompanyHistory, RequestSettlementHistory,
@@ -22,7 +22,7 @@ use shared::protocol::{
 
 use crate::states::GameState;
 use crate::ui::foundation::{
-    UiButtonLabel, UiButtonStyle, UiButtonVariant, selected_button_chrome,
+    selected_button_chrome, UiButtonLabel, UiButtonStyle, UiButtonVariant,
 };
 use crate::ui::good_icon_path;
 use crate::ui::modal::update_modal_click_guard;

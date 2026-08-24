@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run script for Fistworld
-# Usage: ./run.sh [server|client|both|testworld|uxworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|multi] [--release|--dev]
+# Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|multi] [--release|--dev]
 #
 # BUILD PROFILE. This used to build --release every time, which meant a ten
 # minute wait for a one line change: release turns on thin LTO, which re-links
@@ -53,8 +53,8 @@ STREAM_VILLAGE_LOGS="${FISTWORLD_STREAM_LOGS:-1}"
 
 # The rendered Village Lab is explicit rather than tied to the map id. This
 # preserves `CITYSIM_MAP_ID=village_lab ./run.sh` as an empty god-mode sandbox.
-if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || "$MODE" == "regionalworld" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
-    if [[ "$MODE" == "uxworld" ]]; then
+if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || "$MODE" == "uxstressworld" || "$MODE" == "regionalworld" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
+    if [[ "$MODE" == "uxworld" || "$MODE" == "uxstressworld" ]]; then
         # A mature City fixture for exercising player-facing management UX
         # without waiting through days of organic development. Its residents,
         # buildings, inventories and companies are ordinary runtime entities;
@@ -62,10 +62,24 @@ if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || 
         export CITYSIM_MAP_ID="village_lab"
         export FISTWORLD_UX_TOWN="${FISTWORLD_UX_TOWN:-1}"
         export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-secure}"
-        export FISTWORLD_LAB_DAY_TWO_ARRIVALS="${FISTWORLD_LAB_DAY_TWO_ARRIVALS:-0}"
-        export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-1}"
+        if [[ "$MODE" == "uxstressworld" ]]; then
+            # Let the prepared economy establish its first routines, then add
+            # one real 500-person immigration shock on scenario day 2. The
+            # causal watchdog distinguishes legitimate queues/work from actors
+            # whose target, route or freight ownership has genuinely stalled.
+            export FISTWORLD_UX_STRESS="${FISTWORLD_UX_STRESS:-1}"
+            export FISTWORLD_STUCK_WATCH="${FISTWORLD_STUCK_WATCH:-1}"
+            export FISTWORLD_LAB_DAY_TWO_ARRIVALS="${FISTWORLD_LAB_DAY_TWO_ARRIVALS:-500}"
+            export FISTWORLD_LAB_ARRIVAL_DAY="${FISTWORLD_LAB_ARRIVAL_DAY:-2}"
+            export FISTWORLD_LAB_ARRIVAL_OFFSET="${FISTWORLD_LAB_ARRIVAL_OFFSET:-0,-90}"
+            export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-10}"
+            export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-520}"
+        else
+            export FISTWORLD_LAB_DAY_TWO_ARRIVALS="${FISTWORLD_LAB_DAY_TWO_ARRIVALS:-0}"
+            export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-1}"
+            export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-430}"
+        fi
         export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:--108,220}"
-        export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-430}"
         export FISTFORCE_SERVER_PERF="${FISTFORCE_SERVER_PERF:-1}"
         export FISTFORCE_CLIENT_PERF="${FISTFORCE_CLIENT_PERF:-1}"
         # Retain the full trace on disk without making hundreds of prepared
@@ -347,9 +361,9 @@ case $MODE in
         echo -e "${BLUE}Starting client...${NC}"
         cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
         ;;
-    both|testworld|testlab|uxworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|reallab)
+    both|testworld|testlab|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|reallab)
         cleanup_server
-        if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || "$MODE" == "regionalworld" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
+        if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || "$MODE" == "uxstressworld" || "$MODE" == "regionalworld" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
             echo -e "${YELLOW}Village Lab: ${FISTWORLD_LAB_SCENARIO}, map ${CITYSIM_MAP_ID}, starting at ${FISTWORLD_LAB_WARP}x (HUD: pause / 1x / 10x / 25x / 100x)${NC}"
             echo -e "${YELLOW}Logs: ${VILLAGE_LOG_DIR}${NC}"
         fi
@@ -435,12 +449,13 @@ case $MODE in
         echo -e "${GREEN}Client closed. Stopping server...${NC}"
         ;;
     *)
-        echo "Usage: ./run.sh [server|client|both|testworld|uxworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|multi|windows] [--release|--dev]"
+        echo "Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|multi|windows] [--release|--dev]"
         echo "  server  - Start only the server"
         echo "  client  - Start only the client"
         echo "  both    - Start server then client (default)"
         echo "  testworld - Watch one deterministic logged Village Lab settlement (starts at 1x)"
         echo "  uxworld - Open a mature logged 500-resident City for permit/company UX testing (1x)"
+        echo "  uxstressworld - Grow that City from 500 toward 1,000 with a day-2 shock and stuck-actor evidence (10x)"
         echo "  regionalworld - Watch four contrasting villages grow on the larger regional lab (10x)"
         echo "  stoneworld - Watch Meadow and Stone-rich settlements develop together (starts at 1x)"
         echo "  tradeworld - Watch two villages grow to 35 and create a physical Stone import route (10x)"

@@ -32,8 +32,8 @@ use shared::protocol::{
 
 use crate::states::GameState;
 use crate::ui::foundation::{
-    retained_scroll, selected_button_chrome, subtree_is_interacting, UiButtonLabel,
-    UiButtonStyle, UiButtonVariant,
+    retained_scroll, selected_button_chrome, subtree_is_interacting, UiButtonLabel, UiButtonStyle,
+    UiButtonVariant,
 };
 use crate::ui::modal::update_modal_click_guard;
 use crate::ui::styles::{
@@ -272,7 +272,11 @@ impl ControlsModel {
     }
 }
 
-fn order(id: impl Into<String>, label: impl Into<String>, action: HeroBusinessAction) -> ControlModel {
+fn order(
+    id: impl Into<String>,
+    label: impl Into<String>,
+    action: HeroBusinessAction,
+) -> ControlModel {
     ControlModel {
         id: id.into(),
         label: label.into(),
@@ -387,7 +391,12 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
     let site_label = format!("{kind_label} #{}", site.building_id.0);
     let title = format!("MANAGE {site_label}");
     let subtitle = company.as_ref().map_or_else(
-        || format!("INDEPENDENT SITE  /  IN {}", building.settlement.to_uppercase()),
+        || {
+            format!(
+                "INDEPENDENT SITE  /  IN {}",
+                building.settlement.to_uppercase()
+            )
+        },
         |company| {
             format!(
                 "ONE SITE OF {}  /  IN {}  /  COMPANY TREASURY {} COIN",
@@ -406,7 +415,9 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
     // fallback only for a direct open; the Back-to-Company flow starts with
     // the site.
     if let Some(company) = company.as_ref().filter(|_| *direct_open) {
-        blocks.push(Block::Section("COMPANY FINANCE, OWNERSHIP & GOVERNANCE".into()));
+        blocks.push(Block::Section(
+            "COMPANY FINANCE, OWNERSHIP & GOVERNANCE".into(),
+        ));
         let cap_table = company
             .ownership
             .shares()
@@ -544,13 +555,18 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
         if let Some(person) = local_person {
             for offer in offers.iter().filter(|offer| offer.seller != *person) {
                 let mut quantities = vec![1, 10, offer.shares];
-                quantities.iter_mut().for_each(|q| *q = (*q).min(offer.shares));
+                quantities
+                    .iter_mut()
+                    .for_each(|q| *q = (*q).min(offer.shares));
                 quantities.retain(|q| *q > 0);
                 quantities.dedup();
                 for quantity in quantities {
                     buys.push(order(
                         format!("buy.{}.{quantity}", offer.seller.0),
-                        format!("BUY {quantity} FROM {}", name_of(offer.seller).to_uppercase()),
+                        format!(
+                            "BUY {quantity} FROM {}",
+                            name_of(offer.seller).to_uppercase()
+                        ),
                         HeroBusinessAction::BuyCompanyShares {
                             seller: offer.seller,
                             shares: quantity,
@@ -560,7 +576,12 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
             }
         }
         blocks.push(row("share.public", "PUBLIC SHARE OFFERS", offer_text, buys));
-        blocks.push(dividend_row("company.dividends", "COMPANY DIVIDENDS", company, can_manage));
+        blocks.push(dividend_row(
+            "company.dividends",
+            "COMPANY DIVIDENDS",
+            company,
+            can_manage,
+        ));
 
         let decision_text = if company.decisions.entries().is_empty() {
             "No strategy change recorded yet".to_string()
@@ -603,7 +624,9 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
         ));
     }
 
-    blocks.push(Block::Section(format!("SITE OPERATING CONTROLS  /  {site_label}")));
+    blocks.push(Block::Section(format!(
+        "SITE OPERATING CONTROLS  /  {site_label}"
+    )));
     if can_manage {
         let management = site.management;
         blocks.push(row(
@@ -612,7 +635,11 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
             if management.autopilot { "ON" } else { "OFF" },
             vec![order(
                 "autopilot.toggle",
-                if management.autopilot { "PAUSE" } else { "ENABLE" },
+                if management.autopilot {
+                    "PAUSE"
+                } else {
+                    "ENABLE"
+                },
                 HeroBusinessAction::SetAutopilot(!management.autopilot),
             )],
         ));
@@ -646,7 +673,11 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
             format!(
                 "{} coin  /  {}",
                 format_money(wage.daily_wage),
-                if wage.automatic { "automatic" } else { "manual" }
+                if wage.automatic {
+                    "automatic"
+                } else {
+                    "manual"
+                }
             ),
             vec![
                 order(
@@ -701,7 +732,11 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
             format!(
                 "{} coin  /  {}",
                 format_money(sale.asking_unit_price),
-                if sale.automatic_pricing { "automatic" } else { "manual" }
+                if sale.automatic_pricing {
+                    "automatic"
+                } else {
+                    "manual"
+                }
             ),
             vec![
                 order(
@@ -748,7 +783,11 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
                 format!(
                     "{} innkeeper{} on duty  /  {} of {} guest places taken",
                     service.innkeepers_on_duty,
-                    if service.innkeepers_on_duty == 1 { "" } else { "s" },
+                    if service.innkeepers_on_duty == 1 {
+                        ""
+                    } else {
+                        "s"
+                    },
                     service.current_guests,
                     service.guest_capacity,
                 ),
@@ -777,7 +816,9 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
                 blocks.push(meter(
                     "stock.wool",
                     "WOOL BY-PRODUCT",
-                    format!("{wool} units here  /  one per livestock cycle, priced from the Meat ask"),
+                    format!(
+                        "{wool} units here  /  one per livestock cycle, priced from the Meat ask"
+                    ),
                     wool,
                     0,
                     (inventory.bulk_capacity() / Good::Wool.bulk_per_unit()).max(1),
@@ -818,7 +859,12 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
             .filter(|good| procurement.rule(*good).enabled)
             .collect();
         if inputs.is_empty() {
-            blocks.push(row("inputs.none", "INPUT PROCUREMENT", "No purchased inputs", vec![]));
+            blocks.push(row(
+                "inputs.none",
+                "INPUT PROCUREMENT",
+                "No purchased inputs",
+                vec![],
+            ));
         } else {
             let sourcing_on = procurement.automatic && supply.automatic;
             blocks.push(row(
@@ -831,7 +877,11 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
                 },
                 vec![order(
                     "sourcing.toggle",
-                    if sourcing_on { "PAUSE SOURCING" } else { "RESUME SOURCING" },
+                    if sourcing_on {
+                        "PAUSE SOURCING"
+                    } else {
+                        "RESUME SOURCING"
+                    },
                     HeroBusinessAction::SetAutomaticProcurement(!sourcing_on),
                 )],
             ));
@@ -931,7 +981,12 @@ fn controls_model(inputs: &ModelInputs<'_>) -> ControlsModel {
                 ),
                 vec![],
             ));
-            blocks.push(dividend_row("finance.dividends", "DIVIDENDS", company, true));
+            blocks.push(dividend_row(
+                "finance.dividends",
+                "DIVIDENDS",
+                company,
+                true,
+            ));
         }
     } else {
         blocks.push(row(
@@ -1162,10 +1217,10 @@ fn ensure_panel(
         }
     }
     let name_of = |person: PersonId| {
-        people
-            .iter()
-            .find(|(id, _)| **id == person)
-            .map_or_else(|| format!("Person #{}", person.0), |(_, name)| name.0.clone())
+        people.iter().find(|(id, _)| **id == person).map_or_else(
+            || format!("Person #{}", person.0),
+            |(_, name)| name.0.clone(),
+        )
     };
     let model = controls_model(&ModelInputs {
         site: SiteView {
@@ -1196,7 +1251,8 @@ fn ensure_panel(
     }
     // A structural change while a control is pressed would pull the button
     // out from under the cursor; wait a frame.
-    if existing.is_some_and(|(root, _)| subtree_is_interacting(root, &ui.children, &ui.interactions))
+    if existing
+        .is_some_and(|(root, _)| subtree_is_interacting(root, &ui.children, &ui.interactions))
     {
         return;
     }
@@ -1218,9 +1274,12 @@ fn bind_panel(model: &ControlsModel, bound: &mut BoundControls) {
     let mut lanes: HashMap<&str, [f32; 2]> = HashMap::new();
     texts.insert("title", (&model.title, None));
     texts.insert("subtitle", (&model.subtitle, None));
-    let (feedback_text, feedback_color) = model.feedback.as_ref().map_or(("", FEEDBACK_OK), |(m, ok)| {
-        (m.as_str(), if *ok { FEEDBACK_OK } else { FEEDBACK_FAIL })
-    });
+    let (feedback_text, feedback_color) = model
+        .feedback
+        .as_ref()
+        .map_or(("", FEEDBACK_OK), |(m, ok)| {
+            (m.as_str(), if *ok { FEEDBACK_OK } else { FEEDBACK_FAIL })
+        });
     texts.insert("feedback", (feedback_text, Some(feedback_color)));
     for block in &model.blocks {
         match block {
@@ -1250,7 +1309,11 @@ fn bind_panel(model: &ControlsModel, bound: &mut BoundControls) {
                 color.0 = *tint;
             }
         }
-        let display = if value.is_empty() { Display::None } else { Display::Flex };
+        let display = if value.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
         if node.display != display {
             node.display = display;
         }
@@ -1374,7 +1437,11 @@ fn spawn_panel(
                     },
                     TextColor(if ok { FEEDBACK_OK } else { FEEDBACK_FAIL }),
                     Node {
-                        display: if message.is_empty() { Display::None } else { Display::Flex },
+                        display: if message.is_empty() {
+                            Display::None
+                        } else {
+                            Display::Flex
+                        },
                         ..default()
                     },
                 ));
@@ -1533,7 +1600,10 @@ fn spawn_meter(parent: &mut ChildSpawnerCommands<'_>, meter: &MeterModel) {
                 BorderColor::all(PLATE_RULE_SOFT),
             ))
             .with_children(|track| {
-                for (lane, fill) in [COMPANY_STOCK_FILL, MARKET_STOCK_FILL].into_iter().enumerate() {
+                for (lane, fill) in [COMPANY_STOCK_FILL, MARKET_STOCK_FILL]
+                    .into_iter()
+                    .enumerate()
+                {
                     track.spawn((
                         MeterFill {
                             id: meter.id.clone(),

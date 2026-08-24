@@ -223,6 +223,8 @@ pub fn plan_requested_roads(
             Has<HouseholdShoppingRoutine>,
             Has<MootQueueTicket>,
             Has<HomeRoutine>,
+            Has<InternalDeliveryRoutine>,
+            Has<TradeRouteRoutine>,
             Has<crate::world::settlement_development::CivicHallBuilderRoutine>,
         ),
         With<CharacterKind>,
@@ -311,6 +313,8 @@ pub fn plan_requested_roads(
             shopping,
             queueing,
             at_home,
+            internal_delivery,
+            trade_route,
             civic_hall_building,
         )) = builders.get_mut(request.builder)
         else {
@@ -332,6 +336,8 @@ pub fn plan_requested_roads(
             || shopping
             || queueing
             || at_home
+            || internal_delivery
+            || trade_route
             || civic_hall_building
         {
             continue;
