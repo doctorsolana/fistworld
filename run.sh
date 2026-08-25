@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run script for Fistworld
-# Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|multi] [--release|--dev]
+# Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|realworld|multi] [--release|--dev]
 #
 # BUILD PROFILE. This used to build --release every time, which meant a ten
 # minute wait for a one line change: release turns on thin LTO, which re-links
@@ -53,7 +53,7 @@ STREAM_VILLAGE_LOGS="${FISTWORLD_STREAM_LOGS:-1}"
 
 # The rendered Village Lab is explicit rather than tied to the map id. This
 # preserves `CITYSIM_MAP_ID=village_lab ./run.sh` as an empty god-mode sandbox.
-if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || "$MODE" == "uxstressworld" || "$MODE" == "regionalworld" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
+if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || "$MODE" == "uxstressworld" || "$MODE" == "regionalworld" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" || "$MODE" == "battleworld" ]]; then
     if [[ "$MODE" == "uxworld" || "$MODE" == "uxstressworld" ]]; then
         # A mature City fixture for exercising player-facing management UX
         # without waiting through days of organic development. Its residents,
@@ -87,6 +87,9 @@ if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || 
         STREAM_VILLAGE_LOGS="${FISTWORLD_STREAM_LOGS:-0}"
     elif [[ "$MODE" == "regionalworld" ]]; then
         export CITYSIM_MAP_ID="regional_lab"
+    elif [[ "$MODE" == "battleworld" ]]; then
+        # A quarter-size open field of its own; no village belongs on it.
+        export CITYSIM_MAP_ID="battle_lab"
     else
         export CITYSIM_MAP_ID="village_lab"
     fi
@@ -102,6 +105,21 @@ if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || 
         export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-1250}"
         export FISTFORCE_SERVER_PERF="${FISTFORCE_SERVER_PERF:-1}"
         export FISTFORCE_CLIENT_PERF="${FISTFORCE_CLIENT_PERF:-1}"
+    elif [[ "$MODE" == "battleworld" ]]; then
+        # A battlefield, not a village: the skirmish scenario stages NO
+        # settlement - just idle villagers on open ground waiting to be
+        # conscripted. No economy, no migration, nothing moves until you act.
+        # The hero auto-spawns standing at the camera focus (no name modal,
+        # no dinghy voyage, no cinematic). God mode is on: SPAWN VILLAGER
+        # (G panel) drops more bodies, the encyclopedia's retinue button
+        # conscripts them, the ARMY tab musters battalions, C arms combat.
+        export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-skirmish}"
+        export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-1}"
+        export FISTWORLD_LAB_FOUNDERS="${FISTWORLD_LAB_FOUNDERS:-8}"
+        export FISTWORLD_DEV=1
+        export FISTWORLD_AUTOSPAWN_HERO="${FISTWORLD_AUTOSPAWN_HERO:-1}"
+        export FISTFORCE_START_FOCUS="${FISTFORCE_START_FOCUS:--20,-40}"
+        export FISTFORCE_START_ZOOM="${FISTFORCE_START_ZOOM:-110}"
     elif [[ "$MODE" == "economyworld" ]]; then
         export FISTWORLD_LAB_SCENARIO="${FISTWORLD_LAB_SCENARIO:-economy-soak}"
         export FISTWORLD_LAB_WARP="${FISTWORLD_LAB_WARP:-10}"
@@ -361,9 +379,9 @@ case $MODE in
         echo -e "${BLUE}Starting client...${NC}"
         cargo run "${CARGO_PROFILE[@]+"${CARGO_PROFILE[@]}"}" -p client
         ;;
-    both|testworld|testlab|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|reallab)
+    both|testworld|testlab|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|realworld|reallab)
         cleanup_server
-        if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || "$MODE" == "uxstressworld" || "$MODE" == "regionalworld" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" ]]; then
+        if [[ "$MODE" == "testworld" || "$MODE" == "testlab" || "$MODE" == "uxworld" || "$MODE" == "uxstressworld" || "$MODE" == "regionalworld" || "$MODE" == "stoneworld" || "$MODE" == "tradeworld" || "$MODE" == "merchantworld" || "$MODE" == "economyworld" || "$MODE" == "stressworld" || "$MODE" == "denseworld" || "$MODE" == "battleworld" ]]; then
             echo -e "${YELLOW}Village Lab: ${FISTWORLD_LAB_SCENARIO}, map ${CITYSIM_MAP_ID}, starting at ${FISTWORLD_LAB_WARP}x (HUD: pause / 1x / 10x / 25x / 100x)${NC}"
             echo -e "${YELLOW}Logs: ${VILLAGE_LOG_DIR}${NC}"
         fi
@@ -449,7 +467,7 @@ case $MODE in
         echo -e "${GREEN}Client closed. Stopping server...${NC}"
         ;;
     *)
-        echo "Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|realworld|multi|windows] [--release|--dev]"
+        echo "Usage: ./run.sh [server|client|both|testworld|uxworld|uxstressworld|regionalworld|stoneworld|tradeworld|merchantworld|economyworld|stressworld|denseworld|battleworld|realworld|multi|windows] [--release|--dev]"
         echo "  server  - Start only the server"
         echo "  client  - Start only the client"
         echo "  both    - Start server then client (default)"
@@ -463,6 +481,7 @@ case $MODE in
         echo "  economyworld - Watch the three-village 50-day economy schedule (starts at 10x)"
         echo "  stressworld - Watch three logged 200-person villages together (starts at 10x)"
         echo "  denseworld - Watch one logged 1,000-person village at 10x"
+        echo "  battleworld - Small secure village for combat testing (select hero, press C, right-click a target)"
         echo "  realworld - Watch a logged 32-villager stress village on big_world"
         echo "  multi   - Start server + 2 clients for multiplayer testing"
         echo "  windows - Build & run Windows client with GPU (for WSL2)"

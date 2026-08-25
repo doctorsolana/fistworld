@@ -308,7 +308,12 @@ pub fn spawn_hero(
             // Opt into region interest BEFORE the visibility pass runs.
             shared::region::RegionCoord::from_world_pos(grounded),
             PlayerPosition(grounded),
-            CharacterMotion::STATIONARY,
+            // Activity is part of the standard character contract: systems
+            // whose queries demand it (combat, animation-facing writes) must
+            // match a hero however it was created - fresh spawn, profile
+            // restore, dev spawn. Only the opening voyage overwrites this
+            // (with Sitting) after the fact.
+            (CharacterMotion::STATIONARY, CharacterActivity::default()),
             PlayerRotation(rotation),
             Replicate::to_clients(NetworkTarget::All),
         ))
@@ -495,7 +500,13 @@ pub fn handle_unit_move_orders(
                             .remove::<NavigationRouteFailed>()
                             .insert(CharacterActivity::Idle);
                     }
-                    commands.entity(*unit).insert(MoveTarget(*point));
+                    // A fresh destination is also a stand-down: without this
+                    // the unit would resume its old attack after arriving.
+                    commands
+                        .entity(*unit)
+                        .insert(MoveTarget(*point))
+                        .remove::<crate::player::combat::AttackOrder>()
+                        .remove::<crate::player::combat::MeleeCooldown>();
                     continue;
                 }
 

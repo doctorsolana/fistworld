@@ -954,7 +954,7 @@ pub(super) fn handle_company_site_buttons(
                 .buildings
                 .iter()
                 .position(|candidate| candidate.id == Some(*building))
-                .map(|index| (place.name.clone(), index))
+                .map(|index| (place.id, index))
         }) else {
             continue;
         };
@@ -980,10 +980,10 @@ pub(super) fn handle_company_person_buttons(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        let Some(record) = people.records.iter().find(|record| record.id == *person) else {
+        if people.records.iter().all(|record| record.id != *person) {
             continue;
-        };
-        selected.0 = Some(record.name.clone());
+        }
+        selected.0 = Some(*person);
         *tab = EncyclopediaTab::People;
     }
 }

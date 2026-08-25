@@ -1093,29 +1093,33 @@ fn handle_compact_actions(
         let Some(entity) = selection.primary() else {
             continue;
         };
-        let (place_name, entry) = if let Ok((_, settlement, _)) = settlements.get(entity) {
+        let (place_id, entry) = if let Ok((_, _, id)) = settlements.get(entity) {
             (
-                settlement.name.clone(),
+                *id,
                 crate::ui::encyclopedia::places::SelectedPlaceEntry::Hall,
             )
         } else if let Ok((building, position, _)) = buildings.get(entity) {
-            let entry = places
-                .find(&building.settlement)
-                .and_then(|place| {
-                    place
-                        .buildings
-                        .iter()
-                        .position(|record| {
-                            record.kind == building.kind
-                                && record.position.distance_squared(position.0) < 0.01
-                        })
-                        .map(crate::ui::encyclopedia::places::SelectedPlaceEntry::Building)
+            // Buildings link their settlement BY NAME in the data model; the
+            // registry resolves that to a durable id at this one boundary.
+            let Some(place) = places.find(&building.settlement) else {
+                continue;
+            };
+            let entry = place
+                .buildings
+                .iter()
+                .position(|record| {
+                    record.kind == building.kind
+                        && record.position.distance_squared(position.0) < 0.01
                 })
+                .map(crate::ui::encyclopedia::places::SelectedPlaceEntry::Building)
                 .unwrap_or_default();
-            (building.settlement.clone(), entry)
+            (place.id, entry)
         } else if let Ok((site, _)) = sites.get(entity) {
+            let Some(place) = places.find(&site.settlement) else {
+                continue;
+            };
             (
-                site.settlement.clone(),
+                place.id,
                 crate::ui::encyclopedia::places::SelectedPlaceEntry::Worksite(entity),
             )
         } else {
@@ -1123,7 +1127,7 @@ fn handle_compact_actions(
         };
         market_target.0 = None;
         property_target.0 = None;
-        selected_place.0 = Some(place_name);
+        selected_place.0 = Some(place_id);
         *selected_entry = entry;
         *tab = crate::ui::encyclopedia::EncyclopediaTab::Places;
         encyclopedia_open.0 = true;
@@ -1149,14 +1153,18 @@ fn handle_compact_actions(
             let Ok((_, settlement, _)) = settlements.get(market) else {
                 continue;
             };
+            let Ok((_, _, market_place_id)) = settlements.get(market) else {
+                continue;
+            };
             property_target.0 = None;
-            selected_place.0 = Some(settlement.name.clone());
+            selected_place.0 = Some(*market_place_id);
             *selected_entry = crate::ui::encyclopedia::places::SelectedPlaceEntry::Overview;
             *tab = crate::ui::encyclopedia::EncyclopediaTab::Places;
             encyclopedia_open.0 = true;
             market_target.0 = Some(crate::ui::market::MarketPage {
                 settlement: market,
                 place: settlement.name.clone(),
+                place_id: *market_place_id,
             });
         }
     }

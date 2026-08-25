@@ -83,6 +83,12 @@ impl MortalityLedger {
     }
 }
 
+/// Stamped by whatever landed a killing blow, and read exactly once by
+/// [`process_character_deaths`] so the mortality ledger records the honest
+/// cause instead of inferring it from hunger.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct PendingDeathCause(pub DeathCause);
+
 /// Backfill authored characters and old tests as well as normal spawn paths.
 /// Every character receives both vitals; only people whose Nutrition records a
 /// missed meal take starvation damage.
@@ -319,7 +325,7 @@ pub fn process_character_deaths(
             Option<&shared::components::CivicEmployment>,
             Option<&Wallet>,
             Option<&GoodsInventory>,
-            Option<&Hero>,
+            (Option<&Hero>, Option<&PendingDeathCause>),
         ),
         Changed<Health>,
     >,
@@ -391,7 +397,7 @@ pub fn process_character_deaths(
                 civic_job,
                 wallet,
                 inventory,
-                _,
+                (_, pending_cause),
             )| {
                 let mut goods = [0; Good::COUNT];
                 if let Some(inventory) = inventory {
@@ -416,11 +422,16 @@ pub fn process_character_deaths(
                         .get(entity)
                         .map_or_else(|_| Vec::new(), company_permit_escrows),
                     goods,
-                    cause: if nutrition.is_some_and(|nutrition| nutrition.is_hungry()) {
-                        DeathCause::Starvation
-                    } else {
-                        DeathCause::Unknown
-                    },
+                    cause: pending_cause.map_or_else(
+                        || {
+                            if nutrition.is_some_and(|nutrition| nutrition.is_hungry()) {
+                                DeathCause::Starvation
+                            } else {
+                                DeathCause::Unknown
+                            }
+                        },
+                        |pending| pending.0,
+                    ),
                 }
             },
         )

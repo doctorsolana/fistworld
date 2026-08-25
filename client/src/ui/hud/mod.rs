@@ -64,8 +64,11 @@ impl Plugin for HudPlugin {
                 state_sync::sync_found_village_button,
                 actions::watch_immigrant_boat.after(crate::camera_rts::update_commander_camera),
                 tick_god_notice,
-                state_sync::sync_selection_plate,
-                state_sync::sync_selection_box,
+                // AFTER the gesture pipeline, or these draw last frame's
+                // box/selection on whatever frames the scheduler reorders -
+                // which the hand feels as intermittent lag.
+                state_sync::sync_selection_plate.after(crate::selection::SelectionGestureSet),
+                state_sync::sync_selection_box.after(crate::selection::SelectionGestureSet),
             )
                 .run_if(in_state(GameState::Playing)),
         );

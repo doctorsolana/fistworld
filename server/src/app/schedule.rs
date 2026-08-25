@@ -99,7 +99,13 @@ fn configure_server_fixed_schedule(app: &mut App) {
             world::village::history::handle_company_history_requests,
             net::input::handle_client_input_messages,
             player::commander::sync_commander_views,
-            player::hero::handle_unit_move_orders,
+            (
+                player::hero::handle_unit_move_orders,
+                player::combat::handle_unit_attack_orders,
+                player::army::handle_army_orders,
+                player::army::handle_formation_move_orders,
+            )
+                .chain(),
             player::permits::handle_hero_construction_orders,
             player::companies::handle_hero_company_founding,
             player::business::handle_hero_business_orders,

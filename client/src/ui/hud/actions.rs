@@ -7,7 +7,7 @@ use super::*;
 /// the scrollable People page.
 pub(super) fn handle_selection_expand_button(
     selection: Res<crate::selection::Selection>,
-    characters: Query<&shared::components::CharacterName>,
+    characters: Query<&shared::components::PersonId>,
     mut open: ResMut<crate::ui::encyclopedia::EncyclopediaOpen>,
     mut tab: ResMut<crate::ui::encyclopedia::EncyclopediaTab>,
     mut selected: ResMut<crate::ui::encyclopedia::SelectedPerson>,
@@ -17,13 +17,15 @@ pub(super) fn handle_selection_expand_button(
         if *interaction != Interaction::Pressed || selection.len() != 1 {
             continue;
         }
-        let Some(name) = selection
+        // By durable id, never by name: names collide, ids do not.
+        let Some(person) = selection
             .primary()
             .and_then(|entity| characters.get(entity).ok())
+            .filter(|person| person.is_assigned())
         else {
             continue;
         };
-        selected.0 = Some(name.0.clone());
+        selected.0 = Some(*person);
         *tab = crate::ui::encyclopedia::EncyclopediaTab::People;
         open.0 = true;
     }

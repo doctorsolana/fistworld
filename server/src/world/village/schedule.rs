@@ -313,7 +313,11 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             world::village_roads::plan_villager_travel_routes,
             player::hero::rebuild_tactical_crowd_grid,
             player::hero::step_units,
+            player::combat::acquire_targets,
+            player::combat::pursue_attack_orders,
+            player::combat::separate_melee_bodies,
             player::hero::settle_villagers_without_targets,
+            player::army::maintain_battalions,
         )
             .chain()
             .in_set(VillageSimulationSet::Navigation),

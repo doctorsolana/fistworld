@@ -188,6 +188,87 @@ pub struct UnitMoveOrder {
     pub units: Vec<(Entity, Vec3)>,
 }
 
+/// Client -> server: the sender's selected units attack one character.
+///
+/// Command authority is identical to [`UnitMoveOrder`]: the server
+/// re-validates that every attacker is commanded by the sender's account, and
+/// that the target is a live character the sender does NOT command (no
+/// friendly fire from a mis-click in a crowd).
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct UnitAttackOrder {
+    pub units: Vec<Entity>,
+    pub target: Entity,
+}
+
+impl bevy::ecs::entity::MapEntities for UnitAttackOrder {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        for unit in &mut self.units {
+            *unit = mapper.get_mapped(*unit);
+        }
+        self.target = mapper.get_mapped(self.target);
+    }
+}
+
+/// Client -> server: manage the sender's battalions. The server owns every
+/// consequence - it validates that each referenced soldier and battalion is
+/// commanded by the sender's account, mints battalion identity, and assigns
+/// names; the client only ever asks.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub enum ArmyOrder {
+    /// Form a new battalion from these soldiers. Soldiers already serving
+    /// elsewhere transfer. The server names it by ordinal.
+    Muster { members: Vec<Entity> },
+    /// Enlist soldiers into an existing battalion.
+    Assign {
+        battalion: Entity,
+        members: Vec<Entity>,
+    },
+    /// Release soldiers from whatever battalion they serve in.
+    Dismiss { members: Vec<Entity> },
+    /// Dissolve a battalion; its soldiers become unassigned.
+    Disband { battalion: Entity },
+}
+
+impl bevy::ecs::entity::MapEntities for ArmyOrder {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        match self {
+            ArmyOrder::Muster { members } | ArmyOrder::Dismiss { members } => {
+                for member in members.iter_mut() {
+                    *member = mapper.get_mapped(*member);
+                }
+            }
+            ArmyOrder::Assign { battalion, members } => {
+                *battalion = mapper.get_mapped(*battalion);
+                for member in members.iter_mut() {
+                    *member = mapper.get_mapped(*member);
+                }
+            }
+            ArmyOrder::Disband { battalion } => {
+                *battalion = mapper.get_mapped(*battalion);
+            }
+        }
+    }
+}
+
+/// Client -> server: move these soldiers to a point IN FORMATION - the server
+/// computes rank-and-file arrival slots (strongest rank forward, facing the
+/// approach) instead of the loose spread of [`UnitMoveOrder`]. Formations are
+/// a server concept on purpose: if the client invented the slots, authority
+/// and intent would disagree the moment a soldier was refused.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct FormationMoveOrder {
+    pub units: Vec<Entity>,
+    pub target: Vec3,
+}
+
+impl bevy::ecs::entity::MapEntities for FormationMoveOrder {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        for unit in &mut self.units {
+            *unit = mapper.get_mapped(*unit);
+        }
+    }
+}
+
 /// Client -> server: assign the sender's live hero to their own unfinished
 /// building. The worksite remains a real world entity so entity mapping and
 /// server-side ownership checks apply exactly as they do to unit movement.
@@ -978,6 +1059,89 @@ mod tests {
         );
         // Targets must be untouched: mapping addresses, not destinations.
         assert_eq!(msg.units[1].1, Vec3::ONE);
+    }
+
+    #[test]
+    fn every_army_order_variant_maps_every_entity() {
+        use bevy::ecs::entity::MapEntities;
+
+        struct SeqMapper {
+            next: u32,
+        }
+        impl bevy::ecs::entity::EntityMapper for SeqMapper {
+            fn get_mapped(&mut self, _entity: Entity) -> Entity {
+                self.next += 1;
+                Entity::from_raw_u32(self.next).unwrap()
+            }
+            fn set_mapped(&mut self, _source: Entity, _target: Entity) {}
+        }
+        let raw = |n: u32| Entity::from_raw_u32(n).unwrap();
+
+        // Each variant must remap EVERY entity it carries; a missed field
+        // silently addresses a random entity on the other peer.
+        let mut orders = [
+            (
+                ArmyOrder::Muster {
+                    members: vec![raw(50), raw(60)],
+                },
+                2,
+            ),
+            (
+                ArmyOrder::Assign {
+                    battalion: raw(50),
+                    members: vec![raw(60), raw(70)],
+                },
+                3,
+            ),
+            (
+                ArmyOrder::Dismiss {
+                    members: vec![raw(50)],
+                },
+                1,
+            ),
+            (ArmyOrder::Disband { battalion: raw(50) }, 1),
+        ];
+        for (order, expected_mapped) in orders.iter_mut() {
+            let mut mapper = SeqMapper { next: 0 };
+            order.map_entities(&mut mapper);
+            assert_eq!(
+                mapper.next as usize, *expected_mapped,
+                "an entity field of {order:?} escaped mapping"
+            );
+        }
+    }
+
+    #[test]
+    fn formation_move_order_maps_units_but_not_the_target_point() {
+        use bevy::ecs::entity::MapEntities;
+
+        struct SeqMapper {
+            next: u32,
+        }
+        impl bevy::ecs::entity::EntityMapper for SeqMapper {
+            fn get_mapped(&mut self, _entity: Entity) -> Entity {
+                self.next += 1;
+                Entity::from_raw_u32(self.next).unwrap()
+            }
+            fn set_mapped(&mut self, _source: Entity, _target: Entity) {}
+        }
+
+        let mut msg = FormationMoveOrder {
+            units: vec![
+                Entity::from_raw_u32(50).unwrap(),
+                Entity::from_raw_u32(60).unwrap(),
+            ],
+            target: Vec3::new(1.0, 2.0, 3.0),
+        };
+        msg.map_entities(&mut SeqMapper { next: 0 });
+        assert_eq!(
+            msg.units,
+            vec![
+                Entity::from_raw_u32(1).unwrap(),
+                Entity::from_raw_u32(2).unwrap(),
+            ]
+        );
+        assert_eq!(msg.target, Vec3::new(1.0, 2.0, 3.0));
     }
 
     #[test]

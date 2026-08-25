@@ -131,14 +131,24 @@ impl KnownPlaces {
         out
     }
 
+    /// Name lookup exists ONLY for dev/capture selectors typed by a human;
+    /// gameplay code selects by durable id, because generated names collide.
     pub fn find(&self, name: &str) -> Option<&PlaceRecord> {
         self.records.iter().find(|record| record.name == name)
     }
+
+    pub fn find_by_id(&self, id: shared::components::SettlementId) -> Option<&PlaceRecord> {
+        if !id.is_assigned() {
+            return None;
+        }
+        self.records.iter().find(|record| record.id == id)
+    }
 }
 
-/// Selected row, held by NAME so it survives list rebuilds.
+/// Selected row, held by durable id so it survives list rebuilds - and so
+/// two settlements that rolled the same generated name stay two places.
 #[derive(Resource, Default)]
-pub struct SelectedPlace(pub Option<String>);
+pub struct SelectedPlace(pub Option<shared::components::SettlementId>);
 
 fn economy_from_summary(summary: &shared::components::SettlementSummary) -> SettlementEconomy {
     let mut economy = SettlementEconomy::default();
@@ -195,9 +205,15 @@ pub(super) fn learn_settlement_summaries(
     mut places: ResMut<KnownPlaces>,
 ) {
     for (summary, position) in summaries.iter() {
-        let existing = places.records.iter().position(|record| {
-            record.id == summary.id || (!record.id.is_assigned() && record.name == summary.name)
-        });
+        // Id-only, and id-required: records are never created or merged by
+        // name, because generated names collide.
+        if !summary.id.is_assigned() {
+            continue;
+        }
+        let existing = places
+            .records
+            .iter()
+            .position(|record| record.id == summary.id);
         let counts = [
             summary.houses,
             summary.farmsteads,
@@ -280,11 +296,11 @@ pub struct PlacesListContent;
 pub struct PlacesListViewport;
 
 #[derive(Component, Clone)]
-pub struct PlaceRow(pub String);
+pub struct PlaceRow(pub shared::components::SettlementId);
 
 #[derive(Component, Clone)]
 pub struct PlaceBuildingRow {
-    pub place: String,
+    pub place: shared::components::SettlementId,
     pub entry: SelectedPlaceEntry,
 }
 
@@ -534,15 +550,14 @@ pub(super) fn learn_settlements(
                 .iter()
                 .filter(|pier| pier.settlement == settlement.name)
                 .count() as u32;
-            let record = places.records.iter().find(|record| {
-                settlement_id.map_or_else(
-                    || record.name == settlement.name,
-                    |id| {
-                        record.id == *id
-                            || (!record.id.is_assigned() && record.name == settlement.name)
-                    },
-                )
-            });
+            let Some(settlement_id) = settlement_id.copied().filter(|id| id.is_assigned()) else {
+                // Not yet identified; nothing to compare against.
+                return false;
+            };
+            let record = places
+                .records
+                .iter()
+                .find(|record| record.id == settlement_id);
             match record {
                 Some(record) => {
                     record.tier != settlement.tier
@@ -605,18 +620,15 @@ pub(super) fn learn_settlements(
             .count() as u32;
         let (inventory_used, inventory_capacity) = inventory_bulk(inventory);
         let inventory = inventory_contents(inventory);
-        match places.records.iter_mut().find(|record| {
-            settlement_id.map_or_else(
-                || record.name == settlement.name,
-                |id| {
-                    record.id == *id || (!record.id.is_assigned() && record.name == settlement.name)
-                },
-            )
-        }) {
+        let Some(settlement_id) = settlement_id.copied().filter(|id| id.is_assigned()) else {
+            continue;
+        };
+        match places
+            .records
+            .iter_mut()
+            .find(|record| record.id == settlement_id)
+        {
             Some(record) => {
-                if let Some(id) = settlement_id {
-                    record.id = *id;
-                }
                 record.tier = settlement.tier;
                 record.hall_level = hall_level;
                 record.position = position.0;
@@ -638,7 +650,7 @@ pub(super) fn learn_settlements(
                 record.permits = permits;
             }
             None => places.records.push(PlaceRecord {
-                id: settlement_id.copied().unwrap_or_default(),
+                id: settlement_id,
                 name: settlement.name.clone(),
                 tier: settlement.tier,
                 hall_level,
@@ -782,7 +794,7 @@ pub(super) fn rebuild_place_list(
         return;
     }
     let ordered = places.ordered();
-    let signature = place_rows_signature(&ordered, selected.0.as_deref());
+    let signature = place_rows_signature(&ordered, selected.0);
     if !fresh && *last == Some(signature) {
         return;
     }
@@ -797,13 +809,13 @@ pub(super) fn rebuild_place_list(
     }
 
     // Drop a selection that no longer exists.
-    if let Some(name) = selected.0.clone() {
-        if !ordered.iter().any(|record| record.name == name) {
+    if let Some(id) = selected.0 {
+        if !ordered.iter().any(|record| record.id == id) {
             selected.0 = None;
             *selected_entry = SelectedPlaceEntry::Overview;
         } else if let SelectedPlaceEntry::Building(index) = *selected_entry {
             if places
-                .find(&name)
+                .find_by_id(id)
                 .is_none_or(|record| index >= record.buildings.len())
             {
                 *selected_entry = SelectedPlaceEntry::Overview;
@@ -826,7 +838,7 @@ pub(super) fn rebuild_place_list(
             list.spawn((
                 // Carries the row marker so the rebuild's despawn pass cleans it
                 // up; an unmarked empty state survives under a populated list.
-                PlaceRow(String::new()),
+                PlaceRow(shared::components::SettlementId::default()),
                 Text::new("No places known yet"),
                 TextFont {
                     font_size: FontSize::Px(15.0),
@@ -841,12 +853,12 @@ pub(super) fn rebuild_place_list(
             return;
         }
         for record in &ordered {
-            let expanded = selected.0.as_deref() == Some(record.name.as_str());
+            let expanded = selected.0 == Some(record.id);
             spawn_place_row(list, record, expanded);
             if expanded {
                 spawn_place_building_row(
                     list,
-                    &record.name,
+                    record.id,
                     SelectedPlaceEntry::Hall,
                     record.hall_level.label(),
                     "COMMON STORE",
@@ -856,7 +868,7 @@ pub(super) fn rebuild_place_list(
                     let summary = building_tree_summary(building);
                     spawn_place_building_row(
                         list,
-                        &record.name,
+                        record.id,
                         SelectedPlaceEntry::Building(index),
                         &label,
                         &summary,
@@ -869,7 +881,10 @@ pub(super) fn rebuild_place_list(
 
 /// Hash of exactly what the place rows render: every row's name, tier and
 /// building count, plus the expanded place's building labels and summaries.
-fn place_rows_signature(ordered: &[&PlaceRecord], selected: Option<&str>) -> u64 {
+fn place_rows_signature(
+    ordered: &[&PlaceRecord],
+    selected: Option<shared::components::SettlementId>,
+) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     selected.hash(&mut hasher);
@@ -878,7 +893,7 @@ fn place_rows_signature(ordered: &[&PlaceRecord], selected: Option<&str>) -> u64
         record.name.hash(&mut hasher);
         record.tier.label().hash(&mut hasher);
         record.buildings.len().hash(&mut hasher);
-        if selected == Some(record.name.as_str()) {
+        if selected == Some(record.id) {
             record.hall_level.label().hash(&mut hasher);
             for (index, building) in record.buildings.iter().enumerate() {
                 building_label(record, index).hash(&mut hasher);
@@ -892,7 +907,7 @@ fn place_rows_signature(ordered: &[&PlaceRecord], selected: Option<&str>) -> u64
 fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, expanded: bool) {
     list.spawn((
         Button,
-        PlaceRow(record.name.clone()),
+        PlaceRow(record.id),
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -947,17 +962,14 @@ fn spawn_place_row(list: &mut ChildSpawnerCommands<'_>, record: &PlaceRecord, ex
 
 fn spawn_place_building_row(
     list: &mut ChildSpawnerCommands<'_>,
-    place: &str,
+    place: shared::components::SettlementId,
     entry: SelectedPlaceEntry,
     label: &str,
     summary: &str,
 ) {
     list.spawn((
         Button,
-        PlaceBuildingRow {
-            place: place.to_string(),
-            entry,
-        },
+        PlaceBuildingRow { place, entry },
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -1044,18 +1056,18 @@ pub(super) fn handle_place_rows(
     if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
-    for (interaction, PlaceRow(name)) in rows.iter() {
+    for (interaction, PlaceRow(id)) in rows.iter() {
         // The empty-state row names nowhere; clicking it must not select it.
-        if *interaction == Interaction::Pressed && !name.is_empty() {
+        if *interaction == Interaction::Pressed && id.is_assigned() {
             return_to.0 = None;
-            selected.0 = Some(name.clone());
+            selected.0 = Some(*id);
             *selected_entry = SelectedPlaceEntry::Overview;
         }
     }
     for (interaction, row) in buildings.iter() {
         if *interaction == Interaction::Pressed {
             return_to.0 = None;
-            selected.0 = Some(row.place.clone());
+            selected.0 = Some(row.place);
             *selected_entry = row.entry;
         }
     }
@@ -1119,13 +1131,13 @@ pub(super) fn style_place_rows(
     mut rows: Query<(&PlaceRow, &mut UiButtonStyle), Without<PlaceBuildingRow>>,
     mut buildings: Query<(&PlaceBuildingRow, &mut UiButtonStyle), Without<PlaceRow>>,
 ) {
-    for (PlaceRow(name), mut style) in rows.iter_mut() {
-        style.selected = selected.0.as_deref() == Some(name.as_str())
+    for (PlaceRow(id), mut style) in rows.iter_mut() {
+        style.selected = id.is_assigned()
+            && selected.0 == Some(*id)
             && *selected_entry == SelectedPlaceEntry::Overview;
     }
     for (row, mut style) in buildings.iter_mut() {
-        style.selected =
-            selected.0.as_deref() == Some(row.place.as_str()) && *selected_entry == row.entry;
+        style.selected = selected.0 == Some(row.place) && *selected_entry == row.entry;
     }
 }
 
@@ -1221,7 +1233,7 @@ pub(super) fn sync_place_detail(
         ),
     >,
 ) {
-    let record = selected.0.as_deref().and_then(|name| places.find(name));
+    let record = selected.0.and_then(|id| places.find_by_id(id));
 
     let show = record.is_some();
     for mut node in card.iter_mut() {
@@ -1397,8 +1409,7 @@ pub(super) fn sync_place_business_history_action(
 ) {
     let target = selected
         .0
-        .as_deref()
-        .and_then(|name| places.find(name))
+        .and_then(|id| places.find_by_id(id))
         .and_then(|place| {
             let SelectedPlaceEntry::Building(index) = *selected_entry else {
                 return None;
@@ -2941,7 +2952,8 @@ mod tests {
         world.insert_resource(KnownPlaces {
             records: vec![place],
         });
-        world.insert_resource(SelectedPlace(Some("Brackwater".into())));
+        let place_id = world.resource::<KnownPlaces>().records[0].id;
+        world.insert_resource(SelectedPlace(Some(place_id)));
         world.insert_resource(SelectedPlaceEntry::Building(0));
         world.spawn((
             Settlement {

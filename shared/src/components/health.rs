@@ -12,6 +12,8 @@ pub const STARVATION_DAMAGE_PER_DAY: f32 = 10.0;
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeathCause {
     Starvation,
+    /// Struck down by another character's weapon.
+    Combat,
     Unknown,
 }
 
@@ -19,6 +21,7 @@ impl DeathCause {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Starvation => "Starvation",
+            Self::Combat => "Killed in battle",
             Self::Unknown => "Unknown",
         }
     }

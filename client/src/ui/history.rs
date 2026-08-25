@@ -223,7 +223,7 @@ fn update_click_guard(
 fn handle_open_buttons(
     mouse: Res<ButtonInput<MouseButton>>,
     selected_place: Res<crate::ui::encyclopedia::places::SelectedPlace>,
-    settlements: Query<(Entity, &Settlement)>,
+    settlements: Query<(Entity, &Settlement, &shared::components::SettlementId)>,
     mut target: ResMut<HistoryPanelTarget>,
     mut cache: ResMut<SettlementHistoryCache>,
     mut market_target: ResMut<crate::ui::market::MarketPageTarget>,
@@ -300,12 +300,10 @@ fn handle_open_buttons(
         if !clicked || *interaction != Interaction::Pressed {
             continue;
         }
-        let Some(place) = selected_place.0.as_deref() else {
+        let Some(place_id) = selected_place.0 else {
             continue;
         };
-        let Some((entity, settlement)) = settlements
-            .iter()
-            .find(|(_, settlement)| settlement.name == place)
+        let Some((entity, settlement, _)) = settlements.iter().find(|(_, _, id)| **id == place_id)
         else {
             continue;
         };

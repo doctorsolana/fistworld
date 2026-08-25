@@ -19,6 +19,7 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.init_resource::<crate::player::hero::TacticalCrowdGrid>();
     app.init_resource::<crate::player::boat::VesselNavigationQueue>();
     app.init_resource::<crate::player::permits::PermitIdAllocator>();
+    app.init_resource::<crate::player::army::BattalionLedger>();
     app.init_resource::<crate::world::dev::VillagerSeed>();
     app.init_resource::<crate::world::immigration::NaturalImmigrationDirector>();
     app.init_resource::<net::input::ClientInputIngressStats>();

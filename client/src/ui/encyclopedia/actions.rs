@@ -103,11 +103,13 @@ pub(super) fn handle_person_rows(
     if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
-    for (interaction, PersonRow(name)) in rows.iter() {
+    for (interaction, row) in rows.iter() {
         // The empty-state row carries the marker so it gets cleaned up, but it
-        // names nobody -- clicking it must not select a person who is not there.
-        if *interaction == Interaction::Pressed && !name.is_empty() {
-            selected.0 = Some(name.clone());
+        // names nobody -- clicking it must not select a person who is not
+        // there. An unassigned id is also unclickable: it cannot be told
+        // apart from a same-named stranger until the id replicates.
+        if *interaction == Interaction::Pressed && row.id.is_assigned() {
+            selected.0 = Some(row.id);
         }
     }
 }
@@ -162,17 +164,14 @@ pub(super) fn handle_banner_buttons(
     if !guard.0 || !god.0 || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
-    let Some(name) = selected.0.clone() else {
+    let Some(id) = selected.0 else {
         return;
     };
-    let Some(record) = people.find(&name) else {
+    let Some(record) = people.find_by_id(id) else {
         return;
     };
     for (interaction, BannerButton(step)) in buttons.iter() {
         if *interaction != Interaction::Pressed {
-            continue;
-        }
-        if !record.id.is_assigned() {
             continue;
         }
         let next = record.affiliation.cycled(*step);
@@ -213,15 +212,12 @@ pub(super) fn handle_retinue_button(
     {
         return;
     }
-    let Some(name) = selected.0.clone() else {
+    let Some(id) = selected.0 else {
         return;
     };
-    let Some(record) = people.find(&name) else {
+    let Some(record) = people.find_by_id(id) else {
         return;
     };
-    if !record.id.is_assigned() {
-        return;
-    }
     let my_account = account
         .as_ref()
         .map(|input| input.name.trim().to_lowercase())

@@ -24,14 +24,15 @@ const LOCATE_ZOOM: f32 = 82.0;
 pub(super) struct RetinueListContent;
 
 #[derive(Component)]
-pub(super) struct RetinueRow(pub String);
+pub(super) struct RetinueRow(pub shared::components::PersonId);
 
 #[derive(Component)]
 pub(super) struct RetinueCountText;
 
-/// The live status line under a member's name, keyed by their roster name.
+/// The live status line under a member's name, keyed by durable id - never
+/// by name, which generated worlds are free to duplicate.
 #[derive(Component)]
-pub(super) struct RetinueStatusText(pub String);
+pub(super) struct RetinueStatusText(pub shared::components::PersonId);
 
 #[derive(Component, Clone)]
 pub(super) struct LocateButton {
@@ -61,7 +62,7 @@ pub(super) fn clan_rows<'a>(people: &'a KnownPeople, account: &str) -> Vec<&'a P
             .cmp(&a.is_self)
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
-    rows.dedup_by(|a, b| a.name == b.name);
+    rows.dedup_by(|a, b| a.id == b.id);
     rows
 }
 
@@ -166,7 +167,7 @@ pub(super) fn spawn_retinue_tab(body: &mut ChildSpawnerCommands<'_>) {
 
 fn spawn_retinue_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) {
     list.spawn((
-        RetinueRow(record.name.clone()),
+        RetinueRow(record.id),
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -215,7 +216,7 @@ fn spawn_retinue_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord)
                 TextColor(INK),
             ));
             copy.spawn((
-                RetinueStatusText(record.name.clone()),
+                RetinueStatusText(record.id),
                 Text::new(retinue_status_line(record)),
                 TextFont {
                     font_size: FontSize::Px(12.5),
@@ -299,7 +300,7 @@ pub(super) fn rebuild_retinue_list(
             // The empty state carries the row marker so the next rebuild
             // clears it (same rule as the people list).
             list.spawn((
-                RetinueRow(String::new()),
+                RetinueRow(shared::components::PersonId::default()),
                 Text::new("Your clan is just you for now. Sworn companions will gather here."),
                 TextFont {
                     font_size: FontSize::Px(13.5),
@@ -329,7 +330,7 @@ pub(super) fn bind_retinue_status(
         return;
     }
     for (marker, mut text) in texts.iter_mut() {
-        let Some(record) = people.find(&marker.0) else {
+        let Some(record) = people.find_by_id(marker.0) else {
             continue;
         };
         let next = retinue_status_line(record);

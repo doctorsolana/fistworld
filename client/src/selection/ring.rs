@@ -69,7 +69,7 @@ const CORE_OUTER: f32 = 0.76;
 /// placed above the maximum -- see [`ground_under_ring`]. 12cm on top of that is
 /// enough to clear the remaining bilinear-versus-triangulated mismatch between
 /// `get_height` and the rendered chunk, while still reading as lying on the soil.
-const RING_LIFT: f32 = 0.12;
+pub(super) const RING_LIFT: f32 = 0.12;
 
 /// Samples taken around the circumference to find the ground under the ring.
 ///
@@ -78,7 +78,7 @@ const RING_LIFT: f32 = 0.12;
 const GROUND_SAMPLES: usize = 8;
 
 /// Highest ground under the ring's footprint, so no arc of it sinks.
-fn ground_under_ring(terrain: &WorldTerrain, centre: Vec3, radius: f32) -> f32 {
+pub(super) fn ground_under_ring(terrain: &WorldTerrain, centre: Vec3, radius: f32) -> f32 {
     let mut highest = terrain.get_height(centre.x, centre.z);
     for i in 0..GROUND_SAMPLES {
         let angle = std::f32::consts::TAU * i as f32 / GROUND_SAMPLES as f32;
@@ -101,12 +101,12 @@ fn ground_under_ring(terrain: &WorldTerrain, centre: Vec3, radius: f32) -> f32 {
 /// So the ring is a close-range affordance, and past `RING_HIDE_ZOOM` the HUD's
 /// selection plate is what tells you what is selected. That is the honest answer
 /// to "the ring is now smaller than a pixel".
-const RING_SCALE_FROM: f32 = 120.0;
-const RING_SCALE_MAX: f32 = 4.0;
-const RING_HIDE_ZOOM: f32 = 520.0;
+pub(super) const RING_SCALE_FROM: f32 = 120.0;
+pub(super) const RING_SCALE_MAX: f32 = 4.0;
+pub(super) const RING_HIDE_ZOOM: f32 = 520.0;
 
 /// Shared material setup for both bands.
-fn ring_material(color: Color) -> StandardMaterial {
+pub(super) fn ring_material(color: Color) -> StandardMaterial {
     StandardMaterial {
         base_color: color,
         // Reads the same at dawn, at noon and under a storm. A lit ring goes
@@ -139,11 +139,17 @@ pub(super) fn sync_selection_ring(
     terrain: Option<Res<WorldTerrain>>,
     camera: Query<&crate::camera_rts::CommanderCamera>,
     account: Option<Res<crate::ui::name_entry::PlayerNameInput>>,
-    positions: Query<(
-        &PlayerPosition,
-        Option<&GlobalTransform>,
-        Option<&shared::components::CommandedBy>,
-    )>,
+    // The SMOOTHED root Transform written by sync_hero_transforms THIS frame,
+    // not GlobalTransform - that is last frame's propagation, and a ring one
+    // frame behind a gliding body reads as jitter.
+    positions: Query<
+        (
+            &PlayerPosition,
+            Option<&Transform>,
+            Option<&shared::components::CommandedBy>,
+        ),
+        Without<SelectionRing>,
+    >,
     mut rings: Query<(Entity, &mut Transform, &mut Visibility, &Children), With<SelectionRing>>,
     mut cores: Query<(&mut MeshMaterial3d<StandardMaterial>, &mut RingTone)>,
 ) {
@@ -192,7 +198,7 @@ pub(super) fn sync_selection_ring(
                 // steps behind a character that glides -- which is the lag you
                 // see. The body and its ring must be driven by the same number.
                 let mut point = visual
-                    .map(|visual| visual.translation())
+                    .map(|visual| visual.translation)
                     .unwrap_or(position.0);
                 // Sit on the GROUND, not on the entity's replicated Y: feet are
                 // terrain-snapped server-side but the client can be a frame

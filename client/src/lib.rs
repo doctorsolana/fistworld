@@ -5,10 +5,12 @@
 
 pub mod app_wiring;
 pub mod audio;
+pub mod battalion_bar;
 pub mod boat;
 pub mod camera_rts;
 pub mod capture;
 pub mod city;
+pub mod combat_mode;
 pub mod hero;
 pub mod input;
 pub mod perf_overlay;
@@ -17,6 +19,7 @@ pub mod props;
 pub mod render;
 pub mod selection;
 pub mod settlement;
+pub mod standard_flag;
 pub mod states;
 pub mod streaming;
 pub mod terrain;

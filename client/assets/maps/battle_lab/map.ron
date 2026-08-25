@@ -1,0 +1,43 @@
+(
+  // The battle testbed: a quarter of village_lab's area, sized for armies
+  // rather than economies. One coastline in a seed-random direction, the
+  // rest open meadow. The skirmish scenario stages its lines near the
+  // interior anchor; no settlement ever spawns here.
+  map_id: "battle_lab",
+  bounds: (
+    min: (-256.0, -256.0),
+    max: (256.0, 256.0),
+  ),
+  terrain: (
+    // Generated maps ignore this filename. Keeping it explicit makes the
+    // definition valid without shipping a large diagnostic heightmap.
+    heightmap: "height.png",
+    minimap: None,
+    water_level: Some(0.0),
+    height_min: -34.0,
+    height_max: 82.0,
+  ),
+  generated: Some((
+    style: Mainland,
+    seed: 7,
+    generator_version: 12,
+    scatter_vegetation: false,
+    half_extent: 256.0,
+  )),
+  player_spawn: Some((0.0, 8.0, 0.0)),
+  // A thin treeline on the flanks so the field reads as a place, without
+  // giving pathfinding anything meaningful to trip over mid-battle.
+  objects: [
+    (kind: "tree_02", position: (-120.0, 0.0, -90.0), rotation_degrees: 12.0, scale: 0.95),
+    (kind: "tree_08", position: (-132.0, 0.0, -64.0), rotation_degrees: 78.0, scale: 1.06),
+    (kind: "tree_01", position: (-126.0, 0.0, -38.0), rotation_degrees: 141.0, scale: 0.92),
+    (kind: "tree_09", position: (-138.0, 0.0, -12.0), rotation_degrees: 203.0, scale: 1.03),
+    (kind: "tree_02", position: (-128.0, 0.0, 16.0), rotation_degrees: 262.0, scale: 0.97),
+    (kind: "tree_01", position: (120.0, 0.0, -84.0), rotation_degrees: 33.0, scale: 1.04),
+    (kind: "tree_09", position: (132.0, 0.0, -58.0), rotation_degrees: 97.0, scale: 0.91),
+    (kind: "tree_08", position: (126.0, 0.0, -30.0), rotation_degrees: 158.0, scale: 1.08),
+    (kind: "tree_02", position: (136.0, 0.0, -4.0), rotation_degrees: 224.0, scale: 0.94),
+    (kind: "tree_01", position: (127.0, 0.0, 22.0), rotation_degrees: 289.0, scale: 1.01),
+  ],
+  blockers: [],
+)

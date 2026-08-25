@@ -210,6 +210,9 @@ pub enum CharacterActivity {
     /// Extracting Stone at an outdoor quarry face. Until dedicated pickaxe
     /// art exists, clients reuse the construction work motion.
     Mining,
+    /// Trading blows in melee. Until dedicated combat art exists, clients
+    /// reuse the most physical work motion available.
+    Fighting,
 }
 
 impl CharacterActivity {
@@ -223,6 +226,7 @@ impl CharacterActivity {
             Self::Sitting => "Taking a rest",
             Self::Indoors => "Indoors",
             Self::Mining => "Quarrying stone",
+            Self::Fighting => "Fighting",
         }
     }
 }

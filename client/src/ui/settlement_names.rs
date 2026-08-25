@@ -13,7 +13,9 @@ use std::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use bevy::ui::UiScale;
 
-use shared::components::{PlayerPosition, Settlement, SettlementSummary, SettlementTier};
+use shared::components::{
+    PlayerPosition, Settlement, SettlementId, SettlementSummary, SettlementTier,
+};
 
 use crate::camera_rts::{update_commander_camera, CommanderCamera};
 use crate::selection::pick::world_to_window;
@@ -56,7 +58,9 @@ fn load_name_font(mut commands: Commands, asset_server: Res<AssetServer>) {
 /// the anchor point is the text's middle without measuring the text.
 #[derive(Component)]
 struct SettlementNameAnchor {
-    key: String,
+    /// Durable id, never the name: two settlements may share a generated
+    /// name and must keep two labels.
+    key: SettlementId,
 }
 
 #[derive(Component)]
@@ -87,7 +91,7 @@ fn sync_settlement_names(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     cameras: Query<(&Camera, &Transform, &CommanderCamera), With<Camera3d>>,
     summaries: Query<(&SettlementSummary, &PlayerPosition)>,
-    halls: Query<(&Settlement, &PlayerPosition), Without<SettlementSummary>>,
+    halls: Query<(&Settlement, &SettlementId, &PlayerPosition), Without<SettlementSummary>>,
     mut anchors: Query<(Entity, &SettlementNameAnchor, &mut Node)>,
     mut labels: Query<
         (&ChildOf, &mut TextFont, &mut TextColor, &mut TextShadow),
@@ -102,32 +106,36 @@ fn sync_settlement_names(
 
     // The globally replicated directory first, then any region-scoped hall
     // the directory does not cover (offline captures stage bare halls).
-    // Both entities exist for one place in live play, so dedup by name.
-    let mut places: HashMap<String, (SettlementTier, Vec3)> = HashMap::new();
+    // Both entities describe one place and carry its durable id, so dedup by
+    // ID - never by name, which two settlements are free to share.
+    let mut places: HashMap<SettlementId, (String, SettlementTier, Vec3)> = HashMap::new();
     for (summary, position) in summaries.iter() {
+        if !summary.id.is_assigned() {
+            continue;
+        }
         places
-            .entry(summary.name.clone())
-            .or_insert((summary.tier, position.0));
+            .entry(summary.id)
+            .or_insert((summary.name.clone(), summary.tier, position.0));
     }
-    for (settlement, position) in halls.iter() {
+    for (settlement, id, position) in halls.iter() {
+        if !id.is_assigned() {
+            continue;
+        }
         places
-            .entry(settlement.name.clone())
-            .or_insert((settlement.tier, position.0));
+            .entry(*id)
+            .or_insert((settlement.name.clone(), settlement.tier, position.0));
     }
 
     // Reconcile the label set (rare: a settlement founded or learned).
-    let existing: HashSet<String> = anchors
-        .iter()
-        .map(|(_, anchor, _)| anchor.key.clone())
-        .collect();
-    for (name, (tier, _)) in &places {
-        if existing.contains(name) {
+    let existing: HashSet<SettlementId> = anchors.iter().map(|(_, anchor, _)| anchor.key).collect();
+    for (id, (name, tier, _)) in &places {
+        if existing.contains(id) {
             continue;
         }
         let font_handle = font.as_ref().map(|font| font.0.clone()).unwrap_or_default();
         commands
             .spawn((
-                SettlementNameAnchor { key: name.clone() },
+                SettlementNameAnchor { key: *id },
                 Pickable::IGNORE,
                 GlobalZIndex(1),
                 Node {
@@ -177,7 +185,7 @@ fn sync_settlement_names(
     let scale = ui_scale.0.max(f32::EPSILON);
     let mut anchor_alpha: HashMap<Entity, (f32, SettlementTier)> = HashMap::new();
     for (entity, anchor, mut node) in anchors.iter_mut() {
-        let Some((tier, position)) = places.get(&anchor.key) else {
+        let Some((_, tier, position)) = places.get(&anchor.key) else {
             continue;
         };
         let screen = (alpha > 0.0)

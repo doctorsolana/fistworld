@@ -70,10 +70,16 @@ pub(super) fn receive_character_roster(
                     shared::components::CharacterKind::Hero => PersonKind::Hero,
                     shared::components::CharacterKind::Villager => PersonKind::Villager,
                 };
-                if let Some(existing) = people.records.iter_mut().find(|record| {
-                    record.id == entry.id || (!record.id.is_assigned() && record.name == entry.name)
-                }) {
-                    existing.id = entry.id;
+                // An entry whose id has not been minted yet is not mergeable
+                // by anything durable; the next roster refresh carries it.
+                if !entry.id.is_assigned() {
+                    continue;
+                }
+                if let Some(existing) = people
+                    .records
+                    .iter_mut()
+                    .find(|record| record.id == entry.id)
+                {
                     existing.kind = kind;
                     existing.affiliation = entry.affiliation;
                     existing.online = entry.online;
@@ -145,34 +151,44 @@ pub(super) fn learn_visible_characters(
             // `track_affiliation_changes` fills it in when it lands.
             Option<&shared::components::CharacterAffiliation>,
             Option<&shared::components::CommandedBy>,
-            Option<&shared::components::PersonId>,
+            // REQUIRED: a record is never created without its durable id.
+            // Names collide (generated names drew two "Jarl Haldenson"s in
+            // one skirmish), so an id-less record would poison every merge
+            // that has to fall back to name matching. The Or<> below fires
+            // whichever of the pair lands second, so batching cannot skip
+            // anyone permanently.
+            &shared::components::PersonId,
         ),
-        Added<shared::components::CharacterName>,
+        Or<(
+            Added<shared::components::CharacterName>,
+            Added<shared::components::PersonId>,
+        )>,
     >,
     mut people: ResMut<KnownPeople>,
     ui_perf: Res<crate::ui::perf::UiPerf>,
 ) {
     let mut _ui_scope = ui_perf.scope("learn_visible_characters");
     for (name, kind, affiliation, commanded, person_id) in seen.iter() {
+        if !person_id.is_assigned() {
+            continue;
+        }
         let affiliation = affiliation.copied().unwrap_or_default();
         let kind = match kind {
             shared::components::CharacterKind::Hero => PersonKind::Hero,
             shared::components::CharacterKind::Villager => PersonKind::Villager,
         };
-        if let Some(existing) = people.records.iter_mut().find(|record| {
-            person_id.is_some_and(|id| record.id == *id)
-                || (!record.id.is_assigned() && record.name == name.0)
-        }) {
-            if let Some(id) = person_id {
-                existing.id = *id;
-            }
+        if let Some(existing) = people
+            .records
+            .iter_mut()
+            .find(|record| record.id == *person_id)
+        {
             existing.known = true;
             existing.kind = kind;
             existing.affiliation = affiliation;
             existing.commanded_by = commanded.map(|c| c.0.clone());
         } else {
             people.records.push(PersonRecord {
-                id: person_id.copied().unwrap_or_default(),
+                id: *person_id,
                 name: name.0.clone(),
                 kind,
                 affiliation,
@@ -255,13 +271,7 @@ pub(super) fn refresh_visible_person_facts(
         .filter(|(_, record)| record.id.is_assigned())
         .map(|(index, record)| (record.id, index))
         .collect();
-    let person_by_name: std::collections::HashMap<String, usize> = people
-        .records
-        .iter()
-        .enumerate()
-        .filter(|(_, record)| !record.id.is_assigned())
-        .map(|(index, record)| (record.name.clone(), index))
-        .collect();
+
     let building_entries: Vec<_> = buildings.iter().collect();
     let mut building_by_id = std::collections::HashMap::new();
     let mut building_by_worker: std::collections::HashMap<&str, usize> =
@@ -382,10 +392,7 @@ pub(super) fn refresh_visible_person_facts(
         let next_inventory = inventory.cloned();
         let next_carried = carried.copied();
 
-        let Some(index) = person_id
-            .and_then(|id| person_by_id.get(id).copied())
-            .or_else(|| person_by_name.get(name.0.as_str()).copied())
-        else {
+        let Some(index) = person_id.and_then(|id| person_by_id.get(id).copied()) else {
             continue;
         };
         let current = &people.records[index];
@@ -450,14 +457,16 @@ pub(super) fn track_affiliation_changes(
     >,
     mut people: ResMut<KnownPeople>,
 ) {
-    for (name, affiliation, person_id) in changed.iter() {
-        if let Some(record) = people.records.iter_mut().find(|record| {
-            person_id.is_some_and(|id| record.id == *id)
-                || (!record.id.is_assigned() && record.name == name.0)
-        }) {
-            if record.affiliation != *affiliation {
-                record.affiliation = *affiliation;
-            }
+    for (_, affiliation, person_id) in changed.iter() {
+        let Some(record) = people
+            .records
+            .iter_mut()
+            .find(|record| person_id.is_some_and(|id| record.id == *id))
+        else {
+            continue;
+        };
+        if record.affiliation != *affiliation {
+            record.affiliation = *affiliation;
         }
     }
 }
@@ -508,8 +517,8 @@ pub(super) fn rebuild_people_list(
 
     // Drop a selection the filter just hid, so the detail pane never describes
     // someone who is no longer listed.
-    if let Some(name) = selected.0.clone() {
-        if !visible.iter().any(|record| record.name == name) {
+    if let Some(id) = selected.0 {
+        if !visible.iter().any(|record| record.id == id) {
             selected.0 = None;
         }
     }
@@ -530,7 +539,10 @@ pub(super) fn rebuild_people_list(
                 // MUST carry the row marker: the rebuild despawns
                 // `Query<Entity, With<PersonRow>>`, so an unmarked empty-state
                 // node is never cleaned up and sits above a populated list.
-                PersonRow(String::new()),
+                PersonRow {
+                    id: shared::components::PersonId::default(),
+                    name: String::new(),
+                },
                 Text::new("No one here yet"),
                 TextFont {
                     font_size: FontSize::Px(15.0),
@@ -571,7 +583,10 @@ fn spawn_person_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) 
     let name_color = if record.known { INK } else { INK_MUTED };
     list.spawn((
         Button,
-        PersonRow(record.name.clone()),
+        PersonRow {
+            id: record.id,
+            name: record.name.clone(),
+        },
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -689,8 +704,8 @@ pub(super) fn style_person_rows(
     selected: Res<SelectedPerson>,
     mut rows: Query<(&PersonRow, &mut UiButtonStyle)>,
 ) {
-    for (PersonRow(name), mut style) in rows.iter_mut() {
-        style.selected = selected.0.as_deref() == Some(name.as_str());
+    for (row, mut style) in rows.iter_mut() {
+        style.selected = row.id.is_assigned() && selected.0 == Some(row.id);
     }
 }
 
@@ -734,7 +749,7 @@ pub(super) fn sync_detail_panel(
     ui_perf: Res<crate::ui::perf::UiPerf>,
 ) {
     let mut _ui_scope = ui_perf.scope("sync_detail_panel");
-    let record = selected.0.as_deref().and_then(|name| people.find(name));
+    let record = selected.0.and_then(|id| people.find_by_id(id));
 
     let show_card = record.is_some();
     for mut node in card.iter_mut() {
@@ -971,8 +986,7 @@ pub(super) fn sync_banner_controls(
 ) {
     let kind = selected
         .0
-        .as_deref()
-        .and_then(|name| people.find(name))
+        .and_then(|id| people.find_by_id(id))
         .map(|record| record.kind);
 
     for mut node in buttons.iter_mut() {
@@ -1017,15 +1031,17 @@ pub(super) fn track_retinue_changes(
     mut people: ResMut<KnownPeople>,
 ) {
     let _ = removed;
-    for (name, commanded, person_id) in changed.iter() {
-        if let Some(record) = people.records.iter_mut().find(|record| {
-            person_id.is_some_and(|id| record.id == *id)
-                || (!record.id.is_assigned() && record.name == name.0)
-        }) {
-            let next = commanded.map(|c| c.0.clone());
-            if record.commanded_by != next {
-                record.commanded_by = next;
-            }
+    for (_, commanded, person_id) in changed.iter() {
+        let Some(record) = people
+            .records
+            .iter_mut()
+            .find(|record| person_id.is_some_and(|id| record.id == *id))
+        else {
+            continue;
+        };
+        let next = commanded.map(|c| c.0.clone());
+        if record.commanded_by != next {
+            record.commanded_by = next;
         }
     }
 }
@@ -1042,7 +1058,7 @@ pub(super) fn sync_retinue_button(
     mut buttons: Query<&mut Node, With<RetinueButton>>,
     mut labels: Query<&mut Text, With<RetinueLabel>>,
 ) {
-    let record = selected.0.as_deref().and_then(|name| people.find(name));
+    let record = selected.0.and_then(|id| people.find_by_id(id));
     let offerable = god.0 && record.is_some_and(|r| r.kind == PersonKind::Villager);
     for mut node in buttons.iter_mut() {
         let display = if offerable {

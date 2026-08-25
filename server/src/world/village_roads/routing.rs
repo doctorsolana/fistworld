@@ -751,6 +751,12 @@ type RouteMoverFilter = (
     Without<BuildingDoorUse>,
     Without<PierTraversal>,
     Without<crate::world::village::ambient::AmbientDirectTransit>,
+    // Combatants move like heroes - directly, collision-gated - and never
+    // enter the road planner: step_units freezes a villager whose route is
+    // pending or failed, and a soldier or raider on raw battlefield ground
+    // must walk, not stand paralyzed waiting for A*.
+    Without<shared::components::CommandedBy>,
+    Without<crate::player::combat::WarParty>,
     // Only an active forecourt step owns movement. A stale transit marker must
     // not strand someone after their ticket is consumed and another routine
     // takes over.

@@ -65,19 +65,39 @@ pub fn tag_villager_intent(
             Option<&CarriedLoad>,
             Option<&Nutrition>,
             Option<&WorkStatus>,
+            (
+                Option<&shared::components::CommandedBy>,
+                Option<&crate::player::combat::WarParty>,
+            ),
         ),
         (With<CharacterName>, With<PlayerPosition>),
     >,
 ) {
-    for (entity, kind, intent, occupation, inventory, activity, carried, nutrition, work_status) in
-        villagers.iter()
+    for (
+        entity,
+        kind,
+        intent,
+        occupation,
+        inventory,
+        activity,
+        carried,
+        nutrition,
+        work_status,
+        (commanded, war_party),
+    ) in villagers.iter()
     {
         // Heroes are players' bodies and join nothing on their own.
         if *kind != CharacterKind::Villager {
             continue;
         }
+        // Combatants are DISCHARGED from village life: conscription (and a
+        // raider's war banner) strips or forgoes the intent on purpose, and
+        // re-seeding it here would hand the body back to the village brain
+        // one tick later. The physical backfills below (inventory,
+        // nutrition, activity) still apply - a soldier eats like anyone.
+        let conscripted = commanded.is_some() || war_party.is_some();
         let mut entity_commands = commands.entity(entity);
-        if intent.is_none() {
+        if intent.is_none() && !conscripted {
             entity_commands.insert(VillagerIntent::Idle);
         }
         // These are backfilled as well as attached by the normal spawn path so
@@ -98,7 +118,7 @@ pub fn tag_villager_intent(
         if nutrition.is_none() {
             entity_commands.insert(Nutrition::default());
         }
-        if work_status.is_none() {
+        if work_status.is_none() && !conscripted {
             entity_commands.insert(if occupation.is_some_and(|value| value.0.is_some()) {
                 WorkStatus::Employed
             } else {
@@ -119,12 +139,17 @@ pub fn seek_settlement(
         &PlayerPosition,
         Option<&PlayerRotation>,
     )>,
-    mut villagers: Query<(
-        Entity,
-        &PlayerPosition,
-        &mut VillagerIntent,
-        Option<&MigrationCooldown>,
-    )>,
+    // Conscripts are excluded outright: even one who somehow regains an Idle
+    // intent must never be marched off to immigrate mid-battle.
+    mut villagers: Query<
+        (
+            Entity,
+            &PlayerPosition,
+            &mut VillagerIntent,
+            Option<&MigrationCooldown>,
+        ),
+        Without<shared::components::CommandedBy>,
+    >,
     road_graph: Option<Res<VillageRoadGraph>>,
 ) {
     // Migration admission is a CPU-facing decision queue. It deliberately

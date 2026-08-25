@@ -1457,7 +1457,8 @@ fn desired_tool(activity: Option<CharacterActivity>, carrying: bool) -> Option<T
         return None;
     }
     match activity {
-        Some(CharacterActivity::Chopping) => Some(ToolKind::Axe),
+        // Fighters swing the axe for now, matching the borrowed chop clip.
+        Some(CharacterActivity::Chopping | CharacterActivity::Fighting) => Some(ToolKind::Axe),
         Some(CharacterActivity::Farming) => Some(ToolKind::Scythe),
         Some(CharacterActivity::Building | CharacterActivity::Mining) => Some(ToolKind::Hammer),
         _ => None,
@@ -1592,7 +1593,9 @@ fn desired_body_animation(
     }
 
     let clip = match activity {
-        Some(CharacterActivity::Chopping) => anim.chop,
+        // Fighting borrows the chop swing until a real attack clip exists:
+        // it is the only full-body arm swing in the set.
+        Some(CharacterActivity::Chopping | CharacterActivity::Fighting) => anim.chop,
         Some(CharacterActivity::Farming) => anim.harvest,
         Some(
             CharacterActivity::Fishing | CharacterActivity::Building | CharacterActivity::Mining,

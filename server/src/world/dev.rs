@@ -322,6 +322,8 @@ pub fn handle_dev_commands(
         Entity,
         &shared::components::PersonId,
         &shared::components::CharacterKind,
+        Option<&shared::components::CommandedBy>,
+        Has<crate::player::combat::WarParty>,
     )>,
     settlements: Query<(
         &shared::components::Settlement,
@@ -569,7 +571,8 @@ pub fn handle_dev_commands(
                     // Only VILLAGERS can be conscripted. A hero is somebody's
                     // persisted body; taking one into a retinue would let god
                     // mode hand a player's character to another player.
-                    let Some((unit, _, kind)) = kinds.iter().find(|(_, id, _)| **id == person)
+                    let Some((unit, _, kind, current_owner, enlisted)) =
+                        kinds.iter().find(|(_, id, _, _, _)| **id == person)
                     else {
                         continue;
                     };
@@ -578,20 +581,49 @@ pub fn handle_dev_commands(
                         continue;
                     }
                     if commanded {
-                        commands
-                            .entity(unit)
-                            .insert(shared::components::CommandedBy(account.clone()));
+                        // A soldier already under arms cannot be talked into
+                        // your retinue: an enemy war band's raider would flip
+                        // sides mid-battle (CommandedBy outranks their
+                        // banner), and another player's conscript would be
+                        // stolen outright. Dismissal below stays allowed only
+                        // for your OWN people.
+                        if enlisted {
+                            info!("Dev: refusing to conscript an enemy soldier");
+                            continue;
+                        }
+                        if current_owner.is_some_and(|owner| owner.0 != account) {
+                            info!("Dev: refusing to conscript another player's soldier");
+                            continue;
+                        }
+                        let mut conscript = commands.entity(unit);
+                        conscript.insert(shared::components::CommandedBy(account.clone()));
+                        // A conscript serves the player, not the village: the
+                        // villager brain would otherwise keep re-asserting its
+                        // own MoveTarget every tick and win every argument
+                        // with a player order.
+                        crate::player::army::discharge_from_village_life(&mut conscript);
                         info!("Dev: {unit:?} joined '{account}'s retinue");
                     } else {
+                        // You may only dismiss your OWN people; anything else
+                        // would let god mode disband a rival's army.
+                        if current_owner.is_none_or(|owner| owner.0 != account) {
+                            info!("Dev: refusing to dismiss a soldier who is not yours");
+                            continue;
+                        }
                         commands
                             .entity(unit)
-                            .remove::<shared::components::CommandedBy>();
-                        // Dropping the order too: a dismissed villager should
-                        // stop where it stands, not finish an errand for someone
-                        // who no longer commands it.
-                        commands
-                            .entity(unit)
-                            .remove::<crate::player::hero::MoveTarget>();
+                            .remove::<shared::components::CommandedBy>()
+                            // Dropping the soldiering too: a dismissed villager
+                            // should stop where it stands, leave its battalion,
+                            // and rejoin village life - which happens on its
+                            // own, because tag_villager_intent re-seeds the
+                            // brain the moment CommandedBy is gone.
+                            .remove::<crate::player::hero::MoveTarget>()
+                            .remove::<shared::components::MemberOfBattalion>()
+                            .remove::<shared::components::StandardBearer>()
+                            .remove::<crate::player::combat::AttackOrder>()
+                            .remove::<crate::player::combat::MeleeCooldown>()
+                            .insert(shared::components::Occupation::default());
                         info!("Dev: {unit:?} dismissed from '{account}'s retinue");
                     }
                 }

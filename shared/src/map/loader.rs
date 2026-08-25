@@ -476,6 +476,36 @@ fn decode_heightmap(
 mod tests {
     use super::*;
 
+    /// The battle map must be sane everywhere a soldier can stand: finite
+    /// heights across the whole field, dry land at the staged battle anchor.
+    /// (A single NaN in the heightfield poisons the camera and TAA into a
+    /// black screen, which is how this pin was earned.)
+    #[test]
+    fn battle_lab_terrain_is_finite_and_dry_at_the_battlefield() {
+        let loaded = load_map("battle_lab").expect("battle_lab map.ron must load");
+        let mut worst = f32::MAX;
+        for zi in -25..=25 {
+            for xi in -25..=25 {
+                let x = xi as f32 * 10.0;
+                let z = zi as f32 * 10.0;
+                let height = loaded.heightmap.sample_height(x, z);
+                assert!(
+                    height.is_finite(),
+                    "height at ({x},{z}) is not finite: {height}"
+                );
+                worst = worst.min(height);
+            }
+        }
+        // The battlefield anchor and the raider line must both be on land.
+        for (x, z) in [(-20.0_f32, -40.0_f32), (-20.0, -85.0)] {
+            let height = loaded.heightmap.sample_height(x, z);
+            assert!(
+                height > 0.5,
+                "the battle anchor ({x},{z}) must be dry land, got {height}"
+            );
+        }
+    }
+
     /// The Valheim-mode fidelity guarantee: a generated map loaded through
     /// the normal loader must sample like the generation grid, with no PNG
     /// and no baked deltas involved — the recipe alone.

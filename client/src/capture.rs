@@ -716,7 +716,11 @@ fn exercise_capture_door(
 }
 
 /// Jump straight into the world and provide the world state the server normally sends.
-fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<GameState>>) {
+fn enter_world_offline(
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<GameState>>,
+    terrain: Option<Res<shared::terrain::WorldTerrain>>,
+) {
     // No connection, no name entry — the map comes off disk.
     next_state.set(GameState::Playing);
 
@@ -1272,10 +1276,15 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                                 .is_some_and(|settlement| settlement.name == "Brackwater")
                         });
                     if let Some(hall) = hall {
+                        let brackwater_id = world
+                            .get::<shared::components::SettlementId>(hall)
+                            .copied()
+                            .unwrap_or_default();
                         world.insert_resource(crate::ui::market::MarketPageTarget(Some(
                             crate::ui::market::MarketPage {
                                 settlement: hall,
                                 place: "Brackwater".into(),
+                                place_id: brackwater_id,
                             },
                         )));
                         world.resource_mut::<crate::ui::encyclopedia::EncyclopediaOpen>().0 = true;
@@ -1283,7 +1292,7 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                             crate::ui::encyclopedia::EncyclopediaTab::Places;
                         world
                             .resource_mut::<crate::ui::encyclopedia::places::SelectedPlace>()
-                            .0 = Some("Brackwater".into());
+                            .0 = Some(brackwater_id);
                         *world.resource_mut::<
                             crate::ui::encyclopedia::places::SelectedPlaceEntry,
                         >() = crate::ui::encyclopedia::places::SelectedPlaceEntry::Overview;
@@ -1394,6 +1403,68 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
         commands.insert_resource(crate::ui::hero_creator::HeroCreatorOpen(true));
     }
 
+    // FISTFORCE_CAPTURE_WARBAR=1 stages three battalions with bearers and a
+    // selection, so the battalion bar and standard flags can be photographed
+    // without a server. Pair with FISTFORCE_COMBAT_MODE=1 and
+    // FISTFORCE_CAPTURE_HUD=play so the war UI is armed and drawn.
+    if std::env::var("FISTFORCE_CAPTURE_WARBAR").is_ok_and(|v| v == "1") {
+        commands.insert_resource(crate::ui::name_entry::PlayerNameInput {
+            name: "Wanderer".to_string(),
+            submitted: true,
+        });
+        // Staged at the battle-field anchor; capture with --at -20,-40.
+        let ground = |x: f32, z: f32| {
+            terrain
+                .as_deref()
+                .map(|terrain| terrain.get_height(x, z))
+                .unwrap_or(0.0)
+        };
+        let focus = Vec3::new(-20.0, ground(-20.0, -40.0), -40.0);
+        let mut selected = Vec::new();
+        for (ordinal, count, wounded) in [(1u64, 8usize, 0.0f32), (2, 6, 22.0), (3, 3, 55.0)] {
+            let id = shared::components::BattalionId(ordinal);
+            commands.spawn((
+                shared::components::Battalion {
+                    id,
+                    name: format!("Battalion {ordinal}"),
+                    ordinal,
+                },
+                shared::components::CommandedBy("wanderer".to_string()),
+                shared::components::PlayerPosition(focus),
+            ));
+            for soldier in 0..count {
+                let x = focus.x + (ordinal as f32 - 2.0) * 12.0 + (soldier % 4) as f32 * 1.5;
+                let z = focus.z + (soldier / 4) as f32 * 1.7 - 6.0;
+                let position = Vec3::new(x, ground(x, z), z);
+                let mut body = commands.spawn((
+                    shared::components::CharacterName(format!("Soldier {ordinal}-{soldier}")),
+                    shared::components::CharacterKind::Villager,
+                    shared::components::PlayerPosition(position),
+                    shared::components::CharacterAttributes::from_seed(
+                        ordinal * 31 + soldier as u64,
+                    ),
+                    {
+                        // Wounded, not weaker: full max, reduced current.
+                        let mut health = shared::components::Health::new(
+                            shared::components::CHARACTER_MAX_HEALTH,
+                        );
+                        health.current -= wounded;
+                        health
+                    },
+                    shared::components::CommandedBy("wanderer".to_string()),
+                    shared::components::MemberOfBattalion(id),
+                ));
+                if soldier == 0 {
+                    body.insert(shared::components::StandardBearer);
+                }
+                if ordinal == 2 {
+                    selected.push(body.id());
+                }
+            }
+        }
+        commands.insert_resource(crate::selection::Selection { entities: selected });
+    }
+
     // FISTFORCE_CAPTURE_ENCYCLOPEDIA=1 opens the encyclopedia and seeds a
     // sample cast, so the window can be verified without a server (there is no
     // roster offline, and an empty list photographs nothing).
@@ -1500,20 +1571,24 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                 record.wallet = Some(2_750);
             }
         }
+        let cassia = records
+            .iter()
+            .find(|record| record.name == "Cassia")
+            .map(|record| record.id);
         commands.insert_resource(KnownPeople {
             records,
             requested: true,
         });
-        commands.insert_resource(SelectedPerson(Some("Cassia".to_string())));
+        commands.insert_resource(SelectedPerson(cassia));
         commands.insert_resource(EncyclopediaOpen(true));
         // Mode picks which surface to photograph: a tab name, or "god" to
         // grant capability so the unknown-people view can be verified.
         commands.insert_resource(match mode.as_str() {
             "retinue" => crate::ui::encyclopedia::EncyclopediaTab::Retinue,
+            "army" => crate::ui::encyclopedia::EncyclopediaTab::Army,
             "ledger" | "companies" | "company-stock" | "business" | "founding" => {
                 crate::ui::encyclopedia::EncyclopediaTab::Companies
             }
-            "retinue" => crate::ui::encyclopedia::EncyclopediaTab::Retinue,
             _ => crate::ui::encyclopedia::EncyclopediaTab::People,
         });
         if mode == "retinue" {
@@ -1543,6 +1618,55 @@ fn enter_world_offline(mut commands: Commands, mut next_state: ResMut<NextState<
                     shared::components::Occupation(Some(occupation.to_string())),
                     shared::components::CommandedBy("wanderer".to_string()),
                 ));
+            }
+        }
+        if mode == "army" {
+            // A photographable army: the tab reads live replicated components,
+            // so stage real entities - two battalions plus a mixed roster with
+            // varied physique, and a couple of unassigned conscripts.
+            commands.insert_resource(crate::ui::name_entry::PlayerNameInput {
+                name: "Wanderer".to_string(),
+                submitted: true,
+            });
+            for (id, name) in [(1u64, "1st Battalion"), (2u64, "2nd Battalion")] {
+                commands.spawn((
+                    shared::components::Battalion {
+                        id: shared::components::BattalionId(id),
+                        name: name.to_string(),
+                        ordinal: id,
+                    },
+                    shared::components::CommandedBy("wanderer".to_string()),
+                    shared::components::PlayerPosition(Vec3::new(id as f32 * 30.0, 0.0, 0.0)),
+                ));
+            }
+            for (index, (name, physique, battalion)) in [
+                ("Odo Sverreson", 19u8, Some(1u64)),
+                ("Brenna the Mason", 16, Some(1)),
+                ("Wystan the Elder", 11, Some(1)),
+                ("Halvar Ironhand", 20, Some(2)),
+                ("Kelda of the Ford", 13, Some(2)),
+                ("Ivo the Younger", 15, None),
+                ("Sigrun Half-Song", 9, None),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut soldier = commands.spawn((
+                    shared::components::CharacterName(name.to_string()),
+                    shared::components::PersonId(9_200 + index as u64),
+                    shared::components::CharacterKind::Villager,
+                    shared::components::PlayerPosition(Vec3::new(index as f32 * 2.0, 0.0, 4.0)),
+                    shared::components::CharacterAttributes::from_seed(physique as u64 * 37),
+                    shared::components::Health::new(
+                        shared::components::CHARACTER_MAX_HEALTH - index as f32 * 9.0,
+                    ),
+                    shared::components::CommandedBy("wanderer".to_string()),
+                ));
+                if let Some(battalion) = battalion {
+                    soldier.insert(shared::components::MemberOfBattalion(
+                        shared::components::BattalionId(battalion),
+                    ));
+                }
             }
         }
         if mode == "founding" {
@@ -2445,8 +2569,8 @@ fn select_capture_place(
     let Some(place) = places.find(&wanted) else {
         return;
     };
-    if selected.0.as_deref() != Some(wanted.as_str()) {
-        selected.0 = Some(wanted);
+    if selected.0 != Some(place.id) {
+        selected.0 = Some(place.id);
         *entry = crate::ui::encyclopedia::places::SelectedPlaceEntry::Overview;
     }
     let Ok(building) = std::env::var("FISTFORCE_CAPTURE_SELECT_BUILDING") else {
@@ -2504,7 +2628,7 @@ fn select_capture_person(
     };
     if wanted.eq_ignore_ascii_case("first") {
         if let Some(record) = people.records.iter().find(|record| record.known) {
-            selected.0 = Some(record.name.clone());
+            selected.0 = Some(record.id);
         }
         return;
     }
@@ -2514,12 +2638,12 @@ fn select_capture_person(
                 .nutrition
                 .is_some_and(|nutrition| nutrition.is_hungry())
         }) {
-            selected.0 = Some(record.name.clone());
+            selected.0 = Some(record.id);
         }
         return;
     }
-    if people.find(&wanted).is_some() {
-        selected.0 = Some(wanted);
+    if let Some(record) = people.find(&wanted) {
+        selected.0 = Some(record.id);
     }
 }
 

@@ -59,6 +59,12 @@ const DEFAULT_REALWORLD_POINT: Vec2 = Vec2::new(-346.0, 306.0);
 // answers avoids re-running an exhaustive fishing survey for every 10 m map
 // sample on the server's first Update (which can block the network handshake).
 const LAB_MEADOW_ANCHOR: Vec2 = Vec2::new(112.0, -158.0);
+/// Mid-meadow on battle_lab (seed 7): flat temperate grass, clear of the
+/// western shore, the northern snow fringe, and the southern sands.
+const BATTLE_FIELD_ANCHOR: Vec2 = Vec2::new(-20.0, -40.0);
+/// How far north of the anchor the enemy war band forms its line.
+const RAIDER_LINE_OFFSET: f32 = -45.0;
+const RAIDER_COUNT: usize = 8;
 const LAB_COLDBARROW_ANCHOR: Vec2 = Vec2::new(-278.0, -428.0);
 const LAB_GREENWOOD_ANCHOR: Vec2 = Vec2::new(-108.0, 220.0);
 const LAB_STONE_ANCHOR: Vec2 = Vec2::new(-390.0, 102.0);
@@ -264,6 +270,12 @@ pub(crate) enum LabScenario {
     RegionalEconomy,
     TripleStress,
     DenseStress,
+    /// A battlefield, not a village: NO settlement is staged, so the
+    /// spawned villagers have nowhere to immigrate and stay Idle forever
+    /// (population.rs treats "no settlement anywhere" as a real state).
+    /// They exist to be conscripted, mustered, and fought. No economy, no
+    /// construction, no migration waves - the only mover is a player order.
+    Skirmish,
 }
 
 impl LabScenario {
@@ -295,8 +307,9 @@ impl LabScenario {
             }
             "triple" | "triple-stress" | "stress" | "three" => Self::TripleStress,
             "dense" | "dense-stress" | "thousand" | "1000" => Self::DenseStress,
+            "skirmish" | "battle" | "battlefield" | "war" => Self::Skirmish,
             value => panic!(
-                "unknown FISTWORLD_LAB_SCENARIO '{value}'; use secure, inland-meadow, policy-comparison, poor, dual, economy-soak, stone-comparison, trade-comparison, merchant-beacon, regional-economy, triple-stress, or dense-stress"
+                "unknown FISTWORLD_LAB_SCENARIO '{value}'; use secure, inland-meadow, policy-comparison, poor, dual, economy-soak, stone-comparison, trade-comparison, merchant-beacon, regional-economy, triple-stress, dense-stress, or skirmish"
             ),
         }
     }
@@ -369,10 +382,12 @@ impl LabScenario {
     }
 
     pub(crate) const fn map_id(self) -> &'static str {
-        if self.is_regional_economy() {
-            "regional_lab"
-        } else {
-            "village_lab"
+        match self {
+            Self::RegionalEconomy => "regional_lab",
+            // The battle testbed gets its own quarter-size map: armies need
+            // an open field, not an economy's worth of coastline.
+            Self::Skirmish => "battle_lab",
+            _ => "village_lab",
         }
     }
 
@@ -408,7 +423,8 @@ impl LabScenario {
             | Self::InlandMeadow
             | Self::PolicyComparison
             | Self::StoneComparison
-            | Self::Dual => SECURE_VILLAGERS,
+            | Self::Dual
+            | Self::Skirmish => SECURE_VILLAGERS,
         };
         if matches!(
             self,
@@ -421,6 +437,7 @@ impl LabScenario {
                 | Self::Poor
                 | Self::Dual
                 | Self::RegionalEconomy
+                | Self::Skirmish
         ) {
             std::env::var("FISTWORLD_LAB_FOUNDERS")
                 .ok()
@@ -2057,7 +2074,10 @@ pub(crate) fn stage_rendered_lab_arrivals(
     if enabled_flag("FISTWORLD_UX_TOWN") && !enabled_flag("FISTWORLD_UX_STRESS") {
         return;
     }
-    if LabScenario::from_environment().is_crowd_stress() {
+    let scenario = LabScenario::from_environment();
+    // Crowd-stress scenarios run their own arrivals; a skirmish field has no
+    // settlement to arrive AT, so its default wave would only warn forever.
+    if scenario.is_crowd_stress() || scenario == LabScenario::Skirmish {
         return;
     }
     let waves = lab_arrival_waves();
@@ -2484,6 +2504,57 @@ pub(crate) fn stage_rendered_lab_once(
         warn!("Rendered Village Lab already exists; skipping duplicate staging");
         *staged = true;
         return;
+    }
+
+    // A battlefield stages BODIES, never a village: with no Settlement
+    // anywhere the spawned villagers have nowhere to immigrate and idle
+    // forever, so the whole scene holds still until the player acts.
+    if scenario == LabScenario::Skirmish {
+        let anchor = BATTLE_FIELD_ANCHOR;
+        let field = Vec3::new(anchor.x, terrain.get_height(anchor.x, anchor.y), anchor.y);
+        spawn_runtime_villagers(
+            &mut commands,
+            &terrain,
+            &mut villager_seed,
+            field,
+            scenario.residents_per_village(),
+            Vec2::ZERO,
+            None,
+            None,
+            None,
+        );
+        // The enemy: a war band drawn up in a line to the north. Their
+        // banner makes them hostile to every player-commanded soldier (and
+        // ONLY to those - the unconscripted bodies around the anchor are
+        // bystanders and stay untouched). One raider carries a standard so
+        // the band reads as a unit from command height.
+        for index in 0..RAIDER_COUNT {
+            let lateral = (index as f32 - (RAIDER_COUNT as f32 - 1.0) * 0.5) * 1.6;
+            let position = Vec3::new(
+                field.x + lateral,
+                terrain.get_height(field.x + lateral, field.z + RAIDER_LINE_OFFSET),
+                field.z + RAIDER_LINE_OFFSET,
+            );
+            let seed = villager_seed.0;
+            villager_seed.0 += 1;
+            let raider =
+                crate::player::hero::spawn_villager(&mut commands, &terrain, seed, position);
+            let mut raider_commands = commands.entity(raider);
+            raider_commands.insert(crate::player::combat::WarParty { banner: 1 });
+            // Visible identity: the encyclopedia shows WHY this one cannot
+            // be conscripted (the server refuses enlisted soldiers).
+            raider_commands.insert(shared::components::Occupation(Some("Raider".to_string())));
+            if index == 0 {
+                raider_commands.insert(shared::components::StandardBearer);
+            }
+        }
+        info!(
+            "Rendered lab staged a skirmish field at ({:.1}, {:.1}): {} idle villager(s), {} raiders to the north, no settlement",
+            field.x,
+            field.z,
+            scenario.residents_per_village(),
+            RAIDER_COUNT,
+        );
     }
 
     let secure = scenario

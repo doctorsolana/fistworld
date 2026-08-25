@@ -225,6 +225,7 @@ fn spawn_body(panel: &mut ChildSpawnerCommands<'_>) {
             spawn_people_tab(body);
             spawn_places_tab(body);
             super::retinue::spawn_retinue_tab(body);
+            super::army::spawn_army_tab(body);
             super::companies::spawn_companies_tab(body);
             // Pages (ledgers, company controls) render here, full size, under
             // one BACK bar. See `EncyclopediaPageHost`.

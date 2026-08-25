@@ -13,6 +13,7 @@
 //! starts sending them — see docs/WORLD-DESIGN.md §1/§4.
 
 pub mod actions;
+pub mod army;
 pub mod companies;
 pub mod layout;
 pub mod places;
@@ -152,6 +153,21 @@ impl Plugin for EncyclopediaPlugin {
                 .after(layout::spawn_encyclopedia)
                 .run_if(encyclopedia_open)
                 .run_if(retinue::retinue_tab_active)
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.init_resource::<army::EnlistTarget>();
+        app.add_systems(
+            Update,
+            (
+                army::handle_army_buttons,
+                army::rebuild_army_list,
+                army::bind_army_vitals,
+                army::bind_muster_label,
+            )
+                .chain()
+                .after(layout::spawn_encyclopedia)
+                .run_if(encyclopedia_open)
+                .run_if(army::army_tab_active)
                 .run_if(in_state(GameState::Playing)),
         );
         app.add_systems(
@@ -377,6 +393,7 @@ fn auto_open_for_diagnostics(
         "people" => EncyclopediaTab::People,
         "places" => EncyclopediaTab::Places,
         "retinue" => EncyclopediaTab::Retinue,
+        "army" => EncyclopediaTab::Army,
         "companies" => EncyclopediaTab::Companies,
         _ => {
             *done = true;
@@ -409,15 +426,18 @@ pub enum EncyclopediaTab {
     /// with neither, and this page stays correct at 0 followers and at 50 —
     /// a clan view grows inside it later instead of forcing a rename.
     Retinue,
+    /// Battalions and the soldiers who fill them: muster, enlist, command.
+    Army,
     /// Companies, shareholdings and consolidated ledgers.
     Companies,
 }
 
 impl EncyclopediaTab {
-    pub const ALL: [EncyclopediaTab; 4] = [
+    pub const ALL: [EncyclopediaTab; 5] = [
         EncyclopediaTab::People,
         EncyclopediaTab::Places,
         EncyclopediaTab::Retinue,
+        EncyclopediaTab::Army,
         EncyclopediaTab::Companies,
     ];
 
@@ -426,6 +446,7 @@ impl EncyclopediaTab {
             EncyclopediaTab::People => "PEOPLE",
             EncyclopediaTab::Places => "PLACES",
             EncyclopediaTab::Retinue => "RETINUE",
+            EncyclopediaTab::Army => "ARMY",
             EncyclopediaTab::Companies => "COMPANIES",
         }
     }
@@ -454,7 +475,10 @@ impl PeopleFilter {
 /// Selected row, held by NAME so the selection survives list rebuilds,
 /// filter changes and roster refreshes.
 #[derive(Resource, Default)]
-pub struct SelectedPerson(pub Option<String>);
+/// Keyed by durable PersonId, never by name: generated names collide (two
+/// "Jarl Haldenson"s can and did share a battlefield), and a name-keyed page
+/// silently showed whichever record matched first.
+pub struct SelectedPerson(pub Option<shared::components::PersonId>);
 
 /// Who someone answers to.
 ///
@@ -570,6 +594,15 @@ impl KnownPeople {
     pub fn find(&self, name: &str) -> Option<&PersonRecord> {
         self.records.iter().find(|record| record.name == name)
     }
+
+    /// The only correct lookup for a SELECTED person: ids are durable and
+    /// unique where names are neither.
+    pub fn find_by_id(&self, id: shared::components::PersonId) -> Option<&PersonRecord> {
+        if !id.is_assigned() {
+            return None;
+        }
+        self.records.iter().find(|record| record.id == id)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -603,7 +636,10 @@ pub struct PeopleListViewport;
 pub struct PeopleListContent;
 
 #[derive(Component, Clone)]
-pub struct PersonRow(pub String);
+pub struct PersonRow {
+    pub id: shared::components::PersonId,
+    pub name: String,
+}
 
 #[derive(Component)]
 pub struct PeopleCountText;
@@ -752,6 +788,7 @@ mod page_tests {
             crate::ui::market::MarketPage {
                 settlement: Entity::from_bits(1),
                 place: "Brackwater".into(),
+                place_id: shared::components::SettlementId(9),
             },
         )));
         world.insert_resource(companies::SelectedCompany::default());

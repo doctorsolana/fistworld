@@ -9,6 +9,7 @@
 //! is selectable is expressed by [`Selectable`], so new kinds opt in by
 //! spawning a component instead of by editing the picker.
 
+pub mod attack_ring;
 pub mod order;
 pub mod pick;
 pub mod ring;
@@ -16,6 +17,14 @@ pub mod ring;
 use bevy::prelude::*;
 
 use crate::states::GameState;
+
+/// The whole selection gesture pipeline (tag -> pick -> expand -> order ->
+/// rings) runs inside this set, so UI that DRAWS gesture state - the marquee
+/// box, the selection plate - can order itself after it. Without that edge
+/// the marquee drew one frame behind the cursor on whatever frames the
+/// scheduler happened to run it first, which reads as intermittent input lag.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SelectionGestureSet;
 
 pub struct SelectionPlugin;
 
@@ -39,11 +48,15 @@ impl Plugin for SelectionPlugin {
                 pick::pick_on_left_click
                     .after(crate::camera_rts::update_cursor_terrain_hit)
                     .after(crate::hero::sync_hero_transforms),
+                expand_standard_bearer_selection,
                 crate::capture::drive_live_voyage_click_input,
                 order::issue_order_on_right_click,
                 ring::sync_selection_ring,
+                attack_ring::hover_attack_target,
+                attack_ring::sync_attack_rings,
             )
                 .chain()
+                .in_set(SelectionGestureSet)
                 .run_if(in_state(GameState::Playing)),
         );
         app.add_systems(OnExit(GameState::Playing), clear_on_exit);
@@ -161,6 +174,42 @@ pub struct Selection {
     pub entities: Vec<Entity>,
 }
 
+/// Selecting a battalion's standard bearer selects the battalion: click the
+/// flag, command the unit. Runs right after picking, so both a single click
+/// and a drag-box that caught the bearer grow to the full roster before any
+/// ring, plate or order reads the selection. Expansion is idempotent - the
+/// re-run triggered by its own write finds nothing to add and writes nothing.
+#[allow(clippy::type_complexity)]
+fn expand_standard_bearer_selection(
+    mut selection: ResMut<Selection>,
+    bearers: Query<
+        &shared::components::MemberOfBattalion,
+        With<shared::components::StandardBearer>,
+    >,
+    members: Query<(Entity, &shared::components::MemberOfBattalion)>,
+) {
+    if !selection.is_changed() {
+        return;
+    }
+    let battalions: Vec<shared::components::BattalionId> = selection
+        .entities
+        .iter()
+        .filter_map(|entity| bearers.get(*entity).ok().map(|member| member.0))
+        .collect();
+    if battalions.is_empty() {
+        return;
+    }
+    let mut expanded = selection.entities.clone();
+    for (soldier, member) in members.iter() {
+        if battalions.contains(&member.0) && !expanded.contains(&soldier) {
+            expanded.push(soldier);
+        }
+    }
+    if expanded.len() != selection.entities.len() {
+        selection.set(expanded);
+    }
+}
+
 impl Selection {
     pub fn is_selected(&self, entity: Entity) -> bool {
         self.entities.contains(&entity)
@@ -268,7 +317,10 @@ pub const DRAG_MOTION_PX: f32 = 14.0;
 ///
 /// Covers press-hold-think-release with a perfectly steady hand, which would
 /// otherwise land as an order the player forgot they were queuing.
-pub const DRAG_HOLD_SECS: f32 = 0.35;
+/// Raised from 0.35: players hold the button while AIMING an order, and a
+/// steady half-second press that never moved is a deliberate command, not an
+/// orbit - dropping it read as "my click did nothing".
+pub const DRAG_HOLD_SECS: f32 = 0.6;
 
 /// Whether a right-press that moved this much should still count as a click.
 pub fn is_click(radial_px: f32, motion_px: f32, held_secs: f32) -> bool {

@@ -2,19 +2,19 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 
 use crate::components::{
-    AboardBoat, ActiveMapState, AttachedTo, BuildingDoorDemand, BuildingId, BuildingOf,
+    AboardBoat, ActiveMapState, AttachedTo, Battalion, BuildingDoorDemand, BuildingId, BuildingOf,
     CharacterActivity, CharacterAffiliation, CharacterAttributes, CharacterDayPlan, CharacterKind,
     CharacterMotion, CharacterName, CharacterNavigationStatus, CharacterObjective, CivicEmployment,
     CivicHallLevel, CivicHallUpgradeWorksite, CivicTradeContract, CloudSeed, CommandedBy, Company,
     CompanyId, CompanyLeadership, CompanyOwnership, CompanyShareMarket, CompanyTradeRoute,
     ConstructionSite, EmployedAt, FarmField, FishingPier, Health, Hero, HeroOutfit, Household,
-    ImmigrantArrivalBoat, LivesAt, LivestockPasture, MarketLevel, MootAdministration, Nutrition,
-    Occupation, OperatedBy, OwnedBy, PersonId, Player, PlayerBoat, PlayerPermitLedger,
-    PlayerPosition, PlayerProgression, PlayerRotation, Residence, ResidentOf, Settlement,
-    SettlementBuilding, SettlementDevelopment, SettlementId, SettlementOpportunityBoard,
-    SettlementPolicies, SettlementPropertyBoard, SettlementSummary, TimeWarp, TradeContractId,
-    TradeRouteHistory, TradeRouteId, TradeRouteSchedule, Vessel, VillageRoad, WorkStatus,
-    WorkplaceOperation, WorldTime, WreckedVessel,
+    ImmigrantArrivalBoat, LivesAt, LivestockPasture, MarketLevel, MemberOfBattalion,
+    MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId, Player, PlayerBoat,
+    PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation, Residence, ResidentOf,
+    Settlement, SettlementBuilding, SettlementDevelopment, SettlementId,
+    SettlementOpportunityBoard, SettlementPolicies, SettlementPropertyBoard, SettlementSummary,
+    StandardBearer, TimeWarp, TradeContractId, TradeRouteHistory, TradeRouteId, TradeRouteSchedule,
+    Vessel, VillageRoad, WorkStatus, WorkplaceOperation, WorldTime, WreckedVessel,
 };
 use crate::economy::{
     BusinessAccount, BusinessCondition, BusinessForSale, BusinessLiquidation,
@@ -80,6 +80,9 @@ impl Plugin for ProtocolPlugin {
         app.component::<CharacterAttributes>().replicate();
         app.component::<CharacterMotion>().replicate();
         app.component::<CharacterActivity>().replicate();
+        app.component::<Battalion>().replicate();
+        app.component::<MemberOfBattalion>().replicate();
+        app.component::<StandardBearer>().replicate();
         app.component::<CharacterObjective>().replicate();
         app.component::<CharacterDayPlan>().replicate();
         app.component::<CharacterNavigationStatus>().replicate();
@@ -175,6 +178,15 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<RequestGodAccess>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<UnitMoveOrder>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<UnitAttackOrder>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<ArmyOrder>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<FormationMoveOrder>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<HeroConstructionOrder>()

@@ -64,7 +64,9 @@ impl Plugin for MarketPlugin {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MarketPage {
     pub settlement: Entity,
+    /// Display only. Selection travels on `place_id` - names collide.
     pub place: String,
+    pub place_id: shared::components::SettlementId,
 }
 
 #[derive(Resource, Default)]
@@ -321,16 +323,17 @@ pub(crate) fn nearest_public_market_entrance(
 fn sync_place_market_action(
     mut commands: Commands,
     selected: Res<SelectedPlace>,
-    settlements: Query<(Entity, &Settlement), With<MootMarket>>,
+    settlements: Query<(Entity, &Settlement, &shared::components::SettlementId), With<MootMarket>>,
     mut buttons: Query<(Entity, &mut Node, Option<&OpenMarketButton>), With<PlaceMarketAction>>,
 ) {
-    let target = selected.0.as_deref().and_then(|place| {
+    let target = selected.0.and_then(|place_id| {
         settlements
             .iter()
-            .find(|(_, settlement)| settlement.name == place)
-            .map(|(entity, settlement)| MarketPage {
+            .find(|(_, _, id)| **id == place_id)
+            .map(|(entity, settlement, id)| MarketPage {
                 settlement: entity,
                 place: settlement.name.clone(),
+                place_id: *id,
             })
     });
     for (entity, mut node, current) in buttons.iter_mut() {
@@ -374,7 +377,7 @@ fn handle_open_market_buttons(
             continue;
         }
         target.0 = Some(button.0.clone());
-        selected.0 = Some(button.0.place.clone());
+        selected.0 = Some(button.0.place_id);
         *entry = SelectedPlaceEntry::Overview;
         *tab = EncyclopediaTab::Places;
         open.0 = true;
@@ -444,13 +447,14 @@ fn open_nearby_market_on_interact(
                 MarketPage {
                     settlement: entity,
                     place: settlement.name.clone(),
+                    place_id: *settlement_id,
                 },
                 distance,
             ))
         })
         .min_by(|a, b| a.1.total_cmp(&b.1));
     let Some((page, _)) = nearby else { return };
-    selected.0 = Some(page.place.clone());
+    selected.0 = Some(page.place_id);
     *entry = SelectedPlaceEntry::Overview;
     *tab = EncyclopediaTab::Places;
     open.0 = true;
