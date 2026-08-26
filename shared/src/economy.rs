@@ -1976,9 +1976,25 @@ pub enum CarriedAppearance {
     IronBundle,
     FlourSack,
     BreadBasket,
+    WoolFleece,
+    MeatHaunch,
 }
 
 impl CarriedAppearance {
+    /// Every authored carried-resource appearance. Keep runtime asset tests
+    /// exhaustive by iterating this list instead of maintaining a second one.
+    pub const ALL: [Self; 9] = [
+        Self::FishBasket,
+        Self::WheatSheaf,
+        Self::WoodBundle,
+        Self::StoneBundle,
+        Self::IronBundle,
+        Self::FlourSack,
+        Self::BreadBasket,
+        Self::WoolFleece,
+        Self::MeatHaunch,
+    ];
+
     /// Default appearance when the producing routine has no more specific
     /// presentation. Food currently comes only from fishing, so its honest
     /// first appearance is a fish basket rather than a generic crate.
@@ -1991,10 +2007,8 @@ impl CarriedAppearance {
             Good::Iron => Self::IronBundle,
             Good::Flour => Self::FlourSack,
             Good::Bread => Self::BreadBasket,
-            // Dedicated carried art can replace these founding placeholders
-            // without changing the inventory or trade contract.
-            Good::Meat => Self::FishBasket,
-            Good::Wool => Self::FlourSack,
+            Good::Meat => Self::MeatHaunch,
+            Good::Wool => Self::WoolFleece,
         }
     }
 
@@ -2007,6 +2021,8 @@ impl CarriedAppearance {
             Self::IronBundle => "Iron bundle",
             Self::FlourSack => "Flour sack",
             Self::BreadBasket => "Bread basket",
+            Self::WoolFleece => "Wool bale",
+            Self::MeatHaunch => "Haunch of meat",
         }
     }
 }
@@ -4059,6 +4075,16 @@ mod tests {
             Some(CarriedAppearance::StoneBundle),
             "an explicit producer-specific appearance must override the fallback"
         );
+        assert_eq!(
+            CarriedAppearance::default_for(Good::Wool),
+            CarriedAppearance::WoolFleece
+        );
+        assert_eq!(
+            CarriedAppearance::default_for(Good::Meat),
+            CarriedAppearance::MeatHaunch
+        );
+        assert_eq!(CarriedAppearance::WoolFleece.label(), "Wool bale");
+        assert_eq!(CarriedAppearance::MeatHaunch.label(), "Haunch of meat");
     }
 
     #[test]

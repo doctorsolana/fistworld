@@ -96,6 +96,18 @@ C_FLOUR      = (0.7900, 0.7700, 0.7100)   # the dust itself, paler and greyer th
 C_CRUST      = (0.5600, 0.3050, 0.1050)
 C_CRUST_LT   = (0.7000, 0.4400, 0.1750)
 C_CRUMB      = (0.7600, 0.5900, 0.3300)
+# Fleece is WARM off-white against the flour sack's cool grey-linen. The two are the only pale
+# objects in the set and they sit one slot apart in every menu, so the split is on hue, not value --
+# raising one's brightness would just have made a lighter grey.
+C_FLEECE     = (0.7450, 0.6950, 0.5750)
+C_TWINE      = (0.3400, 0.2750, 0.1450)
+# Raw meat. Deliberately deep and slightly blue-shifted rather than pillar-box: at the icon
+# renderer's exposure a saturated red blooms into a flat shape with no readable form, the same way
+# the bakery's crust went luminous orange and had to be pulled below 1.0 everywhere.
+C_MEAT       = (0.3600, 0.0850, 0.0720)
+C_MEAT_DK    = (0.2050, 0.0480, 0.0450)
+C_FAT        = (0.8100, 0.7500, 0.6200)
+C_BONE       = (0.8300, 0.7900, 0.6900)
 
 
 def zrot(a):
@@ -496,6 +508,231 @@ for cx, cy, cz, ln, wd, ht, yaw, tone in (
     it.loaf(cx, cy, cz, ln, wd, ht, yaw, tone)
 bread = it.finish(min_width=HAND_GAP)
 
+# ======================================================================================================
+# WOOL -- a pressed bale, bound with twine.
+# ======================================================================================================
+# Reference: medieval fleeces were skirted, ROLLED to a prescribed pattern and packed into canvas
+# woolsheets, ~20 rolls to a sheet. Both halves are authentic and only one is usable: a canvas bundle
+# tied at the corners is a SACK, and this set already has one. Flour's whole design problem was not
+# reading as a second wheat; wool's is not reading as a second flour.
+#
+#   FlourSack   upright, tapering to a tied neck   cool grey-linen
+#   WoolFleece  low horizontal block, twine-bound   warm cream
+#
+# It ended up a rectangular BALE rather than the roll this comment first described, and that is the
+# more accurate object anyway: fleeces were rolled by hand, but once they reached a processing centre
+# they were pressed and bound into standard rectangular bales. The roll was chased first because it
+# gave a silhouette nothing else in the set has; the bale keeps that (nothing else lies flat across
+# the arms) and is simpler to read.
+#
+# Nothing else in the set lies across the arms, so the silhouette is free.
+#
+# THE FIRST VERSION WAS A WHITE CRATE. It was a box plus one 45-deg copy at 0.75 -- the sack's
+# corner-softening trick -- with tufts added on top. Two things were wrong and only one was obvious:
+#
+#   * 0.75 puts the copy's corners 6% proud, which ROUNDS AN ARRIS but cannot disguise a rectangle.
+#     It works on the sack because a sack's silhouette is already a taper; it does nothing for a
+#     straight prism, which stays a straight prism with softened edges.
+#   * Tufts stuck onto a hard body read as HANDLES. Detail on a surface cannot fix an outline.
+#
+# What separates wool from every other material here is that its EDGE is soft, and an edge is most of
+# what survives at 512 px. So the body is built irregular: a row of lumps sharing one axis, each a
+# different size and rolled to a different angle, so the outline undulates by construction.
+it = Item("WoolFleece")
+
+# THREE VERSIONS WERE TOO CLEVER. A hard box with tufts read as a crate; a row of separately-rolled
+# lumps read as popcorn; twelve surface bumps rotated onto a barrel read as a cheese wheel. Each fix
+# added geometry to rescue the last one, which is the wrong direction -- at 512 px and 0.5 m in a
+# villager's arms, a carried item gets a silhouette and a colour and nothing else.
+#
+# So: a white roll, rolled up. The whole read is carried by three things, and every one of them is
+# cheap -- a clean cylindrical mass, the SPIRAL ON THE END that says "rolled" rather than "cut", and
+# twine. Nothing else earns its triangles.
+# The roll must SPAN the hands (0.432 m inner faces, measured off the carry pose), and with
+# the tufts gone there is nothing else to carry the width -- the first simplified pass came
+# out at 0.320 and the builder's own check caught it.
+RL = 0.224
+RR = 0.112
+
+def roll_seg(x0, x1, r0, r1, rgb):
+    """A plain rectangular slice of the roll.
+
+    It used to draw a SECOND copy of itself turned 45 degrees at k = 0.80 -- the corner-softening
+    trick the flour sack uses -- so the section came out an octagon instead of a square. Cut on
+    2026-08-01: at k = 0.80 the copy's corners clear the outer faces by 13%, which on a 0.45 m object
+    is 3 mm of ridge running the length. It is not enough to round anything; it just adds a facet down
+    the middle of every face and a set of tilted squares at the ends, and it doubled the body's
+    triangle count to do it.
+
+    The trick earns its place on the sack, whose silhouette is a taper. On a straight prism it does
+    not."""
+    def place(p):
+        t = (p[0] - x0) / (x1 - x0)
+        r = r0 + (r1 - r0) * t
+        return (p[0], p[1] * r, RR + p[2] * r * 0.94)
+    it.tbox(x0, x1, -1, 1, -1, 1, rgb, place)
+
+
+# ONE SEGMENT. It was three, barrelled slightly, and the joins cost more than the barrel was worth:
+#
+#   * the three carried different tones, so inside each 4 mm overlap the brighter won and drew a pale
+#     ring round the roll -- a second set of bands nobody asked for;
+#   * and worse, each segment's 45-degree copy was inset 3 mm at BOTH ends, so between two segments
+#     there was a 2 mm stretch with no rotated copy at all. The octagon's corners stopped and
+#     restarted there, cutting a notch right round the roll at x = +-0.080. Those were the diagonal
+#     strips.
+#
+# A fleece roll is a cylinder. One segment has no interior joins, so it can have neither defect, and
+# it costs 48 fewer triangles than the version that did.
+# The roll, as one box. `ROLL_SEGS` stays a table of one so `roll_r_at` keeps working -- the twine
+# still has to ask what the radius is where it sits, and a future taper would only add rows here.
+ROLL_SEGS = ((-RL, RL, RR, RR),)
+roll_seg(*ROLL_SEGS[0], shade(C_FLEECE, 1.02))
+
+
+def roll_r_at(x):
+    """Body radius where the segments actually put it -- the roll is barrelled, so it varies."""
+    for x0, x1, r0, r1 in ROLL_SEGS:
+        if x0 - 1e-6 <= x <= x1 + 1e-6:
+            return r0 + (r1 - r0) * (x - x0) / (x1 - x0)
+    return RR
+
+
+def fleece_ring(x, pad=0.0):
+    """The section's four corners at `x`, pushed out along their own diagonals by `pad`.
+
+    Was eight samples round a star octagon, because the body was one. With the rotated copy gone the
+    section is a plain rectangle and the corners are the whole of it -- a rope round a rectangular
+    bale touches the four arrises and bridges the flats, which is what these four points describe."""
+    r = roll_r_at(x)
+    ry, rz = r, r * 0.94
+    d = pad / math.sqrt(2.0)
+    return [( ry + d, RR + rz + d), (-ry - d, RR + rz + d),
+            (-ry - d, RR - rz - d), ( ry + d, RR - rz - d)]
+
+
+def fleece_band(x, ring, hw, thick, rgb):
+    """A flat strap wrapped round the section: width along the ROLL AXIS, thickness radial.
+
+    NOT the kit's `cord`, and the reason is `prism` underneath it: prism derives its cross-section
+    frame from the segment direction and swaps its `up` vector once a segment runs within ~18 degrees
+    of vertical. On a ring two of the eight segments do exactly that, so two of the eight came out
+    with their width pointing RADIALLY instead of along the roll -- chunky blocks standing off the
+    band, which is what they looked like. Fixing that inside `cord` would change the log bundle's
+    binding too, so the strap is built here."""
+    n = len(ring)
+    for i in range(n):
+        y0, z0 = ring[i]
+        y1, z1 = ring[(i + 1) % n]
+        my, mz = (y0 + y1) * 0.5, (z0 + z1) * 0.5 - RR         # outward at the segment midpoint
+        ln = math.hypot(my, mz) or 1.0
+        ny, nz = my / ln, mz / ln
+
+        def xf(p, a=y0, b=z0, c=y1, d=z1, u=ny, v=nz):
+            t = (p[1] + 1.0) * 0.5
+            return (x + p[0] * hw,
+                    a + (c - a) * t + u * thick * p[2],
+                    b + (d - b) * t + v * thick * p[2])
+        it.tbox(-1, 1, -1, 1, -1, 1, rgb, xf)
+
+
+# 2 mm of outward pad, then 7 mm of thickness either side: the strap ends up ~9 mm proud and ~5 mm
+# sunk, which reads as pulled tight rather than laid on.
+for bx in (-0.104, 0.116):
+    fleece_band(bx, fleece_ring(bx, pad=0.002), 0.011, 0.007, shade(C_TWINE, 1.0))
+wool = it.finish(min_width=HAND_GAP)
+
+# ======================================================================================================
+# MEAT -- a haunch on the bone.
+# ======================================================================================================
+# The good is "ready-to-cook livestock food, one unit is one household ration", and the placeholder it
+# replaces is the FISH BASKET. So the one thing it must not be is another tray of pale bodies: two of
+# seven slots already go to wicker trays (fish, bread) and a third would be the same silhouette again.
+#
+# A haunch answers it on every axis at once. It is the readable butcher shape -- bulb tapering to a
+# bone knuckle -- it needs no container, and it is the ONLY RED OBJECT in the set. At 512 px, where a
+# thumbnail is mostly a colour and an outline, that is worth more than any amount of detail. Which is
+# also why this is four parts and not nine: bulb, fat, bone, knuckle.
+it = Item("MeatHaunch")
+
+# THE BODY IS LIFTED ONTO ITS OWN AXIS. `haunch_seg` scales z from -1..1, so without this the leg is
+# centred on z = 0 while every detail below is written as an offset up from a base at zero -- which is
+# how the first version got a fat cap and a bone hanging 11 cm above the meat.
+LIFT = 0.116
+SEGS = ((-0.040, 0.112, 0.054, 0.050, 0.124, 0.112),
+        ( 0.108, 0.222, 0.124, 0.112, 0.080, 0.074))
+
+def hz_at(x):
+    for x0, x1, _hy0, hz0, _hy1, hz1 in SEGS:
+        if x0 - 1e-6 <= x <= x1 + 1e-6:
+            return hz0 + (hz1 - hz0) * (x - x0) / (x1 - x0)
+    return SEGS[-1][5]
+
+def haunch_seg(x0, x1, hy0, hz0, hy1, hz1, rgb):
+    """One tapered slice of the leg. Plain box, for the reason documented on `roll_seg`: the
+    45-degree copy that used to round this into an octagon only stood 6% proud at k = 0.75, which is
+    a hairline ridge down each face rather than a rounding, and it cost twice the triangles."""
+    def place(p):
+        t = (p[0] - x0) / (x1 - x0)
+        return (p[0], p[1] * (hy0 + (hy1 - hy0) * t), LIFT + p[2] * (hz0 + (hz1 - hz0) * t))
+    it.tbox(x0, x1, -1, 1, -1, 1, rgb, place)
+
+
+# One pair of tones across both, for the reason the fleece has one: the segments overlap by 4 mm and
+# a tonal step inside an overlap draws a ring round the object.
+haunch_seg(*SEGS[0], shade(C_MEAT, 1.00))
+haunch_seg(*SEGS[1], shade(C_MEAT, 0.94))
+
+# A second bone end coming out of the top of the rump, and it is built to read as THE SAME BONE
+# passing through the joint: a tapered shaft in the bone colour with a squared cap centred on it,
+# exactly like the shank end, rather than the white brick the first pass put there.
+#
+# It earns its triangles because the joint had one pale element and it was at the far end -- the
+# whole rump half of the silhouette was unbroken red. This breaks the OUTLINE, which is why it works
+# where three versions of a fat cap sitting inside the outline did not.
+# THE BONE RUNS THROUGH THE JOINT AND SHOWS AT BOTH ENDS, on one axis.
+#
+# Two earlier attempts put this second bone somewhere else and both were wrong for the same reason:
+# they made it a DIFFERENT bone. First near the rump on the sloping shoulder, which reads as poking
+# out of the side; then straight up out of the crown, which is vertical and correct as a shape but
+# sits at right angles to the shank -- so the joint had two unrelated bones instead of one passing
+# through it, which is exactly what it looked like.
+#
+# A leg has one femur. Showing its sawn cross-section on the rump's cut face, centred on the SAME
+# y = 0, z = LIFT axis the shank runs along, is what makes the two ends read as one bone.
+#
+# It has to protrude, not sit flush: a disc coplanar with the body's end cap is two faces in one
+# plane, which this renderer answers with a black slab -- the defect that cost four diagnoses earlier
+# in this file.
+it.box(0.214, 0.232, -0.026, 0.026, LIFT - 0.026, LIFT + 0.026, shade(C_BONE, 1.02))
+
+# ONE fat cap, seated 12 mm into the surface so it lies along the curve. Three plates followed the
+# taper more exactly and read as no better; a rectangle laid over a curve touches it at two points,
+# which is the error that put a zip up the front of the flour sack, and sinking it fixes that at any
+# count. The top of the octagon is 1.06 * hz, not hz, because of the 45-degree copy's corners.
+# NO FAT CAP. Three versions of one were built -- three tapered plates, then one tapered plate, then
+# a plain sunk box -- and every one read the same way from above: a WHITE SQUARE SITTING ON THE MEAT.
+# It is anatomically right and it does not survive the projection, because from a three-quarter
+# overhead camera a light patch in the middle of a dark mass is a sticker, not a surface.
+#
+# The joint needs exactly one pale thing, and it should be the bone: that is the detail that says
+# "meat" rather than "sack of something", and it works because it breaks the OUTLINE instead of
+# sitting inside it.
+# Shank and bone, on the body's own axis. The bone is the single detail that says "meat" rather than
+# "sack of something": a pale shaft breaking the silhouette, with a knuckle so it reads as a joint and
+# not a cut stick.
+# EVERYTHING ON THE BONE AXIS SITS AT EXACTLY z = LIFT. The shank used to climb to LIFT + 0.004 and
+# the bone to LIFT + 0.006, which is invisible on its own -- but it meant the knuckle could not be
+# centred on the shaft in z, and the eye reads a 6 mm offset on a symmetric object immediately.
+it.prism((-0.034, 0.0, LIFT), (-0.146, 0.0, LIFT), 0.036, 0.024, shade(C_MEAT, 0.86))
+it.prism((-0.138, 0.0, LIFT), (-0.204, 0.0, LIFT), 0.026, 0.022, shade(C_BONE, 1.00))
+# Centred on the shaft: x spans -0.238..-0.194 about a midpoint of -0.216 with the bone tip at
+# -0.204 running into it, and y/z are symmetric about the axis. Before this the box sat -0.240..-0.194
+# (mid -0.217) against a tip at -0.206 and a z centre 6 mm below the shaft -- the square end visibly
+# hung off one side of its own handle.
+it.box(-0.238, -0.194, -0.032, 0.032, LIFT - 0.030, LIFT + 0.030, shade(C_BONE, 1.06))
+meat = it.finish(min_width=HAND_GAP)
+
 # --- one material, shared: every bundle is vertex-coloured and matte -----------------------------------
 mat = bpy.data.materials.new("ResourceVC")
 if not mat.node_tree:
@@ -515,7 +752,7 @@ for nm in ("Specular IOR Level", "Specular"):
         bsdf.inputs[nm].default_value = 0.0
         break
 
-ITEMS = [wood, wheat, fish, stone, iron, flour, bread]
+ITEMS = [wood, wheat, fish, stone, iron, flour, bread, wool, meat]
 for obj, me, span in ITEMS:
     me.materials.append(mat)
     assert "." not in obj.name, f"datablock name got suffixed: {obj.name}"

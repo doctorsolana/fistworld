@@ -137,8 +137,22 @@ fn stable_height(position: Vec3) -> f32 {
     1.3 * (1.0 + (random - 0.5) * 0.5)
 }
 
-fn instance_for(spawn: &PropSpawn, terrain: &WorldTerrain) -> GrassInstance {
+fn instance_for(
+    spawn: &PropSpawn,
+    terrain: &WorldTerrain,
+    dryness: &shared::props::MeadowDryness,
+) -> GrassInstance {
     let (yaw, _, _) = spawn.rotation.to_euler(EulerRot::YXZ);
+    // Per-tuft dryness: the shared field says WHERE the meadow runs dry
+    // (agreeing with the spawn thinning and the ground mottle), a stable
+    // per-tuft jitter keeps neighbours from being clones. Rides the
+    // previously unused .w lane - no stride change, no pipeline change.
+    let jitter = {
+        let value = (spawn.position.x * 419.3 + spawn.position.z * 173.7).sin() * 43_758.547;
+        value - value.floor()
+    };
+    let dry = (dryness.sample(spawn.position.x, spawn.position.z) + (jitter - 0.5) * 0.35)
+        .clamp(0.0, 1.0);
     GrassInstance {
         position_height: [
             spawn.position.x,
@@ -146,7 +160,7 @@ fn instance_for(spawn: &PropSpawn, terrain: &WorldTerrain) -> GrassInstance {
             spawn.position.z,
             stable_height(spawn.position),
         ],
-        rotation_scale: [yaw.sin(), yaw.cos(), spawn.scale, 0.0],
+        rotation_scale: [yaw.sin(), yaw.cos(), spawn.scale, dry],
     }
 }
 
@@ -237,11 +251,20 @@ fn build_chunk(
     roads: &Query<&VillageRoad>,
 ) {
     let spawns = filtered_spawns(terrain, coord, stress_density, zones, roads);
+    let seed = terrain
+        .generator
+        .loaded_map()
+        .definition
+        .generated
+        .as_ref()
+        .map(|generated| generated.seed)
+        .unwrap_or(0);
+    let dryness = shared::props::MeadowDryness::new(seed);
     let mut data = ChunkGrassInstances::default();
     for spawn in &spawns {
         match spawn.kind {
-            Some(PropKind::GrassShortA) => data.short.push(instance_for(spawn, terrain)),
-            Some(PropKind::GrassTallA) => data.tall.push(instance_for(spawn, terrain)),
+            Some(PropKind::GrassShortA) => data.short.push(instance_for(spawn, terrain, &dryness)),
+            Some(PropKind::GrassTallA) => data.tall.push(instance_for(spawn, terrain, &dryness)),
             _ => {}
         }
     }

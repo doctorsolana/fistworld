@@ -415,38 +415,30 @@ fn handle_card_clicks(
     }
 }
 
-/// The soldiers of the current selection the sender actually commands - what
-/// a muster would take.
-fn eligible_recruits(
-    selection: &crate::selection::Selection,
-    account: &str,
-    commanded: &Query<&CommandedBy, With<shared::components::CharacterKind>>,
-) -> Vec<Entity> {
-    selection
-        .entities
-        .iter()
-        .copied()
-        .filter(|entity| {
-            commanded
-                .get(*entity)
-                .is_ok_and(|owner| !account.is_empty() && owner.0 == account)
-        })
-        .collect()
-}
-
 /// The muster card narrates what a click would do: dimmed "MUSTER" when
 /// nothing is selected, an ember "MUSTER 5" when five of your soldiers are.
+#[allow(clippy::type_complexity)]
 fn bind_muster_card(
     selection: Res<crate::selection::Selection>,
     name_input: Res<crate::ui::name_entry::PlayerNameInput>,
-    commanded: Query<&CommandedBy, With<shared::components::CharacterKind>>,
+    soldiers: Query<
+        (
+            Entity,
+            &CommandedBy,
+            Option<&MemberOfBattalion>,
+            Has<shared::components::Hero>,
+        ),
+        With<shared::components::CharacterKind>,
+    >,
     mut cards: Query<&mut BorderColor, With<MusterCard>>,
     mut labels: Query<&mut Text, With<MusterCardLabel>>,
 ) {
     let account = name_input.name.trim().to_lowercase();
-    let eligible = eligible_recruits(&selection, &account, &commanded).len();
+    let eligible =
+        crate::ui::encyclopedia::army::muster_candidates(&selection, &account, &soldiers).len();
     let next_label = if eligible == 0 {
-        "MUSTER".to_string()
+        // Creates an empty battalion; fill it from the army page.
+        "NEW BATTALION".to_string()
     } else {
         format!("MUSTER {eligible}")
     };
@@ -467,6 +459,7 @@ fn bind_muster_card(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn handle_muster_card_clicks(
     mouse: Res<ButtonInput<MouseButton>>,
     time: Res<Time>,
@@ -474,7 +467,15 @@ fn handle_muster_card_clicks(
     cards: Query<&Interaction, With<MusterCard>>,
     selection: Res<crate::selection::Selection>,
     name_input: Res<crate::ui::name_entry::PlayerNameInput>,
-    commanded: Query<&CommandedBy, With<shared::components::CharacterKind>>,
+    soldiers: Query<
+        (
+            Entity,
+            &CommandedBy,
+            Option<&MemberOfBattalion>,
+            Has<shared::components::Hero>,
+        ),
+        With<shared::components::CharacterKind>,
+    >,
     mut senders: Query<
         &mut lightyear::prelude::MessageSender<shared::protocol::ArmyOrder>,
         (With<crate::GameClient>, With<lightyear::prelude::Connected>),
@@ -496,10 +497,9 @@ fn handle_muster_card_clicks(
         return;
     }
     let account = name_input.name.trim().to_lowercase();
-    let recruits = eligible_recruits(&selection, &account, &commanded);
-    if recruits.is_empty() {
-        return;
-    }
+    // Empty is deliberate: the click always raises a battalion.
+    let recruits =
+        crate::ui::encyclopedia::army::muster_candidates(&selection, &account, &soldiers);
     *last_muster = Some(now);
     if let Ok(mut sender) = senders.single_mut() {
         sender.send::<shared::protocol::ReliableChannel>(shared::protocol::ArmyOrder::Muster {

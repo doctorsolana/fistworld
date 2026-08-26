@@ -5,7 +5,7 @@ Third pipeline in `asset_creation/`, alongside `CHARACTER_PIPELINE.md` (rigged, 
 single-mesh objects with no rig, no animation and no collider.
 
 ```
-build_resources.py        all five bundles      -> carried_resources.blend
+build_resources.py        all nine bundles      -> carried_resources.blend
 export_resources_glb.py   one .glb per bundle   -> client/assets/game_assets/resources/carried/
 render_icons.py           one 512px RGBA icon   -> client/assets/ui/goods/
 inspect_resource_glb.py   contract check
@@ -317,17 +317,17 @@ Two of the fish basket's rules transferred directly and both were broken first:
 Crust tones are all **below 1.0**. At the bakery's own brightness, against wicker instead of dark
 timber, the crust went luminous orange.
 
-## 5. Integration status and open appearance question
+## 5. Runtime integration
 
-The attachment/orientation/base-transform work is integrated. One appearance-model question
-remains as more food trades are added.
+The attachment/orientation/base-transform work is integrated. Each inventory good has a default
+authored appearance, while production routines can still override that presentation when needed.
 
-**`Good::Food` is generic but its appearance is not.** A fisherman carries fish; a baker carries
-bread. Splitting the accounting resource from its look — `Good::Food` +
-`CarriedAppearance::{FishBasket, BreadBasket, MeatBundle}` — is the right shape. `FishBasket`,
-`BreadBasket` and `FlourSack` now exist; `MeatBundle` does not.
+**The accounting good and carried appearance are deliberately separate.** A fisherman carries fish;
+a baker carries bread; a butcher carries meat. `CarriedAppearance` selects the authored object while
+`Good` remains the inventory and market identity. Dedicated `WoolFleece` and `MeatHaunch`
+appearances now back `Good::Wool` and `Good::Meat`.
 
-### Flour and Bread — integrated
+### Dedicated appearances and icons
 
 The dedicated carried models and inventory icons are connected to the runtime. Keep these mappings
 when presentation code is reorganized:
@@ -337,6 +337,8 @@ when presentation code is reorganized:
 ```rust
 CarriedAppearance::FlourSack   => "game_assets/resources/carried/FlourSack.glb#Scene0"
 CarriedAppearance::BreadBasket => "game_assets/resources/carried/BreadBasket.glb#Scene0"
+CarriedAppearance::WoolFleece  => "game_assets/resources/carried/WoolFleece.glb#Scene0"
+CarriedAppearance::MeatHaunch  => "game_assets/resources/carried/MeatHaunch.glb#Scene0"
 ```
 
 **b.** The shared UI icon lookup in `client/src/ui/mod.rs`:
@@ -344,11 +346,14 @@ CarriedAppearance::BreadBasket => "game_assets/resources/carried/BreadBasket.glb
 ```rust
 Good::Flour => "ui/goods/flour.png"
 Good::Bread => "ui/goods/bread.png"
+Good::Wool  => "ui/goods/wool.png"
+Good::Meat  => "ui/goods/meat.png"
 ```
 
-Both icons are shipped at `client/assets/ui/goods/`, 512×512 RGBA, rendered from the same fixed studio
-as the other eight (flour 30.1% canvas coverage, bread 26.5% — comfortably over the 5% empty-render
-assert).
+The icons ship at `client/assets/ui/goods/` as 512×512 RGBA and are rendered from the same fixed
+studio as their GLBs. `item_manifest.py` is the common source for the builder, exporter, icon renderer
+and contact sheet; adding an item there keeps those outputs in lockstep. The renderer rejects icons
+with less than 1% non-transparent coverage as effectively empty.
 
 **Loaded villagers now keep the carry body layer at full weight while standing**, so the
 idle clip no longer pulls their arms away from an attached bundle. A purpose-authored

@@ -521,6 +521,76 @@ impl CivicHallLevel {
     }
 }
 
+/// The two authored house families. A line is permanent identity: upgrades
+/// stay within it so the entrance never jumps to another wall.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum HouseLine {
+    #[default]
+    Cabin,
+    LongCabin,
+}
+
+/// Physical rung of a house, independent of settlement tier after building.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum HouseLevel {
+    #[default]
+    Ground,
+    UpperStorey,
+}
+
+/// Stable replicated art identity for one house or house worksite.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct HouseAppearance {
+    pub line: HouseLine,
+    pub level: HouseLevel,
+}
+
+impl HouseAppearance {
+    /// Pick a repeatable line from the approved plot rather than iteration or
+    /// RNG order, so reloads and high-speed simulations cannot re-skin homes.
+    pub fn for_new_house(tier: SettlementTier, plot: Vec3) -> Self {
+        let x = (plot.x * 4.0).round() as i64 as u64;
+        let z = (plot.z * 4.0).round() as i64 as u64;
+        let mut hash = x ^ z.rotate_left(32) ^ 0x9e37_79b9_7f4a_7c15;
+        hash ^= hash >> 30;
+        hash = hash.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        hash ^= hash >> 27;
+        hash = hash.wrapping_mul(0x94d0_49bb_1331_11eb);
+        hash ^= hash >> 31;
+        Self {
+            line: if hash & 1 == 0 {
+                HouseLine::Cabin
+            } else {
+                HouseLine::LongCabin
+            },
+            level: if tier >= SettlementTier::Village {
+                HouseLevel::UpperStorey
+            } else {
+                HouseLevel::Ground
+            },
+        }
+    }
+
+    pub const fn building_type(self) -> crate::building::BuildingType {
+        use crate::building::BuildingType as Art;
+        match (self.line, self.level) {
+            (HouseLine::Cabin, HouseLevel::Ground) => Art::LogCabin,
+            (HouseLine::Cabin, HouseLevel::UpperStorey) => Art::CabinL2,
+            (HouseLine::LongCabin, HouseLevel::Ground) => Art::LongCabin,
+            (HouseLine::LongCabin, HouseLevel::UpperStorey) => Art::LongCabinL2,
+        }
+    }
+
+    /// Largest authored rung in this same line, used when reserving a plot.
+    pub const fn reserved_building_type(self) -> crate::building::BuildingType {
+        use crate::building::BuildingType as Art;
+        match self.line {
+            HouseLine::Cabin => Art::CabinL2,
+            HouseLine::LongCabin => Art::LongCabinL2,
+        }
+    }
+}
+
 /// The physical finish of a settlement's marketplace.
 ///
 /// The two authored scenes have an identical 12 x 12 metre footprint and the
@@ -771,6 +841,28 @@ impl SettlementBuildingKind {
             SettlementBuildingKind::StoneQuarry => Art::PlaceholderStoneQuarry,
             SettlementBuildingKind::LivestockFarm => Art::PlaceholderLivestockFarm,
         }
+    }
+
+    /// Resolve per-instance house art while preserving the simple semantic
+    /// mapping for every other building kind and old replicated houses.
+    pub fn art_with_house(self, house: Option<&HouseAppearance>) -> crate::building::BuildingType {
+        if self == SettlementBuildingKind::House {
+            house.copied().unwrap_or_default().building_type()
+        } else {
+            self.art()
+        }
+    }
+
+    /// Conservative siting envelope. Houses reserve the union of both L2
+    /// lines because the deterministic line pick happens at the approved plot.
+    pub fn placement_definition(self) -> crate::building::BuildingDef {
+        if self != SettlementBuildingKind::House {
+            return self.art().definition();
+        }
+        let mut definition = crate::building::BuildingType::LongCabinL2.definition();
+        definition.footprint = Vec2::new(8.6866, 7.3600);
+        definition.footprint_center = Vec2::ZERO;
+        definition
     }
 
     /// What this building makes its owner, given the ground it stands on.
@@ -1568,7 +1660,7 @@ pub fn minimum_building_water_clearance(
     kind: SettlementBuildingKind,
     rotation_y: f32,
 ) -> f32 {
-    let definition = kind.art().definition();
+    let definition = kind.placement_definition();
     let half = definition.footprint * 0.5 + Vec2::splat(0.25);
     let footprint_center = definition.world_footprint_center(centre, rotation_y);
     let footprint = minimum_rotated_rect_water_clearance(
@@ -2765,5 +2857,58 @@ mod civic_hall_level_tests {
             reserved.root_footprint_radius() <= SettlementBuildingKind::Hall.clearance(),
             "the planning clearance must contain the complete future Hall shell"
         );
+    }
+}
+
+#[cfg(test)]
+mod house_appearance_tests {
+    use super::*;
+    use crate::building::BuildingType;
+
+    #[test]
+    fn every_house_line_and_level_maps_to_its_matching_asset() {
+        for (line, level, expected) in [
+            (HouseLine::Cabin, HouseLevel::Ground, BuildingType::LogCabin),
+            (
+                HouseLine::Cabin,
+                HouseLevel::UpperStorey,
+                BuildingType::CabinL2,
+            ),
+            (
+                HouseLine::LongCabin,
+                HouseLevel::Ground,
+                BuildingType::LongCabin,
+            ),
+            (
+                HouseLine::LongCabin,
+                HouseLevel::UpperStorey,
+                BuildingType::LongCabinL2,
+            ),
+        ] {
+            assert_eq!(HouseAppearance { line, level }.building_type(), expected);
+        }
+    }
+
+    #[test]
+    fn plot_pick_is_stable_and_tier_only_changes_the_rung() {
+        let plot = Vec3::new(137.25, 0.0, -82.75);
+        let hamlet = HouseAppearance::for_new_house(SettlementTier::Hamlet, plot);
+        assert_eq!(
+            hamlet,
+            HouseAppearance::for_new_house(SettlementTier::Hamlet, plot)
+        );
+        let village = HouseAppearance::for_new_house(SettlementTier::Village, plot);
+        assert_eq!(hamlet.line, village.line);
+        assert_eq!(hamlet.level, HouseLevel::Ground);
+        assert_eq!(village.level, HouseLevel::UpperStorey);
+    }
+
+    #[test]
+    fn planning_envelope_contains_both_upgrade_lines() {
+        let reserved = SettlementBuildingKind::House.placement_definition();
+        for art in [BuildingType::CabinL2, BuildingType::LongCabinL2] {
+            let actual = art.definition();
+            assert!(reserved.footprint.cmpge(actual.footprint).all());
+        }
     }
 }

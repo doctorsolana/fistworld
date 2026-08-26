@@ -2237,7 +2237,10 @@ impl NavigationBuildingCache {
 
 fn settlement_kind_for_art(building_type: BuildingType) -> SettlementBuildingKind {
     match building_type {
-        BuildingType::LogCabin => SettlementBuildingKind::House,
+        BuildingType::LogCabin
+        | BuildingType::LongCabin
+        | BuildingType::CabinL2
+        | BuildingType::LongCabinL2 => SettlementBuildingKind::House,
         BuildingType::LumberjackHut => SettlementBuildingKind::LumberjackHut,
         BuildingType::Farmstead => SettlementBuildingKind::Farmstead,
         BuildingType::FishermansHut => SettlementBuildingKind::FishermansHut,

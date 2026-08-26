@@ -1280,9 +1280,16 @@ mod tests {
     fn trade_board_lists_every_good() {
         assert_eq!(Good::ALL.len(), Good::COUNT);
         for good in Good::ALL {
-            assert!(good_icon_path(good).ends_with(".png"));
+            let icon_path = good_icon_path(good);
+            assert!(icon_path.ends_with(".png"));
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets")
+                .join(icon_path);
+            assert!(path.is_file(), "missing goods icon: {}", path.display());
         }
         assert_eq!(good_icon_path(Good::Flour), "ui/goods/flour.png");
         assert_eq!(good_icon_path(Good::Bread), "ui/goods/bread.png");
+        assert_eq!(good_icon_path(Good::Wool), "ui/goods/wool.png");
+        assert_eq!(good_icon_path(Good::Meat), "ui/goods/meat.png");
     }
 }

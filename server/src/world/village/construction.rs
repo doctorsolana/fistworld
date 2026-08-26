@@ -1319,6 +1319,7 @@ pub fn advance_construction(
         Option<&InheritedBusinessCapital>,
         Option<&BusinessProjectAccounting>,
         Option<&crate::player::permits::PlayerConstructionProject>,
+        Option<&shared::components::HouseAppearance>,
     )>,
     mut sites: Query<&mut shared::components::ConstructionSite>,
     mut facings: Query<&mut PlayerRotation>,
@@ -1334,6 +1335,7 @@ pub fn advance_construction(
         inherited_capital,
         project_accounting,
         player_project,
+        house_appearance,
     ) in pending.iter_mut()
     {
         let Ok((settlement, settlement_id)) = settlements.get(under.settlement) else {
@@ -1413,7 +1415,11 @@ pub fn advance_construction(
                     let attempt = u32::from(under.failed_stand_routes);
                     let angle =
                         under.rotation + (attempt % 12) as f32 * std::f32::consts::TAU / 12.0;
-                    let footprint = under.kind.art().definition().footprint;
+                    let footprint = under
+                        .kind
+                        .art_with_house(house_appearance)
+                        .definition()
+                        .footprint;
                     let radius =
                         footprint.x.max(footprint.y) * 0.5 + 2.0 + (attempt / 12) as f32 * 2.0;
                     let x = under.position.x + angle.sin() * radius;
@@ -1475,7 +1481,7 @@ pub fn advance_construction(
                 // appearing on top of standing trees.
                 commands.entity(site).insert((
                     shared::building::PlacedBuilding {
-                        building_type: under.kind.art(),
+                        building_type: under.kind.art_with_house(house_appearance),
                         rotation: under.rotation,
                     },
                     shared::building::BuildingPosition(under.position),
@@ -1542,7 +1548,7 @@ pub fn advance_construction(
                         // The finished building takes over the plot claim from the
                         // site, so the ground stays clear once the site despawns.
                         shared::building::PlacedBuilding {
-                            building_type: under.kind.art(),
+                            building_type: under.kind.art_with_house(house_appearance),
                             rotation: under.rotation,
                         },
                         shared::building::BuildingPosition(under.position),
@@ -1554,6 +1560,9 @@ pub fn advance_construction(
                 commands
                     .entity(building_entity)
                     .insert(shared::components::BuildingOf(*settlement_id));
+                if let Some(appearance) = house_appearance {
+                    commands.entity(building_entity).insert(*appearance);
+                }
                 if let Some(owner_id) = under.owner_id {
                     commands
                         .entity(building_entity)

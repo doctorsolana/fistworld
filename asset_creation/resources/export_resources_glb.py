@@ -3,12 +3,12 @@
     blender asset_creation/resources/carried_resources.blend --background --python asset_creation/resources/export_resources_glb.py
     python3 asset_creation/resources/inspect_resource_glb.py client/assets/game_assets/resources/carried/WoodBundle.glb
 
-NO ROTATION, unlike the building exporter. Buildings are authored facing -X and turned -90 deg about Z
-on the way out; these are authored facing Blender +Y, which export_yup already maps to glTF -Z. Adding
-the buildings' turn here would leave every bundle lying across the villager's chest.
+NO ROTATION, unlike the building exporter. Carried objects are authored so their Blender -Y front
+lands on the character's glTF -Z front after attachment to `attach.carry`. Adding the buildings'
+export turn here would leave every bundle lying across the villager's chest.
 
-Each item exports ALONE via use_selection, so the five glbs are five single-mesh scenes rather than one
-scene repeated five times with four things hidden. Hidden objects still export unless excluded, and
+Each item exports ALONE via use_selection, so every GLB is a single-mesh scene rather than one scene
+repeated with the other workbench objects hidden. Hidden objects still export unless excluded, and
 `use_visible` is a trap: it depends on viewport state that a headless run does not have.
 """
 

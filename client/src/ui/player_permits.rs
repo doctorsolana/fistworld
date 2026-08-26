@@ -810,7 +810,7 @@ fn road_snap_candidates(
             // Door depth alone is insufficient for wide farmyards: it can put
             // the threshold beside the lane while a footprint corner still
             // occupies the reserved road bed.
-            let setback = kind.art().definition().root_footprint_radius()
+            let setback = kind.placement_definition().root_footprint_radius()
                 + 0.45
                 + road.reserved_width * 0.5
                 + 0.25;
@@ -931,7 +931,7 @@ fn plot_overlap_reason(
     }) {
         return Some("Overlaps an existing or reserved plot".into());
     }
-    let footprint_radius = kind.art().definition().root_footprint_radius() + 0.45;
+    let footprint_radius = kind.placement_definition().root_footprint_radius() + 0.45;
     if roads.iter().any(|road| {
         road.contains_reserved_point(Vec2::new(position.x, position.z), footprint_radius)
     }) {
@@ -1658,7 +1658,7 @@ fn draw_permit_placement_guides(
         return;
     };
     let color = guide_color(preview.band);
-    let definition = preview.kind.art().definition();
+    let definition = preview.kind.placement_definition();
     let footprint_center = definition.world_footprint_center(preview.position, preview.rotation);
     draw_rotated_rect(
         &mut gizmos,

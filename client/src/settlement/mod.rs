@@ -18,8 +18,9 @@ use bevy::prelude::*;
 use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
 use shared::components::{
     BuildingDoorDemand, CivicHallLevel, CivicHallUpgradeWorksite, CloudSeed, ConstructionSite,
-    FarmField, FishingPier, Household, LivestockPasture, MarketLevel, PlayerPosition,
-    PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind, TimeWarp, WorldTime,
+    FarmField, FishingPier, HouseAppearance, Household, LivestockPasture, MarketLevel,
+    PlayerPosition, PlayerRotation, Settlement, SettlementBuilding, SettlementBuildingKind,
+    TimeWarp, WorldTime,
 };
 use shared::debug::DebugGizmoMode;
 use shared::economy::{BusinessCondition, BusinessState, Good, GoodsInventory};
@@ -157,11 +158,12 @@ pub struct BuildingVisual {
 fn building_visual_art(
     kind: SettlementBuildingKind,
     market_level: Option<&MarketLevel>,
+    house: Option<&HouseAppearance>,
 ) -> BuildingType {
     if kind == SettlementBuildingKind::Market {
         market_level.copied().unwrap_or_default().building_type()
     } else {
-        kind.art()
+        kind.art_with_house(house)
     }
 }
 
@@ -341,6 +343,7 @@ fn attach_construction_supply_visuals(
             &PlayerPosition,
             &GoodsInventory,
             Option<&CivicHallUpgradeWorksite>,
+            Option<&HouseAppearance>,
         ),
         Without<ConstructionSupplyVisual>,
     >,
@@ -363,14 +366,14 @@ fn attach_construction_supply_visuals(
         })
         .clone();
 
-    for (entity, site, position, inventory, hall_upgrade) in sites.iter() {
+    for (entity, site, position, inventory, hall_upgrade, house) in sites.iter() {
         let (required, good, material, art) = hall_upgrade.map_or_else(
             || {
                 (
                     site.kind.construction_wood_required(),
                     Good::Wood,
                     wood_material.clone(),
-                    site.kind.art(),
+                    site.kind.art_with_house(house),
                 )
             },
             |upgrade| {
@@ -683,6 +686,7 @@ fn raise_construction_visuals(
         &ConstructionSite,
         &PlayerPosition,
         Option<&CivicHallUpgradeWorksite>,
+        Option<&HouseAppearance>,
         Option<&mut RaisingVisual>,
         Option<&BuildingVisual>,
     )>,
@@ -692,7 +696,7 @@ fn raise_construction_visuals(
         return;
     };
     let warp = warp.iter().next().map(|warp| warp.0).unwrap_or(1.0);
-    for (entity, site, position, hall_upgrade, raising, drawn) in sites.iter_mut() {
+    for (entity, site, position, hall_upgrade, house, raising, drawn) in sites.iter_mut() {
         if !site.raising {
             continue;
         }
@@ -701,7 +705,7 @@ fn raise_construction_visuals(
             // First frame of the raise: put the model in, fully underground.
             let art = hall_upgrade
                 .map(|upgrade| upgrade.target.building_type())
-                .unwrap_or_else(|| site.kind.art());
+                .unwrap_or_else(|| site.kind.art_with_house(house));
             let definition = art.definition();
             let sunk = definition.height.max(1.0);
             if drawn.is_none() {
@@ -787,6 +791,7 @@ fn claim_building_ground(
         &PlayerPosition,
         &PlayerRotation,
         Option<&MarketLevel>,
+        Option<&HouseAppearance>,
         Option<&PlacedBuilding>,
         Option<&BuildingPosition>,
     )>,
@@ -796,6 +801,7 @@ fn claim_building_ground(
             &ConstructionSite,
             &PlayerPosition,
             Option<&CivicHallUpgradeWorksite>,
+            Option<&HouseAppearance>,
         ),
         Without<PlacedBuilding>,
     >,
@@ -815,11 +821,11 @@ fn claim_building_ground(
             commands.entity(entity).insert(BuildingPosition(position.0));
         }
     }
-    for (entity, building, position, rotation, market_level, placed, building_position) in
+    for (entity, building, position, rotation, market_level, house, placed, building_position) in
         built.iter()
     {
         let desired = PlacedBuilding {
-            building_type: building_visual_art(building.kind, market_level),
+            building_type: building_visual_art(building.kind, market_level, house),
             rotation: rotation.0,
         };
         if placed != Some(&desired) {
@@ -831,12 +837,12 @@ fn claim_building_ground(
     }
     // Sites carry their rotation now, so the cleared patch is turned exactly
     // like the building that will stand on it.
-    for (entity, site, position, hall_upgrade) in sites.iter() {
+    for (entity, site, position, hall_upgrade, house) in sites.iter() {
         commands.entity(entity).insert((
             PlacedBuilding {
                 building_type: hall_upgrade
                     .map(|upgrade| upgrade.target.building_type())
-                    .unwrap_or_else(|| site.kind.art()),
+                    .unwrap_or_else(|| site.kind.art_with_house(house)),
                 rotation: site.rotation,
             },
             BuildingPosition(position.0),
@@ -861,16 +867,17 @@ fn attach_building_visuals(
         &PlayerPosition,
         &PlayerRotation,
         Option<&MarketLevel>,
+        Option<&HouseAppearance>,
         Option<&BuildingVisual>,
     )>,
 ) {
     let Some(terrain) = terrain else {
         return;
     };
-    for (entity, building, position, rotation, market_level, visual) in built.iter() {
+    for (entity, building, position, rotation, market_level, house, visual) in built.iter() {
         // The semantic kind chooses its own art, so re-skinning a Farmstead
         // never touches a rule.
-        let art = building_visual_art(building.kind, market_level);
+        let art = building_visual_art(building.kind, market_level, house);
         if visual.is_some_and(|visual| visual.building_type == art) {
             continue;
         }

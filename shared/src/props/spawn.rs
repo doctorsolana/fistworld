@@ -249,6 +249,11 @@ const TREES_DEAD: &[PropKind] = &[
     PropKind::DeadTreeC,
     PropKind::DeadGnarledA,
 ];
+/// The only broadleaf that survives in the taiga: birch, scattered roughly one
+/// tree in ten through the pines so the white stands read against the dark
+/// columns. The full broadleaf pool (oaks, chestnuts, spreading crowns) would
+/// look like summer trees standing in snow.
+const TREES_TAIGA_BIRCH: &[PropKind] = &[PropKind::BirchA, PropKind::BirchB];
 const SCATTER_BUSHES: &[PropKind] = &[PropKind::BushA, PropKind::BushB, PropKind::BushC];
 const SCATTER_ROCKS: &[PropKind] = &[
     PropKind::SmallRockA,
@@ -296,6 +301,10 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
     let clump_mask = fbm(splitmix64(seed ^ 77) as u32, 3, 1.0 / 90.0);
     let glade_mask = fbm(splitmix64(seed ^ 0x61A_DE) as u32, 2, 1.0 / 150.0);
     let copse_mask = fbm(splitmix64(seed ^ 0xC0F_5E) as u32, 2, 1.0 / 230.0);
+    // Flowers gather in ~25 m drifts instead of a uniform sprinkle: dense
+    // inside a drift, rare outside - clustering is what makes them read as
+    // a PLACE (a flower patch you could walk to) rather than confetti.
+    let flower_mask = fbm(splitmix64(seed ^ 0xF7_0F) as u32, 2, 1.0 / 26.0);
 
     let pick =
         |pool: &[PropKind], r: f32| pool[((r * pool.len() as f32) as usize).min(pool.len() - 1)];
@@ -303,13 +312,16 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
         let t = ((value - lo) / (hi - lo)).clamp(0.0, 1.0);
         t * t * (3.0 - 2.0 * t)
     };
-    // Species mix: the BIOME sets the base (highlands are conifer country at
-    // any latitude), CLIMATE shifts it north/south. Conifers take over just
-    // before the ground whitens (frost leads the snowline), dead wood claims
-    // the dry fringe — the treeline and the snowline are one fact.
-    let tree_pool = |conifer_bias: f32,
-                     climate: &crate::worldgen::ClimateSample,
-                     rng: &mut u64|
+    // Species are the biome's identity, readable at a glance: pine country IS
+    // the forest and the taiga, open broadleaf IS the meadows, skeleton trees
+    // ARE the desert. Only the uplands blend by climate — frost pushes out
+    // their last broadleaf toward the north (dry is zero up there, so the
+    // north never grows dead wood), dead trunks claim their dry southern
+    // faces. This closure serves Highlands and Mountains alone; the flatland
+    // biomes pick their pool outright at the spawn site.
+    let upland_tree_pool = |conifer_bias: f32,
+                            climate: &crate::worldgen::ClimateSample,
+                            rng: &mut u64|
      -> &'static [PropKind] {
         let conifer = (conifer_bias + climate.frost * 0.90).clamp(0.0, 0.98);
         let dead = (climate.dry * 0.70).min(0.72);
@@ -392,9 +404,14 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
                         // rare mask rather than a side effect of low density.
                         let density = (0.52 + clump * 0.36) * (1.0 - glade * 0.88);
                         if h > SEA_LEVEL + 2.0 && roll < density {
-                            let alt_bias = ((h - 16.0) / 45.0).clamp(0.0, 0.55);
-                            let pool = tree_pool(0.08 + alt_bias, &climate, &mut rng);
-                            (pick(pool, rand01(&mut rng)), 0.85 + rand01(&mut rng) * 0.45)
+                            // Pure pine: the forest is the dark-conifer biome,
+                            // its border with broadleaf meadow copses IS the
+                            // biome border. (Species never touches `density` —
+                            // the acceptance roll above already happened.)
+                            (
+                                pick(TREES_PINE, rand01(&mut rng)),
+                                0.85 + rand01(&mut rng) * 0.45,
+                            )
                         } else if roll < density + 0.10 && glade > 0.25 {
                             (
                                 pick(SCATTER_BUSHES, rand01(&mut rng)),
@@ -412,13 +429,24 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
                     WorldBiome::Meadows => {
                         // Open grass, flowers, trees gathered into copses.
                         let density = 0.02 + copse * 0.62;
-                        if roll < 0.085 {
+                        let flower_drift = (flower_mask.get([x as f64, z as f64]) as f32 * 0.5
+                            + 0.5)
+                            .clamp(0.0, 1.0);
+                        let flower_chance = 0.02 + feature(flower_drift, 0.56, 0.78) * 0.30;
+                        if roll < flower_chance {
                             (
                                 pick(SCATTER_FLOWERS, rand01(&mut rng)),
                                 0.8 + rand01(&mut rng) * 0.4,
                             )
-                        } else if roll < 0.085 + density && h > SEA_LEVEL + 2.0 {
-                            let pool = tree_pool(0.03, &climate, &mut rng);
+                        } else if roll < flower_chance + density && h > SEA_LEVEL + 2.0 {
+                            // Broadleaf country — never a pine. Skeleton trees
+                            // take over across the dry fringe so the meadow
+                            // treeline dies out on the approach to the desert.
+                            let pool = if rand01(&mut rng) < climate.dry * 0.70 {
+                                TREES_DEAD
+                            } else {
+                                TREES_BROADLEAF
+                            };
                             (pick(pool, rand01(&mut rng)), 0.9 + rand01(&mut rng) * 0.4)
                         } else if roll > 0.995 {
                             (
@@ -441,7 +469,7 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
                                 1.6 + rand01(&mut rng) * 1.6,
                             )
                         } else if roll < 0.165 && h > SEA_LEVEL + 2.0 {
-                            let pool = tree_pool(0.80, &climate, &mut rng);
+                            let pool = upland_tree_pool(0.80, &climate, &mut rng);
                             (pick(pool, rand01(&mut rng)), 0.75 + rand01(&mut rng) * 0.35)
                         } else {
                             continue;
@@ -457,7 +485,7 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
                                 2.0 + rand01(&mut rng) * 1.8,
                             )
                         } else if roll < 0.155 && h < 42.0 {
-                            let pool = tree_pool(0.90, &climate, &mut rng);
+                            let pool = upland_tree_pool(0.90, &climate, &mut rng);
                             (pick(pool, rand01(&mut rng)), 0.7 + rand01(&mut rng) * 0.3)
                         } else {
                             continue;
@@ -465,14 +493,15 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
                     }
                     WorldBiome::Snowlands => {
                         // Taiga: thin pine stands over the snow, boulders and
-                        // rocks breaking the white. Almost every tree is a
-                        // conifer; the rare dead trunk sells the cold.
+                        // rocks breaking the white. Nine trees in ten are
+                        // pines; the rest are birches — the north is cold, not
+                        // dying, so no dead wood here.
                         let density = (0.06 + clump * 0.16) * (1.0 - glade * 0.70);
                         if h > SEA_LEVEL + 2.0 && roll < density {
-                            let pool = if rand01(&mut rng) < 0.92 {
+                            let pool = if rand01(&mut rng) < 0.90 {
                                 TREES_PINE
                             } else {
-                                TREES_DEAD
+                                TREES_TAIGA_BIRCH
                             };
                             (pick(pool, rand01(&mut rng)), 0.8 + rand01(&mut rng) * 0.4)
                         } else if roll < density + 0.045 {
@@ -580,6 +609,37 @@ const GRASS_TALL: PropKind = PropKind::GrassTallA;
 ///
 /// Deterministic from (seed, world position) alone — never from iteration
 /// order — so a chunk looks the same however the player approached it.
+
+/// The meadow dryness field: the ONE shared truth for where grassland runs
+/// dry. The server thins grass spawns with it, the client tints each tuft
+/// with it, and the terrain shader's macro mottle breathes at the same
+/// ~45 m scale - so thin, yellowed grass stands on warm ground instead of
+/// the layers disagreeing about where summer hit hardest.
+pub struct MeadowDryness {
+    field: noise::Fbm<noise::Perlin>,
+}
+
+impl MeadowDryness {
+    pub fn new(seed: u64) -> Self {
+        Self {
+            field: crate::worldgen::fbm(
+                crate::worldgen::splitmix64(seed ^ 0xD127_AEA7) as u32,
+                3,
+                1.0 / 45.0,
+            ),
+        }
+    }
+
+    /// 0 = lush, 1 = dry, remapped to full range (raw fbm huddles around
+    /// 0.5, which would collapse any tuned strength to nothing).
+    pub fn sample(&self, x: f32, z: f32) -> f32 {
+        use noise::NoiseFn;
+        let raw = (self.field.get([x as f64, z as f64]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
+        let t = ((raw - 0.40) / 0.25).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+}
+
 pub fn generate_chunk_grass(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<PropSpawn> {
     generate_chunk_grass_at_density(terrain, chunk, 1.0)
 }
@@ -625,6 +685,8 @@ pub fn generate_chunk_grass_at_density(
     let tall_tuning = default_render_tuning(GRASS_TALL);
     let short_path = GRASS_PATCH.scene_path().to_string();
     let tall_path = GRASS_TALL.scene_path().to_string();
+
+    let dryness = MeadowDryness::new(seed);
 
     // Grass is cleared only to the waterline, not to the prop clearance: a
     // riverbank with grass running down to the water is the point, and a bald
@@ -676,6 +738,9 @@ pub fn generate_chunk_grass_at_density(
             // shading the ground out.
             let density =
                 (profile.farmland * 1.45 + profile.wood * 0.20).min(1.0) * GRASS_DENSITY_SCALE;
+            // Dry patches thin out: the bare ground showing through is half
+            // of what makes a meadow read as mottled rather than carpeted.
+            let density = density * (1.0 - dryness.sample(x, z) * 0.55);
             if crate::worldgen::rand01(&mut rng) > density {
                 continue;
             }
@@ -745,6 +810,120 @@ mod tests {
         assert!(compared > 0, "test area contained no blocking props");
     }
 
+    /// Tree species are the biome's identity — pin the whole contract.
+    ///
+    /// Forest grows only pines, meadows never grow a pine, the taiga is ~90%
+    /// pine with birch and NO dead wood, the desert grows only dead wood. And
+    /// because a species rule is picked AFTER the density roll, changing a
+    /// pool must never thin a biome — the per-biome tree counts here guard
+    /// against a species filter quietly deleting trees.
+    #[test]
+    fn tree_species_follow_the_biome() {
+        use crate::worldgen::WorldBiome;
+        use std::collections::HashMap;
+        let terrain = WorldTerrain::default();
+        let map = terrain.generator.loaded_map();
+        let field = map.biome_field.as_deref().expect("generated map");
+
+        // Forest and meadows are everywhere temperate, but the taiga is a
+        // thin ring and desert flats are rare — blind latitude rows sample
+        // them too sparsely to judge a 90/10 split. So: probe chunk CENTRES
+        // (one height sample each, cheap) across each polar third and scatter
+        // only chunks that actually sit in the biome under test.
+        let mut chunks: Vec<ChunkCoord> = (-64..64)
+            .step_by(6)
+            .flat_map(|cx| [-6, -3, 0, 3, 6].map(|cz| ChunkCoord::new(cx, cz)))
+            .collect();
+        for (rows, want) in [
+            (-64..-40, WorldBiome::Snowlands),
+            (35..64, WorldBiome::Desert),
+        ] {
+            let mut found = 0;
+            'rows: for cz in rows {
+                for cx in -64..64 {
+                    let (x, z) = (
+                        (cx as f32 + 0.5) * CHUNK_SIZE,
+                        (cz as f32 + 0.5) * CHUNK_SIZE,
+                    );
+                    let h = terrain.get_height(x, z);
+                    if h > 3.0 && field.biome(x, z, h, 0.0) == want {
+                        chunks.push(ChunkCoord::new(cx, cz));
+                        found += 1;
+                        if found >= 60 {
+                            break 'rows;
+                        }
+                    }
+                }
+            }
+            assert!(found >= 20, "could not find {want:?} chunks to sample");
+        }
+
+        let mut counts: HashMap<(WorldBiome, &str), u32> = HashMap::new();
+        for chunk in chunks {
+            for spawn in generate_chunk_prop_spawns(&terrain.generator, chunk) {
+                let Some(kind) = spawn.kind else { continue };
+                let family = if TREES_PINE.contains(&kind) {
+                    "pine"
+                } else if TREES_BROADLEAF.contains(&kind) || TREES_TAIGA_BIRCH.contains(&kind) {
+                    "broadleaf"
+                } else if TREES_DEAD.contains(&kind) {
+                    "dead"
+                } else {
+                    continue;
+                };
+                // Re-derive the biome EXACTLY as the scatter did — same
+                // crude forward-difference slope — so a border cell can
+                // never cross-classify and fail the strict rules below.
+                let (x, z) = (spawn.position.x, spawn.position.z);
+                let h = terrain.get_height(x, z);
+                const STEP: f32 = 2.0;
+                let dx = terrain.get_height(x + STEP, z) - h;
+                let dz = terrain.get_height(x, z + STEP) - h;
+                let slope = dx.abs().max(dz.abs()) / STEP;
+                let biome = field.biome(x, z, h, slope);
+                *counts.entry((biome, family)).or_default() += 1;
+            }
+        }
+        let count = |b: WorldBiome, f: &'static str| *counts.get(&(b, f)).unwrap_or(&0);
+        let trees = |b: WorldBiome| count(b, "pine") + count(b, "broadleaf") + count(b, "dead");
+
+        // Every biome with a species rule still grows a healthy stand.
+        assert!(
+            trees(WorldBiome::Forest) > 200,
+            "forest thinned out: {counts:?}"
+        );
+        assert!(
+            trees(WorldBiome::Meadows) > 100,
+            "meadows thinned out: {counts:?}"
+        );
+        assert!(
+            trees(WorldBiome::Snowlands) > 100,
+            "taiga thinned out: {counts:?}"
+        );
+        assert!(trees(WorldBiome::Desert) > 10, "desert emptied: {counts:?}");
+
+        // Forest: pine country, nothing else.
+        assert_eq!(count(WorldBiome::Forest, "broadleaf"), 0);
+        assert_eq!(count(WorldBiome::Forest, "dead"), 0);
+        // Meadows: never a pine (dead wood is legal on the dry fringe).
+        assert_eq!(count(WorldBiome::Meadows, "pine"), 0);
+        // Taiga: no dead wood, roughly nine pines in ten, birch for the rest.
+        assert_eq!(count(WorldBiome::Snowlands, "dead"), 0);
+        let taiga_pine =
+            count(WorldBiome::Snowlands, "pine") as f32 / trees(WorldBiome::Snowlands) as f32;
+        assert!(
+            (0.82..=0.97).contains(&taiga_pine),
+            "taiga pine share {taiga_pine:.2}, want ~0.90"
+        );
+        assert!(
+            count(WorldBiome::Snowlands, "broadleaf") > 0,
+            "no taiga birch"
+        );
+        // Desert: skeleton trees only.
+        assert_eq!(count(WorldBiome::Desert, "pine"), 0);
+        assert_eq!(count(WorldBiome::Desert, "broadleaf"), 0);
+    }
+
     /// Somewhere to point the camera for each biome.
     #[test]
     #[ignore = "diagnostic: cargo test -p shared -- --ignored --nocapture find_biome_spots"]
@@ -789,11 +968,14 @@ mod tests {
         }
     }
 
-    /// Actual prop density per biome, measured from the shipped map.
+    /// Actual scattered-prop density per biome, measured from the live seed.
     ///
     /// "Forest feels emptier than meadows" is either a real defect or an
-    /// illusion, and the map file can settle it. Classifies every authored
-    /// object by the biome it stands in and reports trees per square kilometre.
+    /// illusion, and the scatter can settle it. Samples a stride of chunks,
+    /// classifies each spawn by the biome it stands in and reports trees per
+    /// square kilometre plus the species split — so a species-rule change can
+    /// be checked against a before/after run: the counts must hold still while
+    /// the split moves.
     #[test]
     #[ignore = "diagnostic: cargo test -p shared -- --ignored --nocapture density_by_biome"]
     fn density_by_biome() {
@@ -801,63 +983,75 @@ mod tests {
         let terrain = WorldTerrain::default();
         let map = terrain.generator.loaded_map();
         let field = map.biome_field.as_deref().expect("generated map");
-
-        // Area per biome, from a coarse sweep, so counts become densities.
-        let mut area: HashMap<String, f64> = HashMap::new();
-        const STEP: f32 = 64.0;
         let half = map.definition.generated.as_ref().unwrap().half_extent;
-        let mut x = -half;
-        while x < half {
-            let mut z = -half;
-            while z < half {
-                let h = terrain.get_height(x, z);
-                if h > 1.0 {
+
+        let mut area: HashMap<String, f64> = HashMap::new();
+        let mut counts: HashMap<(String, String), u32> = HashMap::new();
+        let chunks = (half * 2.0 / CHUNK_SIZE) as i32;
+        const STRIDE: i32 = 4;
+        let mut cz = -chunks / 2;
+        while cz < chunks / 2 {
+            let mut cx = -chunks / 2;
+            while cx < chunks / 2 {
+                let chunk = ChunkCoord::new(cx, cz);
+                // Attribute the sampled chunk's area by biome at a 16 m grid,
+                // so counts over the same chunks become densities.
+                const AREA_STEP: f32 = 16.0;
+                let mut x = cx as f32 * CHUNK_SIZE;
+                while x < (cx + 1) as f32 * CHUNK_SIZE {
+                    let mut z = cz as f32 * CHUNK_SIZE;
+                    while z < (cz + 1) as f32 * CHUNK_SIZE {
+                        let h = terrain.get_height(x, z);
+                        if h > 1.0 {
+                            let n = terrain.get_normal(x, z);
+                            let slope = (n.x * n.x + n.z * n.z).sqrt() / n.y.max(0.01);
+                            let b = format!("{:?}", field.biome(x, z, h, slope));
+                            *area.entry(b).or_default() += (AREA_STEP * AREA_STEP) as f64;
+                        }
+                        z += AREA_STEP;
+                    }
+                    x += AREA_STEP;
+                }
+                for spawn in generate_chunk_prop_spawns(&terrain.generator, chunk) {
+                    let Some(kind) = spawn.kind else { continue };
+                    let (x, z) = (spawn.position.x, spawn.position.z);
+                    let h = terrain.get_height(x, z);
                     let n = terrain.get_normal(x, z);
                     let slope = (n.x * n.x + n.z * n.z).sqrt() / n.y.max(0.01);
                     let b = format!("{:?}", field.biome(x, z, h, slope));
-                    *area.entry(b).or_default() += (STEP * STEP) as f64;
+                    let family = if TREES_PINE.contains(&kind) {
+                        "conifer"
+                    } else if TREES_BROADLEAF.contains(&kind) {
+                        "broadleaf"
+                    } else if TREES_DEAD.contains(&kind) {
+                        "dead"
+                    } else if SCATTER_BUSHES.contains(&kind) {
+                        "bush"
+                    } else if SCATTER_FLOWERS.contains(&kind) {
+                        "flower"
+                    } else {
+                        "rock"
+                    };
+                    *counts.entry((b, family.to_string())).or_default() += 1;
                 }
-                z += STEP;
+                cx += STRIDE;
             }
-            x += STEP;
-        }
-
-        let mut counts: HashMap<(String, String), u32> = HashMap::new();
-        for objects in map.objects_by_chunk.values() {
-            for object in objects {
-                let (x, z) = (object.position[0], object.position[2]);
-                let h = terrain.get_height(x, z);
-                let n = terrain.get_normal(x, z);
-                let slope = (n.x * n.x + n.z * n.z).sqrt() / n.y.max(0.01);
-                let b = format!("{:?}", field.biome(x, z, h, slope));
-                let id = object.kind.map(|k| k.id()).unwrap_or("?");
-                let family = if id.starts_with("pine") {
-                    "conifer"
-                } else if id.starts_with("dead") {
-                    "dead"
-                } else if id.starts_with("tree") {
-                    "broadleaf"
-                } else if id.starts_with("bush") {
-                    "bush"
-                } else if id.starts_with("rock") {
-                    "rock"
-                } else {
-                    "flower"
-                };
-                *counts.entry((b, family.to_string())).or_default() += 1;
-            }
+            cz += STRIDE;
         }
 
         let mut biomes: Vec<&String> = area.keys().collect();
         biomes.sort();
-        println!("\n{:<11}{:>9}   {:>26}", "BIOME", "km2", "per km2");
+        println!(
+            "\n{:<11}{:>9}   {:>26}",
+            "BIOME", "km2*", "per km2 (of sampled area)"
+        );
         for b in biomes {
             let km2 = area[b] / 1_000_000.0;
             let get = |f: &str| *counts.get(&(b.clone(), f.to_string())).unwrap_or(&0) as f64 / km2;
-            let trees = get("broadleaf") + get("conifer");
+            let trees = get("broadleaf") + get("conifer") + get("dead");
             println!(
-                "{b:<11}{km2:>9.1}   trees {trees:>6.0}  (broadleaf {:>5.0} conifer {:>5.0})  bush {:>4.0}  rock {:>4.0}  flower {:>4.0}",
-                get("broadleaf"), get("conifer"), get("bush"), get("rock"), get("flower")
+                "{b:<11}{km2:>9.2}   trees {trees:>6.0}  (broadleaf {:>5.0} conifer {:>5.0} dead {:>4.0})  bush {:>4.0}  rock {:>4.0}  flower {:>4.0}",
+                get("broadleaf"), get("conifer"), get("dead"), get("bush"), get("rock"), get("flower")
             );
         }
     }

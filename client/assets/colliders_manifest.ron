@@ -208,6 +208,29 @@
       vertex_filter: LowerYPercent ( percent: 0.545 ),
       collidable: true,
     ),
+    // Additional house lines and upper-storey rungs. Percent is the measured
+    // eave height within each exported vertical range.
+    (
+      kind: "building_long_cabin",
+      gltf_path: "game_assets/buildings/village/LongCabin.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.439 ),
+      collidable: true,
+    ),
+    (
+      kind: "building_cabin_l2",
+      gltf_path: "game_assets/buildings/village/CabinL2.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.625 ),
+      collidable: true,
+    ),
+    (
+      kind: "building_long_cabin_l2",
+      gltf_path: "game_assets/buildings/village/LongCabinL2.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.633 ),
+      collidable: true,
+    ),
     // Same reasoning as the cabin above. Walls top out at 2.20 m of a 3.76 m total (-0.16..3.60),
     // so 0.628 cuts at the eaves. The hull covers the YARD as well as the house — the woodpile and
     // the chopping block are below the cut line and units should walk around them, not through.

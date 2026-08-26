@@ -1047,7 +1047,7 @@ pub fn handle_hero_permit_orders(
                     let stand = shared::components::builder_stand_position(
                         approval.position,
                         approval.rotation,
-                        entry.kind.art().definition().footprint.y,
+                        entry.kind.placement_definition().footprint.y,
                     );
                     let planned_access = PlannedRoadAccess {
                         settlement_id: entry.settlement,
@@ -1084,6 +1084,12 @@ pub fn handle_hero_permit_orders(
                         PlayerPosition(approval.position),
                         Replicate::to_clients(NetworkTarget::All),
                     ));
+                    if entry.kind == SettlementBuildingKind::House {
+                        site.insert(shared::components::HouseAppearance::for_new_house(
+                            settlement.tier,
+                            approval.position,
+                        ));
+                    }
                     if crate::world::village::is_private_business(entry.kind) {
                         if let Some(company) = entry.company {
                             site.insert(OperatedBy(company));

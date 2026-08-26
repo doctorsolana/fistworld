@@ -1673,7 +1673,7 @@ pub fn consider_permits(
             continue;
         };
         if existing_accesses.iter().any(|access| {
-            let footprint_radius = kind.art().definition().root_footprint_radius() + 0.45;
+            let footprint_radius = kind.placement_definition().root_footprint_radius() + 0.45;
             access.intersects_circle(Vec2::new(position.x, position.z), footprint_radius)
         }) {
             // Fishing uses its own shoreline search and alternative selection,
@@ -1987,7 +1987,7 @@ pub fn consider_permits(
         let stand = shared::components::builder_stand_position(
             position,
             rotation,
-            kind.art().definition().footprint.y,
+            kind.placement_definition().footprint.y,
         );
 
         let site = commands
@@ -2027,6 +2027,14 @@ pub fn consider_permits(
                 Replicate::to_clients(NetworkTarget::All),
             ))
             .id();
+        if kind == SettlementBuildingKind::House {
+            commands
+                .entity(site)
+                .insert(shared::components::HouseAppearance::for_new_house(
+                    settlement.tier,
+                    position,
+                ));
+        }
         if is_private_business(kind) {
             commands.entity(site).insert((
                 BusinessProjectAccounting {
@@ -2312,7 +2320,7 @@ pub(crate) fn validate_manual_plot(
     }
 
     let point = Vec2::new(position.x, position.z);
-    let footprint_radius = kind.art().definition().root_footprint_radius() + 0.45;
+    let footprint_radius = kind.placement_definition().root_footprint_radius() + 0.45;
     if roads
         .iter()
         .any(|road| road.contains_reserved_point(point, footprint_radius))
@@ -2460,7 +2468,7 @@ pub(super) fn farmstead_earthwork_effort(
     rotation: f32,
 ) -> Option<f32> {
     let kind = SettlementBuildingKind::Farmstead;
-    let definition = kind.art().definition();
+    let definition = kind.placement_definition();
     let yard_center = definition.world_footprint_center(candidate, rotation);
     let yard_cut_fill =
         rect_max_cut_fill(terrain, yard_center, definition.footprint * 0.5, rotation);
@@ -2497,7 +2505,7 @@ fn livestock_earthwork_effort(
     rotation: f32,
 ) -> Option<f32> {
     let kind = SettlementBuildingKind::LivestockFarm;
-    let definition = kind.art().definition();
+    let definition = kind.placement_definition();
     let yard_center = definition.world_footprint_center(candidate, rotation);
     let yard = rect_max_cut_fill(terrain, yard_center, definition.footprint * 0.5, rotation);
     let pasture = kind.pasture_position(candidate, rotation)?;
@@ -2562,7 +2570,7 @@ fn plot_fits_navigation_bounds(
         })
     };
 
-    let definition = kind.art().definition();
+    let definition = kind.placement_definition();
     let footprint = definition.footprint * 0.5 + Vec2::splat(0.45);
     let footprint_center = definition.world_footprint_center(candidate, rotation);
     if !point_is_inside(candidate)
@@ -2650,7 +2658,7 @@ fn find_fishing_site_with_limits(
             }) {
                 continue;
             }
-            let footprint_radius = kind.art().definition().root_footprint_radius() + 0.45;
+            let footprint_radius = kind.placement_definition().root_footprint_radius() + 0.45;
             if roads.iter().any(|road| {
                 road.contains_reserved_point(Vec2::new(candidate.x, candidate.z), footprint_radius)
             }) {
@@ -2695,7 +2703,7 @@ fn find_fishing_site_with_limits(
                 let stand = shared::components::builder_stand_position(
                     candidate,
                     rotation,
-                    kind.art().definition().footprint.y,
+                    kind.placement_definition().footprint.y,
                 );
                 if !crate::world::village_roads::embodied_land_route_exists(terrain, hall, stand) {
                     continue;
@@ -3131,7 +3139,7 @@ pub(crate) fn road_access_blockers_for_plot(
     rotation: f32,
 ) -> Vec<RoadAccessBlocker> {
     let road_margin = RoadClass::Lane.initial_reserved_width() * 0.5 + 0.45;
-    let definition = kind.art().definition();
+    let definition = kind.placement_definition();
     let mut blockers = vec![RoadAccessBlocker {
         center: definition.world_footprint_center(position, rotation),
         half: definition.footprint * 0.5 + Vec2::splat(road_margin),
@@ -3234,7 +3242,7 @@ pub(super) fn planned_road_access_path(
     // Construction then quite correctly sees that shell and rejects the same
     // reserved path forever. Match the road survey's source-building margin;
     // crop plots retain the wider permanent reservation below.
-    let proposed_definition = kind.art().definition();
+    let proposed_definition = kind.placement_definition();
     local_blockers.push(RoadAccessBlocker {
         center: proposed_definition.world_footprint_center(position, rotation),
         half: proposed_definition.footprint * 0.5
@@ -3567,7 +3575,7 @@ mod road_access_tests {
         assert!(route
             .windows(2)
             .all(|segment| !blocker.blocks_segment(segment[0], segment[1])));
-        let future_definition = kind.art().definition();
+        let future_definition = kind.placement_definition();
         let future_shell = RoadAccessBlocker {
             center: future_definition.world_footprint_center(position, rotation),
             half: future_definition.footprint * 0.5
@@ -3762,7 +3770,7 @@ fn resource_plot_is_viable(
     let stand = shared::components::builder_stand_position(
         candidate,
         rotation,
-        kind.art().definition().footprint.y,
+        kind.placement_definition().footprint.y,
     );
     let hall_entrance = SettlementBuildingKind::Hall.entrance_position(hall, 0.0);
     // The reserved road proves that a future connector can reach the door;
@@ -4131,7 +4139,7 @@ fn find_site_with_plan_diagnostics(
                     continue 'candidate;
                 }
             }
-            let footprint_radius = kind.art().definition().root_footprint_radius() + 0.45;
+            let footprint_radius = kind.placement_definition().root_footprint_radius() + 0.45;
             if roads.iter().any(|road| {
                 road.contains_reserved_point(Vec2::new(candidate.x, candidate.z), footprint_radius)
             }) {
@@ -4213,7 +4221,7 @@ fn find_site_with_plan_diagnostics(
                 let builder_stand = shared::components::builder_stand_position(
                     candidate,
                     rotation,
-                    kind.art().definition().footprint.y,
+                    kind.placement_definition().footprint.y,
                 );
                 // A completed street is already a certified land route. Prove
                 // only the new frontage-to-door leg when one is nearby rather

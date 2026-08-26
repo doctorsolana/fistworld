@@ -1449,6 +1449,12 @@ fn carried_asset_spec(appearance: CarriedAppearance) -> CarriedAssetSpec {
         CarriedAppearance::BreadBasket => CarriedAssetSpec {
             scene_path: "game_assets/resources/carried/BreadBasket.glb#Scene0",
         },
+        CarriedAppearance::WoolFleece => CarriedAssetSpec {
+            scene_path: "game_assets/resources/carried/WoolFleece.glb#Scene0",
+        },
+        CarriedAppearance::MeatHaunch => CarriedAssetSpec {
+            scene_path: "game_assets/resources/carried/MeatHaunch.glb#Scene0",
+        },
     }
 }
 
@@ -1856,17 +1862,17 @@ mod carried_tests {
 
     #[test]
     fn every_carried_appearance_has_an_authored_scene() {
-        for appearance in [
-            CarriedAppearance::WoodBundle,
-            CarriedAppearance::WheatSheaf,
-            CarriedAppearance::FishBasket,
-            CarriedAppearance::StoneBundle,
-            CarriedAppearance::IronBundle,
-            CarriedAppearance::FlourSack,
-            CarriedAppearance::BreadBasket,
-        ] {
+        for appearance in CarriedAppearance::ALL {
             let spec = carried_asset_spec(appearance);
             assert!(spec.scene_path.ends_with(".glb#Scene0"));
+            let asset_path = spec
+                .scene_path
+                .strip_suffix("#Scene0")
+                .expect("carried asset scene suffix");
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets")
+                .join(asset_path);
+            assert!(path.is_file(), "missing carried asset: {}", path.display());
         }
         assert_eq!(
             carried_asset_spec(CarriedAppearance::FlourSack).scene_path,
@@ -1875,6 +1881,14 @@ mod carried_tests {
         assert_eq!(
             carried_asset_spec(CarriedAppearance::BreadBasket).scene_path,
             "game_assets/resources/carried/BreadBasket.glb#Scene0"
+        );
+        assert_eq!(
+            carried_asset_spec(CarriedAppearance::WoolFleece).scene_path,
+            "game_assets/resources/carried/WoolFleece.glb#Scene0"
+        );
+        assert_eq!(
+            carried_asset_spec(CarriedAppearance::MeatHaunch).scene_path,
+            "game_assets/resources/carried/MeatHaunch.glb#Scene0"
         );
         let wood = carried_bundle_transform();
         assert_eq!(wood.scale, Vec3::splat(1.35));

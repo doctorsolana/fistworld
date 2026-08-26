@@ -93,8 +93,12 @@ impl TerrainGenerator {
             let slope = (dx * dx + dz * dz).sqrt();
             let weights = crate::worldgen::surface_weights_at(h, slope);
             if let Some(biomes) = self.loaded_map.biome_field.as_deref() {
-                let biome = biomes.biome(x, z, h, slope);
-                return crate::worldgen::biome_adjusted_weights(weights, biome);
+                // The SMOOTH blend, not the discrete classifier: this is the
+                // one visual-only consumer, and it is where biome borders
+                // stop being one-texel steps (gameplay still reads the
+                // discrete biome and is untouched).
+                let blend = biomes.biome_blend(x, z, h, slope);
+                return crate::worldgen::biome_blended_weights(weights, &blend);
             }
             return weights;
         }

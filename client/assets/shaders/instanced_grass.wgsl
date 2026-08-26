@@ -90,8 +90,18 @@ fn vertex(vertex: GrassVertex) -> VertexOutput {
     out.uv_b = vertex.uv_b;
 #endif
 #ifdef VERTEX_COLORS
+    // Per-tuft dryness tint (instance .w lane): lush tufts sit a touch
+    // deeper green, dry tufts go warm straw. Value-and-warmth only - the
+    // same discipline as the terrain mottle - so the meadow yellows rather
+    // than turning teal or orange.
+    let dryness = clamp(vertex.instance_rotation_scale.w, 0.0, 1.0);
+    let dry_tint = mix(
+        vec3<f32>(0.90, 1.02, 0.88),
+        vec3<f32>(1.18, 1.06, 0.74),
+        dryness,
+    );
     out.color = vec4<f32>(
-        vertex.color.rgb * (1.0 + gust * 0.30 * h),
+        vertex.color.rgb * dry_tint * (1.0 + gust * 0.30 * h),
         vertex.color.a,
     );
 #endif

@@ -182,10 +182,10 @@ pub fn handle_army_orders(
             };
             match order {
                 ArmyOrder::Muster { members: recruits } => {
+                    // An EMPTY muster is legal and useful: raise the banner
+                    // first, assign soldiers to it afterwards. The per-account
+                    // ceiling below still bounds spam.
                     let recruits = owned_soldiers(&recruits, account, &soldiers);
-                    if recruits.is_empty() {
-                        continue;
-                    }
                     // The ceiling every client message needs: without it a
                     // looping client mints an endless stream of replicated
                     // battalion entities from one reusable soldier.
@@ -198,7 +198,13 @@ pub fn handle_army_orders(
                         continue;
                     }
                     let (id, ordinal) = ledger.mint(account);
-                    let centroid = centroid_of(recruits.iter().map(|(_, position, _)| *position));
+                    // An empty battalion has no centroid yet; maintenance
+                    // re-centres it the moment it gains a soldier.
+                    let centroid = if recruits.is_empty() {
+                        Vec3::ZERO
+                    } else {
+                        centroid_of(recruits.iter().map(|(_, position, _)| *position))
+                    };
                     commands.spawn((
                         Battalion {
                             id,
@@ -483,7 +489,6 @@ pub fn maintain_battalions(
     mut commands: Commands,
     time: Res<Time>,
     mut elapsed: Local<f32>,
-    mut condemned: Local<HashSet<BattalionId>>,
     mut battalions: Query<(Entity, &Battalion, &mut PlayerPosition, &mut RegionCoord)>,
     members: Query<
         (
@@ -537,23 +542,15 @@ pub fn maintain_battalions(
             }
         }
     }
-    for (entity, battalion, mut position, mut region) in battalions.iter_mut() {
+    for (_, battalion, mut position, mut region) in battalions.iter_mut() {
+        // A battalion with no soldiers left simply stands empty - its card
+        // reads "0 MEN" until the player refills or disbands it. Nothing is
+        // despawned behind the player's back: an auto-dissolve here once
+        // raced the order handlers, and a banner vanishing on its own reads
+        // as a bug even when it is not.
         let Some(muster) = sums.get(&battalion.id) else {
-            // Every soldier is gone; an empty battalion is a fiction. But it
-            // dies only on the SECOND consecutive empty pass: this system has
-            // no ordering edge to the order handlers, so a legal executor
-            // interleaving can run it after a Muster spawned the battalion
-            // and before the queued member tags applied - despawning on
-            // first sight would orphan those tags on a battalion that no
-            // longer exists.
-            if condemned.contains(&battalion.id) {
-                commands.entity(entity).despawn();
-            } else {
-                condemned.insert(battalion.id);
-            }
             continue;
         };
-        condemned.remove(&battalion.id);
         let centroid = muster.sum / muster.count as f32;
         let snapped = (centroid * 2.0).round() / 2.0;
         if position.0 != snapped {
@@ -796,7 +793,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_battalion_dissolves_and_a_manned_one_recenters() {
+    fn an_empty_battalion_stands_and_a_manned_one_recenters() {
         let mut app = App::new();
         app.init_resource::<Time>();
         app.add_systems(Update, maintain_battalions);
@@ -830,26 +827,19 @@ mod tests {
             PlayerPosition(Vec3::new(10.0, 0.0, 20.0)),
         ));
 
-        // Force the cadence gate open: advance mocked time far enough.
-        app.world_mut()
-            .resource_mut::<Time>()
-            .advance_by(std::time::Duration::from_secs(3));
-        app.update();
-        // One empty pass is only a condemnation, never a despawn: a battalion
-        // mustered this very tick can look empty to an interleaved run of
-        // this system while its member tags still sit in the command queue.
+        // Force the cadence gate open twice: an empty battalion must SURVIVE
+        // every pass. Banners are only lowered by an explicit Disband - an
+        // auto-dissolve once raced the order handlers, and a battalion
+        // vanishing on its own reads as a bug even when it is not.
+        for _ in 0..2 {
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_secs(3));
+            app.update();
+        }
         assert!(
             app.world().get_entity(empty).is_ok(),
-            "the first empty pass is a grace pass"
-        );
-        app.world_mut()
-            .resource_mut::<Time>()
-            .advance_by(std::time::Duration::from_secs(3));
-        app.update();
-
-        assert!(
-            app.world().get_entity(empty).is_err(),
-            "an empty battalion must dissolve on the second pass"
+            "an empty battalion stands until disbanded"
         );
         assert_eq!(
             app.world().get::<PlayerPosition>(manned).map(|p| p.0),

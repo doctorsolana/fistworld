@@ -68,7 +68,7 @@ struct TerrainPalette {
     // x: anchor time (client seconds), z: wind drift speed (client-time
     // units), yw: sun-projection velocity — both extrapolated in-shader.
     clouds_c: vec4<f32>,
-    // x: map half extent (m), y: climate seed phase, zw: reserved.
+    // x: map half extent (m), y: climate seed phase, zw: dune wind direction.
     climate: vec4<f32>,
     // xy: storm center at the wind anchor, z: storminess, w: reserved.
     storm: vec4<f32>,
@@ -372,6 +372,61 @@ fn fragment(
             // Higher ground drifts lighter and cooler, like aerial perspective baked in.
             let band_tint = mix(vec3<f32>(0.94, 0.96, 0.93), vec3<f32>(1.06, 1.05, 1.02), banded);
             flat_albedo *= mix(vec3<f32>(1.0), band_tint, palette.stylize.z * 4.0);
+
+            // --- Meadow variation: value-and-warmth mottling, never hue ---
+            //
+            // One flat green everywhere reads sterile; real ground (and the
+            // reference games) mottles at TWO scales and occasionally wears
+            // through to earth. All three layers are static world-space noise
+            // (TAA converges static fields; animated tints shimmer), reuse the
+            // canonical cloud-field noise above verbatim, vary only luminance
+            // and the warm/cool axis (a hue rotation is what reads as blotchy
+            // paint), and are gated to soft, grassy, above-water ground so
+            // cliffs, beaches, seabeds and the snow line stay disciplined.
+            // `bands.w` is the master strength: 0.0 previews it off.
+            let vary = palette.bands.w;
+            if (vary > 0.001) {
+                let vary_seed = vec2<f32>(palette.climate.y * 130.0, palette.climate.y * 71.0);
+                let ground_xz = pbr_input.world_position.xz;
+                let waterline_v = water_params.x * step(0.5, water_params.y);
+                let dry_ground =
+                    smoothstep(waterline_v + 0.2, waterline_v + 1.2, pbr_input.world_position.y);
+                let soft_ground = weights.x * (1.0 - rockiness) * dry_ground;
+
+                // The 4-octave fbm concentrates around 0.5 (practically
+                // ~0.35..0.65), so every layer REMAPS it to full range first
+                // - without this the tuned tints collapse to an invisible
+                // couple of percent. Measured, not assumed.
+
+                // Meso mottle (~7 m): the soft dark/light patches that do most
+                // of the de-sterilising. Luminance only.
+                let meso_raw = cloud_fbm(ground_xz * (1.0 / 7.0) + vary_seed);
+                let meso = smoothstep(0.32, 0.68, meso_raw);
+                let meso_tint = mix(0.87, 1.11, meso);
+
+                // Macro drift (~40 m): broad lusher/drier regions, a touch of
+                // warmth with the value so dry reads sun-baked, not grey.
+                let macro_raw = cloud_fbm(ground_xz * (1.0 / 42.0) + vary_seed * 1.7);
+                let macro_n = smoothstep(0.34, 0.66, macro_raw);
+                let macro_tint =
+                    mix(vec3<f32>(0.94, 0.98, 0.93), vec3<f32>(1.07, 1.04, 0.975), macro_n);
+
+                let mottle = vec3<f32>(meso_tint) * macro_tint;
+                flat_albedo *= mix(vec3<f32>(1.0), mottle, vary * soft_ground);
+
+                // Worn earth (~25 m field): sparse patches where the grass has
+                // given way, blended toward the DIRT palette colour with
+                // fbm-torn edges — the snowline lesson: a wide un-torn mask
+                // reads airbrushed, a hard threshold reads as leopard spots.
+                let wear_field = cloud_fbm(ground_xz * (1.0 / 25.0) - vary_seed);
+                let wear_tear = cloud_fbm(ground_xz * (1.0 / 5.0) + vary_seed * 3.1) - 0.5;
+                let wear = smoothstep(0.58, 0.70, wear_field + wear_tear * 0.16);
+                flat_albedo = mix(
+                    flat_albedo,
+                    palette.dirt.rgb * mix(1.0, meso_tint, 0.6),
+                    wear * 0.5 * vary * soft_ground,
+                );
+            }
 
             // Retain a trace of the sampled texture so the surface has grain.
             let grain = mix(vec3<f32>(1.0), albedo / max(luminance_safe(albedo), 0.001), palette.bands.z);

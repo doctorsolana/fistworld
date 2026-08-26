@@ -6,11 +6,13 @@
 //! roster derived from the same components the server replicates can never
 //! disagree with the battlefield.
 //!
-//! Layout: a header with the MUSTER button (the creation gesture is "select
-//! soldiers in the world, open the army page, muster"), battalion cards with
-//! SELECT / LOCATE / ENLIST HERE / DISBAND, then one flat soldier roster -
-//! serving soldiers first, grouped under their battalion name, unassigned
-//! at the bottom ranked by strength.
+//! Layout: a header with CREATE BATTALION (always creates - empty when
+//! nothing is selected in the world, from the selection otherwise), battalion
+//! cards with SELECT / LOCATE / ADD HERE / DISBAND, then one flat soldier
+//! roster - serving soldiers first under their battalion name with REMOVE,
+//! unassigned at the bottom ranked by strength with ADD (which sends them to
+//! whichever card says ADDING HERE). Nothing is ever assigned automatically,
+//! and battalions persist until explicitly disbanded.
 
 use bevy::prelude::*;
 
@@ -161,7 +163,7 @@ pub(super) fn spawn_army_tab(body: &mut ChildSpawnerCommands<'_>) {
             ))
             .with_child((
                 MusterButtonLabel,
-                Text::new("MUSTER FROM SELECTION"),
+                Text::new("CREATE BATTALION"),
                 UiButtonLabel,
                 TextFont {
                     font_size: FontSize::Px(12.5),
@@ -484,12 +486,16 @@ fn spawn_battalion_card(
                 TextColor(INK),
             ));
             head.spawn((
-                Text::new(format!(
-                    "{} soldier{}  /  avg strength {}",
-                    unit.count,
-                    if unit.count == 1 { "" } else { "s" },
-                    unit.mean_strength
-                )),
+                Text::new(if unit.count == 0 {
+                    "empty  /  ADD soldiers from the roster below".to_string()
+                } else {
+                    format!(
+                        "{} soldier{}  /  avg strength {}",
+                        unit.count,
+                        if unit.count == 1 { "" } else { "s" },
+                        unit.mean_strength
+                    )
+                }),
                 TextFont {
                     font_size: FontSize::Px(12.5),
                     ..default()
@@ -517,21 +523,21 @@ fn spawn_battalion_card(
                 UiButtonVariant::Secondary,
                 false,
             );
-            // With one battalion every ENLIST already lands here; the extra
-            // button only earns its place once there is a real choice.
-            if battalion_count > 1 {
-                card_button(
-                    actions,
-                    BattalionEnlistHereButton(unit.entity),
-                    if enlisting_here {
-                        "ENLISTING HERE"
-                    } else {
-                        "ENLIST HERE"
-                    },
-                    UiButtonVariant::Secondary,
-                    enlisting_here,
-                );
-            }
+            // ALWAYS shown, even for a lone battalion: this is where the
+            // roster's ADD buttons send soldiers, and hiding the mechanism
+            // made the whole assignment flow unreadable.
+            let _ = battalion_count;
+            card_button(
+                actions,
+                BattalionEnlistHereButton(unit.entity),
+                if enlisting_here {
+                    "ADDING HERE"
+                } else {
+                    "ADD HERE"
+                },
+                UiButtonVariant::Secondary,
+                enlisting_here,
+            );
             card_button(
                 actions,
                 BattalionDisbandButton(unit.entity),
@@ -624,7 +630,7 @@ fn spawn_soldier_row(
             card_button(
                 row,
                 SoldierDismissButton(soldier.entity),
-                "DISMISS",
+                "REMOVE",
                 UiButtonVariant::Ghost,
                 false,
             );
@@ -632,7 +638,7 @@ fn spawn_soldier_row(
             card_button(
                 row,
                 SoldierEnlistButton(soldier.entity),
-                "ENLIST",
+                "ADD",
                 UiButtonVariant::Secondary,
                 false,
             );
@@ -663,26 +669,63 @@ pub(super) fn bind_army_vitals(
 
 /// The muster button narrates what it will do: how many of the units selected
 /// in the world it would actually take.
+
+/// Who a CREATE BATTALION click takes: exactly the soldiers you have
+/// selected in the world - possibly NONE. An empty creation is the normal
+/// management flow (raise the banner, then ADD soldiers from the roster);
+/// nothing is ever swept into a battalion automatically.
+#[allow(clippy::type_complexity)]
+pub(crate) fn muster_candidates(
+    selection: &crate::selection::Selection,
+    account: &str,
+    soldiers: &Query<
+        (
+            Entity,
+            &CommandedBy,
+            Option<&MemberOfBattalion>,
+            Has<shared::components::Hero>,
+        ),
+        With<CharacterKind>,
+    >,
+) -> Vec<Entity> {
+    if account.is_empty() {
+        return Vec::new();
+    }
+    selection
+        .entities
+        .iter()
+        .copied()
+        .filter(|entity| {
+            soldiers
+                .get(*entity)
+                .is_ok_and(|(_, owner, _, _)| owner.0 == account)
+        })
+        .take(shared::components::MAX_BATTALION_SIZE)
+        .collect()
+}
+
+#[allow(clippy::type_complexity)]
 pub(super) fn bind_muster_label(
     selection: Res<crate::selection::Selection>,
     name_input: Res<crate::ui::name_entry::PlayerNameInput>,
-    commanded: Query<&CommandedBy, With<CharacterKind>>,
+    soldiers: Query<
+        (
+            Entity,
+            &CommandedBy,
+            Option<&MemberOfBattalion>,
+            Has<shared::components::Hero>,
+        ),
+        With<CharacterKind>,
+    >,
     mut labels: Query<&mut Text, With<MusterButtonLabel>>,
 ) {
     let account = name_input.name.trim().to_lowercase();
-    let eligible = selection
-        .entities
-        .iter()
-        .filter(|entity| {
-            commanded
-                .get(**entity)
-                .is_ok_and(|owner| !account.is_empty() && owner.0 == account)
-        })
-        .count();
-    let next = if eligible == 0 {
-        "MUSTER FROM SELECTION".to_string()
+    let candidates = muster_candidates(&selection, &account, &soldiers).len();
+    let next = if candidates == 0 {
+        // No selection: the click raises an EMPTY battalion to fill via ADD.
+        "CREATE EMPTY BATTALION".to_string()
     } else {
-        format!("MUSTER {eligible} SELECTED")
+        format!("CREATE BATTALION ({candidates} SELECTED)")
     };
     for mut label in labels.iter_mut() {
         if label.0 != next {
@@ -709,7 +752,15 @@ pub(super) fn handle_army_buttons(
         Option<&SoldierEnlistButton>,
         Option<&SoldierDismissButton>,
     )>,
-    commanded: Query<&CommandedBy, With<CharacterKind>>,
+    soldiers: Query<
+        (
+            Entity,
+            &CommandedBy,
+            Option<&MemberOfBattalion>,
+            Has<shared::components::Hero>,
+        ),
+        With<CharacterKind>,
+    >,
     members: Query<(Entity, &MemberOfBattalion), With<CharacterKind>>,
     battalions: Query<(&Battalion, &PlayerPosition)>,
     mut cameras: Query<&mut CommanderCamera>,
@@ -735,20 +786,10 @@ pub(super) fn handle_army_buttons(
             if last_muster.is_some_and(|sent| now - sent < MUSTER_DEBOUNCE_SECONDS) {
                 continue;
             }
+            // Empty is deliberate: the click ALWAYS creates a battalion, so
+            // the button never silently does nothing.
+            let recruits = muster_candidates(&selection, &account, &soldiers);
             *last_muster = Some(now);
-            let recruits: Vec<Entity> = selection
-                .entities
-                .iter()
-                .copied()
-                .filter(|entity| {
-                    commanded
-                        .get(*entity)
-                        .is_ok_and(|owner| !account.is_empty() && owner.0 == account)
-                })
-                .collect();
-            if recruits.is_empty() {
-                continue;
-            }
             if let Ok(mut sender) = senders.single_mut() {
                 sender.send::<ReliableChannel>(ArmyOrder::Muster { members: recruits });
             }
@@ -770,9 +811,13 @@ pub(super) fn handle_army_buttons(
             open.0 = false;
         }
         if let Some(BattalionLocateButton(battalion)) = locate {
-            let Ok((_, position)) = battalions.get(*battalion) else {
+            let Ok((identity, position)) = battalions.get(*battalion) else {
                 continue;
             };
+            // An empty battalion has no ground to fly to.
+            if members.iter().all(|(_, member)| member.0 != identity.id) {
+                continue;
+            }
             for mut camera in cameras.iter_mut() {
                 camera.focus_target = position.0;
                 camera.zoom_target = LOCATE_ZOOM.clamp(camera.zoom_min, camera.zoom_max);

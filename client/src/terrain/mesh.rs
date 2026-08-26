@@ -477,85 +477,86 @@ pub(crate) fn build_far_terrain_mesh(
                 continue;
             }
 
-            let color = match water_level {
-                // `<=`: vast areas of ocean floor sit exactly at sea level, and `<` left
-                // them failing into the beach band, painting half the map sand.
-                Some(level) if height <= level => {
-                    // Depth shading gives shallows and deep ocean distinct reads, which is
-                    // most of what makes a coastline legible from far away.
-                    // Match the detailed water shader's depth scale. It reaches
-                    // the authored deep color after 2.5m; the former 40m far-
-                    // terrain ramp made ordinary ocean look pale right outside
-                    // the detailed chunk boundary.
-                    let depth =
-                        ((level - height) / shared::water::WATER_DEPTH_FADE_METERS).clamp(0.0, 1.0);
-                    // Force full deep in the outer rim so the mesh's edge lands
-                    // exactly on the infinite-ocean skirt color — otherwise the
-                    // map boundary ghosts as a lighter square in the endless sea.
-                    let bounds = terrain.generator.active_map_bounds();
-                    let dist_to_edge = (world_x - bounds.min[0])
-                        .min(bounds.max[0] - world_x)
-                        .min(world_z - bounds.min[1])
-                        .min(bounds.max[1] - world_z);
-                    let rim = 1.0 - (dist_to_edge / 600.0).clamp(0.0, 1.0);
-                    let depth = depth.max(rim);
-                    // Same deliberately soft three-band quantization as
-                    // toon_water.wgsl.
-                    let depth_banded = depth.lerp((depth * 3.0 + 0.5).floor() / 3.0, 0.35);
-                    // The raw shallow material constant is only ever seen up
-                    // close through ~70% alpha over a sandy seabed; baked
-                    // opaque it rims every coast in neon cyan at map zoom.
-                    // Bake the observed composite instead, exactly as the
-                    // deep endpoint below bakes its own composite.
-                    let shallow = Vec3::from_array([
-                        crate::water::WATER_SHALLOW_RGBA[0],
-                        crate::water::WATER_SHALLOW_RGBA[1],
-                        crate::water::WATER_SHALLOW_RGBA[2],
-                    ]) * 0.70
-                        + Vec3::new(palette.sand.x, palette.sand.y, palette.sand.z) * 0.30;
-                    // The detailed surface is translucent over the seabed, so
-                    // its observed deep color is a touch less blue than its
-                    // material constant alone. Bake that composite into the
-                    // opaque far continuation.
-                    let deep = Vec3::new(0.035, 0.105, 0.25);
-                    shallow.lerp(deep, depth_banded)
-                }
-                Some(level) if height < level + 1.2 => {
-                    Vec3::new(palette.sand.x, palette.sand.y, palette.sand.z)
-                }
-                _ => {
-                    // Biome tint so the zoomed-out map reads like the world's
-                    // resource layout (matches the minimap's colour language);
-                    // legacy maps without a biome field keep the plain grass.
-                    // BiomeField expects a gradient-magnitude slope (rise per
-                    // metre), not the shader's 1-normal.y measure.
-                    let gradient =
-                        (normal.x * normal.x + normal.z * normal.z).sqrt() / normal.y.max(0.01);
-                    let grass = match terrain
-                        .generator
-                        .loaded_map()
-                        .biome_field
-                        .as_deref()
-                        .map(|biomes| biomes.biome(world_x, world_z, height, gradient))
-                    {
-                        Some(shared::worldgen::WorldBiome::Forest) => Vec3::new(0.19, 0.38, 0.17),
-                        Some(shared::worldgen::WorldBiome::Highlands) => {
-                            Vec3::new(0.48, 0.42, 0.28)
-                        }
-                        Some(shared::worldgen::WorldBiome::Mountains) => {
-                            Vec3::new(0.52, 0.50, 0.47)
-                        }
-                        _ => Vec3::new(palette.grass.x, palette.grass.y, palette.grass.z),
-                    };
-                    let rock = Vec3::new(palette.rock.x, palette.rock.y, palette.rock.z);
-                    let rockiness = ((slope - 0.30) / 0.32).clamp(0.0, 1.0);
-                    let base = grass.lerp(rock, rockiness);
-                    // Same height banding as the splat shader so the two agree at the seam.
-                    let height_norm = (height / 90.0).clamp(0.0, 1.0);
-                    let banded = (height_norm * 5.0).floor() / 5.0;
-                    base * (0.94 + banded * 0.16)
-                }
-            };
+            let color =
+                match water_level {
+                    // `<=`: vast areas of ocean floor sit exactly at sea level, and `<` left
+                    // them failing into the beach band, painting half the map sand.
+                    Some(level) if height <= level => {
+                        // Depth shading gives shallows and deep ocean distinct reads, which is
+                        // most of what makes a coastline legible from far away.
+                        // Match the detailed water shader's depth scale. It reaches
+                        // the authored deep color after 2.5m; the former 40m far-
+                        // terrain ramp made ordinary ocean look pale right outside
+                        // the detailed chunk boundary.
+                        let depth = ((level - height) / shared::water::WATER_DEPTH_FADE_METERS)
+                            .clamp(0.0, 1.0);
+                        // Force full deep in the outer rim so the mesh's edge lands
+                        // exactly on the infinite-ocean skirt color — otherwise the
+                        // map boundary ghosts as a lighter square in the endless sea.
+                        let bounds = terrain.generator.active_map_bounds();
+                        let dist_to_edge = (world_x - bounds.min[0])
+                            .min(bounds.max[0] - world_x)
+                            .min(world_z - bounds.min[1])
+                            .min(bounds.max[1] - world_z);
+                        let rim = 1.0 - (dist_to_edge / 600.0).clamp(0.0, 1.0);
+                        let depth = depth.max(rim);
+                        // Same deliberately soft three-band quantization as
+                        // toon_water.wgsl.
+                        let depth_banded = depth.lerp((depth * 3.0 + 0.5).floor() / 3.0, 0.35);
+                        // The raw shallow material constant is only ever seen up
+                        // close through ~70% alpha over a sandy seabed; baked
+                        // opaque it rims every coast in neon cyan at map zoom.
+                        // Bake the observed composite instead, exactly as the
+                        // deep endpoint below bakes its own composite.
+                        let shallow = Vec3::from_array([
+                            crate::water::WATER_SHALLOW_RGBA[0],
+                            crate::water::WATER_SHALLOW_RGBA[1],
+                            crate::water::WATER_SHALLOW_RGBA[2],
+                        ]) * 0.70
+                            + Vec3::new(palette.sand.x, palette.sand.y, palette.sand.z) * 0.30;
+                        // The detailed surface is translucent over the seabed, so
+                        // its observed deep color is a touch less blue than its
+                        // material constant alone. Bake that composite into the
+                        // opaque far continuation.
+                        let deep = Vec3::new(0.035, 0.105, 0.25);
+                        shallow.lerp(deep, depth_banded)
+                    }
+                    Some(level) if height < level + 1.2 => {
+                        Vec3::new(palette.sand.x, palette.sand.y, palette.sand.z)
+                    }
+                    _ => {
+                        // Biome tint so the zoomed-out map reads like the world's
+                        // resource layout (matches the minimap's colour language);
+                        // legacy maps without a biome field keep the plain grass.
+                        // BiomeField expects a gradient-magnitude slope (rise per
+                        // metre), not the shader's 1-normal.y measure.
+                        let gradient =
+                            (normal.x * normal.x + normal.z * normal.z).sqrt() / normal.y.max(0.01);
+                        // The SAME smooth blend as the ground weightmap, so the
+                        // far mesh and the detail terrain agree about where a
+                        // border is and how wide it feathers.
+                        let meadow = Vec3::new(palette.grass.x, palette.grass.y, palette.grass.z);
+                        let grass =
+                            match terrain.generator.loaded_map().biome_field.as_deref().map(
+                                |biomes| biomes.biome_blend(world_x, world_z, height, gradient),
+                            ) {
+                                Some(blend) => {
+                                    Vec3::new(0.19, 0.38, 0.17) * blend.forest
+                                        + Vec3::new(0.48, 0.42, 0.28) * blend.highlands
+                                        + Vec3::new(0.52, 0.50, 0.47) * blend.mountains
+                                        + meadow * (blend.meadow() + blend.snow + blend.desert)
+                                }
+                                None => meadow,
+                            };
+                        let rock = Vec3::new(palette.rock.x, palette.rock.y, palette.rock.z);
+                        let rockiness = ((slope - 0.30) / 0.32).clamp(0.0, 1.0);
+                        let base = grass.lerp(rock, rockiness);
+                        // Same height banding as the splat shader so the two agree at the seam.
+                        let height_norm = (height / 90.0).clamp(0.0, 1.0);
+                        let banded = (height_norm * 5.0).floor() / 5.0;
+                        base * (0.94 + banded * 0.16)
+                    }
+                };
 
             // Climate tint mirrors the splat shader (shared function, so the
             // seam between detail chunks and the far mesh agrees).

@@ -7,11 +7,11 @@ use crate::components::{
     CharacterMotion, CharacterName, CharacterNavigationStatus, CharacterObjective, CivicEmployment,
     CivicHallLevel, CivicHallUpgradeWorksite, CivicTradeContract, CloudSeed, CommandedBy, Company,
     CompanyId, CompanyLeadership, CompanyOwnership, CompanyShareMarket, CompanyTradeRoute,
-    ConstructionSite, EmployedAt, FarmField, FishingPier, Health, Hero, HeroOutfit, Household,
-    ImmigrantArrivalBoat, LivesAt, LivestockPasture, MarketLevel, MemberOfBattalion,
-    MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId, Player, PlayerBoat,
-    PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation, Residence, ResidentOf,
-    Settlement, SettlementBuilding, SettlementDevelopment, SettlementId,
+    ConstructionSite, EmployedAt, FarmField, FishingPier, Health, Hero, HeroOutfit,
+    HouseAppearance, Household, ImmigrantArrivalBoat, LivesAt, LivestockPasture, MarketLevel,
+    MemberOfBattalion, MootAdministration, Nutrition, Occupation, OperatedBy, OwnedBy, PersonId,
+    Player, PlayerBoat, PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation,
+    Residence, ResidentOf, Settlement, SettlementBuilding, SettlementDevelopment, SettlementId,
     SettlementOpportunityBoard, SettlementPolicies, SettlementPropertyBoard, SettlementSummary,
     StandardBearer, TimeWarp, TradeContractId, TradeRouteHistory, TradeRouteId, TradeRouteSchedule,
     Vessel, VillageRoad, WorkStatus, WorkplaceOperation, WorldTime, WreckedVessel,
@@ -101,6 +101,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<CivicHallLevel>().replicate();
         app.component::<CivicHallUpgradeWorksite>().replicate();
         app.component::<MarketLevel>().replicate();
+        app.component::<HouseAppearance>().replicate();
         app.component::<SettlementDevelopment>().replicate();
         app.component::<SettlementOpportunityBoard>().replicate();
         app.component::<SettlementPropertyBoard>().replicate();

@@ -228,7 +228,11 @@ pub fn stylized_palette() -> TerrainPalette {
         // `bands.z` is the entire remaining contribution of the 5.3 MB albedo array: a
         // chroma-only grain multiply. Set it to 0.0 to preview the terrain with no albedo
         // texture at all -- that is exactly what deleting the array would look like.
-        bands: Vec4::new(0.0, 90.0, 0.18, 0.0),
+        //
+        // `bands.w` is the meadow-variation master strength (two-scale value
+        // mottling + sparse worn-earth patches on soft grassy ground). 0.0
+        // previews the old uniform green; 1.0 is the tuned look.
+        bands: Vec4::new(0.0, 90.0, 0.18, 1.0),
         // Cloud shadows start off (strength 0 = shade 1.0 exactly);
         // sync_cloud_shadow_params owns these fields at runtime.
         clouds_a: Vec4::ZERO,

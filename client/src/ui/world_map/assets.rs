@@ -106,27 +106,33 @@ fn build_live_map_image(
                     let world_z = min_z + (y as f32 / (size - 1) as f32) * depth;
                     let slope = (dx * dx + dz * dz).sqrt();
                     let biome = biomes.biome(world_x, world_z, h, slope);
-                    let mut base = match biome {
-                        WorldBiome::Meadows => [0.48, 0.61, 0.30],
-                        WorldBiome::Forest => [0.21, 0.41, 0.19],
-                        WorldBiome::Highlands => [0.56, 0.49, 0.32],
-                        WorldBiome::Mountains => lerp3(
-                            [0.58, 0.56, 0.52],
-                            [0.78, 0.78, 0.80],
-                            (above - 28.0) / 18.0,
-                        ),
+                    // Colours blend with the same smooth field the ground
+                    // textures use, so map borders feather where the world's
+                    // do; the discrete biome is still read for the iron-vein
+                    // overlay below.
+                    let blend = biomes.biome_blend(world_x, world_z, h, slope);
+                    let mountain_base = lerp3(
+                        [0.58, 0.56, 0.52],
+                        [0.78, 0.78, 0.80],
+                        (above - 28.0) / 18.0,
+                    );
+                    let mut base = [0.0f32; 3];
+                    let parts: [([f32; 3], f32); 6] = [
+                        ([0.48, 0.61, 0.30], blend.meadow()),
+                        ([0.21, 0.41, 0.19], blend.forest),
+                        ([0.56, 0.49, 0.32], blend.highlands),
+                        (mountain_base, blend.mountains),
                         // The climate tint below paints the actual snow and
-                        // sand; these bases keep the biome readable through it
-                        // (cold rocky ground, dune sand).
-                        WorldBiome::Snowlands => [0.55, 0.58, 0.60],
-                        WorldBiome::Desert => [0.74, 0.64, 0.44],
-                        // Unreachable in practice — the branches above paint
-                        // anything at or below the waterline before we get
-                        // here. Spelled out anyway, and in sea colours, so that
-                        // if the ordering ever changes the map draws water as
-                        // water rather than as whatever the wildcard guessed.
-                        WorldBiome::Ocean => [0.16, 0.34, 0.52],
-                    };
+                        // sand; these bases keep the biome readable through
+                        // it (cold rocky ground, dune sand).
+                        ([0.55, 0.58, 0.60], blend.snow),
+                        ([0.74, 0.64, 0.44], blend.desert),
+                    ];
+                    for (color, weight) in parts {
+                        base[0] += color[0] * weight;
+                        base[1] += color[1] * weight;
+                        base[2] += color[2] * weight;
+                    }
                     if matches!(biome, WorldBiome::Highlands | WorldBiome::Mountains) {
                         let vein = biomes.iron_vein(world_x, world_z);
                         if vein > 0.55 {

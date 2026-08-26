@@ -16,6 +16,8 @@ ITEMS = {
     "IronBundle":    ("game_assets/resources/carried/IronBundle.glb",  "iron.png"),
     "FlourSack":     ("game_assets/resources/carried/FlourSack.glb",   "flour.png"),
     "BreadBasket":   ("game_assets/resources/carried/BreadBasket.glb", "bread.png"),
+    "WoolFleece":    ("game_assets/resources/carried/WoolFleece.glb",  "wool.png"),
+    "MeatHaunch":    ("game_assets/resources/carried/MeatHaunch.glb",  "meat.png"),
     # hand tools -- attach to `attach.tool.R` on the right hand
     "AxeFelling":    ("game_assets/tools/AxeFelling.glb",    "axe.png"),
     "HammerFraming": ("game_assets/tools/HammerFraming.glb", "hammer.png"),

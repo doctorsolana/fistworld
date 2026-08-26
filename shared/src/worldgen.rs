@@ -221,7 +221,7 @@ impl GeneratedWorld {
 
 /// Land biome: decides resource availability and look. Availability is a
 /// weighting, never exclusive — every biome has some of everything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WorldBiome {
     /// Open grassland: the farmland biome. Lone trees, flowers.
     Meadows,
@@ -322,6 +322,10 @@ pub struct BiomeField {
     soil_quality: Perlin,
     timber_quality: Perlin,
     geology_quality: Perlin,
+    /// Small-scale tear used ONLY by the visual biome blend: it offsets the
+    /// blend thresholds so borders arrive as ragged ~20m fingers instead of
+    /// airbrushed gradient bands. The discrete classifier never reads it.
+    blend_tear: Fbm<Perlin>,
     half_extent: f32,
     climate_phase: f32,
 }
@@ -351,6 +355,7 @@ impl BiomeField {
             soil_quality: Perlin::new(s(11)),
             timber_quality: Perlin::new(s(12)),
             geology_quality: Perlin::new(s(13)),
+            blend_tear: fbm(s(14), 2, 1.0 / 21.0),
             half_extent,
             climate_phase: climate_phase(seed),
         }
@@ -386,6 +391,54 @@ impl BiomeField {
             WorldBiome::Highlands
         } else {
             WorldBiome::Meadows
+        }
+    }
+
+    /// Smooth per-biome blend factors, for VISUAL surfaces only (ground
+    /// weightmap, far-mesh tint, minimap). Gameplay keeps the DISCRETE
+    /// [`Self::biome`] verbatim - a farm is in exactly one biome - but a
+    /// painted border must not be: this soft-cuts every threshold the
+    /// classifier hard-cuts, over a band, with a small fbm tear so the
+    /// transition lands as ragged fingers of forest floor reaching into
+    /// meadow rather than a ruler line (or, just as bad, an airbrushed
+    /// gradient). Factors are priority-masked exactly like the classifier,
+    /// so deep inside any region they reproduce the discrete answer.
+    pub fn biome_blend(&self, x: f32, z: f32, height: f32, slope: f32) -> BiomeBlend {
+        let band = |value: f32, threshold: f32, width: f32| -> f32 {
+            smoothstep01((value - (threshold - width * 0.5)) / width.max(1.0e-4))
+        };
+        let tear = self.blend_tear.get([x as f64, z as f64]) as f32;
+
+        let mountain_t = band(height + tear * 5.0, 40.0, 12.0)
+            .max(band(height + tear * 3.0, 24.0, 8.0) * band(slope, 0.55, 0.10));
+        let highland_slope_t = band(slope, 0.62, 0.12);
+        let climate = climate_at_with_phase(self.climate_phase, x, z, height, self.half_extent);
+        let snow_t = band(climate.snow + tear * 0.05, 0.45, 0.18);
+        let desert_t = band(climate.dry + tear * 0.05, 0.55, 0.18);
+        let zone = self.zone.get([x as f64, z as f64]) as f32 + tear * 0.05;
+        let forest_t = band(zone, 0.16, 0.12);
+        let highland_zone_t = band(-zone, 0.28, 0.12);
+
+        // Same priority order as the classifier, expressed as remaining mass.
+        let mut remaining = 1.0f32;
+        let mountains = mountain_t * remaining;
+        remaining *= 1.0 - mountain_t;
+        let highlands_slope = highland_slope_t * remaining;
+        remaining *= 1.0 - highland_slope_t;
+        let snow = snow_t * remaining;
+        remaining *= 1.0 - snow_t;
+        let desert = desert_t * remaining;
+        remaining *= 1.0 - desert_t;
+        let forest = forest_t * remaining;
+        remaining *= 1.0 - forest_t;
+        let highlands_zone = highland_zone_t * remaining;
+
+        BiomeBlend {
+            forest,
+            highlands: highlands_slope + highlands_zone,
+            mountains,
+            snow,
+            desert,
         }
     }
 
@@ -1933,6 +1986,38 @@ pub fn weights_to_bytes(weights: [f32; 4]) -> [u8; 4] {
 /// read rockier, forests get leaf-litter mottling, meadows stay lush. Only
 /// moves weight from grass to the dirt/rock layer — sand and the slope-driven
 /// rock stay as computed.
+/// See [`BiomeField::biome_blend`]. `meadow()` is the leftover mass.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BiomeBlend {
+    pub forest: f32,
+    pub highlands: f32,
+    pub mountains: f32,
+    pub snow: f32,
+    pub desert: f32,
+}
+
+impl BiomeBlend {
+    pub fn meadow(&self) -> f32 {
+        (1.0 - self.forest - self.highlands - self.mountains - self.snow - self.desert).max(0.0)
+    }
+}
+
+/// The smooth counterpart of [`biome_adjusted_weights`], for visual surfaces:
+/// the same per-biome shifts, weighted by the blend instead of stepped by the
+/// classification, so ground textures cross a biome border over metres of
+/// ragged mixing instead of one texel.
+pub fn biome_blended_weights(mut weights: [f32; 4], blend: &BiomeBlend) -> [f32; 4] {
+    let shift =
+        blend.forest * 0.12 + blend.highlands * 0.38 + blend.mountains * 0.25 + blend.snow * 0.10;
+    let moved = weights[0].min(shift);
+    weights[0] -= moved;
+    weights[1] += moved;
+    let sand_moved = weights[0] * 0.85 * blend.desert.clamp(0.0, 1.0);
+    weights[0] -= sand_moved;
+    weights[2] += sand_moved;
+    weights
+}
+
 pub fn biome_adjusted_weights(mut weights: [f32; 4], biome: WorldBiome) -> [f32; 4] {
     let shift = match biome {
         WorldBiome::Meadows => 0.0,
@@ -2663,6 +2748,80 @@ mod tests {
             ron::de::from_str(legacy).expect("legacy recipe with strokes must still parse");
         assert_eq!(parsed.seed, 91);
         assert_eq!(parsed.half_extent, 4096.0);
+    }
+}
+
+#[cfg(test)]
+mod biome_blend_tests {
+    use super::*;
+
+    /// Deep inside any region the smooth blend must reproduce the discrete
+    /// classifier's ground weights - the blend exists to soften BORDERS,
+    /// never to repaint the interiors gameplay reasons about.
+    #[test]
+    fn the_blend_matches_the_discrete_weights_away_from_borders() {
+        let field = BiomeField::new_with_extent(11, 4096.0);
+        let base = [0.7f32, 0.1, 0.1, 0.1];
+        let mut checked = 0;
+        for zi in -20..=20 {
+            for xi in -20..=20 {
+                let (x, z) = (xi as f32 * 180.0, zi as f32 * 180.0);
+                let (h, slope) = (12.0, 0.05);
+                let blend = field.biome_blend(x, z, h, slope);
+                let dominant = blend
+                    .meadow()
+                    .max(blend.forest)
+                    .max(blend.highlands)
+                    .max(blend.mountains)
+                    .max(blend.snow)
+                    .max(blend.desert);
+                if dominant < 0.995 {
+                    continue; // border zone: divergence is the point
+                }
+                checked += 1;
+                let discrete = biome_adjusted_weights(base, field.biome(x, z, h, slope));
+                let blended = biome_blended_weights(base, &blend);
+                for (a, b) in discrete.iter().zip(blended.iter()) {
+                    assert!(
+                        (a - b).abs() < 0.02,
+                        "interior weights diverge at ({x},{z}): {discrete:?} vs {blended:?}"
+                    );
+                }
+            }
+        }
+        assert!(
+            checked > 100,
+            "the sweep must hit real interiors: {checked}"
+        );
+    }
+
+    /// Crossing a forest border must never step: adjacent half-metre samples
+    /// stay within a small delta, which is exactly what the old one-texel
+    /// hard cut failed.
+    #[test]
+    fn ground_weights_ramp_smoothly_across_borders() {
+        let field = BiomeField::new_with_extent(11, 4096.0);
+        let base = [0.7f32, 0.1, 0.1, 0.1];
+        let mut worst = 0.0f32;
+        for zi in -6..=6 {
+            let z = zi as f32 * 610.0;
+            let mut previous: Option<[f32; 4]> = None;
+            for step in 0..4000 {
+                let x = -1000.0 + step as f32 * 0.5;
+                let blend = field.biome_blend(x, z, 12.0, 0.05);
+                let weights = biome_blended_weights(base, &blend);
+                if let Some(previous) = previous {
+                    for (a, b) in previous.iter().zip(weights.iter()) {
+                        worst = worst.max((a - b).abs());
+                    }
+                }
+                previous = Some(weights);
+            }
+        }
+        assert!(
+            worst < 0.035,
+            "a half-metre step moved a layer weight by {worst} - that renders as a line"
+        );
     }
 }
 

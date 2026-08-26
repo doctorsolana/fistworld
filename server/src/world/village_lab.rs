@@ -5240,7 +5240,10 @@ fn village_simulation_lab() {
                         .filter_map(|(building, position)| {
                             let at = Vec2::new(position.0.x, position.0.z);
                             let kind = match building.building_type {
-                                shared::building::BuildingType::LogCabin => {
+                                shared::building::BuildingType::LogCabin
+                                | shared::building::BuildingType::LongCabin
+                                | shared::building::BuildingType::CabinL2
+                                | shared::building::BuildingType::LongCabinL2 => {
                                     SettlementBuildingKind::House
                                 }
                                 shared::building::BuildingType::LumberjackHut => {

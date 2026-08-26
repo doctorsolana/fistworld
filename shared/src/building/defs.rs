@@ -46,6 +46,11 @@ pub enum BuildingType {
     PlaceholderStoneQuarry,
     /// Temporary barn blockout paired with a separately rendered pasture.
     PlaceholderLivestockFarm,
+    /// Additional authored house art. Appended to preserve every existing
+    /// replicated discriminant and baked-collider identity.
+    LongCabin,
+    CabinL2,
+    LongCabinL2,
 }
 
 /// All authored building types. Collider baking filters this list through
@@ -62,6 +67,9 @@ pub const ALL_BUILDING_TYPES: &[BuildingType] = &[
     BuildingType::Bakery,
     BuildingType::Market,
     BuildingType::MarketPaved,
+    BuildingType::LongCabin,
+    BuildingType::CabinL2,
+    BuildingType::LongCabinL2,
 ];
 
 impl BuildingType {
@@ -88,6 +96,9 @@ impl BuildingType {
             BuildingType::PlaceholderStorageHall => "placeholder_storage_hall",
             BuildingType::PlaceholderStoneQuarry => "placeholder_stone_quarry",
             BuildingType::PlaceholderLivestockFarm => "placeholder_livestock_farm",
+            BuildingType::LongCabin => "building_long_cabin",
+            BuildingType::CabinL2 => "building_cabin_l2",
+            BuildingType::LongCabinL2 => "building_long_cabin_l2",
         }
     }
 
@@ -117,6 +128,11 @@ impl BuildingType {
             BuildingType::PlaceholderStorageHall => None,
             BuildingType::PlaceholderStoneQuarry => None,
             BuildingType::PlaceholderLivestockFarm => None,
+            BuildingType::LongCabin => Some("game_assets/buildings/village/LongCabin.glb#Scene0"),
+            BuildingType::CabinL2 => Some("game_assets/buildings/village/CabinL2.glb#Scene0"),
+            BuildingType::LongCabinL2 => {
+                Some("game_assets/buildings/village/LongCabinL2.glb#Scene0")
+            }
         }
     }
 
@@ -321,6 +337,41 @@ impl BuildingType {
                 flatten_radius: 1.6,
                 color: Color::srgb(0.64, 0.37, 0.20),
                 model_path: Some("game_assets/buildings/village/Bakery.glb#Scene0"),
+            },
+            // Long plan, eave entry and hipped roof. The footprint centre is
+            // off-origin in Z because the porch projects past the front eave.
+            BuildingType::LongCabin => BuildingDef {
+                building_type: *self,
+                display_name: "Long Cabin",
+                footprint: Vec2::new(8.1180, 5.6000),
+                footprint_center: Vec2::new(0.0000, -0.1900),
+                height: 5.3800,
+                flatten_radius: 1.9,
+                color: Color::srgb(0.42, 0.28, 0.18),
+                model_path: Some("game_assets/buildings/village/LongCabin.glb#Scene0"),
+            },
+            // Jettied two-storey upgrade of the original square cabin line.
+            BuildingType::CabinL2 => BuildingDef {
+                building_type: *self,
+                display_name: "Cabin, Upper Storey",
+                footprint: Vec2::new(6.4721, 7.3600),
+                footprint_center: Vec2::ZERO,
+                height: 6.9800,
+                flatten_radius: 1.8,
+                color: Color::srgb(0.45, 0.36, 0.27),
+                model_path: Some("game_assets/buildings/village/CabinL2.glb#Scene0"),
+            },
+            // Matching upper-storey rung for the long cabin line, including
+            // its balcony and stone chimney.
+            BuildingType::LongCabinL2 => BuildingDef {
+                building_type: *self,
+                display_name: "Long Cabin, Upper Storey",
+                footprint: Vec2::new(8.6866, 5.6721),
+                footprint_center: Vec2::ZERO,
+                height: 6.8920,
+                flatten_radius: 2.1,
+                color: Color::srgb(0.45, 0.36, 0.27),
+                model_path: Some("game_assets/buildings/village/LongCabinL2.glb#Scene0"),
             },
         }
     }
