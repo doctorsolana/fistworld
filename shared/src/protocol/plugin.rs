@@ -161,6 +161,9 @@ impl Plugin for ProtocolPlugin {
         app.register_message::<DisembarkBoat>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<SailToLanding>()
+            .add_map_entities()
+            .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<RequestCharacterRoster>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<RequestSettlementHistory>()

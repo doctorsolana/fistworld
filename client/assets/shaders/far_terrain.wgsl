@@ -18,6 +18,7 @@
 #endif
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> water_params: vec4<f32>;
+// water_params: x ocean level, yz detail-hole centre, w detail-hole half extent.
 // xyz: direction to the sun (world), w: glint strength (0 at night).
 @group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> sun_glint: vec4<f32>;
 
@@ -186,10 +187,15 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // blend over streamed seabed in one chunk and over the clear background in
     // the next, exposing the terrain streaming square as a dark box during
     // fast pans — so only IT survives inside the hole. Land pokes through
-    // detail, and the river stamp (with its interpolated banks) rendered as an
-    // opaque band floating over the detailed terrain at middle zoom; both must
-    // go. water_params.yz is the detail-hole center and w its half extent.
-    if (inside_detail_hole && (is_river || a_raw > 0.04)) {
+    // detail, and the river stamp's interpolated triangles rendered as opaque
+    // X-shaped fans over the detailed river; both must go. Testing only the
+    // negative river tag misses the tiny -0.05..0.04 interval produced between
+    // a tagged river vertex and its land neighbours. Elevated world height
+    // identifies that whole inland fan while preserving the sea-level ocean
+    // underlay. water_params.x is ocean level, yz is the detail-hole center and
+    // w its half extent.
+    let elevated_river_fan = in.world_position.y > water_params.x + 0.12;
+    if (inside_detail_hole && (is_river || elevated_river_fan || a_raw > 0.04)) {
         discard;
     }
 
@@ -199,7 +205,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let lit = apply_pbr_lighting(pbr_input);
     let lit_land = main_pass_post_lighting_processing(pbr_input, lit);
 
-    let day_w = smoothstep(-0.08, 0.12, water_params.x);
+    let day_w = smoothstep(-0.08, 0.12, sun_glint.y);
     var water_rgb = mix(
         authored_rgb * vec3<f32>(0.20, 0.26, 0.45),
         authored_rgb,

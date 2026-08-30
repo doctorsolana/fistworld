@@ -213,7 +213,8 @@ cargo test -p client --lib
 ```
 
 The deterministic visual harness can render the real property board without opening the game
-manually:
+manually. See [VISUAL-CAPTURE.md](VISUAL-CAPTURE.md) for checked-in RON scenarios,
+semantic assertions, JSON sidecars, offscreen scene capture, recording and visual baselines:
 
 ```bash
 FISTFORCE_CAPTURE_SETTLEMENT=village \

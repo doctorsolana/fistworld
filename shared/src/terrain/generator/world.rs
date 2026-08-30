@@ -91,16 +91,19 @@ impl TerrainGenerator {
             let dx = (hm.sample_height(x + step, z) - hm.sample_height(x - step, z)) / (2.0 * step);
             let dz = (hm.sample_height(x, z + step) - hm.sample_height(x, z - step)) / (2.0 * step);
             let slope = (dx * dx + dz * dz).sqrt();
-            let weights = crate::worldgen::surface_weights_at(h, slope);
-            if let Some(biomes) = self.loaded_map.biome_field.as_deref() {
+            let base = crate::worldgen::surface_weights_at(h, slope);
+            let weights = if let Some(biomes) = self.loaded_map.biome_field.as_deref() {
                 // The SMOOTH blend, not the discrete classifier: this is the
                 // one visual-only consumer, and it is where biome borders
                 // stop being one-texel steps (gameplay still reads the
                 // discrete biome and is untouched).
                 let blend = biomes.biome_blend(x, z, h, slope);
-                return crate::worldgen::biome_blended_weights(weights, &blend);
-            }
-            return weights;
+                crate::worldgen::biome_blended_weights(base, &blend)
+            } else {
+                base
+            };
+            let (sand, damp) = self.river_ground_blend_at(Vec2::new(x, z), h);
+            return blend_river_ground(weights, sand, damp);
         }
 
         match self.get_biome(x, z) {
@@ -110,6 +113,49 @@ impl TerrainGenerator {
             Biome::Mountain => [0.05, 0.70, 0.10, 0.15],
             Biome::Ocean => [0.0, 0.05, 0.95, 0.0],
         }
+    }
+
+    /// Strength of the sandy inner bank and damp-earth outer bank at a point.
+    ///
+    /// Absolute height cannot identify an inland shore: a river can run ten
+    /// metres above the sea. The loaded map therefore indexes its tapered
+    /// segments per chunk and this query compares ground height with the local
+    /// sloping river surface. Ordinary chunks take one empty hash lookup.
+    fn river_ground_blend_at(&self, point: Vec2, ground_height: f32) -> (f32, f32) {
+        let key = (
+            (point.x / CHUNK_SIZE).floor() as i32,
+            (point.y / CHUNK_SIZE).floor() as i32,
+        );
+        let Some(segments) = self.loaded_map.river_segments_by_chunk.get(&key) else {
+            return (0.0, 0.0);
+        };
+
+        let mut sand = 0.0f32;
+        let mut damp = 0.0f32;
+        for segment in segments {
+            let sample = segment.sample_at(point);
+            let from_water_edge = sample.distance - sample.reach;
+            if from_water_edge >= crate::worldgen::RIVER_BANK_PAINT_MARGIN {
+                continue;
+            }
+
+            // Ground below or just above the local water surface is sand. A
+            // second, softer dirt shoulder survives slightly higher/farther
+            // up the bank, preventing a hard beige stripe in green terrain.
+            let height_above_water = ground_height - sample.surface;
+            let sand_height = 1.0 - smoothstep_range(0.20, 0.95, height_above_water);
+            let sand_lateral = 1.0 - smoothstep_range(1.0, 3.8, from_water_edge.max(0.0));
+            let damp_height = 1.0 - smoothstep_range(0.65, 1.65, height_above_water);
+            let damp_lateral = 1.0
+                - smoothstep_range(
+                    2.5,
+                    crate::worldgen::RIVER_BANK_PAINT_MARGIN,
+                    from_water_edge.max(0.0),
+                );
+            sand = sand.max(sand_height * sand_lateral);
+            damp = damp.max(damp_height * damp_lateral);
+        }
+        (sand, damp)
     }
 
     #[inline]
@@ -143,6 +189,30 @@ impl TerrainGenerator {
             Biome::Grasslands
         }
     }
+}
+
+#[inline]
+fn smoothstep_range(start: f32, end: f32, value: f32) -> f32 {
+    let t = ((value - start) / (end - start).max(1.0e-6)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Lay a strong sandy inner bank over procedural biome paint, followed by a
+/// weaker damp-earth shoulder. Slope rock and cobble remain intact.
+fn blend_river_ground(mut weights: [f32; 4], sand: f32, damp: f32) -> [f32; 4] {
+    let sand = sand.clamp(0.0, 1.0);
+    let damp = damp.clamp(0.0, 1.0) * (1.0 - sand * 0.72);
+
+    let grass_to_sand = weights[0] * sand * 0.94;
+    let dirt_to_sand = weights[1] * sand * 0.38;
+    weights[0] -= grass_to_sand;
+    weights[1] -= dirt_to_sand;
+    weights[2] += grass_to_sand + dirt_to_sand;
+
+    let grass_to_dirt = weights[0] * damp * 0.62;
+    weights[0] -= grass_to_dirt;
+    weights[1] += grass_to_dirt;
+    weights
 }
 
 impl Default for TerrainGenerator {
@@ -587,6 +657,39 @@ impl WorldTerrain {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn river_ground_blend_builds_sand_then_a_dirt_shoulder() {
+        let meadow = [0.85, 0.10, 0.05, 0.0];
+        let inner = blend_river_ground(meadow, 1.0, 1.0);
+        let outer = blend_river_ground(meadow, 0.0, 1.0);
+
+        assert!(inner[2] > 0.85, "inner bank was not sandy: {inner:?}");
+        assert!(outer[1] > meadow[1], "outer bank was not damp: {outer:?}");
+        for weights in [inner, outer] {
+            assert!((weights.iter().sum::<f32>() - 1.0).abs() < 1.0e-6);
+        }
+    }
+
+    #[test]
+    fn generated_inland_riverbed_is_painted_as_sand() {
+        let terrain = WorldTerrain::default();
+        let ocean = terrain.water_level().expect("generated world has water");
+        let point = terrain
+            .rivers()
+            .iter()
+            .flatten()
+            .find(|point| point.y > ocean + 1.0)
+            .expect("generated world has an inland river");
+
+        let weights = terrain.generator.get_surface_weights(point.x, point.z);
+        assert!(
+            weights[2] > weights[0] && weights[2] > 0.55,
+            "riverbed at ({:.1},{:.1}) stayed grassy: {weights:?}",
+            point.x,
+            point.z,
+        );
+    }
 
     #[test]
     fn river_segment_reports_its_sloping_local_surface_only_inside_its_reach() {

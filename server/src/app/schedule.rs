@@ -155,9 +155,15 @@ fn configure_server_fixed_schedule(app: &mut App) {
         FixedUpdate,
         (
             player::boat::handle_disembark_requests,
+            player::boat::handle_sail_to_landing_requests,
             player::boat::plan_vessel_routes,
             player::boat::step_boats,
+            // Landings complete after the hull moves and BEFORE aboard heroes
+            // re-pin to the helm, so the frame a sailor steps ashore is never
+            // also a frame the helm snap fights the beach position.
+            player::boat::finish_player_landings,
             player::boat::sync_aboard_heroes,
+            player::boat::expire_wrecks,
             world::immigration::sync_natural_immigrant_passengers,
             world::immigration::finish_natural_immigrant_voyages,
         )

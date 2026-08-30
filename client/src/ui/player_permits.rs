@@ -571,6 +571,9 @@ fn ensure_permit_tray(
                 BackgroundColor(LIMEWASH_LIT),
                 BorderColor::all(PLATE_RULE),
                 plate_shadow(),
+                // Opaque tray over the world/other panels: swallow BOTH input
+                // paths so a click on its padding can never fall through.
+                crate::ui::foundation::surface_block(),
             ))
             .with_children(|panel| {
                 panel.spawn((
@@ -1243,7 +1246,9 @@ fn ensure_placement_status(
                 BackgroundColor(LIMEWASH_LIT),
                 BorderColor::all(PLATE_RULE),
                 plate_shadow(),
-                Pickable::IGNORE,
+                // Opaque status card: it must not let clicks or the wheel
+                // reach the world/panels underneath (see `surface_block`).
+                crate::ui::foundation::surface_block(),
             ))
             .with_children(|panel| {
                 panel.spawn((

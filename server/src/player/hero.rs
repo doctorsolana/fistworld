@@ -519,8 +519,10 @@ pub fn handle_unit_move_orders(
                 let goal = Vec2::new(point.x, point.z);
                 commands
                     .entity(*unit)
-                    .remove::<crate::player::boat::VesselRoute>();
-                vessel_navigation.request(*unit, goal);
+                    .remove::<crate::player::boat::VesselRoute>()
+                    // A plain sail order also cancels any landing in flight.
+                    .remove::<crate::player::boat::PendingLanding>();
+                vessel_navigation.request(*unit, crate::player::boat::VesselGoal::Sail(goal));
             }
         }
     }

@@ -16,11 +16,11 @@ use shared::components::{
     AboardBoat, CharacterActivity, CharacterMotion, CloudSeed, CommandedBy, PlayerBoat,
     PlayerPosition, PlayerRotation, SettlementBuildingKind, Vessel, WorldTime, WreckedVessel,
 };
-use shared::protocol::{CreateHero, DisembarkBoat};
+use shared::protocol::{CreateHero, DisembarkBoat, SailToLanding};
 use shared::region::RegionCoord;
 use shared::terrain::WorldTerrain;
 
-use crate::player::hero::{HeroIndex, OfflineHero};
+use crate::player::hero::{HeroIndex, MoveTarget, OfflineHero};
 
 const BOAT_SPEED: f32 = 7.0;
 pub(crate) const BOAT_ARRIVE_EPSILON: f32 = 0.2;
@@ -35,6 +35,21 @@ const EDGE_INSET: f32 = 64.0;
 const START_OFFSHORE_DISTANCE: f32 = 56.0;
 const MIN_EDGE_APPROACH: f32 = START_OFFSHORE_DISTANCE + COAST_SCAN_STEP;
 const MAX_DISEMBARK_DISTANCE: f32 = 11.0;
+/// Metres between samples when walking a click-to-boat line looking for the
+/// coast crossing. Fine enough that a beach can't be stepped over, coarse
+/// enough that a 2 km scan is ~500 cheap height samples.
+const LANDING_SCAN_STEP: f32 = 4.0;
+/// A landing order completes only when the hull actually reached its chosen
+/// mooring. Anything farther means the route was replaced or aborted, and the
+/// stale intent must be dropped rather than teleporting the sailor ashore.
+const LANDING_COMPLETE_DISTANCE: f32 = 1.5;
+/// How many coast crossings along the click-to-boat line may be tried before
+/// giving up. Each attempt can cost one bounded water A*; the cap keeps a
+/// pathological click from charging several searches to one server tick.
+const LANDING_ROUTE_ATTEMPTS: usize = 4;
+/// An abandoned dinghy stays visible long enough to read as "my boat, beached
+/// there", then quietly leaves the world.
+const WRECK_LINGER_SECONDS: f32 = 150.0;
 pub(crate) const HELM_LOCAL: Vec3 = Vec3::new(0.0, 0.35, 1.24);
 
 /// Retained route on one player boat. Waypoints are world XZ positions whose
@@ -52,19 +67,60 @@ pub struct VesselNavigation {
     hull_speed: f32,
 }
 
+/// What a queued route search is FOR. A plain sail ends on the water; a
+/// landing ends at a coast chosen by the server, with the sailor put ashore
+/// and walked the rest of the way to the click.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VesselGoal {
+    Sail(Vec2),
+    Land { click: Vec2 },
+}
+
 /// Bounded planning ingress for every vessel class. Route searches are never
 /// run in the network-message loop: a player ordering a fleet cannot turn one
 /// server tick into hundreds of A* searches. Re-ordering the same vessel
 /// replaces its stale pending destination.
 #[derive(Resource, Default)]
 pub struct VesselNavigationQueue {
-    pending: VecDeque<(Entity, Vec2)>,
+    pending: VecDeque<(Entity, VesselGoal)>,
 }
 
 impl VesselNavigationQueue {
-    pub(crate) fn request(&mut self, vessel: Entity, goal: Vec2) {
+    pub(crate) fn request(&mut self, vessel: Entity, goal: VesselGoal) {
         self.pending.retain(|(queued, _)| *queued != vessel);
         self.pending.push_back((vessel, goal));
+    }
+}
+
+/// A landing in progress: the boat is sailing to `mooring`, and on arrival the
+/// aboard hero steps ashore at `landing` and walks to `walk_to`. Server-only —
+/// the client sees the same story unfold through ordinary replication.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct PendingLanding {
+    mooring: Vec2,
+    landing: Vec2,
+    walk_to: Vec2,
+}
+
+/// A beached/abandoned hull counting down to removal. Ticked in real seconds
+/// so a 100x time warp does not vaporise the boat mid-glance.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct WreckExpiry {
+    seconds_left: f32,
+}
+
+impl WreckExpiry {
+    fn new() -> Self {
+        Self {
+            seconds_left: WRECK_LINGER_SECONDS,
+        }
+    }
+
+    /// Advance by `dt` real seconds; true once the wreck should despawn.
+    /// Factored pure so expiry is testable without a clock resource.
+    fn expired_after(&mut self, dt: f32) -> bool {
+        self.seconds_left -= dt;
+        self.seconds_left <= 0.0
     }
 }
 
@@ -391,6 +447,62 @@ pub(crate) fn water_route(terrain: &WorldTerrain, start: Vec2, goal: Vec2) -> Op
     None
 }
 
+/// Choose where a boat should put its sailor ashore for an inland click.
+///
+/// Walks the straight line from the click TOWARD the boat and takes the first
+/// dry→water coast crossing — the beach facing the boat's side of the world,
+/// nearest the click. Each crossing yields a dry `landing` and a `mooring` a
+/// few metres off it; a crossing whose water the boat cannot actually reach
+/// (an inland lake, a too-narrow river) is skipped and the scan continues
+/// toward the boat, whose own water is reachable by definition.
+pub(crate) fn find_landing(
+    terrain: &WorldTerrain,
+    boat: Vec2,
+    click: Vec2,
+) -> Option<(Vec2, Vec2, Vec<Vec2>)> {
+    let to_boat = boat - click;
+    let distance = to_boat.length();
+    if !distance.is_finite() || distance < 1.0e-3 {
+        return None;
+    }
+    let direction = to_boat / distance;
+    let steps = (distance / LANDING_SCAN_STEP).ceil() as usize;
+    let mut last_dry: Option<Vec2> = None;
+    let mut attempts = 0;
+    for step in 0..=steps {
+        let point = click + direction * (step as f32 * LANDING_SCAN_STEP).min(distance);
+        if water_at(terrain, point).is_none() {
+            // Dry or out of bounds; out-of-bounds also resets the crossing.
+            last_dry = dry_at(terrain, point).then_some(point);
+            continue;
+        }
+        let Some(landing) = last_dry else {
+            continue;
+        };
+        // A coast crossing. Moor a boat-length off the waterline when the
+        // water allows it, so the hull does not visibly ground on the beach.
+        let deeper = point + direction * LANDING_SCAN_STEP;
+        let mooring = if water_at(terrain, deeper).is_some()
+            && landing.distance(deeper) <= MAX_DISEMBARK_DISTANCE
+        {
+            deeper
+        } else {
+            point
+        };
+        attempts += 1;
+        if let Some(route) = water_route(terrain, boat, mooring) {
+            return Some((mooring, landing, route));
+        }
+        if attempts >= LANDING_ROUTE_ATTEMPTS {
+            return None;
+        }
+        // Unreachable water (lake, dead channel): keep scanning toward the
+        // boat for the next crossing.
+        last_dry = None;
+    }
+    None
+}
+
 /// Spend a fixed amount of route-planning work per server tick. Direct open
 /// water orders remain practically immediate, while complex coast searches
 /// are naturally spread out under fleet-scale command bursts.
@@ -400,7 +512,8 @@ pub fn plan_vessel_routes(
     mut queue: ResMut<VesselNavigationQueue>,
     vessels: Query<&PlayerPosition, With<Vessel>>,
 ) {
-    for _ in 0..NAV_ROUTES_PER_TICK {
+    let mut budget = NAV_ROUTES_PER_TICK;
+    while budget > 0 {
         let Some((vessel, goal)) = queue.pending.pop_front() else {
             break;
         };
@@ -408,10 +521,35 @@ pub fn plan_vessel_routes(
             continue;
         };
         let start = position.0.xz();
-        if let Some(waypoints) = water_route(&terrain, start, goal) {
-            commands
-                .entity(vessel)
-                .insert(VesselRoute { waypoints, next: 0 });
+        match goal {
+            VesselGoal::Sail(goal) => {
+                budget -= 1;
+                // A fresh sail order supersedes any landing still in flight.
+                commands.entity(vessel).remove::<PendingLanding>();
+                if let Some(waypoints) = water_route(&terrain, start, goal) {
+                    commands
+                        .entity(vessel)
+                        .insert(VesselRoute { waypoints, next: 0 });
+                }
+            }
+            VesselGoal::Land { click } => {
+                // A landing can spend several bounded searches; bill it as a
+                // whole tick of planning rather than letting one click stack
+                // multiple A* passes on top of a fleet's sail orders.
+                budget = 0;
+                if let Some((mooring, landing, waypoints)) = find_landing(&terrain, start, click) {
+                    commands.entity(vessel).insert((
+                        VesselRoute { waypoints, next: 0 },
+                        PendingLanding {
+                            mooring,
+                            landing,
+                            walk_to: click,
+                        },
+                    ));
+                } else {
+                    info!("No reachable landing for a shore order near {click:?}");
+                }
+            }
         }
     }
 }
@@ -764,11 +902,157 @@ pub fn handle_disembark_requests(
             commands.entity(hero_entity).remove::<AboardBoat>();
             commands
                 .entity(request.boat)
-                .insert(WreckedVessel)
+                .insert((WreckedVessel, WreckExpiry::new()))
                 .remove::<Vessel>()
                 .remove::<VesselNavigation>()
-                .remove::<VesselRoute>();
+                .remove::<VesselRoute>()
+                .remove::<PendingLanding>();
             info!("'{account}' disembarked at {ground:?}; the starter dinghy is now wrecked");
+        }
+    }
+}
+
+/// Accept "put me ashore over there" for an inland click: validate ownership,
+/// then queue the landing search. The actual coast choice, water route and
+/// walk order all happen in [`plan_vessel_routes`] and
+/// [`finish_player_landings`] — never in the message loop.
+pub fn handle_sail_to_landing_requests(
+    mut commands: Commands,
+    profiles: Res<crate::persistence::profiles::PlayerProfiles>,
+    mut queue: ResMut<VesselNavigationQueue>,
+    mut clients: Query<(&RemoteId, &mut MessageReceiver<SailToLanding>), With<ClientOf>>,
+    boats: Query<&CommandedBy, (With<PlayerBoat>, With<Vessel>)>,
+) {
+    for (remote, mut receiver) in clients.iter_mut() {
+        let account = profiles.peer_to_name.get(&remote.0).cloned();
+        for request in receiver.receive() {
+            let Some(account) = account.as_deref() else {
+                continue;
+            };
+            if request.boat == Entity::PLACEHOLDER || !request.target.is_finite() {
+                continue;
+            }
+            let Ok(boat_owner) = boats.get(request.boat) else {
+                continue;
+            };
+            if boat_owner.0 != account {
+                continue;
+            }
+            // A new landing intent supersedes whatever the boat was doing.
+            commands
+                .entity(request.boat)
+                .remove::<VesselRoute>()
+                .remove::<PendingLanding>();
+            queue.request(
+                request.boat,
+                VesselGoal::Land {
+                    click: Vec2::new(request.target.x, request.target.z),
+                },
+            );
+        }
+    }
+}
+
+/// Complete landings whose boat finished (or lost) its route: put the sailor
+/// ashore at the chosen beach, hand them a walk order to the original click,
+/// and leave the dinghy beached on its expiry clock.
+pub fn finish_player_landings(
+    mut commands: Commands,
+    terrain: Res<WorldTerrain>,
+    boats: Query<
+        (Entity, &CommandedBy, &PlayerPosition, &PendingLanding),
+        (
+            With<PlayerBoat>,
+            Without<VesselRoute>,
+            Without<shared::components::Hero>,
+        ),
+    >,
+    mut heroes: Query<
+        (
+            Entity,
+            &CommandedBy,
+            &mut PlayerPosition,
+            &mut PlayerRotation,
+            &mut RegionCoord,
+            &mut CharacterMotion,
+            &mut CharacterActivity,
+        ),
+        (
+            With<shared::components::Hero>,
+            With<AboardBoat>,
+            Without<OfflineHero>,
+        ),
+    >,
+) {
+    for (boat, owner, boat_position, pending) in boats.iter() {
+        let boat_xz = boat_position.0.xz();
+        if boat_xz.distance(pending.mooring) > LANDING_COMPLETE_DISTANCE {
+            // The route was aborted or replaced; the intent is stale. Never
+            // teleport a sailor to a beach the boat did not reach.
+            commands.entity(boat).remove::<PendingLanding>();
+            continue;
+        }
+        let Some((
+            hero_entity,
+            _,
+            mut position,
+            mut rotation,
+            mut region,
+            mut motion,
+            mut activity,
+        )) = heroes
+            .iter_mut()
+            .find(|(_, hero_owner, ..)| hero_owner.0 == owner.0)
+        else {
+            // Nobody aboard any more: just moor the boat and drop the intent.
+            commands.entity(boat).remove::<PendingLanding>();
+            continue;
+        };
+        let ground = Vec3::new(
+            pending.landing.x,
+            terrain.get_height(pending.landing.x, pending.landing.y),
+            pending.landing.y,
+        );
+        let walk = Vec3::new(
+            pending.walk_to.x,
+            terrain.get_height(pending.walk_to.x, pending.walk_to.y),
+            pending.walk_to.y,
+        );
+        let direction = pending.walk_to - pending.landing;
+        position.0 = ground;
+        if direction.length_squared() > 1.0e-4 {
+            rotation.0 = f32::atan2(-direction.x, -direction.y);
+        }
+        *region = RegionCoord::from_world_pos(ground);
+        *motion = CharacterMotion::STATIONARY;
+        activity.set_if_neq(CharacterActivity::Idle);
+        commands
+            .entity(hero_entity)
+            .remove::<AboardBoat>()
+            .insert(MoveTarget(walk));
+        commands
+            .entity(boat)
+            .insert((WreckedVessel, WreckExpiry::new()))
+            .remove::<Vessel>()
+            .remove::<VesselNavigation>()
+            .remove::<PendingLanding>();
+        info!(
+            "'{}' landed at {ground:?} and walks on to {walk:?}; the dinghy is beached",
+            owner.0
+        );
+    }
+}
+
+/// Age out beached hulls. Real seconds, so time warp never blinks them away.
+pub fn expire_wrecks(
+    mut commands: Commands,
+    simulation_time: crate::world::simulation_time::SimulationTime,
+    mut wrecks: Query<(Entity, &mut WreckExpiry), With<WreckedVessel>>,
+) {
+    let dt = simulation_time.real_seconds();
+    for (entity, mut expiry) in wrecks.iter_mut() {
+        if expiry.expired_after(dt) {
+            commands.entity(entity).despawn();
         }
     }
 }
@@ -781,9 +1065,13 @@ mod tests {
     fn disembark_system_queries_remain_disjoint() {
         // Bevy validates query aliasing only when a schedule/system is
         // initialized, so `cargo check` cannot catch this class of startup
-        // crash. Keep the exact runtime system under that validation here.
+        // crash. Keep the exact runtime systems under that validation here.
         let mut world = World::new();
         let mut system = IntoSystem::into_system(handle_disembark_requests);
+        system.initialize(&mut world);
+        let mut system = IntoSystem::into_system(handle_sail_to_landing_requests);
+        system.initialize(&mut world);
+        let mut system = IntoSystem::into_system(finish_player_landings);
         system.initialize(&mut world);
     }
 
@@ -848,9 +1136,153 @@ mod tests {
     fn latest_pending_order_replaces_an_older_destination() {
         let mut queue = VesselNavigationQueue::default();
         let vessel = Entity::from_bits(42);
-        queue.request(vessel, Vec2::ONE);
-        queue.request(vessel, Vec2::splat(2.0));
+        queue.request(vessel, VesselGoal::Sail(Vec2::ONE));
+        queue.request(
+            vessel,
+            VesselGoal::Land {
+                click: Vec2::splat(2.0),
+            },
+        );
         assert_eq!(queue.pending.len(), 1);
-        assert_eq!(queue.pending.front(), Some(&(vessel, Vec2::splat(2.0))));
+        assert_eq!(
+            queue.pending.front(),
+            Some(&(
+                vessel,
+                VesselGoal::Land {
+                    click: Vec2::splat(2.0)
+                }
+            ))
+        );
+    }
+
+    /// An inland click from the opening voyage must resolve to a dry landing
+    /// within stepping distance of a mooring the boat can actually sail to.
+    #[test]
+    fn an_inland_click_finds_a_dry_landing_with_a_certified_water_route() {
+        let terrain = WorldTerrain::default();
+        let (start, yaw) = starting_voyage(&terrain, "landing-test")
+            .expect("the active gameplay map must expose at least one coastal start");
+        // Walk the certified heading inland and click the deepest dry point
+        // within 600 m: rivers and bays are legal along the way, so a fixed
+        // "shore + 400 m" premise would be flaky across seeds.
+        let inward = (Quat::from_rotation_y(yaw) * Vec3::NEG_Z).xz().normalize();
+        let click = (1..=120)
+            .map(|step| start.xz() + inward * (START_OFFSHORE_DISTANCE + 5.0 * step as f32))
+            .filter(|point| dry_at(&terrain, *point))
+            .next_back()
+            .expect("the certified heading must reach dry land somewhere inland");
+
+        let (mooring, landing, route) = find_landing(&terrain, start.xz(), click)
+            .expect("an inland click on the certified heading must find a landing");
+        assert!(water_at(&terrain, mooring).is_some(), "mooring must float");
+        assert!(dry_at(&terrain, landing), "landing must be dry");
+        assert!(
+            mooring.distance(landing) <= MAX_DISEMBARK_DISTANCE,
+            "landing {landing:?} out of stepping range of mooring {mooring:?}"
+        );
+        let end = route.last().copied().expect("route must have waypoints");
+        assert!(end.distance(mooring) < 0.5, "route must end at the mooring");
+    }
+
+    #[test]
+    fn a_wreck_expires_after_its_linger_and_not_before() {
+        let mut expiry = WreckExpiry::new();
+        assert!(!expiry.expired_after(WRECK_LINGER_SECONDS * 0.5));
+        assert!(expiry.expired_after(WRECK_LINGER_SECONDS * 0.5 + 0.1));
+    }
+
+    /// The REAL planning and landfall systems, end to end minus the sailing:
+    /// a queued landing order routes the boat and stores the intent; with the
+    /// hull at its mooring, landfall puts the sailor ashore with a walk order
+    /// to the original click and beaches the dinghy on its expiry clock.
+    #[test]
+    fn a_landing_order_ends_with_the_sailor_walking_and_the_dinghy_beached() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let terrain = WorldTerrain::default();
+        let (start, yaw) = starting_voyage(&terrain, "landing-flow-test")
+            .expect("the active gameplay map must expose at least one coastal start");
+        let inward = (Quat::from_rotation_y(yaw) * Vec3::NEG_Z).xz().normalize();
+        let click = (1..=120)
+            .map(|step| start.xz() + inward * (START_OFFSHORE_DISTANCE + 5.0 * step as f32))
+            .filter(|point| dry_at(&terrain, *point))
+            .next_back()
+            .expect("the certified heading must reach dry land somewhere inland");
+
+        let mut world = World::new();
+        world.insert_resource(terrain);
+        world.insert_resource(VesselNavigationQueue::default());
+
+        let account = "landing-flow-test".to_string();
+        let boat = world
+            .spawn((
+                PlayerBoat,
+                Vessel,
+                VesselNavigation::DINGHY,
+                CommandedBy(account.clone()),
+                PlayerPosition(start),
+                PlayerRotation(yaw),
+                CharacterMotion::STATIONARY,
+                RegionCoord::from_world_pos(start),
+            ))
+            .id();
+        let hero = world
+            .spawn((
+                shared::components::Hero {
+                    owner: lightyear::prelude::PeerId::Netcode(7),
+                },
+                AboardBoat,
+                CommandedBy(account),
+                PlayerPosition(start),
+                PlayerRotation(yaw),
+                CharacterMotion::STATIONARY,
+                CharacterActivity::Sitting,
+                RegionCoord::from_world_pos(start),
+            ))
+            .id();
+
+        world
+            .resource_mut::<VesselNavigationQueue>()
+            .request(boat, VesselGoal::Land { click });
+        world.run_system_once(plan_vessel_routes).unwrap();
+        let pending = *world
+            .get::<PendingLanding>(boat)
+            .expect("planning must store the landing intent");
+        assert!(
+            world.get::<VesselRoute>(boat).is_some(),
+            "planning must route the boat to its mooring"
+        );
+
+        // Skip the voyage itself (step_boats has its own coverage): park the
+        // hull at the mooring as an arrived boat would be.
+        world.get_mut::<PlayerPosition>(boat).unwrap().0 =
+            Vec3::new(pending.mooring.x, 0.0, pending.mooring.y);
+        world.entity_mut(boat).remove::<VesselRoute>();
+        world.run_system_once(finish_player_landings).unwrap();
+
+        assert!(
+            world.get::<AboardBoat>(hero).is_none(),
+            "the sailor must step ashore"
+        );
+        let walk = world
+            .get::<MoveTarget>(hero)
+            .expect("landfall must hand the sailor a walk order");
+        assert_eq!(walk.0.xz(), click, "the walk order must aim at the click");
+        let ashore = world.get::<PlayerPosition>(hero).unwrap().0;
+        assert_eq!(
+            ashore.xz(),
+            pending.landing,
+            "the sailor lands on the beach"
+        );
+        assert!(
+            world.get::<WreckedVessel>(boat).is_some()
+                && world.get::<WreckExpiry>(boat).is_some()
+                && world.get::<Vessel>(boat).is_none(),
+            "the dinghy must be beached on its expiry clock"
+        );
+        assert!(
+            world.get::<PendingLanding>(boat).is_none(),
+            "the landing intent must be consumed"
+        );
     }
 }

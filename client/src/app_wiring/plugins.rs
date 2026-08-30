@@ -43,6 +43,12 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
                     }
                     Box::new(settings)
                 }),
+                // Capture scenarios prefer reproducibility to startup speed.
+                // On platforms where Bevy supports it, this prevents a first
+                // screenshot from racing asynchronous pipeline compilation.
+                synchronous_pipeline_compilation: profiling::env_flag(
+                    "FISTFORCE_CAPTURE_SYNC_PIPELINES",
+                ),
                 ..default()
             })
             // Spatial audio in rodio uses strong inverse-square falloff. Our world units are ~meters

@@ -29,16 +29,11 @@ pub struct BlockingPropSpawn {
     pub scale: f32,
 }
 
-/// How far from a river centreline the ground is kept clear of anything with a
-/// silhouette. The water is [`RIVER_HALF_WIDTH`] + 1.5 m wide, so this leaves a
-/// margin of bank beyond the waterline rather than letting trunks stand in the
-/// shallows.
-const RIVER_CLEARANCE: f32 = crate::worldgen::RIVER_WATER_REACH;
-
-/// Grass stops short of the prop clearance, so a bank keeps its grass right
-/// down to the waterline instead of showing a bald strip either side of the
-/// river — which is the road look this all exists to undo.
-const GRASS_RIVER_CLEARANCE: f32 = crate::worldgen::RIVER_HALF_WIDTH + 1.5;
+/// Trees stop at the tapered water footprint. Ground cover stays another two
+/// metres back so the new damp/sandy bank remains visible rather than growing
+/// grass blades in the shallows.
+const TREE_RIVER_CLEARANCE_EXTRA: f32 = 0.0;
+const GRASS_RIVER_CLEARANCE_EXTRA: f32 = 2.0;
 
 /// The river segments near one chunk, and a point test against them.
 ///
@@ -47,26 +42,28 @@ const GRASS_RIVER_CLEARANCE: f32 = crate::worldgen::RIVER_HALF_WIDTH + 1.5;
 /// a chunk holds ~60 props, and the naive loop is 27,000 distance tests for a
 /// chunk that usually has no river in it at all.
 struct RiverReach {
-    segments: Vec<(Vec2, Vec2)>,
-    radius: f32,
+    segments: Vec<crate::map::RiverSegment>,
+    clearance_extra: f32,
 }
 
 impl RiverReach {
-    fn for_chunk(terrain: &TerrainGenerator, chunk: ChunkCoord, radius: f32) -> Self {
+    fn for_chunk(terrain: &TerrainGenerator, chunk: ChunkCoord, clearance_extra: f32) -> Self {
         let segments = terrain
             .loaded_map()
             .river_segments_by_chunk
             .get(&(chunk.x, chunk.z))
             .cloned()
             .unwrap_or_default();
-        Self { segments, radius }
+        Self {
+            segments,
+            clearance_extra,
+        }
     }
 
     fn contains(&self, point: Vec2) -> bool {
-        self.segments.iter().any(|(a, b)| {
-            let seg = *b - *a;
-            let t = ((point - *a).dot(seg) / seg.length_squared().max(1e-6)).clamp(0.0, 1.0);
-            point.distance_squared(*a + seg * t) < self.radius * self.radius
+        self.segments.iter().any(|segment| {
+            let sample = segment.sample_at(point);
+            sample.distance < sample.reach + self.clearance_extra
         })
     }
 }
@@ -93,7 +90,7 @@ pub fn generate_chunk_prop_spawns(terrain: &TerrainGenerator, chunk: ChunkCoord)
     // Rivers are cut from the seed at load, but the props in `map.ron` were
     // baked before the channel existed, so nothing in that list knows the
     // ground moved. Without this, trees stand in the water.
-    let river_reach = RiverReach::for_chunk(terrain, chunk, RIVER_CLEARANCE);
+    let river_reach = RiverReach::for_chunk(terrain, chunk, TREE_RIVER_CLEARANCE_EXTRA);
 
     if let Some(indexed) = terrain
         .loaded_map()
@@ -161,7 +158,7 @@ pub fn generate_chunk_blocking_props(
     if !chunk.in_world_bounds() {
         return Vec::new();
     }
-    let river_reach = RiverReach::for_chunk(terrain, chunk, RIVER_CLEARANCE);
+    let river_reach = RiverReach::for_chunk(terrain, chunk, TREE_RIVER_CLEARANCE_EXTRA);
     let mut out = Vec::new();
     if let Some(indexed) = terrain
         .loaded_map()
@@ -691,7 +688,7 @@ pub fn generate_chunk_grass_at_density(
     // Grass is cleared only to the waterline, not to the prop clearance: a
     // riverbank with grass running down to the water is the point, and a bald
     // strip either side would look like the road this used to be mistaken for.
-    let river_reach = RiverReach::for_chunk(terrain, chunk, GRASS_RIVER_CLEARANCE);
+    let river_reach = RiverReach::for_chunk(terrain, chunk, GRASS_RIVER_CLEARANCE_EXTRA);
 
     let mut grown = 0usize;
     for iz in 0..steps {

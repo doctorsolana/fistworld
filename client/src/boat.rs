@@ -50,7 +50,6 @@ impl Plugin for BoatPlugin {
                 drive_boat_sails,
                 drive_opening_cinematic.after(crate::camera_rts::update_commander_camera),
                 focus_disembarked_hero,
-                sync_voyage_hint,
             )
                 .chain()
                 .run_if(in_state(GameState::Playing)),
@@ -89,9 +88,6 @@ struct BoatSailMorph {
 /// an invisible hull for one or two render frames.
 #[derive(Component)]
 pub(crate) struct BoatSceneReady;
-
-#[derive(Component)]
-struct VoyageHint;
 
 #[derive(Debug, Clone)]
 enum CinematicState {
@@ -752,59 +748,6 @@ fn focus_disembarked_hero(
             camera.focus_target = position.0;
         }
     }
-}
-
-fn sync_voyage_hint(
-    mut commands: Commands,
-    opening: Res<OpeningCinematic>,
-    local: Option<Res<LocalPeerId>>,
-    aboard: Query<&Hero, With<AboardBoat>>,
-    existing: Query<Entity, With<VoyageHint>>,
-) {
-    let active = !opening.is_active()
-        && local.as_ref().is_some_and(|local| {
-            aboard
-                .iter()
-                .any(|hero| shared::player::peer_id_to_u64(hero.owner) == local.0)
-        });
-    if !active {
-        for entity in existing.iter() {
-            commands.entity(entity).despawn();
-        }
-        return;
-    }
-    if !existing.is_empty() {
-        return;
-    }
-    commands
-        .spawn((
-            VoyageHint,
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(18.0),
-                left: Val::Percent(50.0),
-                margin: UiRect::left(Val::Px(-220.0)),
-                width: Val::Px(440.0),
-                padding: UiRect::axes(Val::Px(18.0), Val::Px(10.0)),
-                justify_content: JustifyContent::Center,
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(7.0)),
-                ..default()
-            },
-            BackgroundColor(crate::ui::styles::LIMEWASH),
-            BorderColor::from(crate::ui::styles::PLATE_RULE),
-            GlobalZIndex(60),
-        ))
-        .with_children(|root| {
-            root.spawn((
-                Text::new("RIGHT-CLICK WATER TO SAIL  |  RIGHT-CLICK NEARBY LAND TO DISEMBARK"),
-                TextFont {
-                    font_size: FontSize::Px(11.0),
-                    ..default()
-                },
-                TextColor(crate::ui::styles::INK),
-            ));
-        });
 }
 
 #[cfg(test)]

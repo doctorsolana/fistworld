@@ -84,6 +84,14 @@ pub const BANK_WIDTH: f32 = 16.0;
 /// segment water reach comes from [`river_water_reach_at`].
 pub const RIVER_WATER_REACH: f32 = RIVER_HALF_WIDTH + 4.0;
 
+/// Ground-paint and ground-cover margin beyond the river water footprint.
+///
+/// This is deliberately modest: it gives an inland river a readable damp/sandy
+/// bank without turning every valley into a coastal beach. The chunked river
+/// index includes this margin, so visual surface sampling never scans the
+/// world's complete river graph.
+pub const RIVER_BANK_PAINT_MARGIN: f32 = 5.0;
+
 /// At sea level the carved bed widens to the same footprint the renderer can
 /// fill and sits safely below the ocean plane. Without this final shallow fan,
 /// the blended bank can remain a few centimetres above the water between the

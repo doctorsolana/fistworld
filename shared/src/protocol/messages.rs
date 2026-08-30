@@ -165,6 +165,27 @@ impl bevy::ecs::entity::MapEntities for DisembarkBoat {
     }
 }
 
+/// Sail to a good landing near an inland click, put the sailor ashore, then
+/// walk them the rest of the way.
+///
+/// Complements [`DisembarkBoat`], which handles a click already within
+/// stepping distance of the hull. This one carries the FULL intent — "I want
+/// to be at `target`, on foot" — and the server owns every decision along the
+/// way: which stretch of coast to make for, the water route to it, the dry
+/// landing point, and the walk order after landfall. `target` is intent, not
+/// trusted position data.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+pub struct SailToLanding {
+    pub boat: Entity,
+    pub target: Vec3,
+}
+
+impl bevy::ecs::entity::MapEntities for SailToLanding {
+    fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, mapper: &mut M) {
+        self.boat = mapper.get_mapped(self.boat);
+    }
+}
+
 /// Client -> Server: walk these specific units to these specific points.
 ///
 /// Replaces the old `HeroMoveTo`, which carried NO unit identity -- the server
@@ -1059,6 +1080,30 @@ mod tests {
         );
         // Targets must be untouched: mapping addresses, not destinations.
         assert_eq!(msg.units[1].1, Vec3::ONE);
+    }
+
+    #[test]
+    fn sail_to_landing_maps_the_boat_but_not_the_target_point() {
+        use bevy::ecs::entity::MapEntities;
+
+        struct SeqMapper {
+            next: u32,
+        }
+        impl bevy::ecs::entity::EntityMapper for SeqMapper {
+            fn get_mapped(&mut self, _entity: Entity) -> Entity {
+                self.next += 1;
+                Entity::from_raw_u32(self.next).unwrap()
+            }
+            fn set_mapped(&mut self, _source: Entity, _target: Entity) {}
+        }
+
+        let mut msg = SailToLanding {
+            boat: Entity::from_raw_u32(50).unwrap(),
+            target: Vec3::new(4.0, 5.0, 6.0),
+        };
+        msg.map_entities(&mut SeqMapper { next: 0 });
+        assert_eq!(msg.boat, Entity::from_raw_u32(1).unwrap());
+        assert_eq!(msg.target, Vec3::new(4.0, 5.0, 6.0));
     }
 
     #[test]

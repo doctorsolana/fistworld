@@ -1,0 +1,44 @@
+(
+    version: 1,
+    name: "river-banks",
+    map: "big_world",
+    output_dir: "logs/captures/river-banks",
+    resolution: (1600, 900),
+    fixed_delta_seconds: 0.016666667,
+    target: scene,
+    show_window: false,
+    warmup_frames: 240,
+    readiness: (
+        minimum_frames: 60,
+        maximum_frames: 1200,
+        minimum_loaded_chunks: 64,
+        stable_loaded_chunk_frames: 20,
+    ),
+    diagnostics: (
+        performance_overlay: false,
+        gizmos: false,
+        render_timings: false,
+    ),
+    shots: [
+        (
+            name: "middle-river",
+            // Shipped Showcase/91 river 0, well above its estuary.
+            focus: (-1944.0, 0.0, 920.0),
+            yaw: -0.65,
+            zoom: 105.0,
+            time_of_day: 0.5,
+            assertions: [
+                loaded_chunks_at_least(count: 64),
+                entities_at_least(count: 100),
+            ],
+        ),
+        (
+            name: "river-mouth",
+            focus: (-2585.0, 0.0, 1195.0),
+            yaw: -0.35,
+            zoom: 125.0,
+            time_of_day: 0.5,
+            assertions: [loaded_chunks_at_least(count: 64)],
+        ),
+    ],
+)

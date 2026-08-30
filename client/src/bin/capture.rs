@@ -12,6 +12,9 @@ use std::path::PathBuf;
 
 use bevy::math::Vec3;
 use client::capture::{run, CaptureConfig, Shot};
+use client::capture_artifact::{
+    CaptureComparisonConfig, CaptureRecordingConfig, CaptureScenario, CaptureTarget,
+};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -20,17 +23,67 @@ fn main() {
         return;
     }
 
-    let mut out_dir = PathBuf::from("/tmp/citysim-shots");
+    let scenario_path = args
+        .windows(2)
+        .find(|pair| pair[0] == "--scenario")
+        .map(|pair| PathBuf::from(&pair[1]));
+    let loaded_scenario = scenario_path.as_ref().map(|path| {
+        CaptureScenario::load(path).unwrap_or_else(|error| {
+            eprintln!("capture: {error}");
+            std::process::exit(2);
+        })
+    });
+    if let Some(scenario) = &loaded_scenario {
+        scenario.apply_environment();
+    }
+
+    let mut out_dir = loaded_scenario
+        .as_ref()
+        .map(|scenario| scenario.output_dir.clone())
+        .unwrap_or_else(|| PathBuf::from("/tmp/citysim-shots"));
     let mut focus = Vec3::ZERO;
     let mut yaw = -0.45_f32;
     let mut zoom = 220.0_f32;
     let mut time_of_day = 0.5_f32;
-    let mut warmup_frames = 240_u32;
-    let mut settle_frames = 60_u32;
+    let mut warmup_frames = loaded_scenario
+        .as_ref()
+        .map(|scenario| scenario.warmup_frames)
+        .unwrap_or(240);
+    let mut settle_frames = if loaded_scenario.is_some() { 0 } else { 60 };
     let mut preset: Option<String> = None;
     let mut name = "shot".to_string();
     let mut pitch: Option<f32> = None;
     let mut eye = 1.7_f32;
+    let mut scenario_name = loaded_scenario
+        .as_ref()
+        .map(|scenario| scenario.name.clone())
+        .unwrap_or_else(|| "command-line".to_owned());
+    let mut resolution = loaded_scenario
+        .as_ref()
+        .map(|scenario| scenario.resolution)
+        .unwrap_or([1_600, 900]);
+    let mut fixed_delta_seconds = loaded_scenario
+        .as_ref()
+        .map(|scenario| scenario.fixed_delta_seconds)
+        .unwrap_or(1.0 / 60.0);
+    let mut target = loaded_scenario
+        .as_ref()
+        .map(|scenario| scenario.target)
+        .unwrap_or_default();
+    let mut show_window = loaded_scenario
+        .as_ref()
+        .map(|scenario| scenario.show_window)
+        .unwrap_or(true);
+    let mut comparison = loaded_scenario
+        .as_ref()
+        .and_then(|scenario| scenario.comparison.clone());
+    let mut recording = loaded_scenario
+        .as_ref()
+        .and_then(|scenario| scenario.recording.clone());
+    let mut diagnostics = loaded_scenario
+        .as_ref()
+        .map(|scenario| scenario.diagnostics.clone())
+        .unwrap_or_default();
 
     let mut i = 0;
     while i < args.len() {
@@ -51,14 +104,59 @@ fn main() {
             "--warmup" => warmup_frames = value().parse().unwrap_or(warmup_frames),
             "--settle" => settle_frames = value().parse().unwrap_or(settle_frames),
             "--preset" => preset = Some(value()),
+            "--scenario" => {
+                let _ = value();
+            }
+            "--scenario-name" => scenario_name = value(),
+            "--resolution" => resolution = parse_resolution(&value()).unwrap_or(resolution),
+            "--fixed-delta" => fixed_delta_seconds = value().parse().unwrap_or(fixed_delta_seconds),
+            "--target" => {
+                target = match value().as_str() {
+                    "scene" => CaptureTarget::Scene,
+                    "window" => CaptureTarget::Window,
+                    other => {
+                        eprintln!("capture: unknown target '{other}', expected window or scene");
+                        target
+                    }
+                }
+            }
+            "--hidden" => show_window = false,
+            "--compare" => {
+                comparison = Some(CaptureComparisonConfig {
+                    baseline_dir: PathBuf::from(value()),
+                    ..Default::default()
+                });
+            }
+            "--update-baselines" => {
+                comparison = Some(CaptureComparisonConfig {
+                    baseline_dir: PathBuf::from(value()),
+                    update_baselines: true,
+                    ..Default::default()
+                });
+            }
+            "--record" => {
+                recording = Some(CaptureRecordingConfig {
+                    enabled: true,
+                    ..Default::default()
+                });
+            }
+            "--perf-overlay" => diagnostics.performance_overlay = true,
+            "--gizmos" => diagnostics.gizmos = true,
+            "--render-diagnostics" => diagnostics.render_timings = true,
             other => eprintln!("capture: ignoring unknown arg '{other}'"),
         }
         i += 1;
     }
 
-    let mut shots = match preset.as_deref() {
-        Some(p) => preset_shots(p, focus, time_of_day),
-        None => vec![Shot {
+    let mut shots = match (preset.as_deref(), loaded_scenario.as_ref()) {
+        (Some(p), _) => preset_shots(p, focus, time_of_day),
+        (None, Some(scenario)) => scenario
+            .shots
+            .clone()
+            .into_iter()
+            .map(|shot| shot.into_runtime(&scenario.readiness))
+            .collect(),
+        (None, None) => vec![Shot {
             name,
             focus,
             yaw,
@@ -79,7 +177,14 @@ fn main() {
     // The flight preset only means anything when the camera genuinely moves
     // every rendered frame; settle frames would reintroduce the stationary
     // catch-up gaps the preset exists to eliminate.
-    let continuous = matches!(preset.as_deref(), Some("streaming-flight"));
+    let continuous = matches!(preset.as_deref(), Some("streaming-flight"))
+        || loaded_scenario
+            .as_ref()
+            .is_some_and(|scenario| scenario.continuous);
+    let probe_every = loaded_scenario
+        .as_ref()
+        .map(|scenario| scenario.probe_every)
+        .unwrap_or(4);
 
     println!(
         "capture: {} shot(s) -> {} (warmup {} frames{})",
@@ -94,12 +199,20 @@ fn main() {
     );
 
     run(CaptureConfig {
+        scenario_name,
         out_dir,
         shots,
+        resolution,
+        fixed_delta_seconds,
+        target,
+        show_window,
+        comparison,
+        recording,
+        diagnostics,
         warmup_frames,
         settle_frames: if continuous { 0 } else { settle_frames },
         continuous,
-        probe_every: 4,
+        probe_every,
     });
 }
 
@@ -287,6 +400,13 @@ fn parse_vec3(s: &str) -> Vec3 {
     }
 }
 
+fn parse_resolution(value: &str) -> Option<[u32; 2]> {
+    let (width, height) = value.split_once('x').or_else(|| value.split_once('X'))?;
+    let width = width.trim().parse().ok()?;
+    let height = height.trim().parse().ok()?;
+    (width > 0 && height > 0).then_some([width, height])
+}
+
 fn print_help() {
     println!(
         r#"capture — screenshot the game world (no server needed)
@@ -295,6 +415,7 @@ USAGE (from repo root):
     cargo run -p client --bin capture -- [OPTIONS]
 
 OPTIONS:
+    --scenario <ron>   Load a checked-in deterministic capture scenario
     --out <dir>        Output directory        [default: /tmp/citysim-shots]
     --name <str>       Filename stem for a single shot
     --at <x,y,z>       Camera focus point ("x,z" also works)
@@ -306,11 +427,22 @@ OPTIONS:
     --pitch <rad>      free-look: pitch below horizon (0 = level, negative = up); bypasses the RTS tilt lock
     --eye <m>          free-look camera height above the water (default 1.7)
     --preset <name>    orbit | survey | daycycle | water | shorecycle | streaming-pan | streaming-handoff | streaming-flight
+    --resolution <WxH> Fixed physical capture resolution [default: 1600x900]
+    --fixed-delta <s>  Deterministic real-time step       [default: 0.0166667]
+    --target <kind>    window (scene + UI) | scene (offscreen 3D only)
+    --hidden           Hide the OS window (best paired with --target scene)
+    --compare <dir>    Compare PNGs to baselines; write *.diff.png on failure
+    --update-baselines <dir>  Create or replace approved baseline PNGs
+    --record           Record deterministic raw H.264 (requires --features capture-video)
+    --perf-overlay     Include the F3 performance/world overlay
+    --gizmos           Include F4 planning/collider gizmos
+    --render-diagnostics  Log Bevy render timing diagnostics
 
 EXAMPLES:
     cargo run -p client --bin capture -- --at 0,0 --preset survey
     cargo run -p client --bin capture -- --at -210,-170 --preset water --out /tmp/water
     cargo run -p client --bin capture -- --at 0,0 --preset daycycle
+    cargo run -p client --bin capture -- --scenario capture/scenarios/world-survey.ron
 "#
     );
 }

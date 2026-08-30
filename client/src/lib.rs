@@ -9,6 +9,7 @@ pub mod battalion_bar;
 pub mod boat;
 pub mod camera_rts;
 pub mod capture;
+pub mod capture_artifact;
 pub mod city;
 pub mod combat_mode;
 pub mod hero;

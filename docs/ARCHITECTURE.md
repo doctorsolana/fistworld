@@ -9,7 +9,8 @@ architecture: settlements, goods, caravans, clans, and the player's climb from o
 to a realm. [CIVIC-ECONOMY.md](CIVIC-ECONOMY.md) is the executable reference for market
 ownership, municipal finance and settlement policy. The build order lives in
 [ROADMAP.md](ROADMAP.md). Client presentation and interaction rules live in
-[UI-ARCHITECTURE.md](UI-ARCHITECTURE.md).
+[UI-ARCHITECTURE.md](UI-ARCHITECTURE.md). The real-renderer verification contract and
+capture artifact architecture live in [VISUAL-CAPTURE.md](VISUAL-CAPTURE.md).
 
 > **Status, audited 2026-08-15.** This remains a design record, with implementation state
 > marked **[not built]**, **[partial]** or **[done]**. The living-village foundation now
@@ -183,6 +184,13 @@ This is the most technically demanding choice on the board. It requires:
 - **Transitions must not pop.** Cross-fade or match silhouettes across LOD bands.
   **[partial]** — the terrain seam is genuinely invisible; water hard-pops, non-tree props
   snap out at the wrong distance, and entities have no LOD to cross-fade at all.
+- **Near and far water are one visual contract.** Detailed ocean and sloping rivers use the
+  terrain-crossing water mesh. The far mesh supplies an opaque ocean underlay and a widened
+  cartographic river only outside the streamed detail hole. Its river marker must be removed
+  across the complete interpolated triangle fan inside that hole, or coarse vertices appear as
+  X-shaped water streaks over close rivers. Generated inland banks derive sand/damp-earth paint
+  from the same chunk-indexed river segments and local water surface; absolute sea height cannot
+  identify a riverbank.
 - ~~**Camera range grows enormously** — roughly 5 m to 20 km, versus today's 55–900 m.~~
   **[done, and the figures were stale].** The commander camera is already 12m–12,000m, and
   the shipped map is 8192m across, so 12km already frames the entire world. There is

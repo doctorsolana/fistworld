@@ -1123,7 +1123,10 @@ Automated visual checks can set `FISTWORLD_LAB_CAPTURE_DAY`,
 `FISTWORLD_LAB_CAPTURE_PATH`, `FISTWORLD_LAB_CAPTURE_ZOOM` and optionally
 `FISTWORLD_LAB_CAPTURE_SETTLE_FRAMES` before `./run.sh testworld`. The last value
 shortens the default 180-frame render warmup when capturing a brief event such as
-the founding Moot service line.
+the founding Moot service line. Capture completion is observer-driven and writes a
+`.capture.json` sidecar beside the PNG; it no longer guesses completion by polling the file.
+See [VISUAL-CAPTURE.md](VISUAL-CAPTURE.md) for offline scenarios, semantic assertions and
+baseline comparison, and for when a connected lab capture is the correct choice.
 
 Each run records timestamped `server.log` and `client.log` files under
 `logs/realworld-*`. The server writes a `VillageTrace` snapshot every three

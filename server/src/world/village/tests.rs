@@ -282,6 +282,159 @@ fn player_assignment_advances_the_physical_supply_loop_at_night_without_villager
     );
 }
 
+/// Dusk must not freeze a hauler mid-task: wood on a shoulder still reaches
+/// the site, while a builder merely WALKING toward a tree stands down cleanly
+/// (phase reset to Seeking, no stale walk order) instead of finishing a dead
+/// march and posing beside the worksite until dawn.
+#[test]
+fn nightfall_finishes_deliveries_in_flight_and_stands_down_the_rest_cleanly() {
+    let mut app = village_test_app();
+    app.init_resource::<Time>();
+    app.insert_resource(WorldTerrain::default());
+    app.add_systems(Update, run_construction_material_logistics);
+    // 30 seconds past sunset.
+    app.world_mut().spawn(WorldTime::new(
+        WorldTime::DEFAULT_DAY_DURATION,
+        WorldTime::DEFAULT_NIGHT_DURATION,
+        WorldTime::DEFAULT_DAY_DURATION + 30.0,
+    ));
+
+    let hall_position = Vec3::new(1720.0, 6.0, 0.0);
+    let settlement = app
+        .world_mut()
+        .spawn((
+            shared::components::SettlementId(21),
+            Settlement {
+                name: "Nightwood".into(),
+                tier: shared::components::SettlementTier::Hamlet,
+                residents: 2,
+                treasury: 0,
+            },
+            PlayerPosition(hall_position),
+            PlayerRotation(0.0),
+            GoodsInventory::new(shared::economy::capacity::HALL),
+        ))
+        .id();
+    let kind = SettlementBuildingKind::Farmstead;
+    let site_position = hall_position + Vec3::X * 40.0;
+    let stand = shared::components::builder_stand_position(
+        site_position,
+        0.0,
+        kind.art().definition().footprint.y,
+    );
+    let spawn_builder = |app: &mut App, id: u64, phase: ConstructionMaterialPhase| {
+        app.world_mut()
+            .spawn((
+                shared::components::PersonId(id),
+                CharacterName(format!("Builder {id}")),
+                CharacterKind::Villager,
+                PlayerPosition(hall_position),
+                PlayerRotation(0.0),
+                CharacterActivity::Building,
+                GoodsInventory::new(shared::economy::capacity::VILLAGER),
+                ConstructionMaterialRoutine {
+                    site: Entity::PLACEHOLDER,
+                    cycle: 0,
+                    failed_tree_routes: 0,
+                    failed_store_routes: 0,
+                    failed_delivery_routes: 0,
+                    tree_retry_after: 0.0,
+                    store_retry_after: 0.0,
+                    phase,
+                },
+            ))
+            .id()
+    };
+    let deliverer = spawn_builder(
+        &mut app,
+        31,
+        ConstructionMaterialPhase::Delivering {
+            destination: site_position,
+        },
+    );
+    let tree_walker = spawn_builder(
+        &mut app,
+        32,
+        ConstructionMaterialPhase::WalkingToTree {
+            tree: hall_position + Vec3::Z * 60.0,
+            stand: hall_position + Vec3::Z * 58.0,
+        },
+    );
+    let site = app
+        .world_mut()
+        .spawn((
+            UnderConstruction {
+                kind,
+                position: site_position,
+                rotation: 0.0,
+                owner: None,
+                owner_id: None,
+                builder: Some(deliverer),
+                settlement,
+                settlement_id: shared::components::SettlementId(21),
+                stand,
+                failed_stand_routes: 0,
+                stage: BuildStage::Supplying,
+                quality: 0.5,
+            },
+            shared::components::ConstructionSite {
+                kind,
+                settlement: "Nightwood".into(),
+                raising: false,
+                stand,
+                rotation: 0.0,
+            },
+            GoodsInventory::new(kind.construction_storage_bulk()),
+            PlayerPosition(site_position),
+        ))
+        .id();
+    for builder in [deliverer, tree_walker] {
+        app.world_mut().entity_mut(builder).insert((
+            VillagerIntent::Building { settlement, site },
+            MoveTarget(site_position),
+        ));
+        let mut routine = app
+            .world_mut()
+            .get_mut::<ConstructionMaterialRoutine>(builder)
+            .unwrap();
+        routine.site = site;
+    }
+
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(std::time::Duration::from_secs(1));
+    app.update();
+
+    // The delivery in flight continues through the night...
+    assert!(matches!(
+        app.world()
+            .get::<ConstructionMaterialRoutine>(deliverer)
+            .unwrap()
+            .phase,
+        ConstructionMaterialPhase::Delivering { .. }
+    ));
+    assert!(
+        app.world().get::<MoveTarget>(deliverer).is_some(),
+        "the deliverer must keep walking its cargo to the site"
+    );
+    // ...while the un-invested walk stands down cleanly for the morning.
+    assert!(matches!(
+        app.world()
+            .get::<ConstructionMaterialRoutine>(tree_walker)
+            .unwrap()
+            .phase,
+        ConstructionMaterialPhase::Seeking
+    ));
+    assert!(
+        app.world().get::<MoveTarget>(tree_walker).is_none(),
+        "a stood-down builder must not finish a stale march"
+    );
+    assert_eq!(
+        *app.world().get::<CharacterActivity>(tree_walker).unwrap(),
+        CharacterActivity::Idle
+    );
+}
+
 #[test]
 fn completed_player_building_releases_hero_at_night_and_queues_civic_road_work() {
     let mut app = village_test_app();

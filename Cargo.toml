@@ -64,3 +64,12 @@ debug = "line-tables-only"
 lto = "thin"
 # Debug symbols are for local builds; a shipped client links 70 MB smaller.
 strip = true
+
+# bevy_ui 0.19.0 with ONE surgical fix (see vendor/bevy_ui/src/focus.rs,
+# `clip_check_recursive`): upstream stops the clip walk at the first
+# non-clipping ancestor, so buttons/rows nested under a plain wrapper inside a
+# scroll viewport were hit-tested UNCLIPPED — scrolled-away list rows stole
+# clicks aimed at UI drawn over them. Drop this patch on the 0.20 upgrade
+# after re-testing that scenario.
+[patch.crates-io]
+bevy_ui = { path = "vendor/bevy_ui" }

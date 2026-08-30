@@ -345,16 +345,21 @@ CITYSIM_MAP_ID=village_lab ./run.sh
 cargo run -p client --bin capture -- --at -226,-163 --preset survey
 cargo run -p client --bin capture -- --at 0,0 --preset daycycle --out /tmp/shots
 cargo run -p client --bin capture -- --help
+cargo run -p client --bin capture -- --scenario capture/scenarios/world-survey.ron
 ```
 
 Presets include `survey`, `orbit`, `daycycle` and `water`. Rendering is required to catch
-mesh winding, shader, foliage, lighting and anchor problems that compilation cannot.
+mesh winding, shader, foliage, lighting and anchor problems that compilation cannot. Each
+scenario shot now emits a PNG plus JSON metadata, waits on explicit streaming readiness, can
+assert world state, and can compare against approved pixel baselines. The complete scenario,
+offscreen, recording and regression workflow is in
+[VISUAL-CAPTURE.md](docs/VISUAL-CAPTURE.md).
 
 For a deterministic grass capture that cannot accidentally frame open ocean:
 
 ```bash
 CITYSIM_MAP_ID=village_lab \
-  cargo run -p client --bin capture -- --at 112,-158 --name grass --zoom 90 --tilt 0.55
+  cargo run -p client --bin capture -- --at 112,-158 --name grass --zoom 90 --pitch 0.55
 ```
 
 To stress the renderer without changing normal-world density, add

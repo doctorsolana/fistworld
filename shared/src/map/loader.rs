@@ -36,9 +36,45 @@ pub struct LoadedMap {
     /// River segments indexed by every terrain chunk whose props can be
     /// affected by their clearance radius. Prop and grass streaming consults
     /// this instead of rescanning the entire world's river graph per chunk.
-    pub river_segments_by_chunk: HashMap<(i32, i32), Vec<(Vec2, Vec2)>>,
+    pub river_segments_by_chunk: HashMap<(i32, i32), Vec<RiverSegment>>,
     pub content_hash: u64,
     pub map_dir: PathBuf,
+}
+
+/// One generated river segment with enough information for every local
+/// consumer: water height, tapered footprint, ground paint and prop clearance.
+///
+/// Keeping this in the loaded-map index avoids each terrain texel, grass patch
+/// or navigation query rescanning every river polyline in the world.
+#[derive(Debug, Clone, Copy)]
+pub struct RiverSegment {
+    pub a: Vec2,
+    pub b: Vec2,
+    pub surface_a: f32,
+    pub surface_b: f32,
+    pub reach_a: f32,
+    pub reach_b: f32,
+}
+
+impl RiverSegment {
+    #[inline]
+    pub fn sample_at(self, point: Vec2) -> RiverSegmentSample {
+        let segment = self.b - self.a;
+        let t =
+            ((point - self.a).dot(segment) / segment.length_squared().max(1.0e-6)).clamp(0.0, 1.0);
+        RiverSegmentSample {
+            distance: point.distance(self.a + segment * t),
+            surface: self.surface_a + (self.surface_b - self.surface_a) * t,
+            reach: self.reach_a + (self.reach_b - self.reach_a) * t,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RiverSegmentSample {
+    pub distance: f32,
+    pub surface: f32,
+    pub reach: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -279,7 +315,7 @@ fn build_loaded_map(
         .terrain_deltas_by_chunk()
         .map_err(|err| format!("Invalid map edits for '{}': {err}", definition.map_id))?;
     let objects_by_chunk = build_objects_by_chunk(&definition.objects);
-    let river_segments_by_chunk = build_river_segments_by_chunk(&rivers);
+    let river_segments_by_chunk = build_river_segments_by_chunk(&rivers, heightmap.water_level);
     let content_hash =
         compute_loaded_map_hash(&definition.map_id, map_bytes, &heightmap_bytes, edits_bytes);
 
@@ -297,22 +333,35 @@ fn build_loaded_map(
     })
 }
 
-fn build_river_segments_by_chunk(rivers: &[Vec<Vec3>]) -> HashMap<(i32, i32), Vec<(Vec2, Vec2)>> {
-    let mut by_chunk: HashMap<(i32, i32), Vec<(Vec2, Vec2)>> = HashMap::new();
-    let padding = crate::worldgen::RIVER_WATER_REACH;
+fn build_river_segments_by_chunk(
+    rivers: &[Vec<Vec3>],
+    water_level: Option<f32>,
+) -> HashMap<(i32, i32), Vec<RiverSegment>> {
+    let mut by_chunk: HashMap<(i32, i32), Vec<RiverSegment>> = HashMap::new();
+    let Some(ocean) = water_level else {
+        return by_chunk;
+    };
     for river in rivers {
-        for window in river.windows(2) {
-            let a = Vec2::new(window[0].x, window[0].z);
-            let b = Vec2::new(window[1].x, window[1].z);
-            let min = a.min(b) - Vec2::splat(padding);
-            let max = a.max(b) + Vec2::splat(padding);
+        for (segment_index, window) in river.windows(2).enumerate() {
+            let segment = RiverSegment {
+                a: Vec2::new(window[0].x, window[0].z),
+                b: Vec2::new(window[1].x, window[1].z),
+                surface_a: crate::worldgen::river_surface_height(window[0].y, ocean),
+                surface_b: crate::worldgen::river_surface_height(window[1].y, ocean),
+                reach_a: crate::worldgen::river_water_reach_at(segment_index, river.len()),
+                reach_b: crate::worldgen::river_water_reach_at(segment_index + 1, river.len()),
+            };
+            let padding =
+                segment.reach_a.max(segment.reach_b) + crate::worldgen::RIVER_BANK_PAINT_MARGIN;
+            let min = segment.a.min(segment.b) - Vec2::splat(padding);
+            let max = segment.a.max(segment.b) + Vec2::splat(padding);
             let min_x = (min.x / CHUNK_SIZE).floor() as i32;
             let min_z = (min.y / CHUNK_SIZE).floor() as i32;
             let max_x = (max.x / CHUNK_SIZE).floor() as i32;
             let max_z = (max.y / CHUNK_SIZE).floor() as i32;
             for x in min_x..=max_x {
                 for z in min_z..=max_z {
-                    by_chunk.entry((x, z)).or_default().push((a, b));
+                    by_chunk.entry((x, z)).or_default().push(segment);
                 }
             }
         }
@@ -475,6 +524,23 @@ fn decode_heightmap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexed_river_segment_interpolates_surface_and_taper() {
+        let segment = RiverSegment {
+            a: Vec2::new(0.0, 0.0),
+            b: Vec2::new(10.0, 0.0),
+            surface_a: 8.0,
+            surface_b: 4.0,
+            reach_a: 3.0,
+            reach_b: 7.0,
+        };
+
+        let sample = segment.sample_at(Vec2::new(5.0, 2.0));
+        assert!((sample.distance - 2.0).abs() < 1.0e-6);
+        assert!((sample.surface - 6.0).abs() < 1.0e-6);
+        assert!((sample.reach - 5.0).abs() < 1.0e-6);
+    }
 
     /// The battle map must be sane everywhere a soldier can stand: finite
     /// heights across the whole field, dry land at the staged battle anchor.

@@ -74,6 +74,8 @@ Treat documentation as part of an economy/gameplay change, not as a later cleanu
   loop changes;
 - update `docs/ROADMAP.md` whenever an implemented/future boundary moves;
 - update `docs/VILLAGE-LAB.md` when a scenario, diagnostic field or interpretation changes;
+- update `docs/VISUAL-CAPTURE.md` when capture scenarios, readiness, assertions, artifact
+  metadata, recording or baseline behavior changes;
 - update `server/README.md` or `docs/ARCHITECTURE.md` when code ownership, scheduling,
   persistence or scaling boundaries change.
 
@@ -152,6 +154,12 @@ cargo test --workspace
 `cargo check -p <crate>` is not sufficient: `--all-targets` and a full `cargo build --workspace`
 catch breakage in test targets and in `tools/collider_baker`, which depends on `shared`.
 
+For visual work, compilation is only the first gate. Follow
+[`docs/VISUAL-CAPTURE.md`](docs/VISUAL-CAPTURE.md), run the real Bevy renderer through a
+checked-in scenario where practical, and inspect its PNG **and** `.capture.json`. Use a
+continuous scenario for streaming or camera-motion defects. The repository-level
+[`AGENTS.md`](AGENTS.md) makes this contract discoverable to coding agents before they begin.
+
 For runtime verification (launch recipe, env flags, log signals, and the process-kill trap that
 will otherwise cost you an hour) see `.claude/skills/verify/SKILL.md`.
 
@@ -169,6 +177,7 @@ Add regression tests when fixing:
 - No compatibility shim/placeholder code introduced.
 - Hot path impact reviewed against the scale target.
 - Tests and checks pass; the tree has no new warnings.
+- Renderer/UI work has an inspected capture artifact, not only a successful build.
 - Docs updated when architecture, protocol, or workflow changes.
 
 ## Architecture

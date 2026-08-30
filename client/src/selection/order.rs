@@ -16,8 +16,8 @@ use shared::components::{
     PlayerBoat, PlayerPosition,
 };
 use shared::protocol::{
-    DisembarkBoat, FormationMoveOrder, HeroConstructionOrder, ReliableChannel, UnitAttackOrder,
-    UnitMoveOrder, MAX_UNITS_PER_ORDER,
+    DisembarkBoat, FormationMoveOrder, HeroConstructionOrder, ReliableChannel, SailToLanding,
+    UnitAttackOrder, UnitMoveOrder, MAX_UNITS_PER_ORDER,
 };
 
 use super::{can_command, formation_targets, is_click, RightDrag, Selection};
@@ -38,6 +38,12 @@ pub(super) struct BoatOrderWorld<'w, 's> {
         'w,
         's,
         &'static mut MessageSender<DisembarkBoat>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+    landing_sender: Query<
+        'w,
+        's,
+        &'static mut MessageSender<SailToLanding>,
         (With<crate::GameClient>, With<Connected>),
     >,
     notice: ResMut<'w, crate::ui::hud::GodNotice>,
@@ -252,9 +258,13 @@ pub(super) fn issue_order_on_right_click(
             if land_units.is_empty() {
                 let distance = boat_position.0.xz().distance(target.xz());
                 if distance > 11.0 {
-                    boat_world
-                        .notice
-                        .show("Sail closer to shore before disembarking");
+                    // An inland click is a complete intent: the server picks
+                    // the coast, sails there, puts the sailor ashore and walks
+                    // them the rest of the way. No "sail closer" homework.
+                    if let Ok(mut sender) = boat_world.landing_sender.single_mut() {
+                        sender.send::<ReliableChannel>(SailToLanding { boat, target });
+                        boat_world.notice.show("Making for shore");
+                    }
                     return;
                 }
                 if let Ok(mut sender) = boat_world.sender.single_mut() {

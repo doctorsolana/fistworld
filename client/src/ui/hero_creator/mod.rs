@@ -8,7 +8,7 @@
 
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use bevy::ui::FocusPolicy;
+use bevy::ui::{FocusPolicy, RelativeCursorPosition};
 use lightyear::prelude::{Connected, MessageSender};
 
 use shared::components::HeroOutfit;
@@ -20,8 +20,7 @@ use crate::input::InputState;
 use crate::states::GameState;
 use crate::ui::foundation::{button_chrome, UiButtonLabel, UiButtonVariant};
 use crate::ui::modal::{
-    handle_backdrop_pressed, modal_backdrop_chrome, modal_root_chrome, update_modal_click_guard,
-    ModalRoot,
+    handle_backdrop_pressed, modal_backdrop_chrome, modal_root_chrome, ModalRoot,
 };
 use crate::ui::styles::{EMBER, INK, INK_MUTED, PLATE_RULE};
 
@@ -49,7 +48,12 @@ impl Plugin for HeroCreatorPlugin {
         app.add_systems(
             Update,
             (
-                update_click_guard,
+                // The guard computes this frame's completed-click verdict;
+                // every handler consumes it, so the order is load-bearing.
+                update_click_guard
+                    .before(handle_arrow_buttons)
+                    .before(handle_confirm_buttons)
+                    .before(close_on_escape_or_backdrop),
                 setup_preview_rig,
                 follow_camera_with_diorama,
                 propagate_preview_shadows,
@@ -84,17 +88,47 @@ pub enum HeroCreatorPurpose {
     NewPlayerVoyage,
 }
 
-/// Armed once the left button has been released since the modal opened, so a
-/// button already under the cursor cannot action itself on open.
+/// Click discipline for the creator, tracked as a full press cycle.
+///
+/// The creator's buttons act on RELEASE, and only for a press that BEGAN
+/// while the modal was open with the mouse previously seen up. Two failure
+/// modes forced this shape: (a) the click that opened the modal must not
+/// action a control that appeared under it (the classic guard), and (b) at a
+/// fresh game start macOS can deliver the first press before the window has
+/// ever reported a cursor position, so a press-frame hover test misses and
+/// the first click only "highlights" the button. By the release, the cursor
+/// position is always known.
 #[derive(Resource, Default)]
-pub struct CreatorClickGuard(pub bool);
+pub struct CreatorClickGuard {
+    /// A release has been observed since the modal opened.
+    pub armed: bool,
+    /// A press began while armed; the matching release is a real click.
+    press_in_flight: bool,
+    /// This frame is the release of an in-modal press: handlers act NOW.
+    pub completed_click: bool,
+}
 
 fn update_click_guard(
     open: Res<HeroCreatorOpen>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut guard: ResMut<CreatorClickGuard>,
 ) {
-    update_modal_click_guard(open.0, &mouse, &mut guard.0);
+    guard.completed_click = false;
+    if !open.0 {
+        guard.armed = false;
+        guard.press_in_flight = false;
+        return;
+    }
+    if !guard.armed && !mouse.pressed(MouseButton::Left) {
+        guard.armed = true;
+    }
+    if guard.armed && mouse.just_pressed(MouseButton::Left) {
+        guard.press_in_flight = true;
+    }
+    if mouse.just_released(MouseButton::Left) {
+        guard.completed_click = guard.press_in_flight;
+        guard.press_in_flight = false;
+    }
 }
 
 fn creator_open(open: Res<HeroCreatorOpen>) -> bool {
@@ -451,6 +485,7 @@ fn spawn_arrow(line: &mut ChildSpawnerCommands<'_>, glyph: &str, marker: ArrowBu
     line.spawn((
         Button,
         marker,
+        RelativeCursorPosition::default(),
         Node {
             width: Val::Px(38.0),
             height: Val::Px(34.0),
@@ -484,6 +519,7 @@ fn spawn_action_button(
     row.spawn((
         Button,
         marker,
+        RelativeCursorPosition::default(),
         Node {
             width: Val::Px(120.0),
             height: Val::Px(34.0),
@@ -528,22 +564,21 @@ fn sync_creator_open_state(open: Res<HeroCreatorOpen>, mut input_state: ResMut<I
 /// Cycle a slot and re-dress both the preview rig and the pending selection.
 fn handle_arrow_buttons(
     guard: Res<CreatorClickGuard>,
-    mouse: Res<ButtonInput<MouseButton>>,
     manifest: Res<crate::hero::HeroManifest>,
     mut selected: ResMut<SelectedOutfit>,
     preview: Res<PreviewEntities>,
-    buttons: Query<(&Interaction, &ArrowButton), Changed<Interaction>>,
+    buttons: Query<(&RelativeCursorPosition, &ArrowButton)>,
     mut rig_outfits: Query<&mut HeroOutfit, With<HeroPreviewRig>>,
 ) {
-    // Ordinary menu hygiene: act only on a real button-down edge, and only
-    // once the guard has armed (see CreatorClickGuard), so the click that
-    // opened this modal cannot fall through onto a swatch underneath it.
-    if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
+    // Act on the RELEASE of an in-modal press (see CreatorClickGuard), hit-
+    // tested by live cursor position rather than the Interaction state
+    // machine — the release always happens with a known cursor.
+    if !guard.completed_click {
         return;
     }
     let mut changed = false;
-    for (interaction, arrow) in buttons.iter() {
-        if *interaction != Interaction::Pressed {
+    for (cursor, arrow) in buttons.iter() {
+        if !cursor.cursor_over {
             continue;
         }
         let step = arrow.dir as i16;
@@ -569,13 +604,17 @@ fn handle_arrow_buttons(
 
 fn handle_confirm_buttons(
     guard: Res<CreatorClickGuard>,
-    mouse: Res<ButtonInput<MouseButton>>,
     mut open: ResMut<HeroCreatorOpen>,
     purpose: Res<HeroCreatorPurpose>,
     selected: Res<SelectedOutfit>,
     mut placement: ResMut<WorldPlacementMode>,
-    place: Query<&Interaction, (With<PlaceButton>, Changed<Interaction>)>,
-    cancel: Query<&Interaction, (With<CancelButton>, Changed<Interaction>)>,
+    mut notice: ResMut<crate::ui::hud::GodNotice>,
+    // Hit-tested by live cursor position, not `Interaction`: at a fresh game
+    // start the first press can arrive before the window ever reported a
+    // cursor position, so hover/press state lags one click behind. The
+    // release (guard.completed_click) always has a real cursor to test.
+    place: Query<&RelativeCursorPosition, With<PlaceButton>>,
+    cancel: Query<&RelativeCursorPosition, With<CancelButton>>,
     mut create_sender: Query<
         &mut MessageSender<CreateHero>,
         (With<crate::GameClient>, With<Connected>),
@@ -583,18 +622,22 @@ fn handle_confirm_buttons(
 ) {
     // Same guard as the arrows: without it a click that opened the modal
     // could land on PLACE or CANCEL the instant they appear.
-    if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
+    if !guard.completed_click {
         return;
     }
-    for interaction in place.iter() {
-        if *interaction == Interaction::Pressed {
+    for cursor in place.iter() {
+        if cursor.cursor_over {
             match *purpose {
                 HeroCreatorPurpose::GodPlacement => {
                     open.0 = false;
                     *placement = WorldPlacementMode::SpawnHero;
                 }
                 HeroCreatorPurpose::NewPlayerVoyage => {
+                    // A swallowed click here reads as a dead button. If the
+                    // connection is mid-handshake, SAY so and keep the modal
+                    // open for the retry instead of eating the input.
                     let Ok(mut sender) = create_sender.single_mut() else {
+                        notice.show("Still connecting - try again in a moment");
                         continue;
                     };
                     sender.send::<ReliableChannel>(CreateHero { outfit: selected.0 });
@@ -604,8 +647,8 @@ fn handle_confirm_buttons(
             }
         }
     }
-    for interaction in cancel.iter() {
-        if *interaction == Interaction::Pressed && *purpose == HeroCreatorPurpose::GodPlacement {
+    for cursor in cancel.iter() {
+        if cursor.cursor_over && *purpose == HeroCreatorPurpose::GodPlacement {
             open.0 = false;
         }
     }
@@ -636,7 +679,7 @@ fn close_on_escape_or_backdrop(
     // The backdrop covers the whole screen, so an un-guarded press would
     // close the modal on the very click that opened it.
     let clicked_out =
-        guard.0 && mouse.just_pressed(MouseButton::Left) && handle_backdrop_pressed(&backdrop);
+        guard.armed && mouse.just_pressed(MouseButton::Left) && handle_backdrop_pressed(&backdrop);
     if keyboard.just_pressed(KeyCode::Escape) || clicked_out {
         open.0 = false;
     }

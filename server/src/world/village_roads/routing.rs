@@ -1065,8 +1065,14 @@ fn is_intersettlement_route_objective(objective: Option<&CharacterObjective>) ->
 }
 
 fn needs_regional_corridor(objective: Option<&CharacterObjective>, local_distance: f32) -> bool {
+    // Migration approaches were CERTIFIED with the intersettlement tier (its
+    // node budget and 192 m detour window), so the live walk must plan with
+    // the same tier or a certified approach can be unroutable in practice: a
+    // boat immigrant landing 48-512 m up the coast used to fall into the
+    // extended-local tier, whose 20 m padded window cannot express a headland
+    // detour — and then stood at the landfall "waiting to retry" forever.
     is_intersettlement_route_objective(objective)
-        || (local_distance > EXTENDED_LOCAL_SURVEY_MAX_DISTANCE
+        || (local_distance > EXTENDED_LOCAL_SURVEY_MIN_DISTANCE
             && matches!(objective, Some(CharacterObjective::TravellingToSettlement)))
 }
 
@@ -2635,6 +2641,18 @@ mod local_tests {
             agent_survey_max_nodes(600.0, Some(&CharacterObjective::TravellingToSettlement),),
             INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
             "a coastal immigrant must not be stranded by the local commute cap",
+        );
+        assert_eq!(
+            agent_survey_max_nodes(200.0, Some(&CharacterObjective::TravellingToSettlement),),
+            INTERSETTLEMENT_TRADE_SURVEY_MAX_NODES,
+            "a mid-distance landfall walk must plan with the same tier that \
+             certified the approach, or a headland detour beyond the local \
+             window strands the immigrant at the coast",
+        );
+        assert_eq!(
+            agent_survey_max_nodes(30.0, Some(&CharacterObjective::TravellingToSettlement),),
+            AGENT_SURVEY_MAX_NODES,
+            "a migrant already at the hall's doorstep keeps the cheap local search",
         );
         assert_eq!(
             route_request_priority(

@@ -43,6 +43,22 @@ pub mod type_scale {
 /// while keeping text layout and entity churn bounded at high world speeds.
 pub const LIVE_PANEL_REFRESH_SECONDS: f64 = 0.12;
 
+/// Input contract for any OPAQUE floating surface.
+///
+/// Bevy runs TWO independent input paths and they block differently:
+/// clicks/`Interaction` come from `ui_focus_system`, stopped only by
+/// `FocusPolicy::Block`; hover, wheel scroll and `HoverMap` come from the
+/// picking backend, stopped only by a blocking `Pickable`. A panel that
+/// declares one but not the other produces the haunted-UI bugs: a click on
+/// panel padding selecting a list row BEHIND the panel, or a wheel over the
+/// panel scrolling the pane underneath it. Every opaque card, tray or panel
+/// that floats over other content must carry BOTH, via this one function.
+/// (Transparent layout wrappers and text labels keep `Pickable::IGNORE` and
+/// default focus so input falls through them by design.)
+pub fn surface_block() -> (bevy::ui::FocusPolicy, Pickable) {
+    (bevy::ui::FocusPolicy::Block, Pickable::default())
+}
+
 #[derive(Component, Clone, Copy, Debug)]
 pub struct UiRefreshStamp(pub f64);
 

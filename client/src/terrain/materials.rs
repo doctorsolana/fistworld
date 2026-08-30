@@ -27,9 +27,9 @@ pub type FarTerrainMaterial = ExtendedMaterial<StandardMaterial, FarTerrainExten
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
 pub struct FarTerrainExtension {
-    /// x: height of the sun direction. The far water mirrors the detailed
-    /// water's compact night tint without inheriting terrain lighting.
-    /// y/z: detail-hole centre, w: detail-hole half extent.
+    /// x: ocean level, y/z: detail-hole centre, w: detail-hole half extent.
+    /// The shader needs the ocean level to distinguish an elevated coarse
+    /// river stamp from the sea underlay inside the streamed detail hole.
     #[uniform(100)]
     pub water_params: Vec4,
     /// xyz: direction to the sun (world), w: glint strength (0 at night).
@@ -117,8 +117,9 @@ pub(super) fn setup_terrain_render_assets(
             ..default()
         },
         extension: FarTerrainExtension {
-            water_params: Vec4::new(0.75, 0.0, 0.0, 0.0),
-            // Matches the toon-water default until the first sun sync runs.
+            // Ocean level and detail-hole state are synchronized before the
+            // warmed-up far terrain is revealed.
+            water_params: Vec4::ZERO,
             sun_glint: Vec4::new(0.35, 0.75, 0.30, 1.1),
         },
     });
@@ -139,6 +140,7 @@ pub(super) fn setup_terrain_render_assets(
 /// Land stays on StandardMaterial lighting inside the same shader.
 pub(super) fn sync_far_terrain_water_sun(
     render_assets: Option<Res<TerrainRenderAssets>>,
+    terrain: Res<shared::terrain::WorldTerrain>,
     sun: Query<&GlobalTransform, With<SunLight>>,
     mut materials: ResMut<Assets<FarTerrainMaterial>>,
 ) {
@@ -153,16 +155,17 @@ pub(super) fn sync_far_terrain_water_sun(
     // and the detailed glint brighten and die together across the day.
     let strength = 1.1 * to_sun.y.clamp(0.0, 1.0).sqrt();
     let glint = Vec4::new(to_sun.x, to_sun.y, to_sun.z, strength);
+    let ocean = terrain.water_level().unwrap_or(0.0);
     let Some(material) = materials.get(&render_assets.far_mesh_material) else {
         return;
     };
-    if (material.extension.water_params.x - to_sun.y).abs() < 0.002
+    if (material.extension.water_params.x - ocean).abs() < 0.001
         && material.extension.sun_glint.distance_squared(glint) < 1e-4
     {
         return;
     }
     if let Some(mut material) = materials.get_mut(&render_assets.far_mesh_material) {
-        material.extension.water_params.x = to_sun.y;
+        material.extension.water_params.x = ocean;
         material.extension.sun_glint = glint;
     }
 }

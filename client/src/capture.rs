@@ -12,12 +12,19 @@
 //! Run it via `cargo run -p client --bin capture -- --help`.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use bevy::render::view::screenshot::Screenshot;
 use shared::components::WorldTime;
 
 use crate::camera_rts::CommanderCamera;
+use crate::capture_artifact::{
+    git_commit, request_capture, CaptureAssertion, CaptureAssertionResult, CaptureCameraMetadata,
+    CaptureComparisonConfig, CaptureCompletions, CaptureMetadata, CaptureReadiness, CaptureTarget,
+    CaptureWorldSnapshot, CaptureWriteRequest, CAPTURE_METADATA_VERSION,
+};
 use crate::states::GameState;
 use crate::terrain::LoadedChunks;
 
@@ -38,8 +45,8 @@ pub(crate) enum LiveLabCaptureState {
         path: PathBuf,
         frames_left: u32,
     },
-    AwaitingFile {
-        path: PathBuf,
+    AwaitingCapture {
+        ticket: u64,
         frames_waited: u32,
     },
     Done,
@@ -51,7 +58,7 @@ pub(crate) struct LiveVoyageCaptureState {
     enabled: bool,
     out_dir: PathBuf,
     stage: u8,
-    awaiting: Option<(PathBuf, u32)>,
+    awaiting: Option<(u64, u32)>,
     sail_origin: Option<Vec3>,
     click_phase: u8,
 }
@@ -123,6 +130,7 @@ pub(crate) fn drive_live_voyage_capture(
         ),
     >,
     mut state: ResMut<LiveVoyageCaptureState>,
+    mut completions: ResMut<CaptureCompletions>,
     mut app_exit: MessageWriter<AppExit>,
 ) {
     if !state.initialized {
@@ -146,19 +154,30 @@ pub(crate) fn drive_live_voyage_capture(
         return;
     }
 
-    if let Some((path, frames_waited)) = state.awaiting.as_mut() {
-        let written = std::fs::metadata(&*path).is_ok_and(|metadata| metadata.len() > 0);
+    if let Some((ticket, frames_waited)) = state.awaiting.as_mut() {
         *frames_waited += 1;
-        if !written && *frames_waited <= 600 {
+        let Some(completion) = completions.take(*ticket) else {
+            if *frames_waited <= 600 {
+                return;
+            }
+            error!("live voyage capture: screenshot observer timed out");
+            state.enabled = false;
+            app_exit.write(AppExit::error());
             return;
-        }
-        if !written {
-            error!("live voyage capture: {} never reached disk", path.display());
+        };
+        if let Some(error) = completion.error {
+            error!(
+                "live voyage capture: {} failed: {error}",
+                completion.path.display()
+            );
             state.enabled = false;
             app_exit.write(AppExit::error());
             return;
         }
-        info!("live voyage capture: wrote {}", path.display());
+        info!(
+            "live voyage capture: wrote {} and metadata",
+            completion.path.display()
+        );
         state.awaiting = None;
         state.stage += 1;
         if state.stage >= 4 {
@@ -267,10 +286,13 @@ pub(crate) fn drive_live_voyage_capture(
     // changing physical resolution, even though the presented scene is fine.
     // The cinematic itself lives in this offscreen target, so photographing it
     // is both deterministic and independent of the player's display mode.
-    commands
-        .spawn(Screenshot::image(scene_target.image.clone()))
-        .observe(save_to_disk(path.clone()));
-    state.awaiting = Some((path, 0));
+    let ticket = request_capture(
+        &mut commands,
+        Screenshot::image(scene_target.image.clone()),
+        live_capture_request(path, "live-voyage", filename, CaptureTarget::Scene),
+        &mut completions,
+    );
+    state.awaiting = Some((ticket, 0));
 }
 
 /// Capture the connected, fully simulated Village Lab on a requested HUD day.
@@ -286,6 +308,7 @@ pub(crate) fn drive_live_lab_capture(
     world_time: Query<&WorldTime>,
     mut cameras: Query<&mut CommanderCamera>,
     mut state: Local<LiveLabCaptureState>,
+    mut completions: ResMut<CaptureCompletions>,
     mut app_exit: MessageWriter<AppExit>,
 ) {
     if matches!(*state, LiveLabCaptureState::Uninitialized) {
@@ -351,31 +374,48 @@ pub(crate) fn drive_live_lab_capture(
                 }
             }
             let _ = std::fs::remove_file(&*path);
-            commands
-                .spawn(Screenshot::primary_window())
-                .observe(save_to_disk(path.clone()));
+            let ticket = request_capture(
+                &mut commands,
+                Screenshot::primary_window(),
+                live_capture_request(
+                    path.clone(),
+                    "live-village-lab",
+                    path.file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .unwrap_or("village-lab"),
+                    CaptureTarget::Window,
+                ),
+                &mut completions,
+            );
             info!("live Village Lab capture: shooting {}", path.display());
-            *state = LiveLabCaptureState::AwaitingFile {
-                path: path.clone(),
+            *state = LiveLabCaptureState::AwaitingCapture {
+                ticket,
                 frames_waited: 0,
             };
         }
-        LiveLabCaptureState::AwaitingFile {
-            path,
+        LiveLabCaptureState::AwaitingCapture {
+            ticket,
             frames_waited,
         } => {
-            let written = std::fs::metadata(&*path).is_ok_and(|metadata| metadata.len() > 0);
             *frames_waited += 1;
-            if !written && *frames_waited <= 600 {
+            let completion = completions.take(*ticket);
+            if completion.is_none() && *frames_waited <= 600 {
                 return;
             }
-            if written {
-                info!("live Village Lab capture: wrote {}", path.display());
-            } else {
-                error!(
-                    "live Village Lab capture: {} never reached disk",
-                    path.display()
-                );
+            let success = completion
+                .as_ref()
+                .is_some_and(|completion| completion.error.is_none());
+            match completion {
+                Some(completion) if success => info!(
+                    "live Village Lab capture: wrote {} and metadata",
+                    completion.path.display()
+                ),
+                Some(completion) => error!(
+                    "live Village Lab capture: {} failed: {}",
+                    completion.path.display(),
+                    completion.error.as_deref().unwrap_or("unknown error")
+                ),
+                None => error!("live Village Lab capture: screenshot observer timed out"),
             }
             if std::env::var("FISTWORLD_LAB_CAPTURE_EXIT").is_ok_and(|raw| {
                 matches!(
@@ -383,7 +423,7 @@ pub(crate) fn drive_live_lab_capture(
                     "1" | "true" | "yes" | "on"
                 )
             }) {
-                app_exit.write(if written {
+                app_exit.write(if success {
                     AppExit::Success
                 } else {
                     AppExit::error()
@@ -392,6 +432,43 @@ pub(crate) fn drive_live_lab_capture(
             *state = LiveLabCaptureState::Done;
         }
         LiveLabCaptureState::Done => {}
+    }
+}
+
+fn live_capture_request(
+    path: PathBuf,
+    scenario: &str,
+    shot: &str,
+    target: CaptureTarget,
+) -> CaptureWriteRequest {
+    CaptureWriteRequest {
+        path: path.clone(),
+        metadata: CaptureMetadata {
+            schema_version: CAPTURE_METADATA_VERSION,
+            scenario: scenario.to_owned(),
+            shot: shot.to_owned(),
+            map: std::env::var("CITYSIM_MAP_ID").unwrap_or_else(|_| "default".to_owned()),
+            git_commit: git_commit(),
+            target,
+            fixed_delta_seconds: 0.0,
+            output: path.display().to_string(),
+            width: 0,
+            height: 0,
+            readiness_frames: 0,
+            camera: CaptureCameraMetadata {
+                focus: [0.0; 3],
+                yaw: 0.0,
+                zoom: 0.0,
+                time_of_day: 0.0,
+                pitch: None,
+                eye: 0.0,
+            },
+            world: CaptureWorldSnapshot::default(),
+            assertions: Vec::new(),
+            comparison: None,
+            comparison_error: None,
+        },
+        comparison: None,
     }
 }
 
@@ -417,6 +494,10 @@ pub struct Shot {
     pub pitch: Option<f32>,
     /// Camera height in metres above the water surface for free-look shots.
     pub eye: f32,
+    /// Per-shot streaming readiness contract.
+    pub readiness: CaptureReadiness,
+    /// Semantic invariants checked and recorded before this shot.
+    pub assertions: Vec<CaptureAssertion>,
 }
 
 impl Default for Shot {
@@ -429,6 +510,8 @@ impl Default for Shot {
             time_of_day: 0.5,
             pitch: None,
             eye: 1.7,
+            readiness: CaptureReadiness::default(),
+            assertions: Vec::new(),
         }
     }
 }
@@ -466,8 +549,17 @@ fn apply_capture_free_look(
 
 #[derive(Resource, Debug, Clone)]
 pub struct CaptureConfig {
+    pub scenario_name: String,
     pub out_dir: PathBuf,
     pub shots: Vec<Shot>,
+    pub resolution: [u32; 2],
+    pub fixed_delta_seconds: f64,
+    pub target: CaptureTarget,
+    /// Hide the OS window while continuing to render the `Scene` image.
+    pub show_window: bool,
+    pub comparison: Option<CaptureComparisonConfig>,
+    pub recording: Option<crate::capture_artifact::CaptureRecordingConfig>,
+    pub diagnostics: crate::capture_artifact::CaptureDiagnosticsConfig,
     /// Frames to render before the first shot, so terrain chunks, props and textures
     /// have time to stream in. Streaming is async — too few frames photographs a
     /// half-loaded world, which looks like a rendering bug but is not one.
@@ -475,7 +567,7 @@ pub struct CaptureConfig {
     /// Frames between moving the camera and taking the shot.
     pub settle_frames: u32,
     /// Fly the camera continuously: one shot per rendered frame, never
-    /// pausing in `AwaitingFile` between shots. Screenshot probes are fired
+    /// pausing in `AwaitingCapture` between shots. Screenshot probes are fired
     /// asynchronously and awaited only after the final shot, so streaming
     /// gets no stationary frames in which to catch up — the whole point of a
     /// fast-pan regression capture.
@@ -491,33 +583,68 @@ pub struct CaptureConfig {
 enum CaptureState {
     /// Letting the world stream in before the first shot.
     Warmup {
-        frames_left: u32,
+        progress: ReadinessProgress,
     },
     /// Camera moved, waiting for the world to settle at the new location.
     Settling {
         shot: usize,
-        frames_left: u32,
+        progress: ReadinessProgress,
     },
-    /// Screenshot requested; waiting for the file to actually exist on disk.
-    ///
-    /// This is the latch that matters: the render-to-disk round trip is async, so
-    /// exiting on a frame count instead races the writer and truncates the last image.
-    AwaitingFile {
+    /// Screenshot requested; waiting for Bevy's `ScreenshotCaptured` observer.
+    AwaitingCapture {
         shot: usize,
-        path: PathBuf,
+        ticket: u64,
         frames_waited: u32,
     },
-    /// Continuous flight finished; waiting for every probe PNG to land.
+    /// Continuous flight finished; waiting for every observer to finish.
     AwaitingAll {
-        paths: Vec<PathBuf>,
+        tickets: Vec<u64>,
         frames_waited: u32,
+    },
+    FinishingVideo {
+        started: Instant,
     },
     Done,
+}
+
+#[derive(Debug, Default)]
+struct ReadinessProgress {
+    frames: u32,
+    stable_frames: u32,
+    last_loaded_chunks: Option<usize>,
+}
+
+#[derive(Resource, Default)]
+struct CaptureRunStatus {
+    failed: bool,
+}
+
+#[derive(Resource, Default)]
+struct CaptureVideoControl {
+    enabled: bool,
+    start_requested: bool,
+    stop_requested: bool,
+}
+
+#[derive(SystemParam)]
+struct CaptureInspection<'w, 's> {
+    loaded_chunks: Option<Res<'w, LoadedChunks>>,
+    scene_target: Option<Res<'w, crate::render::systems::scaled_target::SceneRenderTarget>>,
+    frame_count: Res<'w, bevy::diagnostic::FrameCount>,
+    all_entities: Query<'w, 's, Entity>,
+    character_kinds: Query<'w, 's, &'static shared::components::CharacterKind>,
+    settlements: Query<'w, 's, (), With<shared::components::Settlement>>,
+    navigation: Query<'w, 's, &'static shared::components::CharacterNavigationStatus>,
 }
 
 pub fn run(config: CaptureConfig) {
     // Captures must not inherit the user's saved settings file.
     std::env::set_var("FISTFORCE_NO_SETTINGS_FILE", "1");
+    std::env::set_var("FISTFORCE_CAPTURE_SYNC_PIPELINES", "1");
+    if config.diagnostics.render_timings {
+        std::env::set_var("FISTFORCE_RENDER_DIAG", "1");
+        std::env::set_var("FISTFORCE_LOG_DIAGNOSTICS", "1");
+    }
     if let Err(e) = std::fs::create_dir_all(&config.out_dir) {
         eprintln!(
             "capture: cannot create output dir {}: {e}",
@@ -526,18 +653,85 @@ pub fn run(config: CaptureConfig) {
         std::process::exit(1);
     }
 
+    let recording_enabled = config
+        .recording
+        .as_ref()
+        .is_some_and(|recording| recording.enabled);
+    if recording_enabled && config.target != CaptureTarget::Scene {
+        eprintln!(
+            "capture: recording requires --target scene so video and artifact screenshots cannot race for the primary window"
+        );
+        std::process::exit(2);
+    }
+    #[cfg(not(feature = "capture-video"))]
+    if recording_enabled {
+        eprintln!(
+            "capture: recording requires --features capture-video (screenshots are available without it)"
+        );
+        std::process::exit(2);
+    }
+
     let asset_path = crate::get_asset_path();
     let mut app = App::new();
     crate::app_wiring::setup_plugins(&mut app, asset_path);
     crate::app_wiring::setup_resources(&mut app);
     crate::app_wiring::setup_systems(&mut app);
 
+    app.world_mut()
+        .resource_mut::<crate::perf_overlay::PerfOverlayEnabled>()
+        .0 = config.diagnostics.performance_overlay;
+    app.world_mut()
+        .resource_mut::<shared::debug::DebugGizmoMode>()
+        .0 = config.diagnostics.gizmos;
+
+    {
+        let mut settings = app
+            .world_mut()
+            .resource_mut::<crate::render::systems::GraphicsSettings>();
+        // A capture resolution is an artifact contract, not a suggestion to
+        // the user's current monitor. Keep the harness windowed even when the
+        // shipped game defaults to borderless fullscreen.
+        settings.fullscreen_enabled = false;
+        settings.exclusive_fullscreen_enabled = false;
+        settings.display_resolution = crate::render::systems::DisplayResolution::new(
+            config.resolution[0],
+            config.resolution[1],
+        );
+        if config.target == CaptureTarget::Scene {
+            settings.render_scale = 1.0;
+        }
+    }
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        Duration::from_secs_f64(config.fixed_delta_seconds),
+    ));
+
+    #[cfg(feature = "capture-video")]
+    if recording_enabled {
+        use bevy_dev_tools::{EasyScreenRecordPlugin, Preset, Tune};
+        let recording = config.recording.as_ref().expect("checked above");
+        app.add_plugins(EasyScreenRecordPlugin {
+            toggle: KeyCode::F12,
+            preset: Preset::Medium,
+            tune: Tune::Animation,
+            frame_time: Duration::from_secs_f64(1.0 / f64::from(recording.frame_rate.max(1))),
+            output_dir: Some(config.out_dir.join("video")),
+        });
+        app.add_systems(Update, drive_capture_video);
+    }
+
     app.init_resource::<CaptureFreeLook>();
+    app.init_resource::<CaptureCompletions>();
+    app.init_resource::<CaptureRunStatus>();
+    app.insert_resource(CaptureVideoControl {
+        enabled: recording_enabled,
+        ..default()
+    });
     app.insert_resource(CaptureState::Warmup {
-        frames_left: config.warmup_frames,
+        progress: ReadinessProgress::default(),
     });
     app.insert_resource(config);
 
+    app.add_systems(PreStartup, configure_capture_window);
     app.add_systems(Startup, enter_world_offline);
     app.add_systems(
         Update,
@@ -563,7 +757,41 @@ pub fn run(config: CaptureConfig) {
         ),
     );
 
-    app.run();
+    let exit = app.run();
+    if let AppExit::Error(code) = exit {
+        // Winit returns Bevy's error value to the caller but does not convert
+        // it into the capture process' exit status. CI and scripts need a
+        // failed assertion/comparison to be an actual failed command.
+        std::process::exit(i32::from(code.get()));
+    }
+}
+
+fn configure_capture_window(
+    config: Res<CaptureConfig>,
+    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+) {
+    for mut window in &mut windows {
+        window
+            .resolution
+            .set_physical_resolution(config.resolution[0], config.resolution[1]);
+        window.visible = config.show_window;
+        window.title = format!("FistForce Capture — {}", config.scenario_name);
+    }
+}
+
+#[cfg(feature = "capture-video")]
+fn drive_capture_video(
+    mut control: ResMut<CaptureVideoControl>,
+    mut messages: MessageWriter<bevy_dev_tools::RecordScreen>,
+) {
+    if control.start_requested {
+        control.start_requested = false;
+        messages.write(bevy_dev_tools::RecordScreen::Start);
+    }
+    if control.stop_requested {
+        control.stop_requested = false;
+        messages.write(bevy_dev_tools::RecordScreen::Stop);
+    }
 }
 
 /// `FISTFORCE_CAPTURE_WORLD_MAP=1` opens the real modal world map during an
@@ -2654,165 +2882,473 @@ fn drive_capture(
     mut state: ResMut<CaptureState>,
     mut cameras: Query<&mut CommanderCamera>,
     mut world_time: Query<&mut WorldTime>,
-    loaded_chunks: Option<Res<LoadedChunks>>,
     mut free_look: ResMut<CaptureFreeLook>,
-    mut pending_probes: Local<Vec<PathBuf>>,
+    inspection: CaptureInspection,
+    mut completions: ResMut<CaptureCompletions>,
+    mut run_status: ResMut<CaptureRunStatus>,
+    mut video: ResMut<CaptureVideoControl>,
+    mut pending_probes: Local<Vec<u64>>,
     mut app_exit: MessageWriter<AppExit>,
 ) {
+    let chunk_count = inspection
+        .loaded_chunks
+        .as_ref()
+        .map(|chunks| chunks.chunks.len())
+        .unwrap_or(0);
     match &mut *state {
-        CaptureState::Warmup { frames_left } => {
+        CaptureState::Warmup { progress } => {
             // Park the camera on the first shot during warmup so streaming loads the
             // right chunks rather than whatever is around the origin.
             if let Some(shot) = config.shots.first() {
                 apply_shot(shot, &mut cameras, &mut world_time, &mut free_look);
             }
 
-            if *frames_left > 0 {
-                *frames_left -= 1;
-                return;
+            let mut readiness = config
+                .shots
+                .first()
+                .map(|shot| shot.readiness.clone())
+                .unwrap_or_default();
+            readiness.minimum_frames = readiness.minimum_frames.max(config.warmup_frames);
+            readiness.maximum_frames = readiness.maximum_frames.max(readiness.minimum_frames);
+            match advance_readiness(progress, &readiness, chunk_count) {
+                ReadinessOutcome::Waiting => return,
+                ReadinessOutcome::TimedOut(reason) => {
+                    error!("capture: warmup readiness timed out: {reason}");
+                    run_status.failed = true;
+                }
+                ReadinessOutcome::Ready => {}
             }
             info!(
-                "capture: warmup complete, {} shot(s) queued",
-                config.shots.len()
+                "capture: warmup ready after {} frames with {} chunks; {} shot(s) queued",
+                progress.frames,
+                chunk_count,
+                config.shots.len(),
             );
+            if video.enabled {
+                video.start_requested = true;
+            }
             *state = CaptureState::Settling {
                 shot: 0,
-                frames_left: config.settle_frames,
+                progress: ReadinessProgress::default(),
             };
         }
 
-        CaptureState::Settling { shot, frames_left } => {
+        CaptureState::Settling { shot, progress } => {
             let index = *shot;
             let Some(current) = config.shots.get(index) else {
-                *state = CaptureState::Done;
+                finish_capture_run(&config, &mut state, &mut video);
                 return;
             };
             apply_shot(current, &mut cameras, &mut world_time, &mut free_look);
 
-            if *frames_left > 0 {
-                *frames_left -= 1;
-                return;
-            }
-
             if config.continuous {
                 // One shot per rendered frame: fire the probe screenshot
-                // asynchronously and keep flying. Parking in AwaitingFile
+                // asynchronously and keep flying. Parking in AwaitingCapture
                 // here is exactly what used to let streaming catch up and
                 // hide every fast-pan artifact.
                 let probe_every = config.probe_every.max(1) as usize;
                 let last = index + 1 == config.shots.len();
                 if index % probe_every == 0 || last {
                     let path = config.out_dir.join(format!("{}.png", current.name));
-                    let _ = std::fs::remove_file(&path);
-                    commands
-                        .spawn(Screenshot::primary_window())
-                        .observe(save_to_disk(path.clone()));
+                    let snapshot = capture_world_snapshot(
+                        inspection.frame_count.0,
+                        &inspection.all_entities,
+                        &inspection.character_kinds,
+                        &inspection.settlements,
+                        &inspection.navigation,
+                        &world_time,
+                        chunk_count,
+                    );
+                    let assertion_results = evaluate_assertions(&current.assertions, &snapshot);
+                    if assertion_results.iter().any(|result| !result.passed) {
+                        run_status.failed = true;
+                    }
+                    let Some(screenshot) =
+                        screenshot_for_target(config.target, inspection.scene_target.as_deref())
+                    else {
+                        error!("capture: scene target is not ready for '{}'", current.name);
+                        run_status.failed = true;
+                        return;
+                    };
+                    let ticket = request_capture(
+                        &mut commands,
+                        screenshot,
+                        capture_request(&config, current, path, snapshot, assertion_results, 0),
+                        &mut completions,
+                    );
                     info!(
                         "capture: probe '{}' at focus={:?} | {} terrain chunks loaded",
-                        current.name,
-                        current.focus,
-                        loaded_chunks.map(|c| c.chunks.len()).unwrap_or(0),
+                        current.name, current.focus, chunk_count,
                     );
-                    pending_probes.push(path);
+                    pending_probes.push(ticket);
                 }
                 *state = if last {
                     CaptureState::AwaitingAll {
-                        paths: std::mem::take(&mut *pending_probes),
+                        tickets: std::mem::take(&mut *pending_probes),
                         frames_waited: 0,
                     }
                 } else {
                     CaptureState::Settling {
                         shot: index + 1,
-                        frames_left: 0,
+                        progress: ReadinessProgress::default(),
                     }
                 };
                 return;
             }
 
+            let mut readiness = current.readiness.clone();
+            readiness.minimum_frames = readiness.minimum_frames.max(config.settle_frames);
+            readiness.maximum_frames = readiness.maximum_frames.max(readiness.minimum_frames);
+            match advance_readiness(progress, &readiness, chunk_count) {
+                ReadinessOutcome::Waiting => return,
+                ReadinessOutcome::TimedOut(reason) => {
+                    error!("capture: '{}' readiness timed out: {reason}", current.name);
+                    run_status.failed = true;
+                }
+                ReadinessOutcome::Ready => {}
+            }
+
             info!(
-                "capture: '{}' focus={:?} zoom={} time={} | {} terrain chunks loaded",
+                "capture: '{}' ready after {} frames focus={:?} zoom={} time={} | {} terrain chunks loaded",
                 current.name,
+                progress.frames,
                 current.focus,
                 current.zoom,
                 current.time_of_day,
-                loaded_chunks.map(|c| c.chunks.len()).unwrap_or(0),
+                chunk_count,
             );
             let path = config.out_dir.join(format!("{}.png", current.name));
-            let _ = std::fs::remove_file(&path);
-            commands
-                .spawn(Screenshot::primary_window())
-                .observe(save_to_disk(path.clone()));
+            let snapshot = capture_world_snapshot(
+                inspection.frame_count.0,
+                &inspection.all_entities,
+                &inspection.character_kinds,
+                &inspection.settlements,
+                &inspection.navigation,
+                &world_time,
+                chunk_count,
+            );
+            let assertion_results = evaluate_assertions(&current.assertions, &snapshot);
+            for failure in assertion_results.iter().filter(|result| !result.passed) {
+                error!(
+                    "capture: '{}' assertion failed: {:?} (observed {})",
+                    current.name, failure.assertion, failure.observed
+                );
+                run_status.failed = true;
+            }
+            let Some(screenshot) =
+                screenshot_for_target(config.target, inspection.scene_target.as_deref())
+            else {
+                error!("capture: scene target is not ready for '{}'", current.name);
+                run_status.failed = true;
+                return;
+            };
+            let ticket = request_capture(
+                &mut commands,
+                screenshot,
+                capture_request(
+                    &config,
+                    current,
+                    path.clone(),
+                    snapshot,
+                    assertion_results,
+                    progress.frames,
+                ),
+                &mut completions,
+            );
             info!("capture: shooting '{}' -> {}", current.name, path.display());
-            *state = CaptureState::AwaitingFile {
+            *state = CaptureState::AwaitingCapture {
                 shot: index,
-                path,
+                ticket,
                 frames_waited: 0,
             };
         }
 
-        CaptureState::AwaitingFile {
+        CaptureState::AwaitingCapture {
             shot,
-            path,
+            ticket,
             frames_waited,
         } => {
-            // Latch on the file existing rather than a frame count, so a slow write
-            // cannot leave us with a truncated PNG.
-            let written = std::fs::metadata(&*path)
-                .map(|m| m.len() > 0)
-                .unwrap_or(false);
             *frames_waited += 1;
-
-            if !written {
-                if *frames_waited > 600 {
-                    error!("capture: '{}' never hit disk, giving up", path.display());
+            let Some(completion) = completions.take(*ticket) else {
+                if *frames_waited > 1_200 {
+                    error!(
+                        "capture: screenshot observer timed out for ticket {}",
+                        ticket
+                    );
+                    run_status.failed = true;
                 } else {
                     return;
                 }
+                let next = *shot + 1;
+                if next >= config.shots.len() {
+                    finish_capture_run(&config, &mut state, &mut video);
+                } else {
+                    *state = CaptureState::Settling {
+                        shot: next,
+                        progress: ReadinessProgress::default(),
+                    };
+                }
+                return;
+            };
+            if let Some(error) = completion.error {
+                error!("capture: {} failed: {error}", completion.path.display());
+                run_status.failed = true;
             } else {
-                info!("capture: wrote {}", path.display());
+                info!("capture: wrote {} and metadata", completion.path.display());
+            }
+            if completion.comparison_failed {
+                error!(
+                    "capture: visual baseline comparison failed for {}",
+                    completion.path.display()
+                );
+                run_status.failed = true;
             }
 
             let next = *shot + 1;
             if next >= config.shots.len() {
                 info!("capture: all {} shot(s) complete", config.shots.len());
-                *state = CaptureState::Done;
+                finish_capture_run(&config, &mut state, &mut video);
             } else {
                 *state = CaptureState::Settling {
                     shot: next,
-                    frames_left: config.settle_frames,
+                    progress: ReadinessProgress::default(),
                 };
             }
         }
 
         CaptureState::AwaitingAll {
-            paths,
+            tickets,
             frames_waited,
         } => {
             *frames_waited += 1;
-            paths.retain(|path| {
-                let written = std::fs::metadata(path)
-                    .map(|m| m.len() > 0)
-                    .unwrap_or(false);
-                if written {
-                    info!("capture: wrote {}", path.display());
+            tickets.retain(|ticket| {
+                let Some(completion) = completions.take(*ticket) else {
+                    return true;
+                };
+                if let Some(error) = completion.error {
+                    error!("capture: {} failed: {error}", completion.path.display());
+                    run_status.failed = true;
+                } else {
+                    info!("capture: wrote {} and metadata", completion.path.display());
                 }
-                !written
+                if completion.comparison_failed {
+                    error!(
+                        "capture: visual baseline comparison failed for {}",
+                        completion.path.display()
+                    );
+                    run_status.failed = true;
+                }
+                false
             });
-            if paths.is_empty() {
+            if tickets.is_empty() {
                 info!("capture: all probe shot(s) complete");
-                *state = CaptureState::Done;
+                finish_capture_run(&config, &mut state, &mut video);
             } else if *frames_waited > 1_200 {
                 error!(
-                    "capture: {} probe(s) never hit disk, giving up",
-                    paths.len()
+                    "capture: {} screenshot observer(s) timed out",
+                    tickets.len()
                 );
-                *state = CaptureState::Done;
+                run_status.failed = true;
+                finish_capture_run(&config, &mut state, &mut video);
             }
         }
 
-        CaptureState::Done => {
-            app_exit.write(AppExit::Success);
+        CaptureState::FinishingVideo { started } => {
+            let flush_seconds = config
+                .recording
+                .as_ref()
+                .map(|recording| recording.flush_seconds.max(0.0))
+                .unwrap_or(0.0);
+            if started.elapsed().as_secs_f32() >= flush_seconds {
+                *state = CaptureState::Done;
+            }
         }
+        CaptureState::Done => {
+            app_exit.write(if run_status.failed {
+                AppExit::error()
+            } else {
+                AppExit::Success
+            });
+        }
+    }
+}
+
+enum ReadinessOutcome {
+    Waiting,
+    Ready,
+    TimedOut(String),
+}
+
+fn advance_readiness(
+    progress: &mut ReadinessProgress,
+    readiness: &CaptureReadiness,
+    loaded_chunks: usize,
+) -> ReadinessOutcome {
+    progress.frames = progress.frames.saturating_add(1);
+    if progress.last_loaded_chunks == Some(loaded_chunks) {
+        progress.stable_frames = progress.stable_frames.saturating_add(1);
+    } else {
+        progress.last_loaded_chunks = Some(loaded_chunks);
+        progress.stable_frames = 0;
+    }
+    let ready = progress.frames >= readiness.minimum_frames
+        && loaded_chunks >= readiness.minimum_loaded_chunks
+        && progress.stable_frames >= readiness.stable_loaded_chunk_frames;
+    if ready {
+        ReadinessOutcome::Ready
+    } else if progress.frames >= readiness.maximum_frames {
+        ReadinessOutcome::TimedOut(format!(
+            "loaded_chunks={loaded_chunks}/{} stable_frames={}/{}",
+            readiness.minimum_loaded_chunks,
+            progress.stable_frames,
+            readiness.stable_loaded_chunk_frames,
+        ))
+    } else {
+        ReadinessOutcome::Waiting
+    }
+}
+
+fn screenshot_for_target(
+    target: CaptureTarget,
+    scene_target: Option<&crate::render::systems::scaled_target::SceneRenderTarget>,
+) -> Option<Screenshot> {
+    match target {
+        CaptureTarget::Window => Some(Screenshot::primary_window()),
+        CaptureTarget::Scene => scene_target.map(|target| Screenshot::image(target.image.clone())),
+    }
+}
+
+fn capture_world_snapshot(
+    frame: u32,
+    all_entities: &Query<Entity>,
+    character_kinds: &Query<&shared::components::CharacterKind>,
+    settlements: &Query<(), With<shared::components::Settlement>>,
+    navigation: &Query<&shared::components::CharacterNavigationStatus>,
+    world_time: &Query<&mut WorldTime>,
+    loaded_chunks: usize,
+) -> CaptureWorldSnapshot {
+    let villagers = character_kinds
+        .iter()
+        .filter(|kind| **kind == shared::components::CharacterKind::Villager)
+        .count();
+    let planning_routes = navigation
+        .iter()
+        .filter(|status| **status == shared::components::CharacterNavigationStatus::PlanningRoute)
+        .count();
+    let blocked_routes = navigation
+        .iter()
+        .filter(|status| **status == shared::components::CharacterNavigationStatus::RouteBlocked)
+        .count();
+    let clock = world_time.iter().next();
+    CaptureWorldSnapshot {
+        frame,
+        entity_count: all_entities.iter().count(),
+        loaded_chunks,
+        villagers,
+        settlements: settlements.iter().count(),
+        planning_routes,
+        blocked_routes,
+        world_day: clock.map(|clock| clock.day),
+        normalized_time: clock.map(WorldTime::normalized_time),
+    }
+}
+
+fn evaluate_assertions(
+    assertions: &[CaptureAssertion],
+    snapshot: &CaptureWorldSnapshot,
+) -> Vec<CaptureAssertionResult> {
+    assertions
+        .iter()
+        .cloned()
+        .map(|assertion| {
+            let (observed, passed) = match assertion {
+                CaptureAssertion::LoadedChunksAtLeast { count } => {
+                    (snapshot.loaded_chunks, snapshot.loaded_chunks >= count)
+                }
+                CaptureAssertion::EntitiesAtLeast { count } => {
+                    (snapshot.entity_count, snapshot.entity_count >= count)
+                }
+                CaptureAssertion::VillagersAtLeast { count } => {
+                    (snapshot.villagers, snapshot.villagers >= count)
+                }
+                CaptureAssertion::SettlementsAtLeast { count } => {
+                    (snapshot.settlements, snapshot.settlements >= count)
+                }
+                CaptureAssertion::PlanningRoutesAtMost { count } => {
+                    (snapshot.planning_routes, snapshot.planning_routes <= count)
+                }
+                CaptureAssertion::BlockedRoutesAtMost { count } => {
+                    (snapshot.blocked_routes, snapshot.blocked_routes <= count)
+                }
+            };
+            CaptureAssertionResult {
+                assertion,
+                passed,
+                observed,
+            }
+        })
+        .collect()
+}
+
+fn capture_request(
+    config: &CaptureConfig,
+    shot: &Shot,
+    path: PathBuf,
+    world: CaptureWorldSnapshot,
+    assertions: Vec<CaptureAssertionResult>,
+    readiness_frames: u32,
+) -> CaptureWriteRequest {
+    CaptureWriteRequest {
+        path: path.clone(),
+        metadata: CaptureMetadata {
+            schema_version: CAPTURE_METADATA_VERSION,
+            scenario: config.scenario_name.clone(),
+            shot: shot.name.clone(),
+            map: std::env::var("CITYSIM_MAP_ID").unwrap_or_else(|_| "default".to_owned()),
+            git_commit: git_commit(),
+            target: config.target,
+            fixed_delta_seconds: config.fixed_delta_seconds,
+            output: path.display().to_string(),
+            width: 0,
+            height: 0,
+            readiness_frames,
+            camera: CaptureCameraMetadata {
+                focus: shot.focus.to_array(),
+                yaw: shot.yaw,
+                zoom: shot.zoom,
+                time_of_day: shot.time_of_day,
+                pitch: shot.pitch,
+                eye: shot.eye,
+            },
+            world,
+            assertions,
+            comparison: None,
+            comparison_error: None,
+        },
+        comparison: config.comparison.clone(),
+    }
+}
+
+fn finish_capture_run(
+    config: &CaptureConfig,
+    state: &mut CaptureState,
+    video: &mut CaptureVideoControl,
+) {
+    if video.enabled {
+        video.stop_requested = true;
+        *state = CaptureState::FinishingVideo {
+            started: Instant::now(),
+        };
+        info!(
+            "capture: recording stopped; flushing for {:.1}s",
+            config
+                .recording
+                .as_ref()
+                .map(|recording| recording.flush_seconds)
+                .unwrap_or(0.0)
+        );
+    } else {
+        *state = CaptureState::Done;
     }
 }
 

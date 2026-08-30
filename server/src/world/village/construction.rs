@@ -414,7 +414,22 @@ pub fn run_construction_material_logistics(
         // is not an employment shift. A commanded hero must keep gathering
         // and delivering materials overnight instead of remaining frozen in
         // the last visible activity until dawn.
-        if !daylight && !player_assigned {
+        //
+        // And nobody downs tools MID-TASK: a half-felled tree gets felled and
+        // wood already on a shoulder still reaches its site — otherwise dusk
+        // left haulers standing frozen beside the worksite, log in hand, until
+        // morning. Only the un-invested phases (seeking, queueing at a
+        // counter, walking to a tree) stand down at dusk, and they stand down
+        // cleanly: stopped where they are, idle, ready for evening routines.
+        let finishing_up = matches!(
+            routine.phase,
+            ConstructionMaterialPhase::Chopping { .. }
+                | ConstructionMaterialPhase::UnloadingAtHall { .. }
+                | ConstructionMaterialPhase::ApproachingDeliveryAccess { .. }
+                | ConstructionMaterialPhase::Delivering { .. }
+                | ConstructionMaterialPhase::LeavingDeliveryAccess { .. }
+        );
+        if !daylight && !player_assigned && !finishing_up {
             // The moot queue advances all night while this system - the only
             // consumer of Ready freight tickets - sleeps. Dissolve the line
             // at nightfall instead of leaving a Ready head frozen at the
@@ -425,13 +440,25 @@ pub fn run_construction_material_logistics(
                     .entity(builder)
                     .remove::<MootQueueTicket>()
                     .remove::<MootQueueTransit>();
-                if matches!(
-                    routine.phase,
-                    ConstructionMaterialPhase::CollectingFromStore { .. }
-                ) {
-                    routine.phase = ConstructionMaterialPhase::Seeking;
-                }
             }
+            if matches!(
+                routine.phase,
+                ConstructionMaterialPhase::CollectingFromStore { .. }
+                    | ConstructionMaterialPhase::WalkingToTree { .. }
+            ) {
+                // Restart from a clean search at dawn: these phases re-issue
+                // their own movement from Seeking, while a phase abandoned
+                // with its MoveTarget stripped could stand at sunrise waiting
+                // for a walk order that never comes back.
+                routine.phase = ConstructionMaterialPhase::Seeking;
+            }
+            if move_target.is_some() || travel_route.is_some() {
+                commands
+                    .entity(builder)
+                    .remove::<MoveTarget>()
+                    .remove::<TravelRoute>();
+            }
+            activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
         let Ok((

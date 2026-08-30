@@ -1,0 +1,51 @@
+(
+    version: 1,
+    name: "world-survey",
+    map: "big_world",
+    output_dir: "logs/captures/world-survey",
+    resolution: (1600, 900),
+    fixed_delta_seconds: 0.016666667,
+    target: scene,
+    show_window: false,
+    warmup_frames: 240,
+    readiness: (
+        minimum_frames: 60,
+        maximum_frames: 1200,
+        minimum_loaded_chunks: 64,
+        stable_loaded_chunk_frames: 20,
+    ),
+    diagnostics: (
+        performance_overlay: false,
+        gizmos: false,
+        render_timings: false,
+    ),
+    shots: [
+        (
+            name: "close",
+            focus: (0.0, 0.0, 0.0),
+            yaw: -0.45,
+            zoom: 90.0,
+            time_of_day: 0.5,
+            assertions: [
+                loaded_chunks_at_least(count: 64),
+                entities_at_least(count: 100),
+            ],
+        ),
+        (
+            name: "middle",
+            focus: (0.0, 0.0, 0.0),
+            yaw: -0.45,
+            zoom: 590.0,
+            time_of_day: 0.5,
+            assertions: [loaded_chunks_at_least(count: 64)],
+        ),
+        (
+            name: "map",
+            focus: (0.0, 0.0, 0.0),
+            yaw: -0.45,
+            zoom: 2480.0,
+            time_of_day: 0.5,
+            assertions: [entities_at_least(count: 100)],
+        ),
+    ],
+)

@@ -50,8 +50,6 @@ struct ToonWaterUniform {
 
 const TAU: f32 = 6.28318530718;
 const OCEAN_LOOP_SECONDS: f32 = 120.0;
-const WATER_DEPTH_FADE_METERS: f32 = 2.5;
-const WATER_SURFACE_OFFSET: f32 = 0.02;
 
 fn wave_field(p: vec2<f32>, time: f32, freq: f32, speed: f32) -> f32 {
     let dir_a = normalize(vec2<f32>(0.80, 0.60));
@@ -420,19 +418,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // 1 at ~28m out (baked by the mesh builder). Depth alone can't zone
     // features on steep banks — deep water starts right at the coast.
     let shore_dist = clamp(in.color.g, 0.0, 1.0);
-    // Signed base-water depth, including the hidden strip beneath the bank.
-    // This lets contact foam follow the moving water/terrain intersection.
-    let signed_depth = in.color.b;
     let wave_time = globals.time + material.wave_params.w;
     let swell_value = swell_field(in.world_position.xz, wave_time);
-    let surface_displacement = wave_height(
-        in.world_position.xz,
-        depth,
-        shore_dist,
-        signed_depth,
-        ocean_factor,
-        wave_time,
-    );
 
     // Soft-banded depth gradient: quantize a third of the way toward 3 bands
     // for the stylized "painted shelves of color" read.
@@ -463,28 +450,23 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let crest_wave = swell_value * 0.72 + detail_wave * 0.28;
     let crest01 = crest_wave * 0.5 + 0.5;
 
-    // --- Shoreline: rivers retain the authored depth-phased lap below. Ocean
-    // foam instead uses one stable distance field for contact, traveling lines
-    // and wash. Noise modulates opacity only, never the line position, so a
-    // diagonal coast cannot fold back across itself while the wave advances.
+    // --- Shoreline: every bank uses the connected, smoothed horizontal
+    // distance field. The former river contact line used interpolated terrain
+    // depth; its isoline followed water-triangle diagonals and rendered as long
+    // white Xs across narrow channels. Noise modulates opacity only, never the
+    // line position, so neither a river nor an ocean coast can expose its
+    // triangulation while the wave advances.
     let line_wobble = wave_field(in.world_position.xz * 0.22, globals.time * 1.4, 1.0, 1.0);
     let shore_zone = 1.0 - smoothstep(0.0, 0.5, shore_dist);
 
-    // Contact line follows the animated surface against signed terrain depth,
-    // so each crest visibly advances up the bank and each trough retreats.
-    let shore_submersion = signed_depth * WATER_DEPTH_FADE_METERS
-        + WATER_SURFACE_OFFSET
-        + surface_displacement;
-    // Preserve the authored world-space softness up close, but widen it to at
-    // least a pixel at distance. Without derivative AA the otherwise smooth
-    // contour stair-steps as it crosses the screen's pixel grid.
-    let contact_half_width = min(max(0.056, fwidth(shore_submersion) * 0.75), 0.10);
-    let river_contact = (1.0 - smoothstep(
-        max(0.074 - contact_half_width, 0.0),
-        0.074 + contact_half_width,
-        abs(shore_submersion),
-    ))
-        * (1.0 - smoothstep(0.30, 0.62, shore_dist));
+    // About 0.5-1.2m of derivative-softened contact foam at a river edge.
+    // This is the same stable coordinate the traveling lines use below.
+    let river_contact_width = max(0.018, fwidth(shore_dist) * 1.15);
+    let river_contact = 1.0 - smoothstep(
+        0.010 + river_contact_width,
+        0.040 + river_contact_width,
+        shore_dist,
+    );
 
     // Traveling foam lines use true horizontal distance from the connected,
     // smoothed shoreline. Vertical depth inherits the terrain grid and turns
