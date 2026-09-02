@@ -18,6 +18,7 @@ use shared::terrain::WorldTerrain;
 
 pub use chunks::{LoadedChunks, TerrainChunk, TerrainUpdateSet};
 pub use debug::PerfHitchStats;
+pub use streaming::TerrainDeltaState;
 // Cloud-shadow sync writes the palette's cloud fields into chunk materials.
 pub use materials::TerrainSplatMaterial;
 pub(crate) use streaming::TerrainStreamingState;

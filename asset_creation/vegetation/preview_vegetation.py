@@ -1,6 +1,7 @@
 """Render every vegetation asset, every LOD, on one sheet — from the camera the game uses.
 
     blender --background --factory-startup --python asset_creation/vegetation/preview_vegetation.py
+    blender --background --factory-startup --python asset_creation/vegetation/preview_vegetation.py -- --match FernPatch
 
     # live, in the Blender MCP session
     exec(open('/Users/terminator2/Coding/fistworld/asset_creation/vegetation/preview_vegetation.py').read())
@@ -22,6 +23,7 @@ that is the mesh the player actually sees past 72 m.
 import math
 import os
 import re
+import sys
 
 import bpy
 from mathutils import Matrix, Vector
@@ -31,6 +33,8 @@ VEG = os.path.join(REPO, "asset_creation", "vegetation")
 OUT = os.path.join(REPO, "asset_creation", "renders", "vegetation")
 WIDTH = 2400
 WORK_SCENE = "VegPreview"
+ARGV = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+MATCH = ARGV[ARGV.index("--match") + 1] if "--match" in ARGV else None
 
 # The game camera, restated (client/src/camera_rts.rs).
 ELEV, YAW = 0.7127, -0.45
@@ -113,7 +117,11 @@ def main():
     sc = scene()
     os.makedirs(OUT, exist_ok=True)
 
-    new_files = sorted(f for f in os.listdir(VEG) if f.endswith(".glb")) if os.path.isdir(VEG) else []
+    new_files = sorted(
+        f
+        for f in os.listdir(VEG)
+        if f.endswith(".glb") and (MATCH is None or MATCH.lower() in f.lower())
+    ) if os.path.isdir(VEG) else []
     # One row per species. Reversed because row 0 renders NEAREST the camera, and reading order
     # should run front-to-back down the sheet the way the filenames sort.
     # Pack several species per row. One row each was fine at four species and unreadable at twelve

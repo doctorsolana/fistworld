@@ -14,6 +14,7 @@ use crate::terrain::{TerrainChunk, TerrainSplatMaterial};
 use crate::water::chunks::WaterRenderAssets;
 use crate::water::material::ToonWaterMaterial;
 use bevy::math::Vec4Swizzles;
+use bevy::platform::collections::HashMap;
 use shared::components::{CloudSeed, WorldTime};
 use shared::terrain::WorldTerrain;
 
@@ -36,6 +37,17 @@ const SPEED_WRITE_STEP: f32 = 0.01;
 const COVERAGE_WRITE_STEP: f32 = 0.005;
 const SUN_PROJ_WRITE_STEP: f32 = 0.01;
 const STRENGTH_WRITE_STEP: f32 = 0.005;
+/// Chunk materials receiving the newest lane snapshot per frame. Every
+/// `materials.get_mut` re-prepares that material on the GPU (five uniform
+/// buffers + a bind group), and with view_distance 8 there are up to 289 chunk
+/// materials; writing them all in one frame cost ~10 ms on the render thread
+/// per write, and at high time warp the sun projection crosses its threshold
+/// EVERY frame. Sweeping 48/frame finishes 289 chunks in six frames; chunks
+/// mid-sweep hold an anchor at most ~100 ms older than their neighbours, the
+/// same disparity the per-chunk top-up of freshly streamed chunks already
+/// produces, and the shaders extrapolate drift and sun sweep from the anchor
+/// so the field stays continuous across the seam.
+const LANE_WRITES_PER_FRAME: usize = 48;
 
 // The shadow field's seed phase must match what the sky derives from the
 // same `CloudSeed`, so both use the one hash in clouds.rs.
@@ -50,6 +62,38 @@ use super::clouds::hash_to_unit;
 pub struct CloudShadowParams {
     written: Option<(Vec4, Vec4, Vec4, Vec4)>,
     prev_sun_proj: Option<(Vec2, f32)>,
+    /// Newest lane snapshot every chunk material must eventually hold.
+    pending: Option<CloudShadowLanes>,
+    /// Bumped per snapshot; a chunk is up to date when `applied` says so.
+    generation: u32,
+    /// Generation each chunk entity last received. Chunks that stream out are
+    /// pruned when the map outgrows the live chunk set.
+    applied: HashMap<Entity, u32>,
+}
+
+/// The five palette lanes `sync_cloud_shadow_params` owns, as one snapshot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CloudShadowLanes {
+    clouds_a: Vec4,
+    clouds_b: Vec4,
+    clouds_c: Vec4,
+    climate: Vec4,
+    storm: Vec4,
+}
+
+/// Which chunk entities receive the pending lanes THIS frame: every entity not
+/// yet at `generation`, at most `budget` of them, in iteration order. Pure so
+/// the amortisation contract is testable without materials or a GPU.
+fn lane_sweep_targets(
+    entities: impl Iterator<Item = Entity>,
+    applied: &HashMap<Entity, u32>,
+    generation: u32,
+    budget: usize,
+) -> Vec<Entity> {
+    entities
+        .filter(|entity| applied.get(entity) != Some(&generation))
+        .take(budget)
+        .collect()
 }
 
 /// Push the shared cloud-field parameters into every terrain chunk material
@@ -65,7 +109,7 @@ pub fn sync_cloud_shadow_params(
     cover: Res<CloudCover>,
     settings: Res<GraphicsSettings>,
     sun_query: Query<&Transform, With<SunLight>>,
-    chunks: Query<(&TerrainChunk, Ref<TerrainChunk>)>,
+    chunks: Query<(Entity, &TerrainChunk)>,
     water_assets: Option<Res<WaterRenderAssets>>,
     terrain: Option<Res<WorldTerrain>>,
     mut terrain_materials: ResMut<Assets<TerrainSplatMaterial>>,
@@ -184,6 +228,15 @@ pub fn sync_cloud_shadow_params(
     let storm_anchor = super::clouds::storm_center(seed_phase, abs_seconds, half_extent);
     let storm = Vec4::new(storm_anchor.x, storm_anchor.y, storminess, 0.0);
 
+    // Diagnostic kill switch: `FISTFORCE_CLOUD_SHADOW_FREEZE=1` stops every
+    // lane write after the first, so a perf run can measure the cost of the
+    // material churn itself (Bevy re-uploads every mesh whose material asset
+    // is modified). Frozen shadows are wrong; this is for measurement only.
+    if state.written.is_some()
+        && std::env::var("FISTFORCE_CLOUD_SHADOW_FREEZE").is_ok_and(|v| v == "1")
+    {
+        return;
+    }
     let write_due = match state.written {
         None => true,
         Some((a, b, c, s)) => {
@@ -200,19 +253,6 @@ pub fn sync_cloud_shadow_params(
         }
     };
 
-    for (chunk, change) in &chunks {
-        if !write_due && !change.is_added() {
-            continue;
-        }
-        if let Some(mut material) = terrain_materials.get_mut(&chunk.material) {
-            material.extension.palette.clouds_a = clouds_a;
-            material.extension.palette.clouds_b = clouds_b;
-            material.extension.palette.clouds_c = clouds_c;
-            material.extension.palette.climate = climate;
-            material.extension.palette.storm = storm;
-        }
-    }
-
     if write_due {
         if let Some(water_assets) = &water_assets {
             if let Some(mut material) = water_materials.get_mut(&water_assets.material) {
@@ -224,5 +264,107 @@ pub fn sync_cloud_shadow_params(
         }
         state.written = Some((clouds_a, clouds_b, clouds_c, storm));
         state.prev_sun_proj = Some((sun_proj, anchor_time));
+        // Terrain gets the same snapshot, but spread over the coming frames
+        // (see LANE_WRITES_PER_FRAME). Freshly streamed chunks are simply
+        // entities missing from `applied`, so they are topped up the frame
+        // they appear without a separate `is_added` path.
+        state.generation = state.generation.wrapping_add(1);
+        state.pending = Some(CloudShadowLanes {
+            clouds_a,
+            clouds_b,
+            clouds_c,
+            climate,
+            storm,
+        });
+    }
+
+    let Some(lanes) = state.pending else {
+        return;
+    };
+    let generation = state.generation;
+    let targets = lane_sweep_targets(
+        chunks.iter().map(|(entity, _)| entity),
+        &state.applied,
+        generation,
+        LANE_WRITES_PER_FRAME,
+    );
+    for entity in targets {
+        let Ok((_, chunk)) = chunks.get(entity) else {
+            continue;
+        };
+        if let Some(mut material) = terrain_materials.get_mut(&chunk.material) {
+            material.extension.palette.clouds_a = lanes.clouds_a;
+            material.extension.palette.clouds_b = lanes.clouds_b;
+            material.extension.palette.clouds_c = lanes.clouds_c;
+            material.extension.palette.climate = lanes.climate;
+            material.extension.palette.storm = lanes.storm;
+        }
+        state.applied.insert(entity, generation);
+    }
+    // Streamed-out chunks leave stale keys behind; prune once they outnumber
+    // the live set rather than paying a rebuild every frame.
+    let live = chunks.iter().len();
+    if state.applied.len() > live.saturating_mul(2).max(64) {
+        let alive: bevy::platform::collections::HashSet<Entity> =
+            chunks.iter().map(|(entity, _)| entity).collect();
+        state.applied.retain(|entity, _| alive.contains(entity));
+    }
+}
+
+#[cfg(test)]
+mod lane_sweep_tests {
+    use super::*;
+
+    /// 289 chunks at 48 per frame finish in seven frames, no chunk is written
+    /// twice for one generation, and a chunk streaming in afterwards is topped
+    /// up on its first frame.
+    #[test]
+    fn the_lane_sweep_covers_every_chunk_once_and_tops_up_newcomers() {
+        let chunks: Vec<Entity> = (1..=289u32)
+            .map(|i| Entity::from_raw_u32(i).unwrap())
+            .collect();
+        let mut applied = HashMap::default();
+        let generation = 7;
+        let mut frames = 0;
+        let mut written = 0;
+        loop {
+            let targets = lane_sweep_targets(
+                chunks.iter().copied(),
+                &applied,
+                generation,
+                LANE_WRITES_PER_FRAME,
+            );
+            if targets.is_empty() {
+                break;
+            }
+            frames += 1;
+            for entity in targets {
+                assert!(
+                    applied.insert(entity, generation).is_none(),
+                    "written twice"
+                );
+                written += 1;
+            }
+        }
+        assert_eq!(written, 289);
+        assert_eq!(frames, 7);
+
+        let newcomer = Entity::from_raw_u32(1000).unwrap();
+        let targets = lane_sweep_targets(
+            chunks.iter().copied().chain(std::iter::once(newcomer)),
+            &applied,
+            generation,
+            LANE_WRITES_PER_FRAME,
+        );
+        assert_eq!(targets, vec![newcomer]);
+
+        // A new generation re-sweeps everything.
+        let targets = lane_sweep_targets(
+            chunks.iter().copied(),
+            &applied,
+            generation + 1,
+            LANE_WRITES_PER_FRAME,
+        );
+        assert_eq!(targets.len(), LANE_WRITES_PER_FRAME);
     }
 }

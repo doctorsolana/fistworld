@@ -22,7 +22,9 @@ pub(super) fn is_grass_kind(kind: shared::props::PropKind) -> bool {
 /// are too small to read).
 fn is_swayable(kind: shared::props::PropKind) -> bool {
     use shared::props::PropKind::*;
-    is_tree_kind(kind) || is_grass_kind(kind) || matches!(kind, BushA | BushB | BushC)
+    is_tree_kind(kind)
+        || is_grass_kind(kind)
+        || matches!(kind, BushA | BushB | BushC | FernPatchA | FernPatchB)
 }
 
 /// Per-kind sway: amplitude in metres at the tip, and FLUTTER rate.
@@ -41,6 +43,7 @@ fn sway_strength(kind: shared::props::PropKind) -> (f32, f32) {
     }
     match kind {
         BushA | BushB | BushC => (0.030, 1.25),
+        FernPatchA | FernPatchB => (0.055, 1.35),
         // Trees. The first number is METRES AT THE TIP, so 0.055 was 5.5 cm on
         // a canopy 6-8 m up -- physically defensible and visually nothing,
         // especially from an RTS camera where that is a fraction of a pixel.
@@ -317,6 +320,9 @@ pub(super) fn needs_foliage_materials(kind: shared::props::PropKind) -> bool {
             | BushA
             | BushB
             | BushC
+            // environment/ferns
+            | FernPatchA
+            | FernPatchB
             // environment/flowers
             | FlowerA
             | FlowerB

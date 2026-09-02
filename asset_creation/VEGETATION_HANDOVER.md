@@ -9,7 +9,7 @@ The assets are **built, validated and wired into the canonical registry, LOD, wi
 streaming paths**. This document now records the integration contract and the failures that
 must remain guarded when the set changes.
 
-Source: `asset_creation/vegetation/` — **33 GLBs**, ~1.8 MB total. (The two
+Source: `asset_creation/vegetation/` — **35 GLBs**, ~1.8 MB total. (The two
 `Grass_Blades_*.png` are build artefacts; their pixels are embedded in the grass GLBs.)
 
 Everything is untextured vertex colour **except the two grass patches**, which carry a 128×128
@@ -36,6 +36,7 @@ colour in `COLOR_0`, wind weight reserved in `TEXCOORD_1.x`, base bedded −0.15
 | `SmallRockA/B/C` | 24 / 12 | `Rock_1..5` | 34–86 | 7,857 |
 | `BoulderA/B` | 36 / 16 | `BigRock_01/02` | 68–78 | 0 |
 | `BushA/B/C` | 84 / 26 | `Bush_01..04` | 60–104 | 869 |
+| `FernPatchA/B` | 108–132 / 42 | new forest-floor layer | — | sparse long-range colonies plus 12% of existing close forest-cover slots |
 | `FlowerA..D` | **14 / 14** | `Flower_*`, `Spring_Flower_*` | **212–806** | 4,166 |
 | `OakA`, `ChestnutA`, `BirchA/B`, `BroadleafLargeA`, `BroadleafTallA` | 386–604 / 81–103 | new species, no counterpart | — | — |
 | `GrassShortA` (short) | **36 / 12** | `Env_Grass_Tall_04` | 738, **never drawn** | 38,578 |
@@ -46,9 +47,9 @@ The flowers are the largest single ratio: **806 → 14 triangles**, ×4,166 plac
 Validate with the class that matches the family — the classes carry their own budgets and
 tolerances, because a rule written for a tree says nothing useful about a 14-triangle flower:
 
-    python3 asset_creation/vegetation/inspect_vegetation_glb.py --class <tree|conifer|bare|rock|bush|flower|grass> <file>
+    python3 asset_creation/vegetation/inspect_vegetation_glb.py --class <tree|conifer|bare|rock|bush|fern|flower|grass> <file>
 
-**29 of 31 solid assets pass, plus both grass patches.** The two that do not are documented in section 8
+**31 of 33 solid assets pass, plus both grass patches.** The two that do not are documented in section 8
 and are trade-offs, not defects.
 
 ---
@@ -87,7 +88,9 @@ Verified by grepping what an existing kind touches. Missing any one of these fai
 | 9 | `client/assets/colliders_manifest.ron` | only if it should collide; then re-run the baker |
 
 Also check `client/src/props/kinds.rs`, `client/src/props/foliage.rs` and
-`shared/src/props/kinds.rs`; all three name prop kinds and may need the new variant.
+`shared/src/props/kinds.rs`; all three name prop kinds and may need the new variant. The fern
+patches are the reference for a walkable, shadowless `Accent` that still uses the one-entity
+mesh-swap path and wind material.
 
 ### Registry checks
 
@@ -99,7 +102,7 @@ remains the review checklist.
 ### tree_mesh_labels is not optional
 
 `client/src/props/assets.rs:17`. A kind absent from that table gets no LOD swapping at all — it
-renders LOD0 from 0 m to the far cutoff, exactly the bug the pines have today. Use:
+renders LOD0 from 0 m to the far cutoff. Use:
 
 ```rust
 PineA | PineB | ... => Some(TreeMeshLabels {
@@ -137,7 +140,7 @@ output. `inspect_vegetation_glb.py` checks this (`MESH_ORDER`).
 (`client/src/props/lod/detection.rs:194`) tests level 0 before level 1 with a plain substring
 match, and `"lod0"` is a prefix of `"lod01"`. So `X_LOD_01` → Lod0, `has_lod1` goes false, and
 **both meshes draw simultaneously from 0 m to the far cutoff** with the low-poly still casting
-shadows. The padded level-1 branch at `detection.rs:209` is unreachable dead code. All 31 assets
+shadows. The padded level-1 branch at `detection.rs:209` is unreachable dead code. All 33 solid assets
 use unpadded `_LOD0` / `_LOD1`; keep it that way.
 
 **A raw `.glb` path in map.ron is second class.** `ResolvedMapObject.kind` becomes `None` and you
@@ -170,7 +173,7 @@ The map compatibility aliases in §2 are why their removal is safe.
 ## 7. Verify in this order
 
 1. `python3 asset_creation/vegetation/inspect_vegetation_glb.py --class tree <file>` — contract check, exits
-   non-zero. Classes: `tree`, `conifer`, `bare`, `rock`, `bush`, `flower`.
+   non-zero. Classes: `tree`, `conifer`, `bare`, `rock`, `bush`, `fern`, `flower`, `grass`.
 2. `cargo run -q -p collider_baker --bin collider_baker` — also a Bevy-level load test of every
    scene in the manifest.
 3. `cargo run --profile playtest -p client --bin capture -- --at 1720,0 --zoom 150` — **look at

@@ -38,6 +38,7 @@ exists.
 | Dead trees | `DeadTreeA`, `DeadTreeB`, `DeadTreeC`, `DeadGnarledA` |
 | Conifers | `PineA`, `PineB`, `PineTallA`, `PineTallB`, `PineYoungA`, `PineYoungB` |
 | Bushes | `BushA`, `BushB`, `BushC` |
+| Forest floor | `FernPatchA`, `FernPatchB` |
 | Wildflowers | `FlowerA`, `FlowerB`, `FlowerC`, `FlowerD` |
 | Grass | `GrassShortA`, `GrassTallA` |
 | Work props | `WheatField`, `FishingPier` |

@@ -134,21 +134,14 @@ pub struct TerrainSplatExtension {
     #[sampler(105)]
     pub normal_array: Handle<Image>,
 
-    // UV tiling per layer.
+    /// Every non-texture, non-palette parameter in ONE uniform buffer.
+    ///
+    /// Each `#[uniform]` attribute is its own GPU buffer, re-created every time
+    /// the material is re-prepared (any `Assets::get_mut`). Chunk materials
+    /// are re-prepared in bulk by the cloud-shadow sync and on streaming, so
+    /// four separate lanes here quadrupled that cost for no visual reason.
     #[uniform(120)]
-    pub layer_tiling: Vec4,
-
-    // Debug mode selector.
-    #[uniform(121)]
-    pub debug_mode: u32,
-
-    // 1.0 = full normal mapping, 0.0 = skip normal-map contribution.
-    #[uniform(122)]
-    pub normal_strength: f32,
-
-    // x: water level, y: enabled, z: server clock offset, w: surface offset.
-    #[uniform(123)]
-    pub water_params: Vec4,
+    pub params: TerrainSplatParams,
 
     // --- Stylised palette ---
     //
@@ -172,6 +165,23 @@ impl MaterialExtension for TerrainSplatExtension {
     fn deferred_fragment_shader() -> ShaderRef {
         "shaders/terrain_splat.wgsl".into()
     }
+}
+
+/// Scalar/vector terrain parameters packed into binding 120 (see
+/// [`TerrainSplatExtension::params`]). Field order and the explicit padding
+/// mirror `TerrainSplatParams` in terrain_splat.wgsl exactly.
+#[derive(Clone, Copy, Debug, ShaderType)]
+pub struct TerrainSplatParams {
+    /// UV tiling per layer (grass, dirt, sand, cobble).
+    pub layer_tiling: Vec4,
+    /// x: water level, y: enabled, z: server clock offset, w: surface offset.
+    pub water_params: Vec4,
+    /// Debug mode selector.
+    pub debug_mode: u32,
+    /// 1.0 = full normal mapping, 0.0 = skip normal-map contribution.
+    pub normal_strength: f32,
+    /// Explicit tail padding so Rust and WGSL agree on a 48-byte struct.
+    pub _pad: Vec2,
 }
 
 #[derive(Clone, Copy, Debug, ShaderType)]

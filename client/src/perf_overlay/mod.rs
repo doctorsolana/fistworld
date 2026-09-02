@@ -4,6 +4,7 @@
 //! `FISTFORCE_CLIENT_PERF`, and the low-FPS drop monitor. Deliberately independent
 //! of any gameplay domain so it survives gameplay refactors.
 
+use bevy::app::AppExit;
 use bevy::diagnostic::{
     DiagnosticsStore, EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin,
 };
@@ -587,5 +588,308 @@ pub fn despawn_debug_overlay(
 ) {
     for entity in overlay_query.iter() {
         commands.entity(entity).despawn();
+    }
+}
+
+/// Developer harness only: `FISTFORCE_EXIT_AFTER_SECS=<n>` shuts the client
+/// down cleanly after `n` seconds of wall time. Unattended profiling runs need
+/// it because `trace_chrome` writes its file only on a clean exit, and this Mac
+/// Mesh census for perf runs: every 10 s under `FISTFORCE_CLIENT_PERF`, count
+/// the entities carrying a `Mesh3d`, grouped by their `Name` (glTF primitives
+/// are named after their node). A static camera whose frame time still climbs
+/// means something keeps ADDING rendered instances, and this line names it.
+/// Software frame cap (see `GraphicsSettings::frame_cap_fps`). Runs in `Last`
+/// so the pause lands after this frame's extraction hand-off: both the main
+/// and render threads get idle time, which is what keeps the SoC out of its
+/// power limit. Vsync on or a cap of 0 disables it.
+///
+/// macOS `thread::sleep` overshoots by 1-3 ms (timer coalescing), which would
+/// turn a 60 fps cap into 52 fps. The limiter therefore sleeps only up to an
+/// adaptive margin - the recent average overshoot plus a little - and spins
+/// the remainder, so the period lands on the target within ~0.1 ms while
+/// burning well under a millisecond of CPU per frame.
+pub fn limit_frame_rate(
+    settings: Res<crate::render::systems::GraphicsSettings>,
+    mut state: Local<FrameCapState>,
+) {
+    let cap = settings.frame_cap_fps;
+    if cap == 0 || settings.vsync_enabled {
+        state.last_frame_end = None;
+        return;
+    }
+    let target = std::time::Duration::from_secs_f64(1.0 / f64::from(cap));
+    if let Some(previous) = state.last_frame_end {
+        let elapsed = previous.elapsed();
+        if elapsed < target {
+            let remaining = target - elapsed;
+            let margin = std::time::Duration::from_secs_f32(state.sleep_margin_secs);
+            if remaining > margin {
+                let requested = remaining - margin;
+                let before = std::time::Instant::now();
+                std::thread::sleep(requested);
+                let overshoot = before.elapsed().saturating_sub(requested).as_secs_f32();
+                // Track the platform's real sleep error; never trust it below 0.3 ms.
+                state.sleep_margin_secs = (state.sleep_margin_secs * 0.8
+                    + (overshoot + 0.0002) * 0.2)
+                    .clamp(0.0003, 0.006);
+            }
+            while previous.elapsed() < target {
+                std::hint::spin_loop();
+            }
+        }
+    }
+    state.last_frame_end = Some(std::time::Instant::now());
+}
+
+/// Frame-cap pacing state: the previous frame boundary and the learned sleep
+/// overshoot margin.
+pub struct FrameCapState {
+    last_frame_end: Option<std::time::Instant>,
+    sleep_margin_secs: f32,
+}
+
+impl Default for FrameCapState {
+    fn default() -> Self {
+        Self {
+            last_frame_end: None,
+            sleep_margin_secs: 0.0015,
+        }
+    }
+}
+
+/// Which archetypes keep changing their `Mesh3d` in a supposedly static scene:
+/// every 10 s under `FISTFORCE_CLIENT_PERF`, tally the changed-mesh entities
+/// by their component signature (top 4). Exclusive so it can read archetypes.
+pub fn log_changed_mesh_archetypes(world: &mut World) {
+    let enabled = std::env::var("FISTFORCE_CLIENT_PERF").is_ok_and(|v| !v.is_empty());
+    if !enabled {
+        return;
+    }
+    let dt = world.resource::<Time>().delta_secs();
+    let mut state = world
+        .remove_resource::<ChangedMeshArchetypeTally>()
+        .unwrap_or_default();
+    state.since += dt;
+    state.frames += 1;
+    let mut query = world.query_filtered::<Entity, Changed<Mesh3d>>();
+    let entities: Vec<Entity> = query.iter(world).collect();
+    for entity in entities {
+        let mut names: Vec<&str> = world
+            .inspect_entity(entity)
+            .map(|components| {
+                components
+                    .map(|info| info.name().shortname().to_string().leak() as &str)
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.retain(|n| {
+            !matches!(
+                *n,
+                "Transform"
+                    | "GlobalTransform"
+                    | "Visibility"
+                    | "InheritedVisibility"
+                    | "ViewVisibility"
+                    | "Aabb"
+                    | "Mesh3d"
+                    | "ChildOf"
+                    | "Children"
+            )
+        });
+        names.sort_unstable();
+        names.truncate(6);
+        *state.by_signature.entry(names.join("+")).or_default() += 1;
+    }
+    if state.since >= 10.0 {
+        let frames = state.frames.max(1);
+        let mut rows: Vec<(String, u32)> = state.by_signature.drain().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        let top: Vec<String> = rows
+            .iter()
+            .take(4)
+            .map(|(sig, n)| format!("[{sig}] x{:.1}/frame", *n as f32 / frames as f32))
+            .collect();
+        info!("ClientPerfChangedMeshes {}", top.join("  "));
+        state.since = 0.0;
+        state.frames = 0;
+    }
+    world.insert_resource(state);
+}
+
+#[derive(Resource, Default)]
+struct ChangedMeshArchetypeTally {
+    since: f32,
+    frames: u32,
+    by_signature: std::collections::HashMap<String, u32>,
+}
+
+/// Asset stores the census reports on, bundled so the census stays under
+/// Bevy's 16-parameter system limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct CensusAssets<'w> {
+    meshes: Res<'w, Assets<Mesh>>,
+    std_materials: Res<'w, Assets<StandardMaterial>>,
+    images: Res<'w, Assets<Image>>,
+    wind_materials: Option<Res<'w, Assets<crate::props::WindFoliageMaterial>>>,
+    terrain_materials: Option<Res<'w, Assets<crate::terrain::TerrainSplatMaterial>>>,
+    water_materials: Option<Res<'w, Assets<crate::water::material::ToonWaterMaterial>>>,
+}
+
+/// Terrain streaming counters for the census: what actually spawns,
+/// regenerates and unloads chunks in a scene that should be static.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct CensusTerrain<'w, 's> {
+    hitch_stats: Res<'w, crate::terrain::PerfHitchStats>,
+    delta_state: Res<'w, crate::terrain::TerrainDeltaState>,
+    delta_chunks: Query<'w, 's, &'static shared::terrain::TerrainDeltaChunk>,
+    changed_delta_chunks: Query<'w, 's, (), Changed<shared::terrain::TerrainDeltaChunk>>,
+    added_chunks: Query<'w, 's, (), Added<crate::terrain::TerrainChunk>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn log_mesh_census(
+    time: Res<Time>,
+    mut since: Local<f32>,
+    mut enabled: Local<Option<bool>>,
+    mut churn: Local<(u32, u64, u64, u64)>,
+    meshes: Query<(Option<&Name>, Option<&InheritedVisibility>), With<Mesh3d>>,
+    changed_meshes: Query<(), Changed<Mesh3d>>,
+    changed_std_materials: Query<(), Changed<MeshMaterial3d<StandardMaterial>>>,
+    changed_transforms: Query<(), (Changed<GlobalTransform>, With<Mesh3d>)>,
+    assets: CensusAssets,
+    world_time: Query<&shared::components::WorldTime>,
+    cover: Option<Res<crate::render::systems::CloudCover>>,
+    changed_named: Query<Option<&Name>, Changed<Mesh3d>>,
+    mut changed_sample: Local<Vec<String>>,
+    terrain: CensusTerrain,
+    mut terrain_tally: Local<[u64; 6]>,
+) {
+    let on = *enabled
+        .get_or_insert_with(|| std::env::var("FISTFORCE_CLIENT_PERF").is_ok_and(|v| !v.is_empty()));
+    if !on {
+        return;
+    }
+    churn.0 += 1;
+    churn.1 += changed_meshes.iter().count() as u64;
+    churn.2 += changed_std_materials.iter().count() as u64;
+    churn.3 += changed_transforms.iter().count() as u64;
+    terrain_tally[0] += u64::from(terrain.hitch_stats.terrain_chunks_spawned);
+    terrain_tally[1] += u64::from(terrain.hitch_stats.terrain_chunks_finalized);
+    terrain_tally[2] += u64::from(terrain.hitch_stats.terrain_chunks_regen);
+    terrain_tally[3] += u64::from(terrain.hitch_stats.terrain_chunks_unloaded);
+    terrain_tally[4] += terrain.changed_delta_chunks.iter().count() as u64;
+    terrain_tally[5] += terrain.added_chunks.iter().count() as u64;
+    if changed_sample.len() < 8 {
+        for name in changed_named.iter() {
+            if changed_sample.len() >= 8 {
+                break;
+            }
+            let label: String = name
+                .map_or("<unnamed>", |n| n.as_str())
+                .chars()
+                .take(22)
+                .collect();
+            if !changed_sample.contains(&label) {
+                changed_sample.push(label);
+            }
+        }
+    }
+    *since += time.delta_secs();
+    if *since < 10.0 {
+        return;
+    }
+    *since = 0.0;
+    let frames = churn.0.max(1) as u64;
+    info!(
+        "ClientPerfAssets meshes={} std_materials={} images={} wind_materials={} terrain_materials={} water_materials={} | per-frame changed: mesh3d={} std_material={} mesh_transform={}",
+        assets.meshes.len(),
+        assets.std_materials.len(),
+        assets.images.len(),
+        assets.wind_materials.as_deref().map_or(0, |m| m.len()),
+        assets.terrain_materials.as_deref().map_or(0, |m| m.len()),
+        assets.water_materials.as_deref().map_or(0, |m| m.len()),
+        churn.1 / frames,
+        churn.2 / frames,
+        churn.3 / frames,
+    );
+    *churn = (0, 0, 0, 0);
+    let clock = world_time.iter().next().map_or_else(
+        || "n/a".to_string(),
+        |t| {
+            format!(
+                "day={} t={:.0}s sun_phase={:.2} is_day={}",
+                t.day,
+                t.seconds_in_cycle,
+                t.sun_phase(),
+                t.is_day()
+            )
+        },
+    );
+    let weather = cover.as_deref().map_or_else(
+        || "n/a".to_string(),
+        |c| format!("cover={:.2} storminess={:.2}", c.current, c.storminess),
+    );
+    info!(
+        "ClientPerfWorld {clock} | {weather} | changed-mesh names: {}",
+        changed_sample.join(", ")
+    );
+    changed_sample.clear();
+    let max_version = terrain
+        .delta_chunks
+        .iter()
+        .map(|c| c.version)
+        .max()
+        .unwrap_or(0);
+    info!(
+        "ClientPerfTerrain per-interval: spawned={} finalized={} regen={} unloaded={} replicated_delta_changes={} added_chunk_entities={} | delta_chunks={} max_version={} dirty_queue={} known_versions={}",
+        terrain_tally[0], terrain_tally[1], terrain_tally[2], terrain_tally[3], terrain_tally[4], terrain_tally[5],
+        terrain.delta_chunks.iter().count(), max_version,
+        terrain.delta_state.dirty_queue.len(), terrain.delta_state.chunk_versions.len()
+    );
+    *terrain_tally = [0; 6];
+    let mut by_name: std::collections::HashMap<String, (u32, u32)> =
+        std::collections::HashMap::new();
+    let mut total = 0u32;
+    let mut visible = 0u32;
+    for (name, inherited) in meshes.iter() {
+        total += 1;
+        let shown = inherited.is_some_and(|v| v.get());
+        visible += u32::from(shown);
+        let key = name.map_or("<unnamed>", |n| n.as_str());
+        let key: String = key.chars().take(18).collect();
+        let entry = by_name.entry(key).or_default();
+        entry.0 += 1;
+        entry.1 += u32::from(shown);
+    }
+    let mut rows: Vec<(String, (u32, u32))> = by_name.into_iter().collect();
+    rows.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+    let top: Vec<String> = rows
+        .iter()
+        .take(12)
+        .map(|(name, (count, shown))| format!("{name}={count}/{shown}"))
+        .collect();
+    info!(
+        "ClientPerfMeshes total={total} visible={visible} top(name=count/visible): {}",
+        top.join(" ")
+    );
+}
+
+/// has no input automation to press EXIT GAME. Unset in normal play: the
+/// deadline is infinite and the system is a single float compare per frame.
+pub fn exit_after_deadline(
+    time: Res<Time<Real>>,
+    mut exit: MessageWriter<AppExit>,
+    mut deadline: Local<Option<f64>>,
+) {
+    let deadline = *deadline.get_or_insert_with(|| {
+        std::env::var("FISTFORCE_EXIT_AFTER_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<f64>().ok())
+            .filter(|secs| *secs > 0.0)
+            .unwrap_or(f64::INFINITY)
+    });
+    if time.elapsed_secs_f64() >= deadline {
+        info!("FISTFORCE_EXIT_AFTER_SECS reached: exiting cleanly");
+        exit.write(AppExit::Success);
     }
 }

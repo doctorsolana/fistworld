@@ -647,6 +647,10 @@ mod tests {
     fn checked_in_scenarios_parse_and_validate() {
         for text in [
             include_str!("../../capture/scenarios/world-survey.ron"),
+            include_str!("../../capture/scenarios/river-banks.ron"),
+            include_str!("../../capture/scenarios/forest-floor.ron"),
+            include_str!("../../capture/scenarios/isolated-fern.ron"),
+            include_str!("../../capture/scenarios/lighting-readability.ron"),
             include_str!("../../capture/scenarios/ui-company.ron"),
         ] {
             let scenario: CaptureScenario = ron::from_str(text).unwrap();

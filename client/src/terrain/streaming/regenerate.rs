@@ -226,14 +226,17 @@ pub(crate) fn process_chunk_tasks(
                 weight_map: weightmap.handle.clone(),
                 albedo_array: render_assets.albedo_array.clone(),
                 normal_array: render_assets.normal_array.clone(),
-                layer_tiling: render_assets.layer_tiling,
-                debug_mode: debug_settings.mode,
-                normal_strength: desired_terrain_normal_strength(
-                    result.coord,
-                    player_chunk,
-                    view_distance,
-                ),
-                water_params: water_params_for_generator(&result.generator),
+                params: shared::terrain::TerrainSplatParams {
+                    layer_tiling: render_assets.layer_tiling,
+                    water_params: water_params_for_generator(&result.generator),
+                    debug_mode: debug_settings.mode,
+                    normal_strength: desired_terrain_normal_strength(
+                        result.coord,
+                        player_chunk,
+                        view_distance,
+                    ),
+                    _pad: Vec2::ZERO,
+                },
                 palette,
             },
         });

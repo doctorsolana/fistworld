@@ -1,0 +1,63 @@
+(
+    version: 1,
+    name: "lighting-readability",
+    map: "village_lab",
+    output_dir: "logs/captures/lighting-readability",
+    resolution: (1600, 900),
+    fixed_delta_seconds: 0.016666667,
+    target: scene,
+    show_window: false,
+    warmup_frames: 300,
+    readiness: (
+        minimum_frames: 90,
+        maximum_frames: 1200,
+        minimum_loaded_chunks: 25,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: {
+        "FISTFORCE_CAPTURE_SETTLEMENT": "village",
+        "FISTFORCE_CAPTURE_HERO": "default",
+        "FISTFORCE_CAPTURE_VILLAGERS": "12",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    diagnostics: (
+        performance_overlay: false,
+        gizmos: false,
+        render_timings: false,
+    ),
+    shots: [
+        (
+            name: "morning",
+            focus: (0.0, 0.0, 0.0),
+            yaw: -0.45,
+            zoom: 78.0,
+            time_of_day: 0.375,
+            assertions: [
+                settlements_at_least(count: 1),
+                villagers_at_least(count: 1),
+            ],
+        ),
+        (
+            name: "noon",
+            focus: (0.0, 0.0, 0.0),
+            yaw: -0.45,
+            zoom: 78.0,
+            time_of_day: 0.5,
+            assertions: [
+                settlements_at_least(count: 1),
+                villagers_at_least(count: 1),
+            ],
+        ),
+        (
+            name: "evening",
+            focus: (0.0, 0.0, 0.0),
+            yaw: -0.45,
+            zoom: 78.0,
+            time_of_day: 0.75,
+            assertions: [
+                settlements_at_least(count: 1),
+                villagers_at_least(count: 1),
+            ],
+        ),
+    ],
+)

@@ -282,6 +282,14 @@ pub struct GraphicsSettings {
     pub far_terrain_enabled: bool,
     pub props_enabled: bool,
     pub vsync_enabled: bool,
+    /// Software frame cap in frames per second, independent of vsync
+    /// (0 = uncapped). Frames that finish early sleep until the target period;
+    /// slow frames are never delayed, so unlike vsync it cannot quantize a
+    /// 17 ms frame down to 30 fps. Measured on the M5 MacBook: running
+    /// uncapped drives the SoC into its power limit within ~90 s and EVERY
+    /// frame then costs 2-3x more; capped at the display rate the machine
+    /// stays cool and frame time stays flat. Default: 60.
+    pub frame_cap_fps: u32,
     /// Legacy-compatible half of the three-way display mode. Old settings
     /// files contain only this field, so retaining it preserves the player's
     /// previous Windowed/Borderless choice during migration.
@@ -396,6 +404,7 @@ impl GraphicsSettings {
             clouds_enabled: true,
             far_terrain_enabled: true,
             props_enabled: true,
+            frame_cap_fps: 60,
             // Off on macOS: the compositor already prevents tearing, while
             // strict FIFO vsync quantizes missed refreshes (60 -> 30 -> 20),
             // which punishes weaker Macs hardest — a 45fps-capable machine
@@ -483,6 +492,12 @@ impl GraphicsSettings {
         self.clouds_enabled = env_bool("FISTFORCE_CLOUDS", self.clouds_enabled);
         self.props_enabled = env_bool("FISTFORCE_PROPS", self.props_enabled);
         self.vsync_enabled = env_bool("FISTFORCE_VSYNC", self.vsync_enabled);
+        if let Some(cap) = std::env::var("FISTFORCE_FRAME_CAP")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<u32>().ok())
+        {
+            self.frame_cap_fps = cap;
+        }
         self.fullscreen_enabled = env_bool("FISTFORCE_FULLSCREEN", self.fullscreen_enabled);
         self.exclusive_fullscreen_enabled = env_bool(
             "FISTFORCE_EXCLUSIVE_FULLSCREEN",
@@ -534,6 +549,9 @@ impl GraphicsSettings {
         let forced = |name: &str| std::env::var(name).is_ok();
         if forced("FISTFORCE_RENDER_SCALE") {
             self.render_scale = baseline.render_scale;
+        }
+        if forced("FISTFORCE_FRAME_CAP") {
+            self.frame_cap_fps = baseline.frame_cap_fps;
         }
         if forced("FISTFORCE_SHADOWS") {
             self.shadows_enabled = baseline.shadows_enabled;
@@ -710,7 +728,7 @@ pub fn apply_graphics_settings(
     }
 
     info!(
-        "Applying graphics settings: render_scale={:.2} ssao={} shadow_quality={:?} foliage_cutout={} bloom={}, shadows={}, atmosphere={}, clouds={}, far_terrain={}, vsync={}, display_mode={:?}, resolution={}, tonemapping={:?}, exposure={:.2}",
+        "Applying graphics settings: render_scale={:.2} ssao={} shadow_quality={:?} foliage_cutout={} bloom={}, shadows={}, atmosphere={}, clouds={}, far_terrain={}, vsync={}, frame_cap={}, display_mode={:?}, resolution={}, tonemapping={:?}, exposure={:.2}",
         settings.render_scale,
         settings.ssao_enabled,
         settings.shadow_quality,
@@ -721,6 +739,7 @@ pub fn apply_graphics_settings(
         settings.clouds_enabled,
         settings.far_terrain_enabled,
         settings.vsync_enabled,
+        settings.frame_cap_fps,
         settings.display_mode(),
         settings.display_resolution.label(),
         settings.tonemapping,

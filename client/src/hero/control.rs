@@ -328,6 +328,45 @@ pub(super) fn auto_spawn_hero(
 /// `FISTWORLD_AUTOSPEED_AFTER="12,1"` waits twelve real seconds after entering
 /// the world, then requests 1x. This lets a lab build rapidly before a recorder
 /// watches animation timing at normal speed.
+/// `FISTFORCE_AUTOTIME_PRESET=night|morning|midday|sunset` sends one
+/// `SetTimeOfDay` a few seconds after connect (god capability required, like
+/// `FISTWORLD_AUTOSPEED_AFTER`), so a perf run pins the sun instead of
+/// inheriting whatever hour the persistent world clock happens to hold.
+pub(super) fn auto_set_time_of_day(
+    time: Res<Time>,
+    capability: Res<GodCapability>,
+    mut sender: Query<
+        &mut MessageSender<shared::protocol::SetTimeOfDay>,
+        (With<crate::GameClient>, With<Connected>),
+    >,
+    mut state: Local<(f32, bool)>,
+) {
+    if state.1 || !capability.0 {
+        return;
+    }
+    let Some(preset) = std::env::var("FISTFORCE_AUTOTIME_PRESET")
+        .ok()
+        .and_then(|raw| match raw.trim().to_ascii_lowercase().as_str() {
+            "night" => Some(shared::protocol::TimeOfDayPreset::Night),
+            "morning" => Some(shared::protocol::TimeOfDayPreset::Morning),
+            "midday" | "noon" => Some(shared::protocol::TimeOfDayPreset::Midday),
+            "sunset" | "dusk" => Some(shared::protocol::TimeOfDayPreset::Sunset),
+            _ => None,
+        })
+    else {
+        return;
+    };
+    state.0 += time.delta_secs();
+    if state.0 < 5.0 {
+        return;
+    }
+    let Ok(mut sender) = sender.single_mut() else {
+        return;
+    };
+    sender.send::<shared::protocol::ReliableChannel>(shared::protocol::SetTimeOfDay { preset });
+    state.1 = true;
+}
+
 pub(super) fn auto_set_time_warp_after(
     time: Res<Time>,
     capability: Res<GodCapability>,

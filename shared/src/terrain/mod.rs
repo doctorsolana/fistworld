@@ -12,8 +12,8 @@ mod serialization;
 pub use generator::*;
 pub use material::{
     layer_tiling, repeat_sampler, stylized_palette, weightmap_sampler, TerrainLayerDef,
-    TerrainPalette, TerrainSplatExtension, TerrainSplatMaterial, TERRAIN_ALBEDO_ARRAY,
-    TERRAIN_LAYERS, TERRAIN_NORMAL_ARRAY,
+    TerrainPalette, TerrainSplatExtension, TerrainSplatMaterial, TerrainSplatParams,
+    TERRAIN_ALBEDO_ARRAY, TERRAIN_LAYERS, TERRAIN_NORMAL_ARRAY,
 };
 pub use paint::{
     apply_terrain_paint_op_to_weights, build_terrain_weightmap_weights, terrain_paint_op_bounds,

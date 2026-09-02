@@ -4,6 +4,7 @@
 
 mod connection;
 mod rendering;
+pub use rendering::CloudCover;
 mod world;
 
 // Re-export everything for easy access from main.rs

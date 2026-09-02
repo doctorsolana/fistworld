@@ -10,6 +10,8 @@ pub mod control;
 pub mod footprints;
 
 use bevy::animation::{AnimatedBy, AnimationTargetId};
+use bevy::camera::primitives::{Frustum, Sphere};
+use bevy::camera::visibility::ViewVisibility;
 use bevy::gltf::{Gltf, GltfMaterialName};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
@@ -98,6 +100,7 @@ impl Plugin for HeroPlugin {
                     control::handle_world_clicks,
                     control::auto_spawn_hero,
                     control::auto_set_time_warp_after,
+                    control::auto_set_time_of_day,
                 ),
             )
                 .chain()
@@ -268,9 +271,42 @@ struct HeroAnim {
     fading_body: Option<AnimationNodeIndex>,
     body_fade_seconds: f32,
     paused: bool,
+    /// Clip weights at the moment the rig was hidden, restored on unhide.
+    /// Bevy evaluates every PAUSED clip in full each frame; only a weight of
+    /// exactly 0 skips the graph walk, curve sampling and bone writes.
+    saved_weights: Vec<(AnimationNodeIndex, f32)>,
 }
 
 const BODY_ANIMATION_FADE_SECONDS: f32 = 0.14;
+
+/// Rigs whose root lies within this distance of the camera frustum keep
+/// animating even when no view sees a single mesh part yet, so a character
+/// stepping into frame arrives mid-stride instead of catching up by a frame.
+const RIG_ANIMATION_MARGIN: f32 = 6.0;
+
+/// The mesh primitives of one character rig, gathered as they instantiate.
+///
+/// Lets the locomotion driver ask "does ANY view (camera or shadow cascade)
+/// see this rig?" through the primitives' `ViewVisibility` without walking the
+/// hierarchy every frame. Dead entries (a respawned scene) are pruned on use.
+#[derive(Component, Default)]
+struct RigMeshParts(Vec<Entity>);
+
+/// Per-frame rig animation census, logged every 10 s under
+/// `FISTFORCE_CLIENT_PERF=1` so a perf run states how many rigs Bevy actually
+/// evaluated versus how many the visibility cull and the indoors pause skipped.
+#[derive(Default)]
+struct RigAnimationTally {
+    enabled: Option<bool>,
+    since: f32,
+    frames: u32,
+    rigs: u64,
+    hidden: u64,
+    unseen: u64,
+    with_parts: u64,
+    any_seen: u64,
+    in_margin: u64,
+}
 
 /// The authored resource scene parented to the rig's `attach.carry` joint.
 #[derive(Component)]
@@ -631,6 +667,7 @@ const CLIP_FACE_IDLE: &str = "face_idle";
 /// deliberately leaves this to the client (same contract as
 /// `props::foliage::flatten_base`).
 fn matte_character_materials(
+    mut commands: Commands,
     mut assets: ResMut<HeroAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     primitives: Query<
@@ -639,7 +676,12 @@ fn matte_character_materials(
     >,
     parents: Query<&ChildOf>,
     rigs: Query<(), Or<(With<CharacterKind>, With<HeroPreviewRig>)>>,
+    mut parts: Query<&mut RigMeshParts>,
 ) {
+    // Roots seen for the first time this frame: several primitives of one
+    // rig land in the same frame, so their list is assembled here and inserted
+    // once instead of racing insert commands against each other.
+    let mut fresh_parts: HashMap<Entity, Vec<Entity>> = HashMap::new();
     // Scene primitives arrive with their material assets already registered.
     // Inspect only newly instantiated primitives and walk upward once to prove
     // they belong to a character. The previous implementation traversed every
@@ -659,6 +701,23 @@ fn matte_character_materials(
         if !belongs_to_character {
             continue;
         }
+        // Every primitive is a mesh part the visibility test consults, whether
+        // or not its material still needs matting.
+        // Deduplicated: a re-inserted material component re-triggers `Added`
+        // for a primitive already on the list.
+        match parts.get_mut(ancestor) {
+            Ok(mut parts) => {
+                if !parts.0.contains(&entity) {
+                    parts.0.push(entity);
+                }
+            }
+            Err(_) => {
+                let list = fresh_parts.entry(ancestor).or_default();
+                if !list.contains(&entity) {
+                    list.push(entity);
+                }
+            }
+        }
 
         let id = mesh_material.0.id();
         if assets.matted.contains(&id) {
@@ -668,6 +727,9 @@ fn matte_character_materials(
             crate::props::foliage::flatten_base(&mut material);
             assets.matted.insert(id);
         }
+    }
+    for (root, list) in fresh_parts {
+        commands.entity(root).try_insert(RigMeshParts(list));
     }
 }
 
@@ -846,6 +908,7 @@ fn setup_hero_animation(
             fading_body: None,
             body_fade_seconds: BODY_ANIMATION_FADE_SECONDS,
             paused: false,
+            saved_weights: Vec::new(),
         });
         debug!("Hero animation configured for {rig_root:?}");
     }
@@ -1624,24 +1687,110 @@ fn drive_hero_locomotion(
         Option<&CarriedLoad>,
         Option<&PorterCartState>,
         Option<&CharacterMotion>,
+        Option<&mut RigMeshParts>,
+        Option<&GlobalTransform>,
     )>,
     mut players: Query<&mut AnimationPlayer>,
+    frusta: Query<&Frustum, With<Camera3d>>,
+    view_visibilities: Query<&ViewVisibility>,
+    mut tally: Local<RigAnimationTally>,
 ) {
-    for (visual, mut anim, inherited, activity, carried, cart, motion) in heroes.iter_mut() {
-        let hidden = inherited.is_some_and(|visibility| !visibility.get())
+    let census = *tally
+        .enabled
+        .get_or_insert_with(|| std::env::var("FISTFORCE_CLIENT_PERF").is_ok_and(|v| !v.is_empty()));
+    if census {
+        tally.frames += 1;
+        tally.since += time.delta_secs();
+        if tally.since >= 10.0 {
+            let frames = tally.frames.max(1) as u64;
+            info!(
+                "ClientPerfRigs rigs={} animating={} unseen_culled={} hidden_or_indoors={} with_parts={} any_part_seen={} in_frustum_margin={} (per-frame averages)",
+                tally.rigs / frames,
+                (tally.rigs - tally.hidden - tally.unseen) / frames,
+                tally.unseen / frames,
+                tally.hidden / frames,
+                tally.with_parts / frames,
+                tally.any_seen / frames,
+                tally.in_margin / frames
+            );
+            *tally = RigAnimationTally {
+                enabled: Some(true),
+                ..default()
+            };
+        }
+    }
+    for (visual, mut anim, inherited, activity, carried, cart, motion, parts, transform) in
+        heroes.iter_mut()
+    {
+        // A rig no view can see (main camera AND every shadow cascade, per
+        // last frame's ViewVisibility on its mesh parts) contributes nothing
+        // to the image, so its animation is skipped entirely. The frustum
+        // margin keeps rigs about to enter frame animating.
+        let (has_parts, any_seen) = match parts {
+            Some(mut parts) => {
+                parts.0.retain(|part| view_visibilities.contains(*part));
+                (
+                    !parts.0.is_empty(),
+                    parts
+                        .0
+                        .iter()
+                        .any(|part| view_visibilities.get(*part).is_ok_and(|seen| seen.get())),
+                )
+            }
+            None => (false, false),
+        };
+        let in_margin = transform.is_some_and(|transform| {
+            let sphere = Sphere {
+                center: transform.translation().into(),
+                radius: RIG_ANIMATION_MARGIN,
+            };
+            frusta
+                .iter()
+                .any(|frustum| frustum.intersects_sphere(&sphere, false))
+        });
+        let unseen = has_parts && !any_seen && !in_margin;
+        if census {
+            tally.with_parts += u64::from(has_parts);
+            tally.any_seen += u64::from(any_seen);
+            tally.in_margin += u64::from(in_margin);
+        }
+        let indoors_or_hidden = inherited.is_some_and(|visibility| !visibility.get())
             || activity.is_some_and(|activity| *activity == CharacterActivity::Indoors);
+        let hidden = indoors_or_hidden || unseen;
+        if census {
+            tally.rigs += 1;
+            if indoors_or_hidden {
+                tally.hidden += 1;
+            } else if unseen {
+                tally.unseen += 1;
+            }
+        }
         let Ok(mut player) = players.get_mut(anim.player) else {
             continue;
         };
 
         if hidden {
             if !anim.paused {
+                // Pause freezes the seek times; zero weights are what make
+                // Bevy's animate_targets skip the rig (weight == 0 is its
+                // only per-clip early-out - a paused clip is still evaluated
+                // and committed to every bone each frame).
                 player.pause_all();
+                anim.saved_weights.clear();
+                for (node, active) in player.playing_animations_mut() {
+                    anim.saved_weights.push((*node, active.weight()));
+                    active.set_weight(0.0);
+                }
                 anim.paused = true;
             }
             continue;
         }
         if anim.paused {
+            for (node, weight) in anim.saved_weights.drain(..) {
+                if let Some(active) = player.animation_mut(node) {
+                    active.set_weight(weight);
+                }
+            }
             player.resume_all();
             anim.paused = false;
         }
@@ -2008,6 +2157,7 @@ mod carried_tests {
             fading_body: None,
             body_fade_seconds: 0.0,
             paused: false,
+            saved_weights: Vec::new(),
         };
 
         let (clip, speed, frozen) = desired_body_animation(
@@ -2052,6 +2202,7 @@ mod carried_tests {
                 fading_body: None,
                 body_fade_seconds: 0.0,
                 paused: false,
+                saved_weights: Vec::new(),
             },
             CharacterActivity::Farming,
         ));
@@ -2096,6 +2247,7 @@ mod carried_tests {
                 fading_body: None,
                 body_fade_seconds: 0.0,
                 paused: false,
+                saved_weights: Vec::new(),
             },
             CarriedLoad {
                 good: Some(shared::economy::Good::Wood),
@@ -2119,6 +2271,98 @@ mod carried_tests {
         assert_eq!(active_carry.seek_time(), 0.0);
         assert!(player.animation(idle).is_none());
         assert_eq!(player.playing_animations().count(), 1);
+    }
+
+    /// A rig that no view sees (camera or shadow cascade, per its mesh
+    /// parts' ViewVisibility) must cost Bevy's animator nothing: only a clip
+    /// weight of exactly 0 makes animate_targets skip a rig, so pausing alone
+    /// still evaluated ~1000 unseen villagers every frame. On re-entry the
+    /// clip resumes at its saved weight and seek time.
+    #[test]
+    fn a_rig_no_view_can_see_stops_evaluating_and_resumes_where_it_left_off() {
+        let mut world = World::new();
+        world.insert_resource(Time::<()>::default());
+        let idle = AnimationNodeIndex::new(0);
+        let mut player = AnimationPlayer::default();
+        player.play(idle).repeat().set_weight(1.0);
+        let player_entity = world.spawn(player).id();
+        // One mesh part, seen by no view. No camera exists, so the frustum
+        // margin cannot rescue it either.
+        let part = world.spawn(ViewVisibility::HIDDEN).id();
+        world.spawn((
+            HeroVisual { speed: 0.0 },
+            HeroAnim {
+                player: player_entity,
+                idle: Some(idle),
+                walk: None,
+                build: None,
+                chop: None,
+                harvest: None,
+                carry: None,
+                pull: None,
+                sit_idle: None,
+                current_body: Some(idle),
+                fading_body: None,
+                body_fade_seconds: 0.0,
+                paused: false,
+                saved_weights: Vec::new(),
+            },
+            RigMeshParts(vec![part]),
+            GlobalTransform::default(),
+        ));
+
+        world.run_system_once(drive_hero_locomotion).unwrap();
+        {
+            let player = world.get::<AnimationPlayer>(player_entity).unwrap();
+            let active = player.animation(idle).unwrap();
+            assert_eq!(active.weight(), 0.0, "an unseen rig must not be evaluated");
+            assert!(active.is_paused());
+        }
+
+        // A view sees the part again (camera or a shadow cascade).
+        *world.get_mut::<ViewVisibility>(part).unwrap() = ViewVisibility::VISIBLE;
+        world.run_system_once(drive_hero_locomotion).unwrap();
+
+        let player = world.get::<AnimationPlayer>(player_entity).unwrap();
+        let active = player.animation(idle).unwrap();
+        assert_eq!(active.weight(), 1.0, "the saved weight must come back");
+        assert!(!active.is_paused());
+        assert_eq!(player.playing_animations().count(), 1);
+    }
+
+    /// The visibility cull is only as good as its parts list: every mesh
+    /// primitive under a character root must be collected on that root, in
+    /// the frame it instantiates and for late arrivals alike.
+    #[test]
+    fn matte_pass_collects_every_rig_mesh_part_on_the_character_root() {
+        let mut world = World::new();
+        world.init_resource::<HeroAssets>();
+        world.init_resource::<Assets<StandardMaterial>>();
+        let material = world
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let root = world.spawn(CharacterKind::Villager).id();
+        let scene = world.spawn(ChildOf(root)).id();
+        let part_a = world
+            .spawn((MeshMaterial3d(material.clone()), ChildOf(scene)))
+            .id();
+        let part_b = world
+            .spawn((MeshMaterial3d(material.clone()), ChildOf(scene)))
+            .id();
+
+        world.run_system_once(matte_character_materials).unwrap();
+        let parts = world
+            .get::<RigMeshParts>(root)
+            .expect("primitives must be collected on the character root");
+        assert_eq!(parts.0.len(), 2);
+        assert!(parts.0.contains(&part_a) && parts.0.contains(&part_b));
+
+        // A primitive that instantiates a frame later joins the same list.
+        let part_c = world.spawn((MeshMaterial3d(material), ChildOf(scene))).id();
+        world.run_system_once(matte_character_materials).unwrap();
+        let parts = world.get::<RigMeshParts>(root).unwrap();
+        assert_eq!(parts.0.len(), 3);
+        assert!(parts.0.contains(&part_c));
     }
 
     #[test]
@@ -2147,6 +2391,7 @@ mod carried_tests {
                 fading_body: None,
                 body_fade_seconds: 0.0,
                 paused: false,
+                saved_weights: Vec::new(),
             },
             CarriedLoad {
                 good: Some(shared::economy::Good::Wood),

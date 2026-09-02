@@ -126,8 +126,12 @@ pub fn update_day_night_cycle(
     // cool key light (~2-3% of the sun) so shapes still model instead of
     // crushing to silhouette. It rises as the sun drops well below horizon.
     let moon_factor = smoothstep(0.05, 0.35, -elevation);
+    // 14 klux is still a conservative clear-sky fill beside a ~100 klux sun,
+    // but it keeps shaded character faces, house fronts and dense conifer
+    // crowns inside the readable AgX range. This is one shadowless light for
+    // the whole world, not an expensive light attached to every actor/building.
     let fill_illuminance =
-        (lerp_f32(60.0, 11_000.0, day_factor) + 900.0 * twilight_factor + 7_500.0 * moon_factor)
+        (lerp_f32(60.0, 14_000.0, day_factor) + 1_050.0 * twilight_factor + 7_500.0 * moon_factor)
             * lighting_boost;
     // The moon keeps the sun-antipode AZIMUTH but rides HIGH (~63°): the
     // atmosphere scatters every directional light, and a bright moon near the
@@ -178,17 +182,18 @@ pub fn update_day_night_cycle(
     // readable ~1:4 ratio against sunlit surfaces, like a clear real sky.
     // Night ambient runs HIGHER than day's (the moon+ambient must carry the
     // whole scene at the fixed daylight exposure — physical moonlight would
-    // render black). The blue color keeps it reading as night. Day term is
-    // unchanged: lerp hits the old 2610 at day_factor 1.
+    // render black). The blue color keeps it reading as night. The slightly
+    // stronger daylight floor lifts the deepest creases without
+    // flattening forms; the directional sun and fill still provide the shape.
     let ambient_brightness =
-        (lerp_f32(3_600.0, 2_610.0, day_factor) + 600.0 * twilight_factor) * lighting_boost;
+        (lerp_f32(3_600.0, 2_900.0, day_factor) + 650.0 * twilight_factor) * lighting_boost;
     if ambient.color != ambient_color || ambient.brightness != ambient_brightness {
         ambient.color = ambient_color;
         ambient.brightness = ambient_brightness;
     }
 
     let atmosphere_intensity = if settings.atmosphere_enabled {
-        (1.4 + 0.45 * twilight_factor) * lighting_boost
+        (1.4 + 0.15 * day_factor + 0.45 * twilight_factor) * lighting_boost
     } else {
         0.0
     };

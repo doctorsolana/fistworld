@@ -203,6 +203,12 @@ fn wire_game_systems(app: &mut App) {
 
     app.add_systems(
         Update,
-        perf_overlay::emit_client_perf_summary.run_if(in_state(GameState::Playing)),
+        (
+            perf_overlay::emit_client_perf_summary.run_if(in_state(GameState::Playing)),
+            perf_overlay::exit_after_deadline,
+            perf_overlay::log_mesh_census.after(crate::terrain::TerrainUpdateSet),
+            perf_overlay::log_changed_mesh_archetypes,
+        ),
     );
+    app.add_systems(Last, perf_overlay::limit_frame_rate);
 }

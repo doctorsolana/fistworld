@@ -53,7 +53,10 @@ fixture environment variables remain supported.
 
 Scenarios belong under `capture/scenarios/` and are versioned. Checked-in references include
 `world-survey.ron` for zoom-band scene rendering, `river-banks.ron` for the detailed-river/far-
-river handoff and inland ground paint, and `ui-company.ron` for a real retained-UI fixture.
+river handoff and inland ground paint, `forest-floor.ron` for forest accents at morning and noon,
+`isolated-fern.ron` for a single shipped fern with all surrounding props suppressed,
+`lighting-readability.ron` for people/buildings across three daylight angles, and
+`ui-company.ron` for a real retained-UI fixture.
 
 ```ron
 (

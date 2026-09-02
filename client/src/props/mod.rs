@@ -14,6 +14,7 @@ mod simple_mesh;
 mod spawn;
 mod types;
 mod wind;
+pub use wind::WindFoliageMaterial;
 
 pub use debug::PropLodDebugMode;
 pub use plugin::PropsPlugin;

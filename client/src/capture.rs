@@ -736,6 +736,7 @@ pub fn run(config: CaptureConfig) {
     app.add_systems(
         Update,
         (
+            spawn_capture_isolated_prop,
             spawn_capture_dinghy,
             drive_capture_dinghy,
             spawn_capture_heroes,
@@ -764,6 +765,96 @@ pub fn run(config: CaptureConfig) {
         // failed assertion/comparison to be an actual failed command.
         std::process::exit(i32::from(code.get()));
     }
+}
+
+/// Render exactly one shipped prop on otherwise bare terrain.
+///
+/// `FISTFORCE_CAPTURE_PROP=<canonical PropKind id>` disables normal prop and
+/// ground-cover streaming, waits for the real GLB mesh/material handles, and
+/// stages its LOD0 mesh at the first shot's focus. This is deliberately more
+/// literal than a forest survey: it answers whether the asset itself reaches
+/// Bevy's render world before density, lighting or surrounding grass can hide
+/// the result. `FISTFORCE_CAPTURE_PROP_SCALE` is inspection-only and defaults
+/// to 1.0.
+fn spawn_capture_isolated_prop(
+    mut commands: Commands,
+    config: Res<CaptureConfig>,
+    terrain: Option<Res<shared::terrain::WorldTerrain>>,
+    prop_assets: Option<Res<crate::props::PropAssets>>,
+    meshes: Res<Assets<Mesh>>,
+    materials: Res<Assets<StandardMaterial>>,
+    world_root: Query<Entity, With<crate::render::systems::ClientWorldRoot>>,
+    mut settings: ResMut<crate::render::systems::GraphicsSettings>,
+    mut spawned: Local<bool>,
+) {
+    if *spawned {
+        return;
+    }
+    let Ok(raw_kind) = std::env::var("FISTFORCE_CAPTURE_PROP") else {
+        *spawned = true;
+        return;
+    };
+
+    // Suppress the ordinary forest/grass streams immediately. The fixture is
+    // intentionally not an EnvironmentProp, so their cleanup system cannot
+    // remove the single specimen along with the surrounding scenery.
+    settings.props_enabled = false;
+
+    let Some(kind) = shared::props::PropKind::from_id(raw_kind.trim()) else {
+        error!("capture: unknown FISTFORCE_CAPTURE_PROP={raw_kind:?}");
+        *spawned = true;
+        return;
+    };
+    let (Some(terrain), Some(prop_assets)) = (terrain, prop_assets) else {
+        return;
+    };
+    let Some(mesh_set) = prop_assets.tree_meshes.get(&kind) else {
+        error!(
+            "capture: isolated prop {} has no direct mesh registration",
+            kind.id()
+        );
+        *spawned = true;
+        return;
+    };
+    if meshes.get(&mesh_set.lod0).is_none() || materials.get(&mesh_set.material).is_none() {
+        return;
+    }
+    let Ok(world_root) = world_root.single() else {
+        return;
+    };
+    let focus = config
+        .shots
+        .first()
+        .map(|shot| shot.focus)
+        .unwrap_or_default();
+    let scale = std::env::var("FISTFORCE_CAPTURE_PROP_SCALE")
+        .ok()
+        .and_then(|raw| raw.parse::<f32>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(1.0);
+    let position = Vec3::new(focus.x, terrain.get_height(focus.x, focus.z), focus.z);
+    let specimen = commands
+        .spawn((
+            Name::new(format!("Capture specimen: {}", kind.id())),
+            crate::props::PropKindTag(kind),
+            crate::props::NeedsFoliageMaterials,
+            Mesh3d(mesh_set.lod0.clone()),
+            MeshMaterial3d(mesh_set.material.clone()),
+            Transform::from_translation(position).with_scale(Vec3::splat(scale)),
+            Visibility::Visible,
+            InheritedVisibility::default(),
+            bevy::light::NotShadowCaster,
+        ))
+        .id();
+    commands.entity(world_root).add_child(specimen);
+    info!(
+        "capture: staged exactly one {} at ({:.1}, {:.1}) scale {:.2}",
+        kind.id(),
+        position.x,
+        position.z,
+        scale
+    );
+    *spawned = true;
 }
 
 fn configure_capture_window(

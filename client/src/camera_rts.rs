@@ -345,7 +345,17 @@ pub(crate) fn commander_tilt_for_zoom(zoom: f32, zoom_min: f32, zoom_max: f32) -
 }
 
 fn commander_accepts_world_input(input_state: &crate::input::InputState) -> bool {
-    !input_state.ui_blocking()
+    !input_state.ui_blocking() && !camera_locked_for_measurement()
+}
+
+/// `FISTFORCE_CAMERA_LOCK=1` freezes the commander camera against all input
+/// (pan, orbit, zoom) so a perf run photographs one fixed view. Without it a
+/// hand on the mouse turns every frame-time series into a zoom log.
+fn camera_locked_for_measurement() -> bool {
+    static LOCKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *LOCKED.get_or_init(|| {
+        std::env::var("FISTFORCE_CAMERA_LOCK").is_ok_and(|raw| !raw.is_empty() && raw != "0")
+    })
 }
 
 pub fn release_cursor_for_rts(

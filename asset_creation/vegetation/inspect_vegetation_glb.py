@@ -48,6 +48,9 @@ CLASSES = {
     "conifer": {"lod0": (200, 800),  "lod1": (50, 150),  "ratio": (0.10, 0.40), "bbox": 0.15},
     "bare":    {"lod0": (200, 800),  "lod1": (80, 400),  "ratio": (0.30, 0.70), "bbox": 0.12},
     "bush":    {"lod0": (40, 200),   "lod1": (12, 60),   "ratio": (0.15, 0.60), "bbox": 0.35},
+    # Fern patches are broad opaque ribbons rather than alpha cards. They must be large enough
+    # to read from the RTS camera, but remain accent geometry with no collider or shadow.
+    "fern":    {"lod0": (60, 180),   "lod1": (24, 70),   "ratio": (0.20, 0.60), "bbox": 0.40},
     "rock":    {"lod0": (12, 90),    "lod1": (8, 40),    "ratio": (0.30, 0.70), "bbox": 0.35},
     # A flower is a stem and a head. There is no second level of detail to author, so LOD1 may
     # equal LOD0 -- the alternative is a mesh too degenerate to read as anything.

@@ -251,6 +251,6 @@ pub(super) fn sync_terrain_water_clock(
         let Some(mut material) = materials.get_mut(&chunk.material) else {
             continue;
         };
-        material.extension.water_params.z = sync.offset;
+        material.extension.params.water_params.z = sync.offset;
     }
 }

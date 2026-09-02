@@ -158,8 +158,8 @@ pub(crate) fn update_terrain_material_lod(
         let desired_normal_strength =
             desired_terrain_normal_strength(chunk.coord, player_chunk, render_distance);
         if let Some(mut mat) = terrain_materials.get_mut(&chunk.material) {
-            if (mat.extension.normal_strength - desired_normal_strength).abs() > 0.01 {
-                mat.extension.normal_strength = desired_normal_strength;
+            if (mat.extension.params.normal_strength - desired_normal_strength).abs() > 0.01 {
+                mat.extension.params.normal_strength = desired_normal_strength;
             }
         }
 

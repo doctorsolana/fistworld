@@ -69,6 +69,14 @@ fn tree_mesh_labels(kind: shared::props::PropKind) -> Option<TreeMeshLabels> {
             lod1_label: None,
             material_label: "Material0",
         }),
+        // Fern patches use the same one-entity mesh swap as trees. They are common
+        // forest-floor accents, so a scene root plus two child entities per patch
+        // would cost far more than their 42-triangle normal-play mesh.
+        FernPatchA | FernPatchB => Some(TreeMeshLabels {
+            lod0_label: "Mesh0/Primitive0",
+            lod1_label: Some("Mesh1/Primitive0"),
+            material_label: "Material0",
+        }),
         _ => None,
     }
 }

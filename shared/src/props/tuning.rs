@@ -37,7 +37,9 @@ pub fn visual_role(kind: PropKind) -> PropVisualRole {
         | PropKind::FlowerD
         | PropKind::BushA
         | PropKind::BushB
-        | PropKind::BushC => PropVisualRole::Accent,
+        | PropKind::BushC
+        | PropKind::FernPatchA
+        | PropKind::FernPatchB => PropVisualRole::Accent,
 
         _ => PropVisualRole::Landmark,
     }

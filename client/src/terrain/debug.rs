@@ -104,7 +104,7 @@ pub(super) fn sync_terrain_debug_materials(
         return;
     }
     for (_id, material) in materials.iter_mut() {
-        material.extension.debug_mode = debug_settings.mode;
+        material.extension.params.debug_mode = debug_settings.mode;
     }
 }
 
@@ -171,10 +171,13 @@ pub(super) fn warmup_terrain_pipeline(
             weight_map: weightmap.handle.clone(),
             albedo_array: render_assets.albedo_array.clone(),
             normal_array: render_assets.normal_array.clone(),
-            layer_tiling: render_assets.layer_tiling,
-            debug_mode: debug_settings.mode,
-            normal_strength: 1.0,
-            water_params: Vec4::ZERO,
+            params: shared::terrain::TerrainSplatParams {
+                layer_tiling: render_assets.layer_tiling,
+                water_params: Vec4::ZERO,
+                debug_mode: debug_settings.mode,
+                normal_strength: 1.0,
+                _pad: Vec2::ZERO,
+            },
             palette,
         },
     });

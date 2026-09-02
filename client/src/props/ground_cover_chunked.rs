@@ -71,6 +71,8 @@ pub struct ChunkedGroundCover;
 struct ChunkGrassInstances {
     short: Vec<GrassInstance>,
     tall: Vec<GrassInstance>,
+    fern_a: Vec<GrassInstance>,
+    fern_b: Vec<GrassInstance>,
 }
 
 impl ChunkGrassInstances {
@@ -78,6 +80,8 @@ impl ChunkGrassInstances {
         match kind {
             PropKind::GrassShortA => &self.short,
             PropKind::GrassTallA => &self.tall,
+            PropKind::FernPatchA => &self.fern_a,
+            PropKind::FernPatchB => &self.fern_b,
             _ => &[],
         }
     }
@@ -111,8 +115,13 @@ fn in_radius(coord: ChunkCoord, anchor: ChunkCoord, radius: i32) -> bool {
     (coord.x - anchor.x).abs() <= radius && (coord.z - anchor.z).abs() <= radius
 }
 
-fn grass_kinds() -> [PropKind; 2] {
-    [PropKind::GrassShortA, PropKind::GrassTallA]
+fn ground_cover_kinds() -> [PropKind; 4] {
+    [
+        PropKind::GrassShortA,
+        PropKind::GrassTallA,
+        PropKind::FernPatchA,
+        PropKind::FernPatchB,
+    ]
 }
 
 fn climate_params(terrain: &WorldTerrain) -> (f32, f32) {
@@ -158,7 +167,17 @@ fn instance_for(
             spawn.position.x,
             terrain.get_height(spawn.position.x, spawn.position.z),
             spawn.position.z,
-            stable_height(spawn.position),
+            // Grass benefits from per-tuft height noise. A fern asset is an
+            // authored colony with a deliberate arched silhouette; stretching
+            // only its vertical axis turns it into a spiky grass tuft again.
+            if spawn
+                .kind
+                .is_some_and(|kind| matches!(kind, PropKind::FernPatchA | PropKind::FernPatchB))
+            {
+                1.0
+            } else {
+                stable_height(spawn.position)
+            },
         ],
         rotation_scale: [yaw.sin(), yaw.cos(), spawn.scale, dry],
     }
@@ -192,10 +211,16 @@ fn material_for_kind(
         AlphaMode::Mask(0.35)
     };
     let (climate_half, climate_phase) = climate_params(terrain);
+    let (sway_strength, flutter_rate) =
+        if matches!(kind, PropKind::FernPatchA | PropKind::FernPatchB) {
+            (0.055, 1.35)
+        } else {
+            (0.22, 1.4)
+        };
     let handle = materials.add(ExtendedMaterial {
         base,
         extension: InstancedGrassExtension {
-            params: wind_params_for_mesh(source, 0.22, 1.4),
+            params: wind_params_for_mesh(source, sway_strength, flutter_rate),
             extra: Vec4::new(0.0, 1.0, climate_half, climate_phase),
         },
     });
@@ -265,6 +290,8 @@ fn build_chunk(
         match spawn.kind {
             Some(PropKind::GrassShortA) => data.short.push(instance_for(spawn, terrain, &dryness)),
             Some(PropKind::GrassTallA) => data.tall.push(instance_for(spawn, terrain, &dryness)),
+            Some(PropKind::FernPatchA) => data.fern_a.push(instance_for(spawn, terrain, &dryness)),
+            Some(PropKind::FernPatchB) => data.fern_b.push(instance_for(spawn, terrain, &dryness)),
             _ => {}
         }
     }
@@ -307,7 +334,7 @@ fn sync_render_sector(
     materials: &mut Assets<InstancedGrassMaterial>,
     state: &mut ChunkedGroundCoverState,
 ) -> bool {
-    for kind in grass_kinds() {
+    for kind in ground_cover_kinds() {
         let key = GrassBatchKey {
             x: sector.0,
             z: sector.1,
@@ -526,10 +553,12 @@ pub(super) fn stream_chunked_ground_cover(
         let instances = state
             .chunks
             .values()
-            .map(|chunk| chunk.short.len() + chunk.tall.len())
+            .map(|chunk| {
+                chunk.short.len() + chunk.tall.len() + chunk.fern_a.len() + chunk.fern_b.len()
+            })
             .sum::<usize>();
         info!(
-            "GPU-instanced 3D grass ready: {} chunks, {} instances, {} render entities at {:.1}x stress density",
+            "GPU-instanced 3D ground cover ready: {} chunks, {} instances, {} render entities at {:.1}x stress density",
             state.chunks.len(),
             instances,
             state.render_entities.len(),
@@ -648,6 +677,22 @@ mod tests {
         assert_eq!(batch_coord(ChunkCoord::new(-1, -1)), (-1, -1));
         assert_eq!(batch_coord(ChunkCoord::new(-3, -3)), (-1, -1));
         assert_eq!(batch_coord(ChunkCoord::new(-4, -4)), (-2, -2));
+    }
+
+    #[test]
+    fn ground_cover_batches_include_both_fern_variants() {
+        let instance = GrassInstance {
+            position_height: [0.0, 0.0, 0.0, 1.0],
+            rotation_scale: [0.0, 1.0, 1.0, 0.0],
+        };
+        let data = ChunkGrassInstances {
+            fern_a: vec![instance],
+            fern_b: vec![instance],
+            ..default()
+        };
+        assert_eq!(data.for_kind(PropKind::FernPatchA).len(), 1);
+        assert_eq!(data.for_kind(PropKind::FernPatchB).len(), 1);
+        assert_eq!(ground_cover_kinds().len(), 4);
     }
 
     #[test]

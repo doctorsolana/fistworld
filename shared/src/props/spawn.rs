@@ -252,6 +252,15 @@ const TREES_DEAD: &[PropKind] = &[
 /// look like summer trees standing in snow.
 const TREES_TAIGA_BIRCH: &[PropKind] = &[PropKind::BirchA, PropKind::BirchB];
 const SCATTER_BUSHES: &[PropKind] = &[PropKind::BushA, PropKind::BushB, PropKind::BushC];
+const SCATTER_FOREST_FLOOR: &[PropKind] = &[
+    PropKind::BushA,
+    PropKind::BushB,
+    PropKind::BushC,
+    PropKind::FernPatchA,
+    PropKind::FernPatchA,
+    PropKind::FernPatchB,
+    PropKind::FernPatchB,
+];
 const SCATTER_ROCKS: &[PropKind] = &[
     PropKind::SmallRockA,
     PropKind::SmallRockB,
@@ -410,10 +419,22 @@ fn chunk_scatter_hits(terrain: &TerrainGenerator, chunk: ChunkCoord) -> Vec<Scat
                                 0.85 + rand01(&mut rng) * 0.45,
                             )
                         } else if roll < density + 0.10 && glade > 0.25 {
-                            (
-                                pick(SCATTER_BUSHES, rand01(&mut rng)),
-                                0.8 + rand01(&mut rng) * 0.5,
-                            )
+                            let kind = pick(SCATTER_FOREST_FLOOR, rand01(&mut rng));
+                            // Ferns are authored as whole rosettes, not as one
+                            // tiny leaf. At ordinary RTS camera height a
+                            // botanically literal 2.5 m patch disappeared into
+                            // the grass and pine shadows, so let each accepted
+                            // slot read as a small understorey colony. This does
+                            // not add entities or draw calls: it only gives the
+                            // existing 42-triangle LOD1 enough silhouette and
+                            // colour area to survive the gameplay camera.
+                            let scale =
+                                if matches!(kind, PropKind::FernPatchA | PropKind::FernPatchB) {
+                                    1.35 + rand01(&mut rng) * 0.50
+                                } else {
+                                    0.8 + rand01(&mut rng) * 0.5
+                                };
+                            (kind, scale)
                         } else if roll > 0.97 {
                             (
                                 pick(SCATTER_ROCKS, rand01(&mut rng)),
@@ -590,7 +611,12 @@ const GRASS_DENSITY_SCALE: f32 = 0.685;
 const GRASS_PATCH: PropKind = PropKind::GrassShortA;
 const GRASS_TALL: PropKind = PropKind::GrassTallA;
 
-/// Grow the ground cover for a chunk.
+/// Grow the close ground-cover layer for a chunk.
+///
+/// Most accepted cells are grass. In forests, a small deterministic share is
+/// replaced by fern colonies. Replacement is important: the forest becomes
+/// visibly layered at gameplay zoom without creating a second dense entity
+/// stream or increasing the ground-cover count.
 ///
 /// **Grass is generated, not authored, and that is the whole point.** Baked
 /// into `map.ron` it was 38,578 entries — more than half the file — to describe
@@ -680,8 +706,11 @@ pub fn generate_chunk_grass_at_density(
 
     let short_tuning = default_render_tuning(GRASS_PATCH);
     let tall_tuning = default_render_tuning(GRASS_TALL);
+    let fern_tuning = default_render_tuning(PropKind::FernPatchA);
     let short_path = GRASS_PATCH.scene_path().to_string();
     let tall_path = GRASS_TALL.scene_path().to_string();
+    let fern_a_path = PropKind::FernPatchA.scene_path().to_string();
+    let fern_b_path = PropKind::FernPatchB.scene_path().to_string();
 
     let dryness = MeadowDryness::new(seed);
 
@@ -742,11 +771,47 @@ pub fn generate_chunk_grass_at_density(
                 continue;
             }
 
-            let tall = crate::worldgen::rand01(&mut rng) < 0.34;
-            let (kind, path, tuning) = if tall {
-                (GRASS_TALL, &tall_path, tall_tuning)
+            let biome = field.biome(x, z, height, slope);
+            // A close forest view needs actual understorey, but this stream is
+            // already the expensive dense layer. Replace about one grass
+            // patch in eight instead of adding another entity. The sparse prop
+            // scatter supplies larger, long-range colonies; these fill the
+            // player's immediate view and naturally disappear with the rest
+            // of the ground cover at long zoom.
+            let fern = biome == crate::worldgen::WorldBiome::Forest
+                && crate::worldgen::rand01(&mut rng) < 0.12;
+            let tall = !fern && crate::worldgen::rand01(&mut rng) < 0.34;
+            let (kind, path, tuning, scale) = if fern {
+                let kind = if crate::worldgen::rand01(&mut rng) < 0.5 {
+                    PropKind::FernPatchA
+                } else {
+                    PropKind::FernPatchB
+                };
+                let path = if kind == PropKind::FernPatchA {
+                    &fern_a_path
+                } else {
+                    &fern_b_path
+                };
+                (
+                    kind,
+                    path,
+                    fern_tuning,
+                    1.10 + crate::worldgen::rand01(&mut rng) * 0.38,
+                )
+            } else if tall {
+                (
+                    GRASS_TALL,
+                    &tall_path,
+                    tall_tuning,
+                    0.85 + crate::worldgen::rand01(&mut rng) * 0.45,
+                )
             } else {
-                (GRASS_PATCH, &short_path, short_tuning)
+                (
+                    GRASS_PATCH,
+                    &short_path,
+                    short_tuning,
+                    0.85 + crate::worldgen::rand01(&mut rng) * 0.45,
+                )
             };
 
             out.push(PropSpawn {
@@ -757,9 +822,7 @@ pub fn generate_chunk_grass_at_density(
                 rotation: Quat::from_rotation_y(
                     crate::worldgen::rand01(&mut rng) * std::f32::consts::TAU,
                 ),
-                // Modest spread only. Grass reads as a carpet, and a patch at
-                // 1.6x is a bush.
-                scale: 0.85 + crate::worldgen::rand01(&mut rng) * 0.45,
+                scale,
                 render_tuning: tuning,
             });
             grown += 1;
@@ -865,6 +928,8 @@ mod tests {
                     "broadleaf"
                 } else if TREES_DEAD.contains(&kind) {
                     "dead"
+                } else if matches!(kind, PropKind::FernPatchA | PropKind::FernPatchB) {
+                    "fern"
                 } else {
                     continue;
                 };
@@ -902,6 +967,19 @@ mod tests {
         // Forest: pine country, nothing else.
         assert_eq!(count(WorldBiome::Forest, "broadleaf"), 0);
         assert_eq!(count(WorldBiome::Forest, "dead"), 0);
+        assert!(
+            count(WorldBiome::Forest, "fern") > 5,
+            "forest floor lost its fern layer: {counts:?}"
+        );
+        for biome in [
+            WorldBiome::Meadows,
+            WorldBiome::Highlands,
+            WorldBiome::Mountains,
+            WorldBiome::Snowlands,
+            WorldBiome::Desert,
+        ] {
+            assert_eq!(count(biome, "fern"), 0, "fern leaked into {biome:?}");
+        }
         // Meadows: never a pine (dead wood is legal on the dry fringe).
         assert_eq!(count(WorldBiome::Meadows, "pine"), 0);
         // Taiga: no dead wood, roughly nine pines in ten, birch for the rest.
@@ -1024,6 +1102,8 @@ mod tests {
                         "dead"
                     } else if SCATTER_BUSHES.contains(&kind) {
                         "bush"
+                    } else if matches!(kind, PropKind::FernPatchA | PropKind::FernPatchB) {
+                        "fern"
                     } else if SCATTER_FLOWERS.contains(&kind) {
                         "flower"
                     } else {
@@ -1047,8 +1127,8 @@ mod tests {
             let get = |f: &str| *counts.get(&(b.clone(), f.to_string())).unwrap_or(&0) as f64 / km2;
             let trees = get("broadleaf") + get("conifer") + get("dead");
             println!(
-                "{b:<11}{km2:>9.2}   trees {trees:>6.0}  (broadleaf {:>5.0} conifer {:>5.0} dead {:>4.0})  bush {:>4.0}  rock {:>4.0}  flower {:>4.0}",
-                get("broadleaf"), get("conifer"), get("dead"), get("bush"), get("rock"), get("flower")
+                "{b:<11}{km2:>9.2}   trees {trees:>6.0}  (broadleaf {:>5.0} conifer {:>5.0} dead {:>4.0})  bush {:>4.0}  fern {:>4.0}  rock {:>4.0}  flower {:>4.0}",
+                get("broadleaf"), get("conifer"), get("dead"), get("bush"), get("fern"), get("rock"), get("flower")
             );
         }
     }
@@ -1158,5 +1238,54 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert!(stressed.len() > normal.len() * 2);
+    }
+
+    #[test]
+    fn forest_ground_cover_replaces_grass_with_visible_fern_colonies() {
+        let terrain = WorldTerrain::default();
+        let field = terrain
+            .generator
+            .loaded_map()
+            .biome_field
+            .as_deref()
+            .expect("generated map");
+        let centre = ChunkCoord::from_world_pos(Vec3::new(-3000.0, 0.0, -260.0));
+        let mut ferns = Vec::new();
+        let mut total = 0usize;
+        for dz in -2..=2 {
+            for dx in -2..=2 {
+                let chunk = ChunkCoord::new(centre.x + dx, centre.z + dz);
+                let cover = generate_chunk_grass(&terrain.generator, chunk);
+                total += cover.len();
+                ferns.extend(cover.into_iter().filter(|spawn| {
+                    matches!(
+                        spawn.kind,
+                        Some(PropKind::FernPatchA | PropKind::FernPatchB)
+                    )
+                }));
+            }
+        }
+
+        assert!(
+            total > 500,
+            "forest sample had no healthy ground-cover layer"
+        );
+        assert!(
+            ferns.len() > 50,
+            "forest understorey is too sparse: {}",
+            ferns.len()
+        );
+        for fern in ferns {
+            let x = fern.position.x;
+            let z = fern.position.z;
+            let h = terrain.get_height(x, z);
+            let n = terrain.get_normal(x, z);
+            let slope = (n.x * n.x + n.z * n.z).sqrt() / n.y.max(0.01);
+            assert_eq!(
+                field.biome(x, z, h, slope),
+                crate::worldgen::WorldBiome::Forest
+            );
+            assert!((1.10..=1.48).contains(&fern.scale));
+        }
     }
 }

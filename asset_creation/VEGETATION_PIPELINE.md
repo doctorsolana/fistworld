@@ -191,14 +191,15 @@ bindless `StandardMaterial`, because bindless is device-dependent and shared han
 
 ---
 
-## 5. Two families, not one
+## 5. Three families, not one
 
 | Family | Geometry | Material | Placement |
 |---|---|---|---|
 | Trees, bushes, dead trees, stumps | opaque shaped geometry, 2 LODs | shared `vegetation_opaque` | one entity per plant, chunk-streamed |
-| Grass, flowers, reeds, tiny ferns | small clustered **patch** meshes | shared cutout material | one entity per **patch**, never per blade |
+| Fern patches | opaque shaped ribbons, 2 LODs | shared `vegetation_opaque` | sparse props plus GPU-instanced close cover, no collider or shadow |
+| Grass, flowers and reeds | small clustered **patch** meshes | shared cutout material only where the silhouette genuinely requires it | one entity per **patch**, never per blade |
 
-The second family is where alpha is allowed and where the existing `AlphaMode::Mask(0.5)` cutout
+The third family is where alpha is allowed and where the existing `AlphaMode::Mask(0.5)` cutout
 path applies. The hard rule is the patch: an entity per blade is what made `Env_Grass_Tall_04`
 appear 38 578 times in the map, and the client's answer was to classify it `GroundDetail` and never
 spawn it at all. Patches make grass affordable enough to actually draw.
@@ -221,6 +222,7 @@ so adding a species needs no edit downstream.
 
 ```
 build_<species>.py       # geometry, both LODs, COLOR_0, UV1 wind weights -> <species>.blend
+build_forest_floor.py    # direct, textureless two-LOD fern patch export
 preview_vegetation.py    # studio renders + a contact sheet at RTS-relevant distances
 export_vegetation_glb.py # strip studio, rotate to game space, verify node names -> .glb
 inspect_vegetation_glb.py# the validator (§7) -- exits non-zero on any breach
@@ -229,7 +231,9 @@ inspect_vegetation_glb.py# the validator (§7) -- exits non-zero on any breach
 No `texture_and_light.py` step: vegetation bakes nothing. No `animate_*.py`: vegetation has no node
 animation.
 
-Each script reads the `.blend` the previous one saved, so they run in order.
+Most species scripts read the `.blend` the previous one saved, so they run in order.
+`build_forest_floor.py` is deliberately self-contained and writes its tiny GLBs directly; the
+validator and preview remain the same mandatory downstream gates.
 
 **Builds run headless**, via `Blender -b … --python`, not by mutating a live GUI scene. Another
 session may have a building open in Blender at any time; headless builds cannot collide with it, and

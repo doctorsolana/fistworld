@@ -43,11 +43,19 @@
 @group(#{MATERIAL_BIND_GROUP}) @binding(104) var normal_array: texture_2d_array<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(105) var normal_sampler: sampler;
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(120) var<uniform> layer_tiling: vec4<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(121) var<uniform> debug_mode: u32;
-@group(#{MATERIAL_BIND_GROUP}) @binding(122) var<uniform> normal_strength: f32;
-// x: water level, y: enabled, z: server clock offset, w: surface offset.
-@group(#{MATERIAL_BIND_GROUP}) @binding(123) var<uniform> water_params: vec4<f32>;
+// Scalar/vector parameters in ONE buffer (each separate uniform binding is a
+// separate GPU buffer re-created on every material re-prepare). Field order
+// and padding mirror `TerrainSplatParams` in shared/src/terrain/material.rs.
+struct TerrainSplatParams {
+    // UV tiling per layer (grass, dirt, sand, cobble).
+    layer_tiling: vec4<f32>,
+    // x: water level, y: enabled, z: server clock offset, w: surface offset.
+    water_params: vec4<f32>,
+    debug_mode: u32,
+    normal_strength: f32,
+    _pad: vec2<f32>,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(120) var<uniform> terrain_params: TerrainSplatParams;
 
 // Stylised flat palette. One binding, not seven — separate uniforms each allocate their
 // own buffer and overrun the Metal vertex-stage buffer limit.
@@ -278,23 +286,23 @@ fn fragment(
     let sampled_weights = textureSample(weight_map, weight_map_sampler, weight_uv);
     let base_weights = normalize_weights(sampled_weights);
 
-    if (debug_mode == 1u) {
+    if (terrain_params.debug_mode == 1u) {
         pbr_input.material.flags = pbr_input.material.flags | pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT;
         pbr_input.material.base_color = vec4<f32>(base_weights.xyz, 1.0);
         pbr_input.N = normalize(pbr_input.world_normal);
     } else {
         var weights = base_weights;
-        if (debug_mode == 2u) {
+        if (terrain_params.debug_mode == 2u) {
             weights = vec4<f32>(0.0, 0.0, 0.0, 1.0);
-        } else if (debug_mode == 3u) {
+        } else if (terrain_params.debug_mode == 3u) {
             weights = vec4<f32>(1.0, 0.0, 0.0, 0.0);
         }
 
         let world_uv = pbr_input.world_position.xz;
-        let uv_grass = tiled_uv(world_uv, layer_tiling.x);
-        let uv_dirt = tiled_uv(world_uv, layer_tiling.y);
-        let uv_sand = tiled_uv(world_uv, layer_tiling.z);
-        let uv_cobble = tiled_uv(world_uv, layer_tiling.w);
+        let uv_grass = tiled_uv(world_uv, terrain_params.layer_tiling.x);
+        let uv_dirt = tiled_uv(world_uv, terrain_params.layer_tiling.y);
+        let uv_sand = tiled_uv(world_uv, terrain_params.layer_tiling.z);
+        let uv_cobble = tiled_uv(world_uv, terrain_params.layer_tiling.w);
 
         var dominant_layer: u32 = 0u;
         var dominant_weight = weights.x;
@@ -388,7 +396,7 @@ fn fragment(
             if (vary > 0.001) {
                 let vary_seed = vec2<f32>(palette.climate.y * 130.0, palette.climate.y * 71.0);
                 let ground_xz = pbr_input.world_position.xz;
-                let waterline_v = water_params.x * step(0.5, water_params.y);
+                let waterline_v = terrain_params.water_params.x * step(0.5, terrain_params.water_params.y);
                 let dry_ground =
                     smoothstep(waterline_v + 0.2, waterline_v + 1.2, pbr_input.world_position.y);
                 let soft_ground = weights.x * (1.0 - rockiness) * dry_ground;
@@ -445,10 +453,10 @@ fn fragment(
             );
             // Snow belongs to land: fade out below the waterline so polar sea
             // floors stay sea floors.
-            // Gate on the map's REAL waterline (water_params.x; zero when
+            // Gate on the map's REAL waterline (terrain_params.water_params.x; zero when
             // water is disabled) — a hardcoded y band snows sea floors on
             // any map whose water level isn't ~0.
-            let waterline = water_params.x * step(0.5, water_params.y);
+            let waterline = terrain_params.water_params.x * step(0.5, terrain_params.water_params.y);
             let above_water =
                 smoothstep(waterline - 1.0, waterline + 0.3, pbr_input.world_position.y);
             let frost = climate.y * above_water;
@@ -492,13 +500,13 @@ fn fragment(
         }
 
         // --- Water interaction ---
-        if (water_params.y > 0.5) {
-            let water_level = water_params.x;
+        if (terrain_params.water_params.y > 0.5) {
+            let water_level = terrain_params.water_params.x;
             let h = pbr_input.world_position.y;
 
             // The exposed damp strip follows the exact recent path of the
             // shore wave, then dries over five seconds after the water leaves.
-            let wave_time = globals.time + water_params.z;
+            let wave_time = globals.time + terrain_params.water_params.z;
             // Same signed-depth definition the water mesh bakes per vertex
             // (WATER_DEPTH_FADE_METERS = 2.5), so both shaders phase their
             // waves off the identical field.
@@ -506,7 +514,7 @@ fn fragment(
             let wet = recent_shore_wetness(
                 pbr_input.world_position.xz,
                 h,
-                water_level + water_params.w,
+                water_level + terrain_params.water_params.w,
                 signed_depth,
                 wave_time,
             );
@@ -536,7 +544,7 @@ fn fragment(
         pbr_input.material.base_color = vec4<f32>(albedo, 1.0);
 
 #ifdef VERTEX_TANGENTS
-        if (normal_strength > 0.001) {
+        if (terrain_params.normal_strength > 0.001) {
             var blended_nt = vec3<f32>(0.5, 0.5, 1.0);
             if (use_single_normal_fast_path) {
                 if (dominant_layer == 0u) {
@@ -577,7 +585,7 @@ fn fragment(
                 is_front,
                 blended_nt,
             );
-            pbr_input.N = normalize(mix(normalize(pbr_input.world_normal), mapped_n, clamp(normal_strength, 0.0, 1.0)));
+            pbr_input.N = normalize(mix(normalize(pbr_input.world_normal), mapped_n, clamp(terrain_params.normal_strength, 0.0, 1.0)));
         } else {
             pbr_input.N = normalize(pbr_input.world_normal);
         }

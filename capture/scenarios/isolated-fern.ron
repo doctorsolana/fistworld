@@ -1,0 +1,38 @@
+(
+    version: 1,
+    name: "isolated-fern",
+    map: "big_world",
+    output_dir: "logs/captures/isolated-fern",
+    resolution: (1600, 900),
+    fixed_delta_seconds: 0.016666667,
+    target: scene,
+    show_window: false,
+    warmup_frames: 240,
+    readiness: (
+        minimum_frames: 90,
+        maximum_frames: 1200,
+        minimum_loaded_chunks: 25,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: {
+        "FISTFORCE_CAPTURE_PROP": "fern_patch_a",
+        "FISTFORCE_CAPTURE_PROP_SCALE": "4.0",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    diagnostics: (
+        performance_overlay: false,
+        gizmos: false,
+        render_timings: false,
+    ),
+    shots: [
+        (
+            name: "single-fern",
+            // Confirmed temperate land; normal scenery is disabled by the fixture.
+            focus: (1720.0, 0.0, 0.0),
+            yaw: -0.45,
+            zoom: 20.0,
+            time_of_day: 0.5,
+            assertions: [loaded_chunks_at_least(count: 25)],
+        ),
+    ],
+)

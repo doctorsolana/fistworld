@@ -44,6 +44,10 @@ pub enum PropKind {
     BushB,
     BushC,
 
+    // environment/ferns
+    FernPatchA,
+    FernPatchB,
+
     // environment/flowers
     FlowerA,
     FlowerB,
@@ -153,6 +157,9 @@ impl PropKind {
             "bush_b" | "bush_02" => Some(Self::BushB),
             "bush_c" | "bush_03" => Some(Self::BushC),
 
+            "fern_patch_a" => Some(Self::FernPatchA),
+            "fern_patch_b" => Some(Self::FernPatchB),
+
             "flower_a" | "flower_01" => Some(Self::FlowerA),
             "flower_b" | "flower_03" => Some(Self::FlowerB),
             "flower_c" | "spring_flower_06" => Some(Self::FlowerC),
@@ -196,6 +203,8 @@ impl PropKind {
             Self::BushA => "bush_a",
             Self::BushB => "bush_b",
             Self::BushC => "bush_c",
+            Self::FernPatchA => "fern_patch_a",
+            Self::FernPatchB => "fern_patch_b",
             Self::FlowerA => "flower_a",
             Self::FlowerB => "flower_b",
             Self::FlowerC => "flower_c",
@@ -238,6 +247,8 @@ impl PropKind {
             Self::BushA => "Bush A",
             Self::BushB => "Bush B",
             Self::BushC => "Bush C",
+            Self::FernPatchA => "Fern Patch A",
+            Self::FernPatchB => "Fern Patch B",
             Self::FlowerA => "Wildflower A",
             Self::FlowerB => "Wildflower B",
             Self::FlowerC => "Wildflower C",
@@ -289,6 +300,8 @@ impl PropKind {
             Self::BushA => "game_assets/environment/bushes/BushA.glb#Scene0",
             Self::BushB => "game_assets/environment/bushes/BushB.glb#Scene0",
             Self::BushC => "game_assets/environment/bushes/BushC.glb#Scene0",
+            Self::FernPatchA => "game_assets/environment/ferns/FernPatchA.glb#Scene0",
+            Self::FernPatchB => "game_assets/environment/ferns/FernPatchB.glb#Scene0",
             Self::FlowerA => "game_assets/environment/flowers/FlowerA.glb#Scene0",
             Self::FlowerB => "game_assets/environment/flowers/FlowerB.glb#Scene0",
             Self::FlowerC => "game_assets/environment/flowers/FlowerC.glb#Scene0",
@@ -330,6 +343,8 @@ pub const ALL_PROP_KINDS: &[PropKind] = &[
     PropKind::BushA,
     PropKind::BushB,
     PropKind::BushC,
+    PropKind::FernPatchA,
+    PropKind::FernPatchB,
     PropKind::FlowerA,
     PropKind::FlowerB,
     PropKind::FlowerC,
