@@ -70,6 +70,16 @@ inboard of the porch tip at −3.400 and 3.6 m up, so it clears the building at 
 
 ## 1a. The Market — an OPEN-AIR square, and it does not fit the current blockout
 
+> **2026-09-02: the market no longer ships a ground slab.** Both `Market.glb` and `MarketPaved.glb`
+> are now stalls, poles, barrels and an EDGE only (timber edging with pegs for earthen, a dressed
+> stone kerb for paved). The ground is the terrain, painted by the client the way roads are:
+> `client/src/settlement/roads.rs` emits a rotated-rectangle paint op per market from its replicated
+> position, rotation and `MarketLevel` — Dirt over the 12 x 12 plot when Earthen, Cobblestone over
+> a dirt bed when Paved, with the roads' own strengths and falloffs. Square beds go down before every
+> road and the cobble top after, so a stone road runs into the square as one surface. Paving is the
+> same in-place repaint as a road upgrade; no server or protocol change. The paragraphs below that
+> describe the slab, its joints, the dirt mottling and the "only the ground differs" rule are history.
+
 **It ships as TWO LEVELS, and the only difference between them is the ground.** `Market.glb` is on
 beaten earth — what a settlement has when it starts trading in a field — and `MarketPaved.glb` is the
 same market once the ground has been paved. Every measurement, the stall layout, the anchors and the

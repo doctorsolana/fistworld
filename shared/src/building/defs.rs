@@ -44,8 +44,11 @@ pub enum BuildingType {
     /// semantic building remains `StoneQuarry`, so authored quarry art can
     /// replace this without touching saves or economy code.
     PlaceholderStoneQuarry,
-    /// Temporary barn blockout paired with a separately rendered pasture.
-    PlaceholderLivestockFarm,
+    /// The sheep barn. Its pasture stays a separately replicated and
+    /// rendered entity. Keeps the old blockout's discriminant; the alias
+    /// reads pre-art RON data that still calls it `PlaceholderLivestockFarm`.
+    #[serde(alias = "PlaceholderLivestockFarm")]
+    LivestockFarm,
     /// Additional authored house art. Appended to preserve every existing
     /// replicated discriminant and baked-collider identity.
     LongCabin,
@@ -70,6 +73,7 @@ pub const ALL_BUILDING_TYPES: &[BuildingType] = &[
     BuildingType::LongCabin,
     BuildingType::CabinL2,
     BuildingType::LongCabinL2,
+    BuildingType::LivestockFarm,
 ];
 
 impl BuildingType {
@@ -95,7 +99,7 @@ impl BuildingType {
             BuildingType::MarketPaved => "building_market_paved",
             BuildingType::PlaceholderStorageHall => "placeholder_storage_hall",
             BuildingType::PlaceholderStoneQuarry => "placeholder_stone_quarry",
-            BuildingType::PlaceholderLivestockFarm => "placeholder_livestock_farm",
+            BuildingType::LivestockFarm => "building_livestock_farm",
             BuildingType::LongCabin => "building_long_cabin",
             BuildingType::CabinL2 => "building_cabin_l2",
             BuildingType::LongCabinL2 => "building_long_cabin_l2",
@@ -127,7 +131,9 @@ impl BuildingType {
             BuildingType::PlaceholderTavern | BuildingType::PlaceholderChurch => None,
             BuildingType::PlaceholderStorageHall => None,
             BuildingType::PlaceholderStoneQuarry => None,
-            BuildingType::PlaceholderLivestockFarm => None,
+            BuildingType::LivestockFarm => {
+                Some("game_assets/buildings/village/LivestockFarm.glb#Scene0")
+            }
             BuildingType::LongCabin => Some("game_assets/buildings/village/LongCabin.glb#Scene0"),
             BuildingType::CabinL2 => Some("game_assets/buildings/village/CabinL2.glb#Scene0"),
             BuildingType::LongCabinL2 => {
@@ -285,15 +291,20 @@ impl BuildingType {
                 color: Color::srgb(0.43, 0.44, 0.42),
                 model_path: None,
             },
-            BuildingType::PlaceholderLivestockFarm => BuildingDef {
+            // Measured off LivestockFarm.glb (asset_creation/houses/inspect_prop_glb.py): the barn
+            // with its hay porch, haystack and holding pen, X -4.26..+5.02 by Z -3.60..+4.14, base
+            // sunk to -0.16 and the main ridge at +5.16. Anchor_Door is pinned to door_offset
+            // (0, -3.8) at export, which is why the footprint centre sits off-origin. The PASTURE
+            // is not part of this footprint: it is the replicated `LivestockPasture` 12 m behind.
+            BuildingType::LivestockFarm => BuildingDef {
                 building_type: *self,
-                display_name: "Livestock Farm (blockout)",
-                footprint: Vec2::new(8.0, 7.0),
-                footprint_center: Vec2::ZERO,
-                height: 4.2,
-                flatten_radius: 1.8,
+                display_name: "Livestock Farm",
+                footprint: Vec2::new(9.2790, 7.7440),
+                footprint_center: Vec2::new(0.3795, 0.2720),
+                height: 5.3200,
+                flatten_radius: 2.2,
                 color: Color::srgb(0.46, 0.30, 0.18),
-                model_path: None,
+                model_path: Some("game_assets/buildings/village/LivestockFarm.glb#Scene0"),
             },
             BuildingType::PlaceholderTavern => BuildingDef {
                 building_type: *self,

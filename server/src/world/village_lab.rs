@@ -5282,7 +5282,7 @@ fn village_simulation_lab() {
                                 shared::building::BuildingType::PlaceholderStoneQuarry => {
                                     SettlementBuildingKind::StoneQuarry
                                 }
-                                shared::building::BuildingType::PlaceholderLivestockFarm => {
+                                shared::building::BuildingType::LivestockFarm => {
                                     SettlementBuildingKind::LivestockFarm
                                 }
                             };

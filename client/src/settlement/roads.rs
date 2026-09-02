@@ -12,7 +12,10 @@ use std::time::Instant;
 use bevy::asset::AssetId;
 use bevy::prelude::*;
 
-use shared::components::{RoadSurface, VillageRoad};
+use shared::components::{
+    MarketLevel, PlayerPosition, PlayerRotation, RoadSurface, SettlementBuilding,
+    SettlementBuildingKind, VillageRoad,
+};
 use shared::terrain::{
     apply_terrain_paint_op_to_weights, terrain_paint_op_chunk_coords,
     terrain_paint_op_intersects_chunk, ChunkCoord, TerrainLayer, TerrainPaintOp, TerrainPaintShape,
@@ -54,9 +57,82 @@ impl RoadPaintSnapshot {
     }
 }
 
+/// A market square's ground, painted with the SAME layers, strengths and falloffs as the roads
+/// that lead to it. The market glb ships no ground slab: an earthen market is a rectangle of the
+/// Dirt layer over its plot, a paved one is Cobblestone over a dirt bed. A road ends at the
+/// square's edge, so with one material on both the road flows into the square instead of stopping
+/// at a kerb of another colour, and paving the square is the same in-place upgrade as paving a road.
+#[derive(Clone, Debug, PartialEq)]
+struct SquarePaintSnapshot {
+    center: Vec2,
+    half_extents: Vec2,
+    /// Paint-space rotation. `TerrainPaintShape::Rect` maps world to local with the SAME matrix
+    /// `local_to_world_xz` uses for local to world, so the building yaw enters negated.
+    rotation: f32,
+    surface: RoadSurface,
+}
+
+impl SquarePaintSnapshot {
+    fn from_market(position: Vec3, rotation_y: f32, level: MarketLevel) -> Self {
+        // Both market levels share one 12 x 12 footprint (BAKERY_WINDMILL_HANDOVER.md, 1a), so the
+        // earthen definition describes the paved square's ground as well.
+        let def = SettlementBuildingKind::Market.art().definition();
+        Self {
+            center: def.world_footprint_center(position, rotation_y),
+            half_extents: def.footprint * 0.5,
+            rotation: -rotation_y,
+            surface: match level {
+                MarketLevel::Earthen => RoadSurface::Dirt,
+                MarketLevel::Paved => RoadSurface::Stone,
+            },
+        }
+    }
+
+    /// The dirt under everything: the whole floor of an earthen square, or the compacted bed a
+    /// paved square's cobbles sit in, reaching past them by the roads' shoulder width.
+    fn bed_op(&self) -> TerrainPaintOp {
+        let (strength, falloff, extra) = match self.surface {
+            RoadSurface::Dirt => (DIRT_STRENGTH, DIRT_FALLOFF_METERS, 0.0),
+            RoadSurface::Stone => (
+                STONE_DIRT_SHOULDER_STRENGTH,
+                STONE_DIRT_SHOULDER_FALLOFF_METERS,
+                STONE_DIRT_SHOULDER_EXTRA_WIDTH_METERS * 0.5,
+            ),
+        };
+        TerrainPaintOp {
+            id: 1,
+            layer: TerrainLayer::Dirt,
+            strength,
+            falloff,
+            shape: TerrainPaintShape::Rect {
+                center: self.center,
+                half_extents: self.half_extents + Vec2::splat(extra),
+                rotation: self.rotation,
+            },
+        }
+    }
+
+    /// The cobbles of a paved square. Painted AFTER every road so the paving wins over a road's
+    /// dirt shoulder where the road meets the square.
+    fn top_op(&self) -> Option<TerrainPaintOp> {
+        (self.surface == RoadSurface::Stone).then(|| TerrainPaintOp {
+            id: 2,
+            layer: TerrainLayer::Cobblestone,
+            strength: STONE_STRENGTH,
+            falloff: STONE_FALLOFF_METERS,
+            shape: TerrainPaintShape::Rect {
+                center: self.center,
+                half_extents: self.half_extents,
+                rotation: self.rotation,
+            },
+        })
+    }
+}
+
 #[derive(Resource, Default)]
 pub(super) struct VillageRoadPaintState {
     roads: HashMap<Entity, RoadPaintSnapshot>,
+    squares: HashMap<Entity, SquarePaintSnapshot>,
     weightmaps: HashMap<ChunkCoord, AssetId<Image>>,
     dirty_chunks: HashSet<ChunkCoord>,
 }
@@ -69,6 +145,14 @@ pub(super) struct VillageRoadPaintState {
 pub(super) fn paint_village_roads_into_terrain(
     roads: Query<(Entity, Ref<VillageRoad>)>,
     mut removed_roads: RemovedComponents<VillageRoad>,
+    markets: Query<(
+        Entity,
+        &SettlementBuilding,
+        &PlayerPosition,
+        &PlayerRotation,
+        Option<&MarketLevel>,
+    )>,
+    mut removed_buildings: RemovedComponents<SettlementBuilding>,
     mut state: ResMut<VillageRoadPaintState>,
     mut terrain_paint: ResMut<TerrainPaintState>,
     mut images: ResMut<Assets<Image>>,
@@ -94,6 +178,35 @@ pub(super) fn paint_village_roads_into_terrain(
             mark_snapshot_chunks_dirty(&previous, &mut state.dirty_chunks);
         }
         mark_snapshot_chunks_dirty(&next, &mut state.dirty_chunks);
+    }
+
+    // Market squares. The table is a handful of entities, and a snapshot compares four numbers,
+    // so a plain equality check each frame is cheaper than change detection over three components.
+    for entity in removed_buildings.read() {
+        if let Some(previous) = state.squares.remove(&entity) {
+            mark_square_chunks_dirty(&previous, &mut state.dirty_chunks);
+        }
+    }
+    for (entity, building, position, rotation, level) in markets.iter() {
+        if building.kind != SettlementBuildingKind::Market {
+            continue;
+        }
+        let next = SquarePaintSnapshot::from_market(
+            position.0,
+            rotation.0,
+            level.copied().unwrap_or_default(),
+        );
+        if state.squares.get(&entity) == Some(&next) {
+            continue;
+        }
+        debug!(
+            "market square paint: {:?} centre {:?} half {:?} rot {:.2}",
+            next.surface, next.center, next.half_extents, next.rotation
+        );
+        if let Some(previous) = state.squares.insert(entity, next.clone()) {
+            mark_square_chunks_dirty(&previous, &mut state.dirty_chunks);
+        }
+        mark_square_chunks_dirty(&next, &mut state.dirty_chunks);
     }
 
     // A terrain edit or stream reload replaces the image even when the chunk
@@ -134,12 +247,14 @@ pub(super) fn paint_village_roads_into_terrain(
     snapshots
         .sort_unstable_by_key(|(entity, road)| (surface_order(road.surface), entity.to_bits()));
 
+    let squares = state.squares.values().cloned().collect::<Vec<_>>();
+
     let mut completed = Vec::with_capacity(queued.len());
     for coord in queued {
         let Some(weightmap) = terrain_paint.weightmaps.get_mut(&coord) else {
             continue;
         };
-        composite_roads_into_chunk(coord, weightmap, &snapshots);
+        composite_roads_into_chunk(coord, weightmap, &snapshots, &squares);
         if upload_weightmap(weightmap, &mut images) {
             completed.push(coord);
             perf.paint_chunks_updated += 1;
@@ -170,14 +285,34 @@ fn mark_snapshot_chunks_dirty(snapshot: &RoadPaintSnapshot, dirty: &mut HashSet<
     }
 }
 
+fn mark_square_chunks_dirty(snapshot: &SquarePaintSnapshot, dirty: &mut HashSet<ChunkCoord>) {
+    // The bed is the larger of the two rectangles, so it covers every chunk the top touches.
+    dirty.extend(terrain_paint_op_chunk_coords(&snapshot.bed_op()));
+}
+
 fn composite_roads_into_chunk(
     coord: ChunkCoord,
     weightmap: &mut WeightMapData,
     roads: &[(Entity, &RoadPaintSnapshot)],
+    squares: &[SquarePaintSnapshot],
 ) {
     weightmap.weights.clone_from(&weightmap.base_weights);
     let chunk_min = Vec2::new(coord.world_pos().x, coord.world_pos().z);
     let chunk_max = chunk_min + Vec2::splat(CHUNK_SIZE);
+
+    // Square floors and beds go down first, under every road, for the same reason the stone
+    // roads' beds do: nothing laid later may cover cobble with a shoulder.
+    for square in squares {
+        let bed = square.bed_op();
+        if terrain_paint_op_intersects_chunk(&bed, chunk_min, chunk_max) {
+            apply_terrain_paint_op_to_weights(
+                &bed,
+                chunk_min,
+                &mut weightmap.weights,
+                weightmap.resolution,
+            );
+        }
+    }
 
     for (_, road) in roads {
         // Paving is laid over a slightly wider compacted-earth bed. Paint the
@@ -209,6 +344,22 @@ fn composite_roads_into_chunk(
                     weightmap.resolution,
                 );
             }
+        }
+    }
+
+    // Paving last: a stone road's dirt shoulder crosses the square's edge, and the cobbles must
+    // win there so the road reads as running INTO the square.
+    for square in squares {
+        let Some(top) = square.top_op() else {
+            continue;
+        };
+        if terrain_paint_op_intersects_chunk(&top, chunk_min, chunk_max) {
+            apply_terrain_paint_op_to_weights(
+                &top,
+                chunk_min,
+                &mut weightmap.weights,
+                weightmap.resolution,
+            );
         }
     }
 }
@@ -326,6 +477,7 @@ mod tests {
             ChunkCoord::new(0, 0),
             &mut weightmap,
             &[(entity, &snapshot)],
+            &[],
         );
 
         let centre = pixel(&weightmap, 32, 31);
@@ -362,6 +514,7 @@ mod tests {
                 (Entity::from_bits(1), &dirt),
                 (Entity::from_bits(2), &stone),
             ],
+            &[],
         );
 
         assert!(pixel(&weightmap, 31, 31)[3] > 240);
@@ -385,6 +538,7 @@ mod tests {
             ChunkCoord::new(0, 0),
             &mut weightmap,
             &[(Entity::from_bits(1), &stone)],
+            &[],
         );
 
         let paving = pixel(&weightmap, 31, 31);
@@ -423,11 +577,132 @@ mod tests {
             ChunkCoord::new(0, 0),
             &mut weightmap,
             &[(Entity::from_bits(1), &snapshot)],
+            &[],
         );
 
         assert!(
             pixel(&weightmap, 31, 31)[3] > 240,
             "the last top coat must leave the bend predominantly cobblestone"
+        );
+    }
+
+    #[test]
+    fn a_paved_square_is_cobble_with_a_dirt_verge_and_a_road_runs_into_it() {
+        let resolution = 64;
+        let mut images = Assets::<Image>::default();
+        let mut weightmap = build_weightmap_from_weights(
+            vec![[255, 0, 0, 0]; (resolution * resolution) as usize],
+            resolution,
+            &mut images,
+        );
+        let square = SquarePaintSnapshot::from_market(
+            Vec3::new(32.0, 0.0, 32.0),
+            0.0,
+            MarketLevel::Paved,
+        );
+        // A stone road ending at the square's front edge (door_offset is -6.5, the edge -6.0).
+        let road = RoadPaintSnapshot::from_road(&road(
+            RoadSurface::Stone,
+            Vec2::new(32.0, 4.0),
+            Vec2::new(32.0, 25.5),
+        ));
+        composite_roads_into_chunk(
+            ChunkCoord::new(0, 0),
+            &mut weightmap,
+            &[(Entity::from_bits(1), &road)],
+            &[square],
+        );
+
+        assert!(pixel(&weightmap, 32, 32)[3] > 240, "the square's centre is cobblestone");
+        assert!(pixel(&weightmap, 32, 26)[3] > 240, "the road's end and the square's edge are one surface");
+        let verge = pixel(&weightmap, 32, 38);
+        assert!(verge[1] > verge[3] && verge[1] > 0, "past the kerb the bed shows as dirt, got {verge:?}");
+        assert_eq!(pixel(&weightmap, 32, 44), [255, 0, 0, 0], "meadow beyond the bed");
+    }
+
+    #[test]
+    fn an_earthen_square_is_dirt_and_a_turned_square_follows_its_building() {
+        let resolution = 64;
+        let mut images = Assets::<Image>::default();
+        let mut weightmap = build_weightmap_from_weights(
+            vec![[255, 0, 0, 0]; (resolution * resolution) as usize],
+            resolution,
+            &mut images,
+        );
+        // Turned a quarter, so its local +Z edge lies along world X: the same map
+        // `local_to_world_xz` uses for the building's own transform.
+        let square = SquarePaintSnapshot::from_market(
+            Vec3::new(32.0, 0.0, 32.0),
+            std::f32::consts::FRAC_PI_2,
+            MarketLevel::Earthen,
+        );
+        let expected_edge = shared::rotation::local_to_world_xz(Vec2::new(0.0, 5.5), std::f32::consts::FRAC_PI_2);
+        composite_roads_into_chunk(ChunkCoord::new(0, 0), &mut weightmap, &[], &[square]);
+
+        assert!(pixel(&weightmap, 32, 32)[1] > 200, "the floor is dirt");
+        assert_eq!(pixel(&weightmap, 32, 32)[3], 0, "an earthen square has no cobble");
+        let inside = pixel(
+            &weightmap,
+            (32.0 + expected_edge.x) as u32,
+            (32.0 + expected_edge.y) as u32,
+        );
+        assert!(inside[1] > 200, "a point 5.5 m along the building's own +Z is still floor, got {inside:?}");
+    }
+
+    #[test]
+    fn a_market_entity_paints_its_square_through_the_system() {
+        let resolution = 64;
+        let base = vec![[255, 0, 0, 0]; (resolution * resolution) as usize];
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>();
+        app.init_resource::<TerrainPaintState>();
+        app.init_resource::<VillageRoadPaintState>();
+        app.init_resource::<PerfHitchStats>();
+        app.add_systems(Update, paint_village_roads_into_terrain);
+        let weightmap = {
+            let mut images = app.world_mut().resource_mut::<Assets<Image>>();
+            build_weightmap_from_weights(base.clone(), resolution, &mut images)
+        };
+        app.world_mut()
+            .resource_mut::<TerrainPaintState>()
+            .weightmaps
+            .insert(ChunkCoord::new(0, 0), weightmap);
+        let market = app
+            .world_mut()
+            .spawn((
+                SettlementBuilding {
+                    kind: SettlementBuildingKind::Market,
+                    settlement: "Oakmead".into(),
+                    owner: None,
+                    quality: 1.0,
+                    workers: Vec::new(),
+                },
+                PlayerPosition(Vec3::new(32.0, 0.0, 32.0)),
+                PlayerRotation(0.0),
+                MarketLevel::Paved,
+            ))
+            .id();
+
+        app.update();
+        let centre = {
+            let map = &app.world().resource::<TerrainPaintState>().weightmaps[&ChunkCoord::new(0, 0)];
+            pixel(map, 32, 32)
+        };
+        assert!(centre[3] > 240, "the square's centre should be cobble, got {centre:?}");
+
+        app.world_mut().entity_mut(market).insert(MarketLevel::Earthen);
+        app.update();
+        let centre = {
+            let map = &app.world().resource::<TerrainPaintState>().weightmaps[&ChunkCoord::new(0, 0)];
+            pixel(map, 32, 32)
+        };
+        assert!(centre[1] > 200 && centre[3] == 0, "downgraded to earth, got {centre:?}");
+
+        app.world_mut().despawn(market);
+        app.update();
+        assert_eq!(
+            app.world().resource::<TerrainPaintState>().weightmaps[&ChunkCoord::new(0, 0)].weights,
+            base
         );
     }
 

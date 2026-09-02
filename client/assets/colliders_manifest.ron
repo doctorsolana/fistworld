@@ -338,6 +338,21 @@
       vertex_filter: LowerYPercent ( percent: 0.580 ),
       collidable: true,
     ),
+    // The sheep barn. Walls top out at 2.64 m of a 5.32 m total (-0.16..5.16), so 0.526 cuts at the
+    // eaves and keeps the hay porch's roof and the T-shaped ridge out of the hull. The hull takes in
+    // the porch posts, the haystack and the holding pen, which is intended -- units walk round them.
+    // Anchor_Door sits 0.6 m outside the eaves-slice hull (asserted by build_livestock_farm.py).
+    //
+    // The PASTURE is deliberately absent, exactly like the wheat field: `LivestockPasture` is a
+    // separate replicated entity 12 m behind the plot, fenced by the client, and it must stay
+    // walkable for the herders and the flock.
+    (
+      kind: "building_livestock_farm",
+      gltf_path: "game_assets/buildings/village/LivestockFarm.glb#Scene0",
+      mode: ConvexHull,
+      vertex_filter: LowerYPercent ( percent: 0.526 ),
+      collidable: true,
+    ),
 
   ],
 )

@@ -88,6 +88,7 @@ are compatibility input, not registered props.
 | Generic humanoid | `character/humanoid.blend` | `characters/Humanoid.glb` + `Humanoid.ron` | `CharacterManifest` |
 | Legacy humanoid donor | `character/humanoid_legacy_donor.blend` | not shipped | build input only |
 | Log cabin | `houses/log_cabin.blend` | `buildings/village/LogCabin.glb` | `BuildingType::LogCabin` |
+| Livestock farm (sheep barn) | `houses/livestock_farm.blend` | `buildings/village/LivestockFarm.glb` | `BuildingType::LivestockFarm` |
 | Moot Hall | `houses/moot_hall.blend` | `buildings/village/MootHall.glb` | `BuildingType::MootHall` |
 | Village Hall | `houses/village_hall.blend` | `buildings/village/VillageHall.glb` | `BuildingType::VillageHall` |
 | Town Hall | `houses/town_hall.blend` | `buildings/village/TownHall.glb` | `BuildingType::TownHall` |

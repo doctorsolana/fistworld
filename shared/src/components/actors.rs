@@ -839,7 +839,7 @@ impl SettlementBuildingKind {
             // walkable open-air marketplace.
             SettlementBuildingKind::StorageHall => Art::PlaceholderStorageHall,
             SettlementBuildingKind::StoneQuarry => Art::PlaceholderStoneQuarry,
-            SettlementBuildingKind::LivestockFarm => Art::PlaceholderLivestockFarm,
+            SettlementBuildingKind::LivestockFarm => Art::LivestockFarm,
         }
     }
 

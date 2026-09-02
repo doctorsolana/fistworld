@@ -60,6 +60,8 @@ GLB_PATH = {
     "bakery": "game_assets/buildings/village/Bakery.glb",
     "fishermans_hut": "game_assets/buildings/village/FishermansHut.glb",
     "fishing_pier": "game_assets/environment/shore/FishingPier.glb",
+    # The sheep barn. Its pasture is a separate replicated entity (LivestockPasture), not part of it.
+    "livestock_farm": "game_assets/buildings/village/LivestockFarm.glb",
 }
 assert STEM in GLB_PATH, f"no shipped path registered for '{STEM}'; add it to GLB_PATH"
 OUT = os.path.join(REPO, "client", "assets", *GLB_PATH[STEM].split("/"))
@@ -202,6 +204,7 @@ CANON_DOOR_BY_STEM = {
     "market": (0.0, -6.50),             # door_offset(Market) -- NEEDS THE RUST CONSTANT MOVED
     "market_paved": (0.0, -6.50),       # both levels share a threshold, as the halls do
     "bakery": (0.0, -4.00),             # door_offset(Bakery)
+    "livestock_farm": (0.0, -3.80),     # door_offset(LivestockFarm)
 }
 CIVIC = {"moot_hall", "village_hall", "town_hall"}
 if STEM in CANON_DOOR_BY_STEM:

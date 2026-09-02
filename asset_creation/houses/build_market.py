@@ -1,4 +1,4 @@
-"""Marketplace — an OPEN-AIR market: paved ground, separate stalls, no roof over it.
+"""Marketplace — an OPEN-AIR market: separate stalls on painted ground, no roof over it.
 
     blender --background --factory-startup --python asset_creation/houses/build_market.py
     blender asset_creation/houses/market.blend --background --python asset_creation/houses/export_prop_glb.py
@@ -39,7 +39,7 @@ import bmesh
 from mathutils import Vector, kdtree
 
 # --- level ---------------------------------------------------------------------------------------
-# TWO VARIANTS, AND THE ONLY DIFFERENCE IS THE GROUND.
+# TWO VARIANTS, AND THE ONLY DIFFERENCE IS THE EDGE (the ground itself is painted terrain).
 #
 #     blender --background --factory-startup --python build_market.py -- 1   -> market.blend
 #     blender --background --factory-startup --python build_market.py -- 2   -> market_paved.blend
@@ -151,122 +151,39 @@ def box(x0, x1, y0, y1, z0, z1, rgb, top_rgb=None):
 
 jrng = random.Random(4127)
 
-_placed = []
-
-
-_placed = []
-
-def ground_patch(px, py, hw, hd, rgb):
-    """One mottle, mirrored. Overlaps the slab top so it renders proud instead of being buried.
-
-    CLAMPED TO THE FOOTPRINT. Randomly placed patches near the edge otherwise hang over it, and
-    the market must not be one centimetre wider than the ground the settlement reserved. Clamping
-    is symmetric about both axes, so it cannot break the mirror."""
-    # HEIGHT IS ASSIGNED BY COLLISION, not by a counter. Two earlier tries both failed: cycling
-    # the offset (k % 9) put every ninth patch on one plane, and where two of those overlapped
-    # their top faces z-fought into fine stripes across the square; a unique 0.6 mm step per patch
-    # removed the stripes but 0.6 mm is far too tight to survive a depth buffer, and it also
-    # dragged the last patches centimetres into the air for no reason.
-    #
-    # Instead each patch takes the LOWEST free level that no already-placed overlapping patch is
-    # using. Almost everything lands on the first level, so the ground stays flat; only a genuine
-    # pile-up climbs, and no two overlapping tops can share a plane by construction.
-    #
-    # THE LEVEL IS CHOSEN ONCE FOR THE MIRRORED PAIR. Resolving each half separately let the -Y
-    # copy get bumped by the +Y copy that had just been placed, so the pair ended up at different
-    # heights and the symmetry assert failed. And a patch that STRADDLES y=0 overlaps its own
-    # reflection, so it is emitted as a single box spanning both halves -- two overlapping copies
-    # of it would be coplanar with each other, which is the very thing this is here to avoid.
-    x0, x1 = max(px - hw, -HX), min(px + hw, HX)
-    if x1 - x0 < 0.05:
-        return
-    if py < hd:                                   # straddles the centre line: one box, symmetric
-        spans = [(max(-(py + hd), -HY), min(py + hd, HY))]
-    else:
-        spans = []
-        for _sy in (-1, 1):
-            y0, y1 = max(_sy * py - hd, -HY), min(_sy * py + hd, HY)
-            if y1 - y0 >= 0.05:
-                spans.append((y0, y1))
-    if not spans:
-        return
-    lvl = 1
-    while any(l == lvl and not (x1 <= a or x0 >= b or sy1 <= c or sy0 >= d)
-              for a, b, c, d, l in _placed for sy0, sy1 in spans):
-        lvl += 1
-    z = FLOOR_Z1 + 0.0035 * lvl
-    for y0, y1 in spans:
-        _placed.append((x0, x1, y0, y1, lvl))
-        box(x0, x1, y0, y1, z - 0.014, z, rgb)
-
-
-# --- the ground ---------------------------------------------------------------------------------------
-# Without a roof this is the one part of the model that IS the building: it is what says "this ground
-# is the market" rather than "someone left some stalls out".
+# --- the ground: NOT HERE ------------------------------------------------------------------------------
+# The square's surface is the TERRAIN, painted by the client exactly the way roads are
+# (client/src/settlement/roads.rs): an earthen market paints the Dirt layer over its 12 x 12 plot,
+# a paved one paints Cobblestone over a dirt bed, with the same strengths and falloffs as dirt and
+# stone roads. Two reasons this replaced the slab that used to ship here:
+#
+#   * a road ends at the square's edge, so with one material on both the road flows INTO the
+#     square; with a slab it stopped dead at a kerb of a different colour;
+#   * the slab was a 22 cm plinth in its own dark palette that never matched the terrain's
+#     cobble/dirt colours, and its mottling read as camouflage from the RTS camera.
+#
+# What stays is the EDGE, which gives the square a boundary the paint's soft falloff cannot:
+# timber edging with pegs for beaten earth, a dressed stone kerb once it is paved. Both are sunk to
+# -0.16 like every foundation here, standing ~11 cm proud of the flattened ground.
+GROUND = 0.0                 # the flattened terrain surface, where everything now stands
 if LEVEL == 2:
-    # PAVED. Drawn as a slab with joints rather than as individual cobbles -- a 12 x 12 floor at any
-    # believable stone size is many hundreds of boxes, and at RTS distance the joint lines are the
-    # entire read anyway. Accent flags break up the field for a fraction of the cost.
-    box(-HX, HX, -HY, HY, FLOOR_Z0, FLOOR_Z1, C_COBBLE)
-    for i in range(1, 11):
-        y = -HY + WIDTH_Y * i / 11
-        box(-HX, HX, y - 0.035, y + 0.035, FLOOR_Z1 - 0.035, FLOOR_Z1 + 0.004, shade(C_COBBLE, 0.72))
-    for i in range(1, 11):
-        x = -HX + DEPTH_X * i / 11
-        box(x - 0.035, x + 0.035, -HY, HY, FLOOR_Z1 - 0.035, FLOOR_Z1 + 0.004, shade(C_COBBLE, 0.72))
-    for k in range(12):                              # accent flags, mirrored in pairs
-        fx = -4.60 + 1.55 * (k % 6)
-        fy = 0.62 + 1.60 * (k // 6)
-        for sy in (-1, 1):
-            box(fx - 0.40, fx + 0.40, sy * fy - 0.38, sy * fy + 0.38,
-                FLOOR_Z1 - 0.012, FLOOR_Z1 + 0.008, shade(C_COBBLE_LT, 0.90 + 0.08 * (k % 3)))
-    # A dressed stone kerb, so the market has an edge rather than fading into terrain.
-    # Outer face 2 mm INSIDE the slab's. Flush, the kerb and the slab share all four edge planes,
-    # which was 2.64 m2 per side of coplanar same-facing area -- the largest overlap on the model.
     for sy in (-1, 1):
         box(-HX + 0.002, HX - 0.002, sy * (HY - 0.16), sy * (HY - 0.002),
-            FLOOR_Z0, FLOOR_Z1 + 0.05, shade(C_STONE, 1.10))
+            FLOOR_Z0, GROUND + 0.11, shade(C_STONE, 1.10))
     for sx in (-1, 1):
         box(sx * (HX - 0.16), sx * (HX - 0.002), -HY + 0.002, HY - 0.002,
-            FLOOR_Z0, FLOOR_Z1 + 0.05, shade(C_STONE, 1.10))
+            FLOOR_Z0, GROUND + 0.11, shade(C_STONE, 1.10))
 else:
-    # BEATEN EARTH, AND THE FIRST ATTEMPT GOT IT EXACTLY BACKWARDS. Two faults, one of them fatal:
-    #
-    #   1. the wear -- cart ruts and trodden ground -- was drawn from FLOOR_Z1-0.045 to FLOOR_Z1-0.008,
-    #      which is INSIDE the slab whose top is FLOOR_Z1. All of it was buried and invisible.
-    #   2. the only thing left visible was a set of pale accent patches laid out on a REGULAR GRID,
-    #      so the dirt floor rendered as a neat checkerboard -- i.e. as paving, the one thing it is
-    #      supposed not to be.
-    #
-    # A dirt floor has no grid and no repeating unit. What it has is mottling at many scales and wear
-    # where the traffic is. Everything below therefore (a) sits PROUD of the slab so it can be seen,
-    # (b) is placed by a seeded RNG rather than a lattice, and (c) carries its own small z offset so
-    # overlapping patches cannot z-fight. Contrast is kept low on purpose: earth is subtle, and every
-    # step up in contrast turns a patch back into a tile.
-    box(-HX, HX, -HY, HY, FLOOR_Z0, FLOOR_Z1, C_DIRT)
-
-    # Wear only: it follows the STALLS, which are symmetric, so it is symmetric too and belongs
-    # before the assert. The mottling, stones and weeds do not -- they are added after it. These are placed where the traffic actually
-    # is -- in from the entrance, and in front of every counter -- or they read as random stains.
-    for sy in (-1, 1):                               # cart ruts running in from the entrance
-        box(-HX, 2.10, sy * 0.42, sy * 0.86, FLOOR_Z1 - 0.004, FLOOR_Z1 + 0.004,
-            shade(C_DIRT_DK, 1.02))
-    ground_patch(-4.50, 0.0, 1.35, 1.05, shade(C_DIRT_DK, 1.10))          # the entrance mouth
-    for cx_, cy_, hw_, hd_ in ((2.45, 0.95, 0.62, 1.05), (2.45, 3.30, 0.60, 1.05),
-                               (-4.00, 2.55, 1.20, 0.62), (-0.40, 2.55, 1.20, 0.62)):
-        ground_patch(cx_, cy_, hw_, hd_, shade(C_DIRT_DK, 1.12))          # in front of each counter
-
-    # Outer face 2 mm inside the slab's, for the same reason as the paved kerb above.
     for sy in (-1, 1):
         box(-HX + 0.002, HX - 0.002, sy * (HY - 0.18), sy * (HY - 0.002),
-            FLOOR_Z0, FLOOR_Z1 + 0.06, shade(C_BOARD, 0.74))
+            FLOOR_Z0, GROUND + 0.12, shade(C_BOARD, 0.74))
     for sx in (-1, 1):
         box(sx * (HX - 0.18), sx * (HX - 0.002), -HY + 0.002, HY - 0.002,
-            FLOOR_Z0, FLOOR_Z1 + 0.06, shade(C_BOARD, 0.74))
+            FLOOR_Z0, GROUND + 0.12, shade(C_BOARD, 0.74))
     for sy in (-1, 1):                               # pegs holding the edging down
         for gx in (-4.20, -1.40, 1.40, 4.20):
             box(gx - 0.09, gx + 0.09, sy * (HY - 0.22), sy * (HY - 0.04),
-                FLOOR_Z1 + 0.04, FLOOR_Z1 + 0.20, shade(C_TRIM, 1.10))
+                GROUND + 0.10, GROUND + 0.26, shade(C_TRIM, 1.10))
 
 
 # --- one stall ----------------------------------------------------------------------------------------
@@ -304,7 +221,7 @@ def stall(cx, cy, hu, hv, axis, sgn, kind, flip=False):
     for su in (-1, 1):
         for v in (0.14, depth - 0.14):
             lbox(su * (hu - 0.09) - 0.075, su * (hu - 0.09) + 0.075, v - 0.075, v + 0.075,
-                 0.0, CANOPY_FRONT_Z - (CANOPY_FRONT_Z - CANOPY_BACK_Z) * (v / depth) + 0.04,
+                 -0.06, CANOPY_FRONT_Z - (CANOPY_FRONT_Z - CANOPY_BACK_Z) * (v / depth) + 0.04,
                  shade(C_POST, 0.96 + 0.10 * (v > 0.5)))
     # trestle counter, and a boarded front so the stall has mass at eye level
     lbox(-hu, hu, -0.10, 0.62, COUNTER_Z - 0.07, COUNTER_Z, shade(C_BOARD_LT, 1.02))
@@ -375,7 +292,7 @@ def stall(cx, cy, hu, hv, axis, sgn, kind, flip=False):
     # contents have to be too. The other four are mirror PAIRS and could be lopsided; making them all
     # symmetric and varying only the TONE keeps one code path, and tone does not enter the assert.
     for su in (-1, 1):
-        lbox(su * (hu - 0.68), su * (hu - 0.18), depth - 0.52, depth - 0.12, 0.0, 0.42,
+        lbox(su * (hu - 0.68), su * (hu - 0.18), depth - 0.52, depth - 0.12, -0.04, 0.42,
              shade(C_CRATE, 0.92 + 0.14 * (su > 0)))
         # ON each crate, not spanning both: drawn across the full width it bridged the gap between
         # them and read as a bright yellow plank floating in mid-air.
@@ -442,32 +359,20 @@ assert _worst < 1e-6, f"not symmetric about y=0: {_worst:.6f}"
 # ORGANIC PASS — deliberately NOT symmetric
 # ==================================================================================================
 if LEVEL == 1:
-    # Mottling: 40 patches at jittered position, size and tone, placed independently rather than in
-    # mirrored pairs. Sizes span 0.3 to 1.1 m so there is no readable "unit", and they overlap on
-    # purpose -- a patch whose whole outline is visible is a tile, a patch cut by three others is
-    # ground.
-    for _k in range(40):
-        ground_patch(jrng.uniform(-5.6, 5.6), jrng.uniform(-5.5, 5.5),
-                     jrng.uniform(0.30, 1.10), jrng.uniform(0.26, 0.95),
-                     shade(C_DIRT, jrng.uniform(0.80, 1.24)))
-    for _k in range(14):                             # darker damp hollows
-        ground_patch(jrng.uniform(-5.4, 5.4), jrng.uniform(-5.2, 5.2),
-                     jrng.uniform(0.24, 0.62), jrng.uniform(0.22, 0.54),
-                     shade(C_DIRT_DK, jrng.uniform(1.02, 1.30)))
+    # No mottling: the ground is painted terrain now, and the roads' dirt layer already carries
+    # the grain. Loose stones and weeds remain -- they stand ON the ground rather than being it.
     for _k in range(18):                             # loose stones trodden into the surface
         _gx, _gy = jrng.uniform(-5.4, 5.4), jrng.uniform(-5.3, 5.3)
         _r = jrng.uniform(0.07, 0.15)
         box(_gx - _r, _gx + _r, _gy - _r * 0.8, _gy + _r * 0.8,
-            FLOOR_Z1 - 0.004, FLOOR_Z1 + 0.016 + jrng.uniform(0.0, 0.022),
+            GROUND - 0.04, GROUND + 0.012 + jrng.uniform(0.0, 0.022),
             shade(C_STONE_LT, jrng.uniform(0.78, 1.00)))
     for _k in range(22):                             # weeds along the edging, where no one walks
         _e = jrng.random()
         _wx = jrng.uniform(-5.4, 5.4) if _e < 0.5 else (HX - 0.28) * (1 if jrng.random() < 0.5 else -1)
         _wy = (HY - 0.28) * (1 if jrng.random() < 0.5 else -1) if _e < 0.5 else jrng.uniform(-5.4, 5.4)
         box(_wx - 0.07, _wx + 0.06, _wy - 0.06, _wy + 0.07,
-            FLOOR_Z1, FLOOR_Z1 + jrng.uniform(0.10, 0.24), shade(C_GREEN, jrng.uniform(0.66, 0.98)))
-    print(f"[mkt] ground patches: {len(_placed)}, stacked "
-          f"{max(l for *_, l in _placed)} deep ({0.0035 * max(l for *_, l in _placed) * 100:.1f} cm)")
+            GROUND - 0.03, GROUND + jrng.uniform(0.10, 0.24), shade(C_GREEN, jrng.uniform(0.66, 0.98)))
 
 # Stray barrels and crates. Hand-placed rather than random so they sit in genuinely free ground, but
 # NOT in mirrored pairs -- that was the tell. Every one is in a corner or against the kerb; the
@@ -483,12 +388,12 @@ for _lx, _ly, _kind, _r, _h in ((5.45, 5.25, 'barrel', 0.30, 0.66),
         for _j, (_z0, _z1, _hr) in enumerate(((0.0, _h * 0.20, _r * 0.86),
                                               (_h * 0.20, _h * 0.80, _r),
                                               (_h * 0.80, _h, _r * 0.86))):
-            box(_lx - _hr, _lx + _hr, _ly - _hr, _ly + _hr, _z0, _z1,
+            box(_lx - _hr, _lx + _hr, _ly - _hr, _ly + _hr, _z0 - (0.04 if _j == 0 else 0.0), _z1,
                 shade(C_BOARD, 0.88 + 0.12 * (_j % 2)))
         box(_lx - _r - 0.02, _lx + _r + 0.02, _ly - _r - 0.02, _ly + _r + 0.02,
             _h * 0.34, _h * 0.42, shade(C_TRIM, 1.20))
     else:
-        box(_lx - _r, _lx + _r, _ly - _r, _ly + _r, 0.0, _h, shade(C_CRATE, 0.96))
+        box(_lx - _r, _lx + _r, _ly - _r, _ly + _r, -0.04, _h, shade(C_CRATE, 0.96))
         box(_lx - _r + 0.05, _lx + _r - 0.05, _ly - _r - 0.012, _ly + _r + 0.012,
             _h - 0.06, _h + 0.012, shade(C_CRATE_LT, 1.04))
 

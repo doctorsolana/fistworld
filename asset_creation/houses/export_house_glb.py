@@ -193,6 +193,9 @@ for o in list(bpy.data.objects):
         log(f"stripping studio object {o.name}")
         bpy.data.objects.remove(o, do_unlink=True)
 
+# The internal scene name is part of the asset contract: shared's registry test compares it to the
+# file stem, and Blender's default "Scene" failed that test for all three houses exported here.
+bpy.context.scene.name = NAME
 os.makedirs(OUT_DIR, exist_ok=True)
 bpy.ops.object.select_all(action="DESELECT")
 bpy.ops.export_scene.gltf(

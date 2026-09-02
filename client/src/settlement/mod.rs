@@ -1368,6 +1368,11 @@ fn setup_building_night_lighting(
                 Some(SettlementBuildingKind::FishermansHut) => {
                     &[("Light_Interior", 820_000.0, 10.0)]
                 }
+                // The barn is not a Household, so the cabin window-glow path skips it; one warm
+                // interior lamp at the authored anchor is what says "someone is in with the flock".
+                Some(SettlementBuildingKind::LivestockFarm) => {
+                    &[("Light_Interior", 720_000.0, 9.0)]
+                }
                 Some(SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery) => &[
                     ("Light_Interior", 720_000.0, 9.0),
                     ("Light_Lantern", 440_000.0, 7.5),
