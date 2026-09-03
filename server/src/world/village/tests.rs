@@ -533,15 +533,14 @@ fn completed_player_building_releases_hero_at_night_and_queues_civic_road_work()
 
 #[test]
 fn field_quality_controls_continuous_wheat_rate() {
-    assert!((farmer_seconds_per_wheat(1.0) - 170.0).abs() < 0.01);
-    assert!((farmer_seconds_per_wheat(2.0 / 3.0) - 255.0).abs() < 0.01);
-    assert!((farmer_seconds_per_wheat(0.5) - 340.0).abs() < 0.01);
+    assert!((farmer_seconds_per_wheat(1.0) - 120.0).abs() < 0.01);
+    assert!((farmer_seconds_per_wheat(2.0 / 3.0) - 180.0).abs() < 0.01);
+    assert!((farmer_seconds_per_wheat(0.5) - 240.0).abs() < 0.01);
     assert!(farmer_seconds_per_wheat(0.1) > farmer_seconds_per_wheat(0.5));
 
-    let ordinary_shift_seconds = WorldTime::DEFAULT_DAY_DURATION * WORKDAY_END_DAY_T
-        - WorldTime::DEFAULT_START_SECONDS_IN_DAY;
-    assert!((ordinary_shift_seconds / farmer_seconds_per_wheat(1.0) - 5.6).abs() < 0.2);
-    assert!((ordinary_shift_seconds / farmer_seconds_per_wheat(2.0 / 3.0) - 3.7).abs() < 0.2);
+    let full_shift_seconds = WorldTime::DEFAULT_ORDINARY_SHIFT_SECONDS;
+    assert!((full_shift_seconds / farmer_seconds_per_wheat(1.0) - 6.0).abs() < 0.01);
+    assert!((full_shift_seconds / farmer_seconds_per_wheat(2.0 / 3.0) - 4.0).abs() < 0.01);
 }
 
 #[test]

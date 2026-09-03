@@ -12,6 +12,10 @@ use crate::persistence;
 use crate::telemetry;
 
 pub(crate) fn setup_resources(app: &mut App) {
+    // Bevy defaults FixedUpdate to 64 Hz. Networking, movement fallbacks and
+    // performance budgets all use the protocol's 60 Hz contract, so configure
+    // the authoritative schedule from that same source of truth.
+    app.insert_resource(Time::<Fixed>::from_hz(shared::protocol::FIXED_TIMESTEP_HZ));
     app.init_resource::<WorldTerrain>();
     app.init_resource::<AuthoredCityLayout>();
     app.init_resource::<net::input::ClientInputs>();
@@ -52,4 +56,17 @@ pub(crate) fn setup_resources(app: &mut App) {
     app.insert_resource(persistence::profiles::PlayerProfiles::new_session());
     app.init_resource::<telemetry::perf::ServerPerfMonitor>();
     app.init_resource::<telemetry::network::ServerNetDebugWindow>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authoritative_fixed_clock_matches_the_protocol_tick_rate() {
+        let mut app = App::new();
+        setup_resources(&mut app);
+        let fixed = app.world().resource::<Time<Fixed>>();
+        assert_eq!(fixed.timestep(), shared::protocol::tick_duration());
+    }
 }

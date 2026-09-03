@@ -71,24 +71,28 @@ pub struct ActiveMapState {
 }
 
 impl WorldTime {
-    /// 24 minutes of daylight: afternoons linger, so the sun sets a full four
-    /// real minutes later than the old 20-minute day.
-    pub const DEFAULT_DAY_DURATION: f32 = 24.0 * 60.0;
-    /// 4 minutes of night — a moonlit interlude, not a second shift.
-    pub const DEFAULT_NIGHT_DURATION: f32 = 4.0 * 60.0;
-    /// Default to 07:30 on the display clock: the sun is about 17 degrees above
-    /// the horizon, giving simulations a warm sunrise that is still bright
-    /// enough to read the character, sail and coastline clearly.
-    pub const DEFAULT_START_SECONDS_IN_DAY: f32 = 135.0;
-    /// Displayed clock hour of sunrise. The display clock is deliberately
-    /// asymmetric (long summer days): daylight owns 06:00-22:00 so dusk lands
-    /// late in the evening instead of mid-afternoon.
-    pub const SUNRISE_NORMALIZED: f32 = 6.0 / 24.0;
-    /// Displayed clock hour of sunset (22:00).
-    pub const SUNSET_NORMALIZED: f32 = 22.0 / 24.0;
-    /// Ordinary production shifts end three quarters through daylight (about
-    /// 18:00 on the deliberately long summer display day).
-    pub const WORKDAY_END_DAY_T: f32 = 0.75;
+    /// The display clock is deliberately literal: at 1x, one simulation second
+    /// advances it by one world minute and a complete day takes 24 real minutes.
+    pub const CLOCK_MINUTES_PER_DAY: f32 = 24.0 * 60.0;
+    pub const SUNRISE_CLOCK_MINUTE: f32 = 5.0 * 60.0;
+    pub const SUNSET_CLOCK_MINUTE: f32 = 23.0 * 60.0;
+    pub const WORKDAY_START_CLOCK_MINUTE: f32 = 6.0 * 60.0;
+    pub const WORKDAY_END_CLOCK_MINUTE: f32 = 18.0 * 60.0;
+
+    /// The sun spends 18 world hours above the horizon. This controls the
+    /// daylight arc only; [`Self::normalized_time`] remains linear.
+    pub const DEFAULT_DAY_DURATION: f32 = Self::SUNSET_CLOCK_MINUTE - Self::SUNRISE_CLOCK_MINUTE;
+    /// The six-hour night is the faster, below-horizon part of the sun's arc.
+    pub const DEFAULT_NIGHT_DURATION: f32 =
+        Self::CLOCK_MINUTES_PER_DAY - Self::DEFAULT_DAY_DURATION;
+    /// Default to 07:30 on the display clock: the sun is comfortably above the
+    /// horizon, giving simulations a warm morning that is still bright enough
+    /// to read the character, sail and coastline clearly.
+    pub const DEFAULT_START_SECONDS_IN_DAY: f32 = 7.5 * 60.0 - Self::SUNRISE_CLOCK_MINUTE;
+    pub const SUNRISE_NORMALIZED: f32 = Self::SUNRISE_CLOCK_MINUTE / Self::CLOCK_MINUTES_PER_DAY;
+    pub const SUNSET_NORMALIZED: f32 = Self::SUNSET_CLOCK_MINUTE / Self::CLOCK_MINUTES_PER_DAY;
+    pub const DEFAULT_ORDINARY_SHIFT_SECONDS: f32 =
+        Self::WORKDAY_END_CLOCK_MINUTE - Self::WORKDAY_START_CLOCK_MINUTE;
 
     pub fn new(day_duration: f32, night_duration: f32, seconds_in_cycle: f32) -> Self {
         let mut wt = Self {
@@ -120,7 +124,31 @@ impl WorldTime {
 
     /// Whether ordinary private production is currently on shift.
     pub fn is_ordinary_work_time(&self) -> bool {
-        self.is_day() && self.day_t() < Self::WORKDAY_END_DAY_T
+        let seconds = self.seconds_in_cycle;
+        seconds >= self.ordinary_work_start_seconds() && seconds < self.ordinary_work_end_seconds()
+    }
+
+    /// Convert a displayed-clock offset from sunrise into this clock's internal
+    /// cycle seconds. Custom short-cycle test clocks therefore keep the same
+    /// clock-hour semantics without assuming the production defaults.
+    fn cycle_seconds_for_clock_minutes(&self, minutes: f32) -> f32 {
+        self.cycle_duration() * minutes / Self::CLOCK_MINUTES_PER_DAY
+    }
+
+    pub fn ordinary_work_start_seconds(&self) -> f32 {
+        let minutes_after_sunrise = (Self::WORKDAY_START_CLOCK_MINUTE - Self::SUNRISE_CLOCK_MINUTE)
+            .rem_euclid(Self::CLOCK_MINUTES_PER_DAY);
+        self.cycle_seconds_for_clock_minutes(minutes_after_sunrise)
+    }
+
+    pub fn ordinary_work_end_seconds(&self) -> f32 {
+        let minutes_after_sunrise = (Self::WORKDAY_END_CLOCK_MINUTE - Self::SUNRISE_CLOCK_MINUTE)
+            .rem_euclid(Self::CLOCK_MINUTES_PER_DAY);
+        self.cycle_seconds_for_clock_minutes(minutes_after_sunrise)
+    }
+
+    pub fn ordinary_shift_seconds(&self) -> f32 {
+        (self.ordinary_work_end_seconds() - self.ordinary_work_start_seconds()).max(0.0)
     }
 
     pub fn day_t(&self) -> f32 {
@@ -166,25 +194,25 @@ impl WorldTime {
         }
     }
 
-    /// DISPLAY clock, normalized 0..1 of a 24h day (0 = midnight). Sunrise
-    /// displays at [`Self::SUNRISE_NORMALIZED`] (06:00) and sunset at
-    /// [`Self::SUNSET_NORMALIZED`] (20:00) — summer hours, so dusk lands at a
-    /// late clock time. This is presentation ONLY: anything driving light or
-    /// simulation from the sun must use [`Self::sun_phase`], never this.
+    /// Linear display clock, normalized over 24 hours (0 = midnight).
+    ///
+    /// `seconds_in_cycle` starts at sunrise for the existing calendar and
+    /// economy cadence, but this mapping advances uniformly through daylight,
+    /// sunset, night and sunrise. At the default 1x durations, one simulation
+    /// second is exactly one displayed world minute.
     pub fn normalized_time(&self) -> f32 {
-        let day_span = Self::SUNSET_NORMALIZED - Self::SUNRISE_NORMALIZED;
-        let night_span = 1.0 - day_span;
-        if self.is_day() {
-            Self::SUNRISE_NORMALIZED + self.day_t() * day_span
-        } else {
-            (Self::SUNSET_NORMALIZED + self.night_t() * night_span).rem_euclid(1.0)
+        let cycle = self.cycle_duration();
+        if cycle <= 0.0 {
+            return 0.5;
         }
+        (Self::SUNRISE_NORMALIZED + self.seconds_in_cycle / cycle).rem_euclid(1.0)
     }
 
     /// Sun position phase for lighting: elevation == `-cos(sun_phase())`,
     /// exactly the old `normalized * TAU` convention (PI/2 = sunrise on the
     /// horizon, PI = solar noon, 3*PI/2 = sunset). Derived from cycle
-    /// fractions, so it is independent of the asymmetric display clock.
+    /// fractions, so its variable visual speed is independent of the linear
+    /// display clock.
     pub fn sun_phase(&self) -> f32 {
         use std::f32::consts::PI;
         if self.is_day() {
@@ -194,7 +222,7 @@ impl WorldTime {
         }
     }
 
-    /// Set the world clock using a normalized time (0.0-1.0).
+    /// Set the linear display clock using a normalized time (0.0-1.0).
     ///
     /// Deliberately leaves `day` untouched: this is a debug reposition within the
     /// current day, not the passage of time.
@@ -204,24 +232,7 @@ impl WorldTime {
             return;
         }
 
-        let n = normalized.rem_euclid(1.0);
-        let day_span = Self::SUNSET_NORMALIZED - Self::SUNRISE_NORMALIZED;
-        let night_span = 1.0 - day_span;
-        let day_fraction = self.day_duration / cycle;
-        let night_fraction = self.night_duration / cycle;
-
-        let cycle_pos = if (Self::SUNRISE_NORMALIZED..Self::SUNSET_NORMALIZED).contains(&n) {
-            let day_progress = (n - Self::SUNRISE_NORMALIZED) / day_span;
-            day_progress * day_fraction
-        } else {
-            let night_progress = if n >= Self::SUNSET_NORMALIZED {
-                (n - Self::SUNSET_NORMALIZED) / night_span
-            } else {
-                (n + 1.0 - Self::SUNSET_NORMALIZED) / night_span
-            };
-            day_fraction + night_progress * night_fraction
-        };
-
+        let cycle_pos = (normalized.rem_euclid(1.0) - Self::SUNRISE_NORMALIZED).rem_euclid(1.0);
         self.seconds_in_cycle = cycle_pos * cycle;
         self.wrap();
     }
@@ -259,21 +270,76 @@ mod tests {
     }
 
     #[test]
-    fn display_clock_runs_summer_hours() {
-        let mut wt = WorldTime::new(240.0, 40.0, 0.0);
-        // Sunrise displays 06:00 no matter the real durations.
+    fn display_clock_is_linear_while_the_sun_uses_summer_hours() {
+        let mut wt = WorldTime::new(
+            WorldTime::DEFAULT_DAY_DURATION,
+            WorldTime::DEFAULT_NIGHT_DURATION,
+            0.0,
+        );
+        // The internal cycle still begins at sunrise.
         assert!((wt.normalized_time() - WorldTime::SUNRISE_NORMALIZED).abs() < 1e-4);
-        // The instant before night starts displays 20:00...
-        wt.seconds_in_cycle = 239.9;
+        // Daylight ends at 23:00.
+        wt.seconds_in_cycle = wt.day_duration;
         assert!((wt.normalized_time() - WorldTime::SUNSET_NORMALIZED).abs() < 2e-3);
-        // ...while the sun's PHYSICAL phase still hits solar noon mid-day.
-        wt.seconds_in_cycle = 120.0;
+        // The sun's physical phase still reaches its zenith halfway through
+        // its long daylight arc (14:00 with a 05:00 sunrise and 23:00 sunset).
+        wt.seconds_in_cycle = wt.day_duration * 0.5;
         assert!((wt.sun_phase() - std::f32::consts::PI).abs() < 1e-3);
         assert!((-wt.sun_phase().cos() - 1.0).abs() < 1e-3);
-        // Midnight (display 0.0) round-trips through the inverse mapping.
+        // Midnight round-trips through the inverse mapping.
         wt.set_normalized_time(0.0);
         assert!(!wt.is_day());
         assert!((wt.normalized_time() - 0.0).rem_euclid(1.0) < 2e-3);
+    }
+
+    #[test]
+    fn one_simulation_second_is_one_displayed_minute_at_every_hour() {
+        assert_eq!(
+            WorldTime::new_default().cycle_duration(),
+            WorldTime::CLOCK_MINUTES_PER_DAY
+        );
+        for hour in [5.0_f32, 12.0, 22.5, 23.5, 0.5] {
+            let mut wt = WorldTime::new_default();
+            wt.set_normalized_time(hour / 24.0);
+            let before = wt.normalized_time();
+            wt.advance(1.0, 0.0);
+            let advanced_minutes =
+                (wt.normalized_time() - before).rem_euclid(1.0) * WorldTime::CLOCK_MINUTES_PER_DAY;
+            assert!((advanced_minutes - 1.0).abs() < 1e-3, "hour={hour}");
+        }
+    }
+
+    #[test]
+    fn only_the_below_horizon_sun_arc_accelerates() {
+        let mut daylight = WorldTime::new_default();
+        daylight.set_normalized_time(12.0 / 24.0);
+        let daylight_phase = daylight.sun_phase();
+        daylight.advance(1.0, 0.0);
+        let daylight_step = daylight.sun_phase() - daylight_phase;
+
+        let mut night = WorldTime::new_default();
+        night.set_normalized_time(0.0);
+        let night_phase = night.sun_phase();
+        night.advance(1.0, 0.0);
+        let night_step = night.sun_phase() - night_phase;
+
+        assert!((night_step / daylight_step - 3.0).abs() < 1e-3);
+        assert!((daylight.normalized_time() * 24.0 - (12.0 + 1.0 / 60.0)).abs() < 1e-4);
+        assert!((night.normalized_time() * 24.0 - 1.0 / 60.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn work_schedule_uses_clock_hours_not_sun_arc_fractions() {
+        let mut wt = WorldTime::new_default();
+        wt.set_normalized_time(5.99 / 24.0);
+        assert!(!wt.is_ordinary_work_time());
+        wt.set_normalized_time(6.0 / 24.0);
+        assert!(wt.is_ordinary_work_time());
+        wt.set_normalized_time(17.99 / 24.0);
+        assert!(wt.is_ordinary_work_time());
+        wt.set_normalized_time(18.0 / 24.0);
+        assert!(!wt.is_ordinary_work_time());
+        assert!((WorldTime::new_default().ordinary_shift_seconds() - 12.0 * 60.0).abs() < 1e-3);
     }
 
     #[test]

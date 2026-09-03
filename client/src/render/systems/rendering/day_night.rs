@@ -49,8 +49,8 @@ pub fn update_day_night_cycle(
     // SUN POSITION - East-west great-circle arc (rises in east, sets in west)
     // =========================================================================
     // IMPORTANT: we want elevation = -1 at midnight, 0 at sunrise/sunset, +1 at noon.
-    // Cycle-fraction phase, NOT display time: the display clock runs summer
-    // hours (sunset 20:00) and must never steer the physical sun.
+    // Solar phase, NOT a direct angle from the display clock: the clock stays
+    // linear while the sun spends longer above the horizon than below it.
     let phase = world_time.sun_phase();
     let elevation = -phase.cos(); // [-1, 1]
 

@@ -1,6 +1,6 @@
 //! Pure production-rate rules shared by tactical and strategic workers.
 
-use super::{CHOP_SECONDS, PERFECT_FIELD_SECONDS_PER_WHEAT};
+use super::PERFECT_FIELD_SECONDS_PER_WHEAT;
 use shared::components::{SettlementBuildingKind, WorldTime};
 use shared::economy::{
     BusinessProcurementPolicy, BusinessSalePolicy, Good, BASIS_POINTS, MAXIMUM_STOCK_COVERAGE_DAYS,
@@ -97,7 +97,11 @@ impl DailyProductionEstimate {
     }
 }
 
-const RATED_SHIFT_SECONDS: f32 = WorldTime::DEFAULT_DAY_DURATION * WorldTime::WORKDAY_END_DAY_T;
+const RATED_SHIFT_SECONDS: f32 = WorldTime::DEFAULT_ORDINARY_SHIFT_SECONDS;
+/// A staffed Lumberjack Hut has purpose-built tools and an established
+/// cutting workflow. Unaffiliated residents still use the slower, shared
+/// `CHOP_SECONDS` path when gathering emergency construction timber.
+const PROFESSIONAL_CHOP_SECONDS: f32 = 80.0 / 3.0;
 
 /// One embodied processing cycle. Extractors create their output at a field,
 /// shore or tree; processors instead consume and create stock inside their
@@ -137,14 +141,16 @@ pub(crate) const fn processing_recipe(kind: SettlementBuildingKind) -> Option<Pr
             input_units: 1,
             output: Good::Flour,
             output_units: 1,
-            work_seconds: 120.0,
+            // Nine batches per worker across the ordinary twelve-hour shift.
+            work_seconds: 80.0,
         }),
         SettlementBuildingKind::Bakery => Some(ProcessingRecipe {
             input: Good::Flour,
             input_units: 2,
             output: Good::Bread,
             output_units: 4,
-            work_seconds: 140.0,
+            // Fifteen batches across a fully staffed, two-worker shift.
+            work_seconds: 96.0,
         }),
         _ => None,
     }
@@ -262,14 +268,14 @@ pub(crate) fn estimated_staffed_unit_cost(
 /// workable faces and fractured material; meadow quarries remain possible but
 /// substantially less competitive rather than being prohibited by biome.
 pub(crate) fn quarry_seconds_per_stone(site_quality: f32) -> f32 {
-    300.0 - 120.0 * site_quality.clamp(0.0, 1.0)
+    200.0 - 80.0 * site_quality.clamp(0.0, 1.0)
 }
 
 /// Productive tending time for one Meat ration and its paired Wool by-product.
 /// A fully staffed perfect pasture rates six Meat per ordinary day; poor land
 /// remains viable at roughly four, while fish and grain keep distinct niches.
 pub(crate) fn livestock_seconds_per_meat(site_quality: f32) -> f32 {
-    540.0 - 180.0 * site_quality.clamp(0.0, 1.0)
+    360.0 - 120.0 * site_quality.clamp(0.0, 1.0)
 }
 
 /// Materialise paired livestock products atomically. A full store must never
@@ -536,20 +542,21 @@ pub(crate) const fn lumber_tree_yield(_quality: f32) -> u32 {
 
 /// Sparse or awkward woodland takes longer for a professional to turn into a
 /// full three-bundle load. Even the poorest valid plot remains more productive
-/// per hour than two-bundle emergency work; good forest approaches the base
-/// interaction time.
+/// per hour than two-bundle emergency work; good forest approaches the
+/// professional interaction time.
 pub(crate) fn lumber_seconds_per_tree(quality: f32) -> f32 {
     let quality = if quality.is_finite() {
         quality.clamp(0.0, 1.0)
     } else {
         0.0
     };
-    CHOP_SECONDS * (7.0 / 6.0 - quality / 6.0)
+    PROFESSIONAL_CHOP_SECONDS * (7.0 / 6.0 - quality / 6.0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::village::CHOP_SECONDS;
 
     #[test]
     fn professional_tree_work_always_beats_emergency_self_supply() {
@@ -562,8 +569,8 @@ mod tests {
         for quality in [f32::NEG_INFINITY, 0.0, 0.25, 0.5, 0.75, 1.0, f32::INFINITY] {
             assert!(lumber_tree_yield(quality) > SELF_SUPPLY_TREE_YIELD);
         }
-        assert!((lumber_seconds_per_tree(0.0) - (140.0 / 3.0)).abs() < 0.01);
-        assert!((lumber_seconds_per_tree(1.0) - CHOP_SECONDS).abs() < 0.01);
+        assert!((lumber_seconds_per_tree(0.0) - (280.0 / 9.0)).abs() < 0.01);
+        assert!((lumber_seconds_per_tree(1.0) - PROFESSIONAL_CHOP_SECONDS).abs() < 0.01);
         assert!(3.0 / lumber_seconds_per_tree(0.0) > SELF_SUPPLY_TREE_YIELD as f32 / CHOP_SECONDS);
     }
 

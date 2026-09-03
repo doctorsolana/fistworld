@@ -118,8 +118,10 @@ arrival and reusable ship-navigation contract are documented in
   Farmstead and Lumberjack Hut placement exposes live farmland/timber quality, and unused
   permits remain in a bounded tray where they can be resumed or surrendered for a fee refund.
   Recommended processor capital is advisory and remains ordinary spendable company cash.
-- One authoritative simulation clock, the same ordered village schedule in the live game
-  and lab, aggregate off-screen village production, and summary/detail replication.
+- One authoritative linear simulation clock (one world minute per real second at 1x),
+  with a 05:00 sunrise, 23:00 sunset and independently defined 06:00-18:00 work shift;
+  the same ordered village schedule in the live game and lab, aggregate off-screen village
+  production, and summary/detail replication.
 
 The live tier ladder is **Hamlet → Village → Town → City**. Its current executable
 population gates are 12, 30 and a provisional 75 residents, combined with sustained food,

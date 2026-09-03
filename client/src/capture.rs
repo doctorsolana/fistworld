@@ -3477,13 +3477,13 @@ fn apply_shot(
 
 /// Invert `WorldTime::normalized_time()`.
 ///
-/// That function maps the internal "day first, then night" layout onto a clock where
-/// 0.0 = midnight, 0.25 = sunrise, **0.5 = noon**, 0.75 = sunset. Getting this backwards
-/// silently photographs the world at dusk, which reads as "the renderer is broken".
+/// The internal cycle begins at sunrise while the public clock begins at
+/// midnight. Getting that offset backwards silently photographs the world at
+/// dusk, which reads as "the renderer is broken".
 fn normalized_to_seconds(normalized: f32, time: &WorldTime) -> f32 {
     // Delegate to the shared inverse so capture `--time` always agrees with
-    // the game's display clock (now asymmetric summer hours, sunset 20:00) —
-    // a hand-rolled copy here silently drifted once before.
+    // the game's linear display clock; a hand-rolled copy here silently drifted
+    // once before.
     let mut scratch = time.clone();
     scratch.set_normalized_time(normalized);
     scratch.seconds_in_cycle
@@ -3803,13 +3803,11 @@ mod tests {
         }
     }
 
-    /// Display noon is NOT mid-day-portion since the summer clock (sunrise
-    /// 06:00, sunset 22:00): it lands at the clock's fraction of daylight.
+    /// Capture time is a clock reading, not a fraction of the daylight arc.
     #[test]
-    fn noon_lands_at_the_summer_clock_fraction_of_daylight() {
+    fn noon_lands_at_the_linear_clock_offset_from_sunrise() {
         let t = probe();
-        let frac = (0.5 - WorldTime::SUNRISE_NORMALIZED)
-            / (WorldTime::SUNSET_NORMALIZED - WorldTime::SUNRISE_NORMALIZED);
-        assert!((normalized_to_seconds(0.5, &t) - t.day_duration * frac).abs() < 1e-3);
+        let expected = t.cycle_duration() * (0.5 - WorldTime::SUNRISE_NORMALIZED).rem_euclid(1.0);
+        assert!((normalized_to_seconds(0.5, &t) - expected).abs() < 1e-3);
     }
 }

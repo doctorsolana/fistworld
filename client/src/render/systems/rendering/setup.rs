@@ -131,7 +131,7 @@ pub fn setup_rendering(
         // Shadow filter verdict, measured 2026-08-19 on the real connected
         // game (M-series, 1920x1200): Gaussian ~56-72 fps, soft but half the
         // frame budget; Hardware2x2 ~87-99 fps but hard edges expose
-        // shadow-map texel crawl under the fast 20-minute sun ("wavy" tree
+        // shadow-map texel crawl under the accelerated game sun ("wavy" tree
         // shadows), and quantizing the sun to hide it read as lag. Temporal
         // (+ TAA below) measured ~85-94 fps with soft stable edges and was
         // approved in motion — the default. FISTFORCE_SHADOW_FILTER=

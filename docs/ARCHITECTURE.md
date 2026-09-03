@@ -340,7 +340,14 @@ The current village simulation uses these rules as hard boundaries:
   seconds and warp once at the start of the shared tick; `SimulationTime` is the read-only
   system parameter used by gameplay. No gameplay system multiplies `Time` by `TimeWarp`
   independently. Strategic work integrates the full elapsed interval, including exact
-  shift overlap at high warp.
+  shift overlap at high warp. At 1x the display clock is linear: one real second is one
+  world minute and a complete day is 24 real minutes. Sunrise is 05:00 and sunset is
+  23:00; only the sun's below-horizon arc accelerates through the six-hour night. NPC
+  schedules use explicit clock hours (ordinary work is 06:00-18:00), never a fraction of
+  the lighting arc. The authoritative Bevy fixed schedule and network protocol both use
+  the shared 60 Hz constant. `ServerPerf` reports `clock_delivery`; sustained values below
+  100% mean the fixed schedule is dropping elapsed time under overload rather than a game
+  mechanic intentionally slowing the clock.
 - **The live game and Village Lab share one ordered schedule.** Add village behaviour to
   `server/src/world/village/schedule.rs`; do not maintain a second hand-copied lab list.
 - **Summary and detail are different entities.** `SettlementSummary` is tiny and global.

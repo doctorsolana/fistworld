@@ -55,6 +55,7 @@ pub struct ServerPerfMonitor {
     tick_sum: Duration,
     tick_max: Duration,
     tick_over_budget: u32,
+    simulated_seconds: f64,
     phase_sum: [Duration; Phase::COUNT],
     phase_max: [Duration; Phase::COUNT],
 }
@@ -78,6 +79,7 @@ impl Default for ServerPerfMonitor {
             tick_sum: Duration::ZERO,
             tick_max: Duration::ZERO,
             tick_over_budget: 0,
+            simulated_seconds: 0.0,
             phase_sum: [Duration::ZERO; Phase::COUNT],
             phase_max: [Duration::ZERO; Phase::COUNT],
         }
@@ -126,12 +128,13 @@ impl ServerPerfMonitor {
         self.tick_sum = Duration::ZERO;
         self.tick_max = Duration::ZERO;
         self.tick_over_budget = 0;
+        self.simulated_seconds = 0.0;
         self.phase_sum = [Duration::ZERO; Phase::COUNT];
         self.phase_max = [Duration::ZERO; Phase::COUNT];
     }
 }
 
-pub fn handle_perf_tick_begin(mut perf: ResMut<ServerPerfMonitor>) {
+pub fn handle_perf_tick_begin(time: Option<Res<Time>>, mut perf: ResMut<ServerPerfMonitor>) {
     if !perf.enabled {
         return;
     }
@@ -140,6 +143,14 @@ pub fn handle_perf_tick_begin(mut perf: ResMut<ServerPerfMonitor>) {
         info!("Server perf monitor enabled (set FISTFORCE_SERVER_PERF=0 to disable)");
         perf.announced = true;
     }
+
+    // This is the unwarped fixed-clock delivery, compared with wall time when
+    // the window is logged. A sustained value below 100% means Bevy's lag
+    // safety clamp is deliberately dropping elapsed time to avoid a death
+    // spiral; ordinary expensive-but-recoverable ticks still catch up.
+    perf.simulated_seconds += time
+        .as_ref()
+        .map_or(1.0 / FIXED_TIMESTEP_HZ, |time| time.delta_secs_f64());
 
     let now = Instant::now();
     if let Some(last_tick) = perf.last_tick {
@@ -242,6 +253,7 @@ pub fn update_server_perf_log(
         .as_secs_f64()
         .max(0.001);
     let input_ingress_total_per_sec = input_ingress.total_messages as f64 / window_secs;
+    let clock_delivery_pct = perf.simulated_seconds / window_secs * 100.0;
 
     let mut per_client_input_rates: Vec<(String, f64)> = input_ingress
         .messages_by_client
@@ -298,10 +310,11 @@ pub fn update_server_perf_log(
     }
 
     info!(
-        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% | phases world={:.2}/{:.2} core={:.2}/{:.2} navigation={:.2}/{:.2} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} villagers={} idle={} migrating={} settled={} nav_pending={} nav_failed={} migration_cooldown={}",
+        "ServerPerf tick avg={:.2}ms max={:.2}ms over_20%={:.1}% clock_delivery={:.1}% | phases world={:.2}/{:.2} core={:.2}/{:.2} navigation={:.2}/{:.2} ms | inputs buffered={} missing_for_players={} ingress={:.1}/s per_client=[{}] | entities players={} villagers={} idle={} migrating={} settled={} nav_pending={} nav_failed={} migration_cooldown={}",
         tick_avg_ms,
         tick_max_ms,
         over_budget_pct,
+        clock_delivery_pct,
         world_avg_ms,
         world_max_ms,
         core_avg_ms,

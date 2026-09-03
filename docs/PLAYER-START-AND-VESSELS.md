@@ -15,7 +15,7 @@ the client only presents the vessel and sends destinations.
    Dinghy roughly 48–56 metres offshore: close enough for a short opening voyage, while
    leaving enough water for sailing to feel like an arrival rather than starting on the beach.
    A fresh server begins at 08:00 on the display clock, with the sun already above the
-   horizon, so the first arrival is a readable warm sunrise rather than darkness.
+   horizon, so the first arrival is a readable warm morning rather than darkness.
 4. The server creates exactly one Hero and one starter Dinghy. The Hero is seated at the
    authored `Anchor_Helm` position. Presentation waits for the replicated authoritative
    heading before instantiating the hull, so the boat cannot begin at a fallback rotation

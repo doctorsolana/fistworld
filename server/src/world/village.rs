@@ -361,16 +361,14 @@ pub(crate) const CHOP_SECONDS: f32 = 40.0;
 /// failures, but one unreachable hut must not pin them outside a cabin for an
 /// entire day. A later shift can retry after roads or obstacles change.
 const MAX_WORKPLACE_ROUTE_FAILURES: u8 = 3;
-/// At 100% quality, one Wheat takes 2m50s of actual field work. The ordinary
-/// 06:00-ish to 18:00 shift contains about 1,050 simulation seconds, so a
-/// perfect field approaches six Wheat after allowing for short local trips.
-/// A common 67% field takes about 4m14s and approaches four Wheat per shift.
-const PERFECT_FIELD_SECONDS_PER_WHEAT: f32 = 170.0;
+/// At 100% quality, one Wheat takes two hours of displayed world time. The
+/// explicit 06:00-18:00 shift can therefore produce six Wheat per worker
+/// before allowing for local trips. A common 67% field approaches four. This
+/// keeps the physical work loop aligned with both the investment planner and
+/// the intended founding-economy balance.
+const PERFECT_FIELD_SECONDS_PER_WHEAT: f32 = 120.0;
 const FARM_CARRY_BATCH_UNITS: u32 = 2;
 const FISH_CARRY_BATCH_UNITS: u32 = 2;
-/// Daylight spans 06:00-22:00. A 75% cutoff ends ordinary work near 18:00,
-/// leaving a visible evening for shopping, socialising and household tasks.
-pub(crate) const WORKDAY_END_DAY_T: f32 = WorldTime::WORKDAY_END_DAY_T;
 const TREE_MIN_DISTANCE: f32 = 10.0;
 const TREE_MAX_DISTANCE: f32 = 120.0;
 const DOOR_REACH: f32 = 0.4;

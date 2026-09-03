@@ -319,9 +319,7 @@ impl StressTaskLedger {
             .query::<&WorldTime>()
             .iter(world)
             .next()
-            .is_some_and(|clock| {
-                clock.seconds_in_cycle < clock.day_duration * village::WORKDAY_END_DAY_T
-            });
+            .is_some_and(WorldTime::is_ordinary_work_time);
         let settlement_names: HashMap<_, _> = world
             .query::<(Entity, &Settlement)>()
             .iter(world)

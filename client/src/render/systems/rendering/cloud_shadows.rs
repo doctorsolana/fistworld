@@ -55,7 +55,7 @@ use super::clouds::hash_to_unit;
 
 /// Last cloud-shadow uniforms written to the GPU materials, plus the previous
 /// sun projection so its velocity can be finite-differenced for in-shader
-/// extrapolation (the sun arcs fast on a 20-minute day — its sweep component
+/// extrapolation (the sun completes a full arc within one short game day, so its sweep component
 /// of shadow motion is often FASTER than the wind and steps visibly if only
 /// refreshed at the anchor rate).
 #[derive(Default)]
@@ -156,7 +156,7 @@ pub fn sync_cloud_shadow_params(
     // the height keeps a horizon sun from smearing shadows to infinity.
     let to_sun = Vec3::from(sun_tf.back());
     let sun_y = to_sun.y.max(MIN_SUN_Y);
-    // Damped: at a 20-minute day the raw projection sweeps shadows 2-5x
+    // Damped: over a short game day the raw projection sweeps shadows 2-5x
     // faster than the wind moves their clouds, so shadows visibly travel the
     // WRONG WAY relative to the sky. The damp keeps a directional lean (long
     // morning/evening shadows offset away from the sun) while the sweep rate

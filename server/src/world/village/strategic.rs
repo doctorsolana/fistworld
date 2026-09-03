@@ -42,7 +42,7 @@ use super::{
     InternalDeliveryRoutine, LumberjackRoutine, LumberjackWorkProgress, MarketCollectionRoutine,
     MootMealRoutine, MootQueueTicket, PierTraversal, ProcessingRoutine, ProcessorWorkProgress,
     QuarryRoutine, QuarryWorkProgress, SettlementEconomyRuntime, TradeRouteRoutine, WorkerOffDuty,
-    WorkplaceDoorTransit, WORKDAY_END_DAY_T,
+    WorkplaceDoorTransit,
 };
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -521,13 +521,15 @@ fn productive_seconds_ending_at(clock: &WorldTime, elapsed: f64) -> f64 {
     if cycle <= 0.0 || elapsed <= 0.0 {
         return 0.0;
     }
-    let work_end = f64::from(clock.day_duration * WORKDAY_END_DAY_T).clamp(0.0, cycle);
+    let work_start = f64::from(clock.ordinary_work_start_seconds()).clamp(0.0, cycle);
+    let work_end = f64::from(clock.ordinary_work_end_seconds()).clamp(work_start, cycle);
+    let work_duration = work_end - work_start;
     let end = f64::from(clock.day) * cycle + f64::from(clock.seconds_in_cycle);
     let start = (end - elapsed).max(0.0);
     let cumulative = |seconds: f64| {
         let cycles = (seconds / cycle).floor();
         let within = seconds.rem_euclid(cycle);
-        cycles * work_end + within.min(work_end)
+        cycles * work_duration + (within - work_start).clamp(0.0, work_duration)
     };
     (cumulative(end) - cumulative(start)).max(0.0)
 }
@@ -1461,10 +1463,16 @@ mod tests {
     fn strategic_work_overlap_is_warp_step_invariant() {
         let mut clock = WorldTime::new(1_440.0, 240.0, 200.0);
         clock.day = 1;
-        assert!((productive_seconds_ending_at(&clock, 1_680.0) - 1_080.0).abs() < 0.01);
-        // The 800 seconds ending 200 seconds into the new day contain 600
-        // seconds of night and exactly 200 seconds of the new shift.
-        assert!((productive_seconds_ending_at(&clock, 800.0) - 200.0).abs() < 0.01);
+        assert!(
+            (productive_seconds_ending_at(&clock, 1_680.0)
+                - f64::from(clock.ordinary_shift_seconds()))
+            .abs()
+                < 0.01
+        );
+        // The interval ending 200 seconds into the new solar cycle contains
+        // only the portion after the explicit 06:00 shift start.
+        let expected = f64::from(200.0 - clock.ordinary_work_start_seconds());
+        assert!((productive_seconds_ending_at(&clock, 800.0) - expected).abs() < 0.01);
     }
 
     #[test]
@@ -1847,11 +1855,11 @@ mod tests {
         app.world_mut().resource_mut::<StrategicStep>().serial = 1;
         app.world_mut()
             .resource_mut::<StrategicStep>()
-            .elapsed_world_seconds = 340.0;
+            .elapsed_world_seconds = 240.0;
         app.world_mut()
             .get_mut::<WorldTime>(clock)
             .unwrap()
-            .advance(340.0, 0.0);
+            .advance(240.0, 0.0);
         app.update();
         assert_eq!(
             app.world()
@@ -1865,11 +1873,11 @@ mod tests {
         app.world_mut().resource_mut::<StrategicStep>().serial = 2;
         app.world_mut()
             .resource_mut::<StrategicStep>()
-            .elapsed_world_seconds = 340.0;
+            .elapsed_world_seconds = 240.0;
         app.world_mut()
             .get_mut::<WorldTime>(clock)
             .unwrap()
-            .advance(340.0, 0.0);
+            .advance(240.0, 0.0);
         app.update();
         assert_eq!(
             app.world()
