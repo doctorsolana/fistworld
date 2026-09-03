@@ -465,8 +465,10 @@ batch, carry it to their own workplace store, and repeat. A woodcutter must
 reach and finish chopping a real tree interaction before receiving its
 three-Wood load, then deposits that load at the Lumberjack Hut. Better forest
 quality shortens the professional harvest cycle. Emergency construction
-self-supply yields only two Wood from the same interaction, making it a bootstrap
-fallback rather than a competitive industry.
+self-supply yields only two Wood from the same interaction and normally visits a
+nearby safe second tree to fill a four-Wood personal load before returning. Final,
+dusk and blocked-next-tree loads return partially, making the loop both deadlock-safe
+and a bootstrap fallback rather than a competitive industry.
 The physical interactions have no authored daily resource grant. Manual firms can
 run the entire ordinary shift; autonomous firms instead share a cached daily output
 budget derived from recent sales, unmet demand, stock already onsite/listed and the

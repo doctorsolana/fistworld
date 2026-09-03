@@ -698,7 +698,12 @@ with a player who does nothing but found the hall and put people on the map.
    to a real tree, face it, play the chop action, and carry a bounded load back.
    This emergency self-supply recovers two usable Wood bundles per completed tree
    interaction. It prevents a founding deadlock, but is intentionally much less
-   productive than hiring a professional woodcutter or buying their stock.
+   productive than hiring a professional woodcutter or buying their stock. A
+   builder continues to the nearest safe, different second tree until their
+   four-Wood personal capacity is full, then normally delivers `4 + 4 + 2` for a
+   ten-Wood cabin. The final load, a dusk load, or a load whose next tree is
+   unavailable is delivered partially, so batching cannot strand useful Wood in
+   sparse or obstructed woodland.
    Loads accumulate visibly and construction cannot begin on nine of ten logs.
    Only when the exact requirement is present does the builder walk to the plot,
    face the work, clear and level the ground, then spend ten seconds raising it.

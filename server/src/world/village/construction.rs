@@ -19,6 +19,22 @@ fn material_stock_may_supply(
     owns_priority || available_wood >= settlement_outstanding
 }
 
+/// Total Wood this carrier should hold before beginning a construction run.
+///
+/// The target respects both the site's outstanding requirement and the
+/// carrier's actual remaining bulk. This matters for odd-capacity test
+/// inventories and for a builder who happens to be carrying another good:
+/// neither may wait forever for a fourth bundle that cannot physically fit.
+fn construction_wood_load_target(carrier: &GoodsInventory, site_remaining: u32) -> u32 {
+    let carried = carrier.amount(Good::Wood);
+    site_remaining.min(carried.saturating_add(carrier.free_units(Good::Wood)))
+}
+
+fn construction_wood_load_is_ready(carrier: &GoodsInventory, site_remaining: u32) -> bool {
+    let carried = carrier.amount(Good::Wood);
+    carried > 0 && carried >= construction_wood_load_target(carrier, site_remaining)
+}
+
 /// A builder who has not actually secured Wood has no reason to occupy the
 /// public counter. Wait at that builder's own worksite while market stock,
 /// priority or the staggered tree proof changes. One site has one builder, so
@@ -410,6 +426,10 @@ pub fn run_construction_material_logistics(
             activity.set_if_neq(CharacterActivity::Idle);
             continue;
         }
+        let carried_wood = inventories
+            .get(builder)
+            .map(|inventory| inventory.amount(Good::Wood))
+            .unwrap_or(0);
         // Ordinary builders stop for the night, but an explicit player order
         // is not an employment shift. A commanded hero must keep gathering
         // and delivering materials overnight instead of remaining frozen in
@@ -428,7 +448,7 @@ pub fn run_construction_material_logistics(
                 | ConstructionMaterialPhase::ApproachingDeliveryAccess { .. }
                 | ConstructionMaterialPhase::Delivering { .. }
                 | ConstructionMaterialPhase::LeavingDeliveryAccess { .. }
-        );
+        ) || carried_wood > 0;
         if !daylight && !player_assigned && !finishing_up {
             // The moot queue advances all night while this system - the only
             // consumer of Ready freight tickets - sleeps. Dissolve the line
@@ -490,6 +510,40 @@ pub fn run_construction_material_logistics(
                 .remove::<MootQueueTransit>();
             continue;
         }
+        // A partial self-supplied load normally waits for another tree, but
+        // ordinary villagers still finish their material run at dusk. Abort
+        // an uncommitted tree/store approach and start the delivery now so
+        // Wood never spends the night stranded on a builder's shoulder.
+        if !daylight
+            && !player_assigned
+            && carried_wood > 0
+            && !matches!(
+                routine.phase,
+                ConstructionMaterialPhase::Chopping { .. }
+                    | ConstructionMaterialPhase::ApproachingDeliveryAccess { .. }
+                    | ConstructionMaterialPhase::Delivering { .. }
+                    | ConstructionMaterialPhase::LeavingDeliveryAccess { .. }
+            )
+        {
+            commands
+                .entity(builder)
+                .remove::<MootQueueTicket>()
+                .remove::<MootQueueTransit>()
+                .remove::<NavigationRouteFailed>()
+                .remove::<NavigationRoutePending>()
+                .remove::<TravelRoute>()
+                .remove::<MoveTarget>();
+            routine.phase = begin_material_delivery(
+                &mut commands,
+                builder,
+                position.0,
+                site.stand,
+                &terrain,
+                planned_access,
+            );
+            activity.set_if_neq(CharacterActivity::Idle);
+            continue;
+        }
 
         // A Hall pickup uses the shared visible FIFO line. Its movement and
         // route recovery belong to the queue until the counter says Ready;
@@ -514,7 +568,7 @@ pub fn run_construction_material_logistics(
                     name.0, failed.goal.x, failed.goal.z
                 );
                 let widened = postpone_construction_tree_search(&mut routine, now);
-                if widened {
+                if widened && carried_wood == 0 {
                     warn!(
                         "Village supplier {} exhausted twelve tree approaches; pausing the unavailable timber search",
                         name.0
@@ -526,6 +580,19 @@ pub fn run_construction_material_logistics(
                     .remove::<NavigationRoutePending>()
                     .remove::<TravelRoute>()
                     .remove::<MoveTarget>();
+                if carried_wood > 0 {
+                    // Do not hold already gathered Wood hostage to a failed
+                    // second-tree route. Deliver this smaller batch and let
+                    // the advanced candidate/retry state govern the next run.
+                    routine.phase = begin_material_delivery(
+                        &mut commands,
+                        builder,
+                        position.0,
+                        site.stand,
+                        &terrain,
+                        planned_access,
+                    );
+                }
             } else if matches!(
                 routine.phase,
                 ConstructionMaterialPhase::ApproachingDeliveryAccess { .. }
@@ -654,7 +721,8 @@ pub fn run_construction_material_logistics(
             .get(routine.site)
             .map(|inventory| inventory.amount(Good::Wood))
             .unwrap_or(0);
-        if delivered >= required {
+        let remaining = required.saturating_sub(delivered);
+        if remaining == 0 {
             activity.set_if_neq(CharacterActivity::Idle);
             // Release the hall freight-lane ticket too: a builder whose site
             // was topped up externally while they queued would otherwise hold
@@ -700,11 +768,6 @@ pub fn run_construction_material_logistics(
                     building.kind.entrance_position(at.0, rotation.0)
                 }),
         );
-        let carried_wood = inventories
-            .get(builder)
-            .map(|inventory| inventory.amount(Good::Wood))
-            .unwrap_or(0);
-
         // Once Wood changes hands, retain the ready freight ticket until the
         // delivery route is actually installed (or the builder has physically
         // reached a very close target). This keeps one body at the counter,
@@ -750,7 +813,10 @@ pub fn run_construction_material_logistics(
         match routine.phase {
             ConstructionMaterialPhase::Seeking => {
                 activity.set_if_neq(CharacterActivity::Idle);
-                if carried_wood > 0 {
+                let wood_load_ready = inventories
+                    .get(builder)
+                    .is_ok_and(|inventory| construction_wood_load_is_ready(inventory, remaining));
+                if carried_wood > 0 && (wood_load_ready || carries_other_goods) {
                     commands.entity(builder).remove::<ambient::AmbientRoutine>();
                     routine.phase = begin_material_delivery(
                         &mut commands,
@@ -843,6 +909,21 @@ pub fn run_construction_material_logistics(
                         available_wood,
                         outstanding,
                     ) {
+                        if carried_wood > 0 {
+                            // The priority rule only serialises unclaimed Hall
+                            // stock. It must never pin physical Wood already on
+                            // another builder while the preferred site spends
+                            // that stock.
+                            routine.phase = begin_material_delivery(
+                                &mut commands,
+                                builder,
+                                position.0,
+                                site.stand,
+                                &terrain,
+                                planned_access,
+                            );
+                            continue;
+                        }
                         commands.entity(builder).remove::<ambient::AmbientRoutine>();
                         wait_at_own_worksite(
                             &mut commands,
@@ -902,37 +983,7 @@ pub fn run_construction_material_logistics(
                 }
 
                 if now < routine.tree_retry_after || tree_proof_used {
-                    wait_at_own_worksite(
-                        &mut commands,
-                        builder,
-                        position.0,
-                        move_target,
-                        site.stand,
-                    );
-                    continue;
-                }
-                commands.entity(builder).remove::<ambient::AmbientRoutine>();
-                tree_proof_used = true;
-
-                let salt = stable_name_hash(&name.0) ^ routine.site.to_bits() as u32;
-                let (tree, stand) = match find_tree_for_cycle_cached(
-                    &mut tree_candidates,
-                    &terrain,
-                    derived.as_deref(),
-                    obstacles.as_deref(),
-                    // A remote building plot is not the tree-search centre.
-                    // Founding builders share the settlement's reachable
-                    // woodland around its hall, then carry timber out to the
-                    // site; otherwise an edge cabin can back off forever even
-                    // while the same village visibly has a healthy forest.
-                    hall_position.0,
-                    routine.cycle,
-                    salt,
-                ) {
-                    TreeCandidateLookup::Pending => {
-                        // The immutable 5x5-chunk prop search is filled a few
-                        // chunks per tick. Do not count cache preparation as a
-                        // failed tree or impose a gameplay backoff.
+                    if carried_wood == 0 {
                         wait_at_own_worksite(
                             &mut commands,
                             builder,
@@ -940,6 +991,58 @@ pub fn run_construction_material_logistics(
                             move_target,
                             site.stand,
                         );
+                    }
+                    continue;
+                }
+                commands.entity(builder).remove::<ambient::AmbientRoutine>();
+                tree_proof_used = true;
+
+                let salt = stable_name_hash(&name.0) ^ routine.site.to_bits() as u32;
+                // A remote building plot is not the tree-search centre.
+                // Founding builders share the settlement's reachable
+                // woodland around its hall, then carry timber out to the
+                // site; otherwise an edge cabin can back off forever even
+                // while the same village visibly has a healthy forest.
+                // After the first tree, prefer the nearest safe *different*
+                // trunk so filling a four-Wood inventory saves a site trip
+                // without replacing it with a cross-town woodland trip.
+                let tree_lookup = if carried_wood > 0 {
+                    find_nearby_tree_for_cycle_cached(
+                        &mut tree_candidates,
+                        &terrain,
+                        derived.as_deref(),
+                        obstacles.as_deref(),
+                        hall_position.0,
+                        position.0,
+                        routine.last_tree,
+                        routine.cycle,
+                        salt,
+                    )
+                } else {
+                    find_tree_for_cycle_cached(
+                        &mut tree_candidates,
+                        &terrain,
+                        derived.as_deref(),
+                        obstacles.as_deref(),
+                        hall_position.0,
+                        routine.cycle,
+                        salt,
+                    )
+                };
+                let (tree, stand) = match tree_lookup {
+                    TreeCandidateLookup::Pending => {
+                        // The immutable 5x5-chunk prop search is filled a few
+                        // chunks per tick. Do not count cache preparation as a
+                        // failed tree or impose a gameplay backoff.
+                        if carried_wood == 0 {
+                            wait_at_own_worksite(
+                                &mut commands,
+                                builder,
+                                position.0,
+                                move_target,
+                                site.stand,
+                            );
+                        }
                         continue;
                     }
                     TreeCandidateLookup::Unavailable => {
@@ -947,6 +1050,20 @@ pub fn run_construction_material_logistics(
                         // candidate. Back off rather than retrying a sparse
                         // grove at the server tick rate.
                         let widened = postpone_construction_tree_search(&mut routine, now);
+                        if carried_wood > 0 {
+                            // Sparse woodland can provide one valid tree but
+                            // no second candidate. The partial batch is still
+                            // useful and must reach the site immediately.
+                            routine.phase = begin_material_delivery(
+                                &mut commands,
+                                builder,
+                                position.0,
+                                site.stand,
+                                &terrain,
+                                planned_access,
+                            );
+                            continue;
+                        }
                         if widened
                             && market_durably_dry
                             && !player_assigned
@@ -988,6 +1105,20 @@ pub fn run_construction_material_logistics(
                     Vec2::new(stand.x, stand.z),
                 ) {
                     let widened = postpone_construction_tree_search(&mut routine, now);
+                    if carried_wood > 0 {
+                        // The first tree was valid; only the attempted top-up
+                        // is water-separated. Complete the useful partial run
+                        // rather than treating the whole site as starved.
+                        routine.phase = begin_material_delivery(
+                            &mut commands,
+                            builder,
+                            position.0,
+                            site.stand,
+                            &terrain,
+                            planned_access,
+                        );
+                        continue;
+                    }
                     if widened
                         && market_durably_dry
                         && !player_assigned
@@ -1223,23 +1354,43 @@ pub fn run_construction_material_logistics(
                     continue;
                 }
                 let remaining = required.saturating_sub(delivered);
+                let mut carried_after = 0;
+                let mut load_ready = false;
+                let mut carries_other_goods_after = false;
                 if let Ok(mut carrier) = inventories.get_mut(builder) {
                     // This is a deadlock escape, not a substitute timber
                     // industry. An ordinary builder recovers two usable bundles
                     // per tree; a professional woodcutter recovers three, works
                     // faster in good forest, and can sell through the market.
-                    carrier.add(Good::Wood, remaining.min(SELF_SUPPLY_TREE_YIELD));
+                    let still_needed = remaining.saturating_sub(carrier.amount(Good::Wood));
+                    carrier.add(Good::Wood, still_needed.min(SELF_SUPPLY_TREE_YIELD));
+                    carried_after = carrier.amount(Good::Wood);
+                    load_ready = construction_wood_load_is_ready(&carrier, remaining);
+                    carries_other_goods_after = Good::ALL
+                        .iter()
+                        .any(|good| *good != Good::Wood && carrier.amount(*good) > 0);
                 }
                 routine.cycle = routine.cycle.wrapping_add(1);
+                routine.last_tree = Some(tree);
                 activity.set_if_neq(CharacterActivity::Idle);
-                routine.phase = begin_material_delivery(
-                    &mut commands,
-                    builder,
-                    position.0,
-                    site.stand,
-                    &terrain,
-                    planned_access,
-                );
+                if carried_after > 0
+                    && (load_ready || carries_other_goods_after || (!daylight && !player_assigned))
+                {
+                    routine.phase = begin_material_delivery(
+                        &mut commands,
+                        builder,
+                        position.0,
+                        site.stand,
+                        &terrain,
+                        planned_access,
+                    );
+                } else {
+                    // One emergency tree yields two bundles while a normal
+                    // person carries four. Seek another tree before making
+                    // the expensive site trip; the failure branches above
+                    // deliberately fall back to delivering this partial load.
+                    routine.phase = ConstructionMaterialPhase::Seeking;
+                }
             }
             ConstructionMaterialPhase::ApproachingDeliveryAccess { entry, .. } => {
                 activity.set_if_neq(CharacterActivity::Idle);
@@ -1873,11 +2024,41 @@ pub(crate) fn ensure_market_ground_is_level(
 #[cfg(test)]
 mod tests {
     use super::{
-        delivery_egress_points, level_construction_ground, market_ground_needs_leveling,
-        material_stock_may_supply, BuildStage, PlannedRoadAccess, UnderConstruction, WorldTerrain,
+        construction_wood_load_is_ready, construction_wood_load_target, delivery_egress_points,
+        level_construction_ground, market_ground_needs_leveling, material_stock_may_supply,
+        BuildStage, PlannedRoadAccess, UnderConstruction, WorldTerrain,
     };
     use bevy::prelude::{Entity, Vec2, Vec3};
     use shared::components::SettlementBuildingKind;
+    use shared::economy::{capacity, Good, GoodsInventory};
+
+    #[test]
+    fn construction_self_supply_fills_a_real_person_load_before_delivery() {
+        let mut carrier = GoodsInventory::new(capacity::VILLAGER);
+        assert_eq!(construction_wood_load_target(&carrier, 10), 4);
+        assert!(!construction_wood_load_is_ready(&carrier, 10));
+
+        carrier.add(Good::Wood, 2);
+        assert_eq!(construction_wood_load_target(&carrier, 10), 4);
+        assert!(!construction_wood_load_is_ready(&carrier, 10));
+
+        carrier.add(Good::Wood, 2);
+        assert!(construction_wood_load_is_ready(&carrier, 10));
+    }
+
+    #[test]
+    fn construction_self_supply_accepts_final_and_capacity_limited_partial_loads() {
+        let mut final_load = GoodsInventory::new(capacity::VILLAGER);
+        final_load.add(Good::Wood, 2);
+        assert_eq!(construction_wood_load_target(&final_load, 2), 2);
+        assert!(construction_wood_load_is_ready(&final_load, 2));
+
+        let mut constrained = GoodsInventory::new(10);
+        constrained.add(Good::Wood, 2);
+        constrained.add(Good::Food, 2);
+        assert_eq!(construction_wood_load_target(&constrained, 10), 2);
+        assert!(construction_wood_load_is_ready(&constrained, 10));
+    }
 
     #[test]
     fn abundant_market_wood_cannot_be_starved_by_one_priority_site() {

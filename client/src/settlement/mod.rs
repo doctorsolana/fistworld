@@ -2289,7 +2289,11 @@ mod door_tests {
 
     #[test]
     fn cabin_windows_require_both_darkness_and_an_occupied_household() {
-        let mut clock = WorldTime::new(600.0, 300.0, 0.0);
+        // Use the production daylight/night proportions. An arbitrary short
+        // clock no longer maps the authored 05:00/23:00 normalized constants
+        // to its day boundary now that the display clock and sun arc are
+        // intentionally separate.
+        let mut clock = WorldTime::new_default();
 
         clock.set_normalized_time(0.5);
         assert_eq!(house_window_target(&clock, true), 0.0);

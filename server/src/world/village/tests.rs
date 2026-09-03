@@ -237,6 +237,7 @@ fn player_assignment_advances_the_physical_supply_loop_at_night_without_villager
         ConstructionMaterialRoutine {
             site,
             cycle: 0,
+            last_tree: None,
             failed_tree_routes: 0,
             failed_store_routes: 0,
             failed_delivery_routes: 0,
@@ -282,10 +283,206 @@ fn player_assignment_advances_the_physical_supply_loop_at_night_without_villager
     );
 }
 
+#[test]
+fn emergency_builder_batches_two_trees_into_one_full_delivery() {
+    let mut app = village_test_app();
+    app.init_resource::<Time>();
+    app.insert_resource(WorldTerrain::default());
+    app.add_systems(Update, run_construction_material_logistics);
+    app.world_mut().spawn(WorldTime::new_default());
+
+    let hall_position = Vec3::new(1720.0, 6.0, 0.0);
+    let settlement_id = shared::components::SettlementId(90);
+    let settlement = app
+        .world_mut()
+        .spawn((
+            settlement_id,
+            Settlement {
+                name: "Batchwood".into(),
+                tier: shared::components::SettlementTier::Hamlet,
+                residents: 1,
+                treasury: 0,
+            },
+            PlayerPosition(hall_position),
+            PlayerRotation(0.0),
+            GoodsInventory::new(shared::economy::capacity::HALL),
+        ))
+        .id();
+    let owner = shared::components::PersonId(902);
+    let builder = app
+        .world_mut()
+        .spawn((
+            owner,
+            CharacterName("Batch Builder".into()),
+            CharacterKind::Hero,
+            PlayerPosition(hall_position),
+            PlayerRotation(0.0),
+            CharacterActivity::Chopping,
+            GoodsInventory::new(shared::economy::capacity::VILLAGER),
+            Wallet::default(),
+        ))
+        .id();
+    let kind = SettlementBuildingKind::House;
+    let position = hall_position + Vec3::X * 25.0;
+    let stand = shared::components::builder_stand_position(
+        position,
+        0.0,
+        kind.art().definition().footprint.y,
+    );
+    let site = app
+        .world_mut()
+        .spawn((
+            UnderConstruction {
+                kind,
+                position,
+                rotation: 0.0,
+                owner: Some("Batch Builder".into()),
+                owner_id: Some(owner),
+                builder: Some(builder),
+                settlement,
+                settlement_id,
+                stand,
+                failed_stand_routes: 0,
+                stage: BuildStage::Supplying,
+                quality: 1.0,
+            },
+            shared::components::ConstructionSite {
+                kind,
+                settlement: "Batchwood".into(),
+                raising: false,
+                stand,
+                rotation: 0.0,
+            },
+            GoodsInventory::new(kind.construction_storage_bulk()),
+            PlayerPosition(position),
+            crate::player::permits::PlayerConstructionProject { owner },
+        ))
+        .id();
+    app.world_mut().entity_mut(builder).insert((
+        PlayerConstructionAssignment { site, settlement },
+        ConstructionMaterialRoutine {
+            site,
+            cycle: 0,
+            last_tree: None,
+            failed_tree_routes: 0,
+            failed_store_routes: 0,
+            failed_delivery_routes: 0,
+            tree_retry_after: 0.0,
+            store_retry_after: 0.0,
+            phase: ConstructionMaterialPhase::Chopping {
+                tree: hall_position + Vec3::X,
+                seconds_left: 0.0,
+            },
+        },
+    ));
+
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(std::time::Duration::from_secs(1));
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .get::<GoodsInventory>(builder)
+            .unwrap()
+            .amount(Good::Wood),
+        2
+    );
+    assert!(matches!(
+        app.world()
+            .get::<ConstructionMaterialRoutine>(builder)
+            .unwrap()
+            .phase,
+        ConstructionMaterialPhase::Seeking
+    ));
+    assert_eq!(
+        app.world()
+            .get::<ConstructionMaterialRoutine>(builder)
+            .unwrap()
+            .last_tree,
+        Some(hall_position + Vec3::X),
+        "top-up selection must remember and avoid the visible trunk just felled"
+    );
+    assert!(
+        app.world().get::<MoveTarget>(builder).is_none(),
+        "a half-load should seek another tree rather than start the site trip"
+    );
+
+    app.world_mut()
+        .get_mut::<ConstructionMaterialRoutine>(builder)
+        .unwrap()
+        .phase = ConstructionMaterialPhase::Chopping {
+        tree: hall_position + Vec3::Z,
+        seconds_left: 0.0,
+    };
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(std::time::Duration::from_secs(1));
+    app.update();
+
+    assert_eq!(
+        app.world()
+            .get::<GoodsInventory>(builder)
+            .unwrap()
+            .amount(Good::Wood),
+        4
+    );
+    assert!(matches!(
+        app.world()
+            .get::<ConstructionMaterialRoutine>(builder)
+            .unwrap()
+            .phase,
+        ConstructionMaterialPhase::Delivering { .. }
+    ));
+    assert_eq!(app.world().get::<MoveTarget>(builder).unwrap().0, stand);
+}
+
+#[test]
+fn construction_top_up_tree_is_distinct_from_the_tree_just_felled() {
+    let terrain = WorldTerrain::default();
+    let hall = Vec3::new(1720.0, terrain.get_height(1720.0, 0.0), 0.0);
+    let mut cache = TreeWorkCandidateCache::default();
+    let mut first = None;
+    for _ in 0..32 {
+        match find_tree_for_cycle_cached(&mut cache, &terrain, None, None, hall, 0, 71) {
+            TreeCandidateLookup::Pending => {}
+            TreeCandidateLookup::Found { tree, stand } => {
+                first = Some((tree, stand));
+                break;
+            }
+            TreeCandidateLookup::Unavailable => panic!("fixture should contain usable woodland"),
+        }
+    }
+    let (first_tree, first_stand) = first.expect("tree cache should complete within 32 ticks");
+
+    let second = find_nearby_tree_for_cycle_cached(
+        &mut cache,
+        &terrain,
+        None,
+        None,
+        hall,
+        first_stand,
+        Some(first_tree),
+        1,
+        71,
+    );
+    let TreeCandidateLookup::Found {
+        tree: second_tree, ..
+    } = second
+    else {
+        panic!("fixture should offer a distinct top-up tree");
+    };
+    assert!(
+        second_tree.distance_squared(first_tree) >= 0.01,
+        "generated props do not deplete yet, so a batch must not chop one visible trunk twice"
+    );
+}
+
 /// Dusk must not freeze a hauler mid-task: wood on a shoulder still reaches
-/// the site, while a builder merely WALKING toward a tree stands down cleanly
-/// (phase reset to Seeking, no stale walk order) instead of finishing a dead
-/// march and posing beside the worksite until dawn.
+/// the site, a partially loaded tree walker turns back to deliver, and an
+/// empty builder merely WALKING toward a tree stands down cleanly (phase reset
+/// to Seeking, no stale walk order) instead of finishing a dead march and
+/// posing beside the worksite until dawn.
 #[test]
 fn nightfall_finishes_deliveries_in_flight_and_stands_down_the_rest_cleanly() {
     let mut app = village_test_app();
@@ -335,6 +532,7 @@ fn nightfall_finishes_deliveries_in_flight_and_stands_down_the_rest_cleanly() {
                 ConstructionMaterialRoutine {
                     site: Entity::PLACEHOLDER,
                     cycle: 0,
+                    last_tree: None,
                     failed_tree_routes: 0,
                     failed_store_routes: 0,
                     failed_delivery_routes: 0,
@@ -360,6 +558,18 @@ fn nightfall_finishes_deliveries_in_flight_and_stands_down_the_rest_cleanly() {
             stand: hall_position + Vec3::Z * 58.0,
         },
     );
+    let partial_tree_walker = spawn_builder(
+        &mut app,
+        33,
+        ConstructionMaterialPhase::WalkingToTree {
+            tree: hall_position - Vec3::Z * 60.0,
+            stand: hall_position - Vec3::Z * 58.0,
+        },
+    );
+    app.world_mut()
+        .get_mut::<GoodsInventory>(partial_tree_walker)
+        .unwrap()
+        .add(Good::Wood, 2);
     let site = app
         .world_mut()
         .spawn((
@@ -388,7 +598,7 @@ fn nightfall_finishes_deliveries_in_flight_and_stands_down_the_rest_cleanly() {
             PlayerPosition(site_position),
         ))
         .id();
-    for builder in [deliverer, tree_walker] {
+    for builder in [deliverer, tree_walker, partial_tree_walker] {
         app.world_mut().entity_mut(builder).insert((
             VillagerIntent::Building { settlement, site },
             MoveTarget(site_position),
@@ -432,6 +642,23 @@ fn nightfall_finishes_deliveries_in_flight_and_stands_down_the_rest_cleanly() {
     assert_eq!(
         *app.world().get::<CharacterActivity>(tree_walker).unwrap(),
         CharacterActivity::Idle
+    );
+    let partial_phase = app
+        .world()
+        .get::<ConstructionMaterialRoutine>(partial_tree_walker)
+        .unwrap()
+        .phase;
+    assert!(
+        matches!(partial_phase, ConstructionMaterialPhase::Delivering { .. }),
+        "partial dusk load did not begin delivery: {partial_phase:?}"
+    );
+    assert_eq!(
+        app.world()
+            .get::<MoveTarget>(partial_tree_walker)
+            .unwrap()
+            .0,
+        stand,
+        "a partial dusk load must turn back toward its worksite"
     );
 }
 
@@ -2146,6 +2373,7 @@ fn the_first_worksite_chops_its_own_wood_when_no_lumber_hut_exists() {
         ConstructionMaterialRoutine {
             site,
             cycle: 0,
+            last_tree: None,
             failed_tree_routes: 0,
             failed_store_routes: 0,
             failed_delivery_routes: 0,
@@ -2286,6 +2514,7 @@ fn failed_market_route_releases_a_construction_supplier_to_gather_wood() {
         ConstructionMaterialRoutine {
             site,
             cycle: 0,
+            last_tree: None,
             failed_tree_routes: 0,
             failed_store_routes: 0,
             failed_delivery_routes: 0,
@@ -2419,6 +2648,7 @@ fn public_construction_buys_private_wood_and_pays_its_business_owner() {
         ConstructionMaterialRoutine {
             site,
             cycle: 0,
+            last_tree: None,
             failed_tree_routes: 0,
             failed_store_routes: 0,
             failed_delivery_routes: 0,

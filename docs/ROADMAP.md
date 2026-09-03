@@ -198,8 +198,10 @@ answer "can a village run itself?" before any of the economy above exists):
       and Fisherman's Huts require 12 Wood; Lumberjack Huts and cabins require 10.
 - [x] Physical construction supply. The builder buys Wood from the Moot when
       stock and their wallet allow, but a settlement without affordable stock can bootstrap
-      by chopping real trees, carrying bounded loads, and depositing them at the
-      site. Raising cannot start until the last required unit arrives; completion
+      by chopping real trees, filling their bounded personal load at the nearest
+      safe different tree when possible, and depositing it at the site. Partial
+      final, dusk and blocked-next-tree loads are delivered instead of waiting
+      indefinitely. Raising cannot start until the last required unit arrives; completion
       consumes the committed Wood. Market Wood is a real buyer-to-seller purchase.
 - [x] End-to-end test over the real scheduled systems:
       `village::tests::three_villagers_settle_and_build_a_village_unaided`.

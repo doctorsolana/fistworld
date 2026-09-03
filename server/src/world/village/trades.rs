@@ -2585,23 +2585,16 @@ pub(super) enum TreeCandidateLookup {
     Found { tree: Vec3, stand: Vec3 },
 }
 
-fn find_tree_in_candidates(
+fn tree_work_position(
     terrain: &WorldTerrain,
     derived: Option<&DerivedColliderLibrary>,
     obstacles: Option<&SpatialObstacleGrid>,
     hut: Vec3,
     cycle: u32,
-    salt: u32,
     candidates: &TreeWorkCandidates,
+    tree_index: usize,
+    choice_count: usize,
 ) -> Option<(Vec3, Vec3)> {
-    // Keep a comfortably large deterministic candidate pool. Sparse coastal
-    // groves may only contain two usable trees, while a dense forest should
-    // not trap all workers on the same nearest twelve trunks.
-    let choice_count = candidates.trees.len().min(48);
-    if choice_count == 0 {
-        return None;
-    }
-    let tree_index = candidates.trees[(cycle.wrapping_add(salt) as usize) % choice_count];
     let tree_spawn = &candidates.spawns[tree_index];
     let tree = tree_spawn.position;
     let toward_hut = Vec2::new(hut.x - tree.x, hut.z - tree.z).normalize_or(Vec2::Y);
@@ -2641,6 +2634,35 @@ fn find_tree_in_candidates(
     None
 }
 
+fn find_tree_in_candidates(
+    terrain: &WorldTerrain,
+    derived: Option<&DerivedColliderLibrary>,
+    obstacles: Option<&SpatialObstacleGrid>,
+    hut: Vec3,
+    cycle: u32,
+    salt: u32,
+    candidates: &TreeWorkCandidates,
+) -> Option<(Vec3, Vec3)> {
+    // Keep a comfortably large deterministic candidate pool. Sparse coastal
+    // groves may only contain two usable trees, while a dense forest should
+    // not trap all workers on the same nearest twelve trunks.
+    let choice_count = candidates.trees.len().min(48);
+    if choice_count == 0 {
+        return None;
+    }
+    let tree_index = candidates.trees[(cycle.wrapping_add(salt) as usize) % choice_count];
+    tree_work_position(
+        terrain,
+        derived,
+        obstacles,
+        hut,
+        cycle,
+        candidates,
+        tree_index,
+        choice_count,
+    )
+}
+
 pub(super) fn find_tree_for_cycle_cached(
     cache: &mut TreeWorkCandidateCache,
     terrain: &WorldTerrain,
@@ -2655,6 +2677,69 @@ pub(super) fn find_tree_for_cycle_cached(
     };
     match find_tree_in_candidates(terrain, derived, obstacles, hut, cycle, salt, candidates) {
         Some((tree, stand)) => TreeCandidateLookup::Found { tree, stand },
+        None => TreeCandidateLookup::Unavailable,
+    }
+}
+
+/// Find a deterministic, collision-safe top-up tree close to the carrier.
+///
+/// The initial tree still comes from the settlement-wide salted rotation so
+/// simultaneous builders spread through the woodland. Once a builder already
+/// has a partial load, however, another long radial trip defeats the purpose of
+/// batching. Scan the same bounded 48-tree cache, exclude the trunk just used,
+/// and choose the nearest valid stand without generating props or doing A*.
+pub(super) fn find_nearby_tree_for_cycle_cached(
+    cache: &mut TreeWorkCandidateCache,
+    terrain: &WorldTerrain,
+    derived: Option<&DerivedColliderLibrary>,
+    obstacles: Option<&SpatialObstacleGrid>,
+    hut: Vec3,
+    carrier: Vec3,
+    excluded_tree: Option<Vec3>,
+    cycle: u32,
+    salt: u32,
+) -> TreeCandidateLookup {
+    let Some(candidates) = cache.candidates(terrain, derived, hut) else {
+        return TreeCandidateLookup::Pending;
+    };
+    let choice_count = candidates.trees.len().min(48);
+    if choice_count == 0 {
+        return TreeCandidateLookup::Unavailable;
+    }
+
+    let start = (cycle.wrapping_add(salt) as usize) % choice_count;
+    let mut nearest: Option<(f32, usize, Vec3, Vec3)> = None;
+    for offset in 0..choice_count {
+        let order = (start + offset) % choice_count;
+        let tree_index = candidates.trees[order];
+        let tree = candidates.spawns[tree_index].position;
+        if excluded_tree.is_some_and(|excluded| tree.distance_squared(excluded) < 0.01) {
+            continue;
+        }
+        let Some((tree, stand)) = tree_work_position(
+            terrain,
+            derived,
+            obstacles,
+            hut,
+            cycle,
+            candidates,
+            tree_index,
+            choice_count,
+        ) else {
+            continue;
+        };
+        let distance_squared = Vec2::new(carrier.x - stand.x, carrier.z - stand.z).length_squared();
+        let is_nearer = nearest.as_ref().is_none_or(|(best, best_order, ..)| {
+            distance_squared.total_cmp(best).is_lt()
+                || (distance_squared.total_cmp(best).is_eq() && offset < *best_order)
+        });
+        if is_nearer {
+            nearest = Some((distance_squared, offset, tree, stand));
+        }
+    }
+
+    match nearest {
+        Some((_, _, tree, stand)) => TreeCandidateLookup::Found { tree, stand },
         None => TreeCandidateLookup::Unavailable,
     }
 }

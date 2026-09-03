@@ -145,9 +145,9 @@ pub use trades::{
     run_fishing_routines, run_lumberjack_routines, sync_carried_load, sync_porter_cart_state,
 };
 use trades::{
-    build_clip_facing, exterior_door_clearance_position, find_tree_for_cycle_cached,
-    ground_distance, postpone_construction_store_route, postpone_construction_tree_search,
-    TreeCandidateLookup, TreeWorkCandidateCache,
+    build_clip_facing, exterior_door_clearance_position, find_nearby_tree_for_cycle_cached,
+    find_tree_for_cycle_cached, ground_distance, postpone_construction_store_route,
+    postpone_construction_tree_search, TreeCandidateLookup, TreeWorkCandidateCache,
 };
 
 use bevy::ecs::system::SystemParam;
@@ -547,6 +547,10 @@ pub struct UnderConstruction {
 pub struct ConstructionMaterialRoutine {
     site: Entity,
     cycle: u32,
+    /// Most recently felled tree in the current material run. Generated
+    /// scenery is not depleted yet, so top-up selection must explicitly avoid
+    /// immediately harvesting the same visible trunk twice.
+    last_tree: Option<Vec3>,
     failed_tree_routes: u8,
     failed_store_routes: u8,
     failed_delivery_routes: u8,
@@ -573,6 +577,7 @@ impl ConstructionMaterialRoutine {
         Self {
             site,
             cycle: 0,
+            last_tree: None,
             failed_tree_routes: 0,
             failed_store_routes: 0,
             failed_delivery_routes: 0,
