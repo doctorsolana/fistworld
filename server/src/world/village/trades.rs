@@ -139,8 +139,8 @@ pub fn ensure_livestock_pastures(
             .entity(pasture)
             .insert(shared::components::AttachedTo(*building_id));
         info!(
-            "Village '{}': fenced a grazing pasture beside its Livestock Farm",
-            farm.settlement
+            "Village '{}': fenced a grazing pasture beside its Livestock Farm at {:.1},{:.1}",
+            farm.settlement, pasture_position.x, pasture_position.z
         );
     }
 }

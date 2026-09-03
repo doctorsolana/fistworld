@@ -62,6 +62,9 @@ GLB_PATH = {
     "fishing_pier": "game_assets/environment/shore/FishingPier.glb",
     # The sheep barn. Its pasture is a separate replicated entity (LivestockPasture), not part of it.
     "livestock_farm": "game_assets/buildings/village/LivestockFarm.glb",
+    # Pasture livestock: a creature, not a building. Six named parts the client animates itself
+    # (head nod, leg swing), so it ships no clips and lives with the environment art.
+    "sheep": "game_assets/environment/animals/Sheep.glb",
 }
 assert STEM in GLB_PATH, f"no shipped path registered for '{STEM}'; add it to GLB_PATH"
 OUT = os.path.join(REPO, "client", "assets", *GLB_PATH[STEM].split("/"))

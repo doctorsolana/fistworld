@@ -43,6 +43,13 @@ exists.
 | Grass | `GrassShortA`, `GrassTallA` |
 | Work props | `WheatField`, `FishingPier` |
 
+Creatures are not `PropKind`s (nothing scatters or paints them); they are spawned by the
+systems that own them and live beside the environment art:
+
+| Creature | File | Owner |
+|---|---|---|
+| Pasture sheep | `game_assets/environment/animals/Sheep.glb` | `LivestockPasture` visuals (client `settlement/mod.rs`), six per pasture, parts `Sheep`, `SheepHead`, `SheepLegFL/FR/BL/BR` posed by the client — no clips |
+
 Tree paths are grouped by what they are:
 
 ```text

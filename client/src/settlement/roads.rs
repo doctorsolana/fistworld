@@ -595,11 +595,8 @@ mod tests {
             resolution,
             &mut images,
         );
-        let square = SquarePaintSnapshot::from_market(
-            Vec3::new(32.0, 0.0, 32.0),
-            0.0,
-            MarketLevel::Paved,
-        );
+        let square =
+            SquarePaintSnapshot::from_market(Vec3::new(32.0, 0.0, 32.0), 0.0, MarketLevel::Paved);
         // A stone road ending at the square's front edge (door_offset is -6.5, the edge -6.0).
         let road = RoadPaintSnapshot::from_road(&road(
             RoadSurface::Stone,
@@ -613,11 +610,24 @@ mod tests {
             &[square],
         );
 
-        assert!(pixel(&weightmap, 32, 32)[3] > 240, "the square's centre is cobblestone");
-        assert!(pixel(&weightmap, 32, 26)[3] > 240, "the road's end and the square's edge are one surface");
+        assert!(
+            pixel(&weightmap, 32, 32)[3] > 240,
+            "the square's centre is cobblestone"
+        );
+        assert!(
+            pixel(&weightmap, 32, 26)[3] > 240,
+            "the road's end and the square's edge are one surface"
+        );
         let verge = pixel(&weightmap, 32, 38);
-        assert!(verge[1] > verge[3] && verge[1] > 0, "past the kerb the bed shows as dirt, got {verge:?}");
-        assert_eq!(pixel(&weightmap, 32, 44), [255, 0, 0, 0], "meadow beyond the bed");
+        assert!(
+            verge[1] > verge[3] && verge[1] > 0,
+            "past the kerb the bed shows as dirt, got {verge:?}"
+        );
+        assert_eq!(
+            pixel(&weightmap, 32, 44),
+            [255, 0, 0, 0],
+            "meadow beyond the bed"
+        );
     }
 
     #[test]
@@ -636,17 +646,25 @@ mod tests {
             std::f32::consts::FRAC_PI_2,
             MarketLevel::Earthen,
         );
-        let expected_edge = shared::rotation::local_to_world_xz(Vec2::new(0.0, 5.5), std::f32::consts::FRAC_PI_2);
+        let expected_edge =
+            shared::rotation::local_to_world_xz(Vec2::new(0.0, 5.5), std::f32::consts::FRAC_PI_2);
         composite_roads_into_chunk(ChunkCoord::new(0, 0), &mut weightmap, &[], &[square]);
 
         assert!(pixel(&weightmap, 32, 32)[1] > 200, "the floor is dirt");
-        assert_eq!(pixel(&weightmap, 32, 32)[3], 0, "an earthen square has no cobble");
+        assert_eq!(
+            pixel(&weightmap, 32, 32)[3],
+            0,
+            "an earthen square has no cobble"
+        );
         let inside = pixel(
             &weightmap,
             (32.0 + expected_edge.x) as u32,
             (32.0 + expected_edge.y) as u32,
         );
-        assert!(inside[1] > 200, "a point 5.5 m along the building's own +Z is still floor, got {inside:?}");
+        assert!(
+            inside[1] > 200,
+            "a point 5.5 m along the building's own +Z is still floor, got {inside:?}"
+        );
     }
 
     #[test]
@@ -685,18 +703,28 @@ mod tests {
 
         app.update();
         let centre = {
-            let map = &app.world().resource::<TerrainPaintState>().weightmaps[&ChunkCoord::new(0, 0)];
+            let map =
+                &app.world().resource::<TerrainPaintState>().weightmaps[&ChunkCoord::new(0, 0)];
             pixel(map, 32, 32)
         };
-        assert!(centre[3] > 240, "the square's centre should be cobble, got {centre:?}");
+        assert!(
+            centre[3] > 240,
+            "the square's centre should be cobble, got {centre:?}"
+        );
 
-        app.world_mut().entity_mut(market).insert(MarketLevel::Earthen);
+        app.world_mut()
+            .entity_mut(market)
+            .insert(MarketLevel::Earthen);
         app.update();
         let centre = {
-            let map = &app.world().resource::<TerrainPaintState>().weightmaps[&ChunkCoord::new(0, 0)];
+            let map =
+                &app.world().resource::<TerrainPaintState>().weightmaps[&ChunkCoord::new(0, 0)];
             pixel(map, 32, 32)
         };
-        assert!(centre[1] > 200 && centre[3] == 0, "downgraded to earth, got {centre:?}");
+        assert!(
+            centre[1] > 200 && centre[3] == 0,
+            "downgraded to earth, got {centre:?}"
+        );
 
         app.world_mut().despawn(market);
         app.update();
