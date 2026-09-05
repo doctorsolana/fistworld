@@ -212,10 +212,6 @@ impl TerrainGenerator {
             biome: center_biome,
         }
     }
-
-    pub fn generate_chunk_vertices(&self, coord: ChunkCoord) -> ChunkMeshData {
-        self.generate_chunk_with_deltas(&HashMap::new(), coord)
-    }
 }
 
 #[cfg(test)]

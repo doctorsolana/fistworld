@@ -43,7 +43,7 @@ fn reached_visible_moot_forecourt(position: Vec3, hall: Vec3, rotation_y: f32) -
         .definition();
     let reserved_front = reserved.footprint_center.y
         - reserved.footprint.y * 0.5
-        - crate::world::navgrid::VILLAGER_NAV_RADIUS;
+        - shared::physics::CHARACTER_NAV_RADIUS;
     local.y <= reserved_front
 }
 

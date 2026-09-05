@@ -95,15 +95,6 @@ impl RoadSegment {
         self.tangent.y.atan2(self.tangent.x)
     }
 
-    #[inline]
-    pub fn road_rect(&self) -> OrientedRect {
-        OrientedRect {
-            center: (self.start + self.end) * 0.5,
-            half_extents: Vec2::new(self.length * 0.5, self.road_width * 0.5),
-            rotation_y: self.rotation_y(),
-        }
-    }
-
     pub fn sidewalk_rect(&self, side: RoadSide) -> Option<OrientedRect> {
         self.sidewalk_rect_with_trims(side, 0.0, 0.0)
     }
@@ -317,10 +308,6 @@ pub fn plot_rect(plot: &MapPlot) -> OrientedRect {
         half_extents: plot.half_extents_vec2(),
         rotation_y: plot.rotation_degrees.to_radians(),
     }
-}
-
-pub fn plot_chunk_bounds(plot: &MapPlot) -> (i32, i32, i32, i32) {
-    plot_rect(plot).chunk_bounds()
 }
 
 pub fn chunk_coords_in_bounds(bounds: (i32, i32, i32, i32)) -> Vec<ChunkCoord> {

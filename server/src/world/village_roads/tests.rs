@@ -703,7 +703,7 @@ fn farm_work_stand_is_certified_from_the_authored_front_door() {
     let mut obstacles = SpatialObstacleGrid::new();
     obstacles.insert(shared::spatial::ObstacleEntry {
         center: Vec2::new(farm.x, farm.z),
-        half_extents: definition.footprint * 0.5 + Vec2::splat(VILLAGER_NAV_RADIUS),
+        half_extents: definition.footprint * 0.5 + Vec2::splat(CHARACTER_NAV_RADIUS),
         rotation,
         obstacle_type: 0,
     });
@@ -1299,7 +1299,7 @@ fn villager_route_uses_the_road_and_never_crosses_a_building() {
     let footprint = building_type.definition().footprint;
     let blocker = BuildingBlocker {
         center: Vec2::new(building_position.x, building_position.z),
-        half: footprint * 0.5 + Vec2::splat(crate::world::navgrid::VILLAGER_NAV_RADIUS),
+        half: footprint * 0.5 + Vec2::splat(shared::physics::CHARACTER_NAV_RADIUS),
         rotation: 0.0,
     };
     let mut points = vec![Vec2::new(start.x, start.z)];

@@ -86,13 +86,6 @@ impl VillageRoad {
         usize::from(self.built_through) >= self.points.len()
     }
 
-    pub fn built_length(&self) -> f32 {
-        self.built_points()
-            .windows(2)
-            .map(|pair| pair[0].distance(pair[1]))
-            .sum()
-    }
-
     pub fn total_length(&self) -> f32 {
         self.points
             .windows(2)

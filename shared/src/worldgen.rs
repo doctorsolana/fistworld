@@ -1921,17 +1921,6 @@ impl HeightGrid {
         (dx * dx + dz * dz).sqrt()
     }
 
-    /// (min, max) over the whole grid — recorded as terrain metadata.
-    pub fn height_range(&self) -> (f32, f32) {
-        let mut min = f32::MAX;
-        let mut max = f32::MIN;
-        for &h in &self.data {
-            min = min.min(h);
-            max = max.max(h);
-        }
-        (min, max)
-    }
-
     /// Package the grid as the runtime sampling structure. The grid lattice
     /// (min = -half_extent, 2m spacing, size = extent/spacing + 1) maps 1:1
     /// onto [`HeightmapData`]'s bilinear indexing over the same bounds, so

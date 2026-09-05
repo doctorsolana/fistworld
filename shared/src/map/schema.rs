@@ -1,4 +1,4 @@
-use bevy::prelude::{Vec2, Vec3};
+use bevy::prelude::Vec2;
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path};
 
@@ -172,10 +172,6 @@ pub struct MapObjectSpawn {
 }
 
 impl MapObjectSpawn {
-    pub fn position_vec3(&self) -> Vec3 {
-        Vec3::new(self.position[0], self.position[1], self.position[2])
-    }
-
     pub fn prop_kind(&self) -> Option<PropKind> {
         PropKind::from_id(self.kind.trim())
     }

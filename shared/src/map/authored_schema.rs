@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::city::{MapPlot, MapRoad};
 use crate::terrain::{
-    build_terrain_weightmap_weights, terrain_paint_op_chunk_coords, ChunkCoord, TerrainDeltaData,
-    TerrainGenerator, TerrainPaintOp, CHUNK_RESOLUTION, TERRAIN_WEIGHTMAP_RESOLUTION,
+    build_terrain_weightmap_weights, ChunkCoord, TerrainDeltaData, TerrainGenerator,
+    TerrainPaintOp, CHUNK_RESOLUTION, TERRAIN_WEIGHTMAP_RESOLUTION,
 };
 
 pub const MAP_EDITS_VERSION: u32 = 3;
@@ -123,22 +123,6 @@ impl MapEditsDefinition {
         Ok(out)
     }
 
-    pub fn set_terrain_deltas_from_world(
-        &mut self,
-        chunks: &HashMap<ChunkCoord, TerrainDeltaData>,
-    ) {
-        let mut out = Vec::with_capacity(chunks.len());
-        for (coord, data) in chunks {
-            out.push(MapTerrainDeltaChunk {
-                coord: *coord,
-                deltas_cm: data.to_quantized(),
-                version: data.version,
-            });
-        }
-        out.sort_by_key(|chunk| (chunk.coord.x, chunk.coord.z));
-        self.terrain_deltas = out;
-    }
-
     /// Decoded baked weightmap for a chunk, if one is stored.
     pub fn weightmap_for_chunk(&self, coord: ChunkCoord) -> Option<Vec<[u8; 4]>> {
         self.terrain_weightmaps
@@ -178,31 +162,6 @@ impl MapEditsDefinition {
             }
         }
         build_terrain_weightmap_weights(generator, coord, &self.terrain_paint_ops, resolution)
-    }
-
-    /// Migrate legacy stroke history into baked weightmaps: every chunk a
-    /// legacy op touches gets its final weights stored, then the op list is
-    /// cleared. Returns true if anything changed.
-    pub fn bake_legacy_paint_ops(&mut self, generator: &TerrainGenerator) -> bool {
-        if self.terrain_paint_ops.is_empty() {
-            return false;
-        }
-
-        let mut coords = HashSet::new();
-        for op in &self.terrain_paint_ops {
-            for coord in terrain_paint_op_chunk_coords(op) {
-                if coord.in_world_bounds() {
-                    coords.insert(coord);
-                }
-            }
-        }
-        for coord in coords {
-            let weights =
-                self.resolve_chunk_weights(generator, coord, TERRAIN_WEIGHTMAP_RESOLUTION);
-            self.set_weightmap_for_chunk(coord, &weights);
-        }
-        self.terrain_paint_ops.clear();
-        true
     }
 }
 

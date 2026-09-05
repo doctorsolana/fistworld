@@ -7,15 +7,10 @@
 //! the authored doors.
 
 use bevy::prelude::*;
+use shared::physics::CHARACTER_NAV_RADIUS;
 use shared::spatial::{ObstacleEntry, SpatialObstacleGrid};
 
 use crate::collision::building_index::BuildingSpatialIndex;
-
-/// Horizontal clearance around solid architecture for an embodied villager.
-/// Build-zone `flatten_radius` is landscaping space, not collision space; using
-/// it here swallowed authored door anchors and made correct portal routing
-/// impossible.
-pub const VILLAGER_NAV_RADIUS: f32 = 0.28;
 
 /// Horizontal body clearance used around authored props. Keep this shared by
 /// route surveying, interaction-point selection and movement-time collision;
@@ -56,8 +51,8 @@ pub fn sync_obstacle_grid(
         }
         let def = building.building_type.definition();
         let half_extents = Vec2::new(
-            def.footprint.x / 2.0 + VILLAGER_NAV_RADIUS,
-            def.footprint.y / 2.0 + VILLAGER_NAV_RADIUS,
+            def.footprint.x / 2.0 + CHARACTER_NAV_RADIUS,
+            def.footprint.y / 2.0 + CHARACTER_NAV_RADIUS,
         );
 
         grid.insert(ObstacleEntry {
@@ -95,12 +90,41 @@ mod tests {
                 (BuildingType::MootHall, SettlementBuildingKind::Hall),
                 (BuildingType::VillageHall, SettlementBuildingKind::Hall),
                 (BuildingType::TownHall, SettlementBuildingKind::Hall),
+                (BuildingType::LongCabin, SettlementBuildingKind::House),
+                (BuildingType::CabinL2, SettlementBuildingKind::House),
+                (BuildingType::LongCabinL2, SettlementBuildingKind::House),
+                (
+                    BuildingType::FishermansHut,
+                    SettlementBuildingKind::FishermansHut,
+                ),
+                (BuildingType::Windmill, SettlementBuildingKind::Windmill),
+                (BuildingType::Bakery, SettlementBuildingKind::Bakery),
+                (
+                    BuildingType::LivestockFarm,
+                    SettlementBuildingKind::LivestockFarm,
+                ),
+                (
+                    BuildingType::PlaceholderTavern,
+                    SettlementBuildingKind::Tavern,
+                ),
+                (
+                    BuildingType::PlaceholderChurch,
+                    SettlementBuildingKind::Church,
+                ),
+                (
+                    BuildingType::PlaceholderStorageHall,
+                    SettlementBuildingKind::StorageHall,
+                ),
+                (
+                    BuildingType::PlaceholderStoneQuarry,
+                    SettlementBuildingKind::StoneQuarry,
+                ),
             ] {
                 let mut grid = SpatialObstacleGrid::default();
                 let definition = building_type.definition();
                 grid.insert(ObstacleEntry {
                     center: definition.world_footprint_center(Vec3::ZERO, rotation),
-                    half_extents: definition.footprint * 0.5 + Vec2::splat(VILLAGER_NAV_RADIUS),
+                    half_extents: definition.footprint * 0.5 + Vec2::splat(CHARACTER_NAV_RADIUS),
                     rotation,
                     obstacle_type: building_type as u32,
                 });

@@ -109,15 +109,6 @@ impl MapRoad {
         }
         Ok(())
     }
-
-    pub fn total_half_width(&self) -> f32 {
-        let sidewalk = if self.sidewalk_left || self.sidewalk_right {
-            self.sidewalk_width.max(0.0)
-        } else {
-            0.0
-        };
-        self.width * 0.5 + sidewalk
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

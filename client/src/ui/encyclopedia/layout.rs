@@ -1019,52 +1019,6 @@ fn spawn_banner_button(parent: &mut ChildSpawnerCommands<'_>, glyph: &str, step:
         });
 }
 
-/// Placeholder tabs still get a real empty state: a blank panel is what makes
-/// an unfinished UI look broken rather than pending.
-fn spawn_placeholder_tab(
-    body: &mut ChildSpawnerCommands<'_>,
-    tab: EncyclopediaTab,
-    headline: &str,
-    blurb: &str,
-) {
-    body.spawn((
-        TabBody(tab),
-        Node {
-            display: Display::None,
-            flex_grow: 1.0,
-            flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            row_gap: Val::Px(10.0),
-            padding: UiRect::all(Val::Px(40.0)),
-            ..default()
-        },
-    ))
-    .with_children(|panel| {
-        panel.spawn((
-            Text::new(headline),
-            TextFont {
-                font_size: FontSize::Px(18.0),
-                ..default()
-            },
-            TextColor(EMBER),
-        ));
-        panel.spawn((
-            Text::new(blurb),
-            TextFont {
-                font_size: FontSize::Px(15.0),
-                ..default()
-            },
-            TextColor(INK_MUTED),
-            TextLayout::justify(Justify::Center),
-            Node {
-                max_width: Val::Px(430.0),
-                ..default()
-            },
-        ));
-    });
-}
-
 fn spawn_footer(panel: &mut ChildSpawnerCommands<'_>) {
     panel
         .spawn((

@@ -8,8 +8,8 @@ use crate::{
 };
 
 use super::{
-    build_road_segments, chunk_coords_in_bounds, plot_chunk_bounds, project_point_onto_segment,
-    MapPlot, MapRoad, RoadSegment, RoadSide,
+    build_road_segments, chunk_coords_in_bounds, project_point_onto_segment, MapPlot, MapRoad,
+    RoadSegment, RoadSide,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -32,7 +32,6 @@ pub struct CityLayout {
     plots: Vec<MapPlot>,
     road_segments: Vec<RoadSegment>,
     road_segments_by_chunk: HashMap<ChunkCoord, Vec<usize>>,
-    plots_by_chunk: HashMap<ChunkCoord, Vec<usize>>,
     roads_by_id: HashMap<u64, usize>,
     plots_by_id: HashMap<u64, usize>,
 }
@@ -66,19 +65,11 @@ impl CityLayout {
             }
         }
 
-        let mut plots_by_chunk: HashMap<ChunkCoord, Vec<usize>> = HashMap::new();
-        for (plot_index, plot) in plots.iter().enumerate() {
-            for chunk in chunk_coords_in_bounds(plot_chunk_bounds(plot)) {
-                plots_by_chunk.entry(chunk).or_default().push(plot_index);
-            }
-        }
-
         Self {
             roads,
             plots,
             road_segments,
             road_segments_by_chunk,
-            plots_by_chunk,
             roads_by_id,
             plots_by_id,
         }
@@ -113,13 +104,6 @@ impl CityLayout {
         self.plots_by_id
             .get(&id)
             .and_then(|index| self.plots.get(*index))
-    }
-
-    pub fn plots_in_chunk(&self, chunk: ChunkCoord) -> &[usize] {
-        self.plots_by_chunk
-            .get(&chunk)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
     }
 
     pub fn nearest_road_segment(

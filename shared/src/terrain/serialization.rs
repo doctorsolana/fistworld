@@ -35,14 +35,6 @@ impl TerrainDeltaData {
         }
     }
 
-    /// Set delta at vertex indices
-    #[inline]
-    pub fn set_vertex(&mut self, xi: usize, zi: usize, delta: f32) {
-        if xi < CHUNK_RESOLUTION && zi < CHUNK_RESOLUTION {
-            self.deltas[zi * CHUNK_RESOLUTION + xi] = delta;
-        }
-    }
-
     /// Add to existing delta at vertex (composable edits)
     #[inline]
     pub fn add_vertex(&mut self, xi: usize, zi: usize, additional: f32) {

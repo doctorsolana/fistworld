@@ -54,7 +54,7 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::player::hero::MoveTarget;
-use crate::world::navgrid::{NAVIGATION_SAMPLE_STEP, VILLAGER_NAV_RADIUS, VILLAGER_PROP_RADIUS};
+use crate::world::navgrid::{NAVIGATION_SAMPLE_STEP, VILLAGER_PROP_RADIUS};
 use crate::world::village::{
     ambient::AmbientRoutine, FarmerRoutine, FishingRoutine, HomeRoutine, HouseholdShoppingRoutine,
     InternalDeliveryRoutine, LumberjackRoutine, MarketCollectionRoutine, MootQueueTicket,
@@ -64,6 +64,7 @@ use crate::{
     collision::library::{DerivedColliderLibrary, StaticColliders},
     world::pathfinding::PathfindingBudgetSettings,
 };
+use shared::physics::CHARACTER_NAV_RADIUS;
 
 pub(crate) use geometry::{
     road_corridor_is_dry, road_sample_is_dry, road_segment_is_coarsely_dry,
@@ -1516,7 +1517,7 @@ pub(crate) fn reachable_farm_work_stand(
     let outward = Vec2::new(door.x - farm.x, door.z - farm.z).normalize_or_zero();
     let start = Vec2::new(door.x, door.z) + outward * 0.75;
     let definition = kind.art().definition();
-    let footprint_half = definition.footprint * 0.5 + Vec2::splat(VILLAGER_NAV_RADIUS);
+    let footprint_half = definition.footprint * 0.5 + Vec2::splat(CHARACTER_NAV_RADIUS);
     let own_building = BuildingBlocker {
         center: definition.world_footprint_center(farm, rotation),
         half: footprint_half,
@@ -2197,8 +2198,8 @@ impl NavigationBuildingCache {
             }
             let kind = settlement_kind_for_art(building.building_type);
             let definition = building.building_type.definition();
-            let half = definition.footprint * 0.5
-                + Vec2::splat(crate::world::navgrid::VILLAGER_NAV_RADIUS);
+            let half =
+                definition.footprint * 0.5 + Vec2::splat(shared::physics::CHARACTER_NAV_RADIUS);
             let navigation = NavigationBuilding {
                 blocker: BuildingBlocker {
                     center: definition.world_footprint_center(position.0, building.rotation),

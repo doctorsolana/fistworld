@@ -23,16 +23,6 @@ impl Biome {
             Biome::Ocean => Color::srgb(0.12, 0.24, 0.28),
         }
     }
-
-    pub fn accent_color(&self) -> Color {
-        match self {
-            Biome::Desert => Color::srgb(0.90, 0.80, 0.60),
-            Biome::Grasslands => Color::srgb(0.40, 0.60, 0.30),
-            Biome::Natureland => Color::srgb(0.32, 0.48, 0.26),
-            Biome::Mountain => Color::srgb(0.55, 0.57, 0.60),
-            Biome::Ocean => Color::srgb(0.16, 0.30, 0.34),
-        }
-    }
 }
 
 /// Chunk coordinate (integer grid position).

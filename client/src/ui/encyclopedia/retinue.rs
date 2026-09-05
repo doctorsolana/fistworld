@@ -24,7 +24,7 @@ const LOCATE_ZOOM: f32 = 82.0;
 pub(super) struct RetinueListContent;
 
 #[derive(Component)]
-pub(super) struct RetinueRow(pub shared::components::PersonId);
+pub(super) struct RetinueRow;
 
 #[derive(Component)]
 pub(super) struct RetinueCountText;
@@ -167,7 +167,7 @@ pub(super) fn spawn_retinue_tab(body: &mut ChildSpawnerCommands<'_>) {
 
 fn spawn_retinue_row(list: &mut ChildSpawnerCommands<'_>, record: &PersonRecord) {
     list.spawn((
-        RetinueRow(record.id),
+        RetinueRow,
         Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::Center,
@@ -300,7 +300,7 @@ pub(super) fn rebuild_retinue_list(
             // The empty state carries the row marker so the next rebuild
             // clears it (same rule as the people list).
             list.spawn((
-                RetinueRow(shared::components::PersonId::default()),
+                RetinueRow,
                 Text::new("Your clan is just you for now. Sworn companions will gather here."),
                 TextFont {
                     font_size: FontSize::Px(13.5),

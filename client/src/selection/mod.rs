@@ -137,10 +137,6 @@ impl Selectable {
         }
     }
 
-    pub fn settlement_building(kind: shared::components::SettlementBuildingKind) -> Self {
-        Self::settlement_building_rotated(kind, 0.0)
-    }
-
     pub fn settlement_building_rotated(
         kind: shared::components::SettlementBuildingKind,
         rotation: f32,

@@ -29,8 +29,5 @@ pub fn peer_id_to_u64(peer_id: lightyear::prelude::PeerId) -> u64 {
 /// Player height (for capsule)
 pub const PLAYER_HEIGHT: f32 = 1.8;
 
-/// Mouse sensitivity for look
-pub const MOUSE_SENSITIVITY: f32 = 0.003;
-
 /// Spawn position for new players (spawn above terrain to prevent clipping)
 pub const SPAWN_POSITION: [f32; 3] = [0.0, 10.0, 0.0];
