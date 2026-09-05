@@ -782,7 +782,10 @@ pub fn refresh_company_accounts(
             .get(company_id)
             .copied()
             .unwrap_or_else(|| CompanySiteAggregate::new(day));
-        account.refresh_from_sites(
+        // CompanyAccount is a small Copy value. Consolidate off-component so
+        // an identical result never advances Bevy's replication change tick.
+        let mut refreshed = *account;
+        refreshed.refresh_from_sites(
             day,
             aggregate.wage_arrears,
             aggregate.tax_arrears,
@@ -793,6 +796,7 @@ pub fn refresh_company_accounts(
             aggregate.current_day,
             aggregate.completed_day,
         );
+        account.set_if_neq(refreshed);
     }
 }
 
@@ -1147,6 +1151,75 @@ mod tests {
                 0
             );
         }
+    }
+
+    #[test]
+    fn company_replication_only_changes_when_consolidated_values_change() {
+        #[derive(Resource, Default)]
+        struct AccountChanges(usize);
+        fn count_changes(
+            mut changes: ResMut<AccountChanges>,
+            accounts: Query<(), Changed<CompanyAccount>>,
+        ) {
+            changes.0 = accounts.iter().count();
+        }
+
+        let mut app = App::new();
+        app.init_resource::<AccountChanges>()
+            .add_systems(Update, (refresh_company_accounts, count_changes).chain());
+        let clock = app.world_mut().spawn(WorldTime::new_default()).id();
+        let company = app
+            .world_mut()
+            .spawn((
+                CompanyId(32),
+                CompanyAccount {
+                    cash: 500,
+                    contributed_capital: 250,
+                    ..default()
+                },
+            ))
+            .id();
+        let site = app
+            .world_mut()
+            .spawn((OperatedBy(CompanyId(32)), BusinessAccount::default()))
+            .id();
+        app.update();
+        for _ in 0..4 {
+            app.update();
+            assert_eq!(
+                app.world().resource::<AccountChanges>().0,
+                0,
+                "idle consolidation must not dirty the replicated account"
+            );
+        }
+
+        app.world_mut()
+            .get_mut::<BusinessAccount>(site)
+            .unwrap()
+            .record_sale(0, 200, 0, 2);
+        app.update();
+        assert_eq!(app.world().resource::<AccountChanges>().0, 1);
+        assert_eq!(
+            app.world()
+                .get::<CompanyAccount>(company)
+                .unwrap()
+                .current_day
+                .external_revenue,
+            200
+        );
+        app.update();
+        assert_eq!(app.world().resource::<AccountChanges>().0, 0);
+
+        app.world_mut().get_mut::<WorldTime>(clock).unwrap().day = 1;
+        app.update();
+        assert_eq!(app.world().resource::<AccountChanges>().0, 1);
+        let account = app.world().get::<CompanyAccount>(company).unwrap();
+        assert_eq!(account.current_day.day, 1);
+        assert_eq!(account.previous_day.external_revenue, 200);
+        assert_eq!(account.cash, 500);
+        assert_eq!(account.contributed_capital, 250);
+        app.update();
+        assert_eq!(app.world().resource::<AccountChanges>().0, 0);
     }
 
     #[test]

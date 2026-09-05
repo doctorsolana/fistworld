@@ -14,6 +14,8 @@ use shared::terrain::TerrainDeltaChunk;
 #[derive(Resource, Default)]
 pub struct SettlementDirectory {
     entries: HashMap<SettlementId, Entity>,
+    building_counts: HashMap<SettlementId, [u16; 7]>,
+    counts_initialized: bool,
 }
 
 /// Keep one tiny globally replicated record per settlement. Detailed hall
@@ -22,43 +24,60 @@ pub struct SettlementDirectory {
 pub fn sync_settlement_directory(
     mut commands: Commands,
     mut directory: ResMut<SettlementDirectory>,
-    existing: Query<(Entity, &SettlementSummary)>,
+    existing: Query<(Entity, &SettlementSummary, Option<&PlayerPosition>)>,
     halls: Query<(
         &SettlementId,
         &Settlement,
         &PlayerPosition,
         Option<&SettlementEconomy>,
     )>,
-    buildings: Query<(&BuildingOf, &SettlementBuilding)>,
+    buildings: Query<(Ref<BuildingOf>, Ref<SettlementBuilding>)>,
+    mut removed_buildings: RemovedComponents<SettlementBuilding>,
+    mut removed_building_owners: RemovedComponents<BuildingOf>,
 ) {
-    for (entity, summary) in existing.iter() {
+    for (entity, summary, _) in existing.iter() {
         directory.entries.entry(summary.id).or_insert(entity);
     }
 
-    // Count physical detail once. The previous nested hall/building scan grew
-    // as settlements × buildings and made the global directory unnecessarily
-    // expensive in large worlds.
-    let mut building_counts: HashMap<SettlementId, [u16; 7]> = HashMap::new();
-    for (owner, building) in buildings.iter() {
-        let index = match building.kind {
-            SettlementBuildingKind::House => 0,
-            SettlementBuildingKind::Farmstead => 1,
-            SettlementBuildingKind::FishermansHut => 2,
-            SettlementBuildingKind::LumberjackHut => 3,
-            SettlementBuildingKind::Windmill => 4,
-            SettlementBuildingKind::Bakery => 5,
-            SettlementBuildingKind::Market => 6,
-            _ => continue,
-        };
-        let counts = building_counts.entry(owner.0).or_default();
-        counts[index] = counts[index].saturating_add(1);
+    let removed_any = !removed_buildings.is_empty() || !removed_building_owners.is_empty();
+    removed_buildings.clear();
+    removed_building_owners.clear();
+    // Check change ticks rather than rebuilding the count map at 60 Hz. A
+    // complete rebuild on edits preserves saturating counts and handles moves
+    // between settlements, kind changes, component removal and despawning.
+    if !directory.counts_initialized
+        || removed_any
+        || buildings
+            .iter()
+            .any(|(owner, building)| owner.is_changed() || building.is_changed())
+    {
+        directory.building_counts.clear();
+        for (owner, building) in buildings.iter() {
+            let index = match building.kind {
+                SettlementBuildingKind::House => 0,
+                SettlementBuildingKind::Farmstead => 1,
+                SettlementBuildingKind::FishermansHut => 2,
+                SettlementBuildingKind::LumberjackHut => 3,
+                SettlementBuildingKind::Windmill => 4,
+                SettlementBuildingKind::Bakery => 5,
+                SettlementBuildingKind::Market => 6,
+                _ => continue,
+            };
+            let counts = directory.building_counts.entry(owner.0).or_default();
+            counts[index] = counts[index].saturating_add(1);
+        }
+        directory.counts_initialized = true;
     }
 
     let mut live = HashSet::new();
     for (id, settlement, position, economy) in halls.iter() {
         live.insert(*id);
         let [houses, farmsteads, fishing_huts, lumber_huts, windmills, bakeries, marketplaces] =
-            building_counts.get(id).copied().unwrap_or_default();
+            directory
+                .building_counts
+                .get(id)
+                .copied()
+                .unwrap_or_default();
         let summary = SettlementSummary {
             id: *id,
             name: settlement.name.clone(),
@@ -88,17 +107,16 @@ pub fn sync_settlement_directory(
             bakeries,
             has_marketplace: marketplaces > 0,
         };
-        if let Some(entity) = directory
+        if let Some((entity, current, current_position)) = directory
             .entries
             .get(id)
-            .copied()
-            .filter(|entity| existing.get(*entity).is_ok())
+            .and_then(|entity| existing.get(*entity).ok())
         {
-            let unchanged = existing
-                .get(entity)
-                .is_ok_and(|(_, current)| *current == summary);
-            if !unchanged {
-                commands.entity(entity).insert((summary, position.clone()));
+            if *current != summary {
+                commands.entity(entity).insert(summary);
+            }
+            if current_position != Some(position) {
+                commands.entity(entity).insert(position.clone());
             }
         } else {
             let entity = commands
@@ -169,6 +187,167 @@ pub fn tag_settlement_detail_regions(
 mod tests {
     use super::*;
     use shared::components::SettlementTier;
+
+    #[derive(Resource, Default, Debug, PartialEq)]
+    struct DirectoryChanges {
+        summaries: usize,
+        positions: usize,
+    }
+
+    fn count_directory_changes(
+        mut changes: ResMut<DirectoryChanges>,
+        summaries: Query<(), Changed<SettlementSummary>>,
+        positions: Query<(), (With<SettlementSummary>, Changed<PlayerPosition>)>,
+    ) {
+        changes.summaries = summaries.iter().count();
+        changes.positions = positions.iter().count();
+    }
+
+    fn spawn_hall(app: &mut App, id: SettlementId) -> Entity {
+        app.world_mut()
+            .spawn((
+                id,
+                Settlement {
+                    name: format!("Settlement {}", id.0),
+                    tier: SettlementTier::Village,
+                    residents: 14,
+                    treasury: 321,
+                },
+                PlayerPosition(Vec3::new(600.0, 0.0, -25.0)),
+                SettlementEconomy::default(),
+            ))
+            .id()
+    }
+
+    #[test]
+    fn directory_replication_only_changes_the_component_that_changed() {
+        let mut app = App::new();
+        app.init_resource::<SettlementDirectory>()
+            .init_resource::<DirectoryChanges>()
+            .add_systems(
+                Update,
+                (sync_settlement_directory, count_directory_changes).chain(),
+            );
+        let hall = spawn_hall(&mut app, SettlementId(7));
+        app.update();
+        let summary = app.world().resource::<SettlementDirectory>().entries[&SettlementId(7)];
+
+        app.update();
+        assert_eq!(
+            *app.world().resource::<DirectoryChanges>(),
+            DirectoryChanges::default()
+        );
+
+        app.world_mut()
+            .get_mut::<SettlementEconomy>(hall)
+            .unwrap()
+            .prosperity = 50.0;
+        app.update();
+        assert_eq!(
+            *app.world().resource::<DirectoryChanges>(),
+            DirectoryChanges {
+                summaries: 1,
+                positions: 0
+            },
+            "statistics must not re-replicate an unchanged map position"
+        );
+        assert_eq!(
+            app.world()
+                .get::<SettlementSummary>(summary)
+                .unwrap()
+                .prosperity,
+            50.0
+        );
+
+        let moved = PlayerPosition(Vec3::new(650.0, 0.0, -25.0));
+        app.world_mut().entity_mut(hall).insert(moved.clone());
+        app.update();
+        assert_eq!(
+            *app.world().resource::<DirectoryChanges>(),
+            DirectoryChanges {
+                summaries: 0,
+                positions: 1
+            }
+        );
+        assert_eq!(app.world().get::<PlayerPosition>(summary), Some(&moved));
+
+        app.world_mut()
+            .entity_mut(summary)
+            .remove::<PlayerPosition>();
+        app.update();
+        assert_eq!(app.world().get::<PlayerPosition>(summary), Some(&moved));
+    }
+
+    #[test]
+    fn cached_building_counts_follow_edits_reassignment_and_removal_batches() {
+        let mut app = App::new();
+        app.init_resource::<SettlementDirectory>()
+            .add_systems(Update, sync_settlement_directory);
+        let hall = spawn_hall(&mut app, SettlementId(7));
+        spawn_hall(&mut app, SettlementId(8));
+        let house = SettlementBuilding {
+            kind: SettlementBuildingKind::House,
+            settlement: "Settlement 7".into(),
+            owner: None,
+            quality: 0.8,
+            workers: Vec::new(),
+        };
+        let first = app
+            .world_mut()
+            .spawn((BuildingOf(SettlementId(7)), house.clone()))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((BuildingOf(SettlementId(7)), house.clone()))
+            .id();
+        let counts = |app: &App| {
+            [SettlementId(7), SettlementId(8)].map(|id| {
+                let entity = app.world().resource::<SettlementDirectory>().entries[&id];
+                let summary = app.world().get::<SettlementSummary>(entity).unwrap();
+                [summary.houses, summary.farmsteads]
+            })
+        };
+
+        app.update();
+        assert_eq!(counts(&app), [[2, 0], [0, 0]]);
+        app.update();
+        assert_eq!(counts(&app), [[2, 0], [0, 0]]);
+        app.world_mut()
+            .get_mut::<SettlementBuilding>(first)
+            .unwrap()
+            .kind = SettlementBuildingKind::Farmstead;
+        app.update();
+        assert_eq!(counts(&app), [[1, 1], [0, 0]]);
+        app.world_mut()
+            .entity_mut(first)
+            .insert(BuildingOf(SettlementId(8)));
+        app.update();
+        assert_eq!(counts(&app), [[1, 0], [0, 1]]);
+
+        app.world_mut().entity_mut(first).remove::<BuildingOf>();
+        app.world_mut()
+            .entity_mut(second)
+            .remove::<SettlementBuilding>();
+        app.update();
+        assert_eq!(counts(&app), [[0, 0], [0, 0]]);
+        app.update();
+        assert_eq!(counts(&app), [[0, 0], [0, 0]]);
+        app.world_mut()
+            .entity_mut(first)
+            .insert(BuildingOf(SettlementId(7)));
+        app.world_mut().entity_mut(second).insert(house);
+        app.update();
+        assert_eq!(counts(&app), [[1, 1], [0, 0]]);
+
+        app.world_mut().despawn(first);
+        app.world_mut().despawn(second);
+        app.update();
+        assert_eq!(counts(&app), [[0, 0], [0, 0]]);
+        let summary = app.world().resource::<SettlementDirectory>().entries[&SettlementId(7)];
+        app.world_mut().despawn(hall);
+        app.update();
+        assert!(app.world().get_entity(summary).is_err());
+    }
 
     #[test]
     fn directory_keeps_global_summary_and_region_scoped_detail_separate() {

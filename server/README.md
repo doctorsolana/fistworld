@@ -129,9 +129,15 @@ inside the new system, and do not add lab-only ordering to make a test pass.
 - Private payroll closes the completed shift at dawn. It must debit the company treasury,
   credit the worker, and attribute the expense to the completed site ledger exactly once.
   Company consolidation must publish both the open day and completed day; never infer a
-  zero wage from the still-open day's ledger.
+  zero wage from the still-open day's ledger. Consolidate into a value before updating
+  `CompanyAccount`; unchanged books must not advance its replication change tick.
 - `SettlementSummary` is global; physical/economic detail carries `RegionCoord` and is
-  replicated only through interest management.
+  replicated only through interest management. Directory building counts are cached until
+  building or settlement-assignment components change, including removals. Update summary and
+  position independently so a statistics change does not re-send an unchanged location.
+- Static-prop collider coverage is the union around distinct `PlayerPosition` chunks.
+  Multiple actors in one chunk share streaming work; building-zone revisions still refresh
+  loaded chunks even when all desired chunks are already present.
 - A `StrategicPerson` retains durable social/economic state but owns no tactical path,
   door timer, seat or animation progress. World-wide work belongs in aggregate passes.
 - Embodied routes must remain bounded, cached and shared where possible. Future army/group
