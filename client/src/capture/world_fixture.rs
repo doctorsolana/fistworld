@@ -14,9 +14,24 @@ use shared::components::WorldTime;
 /// replicated demand consumer, and the authored glTF clip in one repeatable run.
 pub(super) fn exercise_capture_door(
     mut commands: Commands,
+    time: Res<Time>,
     settlements: Query<Entity, With<shared::components::Settlement>>,
+    mut building_doors: Query<
+        &mut shared::components::BuildingDoorDemand,
+        With<shared::components::SettlementBuilding>,
+    >,
     mut applied: Local<bool>,
 ) {
+    // Continuous asset captures exercise both clips through the production
+    // demand consumer, without substituting a capture-only animation player.
+    if std::env::var("FISTFORCE_CAPTURE_DOORS").as_deref() == Ok("cycle") {
+        let open = time.elapsed_secs() % 4.0 < 2.0;
+        for mut door in &mut building_doors {
+            if door.open != open {
+                door.open = open;
+            }
+        }
+    }
     if std::env::var("FISTFORCE_CAPTURE_DOOR").as_deref() != Ok("open") {
         return;
     }
@@ -150,11 +165,18 @@ pub(super) fn enter_world_offline(
     // deterministic Village Lab hut/pier pair for shoreline inspection; and
     // "industries" frames the authored founding production buildings closely;
     // "bakery" isolates a staffed bakery for chimney, lighting and stock-art QA;
-    // "market" and "market_paved" isolate the two identically sized square levels.
+    // "market" and "market_paved" isolate the two identically sized square levels;
+    // "storage_hall" isolates the warehouse and its production door wiring.
     if std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").is_ok_and(|v| {
         matches!(
             v.as_str(),
-            "1" | "village" | "coast" | "industries" | "bakery" | "market" | "market_paved"
+            "1" | "village"
+                | "coast"
+                | "industries"
+                | "bakery"
+                | "market"
+                | "market_paved"
+                | "storage_hall"
         )
     }) {
         commands.queue(|world: &mut World| {
@@ -167,7 +189,7 @@ pub(super) fn enter_world_offline(
                 .and_then(|c| c.shots.first().map(|s| s.focus))
                 .unwrap_or_default();
             let mode = std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").unwrap_or_default();
-            if matches!(mode.as_str(), "market" | "market_paved") {
+            if matches!(mode.as_str(), "market" | "market_paved" | "storage_hall") {
                 // Reproduce the authoritative construction earthwork in this
                 // network-free visual fixture. This makes the capture useful
                 // for spotting terrain triangles through the 12 m ground slab,
@@ -175,9 +197,12 @@ pub(super) fn enter_world_offline(
                 if let Some(mut terrain) =
                     world.get_resource_mut::<shared::terrain::WorldTerrain>()
                 {
-                    let def = shared::components::SettlementBuildingKind::Market
-                        .art()
-                        .definition();
+                    let kind = if mode == "storage_hall" {
+                        shared::components::SettlementBuildingKind::StorageHall
+                    } else {
+                        shared::components::SettlementBuildingKind::Market
+                    };
+                    let def = kind.art().definition();
                     let target = terrain.get_height(focus.x, focus.z);
                     terrain.apply_flatten_rect(
                         Vec3::new(focus.x, target, focus.z),
@@ -196,7 +221,7 @@ pub(super) fn enter_world_offline(
                 // Centre the authored production cluster rather than its Hall.
                 // This keeps close asset-validation shots reusable as the Hall
                 // ladder grows substantially taller than founding industries.
-                "industries" | "bakery" | "market" | "market_paved" => {
+                "industries" | "bakery" | "market" | "market_paved" | "storage_hall" => {
                     focus + Vec3::new(0.0, 0.0, 140.0)
                 }
                 _ if std::env::var("FISTFORCE_CAPTURE_PERMIT_PLACEMENT").is_ok() => {
@@ -355,7 +380,7 @@ pub(super) fn enter_world_offline(
                 .is_ok_and(|v| {
                     matches!(
                         v.as_str(),
-                        "village" | "industries" | "bakery" | "market" | "market_paved"
+                        "village" | "industries" | "bakery" | "market" | "market_paved" | "storage_hall"
                     )
                 })
             {
@@ -381,7 +406,9 @@ pub(super) fn enter_world_offline(
                         shared::components::CharacterActivity::Indoors,
                     ));
                 }
-                let kinds: &[K] = if mode == "bakery" {
+                let kinds: &[K] = if mode == "storage_hall" {
+                    &[K::StorageHall]
+                } else if mode == "bakery" {
                     &[K::Bakery]
                 } else if matches!(mode.as_str(), "market" | "market_paved") {
                     &[K::Market]
@@ -389,7 +416,7 @@ pub(super) fn enter_world_offline(
                     &[K::Farmstead, K::LumberjackHut, K::Windmill, K::Bakery]
                 };
                 for (index, kind) in kinds.iter().copied().enumerate() {
-                    let at = if matches!(mode.as_str(), "bakery" | "market" | "market_paved") {
+                    let at = if matches!(mode.as_str(), "bakery" | "market" | "market_paved" | "storage_hall") {
                         focus
                     } else if mode == "industries" {
                         // One authored comparison line: equal frontage,
@@ -423,7 +450,7 @@ pub(super) fn enter_world_offline(
                             store.add(shared::economy::Good::Flour, 6);
                             store.add(shared::economy::Good::Bread, 160);
                         }
-                        K::Market => {
+                        K::Market | K::StorageHall => {
                             store.add(shared::economy::Good::Food, 18);
                             store.add(shared::economy::Good::Wood, 10);
                         }
@@ -461,7 +488,7 @@ pub(super) fn enter_world_offline(
                             K::LumberjackHut => shared::economy::Good::Wood,
                             K::Windmill => shared::economy::Good::Flour,
                             K::Bakery => shared::economy::Good::Bread,
-                            K::Market => shared::economy::Good::Wood,
+                            K::Market | K::StorageHall => shared::economy::Good::Wood,
                             _ => unreachable!(),
                         }),
                         shared::economy::BusinessWagePolicy::default(),

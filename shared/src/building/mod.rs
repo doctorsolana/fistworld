@@ -19,16 +19,100 @@ mod tests {
 
     use super::*;
 
-    fn glb_scene_name(path: &Path) -> String {
+    fn glb_document(path: &Path) -> serde_json::Value {
         let bytes = fs::read(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         assert_eq!(&bytes[0..4], b"glTF", "{} is not a GLB", path.display());
         let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
-        let document: serde_json::Value = serde_json::from_slice(&bytes[20..20 + json_len])
-            .unwrap_or_else(|error| panic!("{}: invalid GLB JSON: {error}", path.display()));
+        serde_json::from_slice(&bytes[20..20 + json_len])
+            .unwrap_or_else(|error| panic!("{}: invalid GLB JSON: {error}", path.display()))
+    }
+
+    fn glb_scene_name(path: &Path) -> String {
+        let document = glb_document(path);
         document["scenes"][0]["name"]
             .as_str()
             .unwrap_or_else(|| panic!("{}: default scene has no name", path.display()))
             .to_string()
+    }
+
+    #[test]
+    fn storage_hall_keeps_its_plot_and_ships_a_lightweight_animated_door() {
+        let kind = BuildingType::StorageHall;
+        assert_eq!(
+            kind as u32, 13,
+            "preserve the old blockout's wire discriminant"
+        );
+        assert_eq!(kind.definition().footprint, Vec2::new(9.0, 7.0));
+        assert!(kind.has_baked_collider());
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../client/assets/game_assets/buildings/village/StorageHall.glb");
+        let document = glb_document(&path);
+        let nodes = document["nodes"].as_array().unwrap();
+        let anchor = nodes
+            .iter()
+            .find(|node| node["name"] == "Anchor_Door")
+            .unwrap();
+        let offset = crate::components::SettlementBuildingKind::StorageHall.door_offset();
+        let anchor_position: Vec<f32> = anchor["translation"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_f64().unwrap() as f32)
+            .collect();
+        assert_eq!(anchor_position, [offset.x, 0.0, offset.y]);
+        let colliders = crate::colliders::load_baked_collider_db_from_file(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../client/assets/colliders.bin"),
+        )
+        .unwrap();
+        let crate::colliders::BakedCollider::ConvexHull { points } = &colliders.entries[kind.id()]
+        else {
+            panic!("Storage Hall must use one inexpensive hull");
+        };
+        let front = points
+            .iter()
+            .map(|point| point[2])
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            offset.y + crate::physics::CHARACTER_NAV_RADIUS + 0.05 < front,
+            "the baked hull must leave character clearance at the door anchor"
+        );
+        let door = nodes
+            .iter()
+            .position(|node| node["name"] == "StorageHallDoor")
+            .unwrap();
+        let animations = document["animations"].as_array().unwrap();
+        assert_eq!(animations.len(), 2);
+        for (name, duration) in [("door_open", 16.0 / 24.0), ("door_close", 22.0 / 24.0)] {
+            let clip = animations.iter().find(|clip| clip["name"] == name).unwrap();
+            let channels = clip["channels"].as_array().unwrap();
+            assert_eq!(channels.len(), 1);
+            assert_eq!(channels[0]["target"]["node"].as_u64(), Some(door as u64));
+            assert_eq!(channels[0]["target"]["path"], "rotation");
+            let input = clip["samplers"][0]["input"].as_u64().unwrap() as usize;
+            let end = document["accessors"][input]["max"][0].as_f64().unwrap();
+            assert!(
+                (end - duration).abs() < 0.001,
+                "{name} must match runtime door timing"
+            );
+        }
+        assert_eq!(document["materials"].as_array().unwrap().len(), 1);
+        assert!(document["skins"].is_null());
+        assert!(document["images"].is_null());
+        assert!(document["extensionsUsed"].is_null());
+        let vertices: u64 = document["meshes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|mesh| mesh["primitives"].as_array().unwrap())
+            .map(|primitive| {
+                let accessor = primitive["attributes"]["POSITION"].as_u64().unwrap() as usize;
+                document["accessors"][accessor]["count"].as_u64().unwrap()
+            })
+            .sum();
+        assert!(
+            vertices <= 8_000,
+            "the storage hall exceeded its exported vertex budget: {vertices}"
+        );
     }
 
     /// Every building the game has must have a definition and a model.

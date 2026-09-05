@@ -2253,7 +2253,7 @@ fn settlement_kind_for_art(building_type: BuildingType) -> SettlementBuildingKin
         BuildingType::PlaceholderChurch => SettlementBuildingKind::Church,
         BuildingType::Windmill => SettlementBuildingKind::Windmill,
         BuildingType::Bakery => SettlementBuildingKind::Bakery,
-        BuildingType::PlaceholderStorageHall => SettlementBuildingKind::StorageHall,
+        BuildingType::StorageHall => SettlementBuildingKind::StorageHall,
         BuildingType::PlaceholderStoneQuarry => SettlementBuildingKind::StoneQuarry,
         BuildingType::LivestockFarm => SettlementBuildingKind::LivestockFarm,
     }

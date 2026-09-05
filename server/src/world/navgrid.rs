@@ -182,7 +182,7 @@ mod tests {
                     SettlementBuildingKind::Church,
                 ),
                 (
-                    BuildingType::PlaceholderStorageHall,
+                    BuildingType::StorageHall,
                     SettlementBuildingKind::StorageHall,
                 ),
                 (

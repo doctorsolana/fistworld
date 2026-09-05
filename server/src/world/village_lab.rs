@@ -5274,7 +5274,7 @@ fn village_simulation_lab() {
                                 shared::building::BuildingType::Bakery => {
                                     SettlementBuildingKind::Bakery
                                 }
-                                shared::building::BuildingType::PlaceholderStorageHall => {
+                                shared::building::BuildingType::StorageHall => {
                                     SettlementBuildingKind::StorageHall
                                 }
                                 shared::building::BuildingType::PlaceholderStoneQuarry => {

@@ -36,10 +36,9 @@ pub enum BuildingType {
     /// Paved upgrade of the market square. It deliberately shares the exact
     /// same anchors and footprint as `Market`, so promotion never moves it.
     MarketPaved,
-    /// Temporary private-depot art. Storage halls previously borrowed the old
-    /// market blockout; keeping that box separate prevents them becoming
-    /// walkable public plazas when the market receives authored art.
-    PlaceholderStorageHall,
+    /// Authored private depot. Retains the original blockout's position so
+    /// binary replication discriminants remain unchanged.
+    StorageHall,
     /// Temporary solid blockout for the first stone-extraction trade. The
     /// semantic building remains `StoneQuarry`, so authored quarry art can
     /// replace this without touching saves or economy code.
@@ -74,6 +73,7 @@ pub const ALL_BUILDING_TYPES: &[BuildingType] = &[
     BuildingType::CabinL2,
     BuildingType::LongCabinL2,
     BuildingType::LivestockFarm,
+    BuildingType::StorageHall,
 ];
 
 impl BuildingType {
@@ -97,7 +97,7 @@ impl BuildingType {
             BuildingType::Windmill => "building_windmill",
             BuildingType::Bakery => "building_bakery",
             BuildingType::MarketPaved => "building_market_paved",
-            BuildingType::PlaceholderStorageHall => "placeholder_storage_hall",
+            BuildingType::StorageHall => "building_storage_hall",
             BuildingType::PlaceholderStoneQuarry => "placeholder_stone_quarry",
             BuildingType::LivestockFarm => "building_livestock_farm",
             BuildingType::LongCabin => "building_long_cabin",
@@ -129,7 +129,9 @@ impl BuildingType {
                 Some("game_assets/buildings/village/MarketPaved.glb#Scene0")
             }
             BuildingType::PlaceholderTavern | BuildingType::PlaceholderChurch => None,
-            BuildingType::PlaceholderStorageHall => None,
+            BuildingType::StorageHall => {
+                Some("game_assets/buildings/village/StorageHall.glb#Scene0")
+            }
             BuildingType::PlaceholderStoneQuarry => None,
             BuildingType::LivestockFarm => {
                 Some("game_assets/buildings/village/LivestockFarm.glb#Scene0")
@@ -271,15 +273,15 @@ impl BuildingType {
                 color: Color::srgb(0.67, 0.48, 0.23),
                 model_path: Some("game_assets/buildings/village/MarketPaved.glb#Scene0"),
             },
-            BuildingType::PlaceholderStorageHall => BuildingDef {
+            BuildingType::StorageHall => BuildingDef {
                 building_type: *self,
-                display_name: "Storage Hall (blockout)",
+                display_name: "Storage Hall",
                 footprint: Vec2::new(9.0, 7.0),
                 footprint_center: Vec2::ZERO,
-                height: 3.2,
+                height: 6.235,
                 flatten_radius: 1.8,
                 color: Color::srgb(0.47, 0.34, 0.21),
-                model_path: None,
+                model_path: Some("game_assets/buildings/village/StorageHall.glb#Scene0"),
             },
             BuildingType::PlaceholderStoneQuarry => BuildingDef {
                 building_type: *self,

@@ -137,7 +137,7 @@ impl SettlementBuildingKind {
             // Dedicated art can replace this semantic mapping without a save
             // migration. Keep its temporary solid box distinct from the
             // walkable open-air marketplace.
-            SettlementBuildingKind::StorageHall => Art::PlaceholderStorageHall,
+            SettlementBuildingKind::StorageHall => Art::StorageHall,
             SettlementBuildingKind::StoneQuarry => Art::PlaceholderStoneQuarry,
             SettlementBuildingKind::LivestockFarm => Art::LivestockFarm,
         }
