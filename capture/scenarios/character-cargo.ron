@@ -1,0 +1,27 @@
+(
+    name: "character-cargo",
+    output_dir: "logs/captures/character-cargo",
+    version: 1,
+    map: "village_lab",
+    resolution: (1600, 900),
+    fixed_delta_seconds: 0.016666667,
+    target: scene,
+    show_window: false,
+    warmup_frames: 300,
+    readiness: (
+        minimum_frames: 90,
+        maximum_frames: 1200,
+        minimum_loaded_chunks: 25,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: {
+        "FISTFORCE_CAPTURE_CARRIED": "wood,wheat,fish,stone,iron",
+        "FISTFORCE_CAPTURE_HERO_OFFSET": "-2.8,0",
+        "FISTFORCE_CAPTURE_CLOUDS": "clear",
+    },
+    shots: [
+        (name: "front", focus: (-15.0, 0.0, -15.0), yaw: -0.2, zoom: 15.0, time_of_day: 0.5, assertions: [entities_at_least(count: 100)]),
+        (name: "side", focus: (-15.0, 0.0, -15.0), yaw: 1.2, zoom: 15.0, time_of_day: 0.5, assertions: [entities_at_least(count: 100)]),
+        (name: "rear", focus: (-15.0, 0.0, -15.0), yaw: 3.0, zoom: 15.0, time_of_day: 0.5, assertions: [entities_at_least(count: 100)]),
+    ],
+)

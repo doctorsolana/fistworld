@@ -430,7 +430,7 @@ OPTIONS:
     --resolution <WxH> Fixed physical capture resolution [default: 1600x900]
     --fixed-delta <s>  Deterministic real-time step       [default: 0.0166667]
     --target <kind>    window (scene + UI) | scene (offscreen 3D only)
-    --hidden           Hide the OS window (best paired with --target scene)
+    --hidden           Hide the OS window (both capture targets are supported)
     --compare <dir>    Compare PNGs to baselines; write *.diff.png on failure
     --update-baselines <dir>  Create or replace approved baseline PNGs
     --record           Record deterministic raw H.264 (requires --features capture-video)

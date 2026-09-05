@@ -63,7 +63,7 @@ pub fn get_asset_path() -> String {
 }
 
 /// Boot the normal multiplayer client.
-pub fn run() {
+pub fn run() -> AppExit {
     let asset_path = get_asset_path();
 
     let mut app = App::new();
@@ -78,5 +78,5 @@ pub fn run() {
         SERVER_ADDR, SERVER_PORT, client_id
     );
 
-    app.run();
+    app.run()
 }

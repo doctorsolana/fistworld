@@ -353,6 +353,12 @@ pub struct CaptureCameraMetadata {
     pub time_of_day: f32,
     pub pitch: Option<f32>,
     pub eye: f32,
+    /// Actual 3D camera pose for connected captures, including cinematics
+    /// that temporarily override the commander controller's orbit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f32; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<[f32; 4]>,
 }
 
 #[derive(Clone, Debug, Serialize)]

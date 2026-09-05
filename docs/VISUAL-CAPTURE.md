@@ -11,9 +11,14 @@ same terrain streaming, water, props, atmosphere, cameras, assets and retained U
 It is intended to answer questions a compile cannot: whether a shoreline tears while panning,
 an animation faces the wrong way, a menu clips, or an LOD transition changes the world.
 
-The implementation has two layers:
+The implementation separates orchestration from fixture data:
 
-- `client/src/capture.rs` owns real-world staging, camera movement and capture sequencing.
+- `client/src/capture.rs` owns application setup, camera movement, readiness and sequencing.
+- `client/src/capture/live.rs` owns the connected voyage and Village Lab hooks.
+- `client/src/capture/inspection.rs` reads shared world counters and live camera evidence;
+  `presentation.rs` owns the offline scene-and-UI render target.
+- `world_fixture.rs`, `scene_fixtures.rs`, `ui_fixtures.rs` and `history_fixtures.rs`
+  under `client/src/capture/` stage deterministic inputs for the production systems.
 - `client/src/capture_artifact.rs` owns scenario RON, readiness, semantic assertions, Bevy
   screenshot observers, PNG/JSON artifacts and baseline comparison.
 
@@ -56,7 +61,9 @@ Scenarios belong under `capture/scenarios/` and are versioned. Checked-in refere
 river handoff and inland ground paint, `forest-floor.ron` for forest accents at morning and noon,
 `isolated-fern.ron` for a single shipped fern with all surrounding props suppressed,
 `lighting-readability.ron` for people/buildings across three daylight angles, and
-`ui-company.ron` for a real retained-UI fixture.
+`ui-company.ron` / `ui-companies.ron` for real retained-UI fixtures. Character maintenance
+checks include `character-work.ron` (one continuous animation sequence),
+`character-cargo.ron` (five authored carried bundles) and `porter-cart.ron` (loaded cart).
 
 ```ron
 (
@@ -136,8 +143,15 @@ so a pretty screenshot cannot pass while its intended population or world state 
 
 ## Window, offscreen scene and diagnostics
 
-`target: window` captures the composed OS window: scaled 3D scene plus native-resolution UI.
-Use it for HUD, encyclopedia, property, company and interaction tests.
+`target: window` captures the production presentation camera: scaled 3D scene plus
+native-resolution UI. In the offline capture app this camera renders into an owned image,
+and a visible harness window mirrors it. Captures therefore remain usable on a locked
+desktop or during swapchain changes. Use it for HUD, encyclopedia, property, company and
+interaction fixtures; `show_window: false` keeps the same composed output without a mirror.
+
+The connected Village Lab can select its offscreen 3D image with
+`FISTWORLD_LAB_CAPTURE_TARGET=scene`. It waits for stable loaded terrain after the requested
+world day and warmup. Live composed-window capture still requires a usable desktop window.
 
 `target: scene` captures the game's `SceneRenderTarget` image directly at 100% render scale. It is
 independent of fullscreen mode, monitor scale and swapchain behavior, and excludes UI. Add
@@ -216,12 +230,40 @@ server when the subject is NPC behavior.
 For the rendered Village Lab, set `FISTWORLD_LAB_CAPTURE_DAY`,
 `FISTWORLD_LAB_CAPTURE_PATH`, optional `FISTWORLD_LAB_CAPTURE_ZOOM`, and
 `FISTWORLD_LAB_CAPTURE_EXIT=1` before `./run.sh testworld`. The authoritative world day gates the
-shot and the observer writes matching JSON metadata.
+shot and the observer writes matching JSON metadata. Live metadata reads the replicated map,
+world day, population, routes and loaded terrain at the request. It also records the commander
+controller and actual root camera position/rotation, including cinematic overrides.
+`fixed_delta_seconds: 0` identifies a live run rather than a deterministic offline timestep.
+
+When launching the binaries directly, set the same `CITYSIM_MAP_ID` for both client and server;
+`run.sh` normally does this for you. Live capture rejects differing map IDs or content hashes
+before writing an artifact. `FISTWORLD_LAB_CAPTURE_TARGET=scene` selects the owned 3D target when
+the desktop swapchain is unavailable. The requested survey zoom remains fixed throughout warmup
+so a late restored commander view cannot replace the framing.
 
 For the real create-Hero/opening-voyage path, set
 `FISTWORLD_VOYAGE_CAPTURE_DIR=/absolute/output/directory` and optionally
 `FISTWORLD_VOYAGE_CAPTURE_EXIT=1`. It records face hold, camera travel, final RTS framing and an
 ordinary right-click sailing result from the live offscreen scene target.
+
+For an unattended voyage check, start a fresh local server and use an unused profile name.
+Run these in separate terminals after the playtest build:
+
+```bash
+CITYSIM_MAP_ID=big_world target/playtest/server
+
+CITYSIM_MAP_ID=big_world BEVY_ASSET_ROOT="$PWD/client/assets" \
+FISTFORCE_NO_SETTINGS_FILE=1 FISTFORCE_AUTOCONNECT=CaptureVoyage \
+FISTWORLD_AUTOCREATE_VOYAGE=1 \
+FISTWORLD_VOYAGE_CAPTURE_DIR=/tmp/fistworld-voyage \
+FISTWORLD_VOYAGE_CAPTURE_EXIT=1 target/playtest/client
+```
+
+An unattended NPC observer can use the existing `FISTWORLD_AUTOSPAWN_HERO=1` smoke mode to
+suppress the new-player creator. Without server god capability, that flag only skips the creator;
+it does not grant a hero. Inspect the village image itself: replicated population counters can
+be correct while a modal or creator preview occupies the view. The normal client propagates
+Bevy's exit status, so a live capture failure returns a nonzero process status.
 
 ## Adding a regression
 
