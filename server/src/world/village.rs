@@ -9,8 +9,8 @@
 //! fixed-point wallets, businesses consign physically delivered stock under a
 //! stable seller identity, buyers pay the firm only when a sale clears, households
 //! buy daily provisions, builders buy Wood or gather it themselves, and the Moot
-//! earns fees while paying civic workers. Births, boats and remote trade remain
-//! deferred.
+//! earns fees while paying civic workers. Companies also operate physical regional
+//! trade routes; births remain deferred. Player vessels live in `player::boat`.
 //!
 //! Everything in this module is server truth. Clients receive settlements and
 //! buildings and draw them; they never decide anything.

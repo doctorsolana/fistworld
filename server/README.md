@@ -9,16 +9,17 @@ top-level modules and calls `app::run()`; runtime rules belong to their domain.
 |---|---|
 | `app` | Bootstrap, resources and ordered fixed-update wiring |
 | `net` | Connections, peer identity and client-message ingress |
-| `player` | Commander views, hero lifecycle, rosters, movement orders, nearby Hall trading, permit/company funding and placement, physical hero construction, Company Master policy commands, share trading, authoritative caravan timetable orders and player indexes |
+| `player` | Commander views, hero/boat lifecycle, rosters, battalions and formation orders, melee, nearby Hall trading, permit/company funding and placement, physical hero construction, Company Master policies, shares and caravan timetable orders |
 | `collision` | Baked/derived building colliders, spatial indexes, raycasts and streamed static collision |
 | `world` | Time, identity, regions, settlements, village simulation, roads, development and lab fixtures |
-| `persistence` | Session profile snapshots plus legacy profile migration/IO tooling; the live server deliberately starts fresh |
+| `persistence` | In-memory session account/commander snapshots; the live server deliberately starts fresh |
 | `telemetry` | Tick/phase timing, replication pressure and opt-in diagnostics |
 | `city` | Synchronisation for authored plot buildings; autonomous settlements live under `world` |
 
-The removed combat, vehicle, inventory and legacy NPC-AI domains are not runtime
-dependencies. Do not recreate generic versions of them when a living-world domain owns the
-rule more precisely.
+The removed first-person combat, vehicles and NPC AI are not runtime dependencies.
+The current RTS owns melee in `player/combat.rs`, boats in `player/boat.rs`, armies in
+`player/army.rs`, and physical inventories in `shared::economy`. Extend those live domains.
+See [the game code map](../docs/GAME-CODE-MAP.md) for the cross-crate ownership map.
 
 ## World and village ownership
 
@@ -157,9 +158,9 @@ inside the new system, and do not add lab-only ordering to make a test pass.
   modifiers intentionally make the observed cadence vary around the configured base rate.
 - Avoid per-tick full-population scans, string joins and allocations. Reconcile on changed
   state or slow world boundaries.
-- The live server does not load player or world state after restart. Legacy player-profile
-  tooling uses positional bincode and requires `PROFILE_VERSION` changes; any future durable
-  settlement/world save must be versioned and self-describing instead.
+- The live server does not load player or world state after restart. Profiles are in-memory
+  session snapshots. Any future durable account/settlement/world save needs an explicit
+  version envelope and migration policy before payload decoding.
 
 ## Verification
 

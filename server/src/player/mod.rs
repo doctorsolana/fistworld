@@ -1,13 +1,14 @@
 //! Player domain.
 //!
 //! Responsibilities:
-//! - Player spawn/setup and roster responses.
-//! - Fixed-tick movement simulation.
-//! - Death/respawn lifecycle.
+//! - Account command authority, commander views, heroes, boats and rosters.
+//! - Authoritative movement, battalion formations and melee orders.
+//! - Player-directed trade, companies, permits and construction.
 //!
 //! Dependency notes:
-//! - May depend on `shared`, `net`, and persistence resources.
-//! - Should avoid direct dependency on combat/collision internals.
+//! - Uses shared contracts, connection identity and session account resources.
+//! - Movement and attacks use the world's navigation/collision proofs; economic
+//!   commands use village ownership and accounting rules.
 
 pub mod army;
 pub mod boat;

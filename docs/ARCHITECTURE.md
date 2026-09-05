@@ -1,7 +1,7 @@
 # Game architecture
 
-Decisions first recorded 2026-07-27 and reconciled with the live simulation on
-2026-08-15. Retrofitting these boundaries is expensive, so read this before extending
+Decisions first recorded 2026-07-27, with live-code status and ownership reconciled on
+2026-09-05. Retrofitting these boundaries is expensive, so read this before extending
 simulation code.
 
 The companion document [WORLD-DESIGN.md](WORLD-DESIGN.md) describes what runs ON this
@@ -11,15 +11,17 @@ ownership, municipal finance and settlement policy. The build order lives in
 [ROADMAP.md](ROADMAP.md). Client presentation and interaction rules live in
 [UI-ARCHITECTURE.md](UI-ARCHITECTURE.md). The real-renderer verification contract and
 capture artifact architecture live in [VISUAL-CAPTURE.md](VISUAL-CAPTURE.md).
+[GAME-CODE-MAP.md](GAME-CODE-MAP.md) maps common changes to their current source owners.
 
-> **Status, audited 2026-08-15.** This remains a design record, with implementation state
+> **Status, reconciled 2026-09-05.** This remains a design record, with implementation state
 > marked **[not built]**, **[partial]** or **[done]**. The living-village foundation now
 > has stable world identities, one authoritative simulation clock, shared live/lab
 > scheduling, region-scoped settlement detail, a global settlement directory and an
 > aggregate off-screen economy. Stable companies now add 1,000-share cap tables, one
-> treasury, site cost centres and settlement-local physical branches. Politics, armies,
-> combat and world-state persistence are
-> still unbuilt. Do not read an unmarked future rule as working code.
+> treasury, site cost centres and settlement-local physical branches. Player heroes, boats,
+> tactical battalions, formation orders and melee have live authoritative implementations.
+> Strategic armies, political control and world-state persistence remain future work.
+> Do not read an unmarked future rule as working code.
 
 ## The game
 
@@ -262,9 +264,9 @@ guarantee; retain the fixture and compare deltas whenever a world-wide rule is a
   and streamed-prop changes invalidate only intersecting route-cache entries. Repeated
   blocked-goal warnings are spatially and temporally coalesced, while the final live
   collision proof remains authoritative. Permitted worksite footprints block road surveys
-  before their shells exist. The old generic `find_path` routine in
-  `pathfinding.rs` remains unused, although its wall-clock budget settings are shared by
-  the live queue. Future commanded groups still require regional flow fields rather than
+  before their shells exist. `pathfinding.rs` contains the wall-clock budget settings
+  used by the live queue; the retired generic `find_path` implementation is gone.
+  Large commanded groups still require regional flow fields rather than
   multiplying these local searches.
 - Villager inspection intent — **[done]**. Server-only routines are folded at the end of
   the shared village activity schedule into compact, replicated objective and navigation
@@ -295,10 +297,12 @@ guarantee; retain the fixture and compare deltas whenever a world-wide rule is a
 - ~~The commander camera, which needs its zoom range extended by ~20×.~~ **[done]** —
   12m–12,000m, which covers the whole map.
 
-**What does NOT exist, despite being easy to assume from the rest of this document:**
-combat (stripped wholesale — ~9,600 lines — and never replaced), strategic armies,
-caravans, clans, political ownership, world-state persistence, and a production path for
-founding or commanding a body outside the current dev/gameplay tools.
+**Implementation limits:** the new RTS melee and tactical battalion systems live in
+`server/src/player/combat.rs` and `army.rs`; they do not restore the removed first-person
+combat. Regional trade routes and embodied caravan work are implemented, but strategic
+military campaigns, clans, political territory and world-state persistence remain future
+work. Heroes and their possessions survive disconnects within a running server session;
+restarting the server creates a fresh world.
 
 ## 7. Build order
 
@@ -360,7 +364,8 @@ The current village simulation uses these rules as hard boundaries:
   strategic settlement pass and cover tactical/strategic agreement with tests.
 - **Village domains have explicit owners.** `village.rs` is the public facade and shared
   state model; migration and resident counts live in `village/population.rs`, demand and
-  geography-aware permits in `village/planning.rs`, material supply and building work in
+  geography-aware permits behind `village/planning.rs` and its focused `planning/` modules,
+  material supply and building work in
   `village/construction.rs`, vacancy matching in `village/employment.rs`, physical Moot
   Steward collection in `village/commerce.rs`, municipal budgets/payroll and the enacted
   relief/reserve/staffing/subsidy policy model in

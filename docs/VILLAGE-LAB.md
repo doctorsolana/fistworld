@@ -72,8 +72,9 @@ cargo village-lab
 
 # Canonical long economy experiment: 10 arrivals on day 1, 5 on day 5,
 # then 3 per day on days 6-30, evenly divided between three settlements.
-# Migration stops at 30 residents each and the economy runs undisturbed through
-# day 50. One full day is 28 simulated minutes, hence 1,400 minutes total.
+# Migration stops at 30 residents each. Keep the established 1,400-minute
+# acceptance window: with today's 24-minute cycle it runs beyond day 58,
+# leaving more than twenty migration-free days after the last arrivals.
 FISTWORLD_LAB_SCENARIO=economy-soak \
 FISTWORLD_LAB_WARP=10 \
 FISTWORLD_LAB_MINUTES=1400 \
@@ -134,7 +135,7 @@ FISTWORLD_LAB_MINUTES=220 \
 cargo village-lab
 
 # Exact cohort experiment: 5 founders, 5 more on day 3, 5 more on day 5,
-# then observe the closed population through day 40 (28 minutes per day).
+# then observe the closed population beyond day 40 (1,120 simulated minutes).
 FISTWORLD_LAB_SCENARIO=inland-meadow \
 FISTWORLD_LAB_FOUNDERS=5 \
 FISTWORLD_LAB_DAY_TWO_ARRIVALS=5 \
@@ -162,7 +163,7 @@ cargo village-lab
 
 # Long matched-policy experiment: 5 founders, 5 arrivals on day 3, 5 on day 5,
 # then 2 every 3 days from day 8 through day 35. Migration then stops for fifty
-# days and both 35-person towns run through day 85 (2,380 simulated minutes).
+# days and both 35-person towns run beyond day 85 (2,380 simulated minutes).
 CITYSIM_PATHFINDING_MILLISECONDS_PER_TICK=50 \
 FISTWORLD_LAB_SCENARIO=policy-comparison \
 FISTWORLD_LAB_FOUNDERS=5 \

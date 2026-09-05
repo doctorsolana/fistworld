@@ -5,8 +5,10 @@ feature work across `client`, `server`, and `shared`.
 
 > **Context:** the old first-person game is preserved at tag `citysim-final`. The live
 > repository is a top-down persistent living-world RTS with an implemented autonomous
-> settlement/economy slice. Do not revive removed combat, vehicle or legacy NPC systems as
-> shortcuts; new features must fit the current server-authoritative architecture.
+> settlement/economy slice, embodied heroes, boats, battalions and player-ordered melee.
+> Do not revive the removed first-person systems as shortcuts; new features must fit the
+> current server-authoritative architecture. See [the game code map](docs/GAME-CODE-MAP.md)
+> for current module ownership.
 
 ## Core Rules
 
@@ -123,9 +125,11 @@ observed subset. Anything per-person per-frame is a design decision, not a detai
   `Serialize`/`Deserialize` around a bit-packed struct; that class of silent skew is why it is now a
   plain derive. Don't reintroduce hand-packing without a roundtrip test.
 - Keep map-load preprocessing deterministic and reusable by both client and server.
-- **Player profiles are bincode, which is positional and not self-describing.** Any field
-  add/remove/reorder in `PlayerProfile` requires bumping `PROFILE_VERSION`. The version guard runs
-  *after* deserialize and cannot catch a layout shift — old files decode into silent garbage.
+- **Network serialization is positional.** Preserve serialized field/variant order when moving
+  shared types between files. A source-only module split does not require a protocol bump;
+  changing their wire layout or registration does. `PlayerProfile` is an in-memory session
+  snapshot, not a disk format; the live world and account registry start fresh on restart.
+  Future durable saves need an explicit version envelope checked before decoding the payload.
 - **Map `.ron` files fail hard on unknown enum variants** (unknown struct *fields* are fine).
   Removing a `SpawnMarkerKind` variant that exists in a saved map panics `WorldTerrain` init in
   both client and server. Preserve serialized variants or migrate authored maps first.
