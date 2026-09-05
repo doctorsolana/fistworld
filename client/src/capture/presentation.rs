@@ -28,7 +28,10 @@ pub(super) fn setup_capture_presentation(
     mut cameras: Query<(Entity, &mut RenderTarget), With<PresentCamera>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    if config.target != CaptureTarget::Window {
+    // A hidden macOS swapchain may block even with vsync disabled. Timed
+    // scene runs must also present into an owned image, so timing reflects
+    // the renderer instead of hidden-window drawable availability.
+    if config.target != CaptureTarget::Window && !config.benchmark {
         return;
     }
     let Ok(window) = windows.single() else {

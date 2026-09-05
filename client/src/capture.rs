@@ -14,6 +14,7 @@
 mod history_fixtures;
 mod inspection;
 mod live;
+mod performance;
 mod presentation;
 mod scene_fixtures;
 mod ui_fixtures;
@@ -151,6 +152,8 @@ pub struct CaptureConfig {
     /// one request per frame: Bevy silently despawns a same-frame duplicate
     /// screenshot of the same window and its PNG would never land.
     pub probe_every: u32,
+    /// Measure real frame intervals on a continuous path without screenshot readbacks.
+    pub benchmark: bool,
 }
 
 /// Where we are in the capture sequence.
@@ -201,10 +204,27 @@ struct CaptureVideoControl {
     stop_requested: bool,
 }
 
-pub fn run(config: CaptureConfig) {
+pub fn run(mut config: CaptureConfig) {
+    if config.benchmark
+        && (!config.continuous
+            || config.shots.is_empty()
+            || config.comparison.is_some()
+            || config
+                .recording
+                .as_ref()
+                .is_some_and(|recording| recording.enabled))
+    {
+        eprintln!("capture: --benchmark requires a nonempty continuous flight without comparison or recording");
+        std::process::exit(2);
+    }
     // Captures must not inherit the user's saved settings file.
     std::env::set_var("FISTFORCE_NO_SETTINGS_FILE", "1");
     std::env::set_var("FISTFORCE_CAPTURE_SYNC_PIPELINES", "1");
+    if config.benchmark {
+        config.show_window = false;
+        std::env::set_var("FISTFORCE_FRAME_CAP", "0");
+        std::env::set_var("FISTFORCE_VSYNC", "0");
+    }
     if config.diagnostics.render_timings {
         std::env::set_var("FISTFORCE_RENDER_DIAG", "1");
         std::env::set_var("FISTFORCE_LOG_DIAGNOSTICS", "1");
@@ -293,6 +313,14 @@ pub fn run(config: CaptureConfig) {
     app.insert_resource(CaptureState::Warmup {
         progress: ReadinessProgress::default(),
     });
+    if config.benchmark {
+        // Winit's default game policy uses a reactive 60 Hz event loop when
+        // unfocused, independently of vsync/the software cap. Hidden timing
+        // runs must exercise the same continuous loop as focused gameplay.
+        app.insert_resource(bevy::winit::WinitSettings::continuous());
+        app.insert_resource(performance::CapturePerformance::new(config.shots.len()));
+        app.add_systems(First, performance::measure_frames);
+    }
     app.insert_resource(config);
 
     app.add_systems(PreStartup, configure_capture_window);
@@ -433,7 +461,16 @@ fn drive_capture(
                 // hide every fast-pan artifact.
                 let probe_every = config.probe_every.max(1) as usize;
                 let last = index + 1 == config.shots.len();
-                if index % probe_every == 0 || last {
+                if config.benchmark && !current.assertions.is_empty() {
+                    let snapshot = inspection.world_snapshot(world_time.iter().next());
+                    for result in evaluate_assertions(&current.assertions, &snapshot) {
+                        if !result.passed {
+                            error!("capture: '{}' assertion failed: {:?}", current.name, result);
+                            run_status.failed = true;
+                        }
+                    }
+                }
+                if !config.benchmark && (index % probe_every == 0 || last) {
                     let path = config.out_dir.join(format!("{}.png", current.name));
                     let snapshot = inspection.world_snapshot(world_time.iter().next());
                     let assertion_results = evaluate_assertions(&current.assertions, &snapshot);

@@ -86,6 +86,7 @@ fn main() {
         .unwrap_or_default();
 
     let mut i = 0;
+    let mut benchmark = false;
     while i < args.len() {
         let arg = args[i].as_str();
         let mut value = || -> String {
@@ -121,6 +122,7 @@ fn main() {
                 }
             }
             "--hidden" => show_window = false,
+            "--benchmark" => benchmark = true,
             "--compare" => {
                 comparison = Some(CaptureComparisonConfig {
                     baseline_dir: PathBuf::from(value()),
@@ -213,6 +215,7 @@ fn main() {
         settle_frames: if continuous { 0 } else { settle_frames },
         continuous,
         probe_every,
+        benchmark,
     });
 }
 
@@ -431,6 +434,7 @@ OPTIONS:
     --fixed-delta <s>  Deterministic real-time step       [default: 0.0166667]
     --target <kind>    window (scene + UI) | scene (offscreen 3D only)
     --hidden           Hide the OS window (both capture targets are supported)
+    --benchmark        Time a continuous flight without screenshot readbacks; writes performance.json
     --compare <dir>    Compare PNGs to baselines; write *.diff.png on failure
     --update-baselines <dir>  Create or replace approved baseline PNGs
     --record           Record deterministic raw H.264 (requires --features capture-video)

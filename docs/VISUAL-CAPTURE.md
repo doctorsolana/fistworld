@@ -174,6 +174,44 @@ The command-line equivalents are `--perf-overlay`, `--gizmos`, and
 `--render-diagnostics`. Prefer a clean color capture plus a separate diagnostic capture rather
 than approving a baseline with volatile FPS text.
 
+## Measuring frame pacing
+
+Use a release build for performance decisions. The normal capture clock advances
+by a fixed simulation timestep, so its FPS overlay is **not** a wall-clock
+benchmark. Screenshot readbacks also disturb timing. `--benchmark` runs a
+nonempty continuous scenario with frame limiting, vsync and Winit's background
+event-loop throttle disabled, skips PNG readbacks, and writes `performance.json`
+with real frame intervals, percentiles,
+slow-frame counts and the preceding frame's terrain/prop CPU counters. Warmup
+is excluded. Comparison and recording cannot be combined with this mode.
+Benchmark presentation uses an owned offscreen image even for `target: scene`,
+avoiding hidden macOS swapchain waits. Benchmark mode always hides the window
+and omits its presentation mirror.
+
+```bash
+python3 capture/performance_flights.py /tmp/fistworld-flights
+cargo build --release -p client --bin capture
+BEVY_ASSET_ROOT="$PWD/client/assets" target/release/capture \
+  --scenario /tmp/fistworld-flights/forest-mid.ron --benchmark --out /tmp/forest-timing
+# Run the identical moving path with PNG/JSON probes for visual verification:
+BEVY_ASSET_ROOT="$PWD/client/assets" target/release/capture \
+  --scenario /tmp/fistworld-flights/forest-mid.ron --out /tmp/forest-visual
+```
+
+The generator covers forest close/mid/wide/map views, a zoom sweep, and sandy
+river-mouth traversal on Showcase/91. Each 1,200-frame path crosses chunk
+boundaries and repeats its circuit. Resolution is 1920×1080 at 100% scene scale;
+`--resolution` can override it. The sun advances deterministically too. Keep
+the same path, resolution, graphics settings and binary build profile for paired
+runs; record hardware, environment overrides and binary revisions separately.
+Avoid compilation or other heavy jobs during timing, and repeat each case.
+
+These are offline renderer measurements, not a connected NPC/server workload or
+proof of performance on another Mac. Metal does not provide GPU timestamp
+results through Bevy 0.19's render diagnostics; frame intervals measure application
+throughput and scheduling/render backpressure. A benchmark never substitutes
+for personally inspecting the normal run's PNG and `.capture.json`.
+
 ## Visual baselines
 
 Create or deliberately replace baselines:
