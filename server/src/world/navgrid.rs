@@ -27,7 +27,9 @@ pub const NAVIGATION_SAMPLE_STEP: f32 = 0.2;
 /// Tracks the last known building index version to detect authored changes.
 #[derive(Resource, Default)]
 pub struct ObstacleGridState {
-    pub last_building_version: u64,
+    // An empty grid is a valid completed rebuild. Track initialization
+    // separately from obstacle count so empty worlds retain cached routes.
+    last_building_version: Option<u64>,
 }
 
 /// Sync the `SpatialObstacleGrid` with current buildings.
@@ -37,11 +39,11 @@ pub fn sync_obstacle_grid(
     mut state: ResMut<ObstacleGridState>,
     building_index: Res<BuildingSpatialIndex>,
 ) {
-    if building_index.version == state.last_building_version && !grid.is_empty() {
+    if state.last_building_version == Some(building_index.version) {
         return;
     }
 
-    state.last_building_version = building_index.version;
+    state.last_building_version = Some(building_index.version);
     grid.clear();
 
     let buildings = building_index.snapshot();
@@ -75,6 +77,74 @@ mod tests {
     use shared::building::BuildingType;
     use shared::building::{BuildingPosition, PlacedBuilding};
     use shared::components::SettlementBuildingKind;
+
+    fn navigation_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<BuildingSpatialIndex>();
+        app.init_resource::<SpatialObstacleGrid>();
+        app.init_resource::<ObstacleGridState>();
+        app.add_systems(
+            Update,
+            (sync_building_spatial_index, sync_obstacle_grid).chain(),
+        );
+        app
+    }
+
+    #[test]
+    fn empty_navigation_world_keeps_its_obstacle_version() {
+        let mut app = navigation_app();
+        app.update();
+        let version = app.world().resource::<SpatialObstacleGrid>().version;
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(
+            app.world().resource::<SpatialObstacleGrid>().version,
+            version
+        );
+    }
+
+    #[test]
+    fn navigation_grid_tracks_movement_and_removal_without_empty_rebuilds() {
+        let mut app = navigation_app();
+        let building = app
+            .world_mut()
+            .spawn((
+                PlacedBuilding {
+                    building_type: BuildingType::MootHall,
+                    rotation: 0.0,
+                },
+                BuildingPosition(Vec3::ZERO),
+            ))
+            .id();
+        app.update();
+        assert!(app
+            .world()
+            .resource::<SpatialObstacleGrid>()
+            .point_blocked(Vec2::ZERO));
+
+        app.world_mut()
+            .get_mut::<BuildingPosition>(building)
+            .unwrap()
+            .0
+            .x = 100.0;
+        app.update();
+        let grid = app.world().resource::<SpatialObstacleGrid>();
+        assert!(!grid.point_blocked(Vec2::ZERO));
+        assert!(grid.point_blocked(Vec2::new(100.0, 0.0)));
+
+        app.world_mut().despawn(building);
+        app.update();
+        assert!(app.world().resource::<SpatialObstacleGrid>().is_empty());
+        let version = app.world().resource::<SpatialObstacleGrid>().version;
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(
+            app.world().resource::<SpatialObstacleGrid>().version,
+            version
+        );
+    }
 
     #[test]
     fn every_authored_door_sits_outside_its_navigation_blocker() {
@@ -141,14 +211,7 @@ mod tests {
 
     #[test]
     fn open_air_market_is_not_a_navigation_blocker() {
-        let mut app = App::new();
-        app.init_resource::<BuildingSpatialIndex>();
-        app.init_resource::<SpatialObstacleGrid>();
-        app.init_resource::<ObstacleGridState>();
-        app.add_systems(
-            Update,
-            (sync_building_spatial_index, sync_obstacle_grid).chain(),
-        );
+        let mut app = navigation_app();
         app.world_mut().spawn((
             PlacedBuilding {
                 building_type: BuildingType::Market,
@@ -160,5 +223,11 @@ mod tests {
         app.update();
 
         assert!(app.world().resource::<SpatialObstacleGrid>().is_empty());
+        let version = app.world().resource::<SpatialObstacleGrid>().version;
+        app.update();
+        assert_eq!(
+            app.world().resource::<SpatialObstacleGrid>().version,
+            version
+        );
     }
 }

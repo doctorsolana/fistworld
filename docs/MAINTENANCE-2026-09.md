@@ -84,6 +84,15 @@ zero entity growth and zero pending routes. Baseline steady-village p50 is
 local measurements, not performance guarantees; compare the final build using
 the same release fixture without competing compilation.
 
+### Navigation cache lifetime
+
+The obstacle synchronizer used a nonempty grid as its initialization flag. An
+empty world, an open-air-market-only world, and removal of the last solid
+building therefore incremented obstacle versions every tick and invalidated
+otherwise reusable navigation work. All three regression cases failed before
+the fix. Synchronization now remembers an optional source-building version;
+the workspace suite passes 815 tests, including both new lifecycle regressions.
+
 ## Final verification and remaining work
 
 Pending completion of the run.
