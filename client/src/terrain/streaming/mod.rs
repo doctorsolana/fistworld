@@ -96,15 +96,13 @@ impl TerrainChunkTasks {
 
 #[derive(Resource, Default)]
 pub struct TerrainTaskScratch {
-    pub completed: Vec<ChunkBuildResult>,
     pub to_remove: Vec<ChunkCoord>,
 }
 
 pub struct ChunkBuildResult {
     pub coord: ChunkCoord,
-    pub generator: TerrainGenerator,
-    pub mesh_data: shared::terrain::ChunkMeshData,
-    pub tangents: Vec<[f32; 4]>,
+    pub mesh: Mesh,
+    pub water_params: Vec4,
     pub weights: Vec<[u8; 4]>,
     pub resolution: u32,
 }

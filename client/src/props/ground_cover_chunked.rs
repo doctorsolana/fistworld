@@ -489,14 +489,13 @@ pub(super) fn stream_chunked_ground_cover(
         );
     }
 
-    let mut dirty = state
+    let next_dirty = state
         .dirty
         .iter()
         .copied()
         .filter(|coord| state.chunks.contains_key(coord))
-        .collect::<Vec<_>>();
-    dirty.sort_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
-    if let Some(coord) = dirty.first().copied() {
+        .min_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
+    if let Some(coord) = next_dirty {
         build_chunk(
             coord,
             &terrain,
@@ -522,13 +521,14 @@ pub(super) fn stream_chunked_ground_cover(
         return;
     }
 
-    let mut desired = anchor_chunk
-        .chunks_in_radius(GROUND_COVER_CHUNK_RADIUS)
-        .into_iter()
+    let next = (-GROUND_COVER_CHUNK_RADIUS..=GROUND_COVER_CHUNK_RADIUS)
+        .flat_map(|dx| {
+            (-GROUND_COVER_CHUNK_RADIUS..=GROUND_COVER_CHUNK_RADIUS)
+                .map(move |dz| ChunkCoord::new(anchor_chunk.x + dx, anchor_chunk.z + dz))
+        })
         .filter(|coord| loaded_chunks.chunks.contains(coord) && !state.chunks.contains_key(coord))
-        .collect::<Vec<_>>();
-    desired.sort_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
-    if let Some(coord) = desired.first().copied() {
+        .min_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
+    if let Some(coord) = next {
         build_chunk(
             coord,
             &terrain,

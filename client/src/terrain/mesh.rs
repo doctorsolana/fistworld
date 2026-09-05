@@ -252,8 +252,7 @@ pub(crate) fn build_terrain_mesh(
     tangents: Option<&Vec<[f32; 4]>>,
     generator: &TerrainGenerator,
     coord: ChunkCoord,
-    meshes: &mut Assets<Mesh>,
-) -> Handle<Mesh> {
+) -> Mesh {
     let buffers = shore_refined_buffers(mesh_data, tangents, generator, coord);
     let mut mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
@@ -280,7 +279,7 @@ pub(crate) fn build_terrain_mesh(
     } else {
         let _ = mesh.generate_tangents();
     }
-    meshes.add(mesh)
+    mesh
 }
 
 pub(crate) fn compute_chunk_tangents(
@@ -706,6 +705,35 @@ pub(crate) fn build_far_terrain_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_built_shore_mesh_preserves_attributes_and_valid_indices() {
+        // The production streaming task must return a complete Send mesh,
+        // including refined shoreline attributes, without accessing Assets.
+        let mesh = std::thread::spawn(|| {
+            let generator = TerrainGenerator::new();
+            let coord = ChunkCoord::from_world_pos(Vec3::new(-2585.0, 0.0, 1195.0));
+            let data = generator.generate_chunk_with_deltas(&Default::default(), coord);
+            let tangents = compute_chunk_tangents(&data).unwrap();
+            build_terrain_mesh(&data, Some(&tangents), &generator, coord)
+        })
+        .join()
+        .expect("terrain worker panicked");
+        let count = mesh.count_vertices();
+        assert!(count >= CHUNK_RESOLUTION * CHUNK_RESOLUTION);
+        for attribute in [
+            Mesh::ATTRIBUTE_POSITION,
+            Mesh::ATTRIBUTE_NORMAL,
+            Mesh::ATTRIBUTE_UV_0,
+            Mesh::ATTRIBUTE_TANGENT,
+        ] {
+            assert_eq!(mesh.attribute(attribute).unwrap().len(), count);
+        }
+        let indices = mesh.indices().expect("indexed terrain mesh");
+        assert_eq!(indices.len() % 3, 0);
+        assert!(indices.iter().all(|index| index < count));
+        assert_eq!(mesh.asset_usage, RenderAssetUsages::RENDER_WORLD);
+    }
 
     #[test]
     fn shoreline_band_refines_crossings_and_moving_lap_margin_only() {

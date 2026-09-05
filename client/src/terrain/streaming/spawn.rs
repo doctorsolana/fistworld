@@ -232,6 +232,15 @@ pub(crate) fn spawn_terrain_chunks(
             let generator = TerrainGenerator::new();
             let mesh_data = generator.generate_chunk_with_deltas(&delta_map, coord);
             let tangents = compute_chunk_tangents(&mesh_data).unwrap_or_default();
+            // Shoreline subdivision, attribute copies and tangent fallback are
+            // CPU work too. Finish them on the worker, before publishing the
+            // result; the main thread only registers the finished mesh asset.
+            let mesh = build_terrain_mesh(
+                &mesh_data,
+                (!tangents.is_empty()).then_some(&tangents),
+                &generator,
+                coord,
+            );
             // Authored surface paint is baked per-chunk map data (like the
             // height deltas), resolved from this generator's map copy.
             let weights = generator
@@ -240,9 +249,8 @@ pub(crate) fn spawn_terrain_chunks(
                 .resolve_chunk_weights(&generator, coord, resolution);
             ChunkBuildResult {
                 coord,
-                generator,
-                mesh_data,
-                tangents,
+                mesh,
+                water_params: water_params_for_generator(&generator),
                 weights,
                 resolution,
             }

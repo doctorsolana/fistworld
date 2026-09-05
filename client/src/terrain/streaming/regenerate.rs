@@ -115,7 +115,6 @@ pub(crate) fn process_chunk_tasks(
     } else {
         TASK_FINALIZE_MAX_PER_FRAME
     };
-    scratch.completed.clear();
     scratch.to_remove.clear();
 
     let should_rebuild_order = tasks.order_dirty
@@ -155,41 +154,26 @@ pub(crate) fn process_chunk_tasks(
         .ordered_coords
         .sort_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
 
-    {
-        let TerrainChunkTasks {
-            tasks: task_map,
-            ordered_coords,
-            ..
-        } = &mut *tasks;
-        for coord in ordered_coords.iter().copied() {
-            if scratch.completed.len() >= finalize_max_per_frame {
-                break;
-            }
-
-            if start.elapsed().as_secs_f32() * 1000.0 > finalize_budget_ms {
-                break;
-            }
-
-            let Some(task) = task_map.get_mut(&coord) else {
-                continue;
-            };
-
-            if let Some(result) = block_on(poll_once(task)) {
-                scratch.completed.push(result);
-                scratch.to_remove.push(coord);
-            }
-        }
-    }
-
-    if !scratch.to_remove.is_empty() {
-        for coord in scratch.to_remove.drain(..) {
-            tasks.tasks.remove(&coord);
-        }
-        tasks.order_dirty = true;
-    }
-
     let mut finalized = 0u32;
-    for result in scratch.completed.drain(..) {
+    // Budget the actual asset finalization, not just the cheap readiness polls.
+    // Leave unpolled results in their tasks for the next frame. A chunk swap is
+    // indivisible, so this is a soft CPU budget; the count cap also bounds the
+    // deferred spawns and later render-world uploads it schedules.
+    for index in 0..tasks.ordered_coords.len() {
+        if finalized as usize >= finalize_max_per_frame
+            || start.elapsed().as_secs_f32() * 1000.0 >= finalize_budget_ms
+        {
+            break;
+        }
+        let coord = tasks.ordered_coords[index];
+        let Some(task) = tasks.tasks.get_mut(&coord) else {
+            continue;
+        };
+        let Some(result) = block_on(poll_once(task)) else {
+            continue;
+        };
+        tasks.tasks.remove(&coord);
+        tasks.order_dirty = true;
         if loaded_chunks.chunks.contains(&result.coord) {
             continue;
         }
@@ -200,18 +184,7 @@ pub(crate) fn process_chunk_tasks(
             log_weightmap_stats(result.coord, &weightmap, "spawn");
         }
 
-        let tangents_ref = if result.tangents.is_empty() {
-            None
-        } else {
-            Some(&result.tangents)
-        };
-        let mesh_handle = build_terrain_mesh(
-            &result.mesh_data,
-            tangents_ref,
-            &result.generator,
-            result.coord,
-            &mut meshes,
-        );
+        let mesh_handle = meshes.add(result.mesh);
 
         let palette = crate::terrain::materials::stylized_palette();
         let material = materials.add(TerrainSplatMaterial {
@@ -228,7 +201,7 @@ pub(crate) fn process_chunk_tasks(
                 normal_array: render_assets.normal_array.clone(),
                 params: shared::terrain::TerrainSplatParams {
                     layer_tiling: render_assets.layer_tiling,
-                    water_params: water_params_for_generator(&result.generator),
+                    water_params: result.water_params,
                     debug_mode: debug_settings.mode,
                     normal_strength: desired_terrain_normal_strength(
                         result.coord,

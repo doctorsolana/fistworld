@@ -28,12 +28,12 @@ pub fn setup_plugins(app: &mut App, asset_path: String) {
                         features: WgpuFeatures::INDIRECT_FIRST_INSTANCE,
                         ..default()
                     };
-                    // Metal counter sample buffers can fail on macOS under heavy diagnostics usage.
-                    // Disable GPU timestamp / pipeline stats queries to avoid device loss —
-                    // EXCEPT during an explicit render-diag profiling run, which needs
-                    // elapsed_gpu numbers and accepts the (rare) device-loss risk.
+                    // Bevy 0.19's GPU diagnostic recorder supports Vulkan/DX12,
+                    // not Metal. RenderDiagnosticsPlugin still reports CPU
+                    // timings here; enabling counter sample buffers provides
+                    // no GPU timings and can fail under heavy diagnostics.
                     #[cfg(target_os = "macos")]
-                    if !crate::profiling::env_flag("FISTFORCE_RENDER_DIAG") {
+                    {
                         settings.disabled_features = Some(
                             WgpuFeatures::TIMESTAMP_QUERY
                                 | WgpuFeatures::TIMESTAMP_QUERY_INSIDE_PASSES

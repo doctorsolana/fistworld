@@ -674,17 +674,17 @@ pub fn log_changed_mesh_archetypes(world: &mut World) {
     let mut query = world.query_filtered::<Entity, Changed<Mesh3d>>();
     let entities: Vec<Entity> = query.iter(world).collect();
     for entity in entities {
-        let mut names: Vec<&str> = world
+        let mut names: Vec<String> = world
             .inspect_entity(entity)
             .map(|components| {
                 components
-                    .map(|info| info.name().shortname().to_string().leak() as &str)
+                    .map(|info| info.name().shortname().to_string())
                     .collect()
             })
             .unwrap_or_default();
         names.retain(|n| {
             !matches!(
-                *n,
+                n.as_str(),
                 "Transform"
                     | "GlobalTransform"
                     | "Visibility"

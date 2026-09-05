@@ -196,17 +196,20 @@ pub(super) fn spawn_chunk_props(
     // while dense forests/ground clutter should only exist as live entities near the player.
     let player_chunk = shared::terrain::ChunkCoord::from_world_pos(anchor_pos);
     let prop_radius = prop_stream_radius_chunks(&settings, camera_distance);
-    let mut desired: Vec<shared::terrain::ChunkCoord> = player_chunk
-        .chunks_in_radius(prop_radius)
-        .into_iter()
-        .filter(|coord| loaded_chunks.chunks.contains(coord))
-        .collect();
-    desired.sort_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
+    // Only one chunk can be generated below. Select that minimum directly
+    // instead of allocating and sorting the entire loaded radius every frame.
+    let next = (-prop_radius..=prop_radius)
+        .flat_map(|dx| {
+            (-prop_radius..=prop_radius).map(move |dz| {
+                shared::terrain::ChunkCoord::new(player_chunk.x + dx, player_chunk.z + dz)
+            })
+        })
+        .filter(|coord| {
+            loaded_chunks.chunks.contains(coord) && !loaded_prop_chunks.chunks.contains(coord)
+        })
+        .min_by_key(|coord| chunk_stream_priority(*coord, anchor_pos, view_priority));
 
-    for coord in desired {
-        if loaded_prop_chunks.chunks.contains(&coord) {
-            continue;
-        }
+    if let Some(coord) = next {
         let chunk_zones = build_zone_index.by_chunk.get(&coord);
         let mut spawns = shared::props::generate_chunk_prop_spawns(&terrain.generator, coord);
         // Ground detail IS spawned now. It was blanket-dropped here because the
@@ -255,7 +258,6 @@ pub(super) fn spawn_chunk_props(
         if !spawns.is_empty() {
             pending_spawns.queue.push_back((coord, spawns));
         }
-        break;
     }
 
     // Stage 2: realize a bounded number of queued instances.
