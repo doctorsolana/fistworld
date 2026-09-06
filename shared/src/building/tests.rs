@@ -5,6 +5,8 @@ use std::path::Path;
 
 use super::*;
 
+mod roofs;
+
 fn glb_document(path: &Path) -> serde_json::Value {
     let bytes = fs::read(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     assert_eq!(&bytes[0..4], b"glTF", "{} is not a GLB", path.display());

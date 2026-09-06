@@ -5,6 +5,9 @@ networking, terrain, rendering, or UI code. The server is authoritative; generat
 worlds are deterministic recipes; existing user changes in a dirty worktree must be
 preserved.
 
+Before authoring building or prop assets, read `asset_creation/PROP_PIPELINE.md`,
+including the ground-contact, supported-cargo, structural-joint, hinge and roof-underside checks.
+
 ## Visual work is not complete until it is seen
 
 For any renderer, terrain, water, asset, camera, animation, visibility, LOD, or retained-UI

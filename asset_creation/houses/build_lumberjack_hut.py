@@ -18,7 +18,7 @@ from mathutils import Vector
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from building_mesh import BuildingMesh, animate_door, palette_material
+from building_mesh import BuildingMesh, animate_door, palette_material, roof_underside
 
 OUT = (
     HERE.parent.parent / "client/assets/game_assets/buildings/village/LumberjackHut.glb"
@@ -80,6 +80,9 @@ def roof(body, ridge_x, ridge_z, eave_x, eave_z, back, front, rows, cols):
         [point(0, back), point(1, back), point(1, front), point(0, front)],
         [face],
         "roof",
+    )
+    roof_underside(
+        body, [point(0, back), point(1, back), point(1, front), point(0, front)], "plank"
     )
     tile_width = (front - back) / cols
     for row in range(rows):

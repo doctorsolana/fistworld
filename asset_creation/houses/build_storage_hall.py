@@ -12,12 +12,16 @@ One vertex-colour material, two mesh nodes, no textures, skins or extensions.
 import json
 import math
 import random
+import sys
 from pathlib import Path
 
 import bpy
 from mathutils import Vector
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from building_mesh import roof_underside
+
 REPO = HERE.parent.parent
 OUT = REPO / "client/assets/game_assets/buildings/village/StorageHall.glb"
 RNG = random.Random(8041)
@@ -58,12 +62,13 @@ material.node_tree.links.new(colour.outputs["Color"], bsdf.inputs["Base Color"])
 class Parts:
     def __init__(self):
         self.vertices, self.faces, self.colours = [], [], []
+        self.random = RNG
 
     def add(self, vertices, faces, tone, variation=0.0):
         offset = len(self.vertices)
         self.vertices.extend(vertices)
         rgba = PAL[tone] if isinstance(tone, str) else tone
-        factor = 1.0 + RNG.uniform(-variation, variation)
+        factor = 1.0 + self.random.uniform(-variation, variation)
         rgba = tuple(min(1.0, c * factor) for c in rgba[:3]) + (1.0,)
         for face in faces:
             self.faces.append(tuple(offset + i for i in face))
@@ -198,6 +203,8 @@ for side in [-1, 1]:
     body.add([(0, -3.35, 6.04), (side * 3.86, -3.35, 3.46),
               (side * 3.86, 3.35, 3.46), (0, 3.35, 6.04)],
              [(0, 1, 2, 3)] if side > 0 else [(3, 2, 1, 0)], "slate")
+    roof_underside(body, [(0, -3.35, 6.04), (side * 3.86, -3.35, 3.46),
+                         (side * 3.86, 3.35, 3.46), (0, 3.35, 6.04)], "plank")
     for row in range(8):
         a, b = row / 8, (row + 1) / 8
         xa, xb = side * a * 3.83, side * (b * 3.83 + .03)
@@ -216,8 +223,10 @@ body.box((0, 0, 6.15), (.20, 6.88, .17), "slate")
 
 # A small lean-to loading shelter along the right flank. Cargo stays inside
 # the same collision plot; the entrance directly ahead is kept unobstructed.
+yard_floor = .02
+body.box((4.02, 0, -.08), (.94, 5.36, .20), "stone")
 for y in [-2.38, 2.38]:
-    body.box((4.29, y, 1.30), (.18, .18, 2.62), "oak")
+    body.box((4.29, y, (yard_floor + 2.61) / 2), (.18, .18, 2.61 - yard_floor), "oak")
     body.beam((4.26, y, 2.38), (3.48, y, 2.97), .14, .14)
 body.box((4.29, 0, 2.57), (.17, 5.06, .19), "oak")
 for row in range(3):
@@ -226,6 +235,8 @@ for row in range(3):
     body.add([(x0, -2.68, z0), (x1, -2.68, z1), (x1, 2.68, z1), (x0, 2.68, z0)],
              [(0, 1, 2, 3)], "slate", .07)
 body.box((4.45, 0, 2.61), (.10, 5.36, .09), "edge")
+roof_underside(body, [(3.45, -2.68, 3.02), (4.47, -2.68, 2.615),
+                     (4.47, 2.68, 2.615), (3.45, 2.68, 3.02)], "plank")
 
 
 def crate(x, y, z, width=.75):
@@ -239,30 +250,40 @@ def crate(x, y, z, width=.75):
               (x+width*.38, y+width*.5+.04, z+width-.12), .09, .05, "oak")
 
 
-crate(3.88, -1.76, 0.05)
-crate(3.88, -.87, 0.05)
-crate(3.88, -1.30, .80, .67)
-crate(-2.67, 3.24, .33, .63)
+# Stock sits on the loading-bay slab, clear of the wall and the door approach.
+# Stack bases are derived from the supporting crate's height, never eyeballed.
+for y in [-1.76, -.91]:
+    crate(4.015, y, yard_floor, .66)
+    crate(4.015, y, yard_floor + .66, .66)
 # A glimpse of stored stock through the open leaf; leave the threshold clear.
 crate(-.48, .85, .29)
 crate(-.45, .84, 1.04, .65)
-for x, y in [(3.86, .85), (3.86, 1.75)]:
-    body.rings((x, y, .04), [(0, .28), (.15, .35), (.7, .36), (.88, .28)], 10, "plank")
+for x, y in [(4.015, -.05), (4.015, .77)]:
+    body.rings((x, y, yard_floor), [(0, .28), (.15, .35), (.7, .36), (.88, .28)], 10, "plank")
     for z in [.17, .70]:
-        body.rings((x, y, .04), [(z, .363), (z+.075, .363)], 10, "iron")
-for x, y, z in [(-2.0, 3.23, .29), (-1.51, 3.23, .29), (-1.8, 3.19, .85)]:
-    body.rings((x, y, z), [(0, .20), (.10, .29), (.42, .24), (.56, .09), (.61, .1)], 7, "sack", .07)
+        body.rings((x, y, yard_floor), [(z, .363), (z+.075, .363)], 10, "iron")
+for y in [1.59, 2.19]:
+    body.rings((4.015, y, yard_floor), [(0, .20), (.10, .29), (.42, .24), (.56, .09), (.61, .1)], 7, "sack", .07)
+# A third sack rests on the upper crate, not balanced on two narrow sack ties.
+body.rings((4.015, -1.76, yard_floor + 1.32), [(0, .20), (.10, .29), (.42, .24), (.56, .09), (.61, .1)], 7, "sack", .07)
 
 # Freight door: one genuinely separate leaf, origin at its left hinge. All
 # visible bracing and ironwork belongs to it and follows the same node clip.
+hinge = (-1.06, 3.25, .18)
 for i in range(8):
     leaf.box((-.9275 + i * .265, 3.115, 1.45), (.249, .115, 2.54), "plank", .10)
 for z in [.42, 2.48]:
     leaf.box((0, 3.195, z), (2.10, .07, .16), "edge")
 leaf.beam((-.91, 3.21, .49), (.91, 3.21, 2.41), .14, .085, "edge")
 for z in [.66, 2.26]:
-    leaf.box((-.53, 3.25, z), (1.05, .045, .10), "iron")
-    for x in [-.95, -.54, -.12]:
+    # Forged strap from the actual pivot to a pointed end across the leaf.
+    # The vertical knuckle makes the hinge function readable in the closed pose.
+    outline = [(hinge[0], z-.06), (.43, z-.06), (.58, z), (.43, z+.06), (hinge[0], z+.06)]
+    verts = [(x, y, h) for y in [3.2275, 3.2725] for x, h in outline]
+    leaf.add(verts, [(0, 1, 2, 3, 4), (9, 8, 7, 6, 5)] +
+             [(i, i+5, (i+1)%5+5, (i+1)%5) for i in range(5)], "iron")
+    leaf.rings((hinge[0], hinge[1], z), [(-.12, .06), (.12, .06)], 4, "iron")
+    for x in [-.88, -.30, .31]:
         leaf.box((x, 3.285, z), (.045, .025, .045), "iron")
 leaf.box((.80, 3.255, 1.38), (.055, .075, .30), "iron")
 for x in [-1.16, 1.16]:
@@ -281,7 +302,7 @@ for stem in [-.28, 0, .28]:
                      [(0, 1, 2)] if side > 0 else [(0, 2, 1)], "grain")
 
 static = body.object("StorageHallBody")
-door = leaf.object("StorageHallDoor", (-1.06, 3.115, .18))
+door = leaf.object("StorageHallDoor", hinge)
 for name, location in {
     "Anchor_Door": (0, 4.0, 0),
     "Anchor_Work": (0, 4.0, 0),

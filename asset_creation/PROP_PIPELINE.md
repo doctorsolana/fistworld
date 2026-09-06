@@ -13,6 +13,28 @@ Use each building's documented entry point: the older `export_prop_glb.py` appli
 stonework and readable silhouettes keep the village coherent without making every
 workplace another copy of the cabin.
 
+### Building detail checks learned from the September 2026 review
+
+- Inspect roofs from below with backface culling enabled. Main roofs, hips,
+  porches and lean-tos need actual backing and closed edges; a top-facing sheet
+  disappears below the eaves. `houses/building_mesh.py::roof_underside` adds
+  6 cm timber backing without extra materials or mesh nodes.
+- Check **every** cargo item and support against its actual supporting surface.
+  A building origin at ground level does not prove its sacks, barrels or posts
+  touch the ground. Foundation undersides may extend below terrain; stock belongs
+  on terrain, a modeled floor or a pallet. Show the base from a low side angle.
+- Derive a stack's next base from the supporting object's top. Do not balance
+  upper sacks on narrow ties, float crates against walls, or conceal intersections
+  behind props. Keep wall clearance as well as ground contact.
+- Roof posts must meet both their supporting base and the roof beam. Knee braces
+  must terminate inside a real post and header; derive their ends from those
+  supports instead of placing diagonal decoration that stops in empty space. Door straps
+  should connect visibly to a hinge at the pivot, with the moving ironwork attached
+  to the animated leaf. Inspect the complete open/close cycle for clipping.
+- Recheck the navigation hull after adding backing or moving cargo. Overhead
+  geometry must stay out of the ground slice; cargo must leave the entrance clear.
+  Verify both the actual exported GLB and the Bevy PNG/JSON, not just the source scene.
+
 ---
 
 ## 1. The contract

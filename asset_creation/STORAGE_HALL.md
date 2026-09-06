@@ -2,17 +2,21 @@
 
 Integrated on 2026-09-06. The private depot now uses authored low-poly art in
 place of its blockout: oak framing, plaster gables, slate shingles, a loading
-loft and hoist, covered cargo, and a hinged freight door.
+loft and hoist, covered cargo, and a hinged freight door. Main and shelter roofs
+have 6 cm timber backing and closed rims. Cargo is arranged on the side loading
+bay’s stone floor, clear of the wall and doorway; stacks derive their bases from
+the crate heights. Both shelter posts meet the floor. The freight door has tapered
+strap hinges with visible knuckles connected to its pivot.
 
 ![Storage Hall in Bevy](houses/renders/storage_hall_ingame.png)
 
 ## Cost and files
 
-- **3,471 authoring vertices; 7,832 exported render vertices; 3,958 triangles.**
+- **3,523 authoring vertices; 7,976 exported render vertices; 4,032 triangles.**
   Flat normals and per-face colours split vertices during export. Counts include
   the door and cargo, and exclude the source file's studio ground and lights.
 - Two mesh primitives, one shared vertex-colour material, no textures or skins.
-- `client/assets/game_assets/buildings/village/StorageHall.glb`: 309,524 bytes.
+- `client/assets/game_assets/buildings/village/StorageHall.glb`: 315,144 bytes.
 - Editable studio: `asset_creation/houses/storage_hall.blend`.
 - Reproducible builder/exporter: `asset_creation/houses/build_storage_hall.py`.
 
@@ -30,9 +34,10 @@ returns to rest in 0.917 seconds. The existing `BuildingDoorDemand` consumer,
 shared animation graph and hold/close state machine drive it. Interior cargo
 is decorative; storage quantities and porter work remain server-owned.
 
-The manifest bakes one 52-point convex hull below the roof/hoist. Its front is
-at −3.62 m, leaving clearance for the 0.28 m character radius at the −4 m
-entrance. The other 37 baked colliders remain geometrically identical.
+The manifest bakes one 46-point convex hull below the roof/hoist. Its front is
+at −3.50 m, leaving clearance for the 0.28 m character radius at the −4 m
+entrance. The same pass corrects four house hulls; the other 33 colliders remain
+geometrically identical.
 
 ## Rebuild and inspect
 
@@ -49,10 +54,11 @@ BEVY_ASSET_ROOT="$PWD/client/assets" ./target/playtest/capture \
   --scenario capture/scenarios/storage-hall-door.ron
 ```
 
-The first scenario checks front, entrance and rear views. The second holds a
-single camera through 271 uninterrupted 60 Hz frames, photographing open,
+The first scenario checks front, entrance and rear views, two views under the
+eaves, and a low side view of the loading-bay floor and stock contact. The second
+holds a single camera through 271 uninterrupted 60 Hz frames, photographing open,
 closing, shut and reopening poses through the production animation systems.
-All 13 PNG/JSON pairs passed their semantic assertions and representative
+All 16 PNG/JSON pairs passed their semantic assertions and representative
 poses were inspected. These are actual offline Bevy game-renderer captures;
 they do not assert that a connected NPC logistics journey was exercised.
 
@@ -62,3 +68,5 @@ clearance. The existing server navigation suite covers rotated storage-hall
 entrances with every other supported building kind.
 
 ![Open freight door in Bevy](houses/renders/storage_hall_door_open.png)
+
+![Grounded stock and roof posts on the loading-bay floor in Bevy](houses/renders/storage_hall_loading_bay.png)

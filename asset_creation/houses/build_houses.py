@@ -21,7 +21,7 @@ from mathutils import Matrix, Vector
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from building_mesh import BuildingMesh, animate_door, palette_material
+from building_mesh import BuildingMesh, animate_door, palette_material, roof_underside
 
 PAL = {
     "oak": (0.14, 0.064, 0.025, 1),
@@ -57,6 +57,9 @@ HOUSES = [
     House("CabinL2", "cabin_l2", False, True, 3.90, 8808),
     House("LongCabinL2", "long_cabin_l2", True, True, 3.00, 11280),
 ]
+
+BALCONY_FLOOR_Z = 2.48
+BALCONY_FLOOR_THICKNESS = 0.15
 
 
 class Facade:
@@ -176,6 +179,7 @@ def roof_panel(mesh, top_a, top_b, bottom_a, bottom_b, rows, cols):
         mesh.add(unique, [indices], tone, variation)
 
     face([ta, ba, bb, tb], "roof")
+    roof_underside(mesh, [ta, ba, bb, tb], "wood")
     for row in range(rows):
         stagger = 0.5 * (row % 2)
         for col in range(cols + row % 2):
@@ -330,6 +334,7 @@ def entrance(mesh, leaf, glass, d, long, upper):
     mesh.box((0, d + reach * 0.50, 0.07), (1.72, reach, 0.20), "stone")
     # Small porch, or the L2 long house's balcony shelter over the same doorway.
     porch_front = d + reach - 0.05
+    porch_eave = 2.18
     if not (long and upper):
         peak = 2.72
         for side in [-1, 1]:
@@ -337,22 +342,35 @@ def entrance(mesh, leaf, glass, d, long, upper):
                 mesh,
                 (0, d - 0.07, peak),
                 (0, porch_front + 0.04, peak),
-                (side * 0.99, d - 0.07, 2.18),
-                (side * 0.99, porch_front + 0.04, 2.18),
+                (side * 0.99, d - 0.07, porch_eave),
+                (side * 0.99, porch_front + 0.04, porch_eave),
                 3,
                 3,
             )
             mesh.beam(
                 (0, porch_front + 0.06, peak + 0.03),
-                (side * 1.03, porch_front + 0.06, 2.17),
+                (side * 1.03, porch_front + 0.06, porch_eave - 0.01),
                 0.105,
                 0.12,
                 "edge",
             )
+    # Every knee brace bears into a continuous header joining both posts.
+    # The header supports either the two porch rafters or the balcony floor.
+    header_top = (
+        BALCONY_FLOOR_Z - BALCONY_FLOOR_THICKNESS / 2
+        if long and upper else porch_eave
+    )
+    header_bottom = header_top - 0.16
+    mesh.box((0, porch_front, header_top - 0.08), (1.98, 0.14, 0.16), "edge")
+    post_bottom = -0.16  # Same foundation bed as the house, with no floating feet.
     for x in [-0.90, 0.90]:
-        mesh.box((x, porch_front, 1.13), (0.13, 0.13, 2.25), "edge")
+        mesh.box(
+            (x, porch_front, (post_bottom + header_top) / 2),
+            (0.13, 0.13, header_top - post_bottom), "edge"
+        )
         mesh.beam(
-            (x, porch_front, 1.65), (x * 0.57, porch_front, 2.20), 0.09, 0.09, "oak"
+            (x, porch_front, header_bottom - 0.43),
+            (x * 0.57, porch_front, header_bottom + 0.04), 0.09, 0.09, "oak"
         )
     # A shared pane material gives the lantern a warm flame without another lamp.
     front.box(0.78, 0.28, 1.77, 0.15, 0.15, 0.22, "glass", target=glass)
@@ -420,7 +438,10 @@ def architecture(spec):
             # The balcony window belongs to the static upper facade; only the
             # ground-floor entrance has an animation target and a service anchor.
             window(upper_front, glass, 0, 3.43, tall=True)
-            body.box((0, ud + 0.40, 2.48), (2.58, 0.91, 0.15), "wood")
+            body.box(
+                (0, ud + 0.40, BALCONY_FLOOR_Z),
+                (2.58, 0.91, BALCONY_FLOOR_THICKNESS), "wood"
+            )
             for x in [-1.24, -0.62, 0, 0.62, 1.24]:
                 body.box((x, ud + 0.80, 2.89), (0.075, 0.075, 0.76), "edge")
             body.box((0, ud + 0.80, 3.29), (2.67, 0.11, 0.11), "fresh")

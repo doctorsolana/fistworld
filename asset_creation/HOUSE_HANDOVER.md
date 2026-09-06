@@ -43,15 +43,20 @@ These are exported vertices, including flat-normal splits, summed across all pri
 
 | Asset | Previous vertices | New vertices | Reduction | Triangles | GLB bytes |
 |---|---:|---:|---:|---:|---:|
-| `LogCabin` (compact L1) | 8,424 | 4,674 | 44.5% | 2,336 | 187,180 |
-| `LongCabin` (long L1) | 4,656 | 4,274 | 8.2% | 2,132 | 171,548 |
-| `CabinL2` (compact L2) | 8,808 | 6,786 | 23.0% | 3,392 | 269,556 |
-| `LongCabinL2` (long L2) | 11,280 | 6,114 | 45.8% | 3,052 | 243,308 |
+| `LogCabin` (compact L1) | 8,424 | 4,778 | 43.3% | 2,388 | 191,236 |
+| `LongCabin` (long L1) | 4,656 | 4,408 | 5.3% | 2,198 | 176,768 |
+| `CabinL2` (compact L2) | 8,808 | 6,890 | 21.8% | 3,444 | 273,612 |
+| `LongCabinL2` (long L2) | 11,280 | 6,208 | 45.0% | 3,098 | 246,968 |
 
 Every variant has three mesh nodes/primitives (body, door, glass) and two materials,
 down from three materials. There are no textures, skins, extensions or degenerate
 triangles. Roof shingles use visible faces and thin butt edges instead of hidden
-six-sided boxes. Reduced geometry and asset size are measured; no FPS improvement
+six-sided boxes. Every main/hip/porch panel has 6 cm of timber backing and closed
+rims, verified by upward probes into the exported geometry and low Bevy views.
+All four entrances have a crossbeam joining the porch posts. Knee braces terminate
+in this beam, and the long L2 beam meets the balcony floor. The posts extend to
+the house foundation bed; beam and brace positions derive from their supports.
+Reduced geometry and asset size are measured; no FPS improvement
 is claimed from these counts alone.
 
 ## Doors, lights and navigation
@@ -76,18 +81,18 @@ entrance calculation, which stages people outside the full planning envelope.
 
 | Asset | Reserved plot (m) | `Anchor_Door` | Hull points | Front clearance (m) |
 |---|---|---|---:|---:|
-| LogCabin | 6.00 × 6.94 | `(0, 0, -3.80)` | 38 | ≥0.58 |
-| LongCabin | 8.118 × 5.60, centre Z −0.19 | `(0, 0, -3.25)` | 36 | ≥0.73 |
-| CabinL2 | 6.4721 × 7.36 | `(0, 0, -3.90)` | 52 | ≥0.68 |
-| LongCabinL2 | 8.6866 × 5.6721 | `(0, 0, -3.00)` | 62 | ≥0.535 |
+| LogCabin | 6.00 × 6.94 | `(0, 0, -3.80)` | 67 | ≥0.635 |
+| LongCabin | 8.118 × 5.60, centre Z −0.19 | `(0, 0, -3.25)` | 70 | ≥0.785 |
+| CabinL2 | 6.4721 × 7.36 | `(0, 0, -3.90)` | 67 | ≥0.735 |
+| LongCabinL2 | 8.6866 × 5.6721 | `(0, 0, -3.00)` | 66 | ≥0.535 |
 
-The one convex hull per house is sliced at 2.30 m above the origin. Roof overhangs,
+The one convex hull per house is sliced at 2.00 m above the origin. Roof overhangs,
 chimneys and the upper jetty/balcony must not extend the obstacle into walkable space
 at ground level. Measured vertical bounds are −0.16..4.202, −0.16..5.222,
 −0.16..6.822 and −0.16..6.792 m respectively; the manifest fractions are
-0.563961, 0.457079, 0.352335 and 0.353855. All four art approaches exceed the
-character navigation radius plus a 5 cm margin. The bake changed only these four
-entries; the other 34 collider entries were compared and are unchanged.
+0.495186, 0.401338, 0.309367 and 0.310702. All four art approaches exceed the
+character navigation radius plus a 5 cm margin. The roof/contact correction changed
+these four hulls and the storage hall; the other 33 collider entries are unchanged.
 
 ## Verification
 
@@ -102,7 +107,8 @@ cargo build --workspace --profile playtest
 ```
 
 Individual scenarios `house-cabin-l1.ron`, `house-cabin-l2.ron`, `house-long-l1.ron`
-and `house-long-l2.ron` cover front daylight, rear, midnight and gameplay zoom.
+and `house-long-l2.ron` cover front daylight, rear, midnight, gameplay zoom and
+two low views under the eaves. Both L2 scenarios also frame the lower porch joints.
 The lineup places L1 in front and L2 behind, with the long family on the image's left.
 The continuous door scenario samples all four doors every 30 frames at fixed 60 Hz.
 Inspect the PNGs and matching `.capture.json` files; representative inspected output
@@ -111,6 +117,8 @@ These use the real renderer, occupancy lighting and door-demand consumer. They a
 offline art fixtures, not a connected NPC journey test.
 
 Shared regression tests cover each variant's reserved plot, exact art entrance,
-baked clearance, glass/anchor names, clip target/timing, mesh/material count and
-vertex budget. Existing client tests cover occupied-house daylight transitions,
+baked clearance, glass/anchor names, clip target/timing, mesh/material count,
+vertex budget, roof backing and porch headers. Existing client tests cover occupied-house daylight transitions,
 stale scene rebinding, lamp budgeting and door playback/interruption behavior.
+
+![Timber backing beneath the main and porch roofs in Bevy](houses/renders/roof_underside_ingame.png)

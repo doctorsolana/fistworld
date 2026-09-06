@@ -6,6 +6,7 @@ receive the model through the same asset path; no simulation or protocol change 
 
 The timber cabin has a stone plinth, staggered cedar shingles with warm russet colour variation, exposed gable trusses,
 a chimney, a side shelter, stacked logs, a saw bench, and an axe in a chopping block.
+Both main slopes and the side shelter have 6 cm timber backing with closed edges.
 The short shelter roof deliberately leaves the log ends visible from the RTS camera.
 The front opening is hollow and the braced door rotates about its hinge. Open shutters
 frame two glazed windows; they are static architectural parts, not additional animations.
@@ -33,11 +34,11 @@ Use the Bevy scenarios below instead of the older Blender door-lineup sheet.
 
 | Export measurement | New workshop | Previous hut |
 |---|---:|---:|
-| Vertices, including flat-normal splits | 6,674 | 7,488 |
-| Triangles | 3,392 | 3,744 |
+| Vertices, including flat-normal splits | 6,734 | 7,488 |
+| Triangles | 3,422 | 3,744 |
 | Mesh nodes / primitives | 3 / 3 | 3 / 3 |
 | Materials | 2 | 3 |
-| GLB bytes | 265,668 | 977,088 |
+| GLB bytes | 268,008 | 977,088 |
 
 There are no textures, skins or glTF extensions. Static geometry and the door share
 `Lumberjack_Palette`; both panes and the porch lantern share `HutGlass`.

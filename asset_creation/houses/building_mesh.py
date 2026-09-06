@@ -22,6 +22,33 @@ def palette_material(name):
     return material
 
 
+def roof_underside(mesh, outline, tone, thickness=0.06):
+    """Close a roof's existing top panel with timber backing and outward rims.
+
+    Outline is in perimeter order, in either winding. Extruding vertically
+    keeps adjacent gable/hip panels joined at the same ridge and hip vertices.
+    The top already exists beneath the shingles; don't duplicate it here.
+    """
+    top = []
+    for point in map(Vector, outline):
+        if not any((point - other).length_squared < 1e-10 for other in top):
+            top.append(point)
+    if len(top) < 3 or thickness <= 0:
+        raise ValueError("A roof needs a polygon and positive backing thickness")
+    if (top[1] - top[0]).cross(top[2] - top[0]).z < 0:
+        top.reverse()
+    count = len(top)
+    vertices = top + [point - Vector((0, 0, thickness)) for point in top]
+    faces = [tuple(reversed(range(count, 2 * count)))]
+    for i in range(count):
+        j = (i + 1) % count
+        faces.append((i, i + count, j + count, j))
+    # Extra backing must not reroll existing shingle colours or irregular edges.
+    state = mesh.random.getstate()
+    mesh.add(vertices, faces, tone)
+    mesh.random.setstate(state)
+
+
 class BuildingMesh:
     def __init__(self, palette, seed=17):
         self.vertices, self.faces, self.colours = [], [], []

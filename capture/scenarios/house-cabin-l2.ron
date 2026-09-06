@@ -3,8 +3,12 @@
  target: scene, show_window: false, warmup_frames: 300,
  readiness: (minimum_frames: 90, maximum_frames: 1200, minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
  environment: { "FISTFORCE_CAPTURE_HOUSES": "cabin-l2", "FISTFORCE_CAPTURE_CLOUDS": "clear" },
+ // Free-look eye is above sea level; the fixture foundation is at Y=8.885553.
  shots: [ (name: "front-day", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 19.0, time_of_day: 0.43, assertions: [villagers_at_least(count: 1), settlements_at_least(count: 1)]),
 (name: "rear", focus: (-15.0, 0.0, -15.0), yaw: 0.65, zoom: 19.0, time_of_day: 0.50, assertions: [villagers_at_least(count: 1), settlements_at_least(count: 1)]),
 (name: "front-night", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 19.0, time_of_day: 0.00, assertions: [villagers_at_least(count: 1), settlements_at_least(count: 1)]),
-(name: "gameplay", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 40.0, time_of_day: 0.43, assertions: [villagers_at_least(count: 1), settlements_at_least(count: 1)]) ],
+(name: "gameplay", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 40.0, time_of_day: 0.43, assertions: [villagers_at_least(count: 1), settlements_at_least(count: 1)]),
+(name: "porch-joints", focus: (-12.0, 0.0, -21.0), yaw: 2.678, zoom: 15.0, pitch: Some(-0.16), eye: 10.65, time_of_day: 0.43, assertions: [settlements_at_least(count: 1)]),
+(name: "under-eaves-front", focus: (-12.0, 0.0, -21.0), yaw: 2.678, zoom: 15.0, pitch: Some(-0.48), eye: 10.65, time_of_day: 0.43, assertions: [settlements_at_least(count: 1)]),
+(name: "under-eaves-side", focus: (-7.0, 0.0, -11.0), yaw: 1.107, zoom: 15.0, pitch: Some(-0.4), eye: 9.985553, time_of_day: 0.50, assertions: [settlements_at_least(count: 1)]) ],
 )

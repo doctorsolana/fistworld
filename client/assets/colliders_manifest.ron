@@ -190,36 +190,36 @@
     // =========================================================================
     // Four house variants authored by asset_creation/houses/build_houses.py.
     // One hull per building gives the RTS a cheap navigation footprint. Slice at
-    // 2.30 m above the origin: roof overhangs, chimneys, and the L2 jetty/balcony
+    // 2.00 m above the origin: roof backing, chimneys, and the L2 jetty/balcony
     // sit above people and must not expand the ground obstacle. Percentages are
-    // (2.30 - min_y) / (max_y - min_y) in the measured exported bounds.
+    // (2.00 - min_y) / (max_y - min_y) in the measured exported bounds.
     // Entrances stop outside the solid hull; the visual doorway is an open shell.
     (
       kind: "building_log_cabin",
       gltf_path: "game_assets/buildings/village/LogCabin.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.563961 ),
+      vertex_filter: LowerYPercent ( percent: 0.495186 ),
       collidable: true,
     ),
     (
       kind: "building_long_cabin",
       gltf_path: "game_assets/buildings/village/LongCabin.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.457079 ),
+      vertex_filter: LowerYPercent ( percent: 0.401338 ),
       collidable: true,
     ),
     (
       kind: "building_cabin_l2",
       gltf_path: "game_assets/buildings/village/CabinL2.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.352335 ),
+      vertex_filter: LowerYPercent ( percent: 0.309367 ),
       collidable: true,
     ),
     (
       kind: "building_long_cabin_l2",
       gltf_path: "game_assets/buildings/village/LongCabinL2.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.353855 ),
+      vertex_filter: LowerYPercent ( percent: 0.310702 ),
       collidable: true,
     ),
     // Timber workshop: wall/eave slice at 2.22 m within -0.16..3.736 m,

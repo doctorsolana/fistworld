@@ -18,9 +18,13 @@
         "FISTFORCE_CAPTURE_SETTLEMENT": "storage_hall",
         "FISTFORCE_CAPTURE_CLOUDS": "clear",
     },
-    shots: [
+    // Free-look eye is above sea level; the fixture foundation is at Y=8.885553.
+ shots: [
         (name: "front-loading-bay", focus: (-15.0, 0.0, -15.0), yaw: 2.55, zoom: 19.0, time_of_day: 0.43, assertions: [settlements_at_least(count: 1), entities_at_least(count: 100)]),
         (name: "front-door", focus: (-15.0, 0.0, -15.0), yaw: 3.20, zoom: 16.0, time_of_day: 0.43, assertions: [settlements_at_least(count: 1)]),
         (name: "rear", focus: (-15.0, 0.0, -15.0), yaw: 0.6, zoom: 20.0, time_of_day: 0.5, assertions: [settlements_at_least(count: 1)]),
+        (name: "under-eaves-front", focus: (-10.0, 0.0, -23.0), yaw: 2.583, zoom: 15.0, pitch: Some(-0.32), eye: 9.985553, time_of_day: 0.43, assertions: [settlements_at_least(count: 1)]),
+        (name: "under-eaves-side", focus: (-7.0, 0.0, -11.0), yaw: 1.107, zoom: 15.0, pitch: Some(-0.25), eye: 9.985553, time_of_day: 0.50, assertions: [settlements_at_least(count: 1)]),
+        (name: "loading-bay-contact", focus: (-7.0, 0.0, -15.0), yaw: 1.5708, zoom: 15.0, pitch: Some(0.06), eye: 10.10, time_of_day: 0.43, assertions: [settlements_at_least(count: 1)]),
     ],
 )

@@ -61,6 +61,15 @@ authored warehouse from three angles; `storage-hall-door.ron` records one contin
 cycle. The latter uses `FISTFORCE_CAPTURE_DOORS=cycle` to alternate the ordinary building-side
 door demand every two simulated seconds, exercising the production animation consumer.
 
+The six individual storage hall, lumberjack and house scenarios also include low-angle
+`under-eaves-front` and `under-eaves-side` shots. These expose missing roof backing;
+`storage-hall.ron` additionally checks cargo and post contact in `loading-bay-contact`.
+Both level-2 house scenarios include `porch-joints`, keeping the entrance framing
+in view separately from the upper roof. The compact and long level-1 low front
+shots already show these joints.
+Their free-look eye heights use the generated fixture elevation (8.885553 m), because
+the capture camera's `eye` is measured above the local water level, not terrain.
+
 `lumberjack-hut.ron` checks the timber workshop from front/rear, at midnight, and at
 gameplay/town zoom. `lumberjack-hut-door.ron` records its ordinary door-demand cycle.
 
