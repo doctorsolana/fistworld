@@ -17,13 +17,52 @@ Battles happen on the existing map. There is no separate battle scene.
 - **X**, then a destination: attack-move. Engage nearby enemies, then resume the
   original march. **R**, then a destination: retreat without acquiring enemies
   during movement. Ordinary movement also obeys the destination over acquisition.
-- **H** holds the formation: exposed soldiers may step locally to meet a threat.
-  Arrival changes a marching unit to Hold. Escape clears an armed command mode.
+- **H** stops the current order and holds the formation: exposed soldiers may step
+  locally to meet a threat. Arrival changes a marching unit to idle guard. The
+  persistent **Hold line** stance disables automatic movement. Escape clears an
+  armed command mode.
 - **Ctrl/Cmd + 0–9** saves a control group. The digit recalls it; Shift adds it.
   Complete battalions retain their identity as membership changes. Partial
   selections retain only the individual people saved.
 - Battalion cards show complete/partial selection. Shift-click adds or removes a
   card's battalion. The Army encyclopedia handles muster, assignment and disbanding.
+
+## Army management and standing stances
+
+The Army page has a battalion sidebar and two separate troop lists. Choose a battalion,
+then add/remove a single troop, check rows for bulk changes, or fill its free slots from
+unassigned reserves. **Other battalions** permits direct transfers without removing a
+soldier first. Capacity is 64; unavailable embarked troops are visible but disabled.
+Removing troops or disbanding a battalion keeps those people in the player's army.
+**New battalion** creates an empty group and selects it; it never takes an unrelated
+battlefield selection implicitly. Disband uses an inline confirmation.
+
+Standing policy is independent of an active tactical objective:
+
+- **Defensive** (default): after a nearby catapult impact, idle troops move to new
+  ground. Members reposition together; individual unassigned troops can react too.
+  They retain the new position instead of returning to the same bombardment point.
+  A detached troop recently transferred on the roster reacts locally; distant members
+  are not pulled across the map.
+- **Hold line**: no autonomous translation, local melee steps, casualty gap filling
+  or crowd pushes. Soldiers still turn and strike enemies already within reach.
+- Direct move, retreat, attack-move and attack objectives take priority over both
+  policies. One active member objective prevents a bombardment response from splitting
+  its battalion. Changing policy cancels an automatic escape, not a direct objective.
+- H stops an objective; it does not change the persistent policy. An idle Defensive
+  battalion may therefore still reposition after an impact. Choose Hold line to forbid it.
+
+`army/response.rs` consumes each resolved impact once, with a six-second response
+cooldown. It checks the blast plus a four-metre warning margin, tries up to eight
+fourteen-metre offsets against terrain and static obstacles, and submits a normal
+formation move through the existing bounded route planner and mover. It does not
+predict airborne stones or override a blocked player route. If no escape is navigable,
+troops remain where they are. This is repositioning, not a morale/routing simulation.
+
+`BattalionStance` is replicated on each battalion and inherited by its members.
+Transfers apply the destination's policy; released troops revert to the Defensive
+default. The Army page's model, layout, bindings and actions have separate modules;
+health, stance and checkbox updates preserve the controls under the pointer.
 
 ## Contracts and ownership
 

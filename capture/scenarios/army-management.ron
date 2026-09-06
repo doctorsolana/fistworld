@@ -1,0 +1,7 @@
+(
+ version:1, account:"armylab", map:"battle_lab",
+ battalions:2, soldiers_per_battalion:12, origin:(0.0,0.0,-15.0),
+ deployments:[(target:(0.0,0.0,-15.0),facing:(0.0,1.0),width:36.0)],
+ camera_focus:(0.0,0.0,-28.0),camera_zoom:72.0,timeout_seconds:180.0,
+ management:true,
+)

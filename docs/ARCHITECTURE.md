@@ -417,3 +417,11 @@ Catapults use `player::siege` for authoritative orders, firing and splash damage
 budget and mover. Replicated stones contain absolute launch/impact timelines; damage
 resolves once on the server. See [CATAPULT.md](CATAPULT.md) for controls, ownership,
 scaling and the current developer-placement boundary.
+
+### Standing army policies
+
+`army/response.rs` owns standing battalion policies and event-driven bombardment
+responses. Policy replicates separately from a transient move/attack objective;
+membership edits propagate the destination policy. Responses reuse `orders` and its
+bounded formation routes. The retained Army page under `ui/encyclopedia/army/` separates
+pure roster/action models, layout, binding and input. See COMBAT-DESIGN.md for priority.

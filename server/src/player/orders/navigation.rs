@@ -143,7 +143,8 @@ pub fn advance_marches(
                     NavigationRoutePending,
                     NavigationRouteFailed,
                 )>()
-                .insert(CommandStance::Hold);
+                .insert(CommandStance::Guard)
+                .remove::<crate::player::army::EvadingBombardment>();
             continue;
         }
         let Some(group) = routes.groups.get_mut(&march.group) else {

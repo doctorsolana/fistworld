@@ -110,6 +110,8 @@ pub fn pursue_attack_orders(
     swing_visuals: Query<&shared::components::CombatSwing>,
     engagements: Query<&shared::components::EngagedWith>,
     skirmishers: Query<(), With<SkirmishOrder>>,
+    policies: Query<&shared::components::BattalionStance>,
+    directed: Query<(), With<crate::player::army::DirectedAttack>>,
     mut attackers: Query<
         (
             Entity,
@@ -153,6 +155,7 @@ pub fn pursue_attack_orders(
             commands
                 .entity(attacker)
                 .remove::<AttackOrder>()
+                .remove::<crate::player::army::DirectedAttack>()
                 .remove::<shared::components::EngagedWith>()
                 .remove::<MoveTarget>();
         };
@@ -207,6 +210,10 @@ pub fn pursue_attack_orders(
                 clock.disengage();
             }
             if formations.contains(attacker)
+                || (!directed.contains(attacker)
+                    && policies
+                        .get(attacker)
+                        .is_ok_and(|s| *s == shared::components::BattalionStance::HoldLine))
                 || stances
                     .get(attacker)
                     .is_ok_and(|s| *s == crate::player::orders::CommandStance::Hold)

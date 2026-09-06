@@ -98,6 +98,7 @@ pub fn acquire_targets(
         ),
     >,
     identities: Query<&PersonId>,
+    policies: Query<&BattalionStance>,
     mut scratch: Local<AcquisitionScratch>,
 ) {
     scratch.candidates.clear();
@@ -124,9 +125,15 @@ pub fn acquire_targets(
         } else {
             match stance {
                 Some(CommandStance::Move | CommandStance::Retreat) => 0.0,
-                Some(CommandStance::Hold) => MELEE_REACH,
+                Some(CommandStance::Hold | CommandStance::Guard) => MELEE_REACH,
                 Some(CommandStance::AttackMove) => ACQUISITION_RANGE,
                 None if moving => 0.0,
+                None if policies
+                    .get(entity)
+                    .is_ok_and(|s| *s == BattalionStance::HoldLine) =>
+                {
+                    MELEE_REACH
+                }
                 None => ACQUISITION_RANGE,
             }
         };

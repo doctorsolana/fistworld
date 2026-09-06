@@ -141,7 +141,11 @@ fn configure_server_fixed_schedule(app: &mut App) {
 
     app.add_systems(
         FixedUpdate,
-        world::army_lab::stage_connected_army
+        (
+            world::army_lab::stage_connected_army,
+            world::army_lab::drive_management_bombardment,
+        )
+            .chain()
             .after(player::spawn::handle_player_name_submission)
             .before(player::orders::handle_unit_orders)
             .in_set(ServerSet::NetIngress)

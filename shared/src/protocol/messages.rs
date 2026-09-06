@@ -212,6 +212,10 @@ pub enum ArmyOrder {
     Dismiss { members: Vec<Entity> },
     /// Dissolve a battalion; its soldiers become unassigned.
     Disband { battalion: Entity },
+    SetStance {
+        battalion: Entity,
+        stance: crate::components::BattalionStance,
+    },
 }
 
 impl bevy::ecs::entity::MapEntities for ArmyOrder {
@@ -228,7 +232,7 @@ impl bevy::ecs::entity::MapEntities for ArmyOrder {
                     *member = mapper.get_mapped(*member);
                 }
             }
-            ArmyOrder::Disband { battalion } => {
+            ArmyOrder::Disband { battalion } | ArmyOrder::SetStance { battalion, .. } => {
                 *battalion = mapper.get_mapped(*battalion);
             }
         }
@@ -1018,8 +1022,17 @@ mod tests {
                 1,
             ),
             (ArmyOrder::Disband { battalion: raw(50) }, 1),
+            (
+                ArmyOrder::SetStance {
+                    battalion: raw(50),
+                    stance: crate::components::BattalionStance::HoldLine,
+                },
+                1,
+            ),
         ];
         for (order, expected_mapped) in orders.iter_mut() {
+            let bytes = bincode::serialize(order).unwrap();
+            assert_eq!(*order, bincode::deserialize::<ArmyOrder>(&bytes).unwrap());
             let mut mapper = SeqMapper { next: 0 };
             order.map_entities(&mut mapper);
             assert_eq!(

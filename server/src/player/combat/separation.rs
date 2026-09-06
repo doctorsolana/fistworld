@@ -3,7 +3,7 @@ use super::*;
 use std::collections::HashMap;
 #[derive(Default)]
 pub struct SeparationScratch {
-    participants: Vec<(Entity, Vec2)>,
+    participants: Vec<(Entity, Vec2, bool)>,
     cells: HashMap<(i32, i32), Vec<usize>>,
     pushes: HashMap<Entity, Vec2>,
 }
@@ -21,6 +21,14 @@ pub fn separate_melee_bodies(
     colliders: Option<Res<crate::collision::library::StaticColliders>>,
     derived: Option<Res<crate::collision::library::DerivedColliderLibrary>>,
     mut scratch: Local<SeparationScratch>,
+    policies: Query<(
+        Option<&shared::components::BattalionStance>,
+        Has<crate::player::army::DirectedAttack>,
+        Has<crate::player::orders::MarchOrder>,
+        Has<super::SkirmishOrder>,
+        Option<&super::fronts::FormationMember>,
+    )>,
+    formations: Option<Res<super::fronts::CombatFormations>>,
     mut bodies: Query<
         (
             Entity,
@@ -55,12 +63,29 @@ pub fn separate_melee_bodies(
         if health.is_some_and(|h| h.is_dead()) || (war_party.is_none() && commanded.is_none()) {
             continue;
         }
-        participants.push((entity, Vec2::new(position.0.x, position.0.z)));
+        let fixed =
+            policies
+                .get(entity)
+                .is_ok_and(|(policy, directed, marching, skirmish, member)| {
+                    policy == Some(&shared::components::BattalionStance::HoldLine)
+                        && !directed
+                        && !marching
+                        && !skirmish
+                        && !member.is_some_and(|m| {
+                            formations
+                                .as_ref()
+                                .and_then(|f| f.fronts.get(&m.group))
+                                .is_some_and(|f| {
+                                    matches!(f.intent, super::fronts::Intent::Attack(_))
+                                })
+                        })
+                });
+        participants.push((entity, Vec2::new(position.0.x, position.0.z), fixed));
     }
     if participants.len() < 2 {
         return;
     }
-    for (index, (_, point)) in participants.iter().enumerate() {
+    for (index, (_, point, _)) in participants.iter().enumerate() {
         cells
             .entry((
                 (point.x / CELL).floor() as i32,
@@ -72,7 +97,7 @@ pub fn separate_melee_bodies(
 
     let min_distance = BODY_RADIUS * 2.0;
     cells.retain(|_, indices| !indices.is_empty());
-    for (index, (entity, point)) in participants.iter().enumerate() {
+    for (index, (entity, point, fixed)) in participants.iter().enumerate() {
         let cell = (
             (point.x / CELL).floor() as i32,
             (point.y / CELL).floor() as i32,
@@ -87,7 +112,10 @@ pub fn separate_melee_bodies(
                     if *other_index <= index {
                         continue;
                     }
-                    let (other, other_point) = participants[*other_index];
+                    let (other, other_point, other_fixed) = participants[*other_index];
+                    if *fixed && other_fixed {
+                        continue;
+                    }
                     let offset = *point - other_point;
                     let distance = offset.length();
                     if distance >= min_distance - SEPARATION_SLACK {
@@ -105,8 +133,14 @@ pub fn separate_melee_bodies(
                         Vec2::new(angle.cos(), angle.sin())
                     };
                     let correction = ((min_distance - distance) * 0.5).min(MAX_PUSH_PER_TICK);
-                    *pushes.entry(*entity).or_default() += axis * correction;
-                    *pushes.entry(other).or_default() -= axis * correction;
+                    if !*fixed {
+                        *pushes.entry(*entity).or_default() +=
+                            axis * correction * if other_fixed { 2.0 } else { 1.0 };
+                    }
+                    if !other_fixed {
+                        *pushes.entry(other).or_default() -=
+                            axis * correction * if *fixed { 2.0 } else { 1.0 };
+                    }
                 }
             }
         }

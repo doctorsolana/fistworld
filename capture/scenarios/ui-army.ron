@@ -1,0 +1,31 @@
+(
+    version: 1,
+    name: "ui-army",
+    map: "battle_lab",
+    output_dir: "logs/captures/ui-army",
+    resolution: (1600, 900),
+    fixed_delta_seconds: 0.016666667,
+    target: window,
+    show_window: false,
+    warmup_frames: 120,
+    readiness: (
+        minimum_frames: 60,
+        maximum_frames: 1200,
+        minimum_loaded_chunks: 25,
+        stable_loaded_chunk_frames: 20,
+    ),
+    environment: {
+        "FISTFORCE_CAPTURE_HERO": "default",
+        "FISTFORCE_CAPTURE_ENCYCLOPEDIA": "army",
+    },
+    shots: [
+        (
+            name: "army-management",
+            focus: (0.0, 0.0, 0.0),
+            yaw: -0.45,
+            zoom: 120.0,
+            time_of_day: 0.5,
+            assertions: [villagers_at_least(count: 7)],
+        ),
+    ],
+)

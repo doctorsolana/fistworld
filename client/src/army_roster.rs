@@ -28,6 +28,7 @@ pub struct BattalionFacts {
     pub count: usize,
     pub mean_strength: u32,
     pub health_fraction: f32,
+    pub stance: BattalionStance,
 }
 
 #[derive(Resource, Default)]
@@ -109,6 +110,7 @@ pub struct RosterChanges<'w, 's> {
                 Changed<CharacterName>,
                 Changed<PersonId>,
                 Changed<Battalion>,
+                Changed<BattalionStance>,
                 Changed<MemberOfBattalion>,
                 Added<AboardBoat>,
             )>,
@@ -138,7 +140,7 @@ pub fn refresh_army_roster(
         ),
         With<CharacterKind>,
     >,
-    battalions: Query<(Entity, &Battalion, &CommandedBy)>,
+    battalions: Query<(Entity, &Battalion, &CommandedBy, Option<&BattalionStance>)>,
     mut roster: ResMut<ArmyRoster>,
 ) {
     let removed = changes.members.read().count()
@@ -174,7 +176,7 @@ pub fn refresh_army_roster(
         );
     }
     let mut units = Vec::new();
-    for (entity, battalion, owner) in &battalions {
+    for (entity, battalion, owner, stance) in &battalions {
         if account.is_empty() || owner.0 != account {
             continue;
         }
@@ -194,6 +196,7 @@ pub fn refresh_army_roster(
             id: battalion.id,
             name: battalion.name.clone(),
             ordinal: battalion.ordinal,
+            stance: stance.copied().unwrap_or_default(),
             count: members.len(),
             mean_strength: strength / members.len().max(1) as u32,
             health_fraction: if max_health > 0.0 {

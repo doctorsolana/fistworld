@@ -137,6 +137,9 @@ fn ordinal_name(ordinal: u64) -> String {
 
 mod membership;
 pub use membership::{apply_army_order, handle_army_orders};
+mod response;
+pub use response::{react_to_bombardment, EvadingBombardment};
+pub(crate) use response::{set_stance, DirectedAttack, UnansweredBombardment};
 
 /// Housekeeping at a slow, fixed cadence: refresh each battalion's replicated
 /// centroid (for LOCATE and the map), and appoint missing standard bearers.

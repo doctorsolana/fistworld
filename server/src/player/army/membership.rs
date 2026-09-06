@@ -48,6 +48,7 @@ fn release(world: &mut World, soldier: Entity) {
         crate::player::combat::fronts::FormationMember,
         crate::player::combat::fronts::PausedFormationMarch,
         CombatReady,
+        BattalionStance,
     )>();
 }
 
@@ -80,6 +81,7 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
                     ordinal,
                 },
                 CommandedBy(account.into()),
+                BattalionStance::default(),
                 PlayerPosition(position),
                 RegionCoord::from_world_pos(position),
                 Replicate::to_clients(NetworkTarget::All),
@@ -97,6 +99,7 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
                 } else {
                     entity.remove::<StandardBearer>();
                 }
+                super::response::apply_policy(world, *soldier, BattalionStance::default());
             }
             (
                 soldiers.len(),
@@ -121,6 +124,10 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
                 .filter(|m| m.0 == id)
                 .count();
             let mut room = MAX_BATTALION_SIZE.saturating_sub(serving);
+            let stance = world
+                .get::<BattalionStance>(battalion)
+                .copied()
+                .unwrap_or_default();
             let mut accepted = 0;
             let requested = soldiers.len();
             for soldier in soldiers {
@@ -143,6 +150,7 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
                     )>()
                     .insert(MemberOfBattalion(id))
                     .remove::<StandardBearer>();
+                super::response::apply_policy(world, soldier, stance);
                 room -= 1;
                 accepted += 1;
             }
@@ -185,6 +193,16 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
             (
                 members.len(),
                 "Battalion disbanded; soldiers remain in your retinue".into(),
+            )
+        }
+        ArmyOrder::SetStance { battalion, stance } => {
+            let Some(id) = owned_battalion(world, account, battalion) else {
+                return unavailable();
+            };
+            let count = super::set_stance(world, battalion, id, stance);
+            (
+                count.max(1),
+                format!("Battalion stance: {}", stance.label()),
             )
         }
     }

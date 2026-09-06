@@ -155,15 +155,10 @@ impl Plugin for EncyclopediaPlugin {
                 .run_if(retinue::retinue_tab_active)
                 .run_if(in_state(GameState::Playing)),
         );
-        app.init_resource::<army::EnlistTarget>();
+        app.init_resource::<army::ArmyManagement>();
         app.add_systems(
             Update,
-            (
-                army::handle_army_buttons,
-                army::rebuild_army_list,
-                army::bind_army_vitals,
-                army::bind_muster_label,
-            )
+            (army::handle_army_buttons, army::sync_army_panel)
                 .chain()
                 .after(crate::army_roster::ArmyRosterSet)
                 .after(layout::spawn_encyclopedia)

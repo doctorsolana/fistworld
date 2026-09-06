@@ -36,6 +36,31 @@ pub struct Battalion {
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemberOfBattalion(pub BattalionId);
 
+/// Standing policy, independent of a current move/attack order. The server
+/// copies the battalion's policy onto members at assignment and policy changes.
+/// Unassigned troops default to Defensive.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum BattalionStance {
+    #[default]
+    Defensive,
+    HoldLine,
+}
+
+impl BattalionStance {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Defensive => "Defensive",
+            Self::HoldLine => "Hold line",
+        }
+    }
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Defensive => "Idle troops reposition after nearby catapult impacts. Your move and attack orders take priority.",
+            Self::HoldLine => "Stand firm under bombardment and nearby enemies. Fight within reach; move only when ordered.",
+        }
+    }
+}
+
 /// Worn by exactly one soldier per battalion: the one carrying the standard.
 /// Selecting the bearer selects the battalion, and the flag he carries is how
 /// a formation reads as a UNIT on the battlefield rather than a crowd. The

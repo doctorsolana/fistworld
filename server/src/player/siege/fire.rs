@@ -222,7 +222,7 @@ pub fn resolve_siege_projectiles(
             commands
                 .entity(entity)
                 .remove::<SiegeProjectile>()
-                .insert(impact);
+                .insert((impact, crate::player::army::UnansweredBombardment));
         } else {
             region.set_if_neq(RegionCoord::from_world_pos(stone.position(now)));
         }

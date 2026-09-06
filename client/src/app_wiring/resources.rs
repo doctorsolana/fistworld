@@ -11,6 +11,7 @@ pub fn setup_resources(app: &mut App) {
     app.init_resource::<camera_rts::CursorRay>();
     app.init_resource::<crate::capture::LiveVoyageCaptureState>();
     app.init_resource::<crate::capture::ArmyCapture>();
+    app.init_resource::<crate::capture::ManagementCapture>();
     app.init_resource::<crate::capture::BattleCapture>();
     app.init_resource::<crate::capture::SiegeCapture>();
     app.init_resource::<crate::capture_artifact::CaptureCompletions>();

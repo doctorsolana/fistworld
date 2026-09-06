@@ -417,3 +417,61 @@ At most four screenshot tickets are outstanding, and every ticket must complete 
 the rehearsal exits. The requested launch cadence is 24 Hz, but readback can reduce it;
 encode recordings from the `.siege.json` timestamps rather than assuming a fixed frame
 rate. This rehearsal is visual/functional evidence, not a frame-rate benchmark.
+
+## Army management and standing-policy rehearsal
+
+`capture/scenarios/ui-army.ron` renders the actual retained Army page with two battalions,
+assigned and unassigned troops. Use `target: window`; inspect the PNG and `.capture.json`.
+A smaller-window check can use `--resolution 1280x720 --out /tmp/army-ui-small` with the
+same scenario. Health/stance/checkbox changes must bind without replacing controls.
+
+`capture/scenarios/army-management.ron` requires the real connected lab. Rebuild both
+binaries (the stance contract changes the protocol). Launch the server with:
+
+```sh
+CITYSIM_MAP_ID=battle_lab FISTWORLD_VILLAGE_LAB_RUNTIME=1 \
+FISTWORLD_LAB_SCENARIO=skirmish FISTWORLD_LAB_WARP=1 \
+FISTWORLD_ARMY_SCENARIO="$PWD/capture/scenarios/army-management.ron" \
+./target/playtest/server
+```
+
+Launch the client with the same `CITYSIM_MAP_ID` and `FISTWORLD_ARMY_SCENARIO`, plus
+`FISTFORCE_AUTOCONNECT=armylab`, `BEVY_ASSET_ROOT="$PWD/client/assets"`,
+`FISTFORCE_NO_SETTINGS_FILE=1`, `FISTFORCE_RESOLUTION=1600x900`,
+`FISTFORCE_RENDER_SCALE=1` and a fresh `FISTWORLD_ARMY_CAPTURE_DIR`.
+
+After actors, UI text and terrain are ready, the rehearsal activates the production
+Army buttons: bulk remove/refill, transfer, remove/reassign, and Hold line. It waits for
+each server-replicated roster transition rather than assuming a network delay. The
+server fixture then orders two real enemy catapults to fire once, one at each stance.
+Fixture soldiers have 300 health so all survivors' positions can be compared. Damage,
+responses, collision, navigation and movement use the production systems.
+
+UI checkpoints use window captures; the bombardment and repositioning sequence uses
+continuous scene captures at a modest cadence. `.army.json` records positions, health,
+membership and world time beside each PNG/renderer `.capture.json`. `summary.json`
+requires completed membership edits, policy replication, damage to both battalions,
+at least 8 m travel by every Defensive troop and less than 0.05 m by every held troop.
+The final capture must complete before exit. This is not a performance benchmark.
+
+### Verified 2026-09-06
+
+Inspected the Army page at 1600x900 and 1280x720, then ran the connected scenario
+through the production button handlers and network messages. The passing run used
+24 soldiers (12 per battalion) and two enemy catapults. Eight soldiers in each
+battalion took splash damage; every Defensive soldier travelled at least 12.904 m,
+and the maximum Hold line displacement was 0.000 m. The continuous captures show
+the Defensive line reforming on new ground while the held line remains in place.
+Bulk remove/refill, an inter-battalion transfer and its return, and policy replication
+all passed. This exercises button actions, not native pointer hit-testing.
+
+Local artifacts are under `logs/captures/army-management/`: `before/`, `after/`,
+`small/` and the full passing `connected/` sequence with PNGs, capture/army sidecars
+and `summary.json`. Readiness includes bound row labels and completed text updates;
+the roster count alone can precede the deferred row binding. The rehearsal also
+exposed a row-replacement/disabled-button command ordering bug. A regression test
+now covers switching destination battalions while old row actions become invalid.
+
+Verification completed with `cargo check --workspace --all-targets`,
+`cargo test --workspace` (873 passed, 11 existing ignored),
+`cargo build --workspace --profile playtest`, formatting and whitespace checks.

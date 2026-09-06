@@ -47,6 +47,8 @@ fn wire_common_systems(app: &mut App) {
         Update,
         (
             crate::capture::drive_army_input,
+            crate::capture::drive_management_input
+                .before(crate::ui::encyclopedia::army::handle_army_buttons),
             crate::capture::drive_battle_input,
             crate::capture::drive_siege_input.before(crate::siege::SiegeInputSet),
         )
@@ -57,6 +59,8 @@ fn wire_common_systems(app: &mut App) {
         Update,
         (
             crate::capture::drive_army_capture,
+            crate::capture::drive_management_capture
+                .after(crate::ui::encyclopedia::army::sync_army_panel),
             crate::capture::drive_battle_capture,
             crate::capture::drive_siege_capture,
         )

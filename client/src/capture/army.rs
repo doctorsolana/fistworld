@@ -114,8 +114,8 @@ pub(crate) fn drive_army_capture(
 ) {
     if !state.initialized {
         state.initialized = true;
-        state.scenario =
-            ArmyLabScenario::from_env().filter(|s| s.catapult.is_none() && s.battle.is_none());
+        state.scenario = ArmyLabScenario::from_env()
+            .filter(|s| !s.management && s.catapult.is_none() && s.battle.is_none());
         state.started = Some(Instant::now());
     }
     let Some(scenario) = state.scenario.clone() else {

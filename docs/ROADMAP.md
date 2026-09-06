@@ -703,3 +703,11 @@ Implemented: selectable slow catapults, animated launch/reload, ground bombardme
 enemy attack orders, ballistic terrain interception, friendly splash damage and impact
 FX. Available from God placement. Future: workshop production, crews, resupply and
 building/wall destruction. See [CATAPULT.md](CATAPULT.md).
+
+### Army management and defensive stances — implemented 2026-09-06
+
+The Army page supports direct and bulk membership edits, inter-battalion transfers,
+capacity-aware refill and persistent Defensive / Hold line policies. Idle Defensive
+troops reposition together after nearby catapult impacts; direct orders take priority.
+Hold line keeps troops anchored while allowing attacks within reach. This does not
+implement morale, routs, paid recruitment or strategic/off-screen army simulation.

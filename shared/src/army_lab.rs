@@ -19,6 +19,8 @@ pub struct ArmyLabScenario {
     pub battle: Option<BattleScenario>,
     #[serde(default)]
     pub catapult: Option<CatapultScenario>,
+    #[serde(default)]
+    pub management: bool,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

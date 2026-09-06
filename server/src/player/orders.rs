@@ -28,6 +28,8 @@ pub enum CommandStance {
     AttackMove,
     Retreat,
     Hold,
+    /// Arrived / maintaining formation, without an explicit hold order.
+    Guard,
 }
 
 #[derive(Component, Clone, Copy, Debug)]
@@ -418,7 +420,7 @@ pub fn apply_unit_order(world: &mut World, account: &str, order: UnitOrder) -> (
                 let mut soldier = world.entity_mut(entity);
                 soldier
                     .remove::<CommandStance>()
-                    .insert(AttackOrder { target });
+                    .insert((AttackOrder { target }, super::army::DirectedAttack));
                 if !machine {
                     soldier.insert(super::combat::SkirmishOrder { target: enemy });
                 }
@@ -475,6 +477,8 @@ fn interrupt_previous_order(world: &mut World, entity: Entity) {
         cooldown.disengage();
     }
     unit.remove::<(
+        super::army::DirectedAttack,
+        super::army::EvadingBombardment,
         fronts::FormationMember,
         fronts::PausedFormationMarch,
         super::combat::SkirmishOrder,

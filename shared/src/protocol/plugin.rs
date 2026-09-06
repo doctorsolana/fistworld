@@ -90,6 +90,8 @@ impl Plugin for ProtocolPlugin {
         app.component::<CharacterMotion>().replicate();
         app.component::<CharacterActivity>().replicate();
         app.component::<Battalion>().replicate();
+        app.component::<crate::components::BattalionStance>()
+            .replicate();
         app.component::<MemberOfBattalion>().replicate();
         app.component::<StandardBearer>().replicate();
         app.component::<EngagedWith>().replicate();

@@ -332,6 +332,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             (
                 player::siege::advance_catapults,
                 player::siege::resolve_siege_projectiles,
+                player::army::react_to_bombardment,
             )
                 .chain(),
             (

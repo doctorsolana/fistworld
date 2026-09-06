@@ -148,3 +148,11 @@ Siege orders/damage: `server/src/player/siege.rs` and `siege/fire.rs`. Shared ba
 and timelines: `shared/src/components/siege.rs`. Model, FX and targeting UI:
 `client/src/siege/`. Connected rehearsal: `capture/scenarios/catapult.ron`.
 See [CATAPULT.md](CATAPULT.md).
+
+### Army roster and standing policy
+
+`client/src/ui/encyclopedia/army/{model,view,binding,actions}.rs` owns army management.
+`server/src/player/army/response.rs` owns policy changes and impact-driven responses;
+`army/membership.rs` owns membership and policy inheritance. Shared `BattalionStance`
+is separate from active tactical objectives. Connected verification uses
+`capture/scenarios/army-management.ron`; the offline UI fixture is `ui-army.ron`.

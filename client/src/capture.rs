@@ -11,6 +11,8 @@
 //!
 //! Run it via `cargo run -p client --bin capture -- --help`.
 
+mod management;
+pub(crate) use management::{drive_management_capture, drive_management_input, ManagementCapture};
 mod siege;
 pub(crate) use siege::{
     drive_siege_capture, drive_siege_input, drive_siege_ray, frame_siege_flight, SiegeCapture,

@@ -1,4 +1,7 @@
 //! Opt-in connected army fixture. Commands and movement use production code.
+mod management;
+pub use management::drive_management_bombardment;
+
 use bevy::{ecs::system::SystemState, prelude::*};
 use shared::{
     army_lab::ArmyLabScenario,
@@ -99,6 +102,9 @@ pub fn stage_connected_army(world: &mut World) {
             crate::player::siege::spawn_catapult(&mut world.commands(), &scenario.account, p);
         world.flush();
         world.entity_mut(entity).insert(PlayerRotation(0.0));
+    }
+    if scenario.management {
+        management::stage(world, &scenario.account);
     }
     world.insert_resource(Staged);
     info!(

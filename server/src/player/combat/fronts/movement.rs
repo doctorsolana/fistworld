@@ -27,6 +27,7 @@ pub fn advance_battle_fronts(
     buildings: Option<Res<shared::spatial::SpatialObstacleGrid>>,
     colliders: Option<Res<crate::collision::library::StaticColliders>>,
     derived: Option<Res<crate::collision::library::DerivedColliderLibrary>>,
+    policies: Query<&BattalionStance>,
     mut units: Query<(
         &FormationMember,
         Option<&MemberOfBattalion>,
@@ -259,6 +260,22 @@ pub fn advance_battle_fronts(
         }
         let mut route_group = None;
         for (entity, home, exposed) in front.posts() {
+            if front.intent == Intent::Hold
+                && policies
+                    .get(entity)
+                    .is_ok_and(|policy| *policy == BattalionStance::HoldLine)
+            {
+                commands.entity(entity).remove::<MoveTarget>();
+                if let Ok((_, _, _, _, _, fighting, _, mut motion, mut activity)) =
+                    units.get_mut(entity)
+                {
+                    motion.set_if_neq(CharacterMotion::STATIONARY);
+                    if !fighting {
+                        activity.set_if_neq(CharacterActivity::Idle);
+                    }
+                }
+                continue;
+            }
             // The rank is a home position, not a rail. Only exposed soldiers
             // step out to meet a local threat; supporting ranks retain space
             // behind them. A lone flanker never turns the whole battalion.
@@ -373,7 +390,7 @@ pub fn advance_battle_fronts(
                 motion.set_if_neq(CharacterMotion::STATIONARY);
                 activity.set_if_neq(CharacterActivity::Idle);
             }
-            commands.entity(entity).insert_if_new(CommandStance::Hold);
+            commands.entity(entity).insert_if_new(CommandStance::Guard);
         }
     }
 }
