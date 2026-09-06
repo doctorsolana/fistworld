@@ -1,11 +1,7 @@
 """Export any house .blend -> client/assets/game_assets/buildings/village/<Name>.glb
 
-    blender asset_creation/houses/long_cabin.blend  --background --python asset_creation/houses/export_house_glb.py
-    blender asset_creation/houses/cabin_l2.blend    --background --python asset_creation/houses/export_house_glb.py
-    blender asset_creation/houses/long_cabin_l2.blend --background --python asset_creation/houses/export_house_glb.py
-
-Generic where `export_log_cabin_glb.py` is cabin-specific: it finds the three parts by convention and
-derives the facing rotation from where the door actually is, so one script serves every house.
+The four village homes are rebuilt and exported by build_houses.py. This older
+convention-based exporter remains available for other three-part building sources.
 
 WHAT IT VERIFIES, and why each one is here rather than trusted
 -------------------------------------------------------------
@@ -50,6 +46,10 @@ from mathutils import Matrix
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUT_DIR = os.path.join(REPO, "client", "assets", "game_assets", "buildings", "village")
 ANCHORS = ("Anchor_Door", "Light_Interior", "Light_Window.L", "Light_Window.R")
+assert os.path.splitext(os.path.basename(bpy.data.filepath))[0] not in {
+    "log_cabin", "long_cabin", "cabin_l2", "long_cabin_l2",
+}, "Rebuild the village houses with build_houses.py --factory-startup; it exports them itself."
+
 
 
 def log(m):

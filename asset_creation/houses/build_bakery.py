@@ -6,7 +6,7 @@
 
 DELIBERATELY THE SAME BUILDING AS THE CABIN, PLUS FOUR THINGS. Course height, log thickness, corner
 projection, end grain, chinking, the stepped shingle roof and the whole palette are copied from
-build_log_cabin.py without change -- a bakery in this village is a cabin somebody bakes in, not a new
+the original cabin builder without change -- a bakery in this village is a cabin somebody bakes in, not a new
 kind of architecture. What makes it read as a shop is a short list:
 
     oven      a STONE mass filling the whole rear corner, the only masonry on the building; its

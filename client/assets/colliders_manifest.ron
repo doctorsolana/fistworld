@@ -188,47 +188,38 @@
     // =========================================================================
     // buildings/village
     // =========================================================================
-    // Built in-repo by asset_creation/houses/build_log_cabin.py, not a purchased asset.
-    //
-    // A HULL, not decomposition, because this is a top-down RTS: the thing units need is a footprint
-    // to walk around. VHACD would spend dozens of convex pieces describing log ends and roof steps
-    // that no unit can ever touch, and cost that at runtime for detail the camera never resolves.
-    //
-    // The Y slice is what makes a plain hull correct. Walls top out at 2.20 m of a 4.33 m total
-    // (-0.16..4.17), so 0.545 cuts exactly at the eaves. Without it the hull would also enclose the
-    // roof, and since the overhang stands 0.47 m proud of the walls a CONVEX hull flares outward as
-    // it rises — stopping units short of the wall at head height, against thin air.
-    //
-    // The doorway is solid, as any hull's would be. Units path to the Anchor_Door empty and stop
-    // outside, which is the intent while the interior is an empty shell.
+    // Four house variants authored by asset_creation/houses/build_houses.py.
+    // One hull per building gives the RTS a cheap navigation footprint. Slice at
+    // 2.30 m above the origin: roof overhangs, chimneys, and the L2 jetty/balcony
+    // sit above people and must not expand the ground obstacle. Percentages are
+    // (2.30 - min_y) / (max_y - min_y) in the measured exported bounds.
+    // Entrances stop outside the solid hull; the visual doorway is an open shell.
     (
       kind: "building_log_cabin",
       gltf_path: "game_assets/buildings/village/LogCabin.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.545 ),
+      vertex_filter: LowerYPercent ( percent: 0.563961 ),
       collidable: true,
     ),
-    // Additional house lines and upper-storey rungs. Percent is the measured
-    // eave height within each exported vertical range.
     (
       kind: "building_long_cabin",
       gltf_path: "game_assets/buildings/village/LongCabin.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.439 ),
+      vertex_filter: LowerYPercent ( percent: 0.457079 ),
       collidable: true,
     ),
     (
       kind: "building_cabin_l2",
       gltf_path: "game_assets/buildings/village/CabinL2.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.625 ),
+      vertex_filter: LowerYPercent ( percent: 0.352335 ),
       collidable: true,
     ),
     (
       kind: "building_long_cabin_l2",
       gltf_path: "game_assets/buildings/village/LongCabinL2.glb#Scene0",
       mode: ConvexHull,
-      vertex_filter: LowerYPercent ( percent: 0.633 ),
+      vertex_filter: LowerYPercent ( percent: 0.353855 ),
       collidable: true,
     ),
     // Timber workshop: wall/eave slice at 2.22 m within -0.16..3.736 m,

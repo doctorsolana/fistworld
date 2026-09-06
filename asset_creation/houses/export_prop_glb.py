@@ -43,7 +43,6 @@ STEM = os.path.splitext(os.path.basename(bpy.data.filepath))[0]
 # Explicit, because the .blend stem is a working name and the shipped path is a game-facing one.
 # The wheat field is not a building and does not live with them.
 GLB_PATH = {
-    "log_cabin": "game_assets/buildings/village/LogCabin.glb",
     "farmstead": "game_assets/buildings/village/Farmstead.glb",
     "wheat_field": "game_assets/environment/crops/WheatField.glb",
     # The civic ladder. A settlement replaces the building on the same plot as it grows, so these are
@@ -65,6 +64,9 @@ GLB_PATH = {
     # (head nod, leg swing), so it ships no clips and lives with the environment art.
     "sheep": "game_assets/environment/animals/Sheep.glb",
 }
+assert STEM not in {"log_cabin", "long_cabin", "cabin_l2", "long_cabin_l2"}, (
+    "Village houses export themselves; run build_houses.py with --factory-startup."
+)
 assert STEM != "lumberjack_hut", (
     "The lumberjack workshop is authored in +Y and exports itself; run "
     "build_lumberjack_hut.py with --factory-startup instead of this -X exporter."

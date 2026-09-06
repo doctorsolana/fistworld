@@ -3,7 +3,7 @@
     blender --background --factory-startup --python asset_creation/houses/build_farmstead.py
     # or, in the live session:  exec(open(".../build_farmstead.py").read())
 
-Same parts as build_log_cabin.py and build_lumberjack_hut.py: squared beams one box each,
+Same parts as the original cabin builder and build_lumberjack_hut.py: squared beams one box each,
 interlocked projecting corner ends with end grain, per-course depth offset, stepped shingle roof with
 filled risers, chinking behind the logs. Course height, log thickness and corner projection are held
 IDENTICAL across all three so they sit together at one visual scale.

@@ -1,0 +1,8 @@
+(version: 1, name: "houses-lineup", map: "village_lab",
+ output_dir: "logs/captures/houses-lineup", resolution: (1600, 1000), fixed_delta_seconds: 0.016666667,
+ target: scene, show_window: false, warmup_frames: 300,
+ readiness: (minimum_frames: 90, maximum_frames: 1200, minimum_loaded_chunks: 25, stable_loaded_chunk_frames: 20),
+ environment: { "FISTFORCE_CAPTURE_HOUSES": "lineup", "FISTFORCE_CAPTURE_CLOUDS": "clear" },
+ shots: [ (name: "lineup-day", focus: (-15.0, 0.0, -15.0), yaw: 3.10, zoom: 43.0, time_of_day: 0.43, assertions: [villagers_at_least(count: 1), settlements_at_least(count: 1)]),
+(name: "lineup-night", focus: (-15.0, 0.0, -15.0), yaw: 3.10, zoom: 43.0, time_of_day: 0.00, assertions: [villagers_at_least(count: 1), settlements_at_least(count: 1)]) ],
+)

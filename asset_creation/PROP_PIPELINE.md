@@ -4,8 +4,9 @@ The sibling of `CHARACTER_PIPELINE.md`. That one covers rigged, skinned, wardrob
 This one covers **static and node-animated props** — buildings, furniture, anything that is not a
 skeleton. The contracts differ enough that conflating them causes real bugs, so they are separate.
 
-The log cabin and older workshops demonstrate the original log construction pipeline.
-The rebuilt [lumberjack workshop](LUMBERJACK_HUT.md) and [storage hall](STORAGE_HALL.md)
+Older workshops demonstrate the original log construction pipeline.
+The rebuilt [houses](HOUSE_HANDOVER.md), [lumberjack workshop](LUMBERJACK_HUT.md)
+and [storage hall](STORAGE_HALL.md)
 use self-contained builders that author directly in Blender +Y and export their own GLBs.
 Use each building's documented entry point: the older `export_prop_glb.py` applies a
 −90° facing correction and must not process these newer sources. Shared scale, timber,
@@ -34,8 +35,8 @@ workplace another copy of the cabin.
 Same rule, same reason. The exporter's `export_yup=True` maps **Blender +Y → glTF −Z**, so whatever
 should face the camera at identity rotation must face **Blender +Y** at export time.
 
-The cabin is *built* facing −X because that is how the geometry reads most naturally in the build
-script. `export_cabin_glb.py` rotates −90° about Z on the way out. **Never fix facing with a yaw
+Older sources built facing −X use `export_prop_glb.py` to rotate −90° about Z
+on the way out. Current house, lumberjack and storage builders already face +Y. **Never fix facing with a yaw
 offset in Rust** — the character pipeline is littered with the scars of that.
 
 For a −Z-facing node with +Y up, right = forward × up = **+X**, so the object's **left is −X**. If
@@ -224,7 +225,7 @@ glass), metallic 0, and the base bedding into the ground.
 Two bugs today were found by it and by a log line, not by looking at the model:
 
 - **`door_close` missing** — the render looked perfect; the glb had one clip.
-- **the factory-startup `Cube` shipping inside the building.** `build_log_cabin.py` runs with
+- **the factory-startup `Cube` shipping inside the building.** The original cabin builder ran with
   `--factory-startup`, which opens with a Cube, a Camera and a Light. The texture step used to delete
   them as a side effect of purging everything that was not a bake target. Narrowing that purge so it
   would stop eating the new anchor empties let the Cube sail straight through into the glb. The
@@ -380,7 +381,9 @@ is already coloured per vertex.
 
 ## 12. Script order
 
-The per-asset scripts are the build ones; everything downstream is generic and discovers by convention.
+For older sources that use the texture-baking chain, the build script owns geometry
+and downstream scripts discover parts by convention. Self-contained builders listed above
+replace this entire chain; use their documented entry points.
 
 ```
 build_<asset>.py        # geometry + vertex colour + glass + anchors -> <asset>.blend
@@ -397,9 +400,15 @@ the failure mode that let the factory-startup Cube ship inside the cabin.
 `texture_and_light.py` frames the camera on every shippable mesh rather than on the bake targets, so an
 asset that bakes nothing still gets a studio render.
 
-`texture_and_light_cabin.py`, `animate_cabin_door.py` and `export_cabin_glb.py` are the cabin's original
-single-asset versions, kept because the shipped cabin was verified through them. They should migrate to
-the generic three — the cabin would need its whole chain re-run and re-baked to do it.
-
 Each script reads the `.blend` the previous one saved, so they must run in order, and the whole chain
 must be re-run when geometry changes — the bake is not incremental.
+
+## Current village houses
+
+The compact and long house families, at level 1 and level 2, now share
+`houses/build_houses.py` and `houses/building_mesh.py`. The builder owns geometry,
+vertex colours, door clips, anchors and export in one fresh Blender process. It writes
+both the four canonical GLBs and their editable `.blend` sources. The previous six
+cabin build/texture/animation/export scripts were replaced; do not apply the older
+−X-facing exporter or texture passes to these +Y-facing sources.
+See [HOUSE_HANDOVER.md](HOUSE_HANDOVER.md) for budgets, collider slices and real Bevy captures.

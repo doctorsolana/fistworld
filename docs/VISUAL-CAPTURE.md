@@ -64,6 +64,14 @@ door demand every two simulated seconds, exercising the production animation con
 `lumberjack-hut.ron` checks the timber workshop from front/rear, at midnight, and at
 gameplay/town zoom. `lumberjack-hut-door.ron` records its ordinary door-demand cycle.
 
+`house-cabin-l1.ron`, `house-cabin-l2.ron`, `house-long-l1.ron` and
+`house-long-l2.ron` inspect each occupied home at daylight, midnight, rear and gameplay
+zoom. `houses-lineup.ron` compares both families and upgrade levels in one view;
+`houses-doors.ron` continuously exercises all four door clips. Their fixture uses
+`FISTFORCE_CAPTURE_HOUSES=cabin-l1|cabin-l2|long-l1|long-l2|lineup` and the production
+`HouseAppearance`, household lighting and door-demand consumers. It has no connected
+villager simulation; use the client/server lab for NPC journeys.
+
 Other checked-in references include
 `world-survey.ron` for zoom-band scene rendering, `river-banks.ron` for the detailed-river/far-
 river handoff and inland ground paint, `forest-floor.ron` for forest accents at morning and noon,

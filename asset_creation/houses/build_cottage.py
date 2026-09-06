@@ -30,7 +30,7 @@ where the buildings are still drawn at all; a different window arrangement does 
 the wool bale learned against the flour sack -- they had to split on hue, because at 512 px an
 object is a colour and an outline.
 
-CONVENTIONS, copied from build_log_cabin.py because they are load-bearing:
+CONVENTIONS, copied from the original cabin builder because they are load-bearing:
   * metres, so it lands at game scale beside a 1.7 m villager with no rescale;
   * built with the door on -X. `export_cottage_glb.py` rotates everything -90 deg about Z so the
     front lands on glTF -Z, which is the prop contract;
@@ -293,7 +293,7 @@ lo = Vector((min(v.co[i] for v in me.vertices) for i in range(3)))
 hi = Vector((max(v.co[i] for v in me.vertices) for i in range(3)))
 assert abs(lo.z) < 1e-6, f"base is not on z=0: {lo.z:.4f}"
 
-# The material. The cabin gets its own from `texture_and_light_log_cabin.py`, which bakes atlases;
+# The material. The cabin gets its own from its original texture pass, which bakes atlases;
 # this house is vertex-coloured only, so the shader is three nodes and belongs here rather than in a
 # second script. Without it the mesh carries its colours and renders flat white -- which is exactly
 # what the first build looked like in the viewport.

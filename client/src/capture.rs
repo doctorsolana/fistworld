@@ -24,6 +24,7 @@ pub(crate) use battle::{
     drive_battle_capture, drive_battle_input, drive_battle_ray, BattleCapture,
 };
 mod history_fixtures;
+mod house_fixtures;
 mod inspection;
 mod live;
 mod performance;
@@ -340,7 +341,13 @@ pub fn run(mut config: CaptureConfig) {
 
     app.add_systems(PreStartup, configure_capture_window);
     app.add_systems(Startup, enter_world_offline);
-    app.add_systems(PostStartup, presentation::setup_capture_presentation);
+    app.add_systems(
+        PostStartup,
+        (
+            presentation::setup_capture_presentation,
+            house_fixtures::stage_capture_houses,
+        ),
+    );
     app.add_systems(
         Update,
         (

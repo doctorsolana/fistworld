@@ -164,7 +164,7 @@ work tool while carrying. A stationary carrier currently holds the carry pose; a
 
 | Asset | `BuildingType` / `PropKind` | Footprint | Height | Collider |
 |---|---|---|---|---|
-| `LogCabin.glb` | `BuildingType::LogCabin` | 6.00 × 6.94 | 4.33 | hull, 45 pts |
+| `LogCabin.glb` | `BuildingType::LogCabin` | 6.00 × 6.94 | 4.33 reserved | hull, 38 pts |
 | `LumberjackHut.glb` | `BuildingType::LumberjackHut` | 5.16 × 5.40 | 3.76 | hull, [workshop details](LUMBERJACK_HUT.md) |
 | `Farmstead.glb` | `BuildingType::Farmstead` | 5.41 × 6.62 | 4.07 | hull, 51 pts |
 | `MootHall.glb` | `BuildingType::MootHall` | 6.45 × 8.74 | 8.18 | hull, 57 pts |
@@ -229,7 +229,7 @@ in code; offsets silently go wrong the first time a building is resized, and not
 Every stand-on anchor was measured against the baked hull. Current clearances, all outside:
 
 ```
-LogCabin       Anchor_Door   +0.33      FishermansHut  Anchor_Door   +0.68
+LogCabin       Anchor_Door  >=0.58      FishermansHut  Anchor_Door   +0.68
 LumberjackHut  Anchor_Door  >=0.77                     Anchor_Nets   +0.53
                Anchor_Work  >=0.47                     Anchor_Pier   +0.11
 Farmstead      Anchor_Door   +0.56      MootHall       Anchor_Door   +0.71
@@ -317,3 +317,7 @@ looks correct. `inspect_glb.py` cross-checks the manifest against the glb and ca
 `colliders.bin`. It also drops entries whose manifest rows are gone — five stale ones
 (`building_train_station`, `desert_*`) were removed this way, all with zero references in code. Diff
 before and after rather than trusting the byte count.
+
+The four September 2026 house replacements (both families, both upgrade levels)
+are documented in [HOUSE_HANDOVER.md](HOUSE_HANDOVER.md). That document owns the
+current geometry counts, source/export workflow, per-variant entrances and captures.
