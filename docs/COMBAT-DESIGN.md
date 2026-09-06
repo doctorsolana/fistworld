@@ -1,160 +1,123 @@
-# Combat design — battles on the living map
+# Combat on the living map
 
-Audited against the working tree 2026-08-24. This is the plan for Phase 7's
-battle system: Rome Total War / Bannerlord in *feel* — massed melee, squads,
-formations, morale, individual soldiers who differ — but **never an instanced
-battle arena**. A battle is an event at a real place on the one persistent
-map: the terrain is the terrain, the buildings are the buildings, and the
-people who die are real residents whose estates settle through the same
-mortality pipeline as everyone else's. That last part is not a burden, it is
-the design: wars here have economic consequences automatically, because a
-dead soldier's wallet folds into his household, his business lists for sale,
-and his company shares transfer — all code that already runs today.
+Implementation status: 2026-09-06. Combat is server-authoritative and shares the
+village simulation's fixed schedule, world clock, collision and mortality pipeline.
+Battles happen on the existing map. There is no separate battle scene.
 
-## 1. Principles
+## Current controls
 
-1. **One world.** No battle scenes, no loading, no separate simulation rules.
-   A siege is literally an army standing at a real settlement.
-2. **Same discipline as everything else.** Server-authoritative in the shared
-   60 Hz village schedule; all combat timers in *world seconds* through
-   `SimulationTime` (a 100x tick delivers ~1.67 world-seconds and can contain
-   several swings — every cadence loop must consume its whole budget, the
-   same rule as `step_units`' multi-waypoint loop); replication follows the
-   change-flag rules in ARCHITECTURE.md — per-swing state never crosses the
-   wire.
-3. **Individuals compose upward.** Resolution happens per soldier (their
-   physique sets their damage and toughness, their own Health takes the
-   hits); command and cohesion happen per squad; strategy per army. The RTW
-   feel comes from the squad layer, the Bannerlord feel from the individual
-   layer underneath it.
-4. **Two tiers, like the villagers.** Observed battles are embodied. Distant
-   battles will eventually resolve abstractly on the strategic layer and
-   reconstruct when someone looks — the same promotion/demotion philosophy
-   the population already uses. (Late phase; embodied comes first.)
+- **C** changes how the client interprets clicks. It is not a server ceasefire.
+- Left-click selects a person; click a standard bearer to select their battalion.
+  Drag a box to select owned people. **Shift** adds to a box selection or toggles
+  a clicked group. **Alt-click** selects a bearer individually.
+- In combat mode, right-click an enemy to attack or empty ground to move.
+  **Right-drag** lays out a frontage: drag left to right when facing the enemy.
+  The gold preview shows each destination and facing. Reverse the drag to reverse
+  facing. **Alt + right-drag** orbits the camera when units are selected.
+- **X**, then a destination: attack-move. Engage nearby enemies, then resume the
+  original march. **R**, then a destination: retreat without acquiring enemies
+  during movement. Ordinary movement also obeys the destination over acquisition.
+- **H** holds position: fight enemies within melee reach, without pursuing them.
+  Arrival changes a marching unit to Hold. Escape clears an armed command mode.
+- **Ctrl/Cmd + 0–9** saves a control group. The digit recalls it; Shift adds it.
+  Complete battalions retain their identity as membership changes. Partial
+  selections retain only the individual people saved.
+- Battalion cards show complete/partial selection. Shift-click adds or removes a
+  card's battalion. The Army encyclopedia handles muster, assignment and disbanding.
 
-## 2. What already exists (verified)
+## Contracts and ownership
 
-| Substrate | State | Combat use |
-| --- | --- | --- |
-| `Health` + `take_damage() -> died` | replicated, live | the one damage sink; write only on hit |
-| `process_character_deaths` | live | estate/business/shares/ledger settlement + despawn, keyed on `Changed<Health>` — combat deaths ride it unchanged |
-| `CharacterAttributes { physique, .. }` 0–100, seeded 8–20, `train_physique` | replicated, live | per-soldier damage/toughness variance; veterancy = training on kills |
-| `MoveTarget` + `step_units` | proven at 1,000+ NPCs, warp-correct, collision-checked | approach, chase, rout movement |
-| `TacticalCrowdGrid` (2.5 m cells, 3×3 scan) | live, idle early-out | melee target acquisition in weapon reach — widen its populate predicate to "movers OR combatants" |
-| `CommandedBy` + `UnitMoveOrder` (256 cap) + drag-box | live | the player command surface; squads-as-entities bypass the cap later |
-| `CivicRole::Guard` | job only, no behavior | the first defenders — guards get combat AI before anyone |
-| Lab harness (`LabScenario`, run.sh modes, VillageTrace/StuckWatch) | live | the battle test world plugs in as one more scenario |
-| Old melee math (`git show 041deaa^:shared/src/weapons/melee.rs`) | deleted, recoverable | pure, unit-tested arc-sweep + range + shield-block math — salvage as code |
-| Old melee pipeline (`git show 041deaa^:server/src/combat/melee.rs`) | deleted | salvage as *design*: validate → broadphase → arc → nearest-first → direct Health mutation; cooldown kept outside the weapon component |
-| LOS raycasts (`git show 9752cc6^:server/src/collision/raycast.rs`) | deleted twice | recover only when sieges need line-of-sight; verify against current collision modules |
+| Concern | Source of truth |
+|---|---|
+| Tactical wire intent | `shared/src/protocol/unit_orders.rs` |
+| Formation geometry and preview | `shared/src/formation.rs` |
+| Ownership, validation, interruption and command ordering | `server/src/player/orders.rs` |
+| Shared formation route fields | `server/src/player/orders/{navigation,flow}.rs` |
+| Battalion identity/lifecycle and sequential membership | `server/src/player/army.rs`, `army/membership.rs` |
+| Contact/cooldown/damage | `server/src/player/combat.rs` |
+| Local acquisition and body separation | `server/src/player/combat/{targeting,separation}.rs` |
+| Derived client roster | `client/src/army_roster.rs` |
+| Gestures, control groups and formation preview | `client/src/selection/` |
 
-Not salvaged: anatomical hitboxes, hit zones, ballistics, ragdoll impulses —
-FPS fidelity, wrong cost model at two thousand units.
+`UnitOrder` is one message type over the ordered reliable channel. Move, attack,
+retreat, attack-move and hold therefore apply in receive order. Its selection
+contains durable `BattalionId`s for complete battalions and mapped entities for
+individuals. The server expands, deduplicates and checks ownership, health and
+availability, with a 1,024-person command limit. It rejects an excessive command
+rather than silently truncating it. `ArmyOrderFeedback` explains accepted/refused
+commands. Membership messages commit each edit before validating the next edit.
 
-## 3. Component model
+Each account may maintain 12 battalions of up to 64 people. Disbanding removes
+membership and standards while preserving retinue ownership. Empty battalions
+remain until explicitly disbanded. Conscription removes village routines and
+employment; battalion assignment alone does not create command ownership.
 
-**Shared / replicated (low churn only):**
+`EngagedWith(PersonId)` is replicated on engagement transitions. Client attack
+markers follow this authoritative relation, including automatic acquisition and
+stand-down. Sending an attack packet alone does not create a confirmed marker.
+Protocol changes require rebuilding and restarting both binaries.
 
-- `DeathCause::Combat` — append-only serde variant.
-- `CharacterActivity::Fighting` — the animation channel; one send per
-  engage/disengage, never per swing.
-- Later: `Health` on building entities (wire-compatible today), a replicated
-  squad identity for UI.
+## Formation movement
 
-**Server-only (never replicated):**
+A multi-battalion order creates a separate block for each battalion. Default blocks
+use ten files, 1.4 m file spacing, 1.7 m rank spacing and a 5 m gap between blocks.
+A frontage drag changes the number of files, up to twenty. Fifty people normally
+form ten files by five ranks; five such battalions occupy an 83 m frontage.
 
-- `WarParty { banner: String }` — explicit opt-in hostility. Two entities are
-  hostile iff both carry `WarParty` with different banners. Nothing is
-  hostile by accident; villages do not spontaneously go to war because their
-  names differ. The real war-declaration model (who MAY raise a party
-  against whom) is its own later phase.
-- `MeleeSkirmisher { weapon: MeleeWeapon }` — combat capability. Weapon stats
-  (`damage, reach, arc, cooldown, max_targets`) resurrected from the old
-  `MeleeStats` shape.
-- `MeleeCooldown { ready_at: f64 }` — absolute world-clock deadline
-  (`ConstructionSupplyCooldown` pattern), consumed in a loop so high warp
-  lands multiple swings per tick.
-- `CombatTarget(Entity)` — current engagement.
-- `Morale { value, .. }` — phase 4 accumulator; only its state *transitions*
-  (fighting → fleeing → rallied) ever surface to clients.
-- `PendingDeathCause(DeathCause)` — stamped by the killing blow, read by
-  `process_character_deaths` instead of the current infer-from-hunger logic.
+Blocks preserve their current lateral order. Stronger soldiers occupy forward
+ranks; people within a rank are assigned by lateral position to reduce crossing.
+Stable person IDs resolve ties consistently across server/client entity mapping.
+Arrival waits for the mover's completed endpoint before setting the final facing.
 
-**Damage formula (v1):** `weapon.damage * (0.7 + physique / 100 * 0.6)`,
-so a physique-8 recruit swings ~0.75x and a physique-100 veteran ~1.3x; the
-seeded 8–20 spread gives every levy its own feel without any new data.
-Toughness later multiplies `Health::max` the same way.
+Open-ground legs are certified once. An obstructed battalion shares one reverse
+Dijkstra field, bounded to roughly 128 cells on each axis, with coarser sampling
+for larger areas. Every edge uses existing building/prop collision and terrain
+walkability checks. The army shares a 2 ms planning slice, 2,048 expansion cap and
+32 route-install cap per tick; those budgets do not multiply by soldier count.
+Routes feed the existing mover, which consumes multiple waypoints correctly at
+high time warp. Geometry changes invalidate certification; abandoned group fields
+are pruned. Invalid arrival slots are rejected before cancelling a valid march.
 
-## 4. The engagement loop (v1 systems, in the Navigation set after `step_units`)
+This is tactical formation routing, not a strategic regional navigation graph.
+Very narrow passages can be missed by the bounded sampling, and a disconnected
+route may fail. Units follow individual certified paths around obstructions and
+reform at their destination; rigid formation wheeling, adaptive column transitions,
+charge mechanics and coordinated passage reservations remain future work.
 
-1. **acquire** — every `MeleeSkirmisher` with a `WarParty` scans the crowd
-   grid (3×3 of 2.5 m cells) for the nearest hostile. In acquisition range
-   (~6 m): set `CombatTarget`, chase via `MoveTarget` if beyond reach; in
-   reach: `CharacterActivity::Fighting` (set_if_neq).
-2. **swing** — for engaged pairs in reach: loop the world-seconds cooldown
-   budget; each swing runs the salvaged arc test at chest height and applies
-   `take_damage` directly. A miss writes nothing. A kill stamps
-   `PendingDeathCause(Combat)` and trains the killer's physique by 1.
-3. **mortality** — unchanged. Estates settle, the ledger records the death
-   with the true cause, the entity despawns. (A `Corpse` marker that defers
-   despawn for battlefield presentation is a later, purely visual phase.)
-4. **disengage** — target dead or gone: clear and re-acquire; no hostiles in
-   range: stand down to Idle. Guards and off-duty behavior resume on their
-   own because combatants are ordinary characters.
+## Melee and performance rules
 
-Costs at scale: acquisition is O(N × 9 cells); swings happen only along the
-contact front (reach is 2 m — rear ranks physically cannot fight, which is
-exactly the RTW line-grind look); movement is already paid for. Replication
-per second is bounded by actual hits landed, not by army size.
+Acquisition uses a fresh post-movement spatial grid with 9 m cells. Only local
+neighbouring cells are inspected. Hold uses 2 m reach; movement/retreat suppress
+acquisition. Account-controlled people and explicit `WarParty` banners are combat
+participants. Ordinary uncommanded villagers are not automatically targeted.
+Different accounts are currently different allegiances; diplomacy is not implemented.
 
-## 5. The battle lab
+Damage uses `Health::take_damage`, with a 0.8 world-second swing interval and
+`14 * (0.7 + physique / 100 * 0.6)` damage. A killing blow immediately prevents
+that victim's later swing in the same pass. Leaving reach discards missed contact
+opportunities; changing orders preserves the weapon deadline. Sustained-contact
+warp catch-up is capped at four swings per tick. Deaths use the existing estate,
+company/share, history and despawn pipeline.
 
-`LabScenario::BattleLab` (alias `battle`) on `village_lab`, plus a
-`./run.sh battleworld` mode. Knobs:
+Do not dirty replicated motion, rotation, activity or health on no-op writes.
+Acquisition and separation reuse scratch buffers. The client builds one roster on
+membership/identity/vital changes; walking does not rebuild the battalion bar and
+encyclopedia's membership aggregates. Do not infer a measured FPS gain from these
+algorithmic improvements.
 
-- `FISTWORLD_LAB_BATTLE=NvM` — e.g. `1v1`, `2v1`, `5v5`, `100v100`,
-  `1000v1000`. Spawns two `WarParty` groups ("Red"/"Blue") of seeded
-  skirmishers facing each other on open ground near the hall.
-- `FISTWORLD_LAB_BATTLE_WEAPON=fists|club|spear|sword` (later).
-- `FISTWORLD_BATTLE_TRACE=1` — per-2s per-banner line: alive, engaged,
-  fleeing, mean health, kills; the VillageTrace idiom.
+## Verification and remaining work
 
-Headless pins (the shared schedule runs identically in tests):
+The connected scenario `capture/scenarios/army-250.ron` stages five real server
+battalions, selects their 250 replicated members and exercises ordinary formation
+drag input for a forward march and a 90-degree redeployment. It checks per-person
+arrival/facing, captures start/preview/movement/arrival/UI, and emits measurements
+alongside PNG and capture metadata. See [VISUAL-CAPTURE.md](VISUAL-CAPTURE.md).
 
-- `a_1v1_duel_ends_with_exactly_one_survivor_and_a_combat_death_record`
-- `two_on_one_wins_faster_than_one_on_one` (statistical, seeded)
-- `a_duel_at_100x_warp_lands_the_same_world_seconds_of_damage_as_1x`
-- `a_villager_without_a_war_party_is_never_targeted`
+Regression tests cover ordering, authority, membership batches, pursuit cooldowns,
+post-mortem swings, selection semantics, roster invalidation, mapped entity IDs,
+formation geometry and shared obstacle routing through the real mover.
 
-## 6. Build order
-
-| Milestone | Delivers | Proof |
-| --- | --- | --- |
-| **M1 First blood** | WarParty/MeleeSkirmisher/CombatTarget/cooldown, acquire+swing systems, `DeathCause::Combat` carrier, crowd-grid predicate widened, `Fighting` activity, battle lab + run.sh mode | headless pins + watch a 5v5 in battleworld |
-| **M2 Soldiers** | weapon kinds, physique scaling + toughness, client Fighting animation (reuse an existing swing clip as placeholder), guards defend: hostiles near their settlement turn `CivicRole::Guard` holders into skirmishers | 10 raiders vs a guarded village |
-| **M3 Squads** | squad entities (members, facing, line/column formation slots computed server-side, hold/advance/charge stance), squad orders from the retinue/selection UI, one order moves a whole squad past the 256 cap | 100v100 with two lines that hold shape |
-| | *Partially landed early (2026-08-24): `Battalion` entity + `MemberOfBattalion` durable-id tag (both replicated; no Entity in components — repo rule), `ArmyOrder` (Muster/Assign/Dismiss/Disband) + `FormationMoveOrder` messages, server rank-and-file slot assignment (ranks of 8, strongest front, no path-braiding within a rank) in `server/src/player/army.rs`, Army encyclopedia tab (muster from selection, enlist/dismiss, select/locate/disband), right-click routes an all-one-battalion selection through the formation order. Still missing from M3: facing/stance orders, the past-256-cap squad order, hold/advance/charge.* | |
-| **M4 Morale** | server-only morale: drains on nearby friendly deaths / local outnumbering / health, restored by cohesion and a leader's charm; rout (flee away from enemy centroid) and rally; only state flips replicate | routs visibly cascade from a flank |
-| **M5 Scale** | 1000v1000 in battleworld at warp under ServerPerf + BattleTrace budgets; batch Health sends if measurement demands | tick ≤ 16.7 ms through full contact |
-| **M6 War & sieges** | who-may-fight-whom (war declarations, raiding parties), building `Health` + destruction pass (obstacle-grid removal, `navigation_geometry_version` bump on disappear — only the appear direction exists today, economy settlement modeled on mortality.rs), walls/gates, off-screen strategic resolution | besiege Brackwater |
-
-Each milestone is independently playable in the battle lab and lands with its
-regression pins before the next begins.
-
-## 7. Known traps (from the audits — do not relearn these)
-
-- A combat system that writes `CharacterMotion`/`CharacterActivity` or any
-  replicated component every tick recreates the 417 KiB/s bandwidth bug.
-  `set_if_neq`, `as_mut()` never `as_deref_mut()`, no tuple inserts.
-- Warp: any "attack if cooldown ready" check that fires once per tick
-  silently under-damages at high warp. Loop the budget.
-- `StrategicPerson` entities are invisible to `step_units` and the crowd
-  grid — battle participants must be pinned tactical.
-- The client `formation_targets` ring is arrival spread only; real formations
-  are a *server* concept or authority and intent desync.
-- `LabScenario::from_environment` panics on unknown values — new scenarios
-  must update its error string; `stage_rendered_lab_once` refuses wrong
-  `CITYSIM_MAP_ID`.
-- `ensure_character_vitals` auto-gives Health to every `CharacterKind`
-  entity — soldiers get vitals for free, but anything that should NOT settle
-  an estate on death must not be a character.
+Weapon classes, armour, morale/routing/rallying, guards, military wages, diplomacy,
+sieges, line-of-sight attacks, coordinated obstacle-aware combat pursuit and lossless
+strategic army promotion/demotion remain future milestones. They must retain these
+authority, identity, clock and bounded-work contracts.

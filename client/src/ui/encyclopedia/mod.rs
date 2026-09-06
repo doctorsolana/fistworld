@@ -165,6 +165,7 @@ impl Plugin for EncyclopediaPlugin {
                 army::bind_muster_label,
             )
                 .chain()
+                .after(crate::army_roster::ArmyRosterSet)
                 .after(layout::spawn_encyclopedia)
                 .run_if(encyclopedia_open)
                 .run_if(army::army_tab_active)

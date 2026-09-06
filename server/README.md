@@ -18,7 +18,8 @@ top-level modules and calls `app::run()`; runtime rules belong to their domain.
 
 The removed first-person combat, vehicles and NPC AI are not runtime dependencies.
 The current RTS owns melee in `player/combat.rs`, boats in `player/boat.rs`, armies in
-`player/army.rs`, and physical inventories in `shared::economy`. Extend those live domains.
+`player/army.rs` and `player/army/`, tactical intent and shared route fields in
+`player/orders.rs` and `player/orders/`, and physical inventories in `shared::economy`. Extend those live domains.
 See [the game code map](../docs/GAME-CODE-MAP.md) for the cross-crate ownership map.
 
 ## World and village ownership

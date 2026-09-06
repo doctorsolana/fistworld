@@ -1,7 +1,7 @@
 //! Capture the real scene-and-UI composition without depending on a swapchain.
 //!
 //! A locked desktop can return a black window screenshot while the offscreen
-//! 3D camera keeps rendering correctly. In the capture app only, the existing
+//! 3D camera keeps rendering correctly. In opt-in capture runs, the existing
 //! presentation camera draws into a native-resolution image. A visible harness
 //! window mirrors that image; screenshots always read the owned render target.
 
@@ -21,21 +21,24 @@ pub(super) struct CapturePresentationTarget {
 
 /// Runs after production startup has created the real presentation camera.
 /// Its UI roots, scale, layout and rendering systems stay on that camera.
-pub(super) fn setup_capture_presentation(
+pub(crate) fn setup_capture_presentation(
     mut commands: Commands,
-    config: Res<CaptureConfig>,
+    config: Option<Res<CaptureConfig>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut cameras: Query<(Entity, &mut RenderTarget), With<PresentCamera>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    // A hidden macOS swapchain may block even with vsync disabled. Timed
-    // scene runs must also present into an owned image, so timing reflects
-    // the renderer instead of hidden-window drawable availability.
-    if config.target != CaptureTarget::Window && !config.benchmark {
-        return;
-    }
     let Ok(window) = windows.single() else {
-        error!("capture: the presentation window is unavailable");
+        return;
+    };
+    let (resolution, show_window) = if let Some(config) = config {
+        if config.target != CaptureTarget::Window && !config.benchmark {
+            return;
+        }
+        (config.resolution, config.show_window)
+    } else if std::env::var_os("FISTWORLD_ARMY_SCENARIO").is_some() {
+        ([window.physical_width(), window.physical_height()], true)
+    } else {
         return;
     };
     let Ok((camera, mut target)) = cameras.single_mut() else {
@@ -43,8 +46,8 @@ pub(super) fn setup_capture_presentation(
         return;
     };
     let image = images.add(Image::new_target_texture(
-        config.resolution[0],
-        config.resolution[1],
+        resolution[0],
+        resolution[1],
         TextureFormat::Rgba8UnormSrgb,
         None,
     ));
@@ -59,7 +62,7 @@ pub(super) fn setup_capture_presentation(
         image: image.clone(),
     });
 
-    if config.show_window {
+    if show_window {
         // The mirror has one explicitly targeted UI root. It never becomes
         // the default UI camera or draws back into the captured image.
         let mirror = commands

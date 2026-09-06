@@ -2509,7 +2509,7 @@ pub(crate) fn stage_rendered_lab_once(
     // A battlefield stages BODIES, never a village: with no Settlement
     // anywhere the spawned villagers have nowhere to immigrate and idle
     // forever, so the whole scene holds still until the player acts.
-    if scenario == LabScenario::Skirmish {
+    if scenario == LabScenario::Skirmish && std::env::var_os("FISTWORLD_ARMY_SCENARIO").is_none() {
         let anchor = BATTLE_FIELD_ANCHOR;
         let field = Vec3::new(anchor.x, terrain.get_height(anchor.x, anchor.y), anchor.y);
         spawn_runtime_villagers(

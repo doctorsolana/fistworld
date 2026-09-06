@@ -14,23 +14,20 @@
 //! where each body stands. If the client invented the slots, a refused or
 //! dead soldier would desynchronise intent from authority.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use bevy::prelude::*;
-use lightyear::prelude::server::ClientOf;
-use lightyear::prelude::{MessageReceiver, NetworkTarget, RemoteId, Replicate};
 
-use shared::components::{AboardBoat, CharacterActivity};
+use shared::components::CharacterActivity;
 use shared::components::{
-    Battalion, BattalionId, CharacterAttributes, CharacterKind, CommandedBy, MemberOfBattalion,
-    PlayerPosition, MAX_BATTALION_SIZE,
+    Battalion, BattalionId, CharacterAttributes, MemberOfBattalion, PlayerPosition,
 };
-use shared::protocol::{ArmyOrder, FormationMoveOrder, MAX_UNITS_PER_ORDER};
+#[cfg(test)]
+use shared::components::{CharacterKind, CommandedBy};
 use shared::region::RegionCoord;
 
-use crate::player::hero::{MoveTarget, OfflineHero};
+use crate::player::hero::MoveTarget;
 use crate::world::village::PlayerConstructionAssignment;
-use crate::world::village::{ConstructionMaterialRoutine, UnderConstruction};
 use crate::world::village_roads::{NavigationRouteFailed, NavigationRoutePending, TravelRoute};
 
 /// Conscription discharges a villager from village life entirely.
@@ -100,23 +97,10 @@ pub fn discharge_from_village_life(entity: &mut bevy::ecs::system::EntityCommand
         .insert(shared::components::Occupation(Some("Soldier".to_string())));
 }
 
-/// Soldiers per rank. Eight reads as a proper line at village scale and keeps
-/// even a full 64-soldier battalion to eight ranks deep.
-const FORMATION_FILE_WIDTH: usize = 8;
-/// Shoulder-to-shoulder gap along a rank, metres.
-const FORMATION_FILE_SPACING: f32 = 1.4;
-/// Gap between ranks, metres. A touch deeper than the file gap so the block
-/// reads as ranks from above.
-const FORMATION_RANK_SPACING: f32 = 1.7;
-
 /// How often the battalion entity's replicated centroid is refreshed, real
 /// seconds. The centroid exists for the army roster's LOCATE and the map -
 /// nothing simulates against it - so a slow cadence is honest and cheap.
 const BATTALION_SYNC_SECONDS: f32 = 2.0;
-
-/// Standing battalions one account may keep. Twelve full blocks is 768
-/// soldiers - a real army - while still bounding what muster spam can spawn.
-const MAX_BATTALIONS_PER_ACCOUNT: usize = 12;
 
 /// Mints battalion ids and remembers how many battalions each account has
 /// EVER raised, so ordinal names are never reused: disbanding the 2nd and
@@ -151,339 +135,12 @@ fn ordinal_name(ordinal: u64) -> String {
     format!("{ordinal}{suffix} Battalion")
 }
 
-pub fn handle_army_orders(
-    mut commands: Commands,
-    profiles: Res<crate::persistence::profiles::PlayerProfiles>,
-    mut ledger: ResMut<BattalionLedger>,
-    mut client_links: Query<(&RemoteId, &mut MessageReceiver<ArmyOrder>), With<ClientOf>>,
-    soldiers: Query<
-        (&CommandedBy, &PlayerPosition, Option<&MemberOfBattalion>),
-        (
-            With<CharacterKind>,
-            Without<OfflineHero>,
-            Without<AboardBoat>,
-        ),
-    >,
-    battalions: Query<(Entity, &Battalion, &CommandedBy)>,
-    members: Query<(Entity, &MemberOfBattalion), With<CharacterKind>>,
-) {
-    // Membership writes go through Commands and land after this system, so
-    // every capacity decision inside one run must ALSO count what this run
-    // has already admitted - otherwise several same-tick orders each see the
-    // pre-order world and their admissions sum past every cap.
-    let mut pending_admissions: HashMap<BattalionId, usize> = HashMap::new();
-    let mut pending_musters: HashMap<String, usize> = HashMap::new();
-    for (remote_id, mut receiver) in client_links.iter_mut() {
-        let account = profiles.peer_to_name.get(&remote_id.0).cloned();
-        for order in receiver.receive() {
-            // Drain even for an unnamed peer, or the queue backs up forever.
-            let Some(account) = account.as_deref() else {
-                continue;
-            };
-            match order {
-                ArmyOrder::Muster { members: recruits } => {
-                    // An EMPTY muster is legal and useful: raise the banner
-                    // first, assign soldiers to it afterwards. The per-account
-                    // ceiling below still bounds spam.
-                    let recruits = owned_soldiers(&recruits, account, &soldiers);
-                    // The ceiling every client message needs: without it a
-                    // looping client mints an endless stream of replicated
-                    // battalion entities from one reusable soldier.
-                    let standing = battalions
-                        .iter()
-                        .filter(|(_, _, commanded)| commanded.0 == account)
-                        .count()
-                        + pending_musters.get(account).copied().unwrap_or(0);
-                    if standing >= MAX_BATTALIONS_PER_ACCOUNT {
-                        continue;
-                    }
-                    let (id, ordinal) = ledger.mint(account);
-                    // An empty battalion has no centroid yet; maintenance
-                    // re-centres it the moment it gains a soldier.
-                    let centroid = if recruits.is_empty() {
-                        Vec3::ZERO
-                    } else {
-                        centroid_of(recruits.iter().map(|(_, position, _)| *position))
-                    };
-                    commands.spawn((
-                        Battalion {
-                            id,
-                            name: ordinal_name(ordinal),
-                            ordinal,
-                        },
-                        CommandedBy(account.to_string()),
-                        PlayerPosition(centroid),
-                        RegionCoord::from_world_pos(centroid),
-                        Replicate::to_clients(NetworkTarget::All),
-                    ));
-                    *pending_musters.entry(account.to_string()).or_insert(0) += 1;
-                    pending_admissions.insert(id, recruits.len());
-                    // The first recruit raises the standard: stable (the flag
-                    // never hops between soldiers on a re-muster) and always
-                    // present from the very first replicated frame.
-                    for (index, (soldier, _, _)) in recruits.into_iter().enumerate() {
-                        let mut soldier_commands = commands.entity(soldier);
-                        soldier_commands.insert(MemberOfBattalion(id));
-                        if index == 0 {
-                            soldier_commands.insert(shared::components::StandardBearer);
-                        } else {
-                            soldier_commands.remove::<shared::components::StandardBearer>();
-                        }
-                    }
-                }
-                ArmyOrder::Assign {
-                    battalion,
-                    members: recruits,
-                } => {
-                    let Some(id) = owned_battalion(battalion, account, &battalions) else {
-                        continue;
-                    };
-                    let serving = members.iter().filter(|(_, member)| member.0 == id).count()
-                        + pending_admissions.get(&id).copied().unwrap_or(0);
-                    let room = MAX_BATTALION_SIZE.saturating_sub(serving);
-                    let admitted: Vec<Entity> = owned_soldiers(&recruits, account, &soldiers)
-                        .into_iter()
-                        // Already serving here: re-inserting an identical
-                        // replicated tag would dirty it (a no-op on the wire
-                        // costs real bandwidth) and steal room from genuine
-                        // recruits in the same order.
-                        .filter(|(_, _, member)| *member != Some(id))
-                        .take(room)
-                        .map(|(soldier, _, _)| soldier)
-                        .collect();
-                    *pending_admissions.entry(id).or_insert(0) += admitted.len();
-                    for soldier in admitted {
-                        // A transfer joins as a regular soldier; if they were
-                        // their old battalion's bearer, that battalion raises
-                        // a successor on the next maintenance pass.
-                        commands
-                            .entity(soldier)
-                            .insert(MemberOfBattalion(id))
-                            .remove::<shared::components::StandardBearer>();
-                    }
-                }
-                ArmyOrder::Dismiss { members: released } => {
-                    for (soldier, _, member) in owned_soldiers(&released, account, &soldiers) {
-                        if member.is_some() {
-                            commands
-                                .entity(soldier)
-                                .remove::<MemberOfBattalion>()
-                                .remove::<shared::components::StandardBearer>();
-                        }
-                    }
-                }
-                ArmyOrder::Disband { battalion } => {
-                    let Some(id) = owned_battalion(battalion, account, &battalions) else {
-                        continue;
-                    };
-                    for (soldier, member) in members.iter() {
-                        if member.0 == id {
-                            commands
-                                .entity(soldier)
-                                .remove::<MemberOfBattalion>()
-                                .remove::<shared::components::StandardBearer>();
-                        }
-                    }
-                    commands.entity(battalion).despawn();
-                }
-            }
-        }
-    }
-}
-
-/// The referenced soldiers that actually belong to this account, deduplicated,
-/// order preserved, capped. Everything else in the request silently drops -
-/// the standard treatment for a stale or hostile order.
-fn owned_soldiers(
-    requested: &[Entity],
-    account: &str,
-    soldiers: &Query<
-        (&CommandedBy, &PlayerPosition, Option<&MemberOfBattalion>),
-        (
-            With<CharacterKind>,
-            Without<OfflineHero>,
-            Without<AboardBoat>,
-        ),
-    >,
-) -> Vec<(Entity, Vec3, Option<BattalionId>)> {
-    let mut seen = HashSet::new();
-    requested
-        .iter()
-        .take(MAX_BATTALION_SIZE)
-        .filter(|entity| **entity != Entity::PLACEHOLDER && seen.insert(**entity))
-        .filter_map(|entity| {
-            let (commanded, position, member) = soldiers.get(*entity).ok()?;
-            (commanded.0 == account).then_some((*entity, position.0, member.map(|m| m.0)))
-        })
-        .collect()
-}
-
-fn owned_battalion(
-    battalion: Entity,
-    account: &str,
-    battalions: &Query<(Entity, &Battalion, &CommandedBy)>,
-) -> Option<BattalionId> {
-    if battalion == Entity::PLACEHOLDER {
-        return None;
-    }
-    let (_, identity, commanded) = battalions.get(battalion).ok()?;
-    (commanded.0 == account).then_some(identity.id)
-}
-
-fn centroid_of(positions: impl ExactSizeIterator<Item = Vec3>) -> Vec3 {
-    let count = positions.len().max(1);
-    let sum: Vec3 = positions.sum();
-    sum / count as f32
-}
-
-/// Where each soldier of a `count`-strong block stands, front rank first,
-/// each rank centered on the approach line through `target` facing `dir`.
-fn formation_slots(count: usize, target: Vec3, dir: Vec2) -> Vec<Vec3> {
-    // Perpendicular in the XZ plane; which "handedness" is irrelevant since
-    // ranks are symmetric about the approach line.
-    let right = Vec2::new(dir.y, -dir.x);
-    let mut slots = Vec::with_capacity(count);
-    let mut placed = 0;
-    let mut rank = 0usize;
-    while placed < count {
-        let in_rank = (count - placed).min(FORMATION_FILE_WIDTH);
-        let depth = rank as f32 * FORMATION_RANK_SPACING;
-        for file in 0..in_rank {
-            let lateral = (file as f32 - (in_rank as f32 - 1.0) * 0.5) * FORMATION_FILE_SPACING;
-            let offset = right * lateral - dir * depth;
-            slots.push(Vec3::new(
-                target.x + offset.x,
-                target.y,
-                target.z + offset.y,
-            ));
-        }
-        placed += in_rank;
-        rank += 1;
-    }
-    slots
-}
-
-/// Pair soldiers with slots: strongest soldiers fill the front rank (reach is
-/// short, so the front rank IS the battalion's fighting strength), and within
-/// each rank soldiers keep their current left-to-right order so a formation
-/// move never braids paths across the block.
-fn assign_slots(
-    mut soldiers: Vec<(Entity, Vec3, u8)>,
-    target: Vec3,
-    dir: Vec2,
-) -> Vec<(Entity, Vec3)> {
-    let right = Vec2::new(dir.y, -dir.x);
-    // Strongest first; entity id breaks ties so the order is stable across
-    // re-issues of the same order.
-    soldiers.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
-    let slots = formation_slots(soldiers.len(), target, dir);
-
-    let mut assigned = Vec::with_capacity(soldiers.len());
-    let mut cursor = 0;
-    while cursor < soldiers.len() {
-        let in_rank = (soldiers.len() - cursor).min(FORMATION_FILE_WIDTH);
-        let mut rank: Vec<(Entity, Vec3, u8)> = soldiers[cursor..cursor + in_rank].to_vec();
-        // Left-to-right by where each soldier stands NOW.
-        rank.sort_by(|a, b| {
-            let a_side = Vec2::new(a.1.x, a.1.z).dot(right);
-            let b_side = Vec2::new(b.1.x, b.1.z).dot(right);
-            a_side.total_cmp(&b_side)
-        });
-        // Slots within a rank are generated left-to-right already.
-        for (index, (soldier, _, _)) in rank.into_iter().enumerate() {
-            assigned.push((soldier, slots[cursor + index]));
-        }
-        cursor += in_rank;
-    }
-    assigned
-}
-
-#[allow(clippy::type_complexity)]
-pub fn handle_formation_move_orders(
-    mut commands: Commands,
-    profiles: Res<crate::persistence::profiles::PlayerProfiles>,
-    mut client_links: Query<(&RemoteId, &mut MessageReceiver<FormationMoveOrder>), With<ClientOf>>,
-    units: Query<
-        (
-            &CommandedBy,
-            &PlayerPosition,
-            &CharacterAttributes,
-            Option<&PlayerConstructionAssignment>,
-        ),
-        (
-            With<CharacterKind>,
-            Without<OfflineHero>,
-            Without<AboardBoat>,
-        ),
-    >,
-    mut sites: Query<&mut UnderConstruction>,
-) {
-    for (remote_id, mut receiver) in client_links.iter_mut() {
-        let account = profiles.peer_to_name.get(&remote_id.0).cloned();
-        for order in receiver.receive() {
-            let Some(account) = account.as_deref() else {
-                continue;
-            };
-            if !order.target.is_finite() {
-                continue;
-            }
-            let mut seen = HashSet::new();
-            let mut soldiers: Vec<(Entity, Vec3, u8)> = Vec::new();
-            for unit in order.units.iter().take(MAX_UNITS_PER_ORDER) {
-                if *unit == Entity::PLACEHOLDER || !seen.insert(*unit) {
-                    continue;
-                }
-                let Ok((commanded, position, attributes, construction)) = units.get(*unit) else {
-                    continue;
-                };
-                if commanded.0 != account {
-                    continue;
-                }
-                // Same release as an ordinary move: a formation order pulls a
-                // soldier off the worksite and stands them down from a fight.
-                if let Some(construction) = construction {
-                    if let Ok(mut site) = sites.get_mut(construction.site) {
-                        if site.builder == Some(*unit) {
-                            site.builder = None;
-                        }
-                    }
-                    commands
-                        .entity(*unit)
-                        .remove::<PlayerConstructionAssignment>()
-                        .remove::<ConstructionMaterialRoutine>()
-                        .remove::<TravelRoute>()
-                        .remove::<NavigationRoutePending>()
-                        .remove::<NavigationRouteFailed>()
-                        .insert(CharacterActivity::Idle);
-                }
-                soldiers.push((*unit, position.0, attributes.physique()));
-            }
-            if soldiers.is_empty() {
-                continue;
-            }
-            let centroid = centroid_of(soldiers.iter().map(|(_, position, _)| *position));
-            let approach = Vec2::new(order.target.x - centroid.x, order.target.z - centroid.z);
-            // Ordered to the spot they already stand on: hold facing rather
-            // than collapsing to a degenerate direction.
-            let dir = if approach.length_squared() > 1e-4 {
-                approach.normalize()
-            } else {
-                Vec2::new(0.0, 1.0)
-            };
-            for (soldier, slot) in assign_slots(soldiers, order.target, dir) {
-                commands
-                    .entity(soldier)
-                    .insert(MoveTarget(slot))
-                    .remove::<crate::player::combat::AttackOrder>()
-                    .remove::<crate::player::combat::MeleeCooldown>();
-            }
-        }
-    }
-}
+mod membership;
+pub use membership::{apply_army_order, handle_army_orders};
 
 /// Housekeeping at a slow, fixed cadence: refresh each battalion's replicated
-/// centroid (for LOCATE and the map), and dissolve battalions whose last
-/// soldier died or was dismissed. Positions snap to a half-metre grid so a
+/// centroid (for LOCATE and the map), and appoint missing standard bearers.
+/// Empty battalions persist until disbanded. Positions snap to a half-metre grid so a
 /// standing battalion generates zero replication traffic.
 pub fn maintain_battalions(
     mut commands: Commands,
@@ -584,86 +241,6 @@ mod tests {
         for (ordinal, name) in expect {
             assert_eq!(ordinal_name(ordinal), name);
         }
-    }
-
-    #[test]
-    fn a_full_battalion_forms_ranks_of_eight_with_the_front_rank_on_the_target() {
-        let target = Vec3::new(100.0, 3.0, 50.0);
-        let dir = Vec2::new(0.0, 1.0); // marching toward +Z
-        let slots = formation_slots(10, target, dir);
-        assert_eq!(slots.len(), 10);
-        // Front rank: eight soldiers AT the target depth, centered.
-        for slot in &slots[0..8] {
-            assert!(
-                (slot.z - target.z).abs() < 1e-4,
-                "front rank sits on the line"
-            );
-        }
-        let front_x: Vec<f32> = slots[0..8].iter().map(|slot| slot.x).collect();
-        let width = front_x.iter().fold(f32::MIN, |a, b| a.max(*b))
-            - front_x.iter().fold(f32::MAX, |a, b| a.min(*b));
-        assert!((width - 7.0 * FORMATION_FILE_SPACING).abs() < 1e-3);
-        let mean: f32 = front_x.iter().sum::<f32>() / 8.0;
-        assert!((mean - target.x).abs() < 1e-3, "the rank is centered");
-        // Second rank: two soldiers one rank-space BEHIND the approach.
-        for slot in &slots[8..10] {
-            assert!((slot.z - (target.z - FORMATION_RANK_SPACING)).abs() < 1e-4);
-        }
-        // Every slot keeps the click's height so step_units owns the snap.
-        assert!(slots.iter().all(|slot| (slot.y - 3.0).abs() < 1e-6));
-    }
-
-    #[test]
-    fn the_strongest_soldiers_take_the_front_rank() {
-        let target = Vec3::new(0.0, 0.0, 100.0);
-        let dir = Vec2::new(0.0, 1.0);
-        // Twelve soldiers, physique equal to their index: 0..=11.
-        let soldiers: Vec<(Entity, Vec3, u8)> = (0..12u32)
-            .map(|index| {
-                (
-                    Entity::from_raw_u32(index + 1).unwrap(),
-                    Vec3::new(index as f32, 0.0, 0.0),
-                    index as u8,
-                )
-            })
-            .collect();
-        let assigned = assign_slots(soldiers, target, dir);
-        // The four weakest (physique 0..=3) must be the ones in the rear rank.
-        let rear: HashSet<Entity> = assigned
-            .iter()
-            .filter(|(_, slot)| slot.z < target.z - 1.0)
-            .map(|(soldier, _)| *soldier)
-            .collect();
-        let weakest: HashSet<Entity> = (0..4u32)
-            .map(|index| Entity::from_raw_u32(index + 1).unwrap())
-            .collect();
-        assert_eq!(rear, weakest, "the rear rank shields the weakest");
-    }
-
-    #[test]
-    fn soldiers_keep_their_left_to_right_order_within_a_rank() {
-        let target = Vec3::new(0.0, 0.0, 100.0);
-        let dir = Vec2::new(0.0, 1.0); // right = +X... (dir.y, -dir.x) = (1, 0)
-                                       // Equal physique, standing in a line across X.
-        let soldiers: Vec<(Entity, Vec3, u8)> = (0..4u32)
-            .map(|index| {
-                (
-                    Entity::from_raw_u32(index + 1).unwrap(),
-                    Vec3::new(index as f32 * 2.0, 0.0, 0.0),
-                    10,
-                )
-            })
-            .collect();
-        let assigned = assign_slots(soldiers, target, dir);
-        // Soldier order by slot X must match their order by current X:
-        // no path crosses another inside the rank.
-        let mut by_slot = assigned.clone();
-        by_slot.sort_by(|a, b| a.1.x.total_cmp(&b.1.x));
-        let expected: Vec<Entity> = (0..4u32)
-            .map(|index| Entity::from_raw_u32(index + 1).unwrap())
-            .collect();
-        let actual: Vec<Entity> = by_slot.iter().map(|(soldier, _)| *soldier).collect();
-        assert_eq!(actual, expected);
     }
 
     /// The conscription contract, end to end: discharge strips the villager

@@ -12,22 +12,16 @@
 //! FPS-era combat.
 
 use bevy::prelude::*;
-use lightyear::prelude::server::ClientOf;
-use lightyear::prelude::{MessageReceiver, RemoteId};
 
 use shared::components::{
     CharacterActivity, CharacterAttributes, CharacterKind, CharacterMotion, CommandedBy,
     DeathCause, Health, PlayerPosition, PlayerRotation, WorldTime,
 };
-use shared::protocol::{UnitAttackOrder, MAX_UNITS_PER_ORDER};
 
 use shared::components::AboardBoat;
 
 use crate::player::hero::{MoveTarget, OfflineHero};
 use crate::world::village::mortality::PendingDeathCause;
-use crate::world::village::PlayerConstructionAssignment;
-use crate::world::village::{ConstructionMaterialRoutine, UnderConstruction};
-use crate::world::village_roads::{NavigationRouteFailed, NavigationRoutePending, TravelRoute};
 
 /// Arm's length plus a sidearm. Real weapon kinds arrive in milestone 2.
 const MELEE_REACH: f32 = 2.0;
@@ -35,7 +29,7 @@ const SWING_SECONDS: f64 = 0.8;
 const BASE_SWING_DAMAGE: f32 = 14.0;
 /// A high-warp tick can span many swing budgets; cap the catch-up so a 1000x
 /// tick cannot resolve an entire duel invisibly between two frames.
-const MAX_SWINGS_PER_TICK: f64 = 4.0;
+const MAX_SWINGS_PER_TICK: usize = 4;
 /// Re-aim the chase only when the target has drifted this far from the
 /// current goal, so a fleeing target does not churn `MoveTarget` every step.
 const CHASE_REAIM_DISTANCE_SQUARED: f32 = 0.75 * 0.75;
@@ -76,6 +70,13 @@ const SEPARATION_SLACK: f32 = 0.02;
 #[derive(Component, Debug, Clone, Copy)]
 pub struct MeleeCooldown {
     ready_at: f64,
+    engaged: bool,
+}
+
+impl MeleeCooldown {
+    pub(crate) fn disengage(&mut self) {
+        self.engaged = false;
+    }
 }
 
 /// A physique-8 recruit swings at ~0.75x, a physique-100 veteran at ~1.3x.
@@ -92,83 +93,6 @@ fn facing_toward(from: Vec3, to: Vec3) -> f32 {
     f32::atan2(-direction.x, -direction.y)
 }
 
-/// Accept attack orders with exactly the movement-order authority rules.
-///
-/// No dev gate: striking with your own hero and retinue is a normal gameplay
-/// verb; what it is *wise* to do in a town full of witnesses is a later
-/// problem for law and reputation systems.
-#[allow(clippy::type_complexity)]
-pub fn handle_unit_attack_orders(
-    mut commands: Commands,
-    profiles: Res<crate::persistence::profiles::PlayerProfiles>,
-    mut client_links: Query<(&RemoteId, &mut MessageReceiver<UnitAttackOrder>), With<ClientOf>>,
-    attackers: Query<
-        (&CommandedBy, Option<&PlayerConstructionAssignment>),
-        (
-            With<CharacterKind>,
-            Without<OfflineHero>,
-            Without<AboardBoat>,
-        ),
-    >,
-    targets: Query<(&Health, Option<&CommandedBy>), With<CharacterKind>>,
-    mut sites: Query<&mut UnderConstruction>,
-) {
-    for (remote_id, mut receiver) in client_links.iter_mut() {
-        let account = profiles.peer_to_name.get(&remote_id.0).cloned();
-        for order in receiver.receive() {
-            // Drain even for an unnamed peer, or the queue backs up forever.
-            let Some(account) = account.as_deref() else {
-                continue;
-            };
-            if order.target == Entity::PLACEHOLDER {
-                continue;
-            }
-            let Ok((target_health, target_owner)) = targets.get(order.target) else {
-                continue;
-            };
-            if target_health.is_dead() {
-                continue;
-            }
-            // No friendly fire: your own people can never be attack targets,
-            // so a mis-click in a crowd cannot knife your own retinue.
-            if target_owner.is_some_and(|owner| owner.0 == account) {
-                continue;
-            }
-            for unit in order.units.iter().take(MAX_UNITS_PER_ORDER) {
-                if *unit == Entity::PLACEHOLDER || *unit == order.target {
-                    continue;
-                }
-                let Ok((commanded, construction)) = attackers.get(*unit) else {
-                    continue;
-                };
-                if commanded.0 != account {
-                    continue;
-                }
-                if let Some(construction) = construction {
-                    if let Ok(mut site) = sites.get_mut(construction.site) {
-                        if site.builder == Some(*unit) {
-                            site.builder = None;
-                        }
-                    }
-                    commands
-                        .entity(*unit)
-                        .remove::<PlayerConstructionAssignment>()
-                        .remove::<ConstructionMaterialRoutine>();
-                }
-                commands
-                    .entity(*unit)
-                    .insert(AttackOrder {
-                        target: order.target,
-                    })
-                    .remove::<MoveTarget>()
-                    .remove::<TravelRoute>()
-                    .remove::<NavigationRoutePending>()
-                    .remove::<NavigationRouteFailed>();
-            }
-        }
-    }
-}
-
 /// Close with the ordered target and trade blows once in reach.
 ///
 /// Runs in the Navigation chain: chase goals written here are stepped by
@@ -179,6 +103,8 @@ pub fn handle_unit_attack_orders(
 pub fn pursue_attack_orders(
     mut commands: Commands,
     world_time: Query<&WorldTime>,
+    identities: Query<&shared::components::PersonId>,
+    stances: Query<&crate::player::orders::CommandStance>,
     mut attackers: Query<
         (
             Entity,
@@ -191,9 +117,16 @@ pub fn pursue_attack_orders(
             &mut CharacterAttributes,
             &mut CharacterMotion,
         ),
-        Without<OfflineHero>,
+        (Without<OfflineHero>, Without<AboardBoat>),
     >,
-    mut targets: Query<(&PlayerPosition, &mut Health), With<CharacterKind>>,
+    mut targets: Query<
+        (&PlayerPosition, &mut Health),
+        (
+            With<CharacterKind>,
+            Without<AboardBoat>,
+            Without<OfflineHero>,
+        ),
+    >,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
@@ -204,7 +137,7 @@ pub fn pursue_attack_orders(
         order,
         position,
         move_target,
-        cooldown,
+        mut cooldown,
         mut rotation,
         mut activity,
         mut attributes,
@@ -215,11 +148,27 @@ pub fn pursue_attack_orders(
             commands
                 .entity(attacker)
                 .remove::<AttackOrder>()
-                .remove::<MeleeCooldown>()
+                .remove::<shared::components::EngagedWith>()
                 .remove::<MoveTarget>();
         };
+        // Earlier attackers in this same pass may already have killed us.
+        if targets
+            .get(attacker)
+            .is_ok_and(|(_, health)| health.is_dead())
+        {
+            stand_down(&mut commands);
+            if let Some(clock) = cooldown.as_mut() {
+                clock.disengage();
+            }
+            activity.set_if_neq(CharacterActivity::Idle);
+            motion.set_if_neq(CharacterMotion::STATIONARY);
+            continue;
+        }
         let Ok((target_position, mut target_health)) = targets.get_mut(order.target) else {
             stand_down(&mut commands);
+            if let Some(clock) = cooldown.as_mut() {
+                clock.disengage();
+            }
             activity.set_if_neq(CharacterActivity::Idle);
             // Same mid-stride problem as entering reach: a target that dies
             // or despawns during the chase leaves the walk velocity as the
@@ -231,6 +180,9 @@ pub fn pursue_attack_orders(
         };
         if target_health.is_dead() {
             stand_down(&mut commands);
+            if let Some(clock) = cooldown.as_mut() {
+                clock.disengage();
+            }
             activity.set_if_neq(CharacterActivity::Idle);
             if motion.is_moving() {
                 *motion = CharacterMotion::STATIONARY;
@@ -240,6 +192,18 @@ pub fn pursue_attack_orders(
         let distance = Vec2::new(position.0.x, position.0.z)
             .distance(Vec2::new(target_position.0.x, target_position.0.z));
         if distance > MELEE_REACH {
+            if let Some(clock) = cooldown.as_mut() {
+                clock.disengage();
+            }
+            if stances
+                .get(attacker)
+                .is_ok_and(|s| *s == crate::player::orders::CommandStance::Hold)
+            {
+                stand_down(&mut commands);
+                activity.set_if_neq(CharacterActivity::Idle);
+                motion.set_if_neq(CharacterMotion::STATIONARY);
+                continue;
+            }
             let goal = target_position.0;
             if move_target
                 .is_none_or(|target| target.0.distance_squared(goal) > CHASE_REAIM_DISTANCE_SQUARED)
@@ -262,18 +226,31 @@ pub fn pursue_attack_orders(
         }
         rotation.set_if_neq(PlayerRotation(facing_toward(position.0, target_position.0)));
         activity.set_if_neq(CharacterActivity::Fighting);
-        let Some(mut cooldown) = cooldown else {
-            // First contact: arm the clock, swing from the next tick on.
+        if let Ok(person) = identities.get(order.target) {
             commands
                 .entity(attacker)
-                .insert(MeleeCooldown { ready_at: now });
+                .insert_if_new(shared::components::EngagedWith(*person));
+        }
+        let Some(mut cooldown) = cooldown else {
+            // First contact: arm the clock, swing from the next tick on.
+            commands.entity(attacker).insert(MeleeCooldown {
+                ready_at: now,
+                engaged: true,
+            });
             continue;
         };
-        if cooldown.ready_at < now - SWING_SECONDS * MAX_SWINGS_PER_TICK {
-            cooldown.ready_at = now - SWING_SECONDS * MAX_SWINGS_PER_TICK;
+        if !cooldown.engaged {
+            // A weapon can become ready while chasing, but missed contacts
+            // are not attacks that can be stored and spent on arrival.
+            cooldown.ready_at = cooldown.ready_at.max(now);
+            cooldown.engaged = true;
         }
-        while cooldown.ready_at <= now {
+        let oldest = now - SWING_SECONDS * (MAX_SWINGS_PER_TICK - 1) as f64;
+        cooldown.ready_at = cooldown.ready_at.max(oldest);
+        let mut swings = 0;
+        while cooldown.ready_at <= now && swings < MAX_SWINGS_PER_TICK {
             cooldown.ready_at += SWING_SECONDS;
+            swings += 1;
             if target_health.take_damage(swing_damage(&attributes)) {
                 // The honest cause for the obituary, and a lesson for the arm
                 // that swung: kills train physique the way work trains it.
@@ -286,6 +263,7 @@ pub fn pursue_attack_orders(
                 if attributes.physique() < CharacterAttributes::MAX {
                     attributes.train_physique(1);
                 }
+                cooldown.disengage();
                 stand_down(&mut commands);
                 activity.set_if_neq(CharacterActivity::Idle);
                 break;
@@ -294,232 +272,11 @@ pub fn pursue_attack_orders(
     }
 }
 
-/// Which side a character fights for, if any. `None` never fights and is
-/// never fought - the design pin that keeps bystanders out of every battle.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Allegiance<'a> {
-    Banner(u8),
-    Account(&'a str),
-}
+mod targeting;
+pub use targeting::acquire_targets;
 
-fn allegiance_of<'a>(
-    war_party: Option<&WarParty>,
-    commanded: Option<&'a CommandedBy>,
-) -> Option<Allegiance<'a>> {
-    match (commanded, war_party) {
-        (Some(commanded), _) => Some(Allegiance::Account(commanded.0.as_str())),
-        (None, Some(party)) => Some(Allegiance::Banner(party.banner)),
-        (None, None) => None,
-    }
-}
-
-/// Idle combatants engage the nearest hostile in reach on their own: this is
-/// what turns "attack that one raider" into a battle line, because every
-/// soldier who closes in picks their OWN opponent and every raider fights
-/// back. A standing player order is never overridden - acquisition only
-/// fills empty hands.
-#[allow(clippy::type_complexity)]
-pub fn acquire_targets(
-    mut commands: Commands,
-    combatants: Query<
-        (
-            Entity,
-            &PlayerPosition,
-            Option<&WarParty>,
-            Option<&CommandedBy>,
-            Has<AttackOrder>,
-            Option<&Health>,
-        ),
-        (
-            With<CharacterKind>,
-            Without<OfflineHero>,
-            Without<AboardBoat>,
-        ),
-    >,
-) {
-    // O(sides^2) over combat-capable characters only; a peaceful world exits
-    // after one pass because it never sees two allegiances.
-    let mut sides: Vec<(Entity, Vec2, Allegiance, bool)> = Vec::new();
-    let mut factions: Vec<Allegiance> = Vec::new();
-    for (entity, position, war_party, commanded, has_order, health) in combatants.iter() {
-        if health.is_some_and(|health| health.is_dead()) {
-            continue;
-        }
-        let Some(side) = allegiance_of(war_party, commanded) else {
-            continue;
-        };
-        if !factions.contains(&side) {
-            factions.push(side);
-        }
-        sides.push((
-            entity,
-            Vec2::new(position.0.x, position.0.z),
-            side,
-            has_order,
-        ));
-    }
-    if factions.len() < 2 {
-        return;
-    }
-    for (entity, point, side, has_order) in sides.iter() {
-        if *has_order {
-            continue;
-        }
-        let mut nearest: Option<(Entity, f32)> = None;
-        for (other, other_point, other_side, _) in sides.iter() {
-            if side == other_side {
-                continue;
-            }
-            let distance = point.distance(*other_point);
-            if distance > ACQUISITION_RANGE {
-                continue;
-            }
-            if nearest.is_none_or(|(_, best)| distance < best) {
-                nearest = Some((*other, distance));
-            }
-        }
-        if let Some((target, _)) = nearest {
-            commands.entity(*entity).insert(AttackOrder { target });
-        }
-    }
-}
-
-/// Melee bodies never overlap: any two combatants closer than two body radii
-/// are pushed apart, half each, capped per tick. This is what makes a fight
-/// a FRONT LINE - the second rank physically cannot occupy the first rank's
-/// ground, so it holds behind or slides around the flanks - and it is scoped
-/// to combatants so the tuned civilian flows (queues, doorways, markets) are
-/// never disturbed.
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
-pub fn separate_melee_bodies(
-    terrain: Option<Res<shared::terrain::WorldTerrain>>,
-    obstacles: Option<Res<shared::spatial::SpatialObstacleGrid>>,
-    colliders: Option<Res<crate::collision::library::StaticColliders>>,
-    derived: Option<Res<crate::collision::library::DerivedColliderLibrary>>,
-    mut bodies: Query<
-        (
-            Entity,
-            &CharacterKind,
-            &mut PlayerPosition,
-            &mut shared::region::RegionCoord,
-            Option<&WarParty>,
-            Option<&CommandedBy>,
-        ),
-        (
-            With<CharacterKind>,
-            Without<OfflineHero>,
-            Without<AboardBoat>,
-            Without<crate::world::village::strategic::StrategicPerson>,
-        ),
-    >,
-) {
-    // Combatants only, hashed into coarse cells so the pair pass is local.
-    const CELL: f32 = 2.0;
-    let mut participants: Vec<(Entity, Vec2)> = Vec::new();
-    for (entity, _, position, _, war_party, commanded) in bodies.iter() {
-        if allegiance_of(war_party, commanded).is_none() {
-            continue;
-        }
-        participants.push((entity, Vec2::new(position.0.x, position.0.z)));
-    }
-    if participants.len() < 2 {
-        return;
-    }
-    let mut cells: std::collections::HashMap<(i32, i32), Vec<usize>> =
-        std::collections::HashMap::new();
-    for (index, (_, point)) in participants.iter().enumerate() {
-        cells
-            .entry((
-                (point.x / CELL).floor() as i32,
-                (point.y / CELL).floor() as i32,
-            ))
-            .or_default()
-            .push(index);
-    }
-
-    let min_distance = BODY_RADIUS * 2.0;
-    let mut pushes: std::collections::HashMap<Entity, Vec2> = std::collections::HashMap::new();
-    for (index, (entity, point)) in participants.iter().enumerate() {
-        let cell = (
-            (point.x / CELL).floor() as i32,
-            (point.y / CELL).floor() as i32,
-        );
-        for dx in -1..=1 {
-            for dz in -1..=1 {
-                let Some(neighbors) = cells.get(&(cell.0 + dx, cell.1 + dz)) else {
-                    continue;
-                };
-                for other_index in neighbors {
-                    // Each pair once.
-                    if *other_index <= index {
-                        continue;
-                    }
-                    let (other, other_point) = participants[*other_index];
-                    let offset = *point - other_point;
-                    let distance = offset.length();
-                    if distance >= min_distance - SEPARATION_SLACK {
-                        continue;
-                    }
-                    // Exactly coincident bodies fan out along a direction
-                    // derived from the pair, deterministic across both ends.
-                    let axis = if distance > 1.0e-4 {
-                        offset / distance
-                    } else {
-                        let a = entity.to_bits().min(other.to_bits());
-                        let b = entity.to_bits().max(other.to_bits());
-                        let mixed = (a ^ (b.rotate_left(17))).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-                        let angle = (mixed as u32) as f32 / u32::MAX as f32 * std::f32::consts::TAU;
-                        Vec2::new(angle.cos(), angle.sin())
-                    };
-                    let correction = ((min_distance - distance) * 0.5).min(MAX_PUSH_PER_TICK);
-                    *pushes.entry(*entity).or_default() += axis * correction;
-                    *pushes.entry(other).or_default() -= axis * correction;
-                }
-            }
-        }
-    }
-    if pushes.is_empty() {
-        return;
-    }
-
-    for (entity, kind, mut position, mut region, _, _) in bodies.iter_mut() {
-        let Some(push) = pushes.get(&entity) else {
-            continue;
-        };
-        let push = push.clamp_length_max(MAX_PUSH_PER_TICK);
-        if push.length_squared() < 1.0e-8 {
-            continue;
-        }
-        let current = Vec2::new(position.0.x, position.0.z);
-        let next = current + push;
-        // A shove must not put a villager inside a wall - that would hand
-        // them to the route-failure machinery mid-fight. Heroes are as
-        // collision-exempt here as they are in step_units.
-        if *kind == CharacterKind::Villager
-            && !crate::player::hero::navigation_segment_clear(
-                current,
-                next,
-                obstacles.as_deref(),
-                colliders.as_deref(),
-                derived.as_deref(),
-            )
-        {
-            continue;
-        }
-        let y = terrain
-            .as_deref()
-            .map(|terrain| terrain.get_height(next.x, next.y))
-            .unwrap_or(position.0.y);
-        let next_position = Vec3::new(next.x, y, next.y);
-        if position.0 != next_position {
-            position.0 = next_position;
-        }
-        let next_region = shared::region::RegionCoord::from_world_pos(next_position);
-        if *region != next_region {
-            *region = next_region;
-        }
-    }
-}
+mod separation;
+pub use separation::separate_melee_bodies;
 
 #[cfg(test)]
 mod tests {
@@ -858,3 +615,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod regression_tests;

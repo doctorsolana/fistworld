@@ -55,7 +55,8 @@ arithmetic remain distinct.
 | Bootstrap and fixed-update wiring | `server/src/app/` |
 | Connection/account ingress | `server/src/net/`, `server/src/persistence/` |
 | Hero, boat, movement and player trade commands | `server/src/player/` |
-| Tactical battalions and melee | `server/src/player/army.rs`, `combat.rs` |
+| Tactical intent, battalions and melee | `server/src/player/orders.rs` + `orders/`, `army.rs` + `army/`, `combat.rs` + `combat/` |
+| Formation geometry and client army facts | `shared/src/formation.rs`, `client/src/army_roster.rs` |
 | Shared live/lab village system order | `server/src/world/village/schedule.rs` |
 | Village resources and outward API | `server/src/world/village.rs` |
 | Permit review and geography | `server/src/world/village/planning.rs` and `planning/` |

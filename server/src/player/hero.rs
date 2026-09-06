@@ -3,31 +3,26 @@
 //! The hero is the first server-simulated mover since the RTS pivot: spawned
 //! by a god command, stepped here toward client-sent move targets, streamed
 //! to clients through the normal replication + region-interest path. Clients
-//! only ever send intent ([`HeroMoveTo`]); position/rotation truth lives here.
+//! only ever send intent ([`shared::protocol::UnitOrder`]); position/rotation truth lives here.
 
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
-use lightyear::prelude::server::ClientOf;
-use lightyear::prelude::{MessageReceiver, NetworkTarget, PeerId, RemoteId, Replicate};
+use lightyear::prelude::{NetworkTarget, PeerId, Replicate};
 
 use shared::components::{
     AboardBoat, BuildingDoorUse, CharacterActivity, CharacterAffiliation, CharacterAttributes,
     CharacterKind, CharacterMotion, CharacterName, CommandedBy, Health, Hero, HeroOutfit,
     Nutrition, Player, PlayerPermitLedger, PlayerPosition, PlayerProgression, PlayerRotation,
-    Vessel,
 };
 use shared::player::{HERO_ARRIVE_EPSILON, HERO_MOVE_SPEED};
 use shared::player_profile::HeroSave;
-use shared::protocol::{UnitMoveOrder, MAX_UNITS_PER_ORDER};
 use shared::region::RegionCoord;
 use shared::spatial::SpatialObstacleGrid;
 use shared::terrain::WorldTerrain;
 
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
 use crate::world::navgrid::VILLAGER_PROP_RADIUS;
-use crate::world::village::{
-    ConstructionMaterialRoutine, MootQueueTicket, PlayerConstructionAssignment, UnderConstruction,
-};
+use crate::world::village::MootQueueTicket;
 use crate::world::village_roads::{
     NavigationObstacleEscape, NavigationRouteFailed, NavigationRoutePending, TravelRoute,
     VillageRoadGraph, ROAD_SPEED_MULTIPLIER,
@@ -430,102 +425,6 @@ pub fn hero_save(
     health: &Health,
 ) -> HeroSave {
     HeroSave::from_parts(position.0, rotation.0, outfit, health)
-}
-
-/// Turn [`UnitMoveOrder`] intents into [`MoveTarget`] components.
-///
-/// THE AUTHORITY CHECK LIVES HERE, and it is one clause: the unit's
-/// [`CommandedBy`] must equal the sender's account. Entity mapping guarantees an
-/// id is meaningful in this world; it says nothing about whose it is, so a
-/// modified client can and will name units it does not command.
-///
-/// Every rejection is silent and identical, whether the unit does not exist,
-/// has despawned, or belongs to someone else -- distinguishable rejections would
-/// let a client probe for entities outside its interest.
-///
-/// No dev gate: commanding your own retinue is a normal gameplay verb.
-pub fn handle_unit_move_orders(
-    mut commands: Commands,
-    profiles: Res<crate::persistence::profiles::PlayerProfiles>,
-    mut vessel_navigation: ResMut<crate::player::boat::VesselNavigationQueue>,
-    mut client_links: Query<(&RemoteId, &mut MessageReceiver<UnitMoveOrder>), With<ClientOf>>,
-    units: Query<
-        (&CommandedBy, Option<&PlayerConstructionAssignment>),
-        (
-            With<CharacterKind>,
-            Without<OfflineHero>,
-            Without<AboardBoat>,
-        ),
-    >,
-    boats: Query<&CommandedBy, With<Vessel>>,
-    mut sites: Query<&mut UnderConstruction>,
-) {
-    for (remote_id, mut receiver) in client_links.iter_mut() {
-        // Resolved ONCE per connection. Account name, not peer id: that is the
-        // identity a retinue is keyed by, so it survives reconnects.
-        let account = profiles.peer_to_name.get(&remote_id.0).cloned();
-        for order in receiver.receive() {
-            // Drain the receiver even for an unnamed peer, or a client that
-            // orders before submitting a name backs the queue up forever.
-            let Some(account) = account.as_deref() else {
-                continue;
-            };
-            // Cap SERVER-side: a client-side cap is advisory, and an unbounded
-            // Vec in a message is an unbounded loop here.
-            for (unit, point) in order.units.iter().take(MAX_UNITS_PER_ORDER) {
-                if !point.is_finite() {
-                    continue;
-                }
-                // A client that could not map an id sends PLACEHOLDER, which is
-                // a valid-looking Entity that must never reach `commands.entity`.
-                if *unit == Entity::PLACEHOLDER {
-                    continue;
-                }
-                if let Ok((commanded, construction)) = units.get(*unit) {
-                    if commanded.0 != account {
-                        continue;
-                    }
-                    if let Some(construction) = construction {
-                        if let Ok(mut site) = sites.get_mut(construction.site) {
-                            if site.builder == Some(*unit) {
-                                site.builder = None;
-                            }
-                        }
-                        commands
-                            .entity(*unit)
-                            .remove::<PlayerConstructionAssignment>()
-                            .remove::<ConstructionMaterialRoutine>()
-                            .remove::<TravelRoute>()
-                            .remove::<NavigationRoutePending>()
-                            .remove::<NavigationRouteFailed>()
-                            .insert(CharacterActivity::Idle);
-                    }
-                    // A fresh destination is also a stand-down: without this
-                    // the unit would resume its old attack after arriving.
-                    commands
-                        .entity(*unit)
-                        .insert(MoveTarget(*point))
-                        .remove::<crate::player::combat::AttackOrder>()
-                        .remove::<crate::player::combat::MeleeCooldown>();
-                    continue;
-                }
-
-                let Ok(commanded) = boats.get(*unit) else {
-                    continue;
-                };
-                if commanded.0 != account {
-                    continue;
-                }
-                let goal = Vec2::new(point.x, point.z);
-                commands
-                    .entity(*unit)
-                    .remove::<crate::player::boat::VesselRoute>()
-                    // A plain sail order also cancels any landing in flight.
-                    .remove::<crate::player::boat::PendingLanding>();
-                vessel_navigation.request(*unit, crate::player::boat::VesselGoal::Sail(goal));
-            }
-        }
-    }
 }
 
 /// Step every hero toward its move target at walk speed, snapped to terrain.

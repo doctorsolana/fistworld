@@ -1,0 +1,757 @@
+//! Selection state, selectable bounds and selection lifecycle.
+use bevy::prelude::*;
+
+/// Anything the player can click on.
+///
+/// `radius` is the person's world-space pick radius or a building's cheap
+/// broad-phase radius; `shape` is the precise click volume. `height` is how
+/// tall it is above its origin. The hero's origin is at its feet, so a hero is
+/// `height: 1.7`.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct Selectable {
+    pub radius: f32,
+    pub height: f32,
+    pub shape: SelectableShape,
+}
+
+/// The visible volume a click is expected to hit.
+///
+/// Buildings used to be represented by one enclosing circle. In a dense town
+/// that circle includes a great deal of empty yard and could steal a click from
+/// a person who was visibly standing beside the wall. Keeping the authored
+/// footprint here makes selection agree with the object on screen.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SelectableShape {
+    Person,
+    Footprint {
+        half_extents: Vec2,
+        centre_offset: Vec2,
+        rotation: f32,
+    },
+}
+
+impl Selectable {
+    /// A level-aware Hall target. The assets keep their root at the permanent
+    /// doorway, so the radius must include the footprint's shifted centre.
+    pub fn hall(level: shared::components::CivicHallLevel) -> Self {
+        Self::hall_rotated(level, 0.0)
+    }
+
+    pub fn hall_rotated(level: shared::components::CivicHallLevel, rotation: f32) -> Self {
+        let definition = level.building_type().definition();
+        Self {
+            radius: definition.root_footprint_radius(),
+            height: definition.height,
+            shape: SelectableShape::Footprint {
+                half_extents: definition.footprint * 0.5,
+                centre_offset: definition.footprint_center,
+                rotation,
+            },
+        }
+    }
+
+    /// A person-sized target.
+    pub fn person() -> Self {
+        Self {
+            radius: 0.55,
+            height: 1.7,
+            shape: SelectableShape::Person,
+        }
+    }
+
+    /// Authored dinghy footprint: 1.80 m beam by 4.27 m length, rooted at the
+    /// waterline. Future vessel assets can expose their own dimensions through
+    /// the same footprint constructor.
+    pub fn dinghy(rotation: f32) -> Self {
+        let half_extents = Vec2::new(0.9, 2.135);
+        Self {
+            radius: half_extents.length(),
+            height: 4.1,
+            shape: SelectableShape::Footprint {
+                half_extents,
+                centre_offset: Vec2::ZERO,
+                rotation,
+            },
+        }
+    }
+
+    pub fn settlement_building_rotated(
+        kind: shared::components::SettlementBuildingKind,
+        rotation: f32,
+    ) -> Self {
+        let definition = kind.art().definition();
+        Self {
+            radius: definition.root_footprint_radius(),
+            height: definition.height,
+            shape: SelectableShape::Footprint {
+                half_extents: definition.footprint * 0.5,
+                centre_offset: definition.footprint_center,
+                rotation,
+            },
+        }
+    }
+}
+
+/// What the player currently has selected.
+///
+/// A Resource holding an `Entity`, not a marker Component, for one specific
+/// reason: the selected entity is REPLICATED and the server can despawn it at
+/// any time (the hero leaves interest range, or its owner is disconnected and
+/// it is culled). A marker would vanish silently with the entity and leave the
+/// HUD describing something that no longer exists; a resource holding a
+/// possibly-dead `Entity` can be validated in one place, which is exactly what
+/// [`clear_stale_selection`] does.
+#[derive(Resource, Debug, Default)]
+pub struct Selection {
+    /// Order is preserved rather than using a set, so the "primary" selection --
+    /// the one a single-name UI shows -- is stable instead of hash-ordered.
+    pub entities: Vec<Entity>,
+    selected: std::collections::HashSet<Entity>,
+    pending: Option<SelectionGesture>,
+}
+
+#[derive(Debug)]
+struct SelectionGesture {
+    entities: Vec<Entity>,
+    additive: bool,
+    toggle: bool,
+    individual: bool,
+}
+
+/// Selecting a battalion's standard bearer selects the battalion: click the
+/// flag, command the unit. Runs right after picking, so both a single click
+/// and a drag-box that caught the bearer grow to the full roster before any
+/// ring, plate or order reads the selection. Expansion is idempotent - the
+/// re-run triggered by its own write finds nothing to add and writes nothing.
+#[allow(clippy::type_complexity)]
+pub(super) fn expand_standard_bearer_selection(
+    mut selection: ResMut<Selection>,
+    bearers: Query<
+        &shared::components::MemberOfBattalion,
+        With<shared::components::StandardBearer>,
+    >,
+    members: Query<(Entity, &shared::components::MemberOfBattalion)>,
+) {
+    let Some(gesture) = selection.bypass_change_detection().pending.take() else {
+        return;
+    };
+    let mut hits = gesture.entities;
+    if !gesture.individual {
+        let battalions: std::collections::HashSet<_> = hits
+            .iter()
+            .filter_map(|e| bearers.get(*e).ok().map(|m| m.0))
+            .collect();
+        let mut seen: std::collections::HashSet<_> = hits.iter().copied().collect();
+        for (soldier, member) in &members {
+            if battalions.contains(&member.0) && seen.insert(soldier) {
+                hits.push(soldier);
+            }
+        }
+    }
+    selection.apply_group(hits, gesture.additive, gesture.toggle);
+}
+
+impl Selection {
+    pub fn from_entities(entities: Vec<Entity>) -> Self {
+        let mut selection = Self::default();
+        selection.set(entities);
+        selection
+    }
+    pub fn is_selected(&self, entity: Entity) -> bool {
+        self.selected.contains(&entity)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entities.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.entities.len()
+    }
+    pub fn primary(&self) -> Option<Entity> {
+        self.entities.first().copied()
+    }
+    pub fn clear(&mut self) {
+        self.entities.clear();
+        self.selected.clear();
+        self.pending = None;
+    }
+    pub fn set(&mut self, mut entities: Vec<Entity>) {
+        let mut seen = std::collections::HashSet::with_capacity(entities.len());
+        entities.retain(|e| seen.insert(*e));
+        if self.entities != entities {
+            self.entities = entities;
+            self.selected = seen;
+        }
+    }
+    pub fn apply_group(&mut self, entities: Vec<Entity>, additive: bool, toggle: bool) {
+        if !additive {
+            self.set(entities);
+            return;
+        }
+        let remove =
+            toggle && !entities.is_empty() && entities.iter().all(|e| self.is_selected(*e));
+        if remove {
+            let removed: std::collections::HashSet<_> = entities.into_iter().collect();
+            self.set(
+                self.entities
+                    .iter()
+                    .filter(|e| !removed.contains(e))
+                    .copied()
+                    .collect(),
+            );
+        } else {
+            let mut next = self.entities.clone();
+            next.extend(entities);
+            self.set(next);
+        }
+    }
+    pub(super) fn gesture(
+        &mut self,
+        entities: Vec<Entity>,
+        additive: bool,
+        toggle: bool,
+        individual: bool,
+    ) {
+        self.pending = Some(SelectionGesture {
+            entities,
+            additive,
+            toggle,
+            individual,
+        });
+    }
+}
+
+/// Tracks whether the current right-button press has become a camera drag.
+///
+/// Right button does double duty: HELD it orbits the camera, TAPPED it issues a
+/// move order. Without this the two are indistinguishable and every orbit would
+/// fling the hero at wherever the cursor happened to stop. This repo has been
+/// bitten by right-click ambiguity before -- see the comment in
+/// `hero::control::handle_world_clicks` about why Escape, not right-click,
+/// cancels an armed placement.
+#[derive(Resource, Debug, Default)]
+pub struct RightDrag {
+    pub formation_start: Option<Vec3>,
+    pub formation: bool,
+    /// Cursor position when the button went down, in logical window pixels.
+    pub press_at: Option<Vec2>,
+    /// Accumulated RAW DEVICE motion since the press.
+    ///
+    /// Tracked separately from the radial distance below because the two catch
+    /// different gestures and are in different units -- see [`DRAG_MOTION_PX`].
+    pub motion: f32,
+    /// Seconds the button has been held.
+    pub held_secs: f32,
+    /// Set once this press has been disqualified from counting as a click.
+    pub became_drag: bool,
+}
+
+/// An in-progress left-drag selection box, in WINDOW pixels.
+///
+/// Only becomes a box once the cursor has travelled past [`BOX_MIN_PX`]; below
+/// that the gesture is a plain click, so a slightly shaky single-unit click does
+/// not turn into a one-pixel marquee that selects nothing.
+#[derive(Resource, Debug, Default)]
+pub struct DragBox {
+    pub start: Option<Vec2>,
+    pub current: Vec2,
+    pub active: bool,
+}
+
+impl DragBox {
+    /// Min/max corners, or `None` when there is no active box.
+    pub fn rect(&self) -> Option<(Vec2, Vec2)> {
+        let start = self.start?;
+        if !self.active {
+            return None;
+        }
+        Some((start.min(self.current), start.max(self.current)))
+    }
+}
+
+/// Cursor travel before a left-press becomes a selection box.
+pub const BOX_MIN_PX: f32 = 5.0;
+
+/// Radial cursor displacement from the press point that means "orbit", in
+/// logical window pixels.
+///
+/// RADIAL, not path length: summing per-frame travel turns a slow shaky click
+/// into a drag, because +/-1px of jitter over several frames adds up while the
+/// cursor has not actually gone anywhere. Distance from where the press started
+/// is what the player perceives as having moved the mouse.
+pub const DRAG_RADIAL_PX: f32 = 6.0;
+
+/// Accumulated raw device motion that means "orbit".
+///
+/// Needed IN ADDITION to the radial test because the cursor is never grabbed in
+/// RTS mode: an orbit drag that runs into the edge of the window stops moving
+/// the cursor while MouseMotion keeps streaming and the camera keeps yawing.
+/// Radial displacement alone would call that a click and fire an order at the
+/// end of every edge-of-screen orbit.
+///
+/// This is in raw device pixels, which on a Retina display are roughly half a
+/// logical pixel, so the threshold is deliberately larger than the radial one.
+pub const DRAG_MOTION_PX: f32 = 14.0;
+
+/// Seconds after which a right-press is an orbit regardless of movement.
+///
+/// Covers press-hold-think-release with a perfectly steady hand, which would
+/// otherwise land as an order the player forgot they were queuing.
+/// Raised from 0.35: players hold the button while AIMING an order, and a
+/// steady half-second press that never moved is a deliberate command, not an
+/// orbit - dropping it read as "my click did nothing".
+pub const DRAG_HOLD_SECS: f32 = 0.6;
+
+/// Whether a right-press that moved this much should still count as a click.
+pub fn is_click(radial_px: f32, motion_px: f32, held_secs: f32) -> bool {
+    radial_px <= DRAG_RADIAL_PX && motion_px <= DRAG_MOTION_PX && held_secs <= DRAG_HOLD_SECS
+}
+
+/// Forget a selection whose entity can no longer be shown.
+///
+/// Replication can despawn the hero underneath us at any time.
+///
+/// Validity is "still has a world position", NOT "still has [`Selectable`]".
+/// That distinction is load-bearing: `tag_heroes_selectable` inserts through
+/// deferred `Commands`, so on the frame a hero appears it does not yet carry
+/// `Selectable` even though this system has already run. Testing for the tag
+/// would clear any selection made in the same frame the entity arrived -- which
+/// is exactly what silently broke the capture harness's pre-seeded selection.
+/// `PlayerPosition` is also the honest condition, because it is what the ring
+/// and the HUD plate actually need in order to draw anything.
+pub(super) fn clear_stale_selection(
+    mut selection: ResMut<Selection>,
+    positioned: Query<(), With<shared::components::PlayerPosition>>,
+) {
+    if selection.entities.is_empty() {
+        return;
+    }
+    // Bypass change detection in the common no-op case: this runs every frame,
+    // and touching the resource unconditionally would make every consumer of the
+    // selection rebuild every frame.
+    if selection
+        .entities
+        .iter()
+        .all(|entity| positioned.get(*entity).is_ok())
+    {
+        return;
+    }
+    let retained = selection
+        .entities
+        .iter()
+        .filter(|e| positioned.get(**e).is_ok())
+        .copied()
+        .collect();
+    selection.set(retained);
+}
+
+/// Make every replicated PERSON clickable.
+///
+/// Gated on `CharacterKind`, not `Hero`. `Hero` means "a player's body", so
+/// keying on it made villagers unclickable entirely -- you could not even
+/// inspect one, which contradicted this module's own documentation. Selectable
+/// is about being a thing in the world you can point at; whether you may command
+/// it is a separate question answered by [`is_owned_by`].
+///
+/// The hero creator's preview rig is still excluded, because it carries no
+/// `PlayerPosition` -- it is a parked model in front of the camera, not someone
+/// standing somewhere. That requirement, not the `Hero` filter, is what was
+/// really keeping it out of the picker.
+///
+/// Polls `Without<Selectable>` rather than reacting to `Added<..>` because
+/// replication delivers a character's components in separate batches, and a
+/// one-shot on `Added` would miss whoever's position arrived on a later tick.
+/// Halls are clickable, so a settlement can be inspected by pointing at it.
+///
+/// Separate from the character tagger because a settlement is not a person and
+/// wants a different hit shape -- and because command never applies to it: a
+/// place cannot be ordered anywhere.
+pub(super) fn tag_settlements_selectable(
+    mut commands: Commands,
+    settlements: Query<
+        (
+            Entity,
+            &shared::components::Settlement,
+            Option<&shared::components::CivicHallLevel>,
+            Option<&shared::components::PlayerRotation>,
+            Option<&Selectable>,
+        ),
+        With<shared::components::PlayerPosition>,
+    >,
+) {
+    for (entity, settlement, level, rotation, selectable) in settlements.iter() {
+        let desired = Selectable::hall_rotated(
+            level
+                .copied()
+                .unwrap_or_else(|| shared::components::CivicHallLevel::for_tier(settlement.tier)),
+            rotation.map_or(0.0, |rotation| rotation.0),
+        );
+        if selectable != Some(&desired) {
+            commands.entity(entity).insert(desired);
+        }
+    }
+}
+
+pub(super) fn tag_settlement_buildings_selectable(
+    mut commands: Commands,
+    buildings: Query<
+        (
+            Entity,
+            &shared::components::SettlementBuilding,
+            Option<&shared::components::PlayerRotation>,
+        ),
+        (
+            With<shared::components::PlayerPosition>,
+            Without<Selectable>,
+        ),
+    >,
+) {
+    for (entity, building, rotation) in buildings.iter() {
+        commands
+            .entity(entity)
+            .insert(Selectable::settlement_building_rotated(
+                building.kind,
+                rotation.map_or(0.0, |rotation| rotation.0),
+            ));
+    }
+}
+
+pub(super) fn tag_construction_sites_selectable(
+    mut commands: Commands,
+    sites: Query<
+        (
+            Entity,
+            &shared::components::ConstructionSite,
+            Option<&shared::components::CivicHallUpgradeWorksite>,
+        ),
+        (
+            With<shared::components::PlayerPosition>,
+            Without<Selectable>,
+        ),
+    >,
+) {
+    for (entity, site, hall_upgrade) in sites.iter() {
+        let selectable = hall_upgrade.map_or_else(
+            || Selectable::settlement_building_rotated(site.kind, site.rotation),
+            |upgrade| Selectable::hall_rotated(upgrade.target, site.rotation),
+        );
+        commands.entity(entity).insert(selectable);
+    }
+}
+
+pub(super) fn tag_characters_selectable(
+    mut commands: Commands,
+    characters: Query<
+        Entity,
+        (
+            With<shared::components::CharacterKind>,
+            With<shared::components::PlayerPosition>,
+            Without<Selectable>,
+        ),
+    >,
+) {
+    for entity in characters.iter() {
+        commands.entity(entity).insert(Selectable::person());
+    }
+}
+
+pub(super) fn tag_player_boats_selectable(
+    mut commands: Commands,
+    boats: Query<
+        (
+            Entity,
+            Option<&shared::components::PlayerRotation>,
+            Option<&Selectable>,
+        ),
+        (
+            With<shared::components::PlayerBoat>,
+            With<shared::components::PlayerPosition>,
+            Without<shared::components::WreckedVessel>,
+        ),
+    >,
+) {
+    for (entity, rotation, selectable) in boats.iter() {
+        let desired = Selectable::dinghy(rotation.map_or(0.0, |rotation| rotation.0));
+        if selectable != Some(&desired) {
+            commands.entity(entity).insert(desired);
+        }
+    }
+}
+
+pub(super) fn retire_wrecked_boats(
+    mut commands: Commands,
+    wrecks: Query<Entity, (Added<shared::components::WreckedVessel>, With<Selectable>)>,
+) {
+    for entity in wrecks.iter() {
+        commands.entity(entity).remove::<Selectable>();
+    }
+}
+
+pub(super) fn clear_on_exit(
+    mut selection: ResMut<Selection>,
+    mut drag: ResMut<RightDrag>,
+    mut drag_box: ResMut<DragBox>,
+) {
+    selection.clear();
+    *drag = RightDrag::default();
+    *drag_box = DragBox::default();
+}
+
+/// Closest approach between a ray and a vertical segment, as
+/// `(distance_along_ray, gap)`.
+///
+/// Used to hit-test a standing character: the character is the segment from its
+/// feet to its head, and the click hits if `gap` is within its pick radius.
+/// Returns `None` when the ray points away from the segment.
+///
+/// This is a world-space test on purpose. The screen-space alternative
+/// (projecting the entity with `world_to_viewport` and comparing pixels) has to
+/// undo this app's render-target scaling by hand, and getting that subtly wrong
+/// produces a picking offset that only appears at non-1.0 render scale.
+pub fn ray_vs_vertical_segment(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    base: Vec3,
+    height: f32,
+) -> Option<(f32, f32)> {
+    let seg_dir = Vec3::Y;
+    let w0 = ray_origin - base;
+
+    let a = ray_dir.dot(ray_dir);
+    let b = ray_dir.dot(seg_dir);
+    let c = seg_dir.dot(seg_dir);
+    let d = ray_dir.dot(w0);
+    let e = seg_dir.dot(w0);
+
+    let denom = a * c - b * b;
+    // Where along the BODY the ray passes closest. Parallel rays fall back to
+    // the feet. `d` is unused in that branch, hence the explicit discard.
+    let t_seg = if denom.abs() < 1e-6 {
+        let _ = d;
+        0.0
+    } else {
+        (a * e - b * d) / denom
+    }
+    // Clamp to the real extents: the body stops at the head and the feet.
+    .clamp(0.0, height);
+
+    // Solve the ray parameter against that clamped point, so a click at the very
+    // top or bottom of the body still measures the true gap rather than the gap
+    // to an imaginary infinite pole.
+    let t_ray = (seg_dir * t_seg + base - ray_origin).dot(ray_dir) / a.max(1e-6);
+    if t_ray < 0.0 {
+        return None;
+    }
+
+    let on_ray = ray_origin + ray_dir * t_ray;
+    let on_seg = base + seg_dir * t_seg;
+    Some((t_ray, on_ray.distance(on_seg)))
+}
+
+/// Extra pick radius per metre of distance, so distant units stay clickable.
+///
+/// A 0.55m-wide hero is roughly two pixels across at 1km zoom; without this,
+/// selecting anything above a few hundred metres would be pixel hunting. The
+/// coefficient is chosen so the target stays about a dozen pixels wide at
+/// 1080p with the default 45-degree vertical FOV:
+/// `2 * tan(fov/2) / viewport_height * pixels`.
+pub const PICK_ANGULAR_SLOP: f32 = 0.011;
+
+/// Pick radius for a target `distance` metres away.
+pub fn pick_radius_at(base_radius: f32, distance: f32) -> f32 {
+    base_radius.max(distance * PICK_ANGULAR_SLOP)
+}
+
+/// Whether YOU may order this unit.
+///
+/// The one place command is decided client-side, because it is asked in three
+/// contexts -- can I box-select this, does the ring glow, what does the HUD say
+/// -- and three copies of the same test is three chances for them to disagree.
+///
+/// Command follows [`CommandedBy`], NOT the banner. A banner is affiliation, and
+/// clans are joinable by several players, so banner-as-command would hand your
+/// units to anyone who joined your clan. It would also break outright at ROADMAP
+/// Phase 8 when the placeholder banner becomes a real ClanId.
+///
+/// This is a DISPLAY predicate. The server runs the same check itself before
+/// moving anything; a client that lies to itself here only lies to itself.
+///
+/// [`CommandedBy`]: shared::components::CommandedBy
+pub fn can_command(
+    commanded: Option<&shared::components::CommandedBy>,
+    my_account: Option<&str>,
+) -> bool {
+    match (commanded, my_account) {
+        (Some(commanded), Some(account)) => commanded.0 == account,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn shift_toggles_battalions_and_alt_selects_only_the_person() {
+        use shared::components::{BattalionId, MemberOfBattalion, StandardBearer};
+        let mut app = App::new();
+        app.init_resource::<Selection>();
+        app.add_systems(Update, expand_standard_bearer_selection);
+        let flag = app
+            .world_mut()
+            .spawn((MemberOfBattalion(BattalionId(1)), StandardBearer))
+            .id();
+        let mate = app
+            .world_mut()
+            .spawn(MemberOfBattalion(BattalionId(1)))
+            .id();
+        let outsider = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<Selection>()
+            .set(vec![outsider]);
+        app.world_mut()
+            .resource_mut::<Selection>()
+            .gesture(vec![flag], true, true, false);
+        app.update();
+        assert_eq!(app.world().resource::<Selection>().len(), 3);
+        assert!(app.world().resource::<Selection>().is_selected(mate));
+        app.world_mut()
+            .resource_mut::<Selection>()
+            .gesture(vec![flag], true, true, false);
+        app.update();
+        assert_eq!(app.world().resource::<Selection>().entities, vec![outsider]);
+        app.world_mut()
+            .resource_mut::<Selection>()
+            .gesture(vec![flag], false, false, true);
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Selection>().entities, vec![flag]);
+        assert!(!app.world().resource::<Selection>().is_selected(mate));
+    }
+
+    use super::*;
+
+    /// Command gating decides whether you can move a thing, so getting it wrong
+    /// either hands you someone else's units or takes away your own.
+    #[test]
+    fn only_your_own_retinue_is_commandable() {
+        use shared::components::CommandedBy;
+
+        let mine = CommandedBy("aldric".to_string());
+        let theirs = CommandedBy("bryn".to_string());
+
+        assert!(can_command(Some(&mine), Some("aldric")));
+        assert!(
+            !can_command(Some(&theirs), Some("aldric")),
+            "took someone else's unit"
+        );
+        // Nobody's unit: a villager not in any retinue.
+        assert!(
+            !can_command(None, Some("aldric")),
+            "claimed an unconscripted villager"
+        );
+        // Before the account is known, nothing is commandable.
+        assert!(
+            !can_command(Some(&mine), None),
+            "claimed a unit with no account"
+        );
+        // Account keys are lowercase on both sides; a case mismatch must NOT
+        // silently grant command.
+        assert!(
+            !can_command(Some(&mine), Some("Aldric")),
+            "case-insensitive match"
+        );
+    }
+
+    #[test]
+    fn taps_are_clicks_and_drags_are_not() {
+        // A clean tap.
+        assert!(is_click(0.0, 0.0, 0.02));
+        // Hand tremor on a tap must survive: a couple of pixels of wobble and a
+        // little accumulated device motion is still a click.
+        assert!(is_click(2.0, 5.0, 0.10), "a shaky tap was rejected");
+        // A deliberate orbit.
+        assert!(
+            !is_click(120.0, 300.0, 0.6),
+            "an orbit was treated as a click"
+        );
+        // Cursor pinned at the window edge: radial displacement stops growing
+        // while device motion keeps streaming. This is the case radial-only
+        // discrimination gets wrong.
+        assert!(
+            !is_click(3.0, 400.0, 0.2),
+            "an edge-of-screen orbit was treated as a click"
+        );
+        // Press-and-hold with a perfectly steady hand is not a click either.
+        assert!(
+            !is_click(0.0, 0.0, 1.5),
+            "a long hold was treated as a click"
+        );
+    }
+
+    #[test]
+    fn ray_through_a_body_hits_it() {
+        // Looking down -Z at a body standing at the origin.
+        let hit = ray_vs_vertical_segment(Vec3::new(0.0, 1.0, 10.0), Vec3::NEG_Z, Vec3::ZERO, 1.7);
+        let (distance, gap) = hit.expect("ray should reach the body");
+        assert!((distance - 10.0).abs() < 1e-3, "distance {distance}");
+        assert!(gap < 1e-3, "gap {gap} should be ~0 through the centre");
+    }
+
+    #[test]
+    fn ray_beside_a_body_measures_the_gap() {
+        let (_, gap) =
+            ray_vs_vertical_segment(Vec3::new(2.0, 1.0, 10.0), Vec3::NEG_Z, Vec3::ZERO, 1.7)
+                .expect("still in front");
+        assert!(
+            (gap - 2.0).abs() < 1e-3,
+            "gap {gap} should be the 2m offset"
+        );
+    }
+
+    /// A click above the head must not hit. Without clamping the segment to
+    /// `height` the infinite-line solution would report a hit for a ray
+    /// passing well over the character.
+    #[test]
+    fn ray_over_the_head_misses() {
+        let (_, gap) =
+            ray_vs_vertical_segment(Vec3::new(0.0, 6.0, 10.0), Vec3::NEG_Z, Vec3::ZERO, 1.7)
+                .expect("in front, just high");
+        assert!(gap > 4.0, "gap {gap} should be the height shortfall");
+    }
+
+    #[test]
+    fn ray_pointing_away_misses_entirely() {
+        assert!(
+            ray_vs_vertical_segment(Vec3::new(0.0, 1.0, 10.0), Vec3::Z, Vec3::ZERO, 1.7).is_none(),
+            "a ray pointing away from the body must not hit it"
+        );
+    }
+
+    /// Distant targets must stay clickable, near ones must not become giant
+    /// invisible hitboxes.
+    #[test]
+    fn pick_radius_grows_with_distance_but_never_shrinks() {
+        let base = 0.55;
+        assert_eq!(
+            pick_radius_at(base, 10.0),
+            base,
+            "near target lost its radius"
+        );
+        let far = pick_radius_at(base, 1000.0);
+        assert!(
+            far > base * 10.0,
+            "distant target radius {far} is too tight"
+        );
+    }
+
+    #[test]
+    fn civic_hall_pick_shape_grows_with_the_physical_rung() {
+        use shared::components::CivicHallLevel;
+
+        let moot = Selectable::hall(CivicHallLevel::Moot);
+        let village = Selectable::hall(CivicHallLevel::Village);
+        let town = Selectable::hall(CivicHallLevel::Town);
+        assert!(moot.radius < village.radius && village.radius < town.radius);
+        assert!(moot.height < village.height && village.height < town.height);
+        assert!(town.radius > 11.0, "Town Hall rear shell is not clickable");
+        assert!(town.height > 21.0, "Town Hall belfry is not clickable");
+    }
+}

@@ -144,7 +144,9 @@ constructs it. Those values remain prototype balance, not final design.
   durable restart persistence remain future work.
 - Physical palisades, stone walls, gates, guards and patrols.
 - Strategic travelling parties and armies with lossless tactical promotion/demotion.
-- Retinues, formations, flow fields, combat, clans, political ownership and realm war.
+- Military hiring/upkeep, morale, weapon classes, diplomacy, clans and realm war.
+  Tactical battalions, formation orders, bounded shared route fields and basic melee are live;
+  see [combat controls and limits](docs/COMBAT-DESIGN.md).
 
 The checked state and dependencies for each item live in [ROADMAP.md](docs/ROADMAP.md).
 

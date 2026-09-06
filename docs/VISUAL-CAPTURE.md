@@ -319,3 +319,48 @@ Bevy's exit status, so a live capture failure returns a nonzero process status.
 
 Keep production fixes outside the harness. A capture fixture may stage deterministic data, but it
 must exercise the same renderer/UI code as gameplay rather than implementing a second visual path.
+
+## Connected army formation scenario
+
+`capture/scenarios/army-250.ron` uses the shared `ArmyLabScenario` schema rather
+than the offline `CaptureScenario` schema. Both real binaries read it through
+`FISTWORLD_ARMY_SCENARIO`. It supplies the account, map, five 50-person battalions,
+initial layout, two deployment frontages, camera and timeout. This opt-in fixture
+bypasses the new-player creator; it does not create local client soldiers or write
+client positions. Membership is created through the authoritative army handler.
+
+After `cargo build --workspace --profile playtest`, run these in separate terminals
+from the repository root (stop only the processes you start):
+
+```sh
+env RUST_LOG=info CITYSIM_MAP_ID=battle_lab FISTWORLD_VILLAGE_LAB_RUNTIME=1 \
+  FISTWORLD_LAB_SCENARIO=skirmish FISTWORLD_LAB_WARP=1 \
+  FISTWORLD_ARMY_SCENARIO="$PWD/capture/scenarios/army-250.ron" \
+  ./target/playtest/server
+```
+
+Wait for the server's bound/listening log, then:
+
+```sh
+env RUST_LOG=info CITYSIM_MAP_ID=battle_lab \
+  FISTWORLD_ARMY_SCENARIO="$PWD/capture/scenarios/army-250.ron" \
+  FISTFORCE_AUTOCONNECT=armylab BEVY_ASSET_ROOT="$PWD/client/assets" \
+  FISTFORCE_NO_SETTINGS_FILE=1 FISTFORCE_RENDER_SCALE=1 \
+  FISTFORCE_START_FOCUS=-15,-25 FISTFORCE_START_ZOOM=125 \
+  FISTWORLD_ARMY_CAPTURE_DIR=/tmp/fistworld-army-250 \
+  ./target/playtest/client
+```
+
+The client waits for all 250 members, five complete rosters, dressed character
+models, unblocked UI and stable terrain. It selects the battalions and drives
+normal RMB press/drag/release input. Each deployment records preview, movement,
+arrival and selected UI; the run remains connected continuously. Arrival requires
+all 250 replicated positions within 0.3 m of their own slots and all facings within
+0.06 radians. Those are verification bounds, not changed visual comparison tolerances.
+
+Each PNG has the normal `.capture.json` plus `.army.json` with selected/member
+counts, movement/arrival/facing counts and per-person measured/expected positions.
+The client exits successfully only after every deployment and file write succeeds;
+timeout writes `failure.json` and exits with an error. Inspect images and both JSON
+files. The army lab uses the existing owned presentation image for `target: window`,
+so its composed HUD capture also works when a macOS swapchain returns black.

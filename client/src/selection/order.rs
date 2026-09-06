@@ -16,11 +16,11 @@ use shared::components::{
     PlayerBoat, PlayerPosition,
 };
 use shared::protocol::{
-    DisembarkBoat, FormationMoveOrder, HeroConstructionOrder, ReliableChannel, SailToLanding,
-    UnitAttackOrder, UnitMoveOrder, MAX_UNITS_PER_ORDER,
+    DisembarkBoat, HeroConstructionOrder, MovementMode, ReliableChannel, SailToLanding,
+    UnitCommand, UnitOrder, MAX_UNITS_PER_ORDER,
 };
 
-use super::{can_command, formation_targets, is_click, RightDrag, Selection};
+use super::{can_command, is_click, RightDrag, Selection};
 use crate::camera_rts::{CursorRay, CursorTerrainHit, CursorTerrainOverride};
 use crate::input::InputState;
 
@@ -64,10 +64,10 @@ pub(super) struct GroundOrderWorld<'w, 's> {
         ),
         With<ConstructionSite>,
     >,
-    move_sender: Query<
+    sender: Query<
         'w,
         's,
-        &'static mut MessageSender<UnitMoveOrder>,
+        &'static mut MessageSender<UnitOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
     construction_sender: Query<
@@ -76,21 +76,9 @@ pub(super) struct GroundOrderWorld<'w, 's> {
         &'static mut MessageSender<HeroConstructionOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
-    attack_sender: Query<
-        'w,
-        's,
-        &'static mut MessageSender<UnitAttackOrder>,
-        (With<crate::GameClient>, With<Connected>),
-    >,
-    formation_sender: Query<
-        'w,
-        's,
-        &'static mut MessageSender<FormationMoveOrder>,
-        (With<crate::GameClient>, With<Connected>),
-    >,
-    battalion_members: Query<'w, 's, &'static shared::components::MemberOfBattalion>,
     combat_mode: Res<'w, crate::combat_mode::CombatMode>,
-    combat_targets: ResMut<'w, crate::combat_mode::CombatTargets>,
+    command_mode: ResMut<'w, super::commands::CommandMode>,
+    roster: Res<'w, crate::army_roster::ArmyRoster>,
     // Everything a combat-mode click might land on, the same tuple the picker
     // uses so the attack pick and the selection pick can never drift apart.
     characters: Query<
@@ -111,6 +99,7 @@ pub(super) struct GroundOrderWorld<'w, 's> {
 pub(super) fn issue_order_on_right_click(
     time: Res<Time>,
     mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut mouse_motion: MessageReader<MouseMotion>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     input_state: Res<InputState>,
@@ -142,11 +131,18 @@ pub(super) fn issue_order_on_right_click(
         // release would let press-on-HUD, drag into the world, release punch a
         // move order through a panel the player was actually interacting with.
         let over_ui = crate::ui::pointer_over_ui(&ui_blockers);
+        let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
         *drag = RightDrag {
+            formation_start: hit.0,
+            formation: ground_world.combat_mode.0
+                && !alt
+                && !selection.is_empty()
+                && !over_ui
+                && !input_state.ui_blocking(),
             press_at: gesture_cursor,
             motion: 0.0,
             held_secs: 0.0,
-            became_drag: over_ui || input_state.ui_blocking(),
+            became_drag: over_ui || input_state.ui_blocking() || alt,
         };
     }
 
@@ -166,7 +162,14 @@ pub(super) fn issue_order_on_right_click(
         return;
     }
 
-    let was_click = !drag.became_drag && drag.press_at.is_some();
+    let placement = if drag.formation {
+        drag.formation_start
+            .zip(hit.0)
+            .and_then(|(start, end)| super::formation_preview::frontage_from_drag(start, end))
+    } else {
+        None
+    };
+    let was_click = drag.press_at.is_some() && (!drag.became_drag || drag.formation);
     *drag = RightDrag::default();
 
     if !was_click {
@@ -187,6 +190,9 @@ pub(super) fn issue_order_on_right_click(
     let Some(mut target) = hit.0 else {
         return;
     };
+    if let Some((centre, _)) = placement {
+        target = centre;
+    }
     let my_account = account
         .as_ref()
         .map(|input| input.name.trim().to_lowercase());
@@ -203,9 +209,14 @@ pub(super) fn issue_order_on_right_click(
         .iter()
         .copied()
         .filter(|entity| can_command(units.get(*entity).ok(), my_account.as_deref()))
-        .take(MAX_UNITS_PER_ORDER)
         .collect();
     if ours.is_empty() {
+        return;
+    }
+    if ours.len() > MAX_UNITS_PER_ORDER {
+        boat_world
+            .notice
+            .show("Selection exceeds the 1024-unit command limit");
         return;
     }
 
@@ -284,7 +295,10 @@ pub(super) fn issue_order_on_right_click(
     // hover ring, so the person marked red and the person the order names can
     // never disagree. A combat-mode click on empty ground still falls through
     // to movement: repositioning mid-fight must not require leaving the mode.
-    if ground_world.combat_mode.0 {
+    if ground_world.combat_mode.0
+        && placement.is_none()
+        && ground_world.command_mode.0 == MovementMode::Move
+    {
         let victim = super::attack_ring::find_enemy_under_cursor(
             &ground_world.combat_mode,
             &input_state,
@@ -303,20 +317,10 @@ pub(super) fn issue_order_on_right_click(
                 .filter(|entity| boat_world.boats.get(*entity).is_err())
                 .collect();
             if !fighters.is_empty() {
-                if let Ok(mut sender) = ground_world.attack_sender.single_mut() {
-                    // The marker tracks WHO attacks WHOM, so a later order to
-                    // some other squad can drop only its own pairs and a
-                    // target still under attack keeps its ring.
-                    ground_world
-                        .combat_targets
-                        .ordered
-                        .retain(|(attacker, _)| !fighters.contains(attacker));
-                    for fighter in &fighters {
-                        ground_world.combat_targets.ordered.push((*fighter, victim));
-                    }
-                    sender.send::<ReliableChannel>(UnitAttackOrder {
-                        units: fighters,
-                        target: victim,
+                if let Ok(mut sender) = ground_world.sender.single_mut() {
+                    sender.send::<ReliableChannel>(UnitOrder {
+                        selection: ground_world.roster.selection(&fighters),
+                        command: UnitCommand::Attack { target: victim },
                     });
                 }
                 return;
@@ -327,13 +331,16 @@ pub(super) fn issue_order_on_right_click(
     // A worksite click is an interaction order, not a request to walk to the
     // plot centre. Use the same precise pick volume as left-click selection so
     // roofs, long windmill footprints and non-1.0 render scales all agree.
-    let selected_hero = ours.iter().find_map(|entity| {
-        ground_world
-            .heroes
-            .get(*entity)
-            .ok()
-            .map(|(_, person_id)| (*entity, *person_id))
-    });
+    let selected_hero = ours
+        .iter()
+        .filter(|_| placement.is_none() && ground_world.command_mode.0 == MovementMode::Move)
+        .find_map(|entity| {
+            ground_world
+                .heroes
+                .get(*entity)
+                .ok()
+                .map(|(_, person_id)| (*entity, *person_id))
+        });
     if let (Some((hero_entity, person_id)), Some(ray)) = (selected_hero, ray.0) {
         let origin = ray.origin;
         let direction = ray.direction.as_vec3();
@@ -372,64 +379,18 @@ pub(super) fn issue_order_on_right_click(
         }
     }
 
-    // A selection that IS one battalion marches as one battalion: the server
-    // computes rank-and-file arrival slots (strongest rank forward) instead of
-    // the loose spread below. Any outsider in the selection - another
-    // battalion's soldier, an unassigned villager - falls back to the spread,
-    // so nobody is ever silently conscripted into someone else's line.
-    if !sailing_order && ours.len() >= 2 {
-        let mut battalions = ours
-            .iter()
-            .map(|entity| ground_world.battalion_members.get(*entity).ok());
-        let first = battalions.next().flatten().copied();
-        if first.is_some() && battalions.all(|member| member.copied() == first) {
-            if let Ok(mut sender) = ground_world.formation_sender.single_mut() {
-                sender.send::<ReliableChannel>(FormationMoveOrder {
-                    units: ours.clone(),
-                    target,
-                });
-                // The server stands down only the units in THIS order; other
-                // squads' standing attacks (and their rings) survive.
-                ground_world
-                    .combat_targets
-                    .ordered
-                    .retain(|(attacker, _)| !ours.contains(attacker));
-                return;
-            }
+    if let Ok(mut sender) = ground_world.sender.single_mut() {
+        sender.send::<ReliableChannel>(UnitOrder {
+            selection: ground_world.roster.selection(&ours),
+            command: UnitCommand::Move {
+                target,
+                frontage: placement.map(|(_, frontage)| frontage),
+                mode: ground_world.command_mode.0,
+            },
+        });
+        ground_world.command_mode.0 = MovementMode::Move;
+        if sailing_order {
+            boat_world.notice.show("Sailing to destination");
         }
     }
-
-    let Ok(mut sender) = ground_world.move_sender.single_mut() else {
-        return;
-    };
-    // ONE message carrying every (unit, point) pair. The old code sent one
-    // message per unit with no unit id in it at all, so the server -- which
-    // inferred "the sender's hero" -- collapsed the whole order onto one body
-    // and kept only the last target.
-    //
-    // Arrival points are spread so a group sent to one spot arrives as a group
-    // rather than stacking into a single body.
-    let units_and_points: Vec<(Entity, Vec3)> = ours
-        .iter()
-        .copied()
-        .zip(formation_targets(target, ours.len(), FORMATION_SPACING))
-        .collect();
-    sender.send::<ReliableChannel>(UnitMoveOrder {
-        units: units_and_points,
-    });
-    // A move order cancels these units' attacks server-side, so drop THEIR
-    // markers - a ring that outlives the order it marked is a lie, but a
-    // ring belonging to a squad this order never touched is still true.
-    ground_world
-        .combat_targets
-        .ordered
-        .retain(|(attacker, _)| !ours.contains(attacker));
-    if sailing_order {
-        info!("Sailing order requested for {:?} to {target:?}", ours);
-        boat_world.notice.show("Sailing to destination");
-    }
 }
-
-/// Gap between neighbours when a group is ordered to one point, in metres.
-/// Roughly two body widths, so a squad reads as a cluster rather than a queue.
-const FORMATION_SPACING: f32 = 1.4;

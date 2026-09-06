@@ -17,12 +17,12 @@
 use bevy::prelude::*;
 
 use shared::components::{
-    Battalion, CharacterAttributes, CharacterKind, CharacterName, CommandedBy, Health,
-    MemberOfBattalion, PlayerPosition,
+    Battalion, CharacterAttributes, CharacterKind, Health, MemberOfBattalion, PlayerPosition,
 };
 use shared::protocol::{ArmyOrder, ReliableChannel};
 
 use super::*;
+use crate::army_roster::{ArmyRoster, BattalionFacts, SoldierFacts};
 use crate::camera_rts::CommanderCamera;
 use crate::ui::foundation::{
     button_chrome, selected_button_chrome, UiButtonLabel, UiButtonVariant,
@@ -199,94 +199,20 @@ pub(super) fn spawn_army_tab(body: &mut ChildSpawnerCommands<'_>) {
 
 // --- data -------------------------------------------------------------------
 
-struct SoldierFacts {
-    entity: Entity,
-    name: String,
-    battalion: Option<shared::components::BattalionId>,
-    strength: u8,
-}
-
-struct BattalionFacts {
-    entity: Entity,
-    id: shared::components::BattalionId,
-    name: String,
-    count: usize,
-    mean_strength: u32,
-}
-
-#[allow(clippy::type_complexity)]
-fn gather(
-    account: &str,
-    soldiers: &Query<
-        (
-            Entity,
-            &CharacterName,
-            &CommandedBy,
-            &CharacterKind,
-            Option<&MemberOfBattalion>,
-            Option<&CharacterAttributes>,
-            Option<&Health>,
-        ),
-        Without<Battalion>,
-    >,
-    battalions: &Query<(Entity, &Battalion, &CommandedBy)>,
-) -> (Vec<BattalionFacts>, Vec<SoldierFacts>) {
-    let mut troops: Vec<SoldierFacts> = soldiers
-        .iter()
-        .filter(|(_, _, commanded, _, _, _, health)| {
-            !account.is_empty()
-                && commanded.0 == account
-                && health.is_none_or(|health| !health.is_dead())
-        })
-        .map(|(entity, name, _, _, member, attributes, _)| SoldierFacts {
-            entity,
-            name: name.0.clone(),
-            battalion: member.map(|member| member.0),
-            strength: attributes
-                .map(|attributes| attributes.physique())
-                .unwrap_or(0),
-        })
-        .collect();
-
-    let mut units: Vec<BattalionFacts> = battalions
-        .iter()
-        .filter(|(_, _, commanded)| !account.is_empty() && commanded.0 == account)
-        .map(|(entity, battalion, _)| {
-            let serving: Vec<&SoldierFacts> = troops
-                .iter()
-                .filter(|soldier| soldier.battalion == Some(battalion.id))
-                .collect();
-            let mean = if serving.is_empty() {
-                0
-            } else {
-                serving.iter().map(|s| s.strength as u32).sum::<u32>() / serving.len() as u32
-            };
-            BattalionFacts {
-                entity,
-                id: battalion.id,
-                name: battalion.name.clone(),
-                count: serving.len(),
-                mean_strength: mean,
-            }
-        })
-        .collect();
-    units.sort_by(|a, b| a.id.cmp(&b.id));
-
-    // Serving soldiers grouped by battalion in card order, strongest first
-    // inside a group; the unassigned bring up the rear, strongest first.
-    let order_of = |soldier: &SoldierFacts| {
-        soldier
-            .battalion
-            .and_then(|id| units.iter().position(|unit| unit.id == id))
-            .unwrap_or(usize::MAX)
-    };
+fn gather(roster: &ArmyRoster) -> (Vec<BattalionFacts>, Vec<SoldierFacts>) {
+    let mut troops: Vec<_> = roster.soldiers.values().cloned().collect();
     troops.sort_by(|a, b| {
-        order_of(a)
-            .cmp(&order_of(b))
+        a.battalion
+            .unwrap_or(shared::components::BattalionId(u64::MAX))
+            .cmp(
+                &b.battalion
+                    .unwrap_or(shared::components::BattalionId(u64::MAX)),
+            )
             .then(b.strength.cmp(&a.strength))
             .then(a.name.cmp(&b.name))
+            .then(a.entity.cmp(&b.entity))
     });
-    (units, troops)
+    (roster.battalions.clone(), troops)
 }
 
 fn army_signature(
@@ -318,22 +244,9 @@ fn army_signature(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn rebuild_army_list(
     mut commands: Commands,
-    name_input: Res<crate::ui::name_entry::PlayerNameInput>,
+    roster: Res<ArmyRoster>,
     perf: Res<crate::ui::perf::UiPerf>,
     mut enlist_target: ResMut<EnlistTarget>,
-    soldiers: Query<
-        (
-            Entity,
-            &CharacterName,
-            &CommandedBy,
-            &CharacterKind,
-            Option<&MemberOfBattalion>,
-            Option<&CharacterAttributes>,
-            Option<&Health>,
-        ),
-        Without<Battalion>,
-    >,
-    battalions: Query<(Entity, &Battalion, &CommandedBy)>,
     content: Query<Entity, With<ArmyListContent>>,
     existing_rows: Query<Entity, With<ArmyRow>>,
     mut count_text: Query<&mut Text, With<ArmyCountText>>,
@@ -343,8 +256,10 @@ pub(super) fn rebuild_army_list(
     let Ok(content) = content.single() else {
         return;
     };
-    let account = name_input.name.trim().to_lowercase();
-    let (units, troops) = gather(&account, &soldiers, &battalions);
+    if !roster.is_changed() && !enlist_target.is_changed() && !existing_rows.is_empty() {
+        return;
+    }
+    let (units, troops) = gather(&roster);
 
     // The enlistment destination must always be a live battalion; default to
     // the first so a one-battalion army enlists without ceremony.
@@ -670,57 +585,13 @@ pub(super) fn bind_army_vitals(
 /// The muster button narrates what it will do: how many of the units selected
 /// in the world it would actually take.
 
-/// Who a CREATE BATTALION click takes: exactly the soldiers you have
-/// selected in the world - possibly NONE. An empty creation is the normal
-/// management flow (raise the banner, then ADD soldiers from the roster);
-/// nothing is ever swept into a battalion automatically.
-#[allow(clippy::type_complexity)]
-pub(crate) fn muster_candidates(
-    selection: &crate::selection::Selection,
-    account: &str,
-    soldiers: &Query<
-        (
-            Entity,
-            &CommandedBy,
-            Option<&MemberOfBattalion>,
-            Has<shared::components::Hero>,
-        ),
-        With<CharacterKind>,
-    >,
-) -> Vec<Entity> {
-    if account.is_empty() {
-        return Vec::new();
-    }
-    selection
-        .entities
-        .iter()
-        .copied()
-        .filter(|entity| {
-            soldiers
-                .get(*entity)
-                .is_ok_and(|(_, owner, _, _)| owner.0 == account)
-        })
-        .take(shared::components::MAX_BATTALION_SIZE)
-        .collect()
-}
-
 #[allow(clippy::type_complexity)]
 pub(super) fn bind_muster_label(
     selection: Res<crate::selection::Selection>,
-    name_input: Res<crate::ui::name_entry::PlayerNameInput>,
-    soldiers: Query<
-        (
-            Entity,
-            &CommandedBy,
-            Option<&MemberOfBattalion>,
-            Has<shared::components::Hero>,
-        ),
-        With<CharacterKind>,
-    >,
+    roster: Res<ArmyRoster>,
     mut labels: Query<&mut Text, With<MusterButtonLabel>>,
 ) {
-    let account = name_input.name.trim().to_lowercase();
-    let candidates = muster_candidates(&selection, &account, &soldiers).len();
+    let candidates = roster.muster_candidates(&selection).len();
     let next = if candidates == 0 {
         // No selection: the click raises an EMPTY battalion to fill via ADD.
         "CREATE EMPTY BATTALION".to_string()
@@ -738,7 +609,7 @@ pub(super) fn bind_muster_label(
 pub(super) fn handle_army_buttons(
     guard: Res<ClickGuard>,
     mouse: Res<ButtonInput<MouseButton>>,
-    name_input: Res<crate::ui::name_entry::PlayerNameInput>,
+    roster: Res<ArmyRoster>,
     mut enlist_target: ResMut<EnlistTarget>,
     mut selection: ResMut<crate::selection::Selection>,
     mut open: ResMut<EncyclopediaOpen>,
@@ -752,15 +623,6 @@ pub(super) fn handle_army_buttons(
         Option<&SoldierEnlistButton>,
         Option<&SoldierDismissButton>,
     )>,
-    soldiers: Query<
-        (
-            Entity,
-            &CommandedBy,
-            Option<&MemberOfBattalion>,
-            Has<shared::components::Hero>,
-        ),
-        With<CharacterKind>,
-    >,
     members: Query<(Entity, &MemberOfBattalion), With<CharacterKind>>,
     battalions: Query<(&Battalion, &PlayerPosition)>,
     mut cameras: Query<&mut CommanderCamera>,
@@ -771,7 +633,6 @@ pub(super) fn handle_army_buttons(
     if !guard.0 || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
-    let account = name_input.name.trim().to_lowercase();
     for (interaction, muster, select, locate, disband, enlist_here, enlist, dismiss) in
         buttons.iter()
     {
@@ -788,7 +649,7 @@ pub(super) fn handle_army_buttons(
             }
             // Empty is deliberate: the click ALWAYS creates a battalion, so
             // the button never silently does nothing.
-            let recruits = muster_candidates(&selection, &account, &soldiers);
+            let recruits = roster.muster_candidates(&selection);
             *last_muster = Some(now);
             if let Ok(mut sender) = senders.single_mut() {
                 sender.send::<ReliableChannel>(ArmyOrder::Muster { members: recruits });

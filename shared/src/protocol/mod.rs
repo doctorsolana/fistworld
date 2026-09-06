@@ -5,7 +5,9 @@
 mod config;
 mod messages;
 mod plugin;
+mod unit_orders;
 
 pub use config::*;
 pub use messages::*;
 pub use plugin::*;
+pub use unit_orders::*;

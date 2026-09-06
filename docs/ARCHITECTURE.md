@@ -298,11 +298,24 @@ guarantee; retain the fixture and compare deltas whenever a world-wide rule is a
   12m–12,000m, which covers the whole map.
 
 **Implementation limits:** the new RTS melee and tactical battalion systems live in
-`server/src/player/combat.rs` and `army.rs`; they do not restore the removed first-person
+`server/src/player/combat.rs`, `army.rs` and `orders.rs`; they do not restore the removed first-person
 combat. Regional trade routes and embodied caravan work are implemented, but strategic
 military campaigns, clans, political territory and world-state persistence remain future
 work. Heroes and their possessions survive disconnects within a running server session;
 restarting the server creates a fresh world.
+
+### Tactical command and formation boundary (2026-09-06)
+
+One ordered `UnitOrder` stream owns move/attack/hold intent. Membership edits commit
+sequentially before the next edit is validated. Durable battalion IDs compact complete
+selections; individual entities are mapped only in messages. Shared pure geometry drives
+both preview and authority, with `PersonId` tie-breaks. `EngagedWith(PersonId)` carries
+confirmed targeting to client presentation.
+
+`player/orders/navigation.rs` owns bounded shared formation fields and certified routes;
+`hero::step_units` remains the only marching position integrator. Civilian road planners
+do not own commanded formations. The client derives its army roster only when membership,
+identity or vitals change. See [COMBAT-DESIGN.md](COMBAT-DESIGN.md) for budgets and limits.
 
 ## 7. Build order
 

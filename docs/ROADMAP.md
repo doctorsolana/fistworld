@@ -28,7 +28,7 @@ infrastructure is a phase that cannot be tested.
 | 4 | Prices and the hand cart | M | in progress — local Moot trading, on-foot player exchange and the company economy are live; hand carts and inter-town trade are not |
 | 5 | Caravans | L | not started |
 | 6 | Command | XL | not started |
-| 7 | Retinue and businesses | L | in progress — ownership, company controls and shares are live; retinues, combat and offline persistence are not |
+| 7 | Retinue and businesses | L | in progress — ownership, company controls and shares are live; tactical battalions/basic melee are live; military upkeep and durable offline persistence remain |
 | 8 | Clans and territory | L | not started |
 | 9 | War for the realm | XL | not started |
 
@@ -603,17 +603,14 @@ Pushed late deliberately: this is the largest block of work in the roadmap and c
 LEAST architectural uncertainty. It is a solved genre problem with a known cost model, so
 building it early would burn months without falsifying anything.
 
-- [ ] A `Unit` abstraction that is not `Hero`. Note `HeroMoveTargets` is keyed by `PeerId`
-      with one target per player — N units per player is not representable without
-      replacing it.
-- [ ] Selection state and drag-box
-- [ ] Group orders and order feedback
-- [ ] Per-region traversability cost field
-- [ ] Flow-field pathfinding
-- [ ] Replace the unused generic `find_path` routine with the Phase 6 regional
-      flow-field implementation. Preserve the live `SpatialObstacleGrid` contract used by
-      village travel/trades and move its shared route-budget settings out of the old
-      pathfinding module when that replacement lands.
+- [x] Character-scoped `MoveTarget`, with authoritative account ownership.
+- [x] Click/box selection, Shift addition/toggling, individual bearer selection and control groups.
+- [x] Ordered tactical commands, limits and authoritative feedback.
+- [x] Separate battalion blocks, dragged frontage/facing, hold, attack-move and retreat.
+- [x] Bounded shared formation fields for local obstacle routing and certified open-ground legs.
+- [ ] Regional traversability graph, narrow-passage/column coordination and rigid formation wheeling.
+- [ ] Replace the unused generic `find_path` routine when regional navigation lands;
+      keep civilian road-routing budgets and obstacle contracts separate from formation ownership.
 
 **Exit:** twenty units cross a map together and it looks deliberate.
 
@@ -624,10 +621,9 @@ building it early would burn months without falsifying anything.
 **Playable:** hire a squad, escort caravans for real money, own a sawmill that pays while
 you are logged off.
 
-- [ ] **Combat, from zero.** Commit `041deaa` stripped ~9,600 lines of weapons and combat.
-      Shared 100-point Health, replication, inspection and the zero-Health death/estate
-      pipeline now exist, but weapons, attacks, armour, healing and combat damage do not.
-      Those combat systems remain the largest hidden cost in the roadmap.
+- [x] Basic authoritative melee, engagement acquisition, cooldowns, death/estate settlement
+      and tactical battalions. See [COMBAT-DESIGN.md](COMBAT-DESIGN.md) for live controls and limits.
+- [ ] Weapon classes, armour, healing, morale, coordinated combat pursuit and diplomacy.
 - [ ] Retinue hiring, military wages, equipment and campaign upkeep. Civilian business and
       civic hiring/payroll are already live in Phases 3–4.
 - [ ] Complete player business acquisition and offline income. Live-server permits,

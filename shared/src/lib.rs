@@ -5,6 +5,7 @@ pub mod colliders;
 pub mod components;
 pub mod debug;
 pub mod economy;
+pub mod formation;
 pub mod map;
 pub mod names;
 pub mod physics;
@@ -20,3 +21,5 @@ pub mod terrain;
 pub mod water;
 pub mod wind;
 pub mod worldgen;
+
+pub mod army_lab;

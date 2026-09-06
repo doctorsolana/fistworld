@@ -16,6 +16,9 @@ fn wire_common_systems(app: &mut App) {
     );
 
     app.add_systems(Startup, game_systems::setup_rendering);
+    if std::env::var_os("FISTWORLD_ARMY_SCENARIO").is_some() {
+        app.add_systems(PostStartup, crate::capture::setup_capture_presentation);
+    }
 
     // Keep the offscreen scene target sized to window * render_scale in every
     // state (resizes happen in menus and on fullscreen transitions too).
@@ -38,6 +41,19 @@ fn wire_common_systems(app: &mut App) {
     app.add_systems(
         OnEnter(GameState::MainMenu),
         game_systems::cleanup_enter_main_menu,
+    );
+
+    app.add_systems(
+        Update,
+        crate::capture::drive_army_input
+            .before(crate::camera_rts::update_cursor_terrain_hit)
+            .run_if(in_state(GameState::Playing)),
+    );
+    app.add_systems(
+        Update,
+        crate::capture::drive_army_capture
+            .after(crate::selection::SelectionGestureSet)
+            .run_if(in_state(GameState::Playing)),
     );
 
     // Connection systems

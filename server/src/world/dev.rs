@@ -621,7 +621,12 @@ pub fn handle_dev_commands(
                             .remove::<crate::player::hero::MoveTarget>()
                             .remove::<shared::components::MemberOfBattalion>()
                             .remove::<shared::components::StandardBearer>()
-                            .remove::<crate::player::combat::AttackOrder>()
+                            .remove::<(
+                                crate::player::combat::AttackOrder,
+                                shared::components::EngagedWith,
+                                crate::player::orders::MarchOrder,
+                                crate::player::orders::CommandStance,
+                            )>()
                             .remove::<crate::player::combat::MeleeCooldown>()
                             .insert(shared::components::Occupation::default());
                         info!("Dev: {unit:?} dismissed from '{account}'s retinue");

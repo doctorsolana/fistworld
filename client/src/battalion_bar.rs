@@ -9,7 +9,7 @@
 
 use bevy::prelude::*;
 
-use shared::components::{Battalion, CommandedBy, Health, MemberOfBattalion, CHARACTER_MAX_HEALTH};
+use crate::army_roster::ArmyRoster;
 
 use crate::combat_mode::{
     CombatMode, CRIMSON, PARCHMENT, SIGN_WOOD, WAR_SPRING_DAMPING, WAR_SPRING_STIFFNESS,
@@ -38,11 +38,20 @@ impl Plugin for BattalionBarPlugin {
                 rebuild_battalion_cards,
                 handle_card_clicks,
                 handle_muster_card_clicks,
+            )
+                .chain()
+                .after(crate::army_roster::ArmyRosterSet)
+                .before(crate::selection::SelectionGestureSet)
+                .run_if(in_state(GameState::Playing)),
+        );
+        app.add_systems(
+            Update,
+            (
                 bind_battalion_cards,
                 bind_muster_card,
                 animate_battalion_bar,
             )
-                .chain()
+                .after(crate::selection::SelectionGestureSet)
                 .run_if(in_state(GameState::Playing)),
         );
     }
@@ -195,8 +204,7 @@ fn spawn_battalion_bar(
 fn rebuild_battalion_cards(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    name_input: Res<crate::ui::name_entry::PlayerNameInput>,
-    battalions: Query<(Entity, &Battalion, &CommandedBy)>,
+    roster: Res<ArmyRoster>,
     row: Query<Entity, With<BattalionCardRow>>,
     existing: Query<Entity, With<BattalionCard>>,
     mut signature: Local<u64>,
@@ -205,13 +213,14 @@ fn rebuild_battalion_cards(
     let Ok(row) = row.single() else {
         return;
     };
-    let account = name_input.name.trim().to_lowercase();
-    let mut mine: Vec<(Entity, u64, String)> = battalions
+    if !roster.is_changed() && (!existing.is_empty() || roster.battalions.is_empty()) {
+        return;
+    }
+    let mine: Vec<_> = roster
+        .battalions
         .iter()
-        .filter(|(_, _, commanded)| !account.is_empty() && commanded.0 == account)
-        .map(|(entity, battalion, _)| (entity, battalion.ordinal, battalion.name.clone()))
+        .map(|b| (b.entity, b.ordinal, b.name.clone()))
         .collect();
-    mine.sort_by_key(|(_, ordinal, _)| *ordinal);
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     for (entity, ordinal, name) in &mine {
@@ -308,79 +317,71 @@ fn rebuild_battalion_cards(
 
 /// Everything that moves: soldier counts, health fills, the ember highlight
 /// on cards whose soldiers are in the current selection. All writes diffed.
-#[allow(clippy::type_complexity)]
 fn bind_battalion_cards(
     mode: Res<CombatMode>,
-    battalions: Query<&Battalion>,
-    members: Query<(Entity, &MemberOfBattalion, Option<&Health>)>,
+    roster: Res<ArmyRoster>,
     selection: Res<crate::selection::Selection>,
     mut cards: Query<(&BattalionCard, &mut BorderColor, &mut BackgroundColor)>,
     mut counts: Query<(&CardCountText, &mut Text)>,
     mut fills: Query<(&CardHealthFill, &mut Node)>,
 ) {
-    // The bar is off screen while combat mode is off; scanning every member
-    // per card per frame for an invisible bar is pure waste. The binds
-    // refresh the moment the mode arms, before the spring shows anything.
     if !mode.0 {
         return;
     }
-    for (card, mut border, mut background) in cards.iter_mut() {
-        let Ok(battalion) = battalions.get(card.0) else {
-            continue;
-        };
-        let selected = members.iter().any(|(soldier, member, _)| {
-            member.0 == battalion.id && selection.entities.contains(&soldier)
-        });
-        let next_border = if selected {
-            BorderColor::all(Color::srgb(0.95, 0.72, 0.35))
-        } else {
-            BorderColor::all(CRIMSON.with_alpha(0.55))
-        };
-        if *border != next_border {
-            *border = next_border;
-        }
-        let next_background = if selected {
-            BackgroundColor(Color::srgba(0.20, 0.13, 0.08, 0.96))
-        } else {
-            BackgroundColor(SIGN_WOOD)
-        };
-        if *background != next_background {
-            *background = next_background;
-        }
+    if !roster.is_changed() && !selection.is_changed() && !mode.is_changed() {
+        return;
     }
-    for (marker, mut text) in counts.iter_mut() {
-        let Ok(battalion) = battalions.get(marker.0) else {
+    let selected: std::collections::HashMap<_, _> = roster
+        .battalions
+        .iter()
+        .map(|b| {
+            (
+                b.entity,
+                b.members
+                    .iter()
+                    .filter(|e| selection.is_selected(**e))
+                    .count(),
+            )
+        })
+        .collect();
+    for (card, mut border, mut background) in &mut cards {
+        let Some(battalion) = roster.battalions.iter().find(|b| b.entity == card.0) else {
             continue;
         };
-        let count = members
-            .iter()
-            .filter(|(_, member, _)| member.0 == battalion.id)
-            .count();
-        let next = format!("{count} MEN");
+        let count = selected[&card.0];
+        let full = count > 0 && count == battalion.count;
+        border.set_if_neq(BorderColor::all(if full {
+            Color::srgb(0.95, 0.72, 0.35)
+        } else if count > 0 {
+            Color::srgb(0.90, 0.42, 0.20)
+        } else {
+            CRIMSON.with_alpha(0.55)
+        }));
+        background.set_if_neq(BackgroundColor(if count > 0 {
+            Color::srgba(0.20, 0.13, 0.08, 0.96)
+        } else {
+            SIGN_WOOD
+        }));
+    }
+    for (marker, mut text) in &mut counts {
+        let Some(b) = roster.battalions.iter().find(|b| b.entity == marker.0) else {
+            continue;
+        };
+        let n = selected[&b.entity];
+        let next = if n > 0 && n < b.count {
+            format!("{n}/{} SELECTED", b.count)
+        } else {
+            format!("{} MEN", b.count)
+        };
         if text.0 != next {
             text.0 = next;
         }
     }
-    for (marker, mut node) in fills.iter_mut() {
-        let Ok(battalion) = battalions.get(marker.0) else {
+    for (marker, mut node) in &mut fills {
+        let Some(b) = roster.battalions.iter().find(|b| b.entity == marker.0) else {
             continue;
         };
-        let (current, max) = members
-            .iter()
-            .filter(|(_, member, _)| member.0 == battalion.id)
-            .fold(
-                (0.0f32, 0.0f32),
-                |(current, max), (_, _, health)| match health {
-                    Some(health) => (current + health.current.max(0.0), max + health.max),
-                    None => (current + CHARACTER_MAX_HEALTH, max + CHARACTER_MAX_HEALTH),
-                },
-            );
-        let fraction = if max > 0.0 {
-            (current / max).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let next = Val::Percent(fraction * 100.0);
+        let next = Val::Percent(b.health_fraction * 100.0);
         if node.width != next {
             node.width = next;
         }
@@ -389,28 +390,27 @@ fn bind_battalion_cards(
 
 fn handle_card_clicks(
     mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     cards: Query<(&Interaction, &BattalionCard)>,
-    battalions: Query<&Battalion>,
-    members: Query<(Entity, &MemberOfBattalion)>,
+    roster: Res<ArmyRoster>,
     mut selection: ResMut<crate::selection::Selection>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
-    for (interaction, card) in cards.iter() {
+    for (interaction, card) in &cards {
         if *interaction != Interaction::Pressed {
             continue;
         }
-        let Ok(battalion) = battalions.get(card.0) else {
+        let Some(battalion) = roster.battalions.iter().find(|b| b.entity == card.0) else {
             continue;
         };
-        let soldiers: Vec<Entity> = members
-            .iter()
-            .filter(|(_, member)| member.0 == battalion.id)
-            .map(|(soldier, _)| soldier)
-            .collect();
-        if !soldiers.is_empty() {
-            selection.set(soldiers);
+        if !battalion.members.is_empty() {
+            selection.apply_group(
+                battalion.members.clone(),
+                keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+                true,
+            );
         }
     }
 }
@@ -420,22 +420,11 @@ fn handle_card_clicks(
 #[allow(clippy::type_complexity)]
 fn bind_muster_card(
     selection: Res<crate::selection::Selection>,
-    name_input: Res<crate::ui::name_entry::PlayerNameInput>,
-    soldiers: Query<
-        (
-            Entity,
-            &CommandedBy,
-            Option<&MemberOfBattalion>,
-            Has<shared::components::Hero>,
-        ),
-        With<shared::components::CharacterKind>,
-    >,
+    roster: Res<ArmyRoster>,
     mut cards: Query<&mut BorderColor, With<MusterCard>>,
     mut labels: Query<&mut Text, With<MusterCardLabel>>,
 ) {
-    let account = name_input.name.trim().to_lowercase();
-    let eligible =
-        crate::ui::encyclopedia::army::muster_candidates(&selection, &account, &soldiers).len();
+    let eligible = roster.muster_candidates(&selection).len();
     let next_label = if eligible == 0 {
         // Creates an empty battalion; fill it from the army page.
         "NEW BATTALION".to_string()
@@ -466,16 +455,7 @@ fn handle_muster_card_clicks(
     mut last_muster: Local<Option<f32>>,
     cards: Query<&Interaction, With<MusterCard>>,
     selection: Res<crate::selection::Selection>,
-    name_input: Res<crate::ui::name_entry::PlayerNameInput>,
-    soldiers: Query<
-        (
-            Entity,
-            &CommandedBy,
-            Option<&MemberOfBattalion>,
-            Has<shared::components::Hero>,
-        ),
-        With<shared::components::CharacterKind>,
-    >,
+    roster: Res<ArmyRoster>,
     mut senders: Query<
         &mut lightyear::prelude::MessageSender<shared::protocol::ArmyOrder>,
         (With<crate::GameClient>, With<lightyear::prelude::Connected>),
@@ -496,10 +476,7 @@ fn handle_muster_card_clicks(
     if last_muster.is_some_and(|sent| now - sent < 1.0) {
         return;
     }
-    let account = name_input.name.trim().to_lowercase();
-    // Empty is deliberate: the click always raises a battalion.
-    let recruits =
-        crate::ui::encyclopedia::army::muster_candidates(&selection, &account, &soldiers);
+    let recruits = roster.muster_candidates(&selection);
     *last_muster = Some(now);
     if let Ok(mut sender) = senders.single_mut() {
         sender.send::<shared::protocol::ReliableChannel>(shared::protocol::ArmyOrder::Muster {

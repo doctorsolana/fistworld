@@ -59,7 +59,7 @@ fn configure_server_fixed_schedule(app: &mut App) {
                 .run_if(server_is_started),
             world::village::schedule::VillageSimulationSet::Navigation
                 .in_set(ServerSet::NetIngress)
-                .after(player::hero::handle_unit_move_orders)
+                .after(player::orders::handle_unit_orders)
                 .before(world::regions::update_client_interest)
                 .run_if(server_is_started),
         ),
@@ -100,10 +100,8 @@ fn configure_server_fixed_schedule(app: &mut App) {
             net::input::handle_client_input_messages,
             player::commander::sync_commander_views,
             (
-                player::hero::handle_unit_move_orders,
-                player::combat::handle_unit_attack_orders,
+                player::orders::handle_unit_orders,
                 player::army::handle_army_orders,
-                player::army::handle_formation_move_orders,
             )
                 .chain(),
             player::permits::handle_hero_construction_orders,
@@ -141,6 +139,15 @@ fn configure_server_fixed_schedule(app: &mut App) {
             .run_if(server_is_started),
     );
 
+    app.add_systems(
+        FixedUpdate,
+        world::army_lab::stage_connected_army
+            .after(player::spawn::handle_player_name_submission)
+            .before(player::orders::handle_unit_orders)
+            .in_set(ServerSet::NetIngress)
+            .run_if(server_is_started),
+    );
+
     // Opening-voyage systems are kept out of the already-large ingress tuple
     // so adding future vessel classes does not hit Bevy's tuple arity ceiling.
     app.add_systems(
@@ -168,7 +175,7 @@ fn configure_server_fixed_schedule(app: &mut App) {
             world::immigration::finish_natural_immigrant_voyages,
         )
             .chain()
-            .after(player::hero::handle_unit_move_orders)
+            .after(player::orders::handle_unit_orders)
             .before(world::regions::update_client_interest)
             .in_set(ServerSet::NetIngress)
             .run_if(server_is_started),
@@ -202,7 +209,7 @@ fn configure_server_fixed_schedule(app: &mut App) {
                 .after(world::village::schedule::VillageSimulationSet::Core)
                 .before(world::regions::tick_strategic_world),
             telemetry::perf::handle_perf_navigation_phase_begin
-                .after(player::hero::handle_unit_move_orders)
+                .after(player::orders::handle_unit_orders)
                 .before(world::village::schedule::VillageSimulationSet::Navigation),
             telemetry::perf::handle_perf_navigation_phase_end
                 .after(world::village::schedule::VillageSimulationSet::Navigation)

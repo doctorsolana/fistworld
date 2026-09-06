@@ -69,7 +69,10 @@ pub(super) fn handle_name_submission_result(
                         outfit: selected.0,
                     });
                     info!("FISTWORLD_AUTOCREATE_VOYAGE: sent normal CreateHero request");
-                } else if needs_hero_creation && !automated_god_spawn {
+                } else if needs_hero_creation
+                    && !automated_god_spawn
+                    && std::env::var_os("FISTWORLD_ARMY_SCENARIO").is_none()
+                {
                     *creator_purpose = crate::ui::hero_creator::HeroCreatorPurpose::NewPlayerVoyage;
                     creator_open.0 = true;
                     if ux_fixture {

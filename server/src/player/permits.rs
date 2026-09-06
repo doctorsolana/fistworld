@@ -1253,7 +1253,13 @@ pub fn handle_hero_construction_orders(
             site.builder = Some(hero_entity);
             commands
                 .entity(hero_entity)
-                .remove::<crate::player::hero::MoveTarget>()
+                .remove::<(
+                    crate::player::hero::MoveTarget,
+                    crate::player::orders::MarchOrder,
+                    crate::player::orders::CommandStance,
+                    crate::player::combat::AttackOrder,
+                    shared::components::EngagedWith,
+                )>()
                 .remove::<crate::world::village_roads::TravelRoute>()
                 .remove::<crate::world::village_roads::NavigationRoutePending>()
                 .remove::<crate::world::village_roads::NavigationRouteFailed>()

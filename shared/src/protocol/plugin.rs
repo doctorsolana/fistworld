@@ -1,3 +1,5 @@
+use super::unit_orders::{ArmyOrderFeedback, UnitOrder};
+use crate::components::EngagedWith;
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
@@ -83,6 +85,7 @@ impl Plugin for ProtocolPlugin {
         app.component::<Battalion>().replicate();
         app.component::<MemberOfBattalion>().replicate();
         app.component::<StandardBearer>().replicate();
+        app.component::<EngagedWith>().replicate();
         app.component::<CharacterObjective>().replicate();
         app.component::<CharacterDayPlan>().replicate();
         app.component::<CharacterNavigationStatus>().replicate();
@@ -181,18 +184,14 @@ impl Plugin for ProtocolPlugin {
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<RequestGodAccess>()
             .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<UnitMoveOrder>()
-            .add_map_entities()
-            .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<UnitAttackOrder>()
+        app.register_message::<UnitOrder>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<ArmyOrder>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);
-        app.register_message::<FormationMoveOrder>()
-            .add_map_entities()
-            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<ArmyOrderFeedback>()
+            .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<HeroConstructionOrder>()
             .add_map_entities()
             .add_direction(NetworkDirection::ClientToServer);

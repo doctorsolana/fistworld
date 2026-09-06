@@ -291,12 +291,18 @@ mod tests {
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Left);
         world.run_system_once(pick_on_left_click).unwrap();
+        world
+            .run_system_once(super::super::expand_standard_bearer_selection)
+            .unwrap();
         {
             let mut mouse = world.resource_mut::<ButtonInput<MouseButton>>();
             mouse.clear_just_pressed(MouseButton::Left);
             mouse.release(MouseButton::Left);
         }
         world.run_system_once(pick_on_left_click).unwrap();
+        world
+            .run_system_once(super::super::expand_standard_bearer_selection)
+            .unwrap();
     }
 
     fn click_test_world(ray_origin: Vec3) -> World {
@@ -440,6 +446,9 @@ mod tests {
         ));
 
         world.run_system_once(pick_on_left_click).unwrap();
+        world
+            .run_system_once(super::super::expand_standard_bearer_selection)
+            .unwrap();
 
         assert_eq!(world.resource::<Selection>().entities, vec![hero]);
     }
@@ -448,6 +457,7 @@ mod tests {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn pick_on_left_click(
     mouse: Res<ButtonInput<MouseButton>>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
     input_state: Res<InputState>,
     placement: Res<WorldPlacementMode>,
     cursor_ray: Res<CursorRay>,
@@ -467,6 +477,12 @@ pub(super) fn pick_on_left_click(
     mut drag: ResMut<DragBox>,
     mut selection: ResMut<Selection>,
 ) {
+    let shift = keys
+        .as_ref()
+        .is_some_and(|k| k.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]));
+    let individual = keys
+        .as_ref()
+        .is_some_and(|k| k.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]));
     let cursor = windows.single().ok().and_then(|w| w.cursor_position());
 
     // --- track the drag -----------------------------------------------------
@@ -501,7 +517,11 @@ pub(super) fn pick_on_left_click(
     let had_press = drag.start.is_some();
     *drag = DragBox::default();
 
-    if !had_press {
+    if !had_press
+        || input_state.ui_blocking()
+        || placement_armed(&placement)
+        || crate::ui::pointer_over_ui(&ui_blockers)
+    {
         return;
     }
 
@@ -554,7 +574,12 @@ pub(super) fn pick_on_left_click(
             }
         }
         hits.sort_by(|a, b| a.1.total_cmp(&b.1));
-        selection.set(hits.into_iter().map(|(entity, _)| entity).collect());
+        selection.gesture(
+            hits.into_iter().map(|(entity, _)| entity).collect(),
+            shift,
+            false,
+            individual,
+        );
         return;
     }
 
@@ -595,5 +620,10 @@ pub(super) fn pick_on_left_click(
     }
 
     // Clicking empty ground clears -- the standard RTS deselect.
-    selection.set(best.into_iter().map(|(entity, _)| entity).collect());
+    selection.gesture(
+        best.into_iter().map(|(entity, _)| entity).collect(),
+        shift,
+        true,
+        individual,
+    );
 }

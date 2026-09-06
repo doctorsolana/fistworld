@@ -311,6 +311,7 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             world::village_roads::queue_villager_travel_routes,
             world::village_roads::retry_failed_routes_after_obstacle_change,
             world::village_roads::plan_villager_travel_routes,
+            player::orders::advance_marches,
             player::hero::rebuild_tactical_crowd_grid,
             player::hero::step_units,
             player::combat::acquire_targets,

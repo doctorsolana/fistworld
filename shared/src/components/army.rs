@@ -46,3 +46,10 @@ pub struct StandardBearer;
 /// Hard ceiling per battalion. Big enough for a serious shield wall, small
 /// enough that one formation order stays a bounded amount of work.
 pub const MAX_BATTALION_SIZE: usize = 64;
+
+pub const MAX_BATTALIONS_PER_ACCOUNT: usize = 12;
+
+/// The currently engaged person, written only when engagement changes. The
+/// client draws attack markers from this authoritative state, never a sent click.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EngagedWith(pub super::PersonId);

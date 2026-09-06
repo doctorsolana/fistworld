@@ -18,6 +18,7 @@ pub mod commander;
 pub mod companies;
 pub mod hero;
 pub mod market;
+pub mod orders;
 pub mod permits;
 pub mod roster;
 pub mod spawn;

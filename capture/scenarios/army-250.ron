@@ -1,0 +1,17 @@
+// Connected army lab; load with FISTWORLD_ARMY_SCENARIO in BOTH binaries.
+// This is an ArmyLabScenario, not an offline CaptureScenario.
+(
+    version: 1,
+    account: "armylab",
+    map: "battle_lab",
+    battalions: 5,
+    soldiers_per_battalion: 50,
+    origin: (-20.0, 0.0, -75.0),
+    deployments: [
+        (target: (-20.0, 0.0, -25.0), facing: (0.0, 1.0), width: 83.0),
+        (target: (25.0, 0.0, -25.0), facing: (1.0, 0.0), width: 83.0),
+    ],
+    camera_focus: (-15.0, 0.0, -25.0),
+    camera_zoom: 125.0,
+    timeout_seconds: 300.0,
+)

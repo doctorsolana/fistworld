@@ -10,7 +10,7 @@ use lightyear::prelude::{Connected, MessageSender};
 
 use shared::components::{settlement_founding_refusal, Hero, HeroOutfit};
 use shared::player::peer_id_to_u64;
-use shared::protocol::{DevCommand, ReliableChannel, UnitMoveOrder};
+use shared::protocol::{DevCommand, ReliableChannel, UnitOrder};
 
 use crate::camera_rts::{CursorTerrainHit, LocalPeerId};
 use crate::input::InputState;
@@ -232,7 +232,7 @@ pub(super) fn auto_spawn_hero(
         (With<crate::GameClient>, With<Connected>),
     >,
     mut move_sender: Query<
-        &mut MessageSender<UnitMoveOrder>,
+        &mut MessageSender<UnitOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
     mut state: Local<u8>,
@@ -277,9 +277,7 @@ pub(super) fn auto_spawn_hero(
     if let Some(hero_entity) = local_hero_entity(&heroes, &local) {
         if let Ok(mut sender) = move_sender.single_mut() {
             let target = anchor + Vec3::new(12.0, 0.0, 6.0);
-            sender.send::<ReliableChannel>(UnitMoveOrder {
-                units: vec![(hero_entity, target)],
-            });
+            sender.send::<ReliableChannel>(UnitOrder::move_to(vec![hero_entity], target));
             info!("AUTOSPAWN: move order sent to {target:?}");
 
             // FISTWORLD_AUTOSPAWN_NPC=<n> also drops n villagers, so the god

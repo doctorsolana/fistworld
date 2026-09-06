@@ -806,7 +806,7 @@ pub(super) fn enter_world_offline(
                 }
             }
         }
-        commands.insert_resource(crate::selection::Selection { entities: selected });
+        commands.insert_resource(crate::selection::Selection::from_entities(selected));
     }
 
     // FISTFORCE_CAPTURE_ENCYCLOPEDIA=1 opens the encyclopedia and seeds a

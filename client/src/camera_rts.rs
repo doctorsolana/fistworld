@@ -222,6 +222,8 @@ fn restore_commander_view(
 }
 
 pub fn update_commander_camera(
+    combat_mode: Option<Res<crate::combat_mode::CombatMode>>,
+    selection: Option<Res<crate::selection::Selection>>,
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
@@ -247,7 +249,10 @@ pub fn update_commander_camera(
             .as_deref()
             .is_none_or(|opening| !opening.is_active());
 
-    if accepts_world_input && mouse_buttons.pressed(MouseButton::Right) {
+    let placing_formation = combat_mode.as_ref().is_some_and(|m| m.0)
+        && selection.as_ref().is_some_and(|s| !s.is_empty())
+        && !keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+    if accepts_world_input && !placing_formation && mouse_buttons.pressed(MouseButton::Right) {
         controller.yaw_target -=
             look_delta.x * controller.look_sensitivity * input_settings.mouse_sensitivity;
     }

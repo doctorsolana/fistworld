@@ -39,6 +39,43 @@ pub struct AttackRingAssets {
     core_hovered: Handle<StandardMaterial>,
 }
 
+/// Reflect accepted engagements, including automatic target changes. A refused
+/// click never creates a marker, and a stop/work order removes the old marker.
+pub(super) fn sync_authoritative_targets(
+    account: Res<crate::ui::name_entry::PlayerNameInput>,
+    engaged: Query<(Entity, &shared::components::EngagedWith, &CommandedBy)>,
+    people: Query<(Entity, &shared::components::PersonId)>,
+    changed: Query<
+        (),
+        Or<(
+            Changed<shared::components::EngagedWith>,
+            Changed<CommandedBy>,
+            Added<shared::components::PersonId>,
+        )>,
+    >,
+    mut removed: RemovedComponents<shared::components::EngagedWith>,
+    mut removed_people: RemovedComponents<shared::components::PersonId>,
+    mut removed_owners: RemovedComponents<CommandedBy>,
+    mut targets: ResMut<CombatTargets>,
+) {
+    let removed =
+        removed.read().count() + removed_people.read().count() + removed_owners.read().count();
+    if !account.is_changed() && changed.is_empty() && removed == 0 {
+        return;
+    }
+    let account = account.name.trim().to_lowercase();
+    let people: std::collections::HashMap<_, _> = people.iter().map(|(e, id)| (*id, e)).collect();
+    let mut ordered: Vec<_> = engaged
+        .iter()
+        .filter(|(_, _, owner)| owner.0 == account)
+        .filter_map(|(attacker, target, _)| people.get(&target.0).map(|victim| (attacker, *victim)))
+        .collect();
+    ordered.sort_unstable();
+    if targets.ordered != ordered {
+        targets.ordered = ordered;
+    }
+}
+
 /// Slightly wider than the selection ring so a selected attacker standing
 /// beside its victim reads as two different marks, not a rendering glitch.
 const SHOULDER_INNER: f32 = 0.66;

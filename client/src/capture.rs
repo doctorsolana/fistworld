@@ -11,11 +11,14 @@
 //!
 //! Run it via `cargo run -p client --bin capture -- --help`.
 
+mod army;
+pub(crate) use army::{drive_army_capture, drive_army_input, ArmyCapture};
 mod history_fixtures;
 mod inspection;
 mod live;
 mod performance;
 mod presentation;
+pub(crate) use presentation::setup_capture_presentation;
 mod scene_fixtures;
 mod ui_fixtures;
 mod world_fixture;

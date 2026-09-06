@@ -4,6 +4,7 @@
 //! in this crate (notably `src/bin/capture.rs`) can reuse the rendering stack.
 
 pub mod app_wiring;
+pub mod army_roster;
 pub mod audio;
 pub mod battalion_bar;
 pub mod boat;

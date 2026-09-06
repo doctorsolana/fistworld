@@ -15,10 +15,8 @@ use crate::states::GameState;
 #[derive(Resource, Default)]
 pub struct CombatMode(pub bool);
 
-/// Client-side attack bookkeeping for the target markers: which of our units
-/// hold a standing attack order on whom, and who the cursor currently points
-/// at while in combat mode. Pairs, not bare targets, so an order to one squad
-/// can retire only its own markers while another squad's fight stays marked.
+/// Presentation of replicated engagements plus the current click preview.
+/// Sending a command alone never creates an ordered marker.
 #[derive(Resource, Default)]
 pub struct CombatTargets {
     pub ordered: Vec<(Entity, Entity)>,
@@ -55,6 +53,7 @@ impl Plugin for CombatModePlugin {
             Update,
             (toggle_combat_mode, animate_combat_ui)
                 .chain()
+                .before(crate::camera_rts::update_commander_camera)
                 .run_if(in_state(GameState::Playing)),
         );
     }
@@ -65,6 +64,9 @@ struct CombatUiRoot;
 
 #[derive(Component)]
 struct CombatBorderStrip;
+
+#[derive(Component)]
+struct CombatHelp;
 
 /// The hanging sign plus its spring state.
 #[derive(Component)]
@@ -123,6 +125,13 @@ fn spawn_combat_ui(
             },
         ))
         .with_children(|root| {
+            root.spawn((CombatHelp, Pickable::IGNORE, Visibility::Hidden,
+                Node { position_type: PositionType::Absolute, bottom: Val::Px(176.0), left: Val::Percent(50.0), width: Val::Px(960.0), margin: UiRect::left(Val::Px(-480.0)), ..default() },
+                Text::new("RMB drag: formation   |   Shift: add / toggle   |   Alt + click: individual   |   Ctrl / Cmd + 0-9: save group\nH: hold   |   X: attack-move   |   R: retreat   |   Alt + RMB: orbit"),
+                TextFont { font_size: FontSize::Px(12.0), ..default() }, TextColor(PARCHMENT),
+                TextLayout::justify(Justify::Center),
+                TextShadow { offset: Vec2::new(0.0, 1.0), color: Color::BLACK },
+            ));
             // Four crimson edge strips; alpha animated with the mode.
             let strips = [
                 // (left, top, width, height)
@@ -226,8 +235,16 @@ fn animate_combat_ui(
     time: Res<Time>,
     mode: Res<CombatMode>,
     mut banners: Query<(&mut CombatBanner, &mut Node)>,
+    mut help: Query<&mut Visibility, With<CombatHelp>>,
     mut strips: Query<&mut BackgroundColor, (With<CombatBorderStrip>, Without<CombatBanner>)>,
 ) {
+    for mut visibility in &mut help {
+        visibility.set_if_neq(if mode.0 {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
     let dt = time.delta_secs().min(0.05);
     let target = if mode.0 {
         BANNER_SHOWN_TOP
