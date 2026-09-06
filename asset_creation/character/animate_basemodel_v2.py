@@ -758,6 +758,11 @@ make_face("face_happy", openness=0.38, tilt=0.0, raise_z=0.010,
 make_face("face_surprised", openness=1.35, tilt=0.0, raise_z=0.004, darts=())
 
 # ==================================================================================================
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from combat_clips import build_combat_clips
+build_combat_clips(globals())
+
 for a in bpy.data.actions:
     a.use_fake_user = True
 rig.animation_data.action = bpy.data.actions["idle"]

@@ -42,9 +42,13 @@ fn recruits(
 }
 
 fn release(world: &mut World, soldier: Entity) {
-    world
-        .entity_mut(soldier)
-        .remove::<(MemberOfBattalion, StandardBearer)>();
+    world.entity_mut(soldier).remove::<(
+        MemberOfBattalion,
+        StandardBearer,
+        crate::player::combat::fronts::FormationMember,
+        crate::player::combat::fronts::PausedFormationMarch,
+        CombatReady,
+    )>();
 }
 
 pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (usize, String) {
@@ -82,6 +86,11 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
             ));
             for (i, soldier) in soldiers.iter().enumerate() {
                 let mut entity = world.entity_mut(*soldier);
+                entity.remove::<(
+                    crate::player::combat::fronts::FormationMember,
+                    crate::player::combat::fronts::PausedFormationMarch,
+                    CombatReady,
+                )>();
                 entity.insert(MemberOfBattalion(id));
                 if i == 0 {
                     entity.insert(StandardBearer);
@@ -127,6 +136,11 @@ pub fn apply_army_order(world: &mut World, account: &str, order: ArmyOrder) -> (
                 }
                 world
                     .entity_mut(soldier)
+                    .remove::<(
+                        crate::player::combat::fronts::FormationMember,
+                        crate::player::combat::fronts::PausedFormationMarch,
+                        CombatReady,
+                    )>()
                     .insert(MemberOfBattalion(id))
                     .remove::<StandardBearer>();
                 room -= 1;

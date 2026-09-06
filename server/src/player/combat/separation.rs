@@ -29,6 +29,7 @@ pub fn separate_melee_bodies(
             &mut shared::region::RegionCoord,
             Option<&WarParty>,
             Option<&CommandedBy>,
+            Option<&Health>,
         ),
         (
             With<CharacterKind>,
@@ -50,8 +51,8 @@ pub fn separate_melee_bodies(
         indices.clear();
     }
     pushes.clear();
-    for (entity, _, position, _, war_party, commanded) in bodies.iter() {
-        if war_party.is_none() && commanded.is_none() {
+    for (entity, _, position, _, war_party, commanded, health) in bodies.iter() {
+        if health.is_some_and(|h| h.is_dead()) || (war_party.is_none() && commanded.is_none()) {
             continue;
         }
         participants.push((entity, Vec2::new(position.0.x, position.0.z)));
@@ -114,7 +115,7 @@ pub fn separate_melee_bodies(
         return;
     }
 
-    for (entity, kind, mut position, mut region, _, _) in bodies.iter_mut() {
+    for (entity, kind, mut position, mut region, _, _, _) in bodies.iter_mut() {
         let Some(push) = pushes.get(&entity) else {
             continue;
         };

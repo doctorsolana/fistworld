@@ -12,7 +12,7 @@ use shared::protocol::{
 };
 use std::collections::{BTreeMap, HashSet};
 
-use super::combat::{AttackOrder, MeleeCooldown};
+use super::combat::{fronts, AttackOrder, MeleeCooldown};
 use super::hero::{MoveTarget, OfflineHero};
 use crate::world::village::{
     ConstructionMaterialRoutine, PlayerConstructionAssignment, UnderConstruction,
@@ -71,6 +71,14 @@ pub(crate) fn feedback(world: &mut World, link: Entity, accepted: usize, message
 
 pub fn handle_unit_orders(world: &mut World) {
     for (link, account, order) in take_orders::<UnitOrder>(world) {
+        if std::env::var_os("FISTWORLD_ARMY_SCENARIO").is_some() {
+            info!(
+                "Army lab received {:?} for {} battalions and {} individuals",
+                order.command,
+                order.selection.battalions.len(),
+                order.selection.units.len()
+            );
+        }
         let (accepted, message) = apply_unit_order(world, &account, order);
         feedback(world, link, accepted, message);
     }
@@ -210,7 +218,30 @@ pub fn apply_unit_order(world: &mut World, account: &str, order: UnitOrder) -> (
                 .map_or(0, |a| a.physique()),
         });
     }
+    let mut full_sizes = BTreeMap::<u64, usize>::new();
+    for (member, owner, health) in world
+        .query::<(&MemberOfBattalion, &CommandedBy, Option<&Health>)>()
+        .iter(world)
+    {
+        if owner.0 == account && health.is_none_or(|h| !h.is_dead()) {
+            *full_sizes.entry(member.0 .0).or_default() += 1;
+        }
+    }
+    let cohesive: HashSet<_> = grouped
+        .iter()
+        .filter(|(key, units)| full_sizes.get(key) == Some(&units.len()))
+        .map(|(key, _)| *key)
+        .collect();
     let groups = grouped.len();
+    let current_blocks: Vec<_> = if !matches!(order.command, UnitCommand::Move { .. }) {
+        grouped
+            .iter()
+            .filter(|(key, soldiers)| soldiers.len() >= 2 && cohesive.contains(key))
+            .map(|(key, soldiers)| fronts::current_block(world, *key, soldiers))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let blocks = if let UnitCommand::Move {
         target, frontage, ..
     } = order.command
@@ -241,6 +272,21 @@ pub fn apply_unit_order(world: &mut World, account: &str, order: UnitOrder) -> (
         UnitCommand::Move { mode, .. } => {
             world.init_resource::<navigation::FormationRoutes>();
             for block in blocks {
+                if cohesive.contains(&block.key) {
+                    fronts::install(
+                        world,
+                        shared::formation::FormationBlock {
+                            key: block.key,
+                            centre: block.centre,
+                            facing: block.facing,
+                            files: block.files,
+                            slots: block.slots.clone(),
+                        },
+                        fronts::Intent::March {
+                            engage: mode == MovementMode::AttackMove,
+                        },
+                    );
+                }
                 let mut points: Vec<_> = block.slots.iter().map(|(_, p)| p.xz()).collect();
                 points.extend(
                     block
@@ -279,18 +325,31 @@ pub fn apply_unit_order(world: &mut World, account: &str, order: UnitOrder) -> (
             }
         }
         UnitCommand::Attack { target } => {
-            let person = world.get::<PersonId>(target).copied();
-            for entity in soldiers {
-                let mut soldier = world.entity_mut(entity);
-                soldier
-                    .remove::<CommandStance>()
-                    .insert(AttackOrder { target });
-                if let Some(person) = person {
-                    soldier.insert(EngagedWith(person));
+            let enemy = fronts::enemy_of(world, target);
+            // Uncommanded civilians are deliberately absent from the automatic
+            // combat index. Explicit attacks on them keep ordinary pursuit.
+            if world.get::<CommandedBy>(target).is_some()
+                || world.get::<super::combat::WarParty>(target).is_some()
+            {
+                for block in current_blocks {
+                    fronts::install(world, block, fronts::Intent::Attack(enemy));
                 }
+            }
+            for entity in soldiers {
+                if world.get::<fronts::FormationMember>(entity).is_some() {
+                    continue;
+                }
+                let mut soldier = world.entity_mut(entity);
+                soldier.remove::<CommandStance>().insert((
+                    AttackOrder { target },
+                    super::combat::SkirmishOrder { target: enemy },
+                ));
             }
         }
         UnitCommand::Hold => {
+            for block in current_blocks {
+                fronts::install(world, block, fronts::Intent::Hold);
+            }
             for entity in soldiers {
                 world.entity_mut(entity).insert(CommandStance::Hold);
             }
@@ -336,6 +395,14 @@ fn interrupt_previous_order(world: &mut World, entity: Entity) {
         cooldown.disengage();
     }
     unit.remove::<(
+        fronts::FormationMember,
+        fronts::PausedFormationMarch,
+        super::combat::SkirmishOrder,
+        super::combat::DirectCombatApproach,
+        CombatReady,
+        CombatSwing,
+    )>();
+    unit.remove::<(
         AttackOrder,
         EngagedWith,
         MarchOrder,
@@ -377,7 +444,7 @@ fn destination_allowed(world: &World, point: Vec3) -> bool {
 
 mod flow;
 mod navigation;
-pub use navigation::advance_marches;
+pub use navigation::{advance_marches, FormationRoutes};
 
 #[cfg(test)]
 mod tests;

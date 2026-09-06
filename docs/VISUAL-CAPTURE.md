@@ -364,3 +364,30 @@ The client exits successfully only after every deployment and file write succeed
 timeout writes `failure.json` and exits with an error. Inspect images and both JSON
 files. The army lab uses the existing owned presentation image for `target: window`,
 so its composed HUD capture also works when a macOS swapchain returns black.
+
+## Connected clash scenarios
+
+`battle-1v1.ron`, `battle-2v1.ron`, `battle-3v1.ron` and `battle-skirmish.ron`
+use the same launch recipe above, replacing the scenario path in both binaries
+and the account with `FISTFORCE_AUTOCONNECT=battlelab`. Use a fresh server per run,
+`FISTFORCE_RESOLUTION=1600x900`, and a separate output directory. The scenario
+owns camera framing. Both sides are ordinary server characters, discharged into
+retinues and mustered through the real handlers; defenders receive Hold.
+
+The client waits for the complete replicated population, dressed rigs, owned
+roster, stable terrain and unblocked UI. It selects the attacking battalions and
+issues an ordinary enemy click. A matching cursor ray is essential: a ground-only
+cursor override would silently test Move instead. The server's accepted-attack
+feedback is required for success. In the mixed scenario the client subsequently
+orders one independent person, then two more, into the ongoing clash.
+
+The connected run continuously captures the owned scene image with PNG and
+`.capture.json`. A `.battle.json` beside each frame records positions, health,
+battalion/owner, confirmed targets and absolute swing/reaction timestamps. Capture
+cadence increases from 2 world seconds during approach to 0.25 seconds after first
+contact. `summary.json` requires accepted Attack, contact by every configured
+attacking battalion and independent person, casualties and completed captures.
+These are functional checks: personally inspect the approach, contact, casualty
+replacement and late fight to assess crossing, crowding, poses and stalls.
+Screenshot readbacks and compilation disturb timing; these runs are not FPS
+benchmarks. Use `army-250.ron` as the separate march/redeployment regression.

@@ -305,6 +305,7 @@ struct DyingCharacter {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn process_character_deaths(
     mut commands: Commands,
+    combat_reactions: Query<&shared::components::CombatReaction>,
     world_time: Query<&WorldTime>,
     mut ledger: ResMut<MortalityLedger>,
     mut business_events: ResMut<BusinessEventQueue>,
@@ -327,7 +328,10 @@ pub fn process_character_deaths(
             Option<&GoodsInventory>,
             (Option<&Hero>, Option<&PendingDeathCause>),
         ),
-        Changed<Health>,
+        (
+            Changed<Health>,
+            Without<crate::player::combat::SettledCombatDeath>,
+        ),
     >,
     living_characters: Query<(&PersonId, &CharacterName, &Health), With<CharacterKind>>,
     companies: Query<(
@@ -689,7 +693,36 @@ pub fn process_character_deaths(
             day,
             cause: dead.cause,
         });
-        commands.entity(dead.entity).despawn();
+        if combat_reactions.get(dead.entity).is_ok_and(|r| r.fatal) {
+            commands
+                .entity(dead.entity)
+                .insert((
+                    crate::player::combat::SettledCombatDeath,
+                    shared::components::CharacterMotion::STATIONARY,
+                ))
+                .remove::<(
+                    crate::player::hero::MoveTarget,
+                    crate::player::orders::MarchOrder,
+                    crate::player::combat::AttackOrder,
+                    crate::player::combat::SkirmishOrder,
+                    crate::player::combat::DirectCombatApproach,
+                    crate::player::combat::fronts::FormationMember,
+                    crate::player::combat::fronts::PausedFormationMarch,
+                    crate::world::village_roads::TravelRoute,
+                    crate::world::village_roads::NavigationRoutePending,
+                    shared::components::EngagedWith,
+                )>()
+                .remove::<(
+                    ResidentOf,
+                    LivesAt,
+                    shared::components::EmployedAt,
+                    shared::components::CivicEmployment,
+                    WorkStatus,
+                    VillagerIntent,
+                )>();
+        } else {
+            commands.entity(dead.entity).despawn();
+        }
     }
 }
 
@@ -1014,6 +1047,75 @@ pub fn recover_orphaned_construction(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fatal_combat_settles_once_while_the_fall_finishes() {
+        use crate::player::combat::{expire_combat_bodies, SettledCombatDeath};
+        use shared::components::CombatReaction;
+        let mut app = App::new();
+        app.init_resource::<MortalityLedger>()
+            .init_resource::<BusinessEventQueue>()
+            .init_resource::<CompanyEscrowRefundQueue>()
+            .add_systems(
+                Update,
+                (process_character_deaths, expire_combat_bodies).chain(),
+            );
+        let mut clock = WorldTime::new_default();
+        clock.day = 0;
+        clock.seconds_in_cycle = 10.0;
+        let clock = app.world_mut().spawn(clock).id();
+        let dead = app
+            .world_mut()
+            .spawn((
+                PersonId(900),
+                CharacterName("Fallen".into()),
+                CharacterKind::Villager,
+                CharacterAffiliation::default(),
+                CharacterAttributes::default(),
+                Health {
+                    current: 0.0,
+                    ..default()
+                },
+                CombatReaction {
+                    at: 10.0,
+                    fatal: true,
+                },
+                PendingDeathCause(DeathCause::Combat),
+            ))
+            .id();
+        app.world_mut().entity_mut(dead).insert((
+            crate::player::hero::MoveTarget(Vec3::X),
+            shared::components::CharacterMotion { velocity: Vec3::X },
+        ));
+        app.update();
+        assert!(app
+            .world()
+            .get::<crate::player::hero::MoveTarget>(dead)
+            .is_none());
+        assert_eq!(
+            *app.world()
+                .get::<shared::components::CharacterMotion>(dead)
+                .unwrap(),
+            shared::components::CharacterMotion::STATIONARY
+        );
+        assert!(app.world().get::<SettledCombatDeath>(dead).is_some());
+        assert_eq!(app.world().resource::<MortalityLedger>().total_deaths, 1);
+        // Even a later no-op dirty write must not settle the same estate twice.
+        app.world_mut().get_mut::<Health>(dead).unwrap().current = 0.0;
+        app.world_mut()
+            .get_mut::<WorldTime>(clock)
+            .unwrap()
+            .seconds_in_cycle = 11.0;
+        app.update();
+        assert!(app.world().get_entity(dead).is_ok());
+        assert_eq!(app.world().resource::<MortalityLedger>().total_deaths, 1);
+        app.world_mut()
+            .get_mut::<WorldTime>(clock)
+            .unwrap()
+            .seconds_in_cycle = 11.5;
+        app.update();
+        assert!(app.world().get_entity(dead).is_err());
+    }
 
     #[test]
     fn deceased_company_shares_choose_a_stable_living_coowner_not_a_dead_shell() {

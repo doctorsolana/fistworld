@@ -12,7 +12,11 @@
 //! Run it via `cargo run -p client --bin capture -- --help`.
 
 mod army;
+mod battle;
 pub(crate) use army::{drive_army_capture, drive_army_input, ArmyCapture};
+pub(crate) use battle::{
+    drive_battle_capture, drive_battle_input, drive_battle_ray, BattleCapture,
+};
 mod history_fixtures;
 mod inspection;
 mod live;

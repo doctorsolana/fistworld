@@ -30,6 +30,7 @@ pub(super) struct HeroAnim {
     pub(super) walk: Option<AnimationNodeIndex>,
     pub(super) build: Option<AnimationNodeIndex>,
     pub(super) chop: Option<AnimationNodeIndex>,
+    pub(super) combat: super::combat_animation::CombatClips,
     pub(super) harvest: Option<AnimationNodeIndex>,
     pub(super) carry: Option<AnimationNodeIndex>,
     pub(super) pull: Option<AnimationNodeIndex>,
@@ -276,6 +277,12 @@ pub(super) fn setup_hero_animation(
             walk,
             build,
             chop,
+            combat: super::combat_animation::CombatClips {
+                guard: hero_graph.body.get("combat_guard").copied(),
+                strike: hero_graph.body.get("combat_strike").copied(),
+                recoil: hero_graph.body.get("combat_recoil").copied(),
+                fall: hero_graph.body.get("combat_fall").copied(),
+            },
             harvest,
             carry,
             pull,
@@ -340,9 +347,8 @@ pub(super) fn desired_body_animation(
     }
 
     let clip = match activity {
-        // Fighting borrows the chop swing until a real attack clip exists:
-        // it is the only full-body arm swing in the set.
-        Some(CharacterActivity::Chopping | CharacterActivity::Fighting) => anim.chop,
+        Some(CharacterActivity::Chopping) => anim.chop,
+        Some(CharacterActivity::Fighting) => anim.combat.guard,
         Some(CharacterActivity::Farming) => anim.harvest,
         Some(
             CharacterActivity::Fishing | CharacterActivity::Building | CharacterActivity::Mining,
@@ -358,6 +364,7 @@ pub(super) fn desired_body_animation(
 pub(super) fn drive_hero_locomotion(
     time: Res<Time>,
     mut heroes: Query<(
+        Entity,
         &HeroVisual,
         &mut HeroAnim,
         Option<&InheritedVisibility>,
@@ -372,6 +379,12 @@ pub(super) fn drive_hero_locomotion(
     frusta: Query<&Frustum, With<Camera3d>>,
     view_visibilities: Query<&ViewVisibility>,
     mut tally: Local<RigAnimationTally>,
+    clocks: Query<&shared::components::WorldTime>,
+    combat: Query<(
+        Has<shared::components::CombatReady>,
+        Option<&shared::components::CombatSwing>,
+        Option<&shared::components::CombatReaction>,
+    )>,
 ) {
     let census = *tally
         .enabled
@@ -397,7 +410,10 @@ pub(super) fn drive_hero_locomotion(
             };
         }
     }
-    for (visual, mut anim, inherited, activity, carried, cart, motion, parts, transform) in
+    let now = clocks.iter().next().map_or(0.0, |c| {
+        f64::from(c.day) * f64::from(c.cycle_duration()) + f64::from(c.seconds_in_cycle)
+    });
+    for (entity, visual, mut anim, inherited, activity, carried, cart, motion, parts, transform) in
         heroes.iter_mut()
     {
         // A rig no view can see (main camera AND every shadow cascade, per
@@ -475,7 +491,7 @@ pub(super) fn drive_hero_locomotion(
 
         let carting = cart.is_some();
         let carrying = !carting && carried.is_some_and(|load| !load.is_empty());
-        let (desired, speed, freeze_at_contact) = desired_body_animation(
+        let (mut desired, mut speed, freeze_at_contact) = desired_body_animation(
             visual,
             &anim,
             activity.copied(),
@@ -483,6 +499,22 @@ pub(super) fn drive_hero_locomotion(
             carting,
             motion.copied(),
         );
+        let combat_pose = combat
+            .get(entity)
+            .ok()
+            .and_then(|(ready, swing, reaction)| {
+                anim.combat.sample(
+                    now,
+                    ready || activity == Some(&CharacterActivity::Fighting),
+                    swing,
+                    reaction,
+                    motion.is_some_and(|m| m.is_moving()) || visual.speed > 0.24,
+                )
+            });
+        if let Some((clip, seek)) = combat_pose {
+            desired = Some(clip);
+            speed = if seek.is_some() { 0.0 } else { 1.0 };
+        }
         let Some(desired) = desired else {
             continue;
         };
@@ -506,7 +538,10 @@ pub(super) fn drive_hero_locomotion(
         }
 
         if let Some(active) = player.animation_mut(desired) {
-            if freeze_at_contact && active.seek_time() != 0.0 {
+            if let Some((_, Some(seek))) = combat_pose {
+                active.set_seek_time(seek);
+            }
+            if combat_pose.is_none() && freeze_at_contact && active.seek_time() != 0.0 {
                 active.set_seek_time(0.0);
             }
             if (active.speed() - speed).abs() > 0.01 {

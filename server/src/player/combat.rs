@@ -105,6 +105,11 @@ pub fn pursue_attack_orders(
     world_time: Query<&WorldTime>,
     identities: Query<&shared::components::PersonId>,
     stances: Query<&crate::player::orders::CommandStance>,
+    formations: Query<(), With<fronts::FormationMember>>,
+    space: Option<Res<fronts::CombatSpace>>,
+    swing_visuals: Query<&shared::components::CombatSwing>,
+    engagements: Query<&shared::components::EngagedWith>,
+    skirmishers: Query<(), With<SkirmishOrder>>,
     mut attackers: Query<
         (
             Entity,
@@ -191,17 +196,31 @@ pub fn pursue_attack_orders(
         }
         let distance = Vec2::new(position.0.x, position.0.z)
             .distance(Vec2::new(target_position.0.x, target_position.0.z));
-        if distance > MELEE_REACH {
+        if distance > MELEE_REACH
+            || space.as_ref().is_some_and(|s| {
+                s.body(attacker).is_some()
+                    && s.body(order.target).is_some()
+                    && !s.clear_strike(attacker, order.target)
+            })
+        {
             if let Some(clock) = cooldown.as_mut() {
                 clock.disengage();
             }
-            if stances
-                .get(attacker)
-                .is_ok_and(|s| *s == crate::player::orders::CommandStance::Hold)
+            if formations.contains(attacker)
+                || stances
+                    .get(attacker)
+                    .is_ok_and(|s| *s == crate::player::orders::CommandStance::Hold)
             {
                 stand_down(&mut commands);
                 activity.set_if_neq(CharacterActivity::Idle);
                 motion.set_if_neq(CharacterMotion::STATIONARY);
+                continue;
+            }
+            if skirmishers.contains(attacker)
+                && space
+                    .as_ref()
+                    .is_some_and(|s| s.body(order.target).is_some())
+            {
                 continue;
             }
             let goal = target_position.0;
@@ -227,14 +246,18 @@ pub fn pursue_attack_orders(
         rotation.set_if_neq(PlayerRotation(facing_toward(position.0, target_position.0)));
         activity.set_if_neq(CharacterActivity::Fighting);
         if let Ok(person) = identities.get(order.target) {
-            commands
-                .entity(attacker)
-                .insert_if_new(shared::components::EngagedWith(*person));
+            if !engagements.get(attacker).is_ok_and(|e| e.0 == *person) {
+                commands
+                    .entity(attacker)
+                    .insert(shared::components::EngagedWith(*person));
+            }
         }
         let Some(mut cooldown) = cooldown else {
             // First contact: arm the clock, swing from the next tick on.
             commands.entity(attacker).insert(MeleeCooldown {
-                ready_at: now,
+                ready_at: now
+                    + f64::from(shared::components::COMBAT_WINDUP_SECONDS)
+                    + (attacker.to_bits() % 11) as f64 * 0.017,
                 engaged: true,
             });
             continue;
@@ -247,11 +270,28 @@ pub fn pursue_attack_orders(
         }
         let oldest = now - SWING_SECONDS * (MAX_SWINGS_PER_TICK - 1) as f64;
         cooldown.ready_at = cooldown.ready_at.max(oldest);
+        // A swing is announced before its authoritative impact. It is not a
+        // free-running animation loop; changing target cannot reset its clock.
+        if now + f64::from(shared::components::COMBAT_WINDUP_SECONDS) >= cooldown.ready_at
+            && !swing_visuals
+                .get(attacker)
+                .is_ok_and(|s| s.impact_at == cooldown.ready_at)
+        {
+            commands
+                .entity(attacker)
+                .insert(shared::components::CombatSwing {
+                    impact_at: cooldown.ready_at,
+                });
+        }
         let mut swings = 0;
         while cooldown.ready_at <= now && swings < MAX_SWINGS_PER_TICK {
             cooldown.ready_at += SWING_SECONDS;
             swings += 1;
-            if target_health.take_damage(swing_damage(&attributes)) {
+            let fatal = target_health.take_damage(swing_damage(&attributes));
+            commands
+                .entity(order.target)
+                .insert(shared::components::CombatReaction { at: now, fatal });
+            if fatal {
                 // The honest cause for the obituary, and a lesson for the arm
                 // that swung: kills train physique the way work trains it.
                 commands
@@ -271,6 +311,10 @@ pub fn pursue_attack_orders(
         }
     }
 }
+
+pub mod fronts;
+mod skirmish;
+pub use skirmish::{steer_skirmishers, DirectCombatApproach, SkirmishOrder};
 
 mod targeting;
 pub use targeting::acquire_targets;
@@ -618,3 +662,23 @@ mod tests {
 
 #[cfg(test)]
 mod regression_tests;
+
+/// Corpses have already settled their estate; this only bounds their visual
+/// lifetime. Dead bodies never re-enter targeting or formation movement.
+#[derive(Component)]
+pub struct SettledCombatDeath;
+pub fn expire_combat_bodies(
+    mut commands: Commands,
+    clock: Query<&WorldTime>,
+    bodies: Query<(Entity, &shared::components::CombatReaction), With<SettledCombatDeath>>,
+) {
+    let Some(clock) = clock.iter().next() else {
+        return;
+    };
+    let now = world_clock_seconds(clock);
+    for (entity, reaction) in &bodies {
+        if now - reaction.at >= 1.4 {
+            commands.entity(entity).despawn();
+        }
+    }
+}

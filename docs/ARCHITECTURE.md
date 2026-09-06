@@ -315,7 +315,15 @@ confirmed targeting to client presentation.
 `player/orders/navigation.rs` owns bounded shared formation fields and certified routes;
 `hero::step_units` remains the only marching position integrator. Civilian road planners
 do not own commanded formations. The client derives its army roster only when membership,
-identity or vitals change. See [COMBAT-DESIGN.md](COMBAT-DESIGN.md) for budgets and limits.
+identity or vitals change.
+
+`player/combat/fronts` owns persistent file queues and contact-face reservations;
+`combat/skirmish` owns individual/partial-selection approaches. Both use a shared
+local body index and the existing authoritative mover. Rank home positions permit
+bounded local reactions; casualty replacement never sorts the entire battalion.
+Server-clock attack/reaction components drive client-authored clips, and mortality
+settles immediately while a marked fatal body remains briefly for its fall.
+See [COMBAT-DESIGN.md](COMBAT-DESIGN.md) for budgets and limits.
 
 ## 7. Build order
 

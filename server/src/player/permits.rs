@@ -1257,6 +1257,11 @@ pub fn handle_hero_construction_orders(
                     crate::player::hero::MoveTarget,
                     crate::player::orders::MarchOrder,
                     crate::player::orders::CommandStance,
+                    crate::player::combat::fronts::FormationMember,
+                    crate::player::combat::fronts::PausedFormationMarch,
+                    crate::player::combat::SkirmishOrder,
+                    crate::player::combat::DirectCombatApproach,
+                    shared::components::CombatReady,
                     crate::player::combat::AttackOrder,
                     shared::components::EngagedWith,
                 )>()

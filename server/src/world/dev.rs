@@ -626,6 +626,11 @@ pub fn handle_dev_commands(
                                 shared::components::EngagedWith,
                                 crate::player::orders::MarchOrder,
                                 crate::player::orders::CommandStance,
+                                crate::player::combat::fronts::FormationMember,
+                                crate::player::combat::fronts::PausedFormationMarch,
+                                crate::player::combat::SkirmishOrder,
+                                crate::player::combat::DirectCombatApproach,
+                                shared::components::CombatReady,
                             )>()
                             .remove::<crate::player::combat::MeleeCooldown>()
                             .insert(shared::components::Occupation::default());

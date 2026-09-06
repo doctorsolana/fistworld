@@ -45,6 +45,7 @@ pub(crate) struct CharacterHead {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum ToolKind {
     Axe,
+    Sword,
     Hammer,
     Scythe,
 }
@@ -53,6 +54,7 @@ impl ToolKind {
     pub(super) const fn label(self) -> &'static str {
         match self {
             Self::Axe => "Felling axe",
+            Self::Sword => "Soldier sidearm",
             Self::Hammer => "Framing hammer",
             Self::Scythe => "Mowing scythe",
         }
@@ -61,6 +63,7 @@ impl ToolKind {
     pub(super) const fn scene_path(self) -> &'static str {
         match self {
             Self::Axe => "game_assets/tools/AxeFelling.glb#Scene0",
+            Self::Sword => "game_assets/tools/SoldierSidearm.glb#Scene0",
             Self::Hammer => "game_assets/tools/HammerFraming.glb#Scene0",
             Self::Scythe => "game_assets/tools/ScytheMowing.glb#Scene0",
         }
@@ -271,8 +274,8 @@ pub(super) fn desired_tool(
         return None;
     }
     match activity {
-        // Fighters swing the axe for now, matching the borrowed chop clip.
-        Some(CharacterActivity::Chopping | CharacterActivity::Fighting) => Some(ToolKind::Axe),
+        Some(CharacterActivity::Chopping) => Some(ToolKind::Axe),
+        Some(CharacterActivity::Fighting) => Some(ToolKind::Sword),
         Some(CharacterActivity::Farming) => Some(ToolKind::Scythe),
         Some(CharacterActivity::Building | CharacterActivity::Mining) => Some(ToolKind::Hammer),
         _ => None,
@@ -299,14 +302,20 @@ pub(super) fn sync_tool_visuals(
         With<CharacterKind>,
     >,
     mut removed_carts: RemovedComponents<PorterCartState>,
+    readiness: Query<Ref<shared::components::CombatReady>>,
+    mut removed_ready: RemovedComponents<shared::components::CombatReady>,
     existing_visuals: Query<&ToolVisual>,
 ) {
     let removed_carts: HashSet<_> = removed_carts.read().collect();
+    let removed_ready: HashSet<_> = removed_ready.read().collect();
     for (attachment, marker, owner) in attachments.iter() {
+        let ready = readiness.get(owner.0).ok();
         let Ok((activity, carried, cart)) = characters.get(owner.0) else {
             continue;
         };
         if !marker.is_added()
+            && !ready.as_ref().is_some_and(|r| r.is_added())
+            && !removed_ready.contains(&owner.0)
             && !activity
                 .as_ref()
                 .is_some_and(|activity| activity.is_changed())
@@ -317,7 +326,11 @@ pub(super) fn sync_tool_visuals(
             continue;
         }
         let desired = desired_tool(
-            activity.as_deref().copied(),
+            if ready.is_some() {
+                Some(CharacterActivity::Fighting)
+            } else {
+                activity.as_deref().copied()
+            },
             cart.is_some() || carried.is_some_and(|load| !load.is_empty()),
         );
         let existing = children.get(attachment).ok().and_then(|children| {

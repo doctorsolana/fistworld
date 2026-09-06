@@ -86,6 +86,12 @@ impl Plugin for ProtocolPlugin {
         app.component::<MemberOfBattalion>().replicate();
         app.component::<StandardBearer>().replicate();
         app.component::<EngagedWith>().replicate();
+        app.component::<crate::components::CombatReady>()
+            .replicate();
+        app.component::<crate::components::CombatSwing>()
+            .replicate();
+        app.component::<crate::components::CombatReaction>()
+            .replicate();
         app.component::<CharacterObjective>().replicate();
         app.component::<CharacterDayPlan>().replicate();
         app.component::<CharacterNavigationStatus>().replicate();

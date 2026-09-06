@@ -63,6 +63,7 @@ pub fn advance_marches(
         Option<&TravelRoute>,
         Has<NavigationRoutePending>,
         Has<AttackOrder>,
+        Has<crate::player::combat::fronts::PausedFormationMarch>,
     )>,
 ) {
     let Some(mut routes) = routes else {
@@ -113,8 +114,10 @@ pub fn advance_marches(
             field.advance_until(&mut budget, deadline, &clear);
         }
     }
-    for (entity, march, position, mut rotation, target, route, pending, fighting) in &mut units {
-        if fighting {
+    for (entity, march, position, mut rotation, target, route, pending, fighting, paused) in
+        &mut units
+    {
+        if fighting || paused {
             continue;
         }
         if target.is_none() && position.0.xz().distance_squared(march.destination.xz()) < 0.2 * 0.2

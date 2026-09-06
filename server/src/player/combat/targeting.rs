@@ -87,6 +87,7 @@ pub fn acquire_targets(
             Option<&CommandedBy>,
             Has<AttackOrder>,
             Has<MoveTarget>,
+            Has<super::fronts::FormationMember>,
             Option<&CommandStance>,
             Option<&Health>,
         ),
@@ -100,7 +101,7 @@ pub fn acquire_targets(
     mut scratch: Local<AcquisitionScratch>,
 ) {
     scratch.candidates.clear();
-    for (entity, position, party, owner, engaged, moving, stance, health) in &combatants {
+    for (entity, position, party, owner, engaged, moving, formed, stance, health) in &combatants {
         if health.is_some_and(|h| h.is_dead()) {
             continue;
         }
@@ -118,7 +119,7 @@ pub fn acquire_targets(
         } else {
             continue;
         };
-        let range = if engaged {
+        let range = if engaged || formed {
             0.0
         } else {
             match stance {

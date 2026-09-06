@@ -16,6 +16,7 @@ mod animation;
 mod appearance;
 mod attachments;
 mod carts;
+mod combat_animation;
 mod motion;
 
 use crate::states::GameState;

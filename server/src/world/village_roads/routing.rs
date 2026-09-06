@@ -772,10 +772,17 @@ pub fn queue_villager_travel_routes(
     simulation_time: crate::world::simulation_time::SimulationTime,
     mut commands: Commands,
     movers: RouteMoverQuery,
+    formations: Query<
+        (),
+        Or<(
+            With<crate::player::combat::fronts::FormationMember>,
+            With<crate::player::combat::DirectCombatApproach>,
+        )>,
+    >,
 ) {
     let now = simulation_time.elapsed_real_seconds_f64();
     for (entity, kind, target, failed, backoff) in movers.iter() {
-        if *kind != CharacterKind::Villager {
+        if *kind != CharacterKind::Villager || formations.contains(entity) {
             continue;
         }
         // Several high-level routines deliberately re-assert their current

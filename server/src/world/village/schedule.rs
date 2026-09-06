@@ -50,6 +50,8 @@ pub enum VillageConstructionSet {
 
 pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut App, schedule: M) {
     app.init_resource::<world::simulation_time::SimulationDelta>();
+    app.init_resource::<player::combat::fronts::CombatFormations>();
+    app.init_resource::<player::combat::fronts::CombatSpace>();
     app.init_resource::<super::BusinessEventQueue>();
     app.init_resource::<super::CompanyDividendQueue>();
     app.init_resource::<super::CompanyEscrowRefundQueue>();
@@ -312,11 +314,26 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             world::village_roads::retry_failed_routes_after_obstacle_change,
             world::village_roads::plan_villager_travel_routes,
             player::orders::advance_marches,
+            (
+                player::combat::fronts::rebuild_combat_space,
+                player::combat::fronts::advance_battle_fronts,
+                player::combat::steer_skirmishers,
+            )
+                .chain(),
             player::hero::rebuild_tactical_crowd_grid,
             player::hero::step_units,
+            (
+                player::combat::fronts::rebuild_combat_space,
+                player::combat::fronts::assign_formation_contacts,
+            )
+                .chain(),
             player::combat::acquire_targets,
             player::combat::pursue_attack_orders,
-            player::combat::separate_melee_bodies,
+            (
+                player::combat::separate_melee_bodies,
+                player::combat::expire_combat_bodies,
+            )
+                .chain(),
             player::hero::settle_villagers_without_targets,
             player::army::maintain_battalions,
         )

@@ -17,7 +17,7 @@ Battles happen on the existing map. There is no separate battle scene.
 - **X**, then a destination: attack-move. Engage nearby enemies, then resume the
   original march. **R**, then a destination: retreat without acquiring enemies
   during movement. Ordinary movement also obeys the destination over acquisition.
-- **H** holds position: fight enemies within melee reach, without pursuing them.
+- **H** holds the formation: exposed soldiers may step locally to meet a threat.
   Arrival changes a marching unit to Hold. Escape clears an armed command mode.
 - **Ctrl/Cmd + 0–9** saves a control group. The digit recalls it; Shift adds it.
   Complete battalions retain their identity as membership changes. Partial
@@ -35,6 +35,9 @@ Battles happen on the existing map. There is no separate battle scene.
 | Shared formation route fields | `server/src/player/orders/{navigation,flow}.rs` |
 | Battalion identity/lifecycle and sequential membership | `server/src/player/army.rs`, `army/membership.rs` |
 | Contact/cooldown/damage | `server/src/player/combat.rs` |
+| Cohesion, contact faces, file replacement and local body index | `server/src/player/combat/fronts/` |
+| Independent/partial-selection approaches | `server/src/player/combat/skirmish.rs` |
+| Clock-sampled combat clips and weapon presentation | `client/src/hero/{combat_animation,attachments}.rs` |
 | Local acquisition and body separation | `server/src/player/combat/{targeting,separation}.rs` |
 | Derived client roster | `client/src/army_roster.rs` |
 | Gestures, control groups and formation preview | `client/src/selection/` |
@@ -84,11 +87,42 @@ route may fail. Units follow individual certified paths around obstructions and
 reform at their destination; rigid formation wheeling, adaptive column transitions,
 charge mechanics and coordinated passage reservations remain future work.
 
+## Flexible battle fronts
+
+A complete battalion selection installs one persistent formation. Its files are
+queues: when a soldier falls, the next living person in that file advances, without
+sorting all survivors into new ranks. New attack/hold orders preserve physical
+rank order; changing approach direction assigns the new ranks from current positions
+once, avoiding crossing that a row-major reshuffle caused.
+
+Rank positions are home positions. Exposed front, rear and outside-file soldiers may
+step up to 1.1 m from home to meet a nearby opponent. Supporting ranks keep space
+behind them. A local rear attack turns the threatened soldiers, not the entire
+battalion. Weapon paths cannot pass through a person in front, and movement cannot
+push deeper through an occupied body. Existing contacts stay stable until invalid;
+new contacts prefer opponents with fewer attackers.
+
+Several attacking battalions reserve distinct front/left/right/rear faces of their
+target. Flank attackers approach outside its rectangle and narrow their frontage to
+fit the flank. Further formations wait in reserve when all four faces are occupied.
+This is a geometric allocation, not a tactical AI choosing an optimal encirclement.
+Attack-move retains its original shared march while the front fights, then resumes
+when local enemies are gone.
+
+Selecting one person, a few people out of a battalion, or unassigned people gives
+independent orders. They detach from rank control without losing battalion membership,
+choose reachable exposed opponents, and test several local approach angles. Distant
+or obstructed approaches use the existing bounded tactical route planner; full
+formations share their existing reverse field. A complete battalion command brings
+detached members back under formation control.
+
 ## Melee and performance rules
 
-Acquisition uses a fresh post-movement spatial grid with 9 m cells. Only local
-neighbouring cells are inspected. Hold uses 2 m reach; movement/retreat suppress
-acquisition. Account-controlled people and explicit `WarParty` banners are combat
+Loose defensive acquisition uses a post-movement grid with 9 m cells. Formed
+combat and independent attack manoeuvres share a reusable 3 m body index. Formation
+decisions run at 10 Hz and independent steering at roughly 8 Hz in world time; the
+ordinary mover and contact checks remain on the fixed tick. Only local neighbouring
+cells are inspected for strikes, with 2 m reach. Movement/retreat suppress acquisition. Account-controlled people and explicit `WarParty` banners are combat
 participants. Ordinary uncommanded villagers are not automatically targeted.
 Different accounts are currently different allegiances; diplomacy is not implemented.
 
@@ -97,7 +131,15 @@ Damage uses `Health::take_damage`, with a 0.8 world-second swing interval and
 that victim's later swing in the same pass. Leaving reach discards missed contact
 opportunities; changing orders preserves the weapon deadline. Sustained-contact
 warp catch-up is capped at four swings per tick. Deaths use the existing estate,
-company/share, history and despawn pipeline.
+company/share and history pipeline immediately; a fatal combat body remains for
+1.4 world seconds to finish its fall, with a settlement marker preventing duplicate
+estate processing. Dead bodies do not block movement or land further blows.
+
+`CombatReady`, absolute `CombatSwing.impact_at` and `CombatReaction` carry sparse
+presentation state. Authored guard, strike, recoil and fall clips sample the same
+world clock as damage, including the 0.30 s wind-up. The sword is currently a common
+visual sidearm, not an equipment/stat system. Existing rig distance/visibility LOD
+continues to apply.
 
 Do not dirty replicated motion, rotation, activity or health on no-op writes.
 Acquisition and separation reuse scratch buffers. The client builds one roster on
@@ -117,7 +159,13 @@ Regression tests cover ordering, authority, membership batches, pursuit cooldown
 post-mortem swings, selection semantics, roster invalidation, mapped entity IDs,
 formation geometry and shared obstacle routing through the real mover.
 
+Connected `battle-1v1`, `battle-2v1`, `battle-3v1` and `battle-skirmish` scenarios
+exercise ordinary enemy-click input, then record continuous PNG, capture metadata
+and per-person combat state. The mixed scenario sends one independent attacker,
+then two more, into an ongoing clash. See [the verification report](COMBAT-CLASH-VERIFICATION-2026-09.md) for
+observations; scenario assertions alone do not establish visual quality.
+
 Weapon classes, armour, morale/routing/rallying, guards, military wages, diplomacy,
-sieges, line-of-sight attacks, coordinated obstacle-aware combat pursuit and lossless
+sieges, ranged line-of-sight attacks, adaptive passage reservations and lossless
 strategic army promotion/demotion remain future milestones. They must retain these
 authority, identity, clock and bounded-work contracts.

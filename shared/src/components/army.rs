@@ -53,3 +53,45 @@ pub const MAX_BATTALIONS_PER_ACCOUNT: usize = 12;
 /// client draws attack markers from this authoritative state, never a sent click.
 #[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EngagedWith(pub super::PersonId);
+
+/// A formation member has readied their weapon, including supporting ranks.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CombatReady;
+
+/// Absolute world-clock impact time. Clients sample the authored attack clip
+/// against this deadline, so animation and damage have one timing source.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct CombatSwing {
+    pub impact_at: f64,
+}
+
+pub const COMBAT_WINDUP_SECONDS: f32 = 0.30;
+
+/// A hit reaction, retained briefly on a fatal hit so the body can fall before
+/// despawn. Death/estate authority stays in the existing mortality pipeline.
+#[derive(Component, Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct CombatReaction {
+    pub at: f64,
+    pub fatal: bool,
+}
+
+#[cfg(test)]
+mod combat_wire_tests {
+    use super::*;
+    #[test]
+    fn combat_presentation_roundtrips_absolute_clock_and_fatal_state() {
+        for at in [0.0, 0.3, 86_400_000.125] {
+            for fatal in [false, true] {
+                let state = (
+                    CombatReady,
+                    CombatSwing { impact_at: at },
+                    CombatReaction { at, fatal },
+                );
+                let encoded = bincode::serialize(&state).unwrap();
+                let decoded: (CombatReady, CombatSwing, CombatReaction) =
+                    bincode::deserialize(&encoded).unwrap();
+                assert_eq!(decoded, state);
+            }
+        }
+    }
+}

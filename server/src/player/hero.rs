@@ -440,6 +440,8 @@ pub fn step_units(
     simulation_time: crate::world::simulation_time::SimulationTime,
     mut road_graph: Option<ResMut<VillageRoadGraph>>,
     crowd_grid: Option<Res<TacticalCrowdGrid>>,
+    combat_space: Option<Res<super::combat::fronts::CombatSpace>>,
+    formations: Query<(), With<shared::components::CombatReady>>,
     mut reported_route_collisions: Local<HashSet<Entity>>,
     // `With<CharacterKind>` is load-bearing, not decoration: the commander
     // camera anchor carries the identical PlayerPosition + PlayerRotation +
@@ -603,6 +605,7 @@ pub fn step_units(
             let mut direction = preferred_direction;
             let mut proposed = base_proposed;
             if !reaches_goal
+                && !formations.contains(entity)
                 && !queueing
                 && !ambient_direct
                 && !authored_traversal
@@ -624,6 +627,13 @@ pub fn step_units(
                         }
                     }
                 }
+            }
+            if formations.contains(entity)
+                && combat_space
+                    .as_ref()
+                    .is_some_and(|space| !space.movement_clear(entity, current, proposed))
+            {
+                break;
             }
             if *kind == CharacterKind::Villager
                 && door_use.is_none()

@@ -303,6 +303,7 @@ fn a_seated_passenger_does_not_walk_when_the_vessel_moves() {
     let walk = AnimationNodeIndex::new(1);
     let sit = AnimationNodeIndex::new(2);
     let anim = HeroAnim {
+        combat: Default::default(),
         player: Entity::from_bits(1),
         idle: Some(idle),
         walk: Some(walk),
@@ -348,6 +349,7 @@ fn farming_uses_harvest_without_leaking_into_the_build_clip() {
     world.spawn((
         HeroVisual { speed: 0.0 },
         HeroAnim {
+            combat: Default::default(),
             player: player_entity,
             idle: Some(idle),
             walk: None,
@@ -393,6 +395,7 @@ fn a_loaded_stationary_villager_freezes_in_the_carry_pose() {
     world.spawn((
         HeroVisual { speed: 0.0 },
         HeroAnim {
+            combat: Default::default(),
             player: player_entity,
             idle: Some(idle),
             walk: None,
@@ -451,6 +454,7 @@ fn a_rig_no_view_can_see_stops_evaluating_and_resumes_where_it_left_off() {
     world.spawn((
         HeroVisual { speed: 0.0 },
         HeroAnim {
+            combat: Default::default(),
             player: player_entity,
             idle: Some(idle),
             walk: None,
@@ -537,6 +541,7 @@ fn an_active_porter_cart_walks_even_before_visual_interpolation_reports_speed() 
     world.spawn((
         HeroVisual { speed: 0.0 },
         HeroAnim {
+            combat: Default::default(),
             player: player_entity,
             idle: Some(idle),
             walk: None,
