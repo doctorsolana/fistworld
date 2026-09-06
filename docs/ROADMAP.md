@@ -696,3 +696,10 @@ Things every phase touches, easy to discover too late:
       events. Budget for one.
 - [ ] **Multiplayer validation.** Clans, territory and politics are only meaningful with
       concurrent players, and a solo developer cannot discover whether they are fun alone.
+
+### Siege update — 2026-09-06
+
+Implemented: selectable slow catapults, animated launch/reload, ground bombardment and
+enemy attack orders, ballistic terrain interception, friendly splash damage and impact
+FX. Available from God placement. Future: workshop production, crews, resupply and
+building/wall destruction. See [CATAPULT.md](CATAPULT.md).

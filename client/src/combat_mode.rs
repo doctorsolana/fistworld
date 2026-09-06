@@ -232,6 +232,8 @@ fn spawn_combat_ui(
 /// is deliberately underdamped: the sign drops, overshoots a touch, and
 /// settles - and on toggle-off it snaps back up the same way.
 fn animate_combat_ui(
+    selection: Res<crate::selection::Selection>,
+    catapults: Query<(), With<shared::components::Catapult>>,
     time: Res<Time>,
     mode: Res<CombatMode>,
     mut banners: Query<(&mut CombatBanner, &mut Node)>,
@@ -239,11 +241,16 @@ fn animate_combat_ui(
     mut strips: Query<&mut BackgroundColor, (With<CombatBorderStrip>, Without<CombatBanner>)>,
 ) {
     for mut visibility in &mut help {
-        visibility.set_if_neq(if mode.0 {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        });
+        visibility.set_if_neq(
+            if mode.0
+                && !(selection.len() > 0
+                    && selection.entities.iter().all(|e| catapults.contains(*e)))
+            {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
+        );
     }
     let dt = time.delta_secs().min(0.05);
     let target = if mode.0 {

@@ -44,6 +44,10 @@ pub enum UnitCommand {
         target: Entity,
     },
     Hold,
+    /// Siege units bombard this fixed point until moved or held.
+    AttackGround {
+        target: Vec3,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -105,6 +109,7 @@ mod tests {
         let target = Vec3::new(-64.5, 12.0, 480.0);
         for command in [
             UnitCommand::Hold,
+            UnitCommand::AttackGround { target },
             UnitCommand::Attack {
                 target: Entity::from_raw_u32(90).unwrap(),
             },

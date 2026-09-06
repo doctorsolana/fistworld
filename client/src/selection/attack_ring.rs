@@ -104,6 +104,7 @@ pub(super) fn hover_attack_target(
         Option<&Transform>,
         Option<&CommandedBy>,
         Option<&CharacterActivity>,
+        Has<shared::components::Catapult>,
     )>,
 ) {
     let hovered = find_enemy_under_cursor(
@@ -139,6 +140,7 @@ pub(crate) fn find_enemy_under_cursor(
         Option<&Transform>,
         Option<&CommandedBy>,
         Option<&CharacterActivity>,
+        Has<shared::components::Catapult>,
     )>,
 ) -> Option<Entity> {
     if !mode.0 {
@@ -159,9 +161,9 @@ pub(crate) fn find_enemy_under_cursor(
         .filter(|distance| *distance > 0.0);
 
     let mut best: Option<(Entity, f32)> = None;
-    for (entity, selectable, position, visual, commanded, activity) in candidates.iter() {
+    for (entity, selectable, position, visual, commanded, activity, catapult) in candidates.iter() {
         // People only: combat mode must not paint buildings or boats red.
-        if selectable.shape != SelectableShape::Person {
+        if !catapult && selectable.shape != SelectableShape::Person {
             continue;
         }
         if activity.is_some_and(|activity| *activity == CharacterActivity::Indoors) {
@@ -201,7 +203,13 @@ pub(super) fn sync_attack_rings(
     // Current-frame smoothed Transform, same reasoning as the selection ring.
     victims: Query<
         (&PlayerPosition, Option<&Transform>),
-        (With<shared::components::CharacterKind>, Without<AttackRing>),
+        (
+            Or<(
+                With<shared::components::CharacterKind>,
+                With<shared::components::Catapult>,
+            )>,
+            Without<AttackRing>,
+        ),
     >,
     mut rings: Query<(&mut Transform, &mut Visibility, &Children), With<AttackRing>>,
     mut cores: Query<(&mut MeshMaterial3d<StandardMaterial>, &mut AttackTone)>,

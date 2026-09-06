@@ -3,10 +3,7 @@
 use super::flow::FlowField;
 use super::{CommandStance, MarchOrder};
 use crate::collision::library::{DerivedColliderLibrary, StaticColliders};
-use crate::player::{
-    combat::AttackOrder,
-    hero::{navigation_segment_clear, MoveTarget},
-};
+use crate::player::{combat::AttackOrder, hero::MoveTarget};
 use crate::world::village_roads::{
     navigation_geometry_version, NavigationRouteFailed, NavigationRoutePending, RouteWaypoint,
     TravelRoute,
@@ -18,6 +15,7 @@ use std::collections::{BTreeMap, HashSet};
 struct FormationRoute {
     points: Vec<Vec2>,
     goal: Vec2,
+    clearance: f32,
     field: Option<FlowField>,
     version: u64,
     failed: HashSet<Entity>,
@@ -30,12 +28,21 @@ pub struct FormationRoutes {
 }
 impl FormationRoutes {
     pub fn register(&mut self, points: Vec<Vec2>, goal: Vec2) -> u64 {
+        self.register_with_clearance(points, goal, 0.0)
+    }
+    pub fn register_with_clearance(
+        &mut self,
+        points: Vec<Vec2>,
+        goal: Vec2,
+        clearance: f32,
+    ) -> u64 {
         self.next += 1;
         self.groups.insert(
             self.next,
             FormationRoute {
                 points,
                 goal,
+                clearance,
                 field: None,
                 version: 0,
                 failed: HashSet::new(),
@@ -78,16 +85,16 @@ pub fn advance_marches(
         return;
     }
     let version = navigation_geometry_version(buildings.as_deref(), colliders.as_deref());
-    let clear = |a: Vec2, b: Vec2| {
-        navigation_segment_clear(
+    let clear_at = |radius: f32, a: Vec2, b: Vec2| {
+        crate::player::siege::ground_clear(
             a,
             b,
+            radius,
+            terrain.as_deref(),
             buildings.as_deref(),
             colliders.as_deref(),
             derived.as_deref(),
-        ) && terrain
-            .as_deref()
-            .is_none_or(|t| crate::player::hero::terrain_segment_walkable(t, a, b))
+        )
     };
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2);
     let mut route_budget = 32;
@@ -106,12 +113,16 @@ pub fn advance_marches(
     let mut budget = 2048;
     for group in routes.groups.values_mut().skip(skip) {
         if let Some(field) = group.field.as_mut() {
-            field.advance_until(&mut budget, deadline, &clear);
+            field.advance_until(&mut budget, deadline, &|a, b| {
+                clear_at(group.clearance, a, b)
+            });
         }
     }
     for group in routes.groups.values_mut().take(skip) {
         if let Some(field) = group.field.as_mut() {
-            field.advance_until(&mut budget, deadline, &clear);
+            field.advance_until(&mut budget, deadline, &|a, b| {
+                clear_at(group.clearance, a, b)
+            });
         }
     }
     for (entity, march, position, mut rotation, target, route, pending, fighting, paused) in
@@ -158,6 +169,7 @@ pub fn advance_marches(
         route_budget -= 1;
         let start = position.0.xz();
         let goal = march.destination.xz();
+        let clear = |a, b| clear_at(group.clearance, a, b);
         if clear(start, goal) {
             commands
                 .entity(entity)

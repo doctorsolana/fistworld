@@ -14,7 +14,7 @@
 use bevy::prelude::*;
 
 use shared::components::{
-    CharacterActivity, CharacterAttributes, CharacterKind, CharacterMotion, CommandedBy,
+    Catapult, CharacterActivity, CharacterAttributes, CharacterKind, CharacterMotion, CommandedBy,
     DeathCause, Health, PlayerPosition, PlayerRotation, WorldTime,
 };
 
@@ -84,7 +84,7 @@ fn swing_damage(attributes: &CharacterAttributes) -> f32 {
     BASE_SWING_DAMAGE * (0.7 + f32::from(attributes.physique()) / 100.0 * 0.6)
 }
 
-fn world_clock_seconds(clock: &WorldTime) -> f64 {
+pub(crate) fn world_clock_seconds(clock: &WorldTime) -> f64 {
     f64::from(clock.day) * f64::from(clock.cycle_duration()) + f64::from(clock.seconds_in_cycle)
 }
 
@@ -127,7 +127,7 @@ pub fn pursue_attack_orders(
     mut targets: Query<
         (&PlayerPosition, &mut Health),
         (
-            With<CharacterKind>,
+            Or<(With<CharacterKind>, With<Catapult>)>,
             Without<AboardBoat>,
             Without<OfflineHero>,
         ),

@@ -92,6 +92,14 @@ pub fn stage_connected_army(world: &mut World) {
     if let Some(battle) = &scenario.battle {
         stage_defenders(world, &scenario, battle);
     }
+    if let Some(fixture) = &scenario.catapult {
+        let mut p = Vec3::from_array(fixture.origin);
+        p.y = world.resource::<WorldTerrain>().get_height(p.x, p.z);
+        let entity =
+            crate::player::siege::spawn_catapult(&mut world.commands(), &scenario.account, p);
+        world.flush();
+        world.entity_mut(entity).insert(PlayerRotation(0.0));
+    }
     world.insert_resource(Staged);
     info!(
         "Army lab staged {} soldiers in {} battalions for {}",

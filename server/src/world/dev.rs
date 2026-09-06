@@ -329,7 +329,7 @@ pub fn handle_dev_commands(
         &shared::components::Settlement,
         &shared::components::PlayerPosition,
     )>,
-    mut client_links: Query<(&RemoteId, &mut MessageReceiver<DevCommand>), With<ClientOf>>,
+    mut client_links: Query<(Entity, &RemoteId, &mut MessageReceiver<DevCommand>), With<ClientOf>>,
     mut warp: Query<&mut TimeWarp>,
     mut villager_seed: ResMut<VillagerSeed>,
     mut warned_peers: Local<bevy::platform::collections::HashSet<lightyear::prelude::PeerId>>,
@@ -338,7 +338,7 @@ pub fn handle_dev_commands(
     // spawn from earlier in this same drain — track them here or a burst of
     // two reliable SpawnHero messages in one tick defeats one-per-player.
     let mut spawned_this_run = bevy::platform::collections::HashSet::new();
-    for (remote_id, mut receiver) in client_links.iter_mut() {
+    for (link, remote_id, mut receiver) in client_links.iter_mut() {
         for command in receiver.receive() {
             if !access.allows(remote_id.0) {
                 // A legitimate client never sends these without the grant; log the first
@@ -414,6 +414,23 @@ pub fn handle_dev_commands(
                     );
                     spawned_this_run.insert(remote_id.0);
                     info!("Dev: hero {entity:?} spawned for '{name_lower}' at {pos:?}");
+                }
+                DevCommand::SpawnCatapult { pos } => {
+                    let Some(account) = profiles.peer_to_name.get(&remote_id.0).cloned() else {
+                        continue;
+                    };
+                    commands.queue(move |world: &mut World| {
+                        let result = crate::player::siege::spawn_checked(world, &account, pos);
+                        crate::player::orders::feedback(
+                            world,
+                            link,
+                            usize::from(result.is_ok()),
+                            result
+                                .err()
+                                .unwrap_or("Catapult placed: select it and enter combat mode")
+                                .into(),
+                        );
+                    });
                 }
                 DevCommand::SpawnNpc { pos } => {
                     if !pos.is_finite() {

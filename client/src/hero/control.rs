@@ -32,6 +32,7 @@ pub enum WorldPlacementMode {
     None,
     SpawnHero,
     SpawnNpc,
+    SpawnCatapult,
     FoundSettlement,
     Permit {
         permit: shared::components::PlayerPermit,
@@ -47,6 +48,10 @@ impl WorldPlacementMode {
 
     pub const fn is_spawn_hero(&self) -> bool {
         matches!(self, Self::SpawnHero)
+    }
+
+    pub const fn is_spawn_catapult(&self) -> bool {
+        matches!(self, Self::SpawnCatapult)
     }
 
     pub const fn is_spawn_npc(&self) -> bool {
@@ -116,6 +121,7 @@ pub(super) fn handle_world_clicks(
         *placement,
         WorldPlacementMode::SpawnHero
             | WorldPlacementMode::SpawnNpc
+            | WorldPlacementMode::SpawnCatapult
             | WorldPlacementMode::FoundSettlement
     );
     if dev_placement && (!capability.0 || *mode != HudMode::God) {
@@ -203,8 +209,15 @@ pub(super) fn handle_world_clicks(
         return;
     }
 
-    // Villager placement stays armed, so a crowd can be dropped without
-    // re-arming between each one. Escape or leaving god mode clears it.
+    // Siege placement is one-shot, leaving the new carriage selectable.
+    if placement.is_spawn_catapult() {
+        if let Ok(mut sender) = dev_sender.single_mut() {
+            sender.send::<ReliableChannel>(DevCommand::SpawnCatapult { pos: target });
+            *placement = WorldPlacementMode::None;
+        }
+        return;
+    }
+    // Villagers stay armed for repeated crowd placement.
     if placement.is_spawn_npc() {
         if let Ok(mut sender) = dev_sender.single_mut() {
             sender.send::<ReliableChannel>(DevCommand::SpawnNpc { pos: target });

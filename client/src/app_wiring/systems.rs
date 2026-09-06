@@ -48,6 +48,7 @@ fn wire_common_systems(app: &mut App) {
         (
             crate::capture::drive_army_input,
             crate::capture::drive_battle_input,
+            crate::capture::drive_siege_input.before(crate::siege::SiegeInputSet),
         )
             .before(crate::camera_rts::update_cursor_terrain_hit)
             .run_if(in_state(GameState::Playing)),
@@ -57,6 +58,7 @@ fn wire_common_systems(app: &mut App) {
         (
             crate::capture::drive_army_capture,
             crate::capture::drive_battle_capture,
+            crate::capture::drive_siege_capture,
         )
             .after(crate::selection::SelectionGestureSet)
             .run_if(in_state(GameState::Playing)),
@@ -64,9 +66,20 @@ fn wire_common_systems(app: &mut App) {
 
     app.add_systems(
         Update,
-        crate::capture::drive_battle_ray
+        (
+            crate::capture::drive_battle_ray,
+            crate::capture::drive_siege_ray,
+        )
             .after(crate::camera_rts::update_cursor_terrain_hit)
             .before(crate::selection::SelectionGestureSet)
+            .run_if(in_state(GameState::Playing)),
+    );
+
+    app.add_systems(
+        Update,
+        crate::capture::frame_siege_flight
+            .after(crate::camera_rts::update_commander_camera)
+            .before(crate::capture::drive_siege_capture)
             .run_if(in_state(GameState::Playing)),
     );
 

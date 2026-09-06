@@ -330,6 +330,11 @@ pub fn configure_shared_village_simulation<M: ScheduleLabel + Clone>(app: &mut A
             player::combat::acquire_targets,
             player::combat::pursue_attack_orders,
             (
+                player::siege::advance_catapults,
+                player::siege::resolve_siege_projectiles,
+            )
+                .chain(),
+            (
                 player::combat::separate_melee_bodies,
                 player::combat::expire_combat_bodies,
             )

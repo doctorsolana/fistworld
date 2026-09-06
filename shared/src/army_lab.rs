@@ -17,6 +17,8 @@ pub struct ArmyLabScenario {
     pub timeout_seconds: f32,
     #[serde(default)]
     pub battle: Option<BattleScenario>,
+    #[serde(default)]
+    pub catapult: Option<CatapultScenario>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -102,4 +104,12 @@ pub struct BattleScenario {
     pub minimum_engaged_battalions: usize,
     #[serde(default)]
     pub independent_attackers: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatapultScenario {
+    pub origin: [f32; 3],
+    pub move_to: [f32; 3],
+    pub aim: [f32; 3],
 }

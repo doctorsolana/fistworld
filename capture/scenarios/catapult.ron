@@ -1,0 +1,8 @@
+(
+ version:1, account:"battlelab", map:"battle_lab",
+ battalions:1, soldiers_per_battalion:2, origin:(-45.0,0.0,-80.0),
+ deployments:[(target:(-45.0,0.0,-80.0),facing:(0.0,1.0),width:12.61)],
+ camera_focus:(-20.0,0.0,-43.0),camera_zoom:60.0,timeout_seconds:180.0,
+ battle:Some((defender_battalions:1,defenders_per_battalion:50,defender_origin:(-20.0,0.0,-12.0),defender_facing:(0.0,-1.0),observe_seconds:35.0,minimum_engaged_battalions:1)),
+ catapult:Some((origin:(-20.0,0.0,-86.0),move_to:(-20.0,0.0,-80.0),aim:(-20.0,0.0,-12.0))),
+)

@@ -33,6 +33,8 @@ pub struct SelectionRing;
 pub struct RingAssets {
     shoulder_mesh: Handle<Mesh>,
     core_mesh: Handle<Mesh>,
+    siege_shoulder_mesh: Handle<Mesh>,
+    siege_core_mesh: Handle<Mesh>,
     shoulder: Handle<StandardMaterial>,
     /// Warm core: this unit takes your orders.
     core_command: Handle<StandardMaterial>,
@@ -147,10 +149,12 @@ pub(super) fn sync_selection_ring(
             &PlayerPosition,
             Option<&Transform>,
             Option<&shared::components::CommandedBy>,
+            Has<shared::components::Catapult>,
         ),
         Without<SelectionRing>,
     >,
     mut rings: Query<(Entity, &mut Transform, &mut Visibility, &Children), With<SelectionRing>>,
+    mut ring_meshes: Query<&mut Mesh3d>,
     mut cores: Query<(&mut MeshMaterial3d<StandardMaterial>, &mut RingTone)>,
 ) {
     let Some(assets) = assets else {
@@ -160,6 +164,8 @@ pub(super) fn sync_selection_ring(
         commands.insert_resource(RingAssets {
             shoulder_mesh: meshes.add(Annulus::new(SHOULDER_INNER, SHOULDER_OUTER)),
             core_mesh: meshes.add(Annulus::new(CORE_INNER, CORE_OUTER)),
+            siege_shoulder_mesh: meshes.add(Annulus::new(2.90, 3.12)),
+            siege_core_mesh: meshes.add(Annulus::new(2.96, 3.06)),
             shoulder: materials.add(ring_material(Color::srgba(0.106, 0.094, 0.082, 0.34))),
             // Commandable rings carry a warm cast -- the same ember family the
             // HUD reserves for selection -- so "I can move this" is legible
@@ -183,14 +189,14 @@ pub(super) fn sync_selection_ring(
 
     // Where every ring belongs this frame, and whether that unit takes orders.
     // Empty past the hide distance, so the whole pool simply hides.
-    let wanted: Vec<(Vec3, bool)> = if zoom > RING_HIDE_ZOOM {
+    let wanted: Vec<(Vec3, bool, bool)> = if zoom > RING_HIDE_ZOOM {
         Vec::new()
     } else {
         selection
             .entities
             .iter()
             .filter_map(|entity| positions.get(*entity).ok())
-            .map(|(position, visual, commanded)| {
+            .map(|(position, visual, commanded, siege)| {
                 let commandable = super::can_command(commanded, my_account.as_deref());
                 // Follow the SMOOTHED transform, not the replicated position.
                 // `PlayerPosition` is a staircase at network rate while the body
@@ -205,10 +211,18 @@ pub(super) fn sync_selection_ring(
                 // behind, and a ring that lags into a hillside is worse than one
                 // that is always on it.
                 if let Some(terrain) = terrain.as_deref() {
-                    point.y = ground_under_ring(terrain, point, SHOULDER_OUTER * scale_factor);
+                    point.y = ground_under_ring(
+                        terrain,
+                        point,
+                        if siege {
+                            3.12
+                        } else {
+                            SHOULDER_OUTER * scale_factor
+                        },
+                    );
                 }
                 point.y += RING_LIFT;
-                (point, commandable)
+                (point, commandable, siege)
             })
             .collect()
     };
@@ -246,17 +260,29 @@ pub(super) fn sync_selection_ring(
         ));
     }
 
-    let scale = Vec3::splat(scale_factor);
     for (index, (_entity, mut transform, mut visibility, children)) in rings.iter_mut().enumerate()
     {
         match wanted.get(index) {
-            Some((point, commandable)) => {
+            Some((point, commandable, siege)) => {
+                let scale = Vec3::splat(if *siege { 1.0 } else { scale_factor });
                 if transform.translation != *point {
                     transform.translation = *point;
                 }
                 // Swap the core material only when the tone actually changes:
                 // writing a material handle every frame re-uploads it.
                 for child in children.iter() {
+                    let core = cores.contains(child);
+                    let desired = match (*siege, core) {
+                        (true, true) => &assets.siege_core_mesh,
+                        (true, false) => &assets.siege_shoulder_mesh,
+                        (false, true) => &assets.core_mesh,
+                        (false, false) => &assets.shoulder_mesh,
+                    };
+                    if let Ok(mut mesh) = ring_meshes.get_mut(child) {
+                        if mesh.0 != *desired {
+                            mesh.0 = desired.clone();
+                        }
+                    }
                     if let Ok((mut material, mut tone)) = cores.get_mut(child) {
                         if tone.0 != *commandable {
                             tone.0 = *commandable;

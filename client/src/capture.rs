@@ -11,6 +11,10 @@
 //!
 //! Run it via `cargo run -p client --bin capture -- --help`.
 
+mod siege;
+pub(crate) use siege::{
+    drive_siege_capture, drive_siege_input, drive_siege_ray, frame_siege_flight, SiegeCapture,
+};
 mod army;
 mod battle;
 pub(crate) use army::{drive_army_capture, drive_army_input, ArmyCapture};

@@ -14,6 +14,13 @@ pub struct ControlGroups([UnitSelection; 10]);
 
 pub fn handle_command_keys(
     keys: Res<ButtonInput<KeyCode>>,
+    machines: Query<
+        (
+            &shared::components::CommandedBy,
+            &shared::components::Health,
+        ),
+        With<shared::components::Catapult>,
+    >,
     input: Res<crate::input::InputState>,
     placement: Res<crate::hero::control::WorldPlacementMode>,
     combat: Res<crate::combat_mode::CombatMode>,
@@ -78,7 +85,12 @@ pub fn handle_command_keys(
             groups.0[index] = roster.selection(&selection.entities);
             notice.show(&format!("Group {index} saved: {} units", selection.len()));
         } else {
-            let members = roster.resolve(&groups.0[index]);
+            let mut members = roster.resolve(&groups.0[index]);
+            members.extend(groups.0[index].units.iter().copied().filter(|e| {
+                machines
+                    .get(*e)
+                    .is_ok_and(|(o, h)| o.0 == roster.account && !h.is_dead())
+            }));
             if !members.is_empty() {
                 selection.apply_group(
                     members,

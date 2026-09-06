@@ -76,6 +76,8 @@ pub(super) struct GroundOrderWorld<'w, 's> {
         &'static mut MessageSender<HeroConstructionOrder>,
         (With<crate::GameClient>, With<Connected>),
     >,
+    siege_aim: ResMut<'w, crate::siege::SiegeAim>,
+    catapults: Query<'w, 's, (), With<shared::components::Catapult>>,
     combat_mode: Res<'w, crate::combat_mode::CombatMode>,
     command_mode: ResMut<'w, super::commands::CommandMode>,
     roster: Res<'w, crate::army_roster::ArmyRoster>,
@@ -91,6 +93,7 @@ pub(super) struct GroundOrderWorld<'w, 's> {
             Option<&'static Transform>,
             Option<&'static CommandedBy>,
             Option<&'static CharacterActivity>,
+            Has<shared::components::Catapult>,
         ),
     >,
 }
@@ -135,6 +138,11 @@ pub(super) fn issue_order_on_right_click(
         *drag = RightDrag {
             formation_start: hit.0,
             formation: ground_world.combat_mode.0
+                && !ground_world.siege_aim.0
+                && selection
+                    .entities
+                    .iter()
+                    .any(|e| !ground_world.catapults.contains(*e))
                 && !alt
                 && !selection.is_empty()
                 && !over_ui
@@ -220,6 +228,24 @@ pub(super) fn issue_order_on_right_click(
         return;
     }
 
+    if ground_world.siege_aim.0 {
+        let units = ours
+            .iter()
+            .copied()
+            .filter(|e| ground_world.catapults.contains(*e))
+            .collect();
+        if let Ok(mut sender) = ground_world.sender.single_mut() {
+            sender.send::<ReliableChannel>(UnitOrder {
+                selection: shared::protocol::UnitSelection {
+                    units,
+                    battalions: vec![],
+                },
+                command: UnitCommand::AttackGround { target },
+            });
+        }
+        ground_world.siege_aim.0 = false;
+        return;
+    }
     // A selected vessel interprets water as navigation and nearby dry terrain
     // as the natural disembark interaction. The server repeats every check;
     // this prediction exists to explain a refused far-shore click immediately.

@@ -248,3 +248,21 @@ pub(super) fn handle_found_village_button(
         };
     }
 }
+
+pub(super) fn handle_spawn_catapult_button(
+    mut placement: ResMut<crate::hero::control::WorldPlacementMode>,
+    buttons: Query<&Interaction, (With<SpawnCatapultButton>, Changed<Interaction>)>,
+) {
+    for interaction in buttons.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        // Only one placement can be armed: an invisible second armed mode would
+        // make the next click do something the player did not ask for.
+        *placement = if placement.is_spawn_catapult() {
+            crate::hero::control::WorldPlacementMode::None
+        } else {
+            crate::hero::control::WorldPlacementMode::SpawnCatapult
+        };
+    }
+}

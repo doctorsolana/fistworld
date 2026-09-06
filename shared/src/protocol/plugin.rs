@@ -34,6 +34,13 @@ pub struct ProtocolPlugin;
 
 impl Plugin for ProtocolPlugin {
     fn build(&self, app: &mut App) {
+        app.component::<crate::components::Catapult>().replicate();
+        app.component::<crate::components::CatapultStatus>()
+            .replicate();
+        app.component::<crate::components::SiegeProjectile>()
+            .replicate();
+        app.component::<crate::components::SiegeImpact>()
+            .replicate();
         // === PLAYER COMPONENTS ===
         // No .predict(): nothing spawns PredictionTarget or queries Predicted, so
         // prediction registration would be dead weight (lightyear 0.28 requires

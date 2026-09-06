@@ -169,3 +169,10 @@ Weapon classes, armour, morale/routing/rallying, guards, military wages, diploma
 sieges, ranged line-of-sight attacks, adaptive passage reservations and lossless
 strategic army promotion/demotion remain future milestones. They must retain these
 authority, identity, clock and bounded-work contracts.
+
+### Playable catapult — 2026-09-06
+
+The first ranged siege weapon is implemented through God placement, ordinary unit
+selection and the ordered command stream. F/RMB ground bombardment and RMB enemy attacks
+use server-owned, non-homing stone trajectories with local splash and friendly fire.
+H stops future shots. See [CATAPULT.md](CATAPULT.md) for tuning and remaining scope.

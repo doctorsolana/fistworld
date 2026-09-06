@@ -198,6 +198,7 @@ fn god_plate() -> impl Bundle {
             hairline(),
             spawn_hero_button(),
             spawn_npc_button(),
+            spawn_catapult_button(),
             spawn_immigrant_boat_button(),
             found_village_button(),
             god_notice(),
@@ -536,4 +537,31 @@ pub(super) fn despawn_hud(mut commands: Commands, roots: Query<Entity, With<HudR
     for entity in roots.iter() {
         commands.entity(entity).despawn();
     }
+}
+
+fn spawn_catapult_button() -> impl Bundle {
+    (
+        SpawnCatapultButton,
+        Button,
+        Node {
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(2.0)),
+            ..default()
+        },
+        button_chrome(UiButtonVariant::Secondary),
+        children![(
+            SpawnCatapultLabel,
+            UiButtonLabel,
+            Text::new("SPAWN CATAPULT"),
+            TextFont {
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(INK),
+        )],
+    )
 }

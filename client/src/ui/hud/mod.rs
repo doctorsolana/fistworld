@@ -50,7 +50,10 @@ impl Plugin for HudPlugin {
                 handle_mode_chip_button,
                 handle_warp_buttons,
                 handle_spawn_hero_button,
-                actions::handle_spawn_npc_button,
+                (
+                    actions::handle_spawn_npc_button,
+                    actions::handle_spawn_catapult_button,
+                ),
                 actions::handle_immigrant_boat_button,
                 actions::handle_found_village_button,
                 actions::handle_selection_expand_button,
@@ -59,7 +62,10 @@ impl Plugin for HudPlugin {
                 sync_god_panel,
                 style_warp_buttons,
                 sync_spawn_hero_button,
-                state_sync::sync_spawn_npc_button,
+                (
+                    state_sync::sync_spawn_npc_button,
+                    state_sync::sync_spawn_catapult_button,
+                ),
                 state_sync::sync_immigrant_boat_button,
                 state_sync::sync_found_village_button,
                 actions::watch_immigrant_boat.after(crate::camera_rts::update_commander_camera),
@@ -245,3 +251,8 @@ struct SelectionHealthFill;
 
 #[derive(Component)]
 struct SelectionExpandButton;
+
+#[derive(Component)]
+struct SpawnCatapultButton;
+#[derive(Component)]
+struct SpawnCatapultLabel;

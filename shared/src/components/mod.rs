@@ -56,3 +56,6 @@ pub use village_life::{
 };
 pub use village_roads::*;
 pub use world::*;
+
+mod siege;
+pub use siege::*;

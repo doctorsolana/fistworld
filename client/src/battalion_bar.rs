@@ -489,12 +489,16 @@ fn handle_muster_card_clicks(
 /// because the muster card on it IS how you raise the first one - and sinks
 /// out of sight otherwise. Same underdamped spring as the banner.
 fn animate_battalion_bar(
+    selection: Res<crate::selection::Selection>,
+    machines: Query<(), With<shared::components::Catapult>>,
     time: Res<Time>,
     mode: Res<CombatMode>,
     mut roots: Query<(&mut BattalionBarRoot, &mut Node)>,
 ) {
     let dt = time.delta_secs().min(0.05);
-    let target = if mode.0 {
+    let target = if mode.0
+        && !(selection.len() > 0 && selection.entities.iter().all(|e| machines.contains(*e)))
+    {
         BAR_SHOWN_BOTTOM
     } else {
         BAR_HIDDEN_BOTTOM

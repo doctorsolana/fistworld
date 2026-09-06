@@ -140,7 +140,8 @@ pub fn apply_unit_order(world: &mut World, account: &str, order: UnitOrder) -> (
     let requested = units.len();
     if let UnitCommand::Attack { target } = order.command {
         if target == Entity::PLACEHOLDER
-            || world.get::<CharacterKind>(target).is_none()
+            || (world.get::<CharacterKind>(target).is_none()
+                && world.get::<Catapult>(target).is_none())
             || world.get::<PlayerPosition>(target).is_none()
             || world.get::<OfflineHero>(target).is_some()
             || world.get::<AboardBoat>(target).is_some()
@@ -172,8 +173,13 @@ pub fn apply_unit_order(world: &mut World, account: &str, order: UnitOrder) -> (
     }
     let mut soldiers = Vec::new();
     let mut sailed = 0;
+    let mut siege_units = Vec::new();
     for entity in units {
-        if owned_character(world, entity, account) {
+        if world.get::<Catapult>(entity).is_some() {
+            siege_units.push(entity);
+        } else if matches!(order.command, UnitCommand::AttackGround { .. }) {
+            continue;
+        } else if owned_character(world, entity, account) {
             soldiers.push(entity);
         } else if let UnitCommand::Move { target, .. } = order.command {
             if world.get::<Vessel>(entity).is_some()
@@ -192,8 +198,7 @@ pub fn apply_unit_order(world: &mut World, account: &str, order: UnitOrder) -> (
             }
         }
     }
-    let accepted = soldiers.len() + sailed;
-    if accepted == 0 {
+    if soldiers.is_empty() && sailed == 0 && siege_units.is_empty() {
         return (0, "No available units in that selection".into());
     }
     let mut grouped = BTreeMap::<u64, Vec<FormationSoldier>>::new();
@@ -265,6 +270,75 @@ pub fn apply_unit_order(world: &mut World, account: &str, order: UnitOrder) -> (
     } else {
         Vec::new()
     };
+    // Commit siege orders only after the mixed selection's formation has
+    // passed validation. A refused frontage cannot move half the selection.
+    let siege_destinations = if let UnitCommand::Move {
+        target, frontage, ..
+    } = order.command
+    {
+        let average = siege_units
+            .iter()
+            .filter_map(|e| world.get::<PlayerPosition>(*e))
+            .map(|p| p.0.xz())
+            .sum::<Vec2>()
+            / siege_units.len().max(1) as f32;
+        let forward = frontage
+            .map(|f| f.facing)
+            .unwrap_or(target.xz() - average)
+            .normalize_or_zero();
+        let forward = if forward == Vec2::ZERO {
+            Vec2::Y
+        } else {
+            forward
+        };
+        let right = Vec2::new(forward.y, -forward.x);
+        let behind = blocks
+            .iter()
+            .flat_map(|b| &b.slots)
+            .map(|(_, p)| (target.xz() - p.xz()).dot(forward))
+            .fold(0.0_f32, f32::max);
+        (0..siege_units.len())
+            .map(|index| {
+                let lateral = (index as f32 - (siege_units.len().saturating_sub(1)) as f32 * 0.5)
+                    * (CATAPULT_CLEARANCE * 2.0 + 0.5);
+                let offset = right * lateral
+                    - forward
+                        * if soldiers.is_empty() {
+                            0.0
+                        } else {
+                            behind + 6.0
+                        };
+                target + Vec3::new(offset.x, 0.0, offset.y)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let mut siege = 0;
+    let mut siege_error = None;
+    for (index, entity) in siege_units.into_iter().enumerate() {
+        let command = match order.command {
+            UnitCommand::Move { frontage, mode, .. } => UnitCommand::Move {
+                target: siege_destinations[index],
+                frontage,
+                mode,
+            },
+            other => other,
+        };
+        match super::siege::order_catapult(world, account, entity, command) {
+            Ok(()) => siege += 1,
+            Err(reason) => siege_error = Some(reason),
+        }
+    }
+    let accepted = soldiers.len() + sailed + siege;
+    if accepted == 0 {
+        return (
+            0,
+            siege_error
+                .unwrap_or("No available units in that selection")
+                .into(),
+        );
+    }
     for entity in &soldiers {
         interrupt_previous_order(world, *entity);
     }
@@ -328,8 +402,9 @@ pub fn apply_unit_order(world: &mut World, account: &str, order: UnitOrder) -> (
             let enemy = fronts::enemy_of(world, target);
             // Uncommanded civilians are deliberately absent from the automatic
             // combat index. Explicit attacks on them keep ordinary pursuit.
-            if world.get::<CommandedBy>(target).is_some()
-                || world.get::<super::combat::WarParty>(target).is_some()
+            if world.get::<Catapult>(target).is_none()
+                && (world.get::<CommandedBy>(target).is_some()
+                    || world.get::<super::combat::WarParty>(target).is_some())
             {
                 for block in current_blocks {
                     fronts::install(world, block, fronts::Intent::Attack(enemy));
@@ -339,13 +414,17 @@ pub fn apply_unit_order(world: &mut World, account: &str, order: UnitOrder) -> (
                 if world.get::<fronts::FormationMember>(entity).is_some() {
                     continue;
                 }
+                let machine = world.get::<Catapult>(target).is_some();
                 let mut soldier = world.entity_mut(entity);
-                soldier.remove::<CommandStance>().insert((
-                    AttackOrder { target },
-                    super::combat::SkirmishOrder { target: enemy },
-                ));
+                soldier
+                    .remove::<CommandStance>()
+                    .insert(AttackOrder { target });
+                if !machine {
+                    soldier.insert(super::combat::SkirmishOrder { target: enemy });
+                }
             }
         }
+        UnitCommand::AttackGround { .. } => {}
         UnitCommand::Hold => {
             for block in current_blocks {
                 fronts::install(world, block, fronts::Intent::Hold);
@@ -367,6 +446,7 @@ pub fn apply_unit_order(world: &mut World, account: &str, order: UnitOrder) -> (
         UnitCommand::Move { .. } => "Moving",
         UnitCommand::Attack { .. } => "Attacking with",
         UnitCommand::Hold => "Holding with",
+        UnitCommand::AttackGround { .. } => "Bombarding with",
     };
     let omitted = requested.saturating_sub(accepted);
     let suffix = if omitted > 0 {

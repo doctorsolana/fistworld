@@ -110,7 +110,12 @@ pub enum DevCommand {
     /// Spawn a villager at a world position. A test tool for now: villagers have
     /// a name and stand there, so the encyclopedia and selection have real
     /// non-player people to list before settlements exist to produce them.
-    SpawnNpc { pos: Vec3 },
+    SpawnNpc {
+        pos: Vec3,
+    },
+    SpawnCatapult {
+        pos: Vec3,
+    },
     /// Ask the world to launch one immigrant through the complete
     /// ocean-voyage, landfall, overland migration, and Moot queue pipeline.
     /// This remains server-authorized God-mode tooling.
@@ -126,7 +131,10 @@ pub enum DevCommand {
     ///
     /// The founding act per WORLD-DESIGN section 1. The server enforces the
     /// spacing rule -- a client-side check is advisory.
-    FoundSettlement { pos: Vec3, name: String },
+    FoundSettlement {
+        pos: Vec3,
+        name: String,
+    },
     /// Take a villager into the sender's retinue, or dismiss it.
     ///
     /// Targeted by durable identity so the command remains exact even when the

@@ -409,3 +409,11 @@ The current village simulation uses these rules as hard boundaries:
   `ui/scroll.rs` owns nested wheel bubbling. Economy screens preserve the entity under the
   pointer and bound structural refresh at high simulation speed. See
   [UI-ARCHITECTURE.md](UI-ARCHITECTURE.md).
+
+### Siege units
+
+Catapults use `player::siege` for authoritative orders, firing and splash damage and
+`client::siege` for presentation. Their footprint uses the existing formation route
+budget and mover. Replicated stones contain absolute launch/impact timelines; damage
+resolves once on the server. See [CATAPULT.md](CATAPULT.md) for controls, ownership,
+scaling and the current developer-placement boundary.

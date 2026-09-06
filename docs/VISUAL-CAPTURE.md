@@ -391,3 +391,29 @@ These are functional checks: personally inspect the approach, contact, casualty
 replacement and late fight to assess crossing, crowding, poses and stalls.
 Screenshot readbacks and compilation disturb timing; these runs are not FPS
 benchmarks. Use `army-250.ron` as the separate march/redeployment regression.
+
+## Connected catapult rehearsal
+
+`capture/scenarios/catapult.ron` uses the connected army-lab runtime. Rebuild both
+binaries after wire changes. Launch server and client with `CITYSIM_MAP_ID=battle_lab`
+and `FISTWORLD_ARMY_SCENARIO="$PWD/capture/scenarios/catapult.ron"`; the server also
+needs `FISTWORLD_VILLAGE_LAB_RUNTIME=1 FISTWORLD_LAB_SCENARIO=skirmish FISTWORLD_LAB_WARP=1`.
+On the client set `FISTFORCE_AUTOCONNECT=battlelab`,
+`BEVY_ASSET_ROOT="$PWD/client/assets"`, `FISTFORCE_NO_SETTINGS_FILE=1`,
+`FISTFORCE_RESOLUTION=1600x900 FISTFORCE_RENDER_SCALE=1` and a fresh
+`FISTWORLD_ARMY_CAPTURE_DIR`.
+
+Readiness requires replicated actors, instantiated catapult rig, dressed people,
+unblocked input and stable terrain chunks. The rehearsal uses normal RMB movement,
+F + RMB bombardment, H, then RMB enemy attack. Scene captures record the moving carriage,
+launch, flight and impact continuously; window captures include the aiming and status
+panels. Inspect each PNG with its `.capture.json` and `.siege.json`. The summary checks
+travel, authoritative velocity (network snapshot arrival intervals are not movement
+speed), wind-up, two impacts, multiple damaged people, ammunition and a full held reload.
+
+The second shot uses an opt-in cinematic camera that follows the elevated projectile;
+ordinary RTS focus stays grounded. Capture metadata records the actual camera transform.
+At most four screenshot tickets are outstanding, and every ticket must complete before
+the rehearsal exits. The requested launch cadence is 24 Hz, but readback can reduce it;
+encode recordings from the `.siege.json` timestamps rather than assuming a fixed frame
+rate. This rehearsal is visual/functional evidence, not a frame-rate benchmark.

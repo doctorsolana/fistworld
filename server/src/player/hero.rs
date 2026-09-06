@@ -186,14 +186,23 @@ fn static_prop_blocks_segment(
     colliders: &StaticColliders,
     derived: &DerivedColliderLibrary,
 ) -> bool {
+    static_prop_blocks_swept_disc(start, end, colliders, derived, VILLAGER_PROP_RADIUS)
+}
+pub(crate) fn static_prop_blocks_swept_disc(
+    start: Vec2,
+    end: Vec2,
+    colliders: &StaticColliders,
+    derived: &DerivedColliderLibrary,
+    clearance: f32,
+) -> bool {
     const COLLIDER_CELL: f32 = 16.0;
     let min = (
-        (start.x.min(end.x) / COLLIDER_CELL).floor() as i32 - 1,
-        (start.y.min(end.y) / COLLIDER_CELL).floor() as i32 - 1,
+        ((start.x.min(end.x) - clearance) / COLLIDER_CELL).floor() as i32 - 1,
+        ((start.y.min(end.y) - clearance) / COLLIDER_CELL).floor() as i32 - 1,
     );
     let max = (
-        (start.x.max(end.x) / COLLIDER_CELL).floor() as i32 + 1,
-        (start.y.max(end.y) / COLLIDER_CELL).floor() as i32 + 1,
+        ((start.x.max(end.x) + clearance) / COLLIDER_CELL).floor() as i32 + 1,
+        ((start.y.max(end.y) + clearance) / COLLIDER_CELL).floor() as i32 + 1,
     );
     let segment = end - start;
     let length_squared = segment.length_squared();
@@ -209,7 +218,7 @@ fn static_prop_blocks_segment(
                 let Some(shape) = derived.by_kind.get(&instance.kind) else {
                     continue;
                 };
-                let radius = shape.horizontal_radius * instance.scale + VILLAGER_PROP_RADIUS;
+                let radius = shape.horizontal_radius * instance.scale + clearance;
                 let obstacle = Vec2::new(instance.position.x, instance.position.z);
                 let t = if length_squared <= f32::EPSILON {
                     1.0
@@ -441,7 +450,16 @@ pub fn step_units(
     mut road_graph: Option<ResMut<VillageRoadGraph>>,
     crowd_grid: Option<Res<TacticalCrowdGrid>>,
     combat_space: Option<Res<super::combat::fronts::CombatSpace>>,
-    formations: Query<(), With<shared::components::CombatReady>>,
+    formations: Query<
+        (
+            Has<shared::components::CombatReady>,
+            Has<shared::components::Catapult>,
+        ),
+        Or<(
+            With<shared::components::CombatReady>,
+            With<shared::components::Catapult>,
+        )>,
+    >,
     mut reported_route_collisions: Local<HashSet<Entity>>,
     // `With<CharacterKind>` is load-bearing, not decoration: the commander
     // camera anchor carries the identical PlayerPosition + PlayerRotation +
@@ -450,7 +468,7 @@ pub fn step_units(
     mut units: Query<
         (
             Entity,
-            &CharacterKind,
+            Option<&CharacterKind>,
             &MoveTarget,
             &mut PlayerPosition,
             &mut PlayerRotation,
@@ -466,7 +484,7 @@ pub fn step_units(
             Has<crate::world::village::ambient::AmbientDirectTransit>,
         ),
         (
-            With<CharacterKind>,
+            Or<(With<CharacterKind>, With<shared::components::Catapult>)>,
             Without<OfflineHero>,
             Without<crate::world::village::strategic::StrategicPerson>,
         ),
@@ -503,6 +521,7 @@ pub fn step_units(
         ambient_direct,
     ) in units.iter_mut()
     {
+        let is_catapult = formations.get(entity).is_ok_and(|(_, catapult)| catapult);
         let start_position = pos.0;
         let real_dt = simulation_time.real_seconds().max(1.0e-5);
         // Door and pier traversals are authored, collision-exempt movement
@@ -512,7 +531,7 @@ pub fn step_units(
         // Arrival below clears it along with the MoveTarget.
         let authored_traversal =
             door_use.is_some() || pier_traversal.is_some() || obstacle_escape.is_some();
-        if *kind == CharacterKind::Villager
+        if (is_catapult || kind == Some(&CharacterKind::Villager))
             && !authored_traversal
             && (pending.is_some() || failed.is_some())
         {
@@ -572,7 +591,13 @@ pub fn step_units(
             };
             let to_goal = goal - current;
             let distance = to_goal.length();
-            if distance <= HERO_ARRIVE_EPSILON {
+            if distance
+                <= if is_catapult {
+                    1.0e-4
+                } else {
+                    HERO_ARRIVE_EPSILON
+                }
+            {
                 if use_route {
                     let route = route.as_deref_mut().expect("route checked above");
                     route.next += 1;
@@ -584,10 +609,41 @@ pub fn step_units(
                 break;
             }
 
-            let speed = HERO_MOVE_SPEED * if on_road { ROAD_SPEED_MULTIPLIER } else { 1.0 };
+            let speed = if is_catapult {
+                shared::components::CATAPULT_SPEED
+            } else {
+                HERO_MOVE_SPEED * if on_road { ROAD_SPEED_MULTIPLIER } else { 1.0 }
+            };
             let step = (speed * remaining_seconds).min(distance);
             let preferred_direction = to_goal / distance;
-            let reaches_goal = step + HERO_ARRIVE_EPSILON >= distance;
+            if is_catapult {
+                let (yaw, aligned) = shared::components::turn_siege_towards(
+                    rot.0,
+                    preferred_direction,
+                    remaining_seconds,
+                );
+                rot.set_if_neq(PlayerRotation(yaw));
+                if !aligned {
+                    break;
+                }
+                if !super::siege::ground_clear(
+                    current,
+                    current + preferred_direction * step,
+                    shared::components::CATAPULT_CLEARANCE,
+                    Some(&terrain),
+                    obstacles.as_deref(),
+                    colliders.as_deref(),
+                    derived.as_deref(),
+                ) {
+                    break;
+                }
+            }
+            let reaches_goal =
+                step + if is_catapult {
+                    0.0
+                } else {
+                    HERO_ARRIVE_EPSILON
+                } >= distance;
             // Clamp the last leg to the certified waypoint itself. Rebuilding
             // that point as `current + normalized * distance` can land a few
             // floating-point ulps beyond it. Doorways and tree interaction
@@ -628,14 +684,15 @@ pub fn step_units(
                     }
                 }
             }
-            if formations.contains(entity)
+            if !is_catapult
+                && formations.contains(entity)
                 && combat_space
                     .as_ref()
                     .is_some_and(|space| !space.movement_clear(entity, current, proposed))
             {
                 break;
             }
-            if *kind == CharacterKind::Villager
+            if (is_catapult || kind == Some(&CharacterKind::Villager))
                 && door_use.is_none()
                 && pier_traversal.is_none()
                 && !route_geometry_is_current
@@ -725,7 +782,9 @@ pub fn step_units(
 
         // Face travel direction. Bevy yaw 0 looks down -Z; atan2(x, z) of the
         // FORWARD vector gives the yaw whose -Z axis points along it.
-        let next_yaw = last_direction.map(|direction| f32::atan2(-direction.x, -direction.y));
+        let next_yaw = last_direction
+            .filter(|_| !is_catapult)
+            .map(|direction| f32::atan2(-direction.x, -direction.y));
 
         if pos.0 != next_pos {
             pos.0 = next_pos;

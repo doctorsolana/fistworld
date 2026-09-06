@@ -141,3 +141,10 @@ terrain, camera or retained-UI changes, follow [VISUAL-CAPTURE.md](VISUAL-CAPTUR
 run an appropriate checked-in scenario and inspect its PNG and `.capture.json`
 together. Use a continuous scenario for motion or streaming defects. A passing
 metadata assertion cannot prove that an image contains the intended view.
+
+## Catapults
+
+Siege orders/damage: `server/src/player/siege.rs` and `siege/fire.rs`. Shared ballistics
+and timelines: `shared/src/components/siege.rs`. Model, FX and targeting UI:
+`client/src/siege/`. Connected rehearsal: `capture/scenarios/catapult.ron`.
+See [CATAPULT.md](CATAPULT.md).

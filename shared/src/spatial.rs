@@ -186,8 +186,14 @@ impl SpatialObstacleGrid {
     /// segment into each nearby obstacle's local space gives an exact slab
     /// intersection and is also cheaper for ordinary short movement legs.
     pub fn segment_blocked(&self, start: Vec2, end: Vec2) -> bool {
-        let min = Self::world_to_cell(start.min(end));
-        let max = Self::world_to_cell(start.max(end));
+        self.segment_blocked_with_clearance(start, end, 0.0)
+    }
+
+    /// Conservative swept disc: expand each rotated box by the mover radius.
+    /// Broad-phase cells are expanded too, including stationary placement.
+    pub fn segment_blocked_with_clearance(&self, start: Vec2, end: Vec2, radius: f32) -> bool {
+        let min = Self::world_to_cell(start.min(end) - Vec2::splat(radius));
+        let max = Self::world_to_cell(start.max(end) + Vec2::splat(radius));
 
         for cx in min.0..=max.0 {
             for cz in min.1..=max.1 {
@@ -211,7 +217,7 @@ impl SpatialObstacleGrid {
                     if segment_intersects_box_after_start(
                         to_local(start),
                         to_local(end),
-                        entry.half_extents,
+                        entry.half_extents + Vec2::splat(radius),
                     ) {
                         return true;
                     }

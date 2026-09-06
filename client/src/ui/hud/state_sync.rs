@@ -554,3 +554,28 @@ pub(super) fn sync_found_village_button(
         }
     }
 }
+
+pub(super) fn sync_spawn_catapult_button(
+    placement: Res<crate::hero::control::WorldPlacementMode>,
+    mut buttons: Query<&mut UiButtonStyle, With<SpawnCatapultButton>>,
+    mut labels: Query<&mut Text, With<SpawnCatapultLabel>>,
+) {
+    let armed = placement.is_spawn_catapult();
+    let label = if armed {
+        "CLICK TO PLACE"
+    } else {
+        "SPAWN CATAPULT"
+    };
+    for mut style in buttons.iter_mut() {
+        style.variant = if armed {
+            UiButtonVariant::Developer
+        } else {
+            UiButtonVariant::Secondary
+        };
+    }
+    for mut text in labels.iter_mut() {
+        if text.0 != label {
+            text.0 = label.to_string();
+        }
+    }
+}

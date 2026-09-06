@@ -23,3 +23,5 @@ pub mod permits;
 pub mod roster;
 pub mod spawn;
 pub mod trade_routes;
+
+pub mod siege;
