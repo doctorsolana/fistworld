@@ -1,5 +1,10 @@
 # Bakery, Windmill and Market — asset handover
 
+> **Windmill rebuilt 2026-09-06.** Use [WINDMILL.md](WINDMILL.md) for the current
+> geometry, direct +Y export, animation, lighting and inspection workflow. The
+> windmill-specific geometry, dimensions and rebuild instructions below describe
+> the August asset; the stable plot, door offset and cap/sail node names still apply.
+
 > **Bakery and Windmill integrated 2026-08-12.** Both semantic building types now use the authored scenes and baked
 > navigation hulls. Doors and night lights are live; bakery loaves reflect real Bread inventory;
 > the mill cap faces upwind and its sails follow the shared wind speed only while the staffed,
@@ -362,4 +367,4 @@ blender asset_creation/houses/bakery.blend --background --python asset_creation/
 blender asset_creation/houses/bakery.blend --background --python asset_creation/houses/export_prop_glb.py
 ```
 
-Same for `windmill`, plus `animate_sails.py` between the door pass and the export.
+The windmill now has a self-contained builder; see [WINDMILL.md](WINDMILL.md).

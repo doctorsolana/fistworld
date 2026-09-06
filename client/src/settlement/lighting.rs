@@ -47,6 +47,7 @@ fn window_material(kind: SettlementBuildingKind) -> Option<&'static str> {
     match kind {
         SettlementBuildingKind::House => Some("CabinGlass"),
         SettlementBuildingKind::LumberjackHut => Some("HutGlass"),
+        SettlementBuildingKind::Windmill => Some("WindMillGlass"),
         _ => None,
     }
 }
@@ -54,7 +55,10 @@ fn window_material(kind: SettlementBuildingKind) -> Option<&'static str> {
 fn windows_occupied(household: Option<&Household>, building: Option<&SettlementBuilding>) -> bool {
     household.is_some_and(|home| !home.residents.is_empty())
         || building.is_some_and(|site| {
-            site.kind == SettlementBuildingKind::LumberjackHut && !site.workers.is_empty()
+            matches!(
+                site.kind,
+                SettlementBuildingKind::LumberjackHut | SettlementBuildingKind::Windmill
+            ) && !site.workers.is_empty()
         })
 }
 
@@ -331,7 +335,8 @@ pub(super) fn setup_building_night_lighting(
                 Some(SettlementBuildingKind::LivestockFarm) => {
                     &[("Light_Interior", 720_000.0, 9.0)]
                 }
-                Some(SettlementBuildingKind::Windmill | SettlementBuildingKind::Bakery) => &[
+                // Windmill panes and lantern use the budgeted window-light path above.
+                Some(SettlementBuildingKind::Bakery) => &[
                     ("Light_Interior", 720_000.0, 9.0),
                     ("Light_Lantern", 440_000.0, 7.5),
                 ],

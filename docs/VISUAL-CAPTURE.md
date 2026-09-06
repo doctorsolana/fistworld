@@ -558,3 +558,15 @@ Final verification: `cargo check --workspace --all-targets`, `cargo test --works
 (880 passed, 11 existing ignored), `cargo build --workspace --profile playtest`,
 formatting and whitespace checks. No frame-rate conclusions were drawn while the
 machine was also rendering another project.
+
+### Windmill asset inspection
+
+`windmill.ron` isolates a staffed, supplied mill on leveled terrain and checks
+front/rear, rotor-facing, gameplay, midnight and low roof/doorway views.
+`windmill-motion.ron` runs 481 continuous frames, samples every 30 frames and
+changes the replicated clock to exercise cap yaw as well as sail rotation. The
+last section moves close to the doorway while `FISTFORCE_CAPTURE_DOORS=cycle`
+drives the production door consumer. The fixture is selected with
+`FISTFORCE_CAPTURE_SETTLEMENT=windmill`; it does not simulate connected NPC entry.
+The free-look cameras use the fixture elevation 8.885553 m. Inspect each PNG
+with its JSON, including the full rotation and the low threshold views.

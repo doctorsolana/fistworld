@@ -51,7 +51,6 @@ GLB_PATH = {
     "moot_hall": "game_assets/buildings/village/MootHall.glb",          # hamlet
     "village_hall": "game_assets/buildings/village/VillageHall.glb",    # village
     "town_hall": "game_assets/buildings/village/TownHall.glb",          # town
-    "windmill": "game_assets/buildings/village/WindMill.glb",
     # The market ladder: L1 on beaten earth, L2 once the settlement has paved it.
     "market": "game_assets/buildings/village/Market.glb",
     "market_paved": "game_assets/buildings/village/MarketPaved.glb",
@@ -67,6 +66,7 @@ GLB_PATH = {
 assert STEM not in {"log_cabin", "long_cabin", "cabin_l2", "long_cabin_l2"}, (
     "Village houses export themselves; run build_houses.py with --factory-startup."
 )
+assert STEM != "windmill", "Windmill exports itself; run build_windmill.py with --factory-startup."
 assert STEM != "lumberjack_hut", (
     "The lumberjack workshop is authored in +Y and exports itself; run "
     "build_lumberjack_hut.py with --factory-startup instead of this -X exporter."
@@ -135,43 +135,6 @@ for o in bpy.data.objects:
 if door:
     door.rotation_euler = (0.0, 0.0, 0.0)
 
-# The facing correction above rotates geometry and pivots, but object animation
-# channels are independent data and do not follow `Mesh.transform`. The source
-# windmill turns around Blender X because its unexported shaft points along X;
-# after the -90 degree facing turn that same physical shaft points along -Y.
-# Conjugating the source rotation by that turn gives R_y(-theta). Without this
-# conversion the exported clip visibly tumbles the sail disc around game X.
-if STEM == "windmill":
-    action = bpy.data.actions.get("sails_turn")
-    assert action is not None, "windmill export requires sails_turn"
-
-    def action_fcurves(a):
-        if hasattr(a, "fcurves"):
-            return list(a.fcurves)
-        return [
-            curve
-            for layer in a.layers
-            for strip in layer.strips
-            for bag in getattr(strip, "channelbags", [])
-            for curve in bag.fcurves
-        ]
-
-    rotation_curves = {
-        curve.array_index: curve
-        for curve in action_fcurves(action)
-        if curve.data_path == "rotation_euler"
-    }
-    assert set(rotation_curves) == {0, 1, 2}, (
-        f"sails_turn rotation channels are {sorted(rotation_curves)}, expected XYZ")
-    source_x = rotation_curves[0]
-    source_y = rotation_curves[1]
-    source_x.array_index = 1
-    source_y.array_index = 0
-    for point in source_x.keyframe_points:
-        point.co.y = -point.co.y
-        point.handle_left.y = -point.handle_left.y
-        point.handle_right.y = -point.handle_right.y
-    log("converted sails_turn axis Blender +X -> post-facing -Y")
 bpy.context.view_layer.update()
 
 # --- 3b. CIVIC HALLS: pin Anchor_Door to one canonical local offset ------------------------------------
@@ -193,10 +156,8 @@ bpy.context.view_layer.update()
 # -Z. So the Blender-space target is (x, -z). Comparing the glTF value against Blender Y directly
 # shifted every hall 10 m and flipped the door off its facing assert.
 #
-# THE SAME TREATMENT NOW APPLIES TO THE WINDMILL AND BAKERY, for a different reason. They are not a
-# ladder and nothing replaces them, but `door_offset` gives them a shared placeholder Vec2(0, -4.0)
-# while their art put the threshold at -3.51 and -5.02. That constant is what sets the road front edge
-# (village_roads.rs), so the road, the queue and the door would have disagreed by up to a metre.
+# The bakery also pins its art to the established road approach at Vec2(0, -4.0).
+# The self-exporting windmill now enforces its own corresponding asset contract.
 #
 # Pinning the ART to the SHIPPED constant, rather than asking Rust to change to match the art, is the
 # choice that cannot rot: the assert below fails the export the day the two drift apart, whereas a
@@ -206,7 +167,6 @@ CANON_DOOR_BY_STEM = {
     "moot_hall": (0.0, -5.20),          # door_offset(Hall) -- one value for all three rungs
     "village_hall": (0.0, -5.20),
     "town_hall": (0.0, -5.20),
-    "windmill": (0.0, -4.00),           # door_offset(Windmill)
     # The market is 12 x 12 now, so its edge is at -6.0 and -4.00 would put the threshold two
     # metres INSIDE the square. door_offset(Market) has to move to -6.50 with it.
     "market": (0.0, -6.50),             # door_offset(Market) -- NEEDS THE RUST CONSTANT MOVED

@@ -23,16 +23,30 @@ fn triangles(path: &Path) -> Vec<[Vec3; 3]> {
     assert_eq!(&bytes[24 + json_len..28 + json_len], b"BIN\0");
     let bin = &bytes[28 + json_len..];
     let mut triangles = Vec::new();
-    for node in doc["nodes"].as_array().unwrap() {
+    let nodes = doc["nodes"].as_array().unwrap();
+    let mut parents = vec![None; nodes.len()];
+    for (parent, node) in nodes.iter().enumerate() {
+        if let Some(children) = node["children"].as_array() {
+            for child in children {
+                parents[child.as_u64().unwrap() as usize] = Some(parent);
+            }
+        }
+    }
+    for (node_index, node) in nodes.iter().enumerate() {
         let Some(mesh) = node["mesh"].as_u64() else {
             continue;
         };
         // These building exports bake their static transforms; the animated
         // door is translated to its hinge in the authored closed pose.
         assert!(node["matrix"].is_null() && node["rotation"].is_null() && node["scale"].is_null());
-        let translation = Vec3::from_array(std::array::from_fn(|i| {
-            node["translation"][i].as_f64().unwrap_or(0.0) as f32
-        }));
+        let mut translation = Vec3::ZERO;
+        let mut ancestor = Some(node_index);
+        while let Some(index) = ancestor {
+            translation += Vec3::from_array(std::array::from_fn(|i| {
+                nodes[index]["translation"][i].as_f64().unwrap_or(0.0) as f32
+            }));
+            ancestor = parents[index];
+        }
         for primitive in doc["meshes"][mesh as usize]["primitives"]
             .as_array()
             .unwrap()
@@ -117,6 +131,14 @@ fn all_authored_roofs_have_outward_facing_undersides() {
         (
             "LumberjackHut",
             &[(0.7, -1.96, 2.5, 2.8), (2.25, 0.7, 1.78, 2.0)],
+        ),
+        (
+            "WindMill",
+            &[
+                (2.4, -0.491, 2.30, 2.55),
+                (1.55, -0.491, 6.77, 7.10),
+                (0.4, -3.15, 2.4, 2.6),
+            ],
         ),
         (
             "StorageHall",

@@ -322,6 +322,24 @@ fn staffed_lumberjack() -> SettlementBuilding {
 
 #[test]
 fn lumberjack_panes_bind_once_and_follow_staffing_and_daylight() {
+    assert_workshop_window_lighting(
+        shared::components::SettlementBuildingKind::LumberjackHut,
+        "HutGlass",
+    );
+}
+
+#[test]
+fn windmill_panes_bind_once_and_follow_staffing_and_daylight() {
+    assert_workshop_window_lighting(
+        shared::components::SettlementBuildingKind::Windmill,
+        "WindMillGlass",
+    );
+}
+
+fn assert_workshop_window_lighting(
+    kind: shared::components::SettlementBuildingKind,
+    material_name: &str,
+) {
     use super::buildings::BuildingVisual;
     use super::lighting::setup_window_lighting;
     use bevy::gltf::GltfMaterialName;
@@ -343,16 +361,19 @@ fn lumberjack_panes_bind_once_and_follow_staffing_and_daylight() {
     let root = app
         .world_mut()
         .spawn((
-            staffed_lumberjack(),
+            shared::components::SettlementBuilding {
+                kind,
+                ..staffed_lumberjack()
+            },
             BuildingVisual {
-                building_type: shared::building::BuildingType::LumberjackHut,
+                building_type: kind.art(),
             },
         ))
         .id();
     let pane = app
         .world_mut()
         .spawn((
-            GltfMaterialName("HutGlass".into()),
+            GltfMaterialName(material_name.into()),
             MeshMaterial3d(source.clone()),
         ))
         .id();
@@ -367,7 +388,10 @@ fn lumberjack_panes_bind_once_and_follow_staffing_and_daylight() {
     app.update();
     let wiring = app.world().get::<WindowLighting>(root).unwrap();
     assert_eq!(wiring.lamps.len(), 2);
-    assert_eq!(wiring.strength, 1.0, "a staffed hut must glow after dark");
+    assert_eq!(
+        wiring.strength, 1.0,
+        "a staffed workshop must glow after dark"
+    );
     let clone = wiring.glass.clone();
     assert_ne!(
         clone, source,

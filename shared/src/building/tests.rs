@@ -6,6 +6,7 @@ use std::path::Path;
 use super::*;
 
 mod roofs;
+mod windmill;
 
 fn glb_document(path: &Path) -> serde_json::Value {
     let bytes = fs::read(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -131,7 +132,10 @@ fn assert_animated_building_contract(
         .position(|node| node["name"] == door_name)
         .unwrap();
     let animations = document["animations"].as_array().unwrap();
-    assert_eq!(animations.len(), 2);
+    assert_eq!(
+        animations.len(),
+        if kind == BuildingType::Windmill { 3 } else { 2 }
+    );
     for (name, duration) in [("door_open", 16.0 / 24.0), ("door_close", 22.0 / 24.0)] {
         let clip = animations.iter().find(|clip| clip["name"] == name).unwrap();
         let channels = clip["channels"].as_array().unwrap();

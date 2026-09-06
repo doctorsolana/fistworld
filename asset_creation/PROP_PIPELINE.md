@@ -6,7 +6,7 @@ skeleton. The contracts differ enough that conflating them causes real bugs, so 
 
 Older workshops demonstrate the original log construction pipeline.
 The rebuilt [houses](HOUSE_HANDOVER.md), [lumberjack workshop](LUMBERJACK_HUT.md)
-and [storage hall](STORAGE_HALL.md)
+[windmill](WINDMILL.md) and [storage hall](STORAGE_HALL.md)
 use self-contained builders that author directly in Blender +Y and export their own GLBs.
 Use each building's documented entry point: the older `export_prop_glb.py` applies a
 −90° facing correction and must not process these newer sources. Shared scale, timber,
@@ -31,6 +31,13 @@ workplace another copy of the cabin.
   supports instead of placing diagonal decoration that stops in empty space. Door straps
   should connect visibly to a hinge at the pivot, with the moving ironwork attached
   to the animated leaf. Inspect the complete open/close cycle for clipping.
+- Keep entrance paths and sills at the actual character walking height. NPCs currently
+  follow terrain height through doors; a modeled raised step does not make them
+  climb it. Do not infer successful NPC traversal from a door-only animation.
+  Raised entries require a shared height contract and connected client/server proof.
+- On mechanisms, inspect the full independent rotation of every parent and child.
+  A rotor must clear its stationary tower at every cap yaw; its shaft and bearing
+  must physically join the cap, and sailcloth must stay clear of its crossbars.
 - Recheck the navigation hull after adding backing or moving cargo. Overhead
   geometry must stay out of the ground slice; cargo must leave the entrance clear.
   Verify both the actual exported GLB and the Bevy PNG/JSON, not just the source scene.
