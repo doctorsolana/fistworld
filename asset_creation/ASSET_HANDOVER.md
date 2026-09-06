@@ -165,7 +165,7 @@ work tool while carrying. A stationary carrier currently holds the carry pose; a
 | Asset | `BuildingType` / `PropKind` | Footprint | Height | Collider |
 |---|---|---|---|---|
 | `LogCabin.glb` | `BuildingType::LogCabin` | 6.00 × 6.94 | 4.33 | hull, 45 pts |
-| `LumberjackHut.glb` | `BuildingType::LumberjackHut` | 5.16 × 5.40 | 3.76 | hull, 60 pts |
+| `LumberjackHut.glb` | `BuildingType::LumberjackHut` | 5.16 × 5.40 | 3.76 | hull, [workshop details](LUMBERJACK_HUT.md) |
 | `Farmstead.glb` | `BuildingType::Farmstead` | 5.41 × 6.62 | 4.07 | hull, 51 pts |
 | `MootHall.glb` | `BuildingType::MootHall` | 6.45 × 8.74 | 8.18 | hull, 57 pts |
 | `FishermansHut.glb` | `BuildingType::FishermansHut` | 6.44 × 6.51 | 3.86 | hull, 71 pts |
@@ -230,8 +230,8 @@ Every stand-on anchor was measured against the baked hull. Current clearances, a
 
 ```
 LogCabin       Anchor_Door   +0.33      FishermansHut  Anchor_Door   +0.68
-LumberjackHut  Anchor_Door   +0.63                     Anchor_Nets   +0.53
-               Anchor_Work   +0.42                     Anchor_Pier   +0.11
+LumberjackHut  Anchor_Door  >=0.77                     Anchor_Nets   +0.53
+               Anchor_Work  >=0.47                     Anchor_Pier   +0.11
 Farmstead      Anchor_Door   +0.56      MootHall       Anchor_Door   +0.71
                Anchor_Field  +5.86                     Anchor_Notice +0.65
 ```

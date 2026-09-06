@@ -1,4 +1,4 @@
-//! House window glow, bounded local lamps and building night lighting.
+//! Building window glow, bounded local lamps and building night lighting.
 
 use super::buildings::BuildingVisual;
 use super::grounds::FishingPierVisual;
@@ -10,12 +10,10 @@ use shared::components::{
     Household, PlayerPosition, SettlementBuilding, SettlementBuildingKind, WorldTime,
 };
 
-/// The cabin art already separates its panes and provides light anchors. This
-/// component records the per-house material clone and lamps after that scene is
-/// instantiated, so one occupied cabin can glow without modifying every house
-/// that shares the source glTF material.
+/// Per-building glass and lamps. Cloned materials let occupied homes and
+/// staffed workshops glow independently while sharing the same source GLB.
 #[derive(Component)]
-pub(super) struct HouseWindowLighting {
+pub(super) struct WindowLighting {
     pub(super) glass: Handle<StandardMaterial>,
     pub(super) lamps: Vec<Entity>,
     pub(super) strength: f32,
@@ -23,7 +21,7 @@ pub(super) struct HouseWindowLighting {
 }
 
 #[derive(Default)]
-pub(super) struct HouseLightBudget {
+pub(super) struct WindowLightBudget {
     pub(super) candidates: Vec<(f32, Entity)>,
     pub(super) enabled: HashSet<Entity>,
     pub(super) last_update_seconds: f64,
@@ -31,7 +29,7 @@ pub(super) struct HouseLightBudget {
 }
 
 #[derive(Component)]
-pub(super) struct HouseWindowLamp;
+pub(super) struct WindowLamp;
 
 #[derive(Component)]
 pub(super) struct BuildingNightLighting {
@@ -44,7 +42,21 @@ pub(super) struct BuildingNightLamp {
     pub(super) lumens: f32,
 }
 
-pub(super) const CABIN_GLASS_MATERIAL: &str = "CabinGlass";
+/// GLB material names are resolved once, when the scene is bound.
+fn window_material(kind: SettlementBuildingKind) -> Option<&'static str> {
+    match kind {
+        SettlementBuildingKind::House => Some("CabinGlass"),
+        SettlementBuildingKind::LumberjackHut => Some("HutGlass"),
+        _ => None,
+    }
+}
+
+fn windows_occupied(household: Option<&Household>, building: Option<&SettlementBuilding>) -> bool {
+    household.is_some_and(|home| !home.residents.is_empty())
+        || building.is_some_and(|site| {
+            site.kind == SettlementBuildingKind::LumberjackHut && !site.workers.is_empty()
+        })
+}
 
 pub(super) const WINDOW_LIGHT_ANCHORS: [&str; 2] = ["Light_Window.L", "Light_Window.R"];
 
@@ -63,41 +75,37 @@ pub(super) const WINDOW_EMISSIVE: LinearRgba = LinearRgba::new(13.0, 4.25, 0.80,
 /// lights are reserved for the close neighbourhood where their ground spill
 /// is visible; hundreds of distant domestic lights only burden light
 /// preparation and fragment shading.
-pub(super) const MAX_ACTIVE_HOUSE_POINT_LIGHTS: usize = 40;
+// Each selected building has two shadowless lamps; workshops share the cabin budget.
+pub(super) const MAX_LIT_WINDOW_BUILDINGS: usize = 40;
 
-pub(super) const HOUSE_POINT_LIGHT_RADIUS: f32 = 190.0;
+pub(super) const WINDOW_POINT_LIGHT_RADIUS: f32 = 190.0;
 
-pub(super) const HOUSE_LIGHT_BUDGET_INTERVAL_SECONDS: f64 = 0.25;
+pub(super) const WINDOW_LIGHT_BUDGET_INTERVAL_SECONDS: f64 = 0.25;
 
-/// Wire one completed cabin to the glass and light anchors authored in its GLB.
+/// Wire a completed building to the glass and light anchors authored in its GLB.
 ///
-/// Scene instantiation is asynchronous, so this polls only unwired houses. Once
+/// Scene instantiation is asynchronous, so this polls only unwired buildings. Once
 /// all panes and both anchors exist it clones the glass material for that one
-/// cabin, attaches a small warm light to each anchor, and stops scanning it.
-pub(super) fn setup_house_window_lighting(
+/// building, attaches a small warm light to each anchor, and stops scanning it.
+pub(super) fn setup_window_lighting(
     mut commands: Commands,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    houses: Query<
-        Entity,
-        (
-            With<SettlementBuilding>,
-            With<Household>,
-            With<BuildingVisual>,
-            Without<HouseWindowLighting>,
-        ),
-    >,
+    houses: Query<(Entity, &SettlementBuilding), (With<BuildingVisual>, Without<WindowLighting>)>,
     children: Query<&Children>,
     names: Query<&Name>,
     primitives: Query<(&GltfMaterialName, &MeshMaterial3d<StandardMaterial>)>,
 ) {
-    for house in houses.iter() {
+    for (house, building) in houses.iter() {
+        let Some(glass_material) = window_material(building.kind) else {
+            continue;
+        };
         let mut stack = vec![house];
         let mut panes = Vec::new();
         let mut anchors: HashMap<&'static str, Entity> = HashMap::new();
 
         while let Some(entity) = stack.pop() {
             if let Ok((material_name, material)) = primitives.get(entity) {
-                if material_name.0 == CABIN_GLASS_MATERIAL {
+                if material_name.0 == glass_material {
                     panes.push((entity, material.0.clone()));
                 }
             }
@@ -143,8 +151,8 @@ pub(super) fn setup_house_window_lighting(
                 lamps.push(
                     parent
                         .spawn((
-                            Name::new(format!("Cabin glow at {anchor_name}")),
-                            HouseWindowLamp,
+                            Name::new(format!("Window glow at {anchor_name}")),
+                            WindowLamp,
                             PointLight {
                                 color: Color::srgb(1.0, 0.53, 0.20),
                                 intensity: 0.0,
@@ -160,7 +168,7 @@ pub(super) fn setup_house_window_lighting(
                 );
             });
         }
-        commands.entity(house).insert(HouseWindowLighting {
+        commands.entity(house).insert(WindowLighting {
             glass,
             lamps,
             strength: 0.0,
@@ -169,26 +177,27 @@ pub(super) fn setup_house_window_lighting(
     }
 }
 
-/// Fade occupied cabins on after dark and back off at dawn or when empty.
+/// Fade occupied homes and staffed workshops on after dark and off at dawn.
 ///
 /// The replicated household on the cabin is the durable occupancy fact. Do not
 /// cross-join it with separate character entities here: those entities may be
 /// streamed or replicated a frame later than the building's regional detail,
 /// which used to leave a genuinely occupied cabin dark in live play.
-pub(super) fn sync_house_window_lighting(
+pub(super) fn sync_window_lighting(
     mut commands: Commands,
     time: Res<Time>,
     world_time: Query<&WorldTime>,
     camera: Query<&crate::camera_rts::CommanderCamera>,
     mut houses: Query<(
         Entity,
-        &Household,
+        Option<&Household>,
+        Option<&SettlementBuilding>,
         Option<&PlayerPosition>,
-        &mut HouseWindowLighting,
+        &mut WindowLighting,
     )>,
-    mut lamps: Query<(&mut PointLight, &mut Visibility), With<HouseWindowLamp>>,
+    mut lamps: Query<(&mut PointLight, &mut Visibility), With<WindowLamp>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut budget: Local<HouseLightBudget>,
+    mut budget: Local<WindowLightBudget>,
 ) {
     let Some(clock) = world_time.iter().next() else {
         return;
@@ -196,7 +205,7 @@ pub(super) fn sync_house_window_lighting(
 
     let now = time.elapsed_secs_f64();
     if !budget.initialized
-        || now - budget.last_update_seconds >= HOUSE_LIGHT_BUDGET_INTERVAL_SECONDS
+        || now - budget.last_update_seconds >= WINDOW_LIGHT_BUDGET_INTERVAL_SECONDS
     {
         budget.initialized = true;
         budget.last_update_seconds = now;
@@ -205,22 +214,22 @@ pub(super) fn sync_house_window_lighting(
 
         if let Ok(camera) = camera.single() {
             if camera.zoom <= 420.0 {
-                for (house, household, position, _) in houses.iter() {
-                    if household.residents.is_empty() {
+                for (house, household, building, position, _) in houses.iter() {
+                    if !windows_occupied(household, building) {
                         continue;
                     }
                     let Some(position) = position else { continue };
                     let distance_squared =
                         Vec2::new(position.0.x - camera.focus.x, position.0.z - camera.focus.z)
                             .length_squared();
-                    if distance_squared <= HOUSE_POINT_LIGHT_RADIUS * HOUSE_POINT_LIGHT_RADIUS {
+                    if distance_squared <= WINDOW_POINT_LIGHT_RADIUS * WINDOW_POINT_LIGHT_RADIUS {
                         budget.candidates.push((distance_squared, house));
                     }
                 }
                 budget
                     .candidates
                     .sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-                let count = budget.candidates.len().min(MAX_ACTIVE_HOUSE_POINT_LIGHTS);
+                let count = budget.candidates.len().min(MAX_LIT_WINDOW_BUILDINGS);
                 for index in 0..count {
                     let house = budget.candidates[index].1;
                     budget.enabled.insert(house);
@@ -229,15 +238,15 @@ pub(super) fn sync_house_window_lighting(
         } else {
             // Headless visual tests and unusual camera-less transitions contain
             // only a handful of houses; preserve the straightforward behavior.
-            for (house, household, _, _) in houses.iter() {
-                if !household.residents.is_empty() {
+            for (house, household, building, _, _) in houses.iter() {
+                if windows_occupied(household, building) {
                     budget.enabled.insert(house);
                 }
             }
         }
     }
 
-    for (house, household, _position, mut window) in houses.iter_mut() {
+    for (house, household, building, _position, mut window) in houses.iter_mut() {
         // Scene streaming/re-instantiation can replace a house's descendants
         // while the replicated building entity survives. The old component
         // then points at despawned lamps and used to remain permanently dark
@@ -246,11 +255,11 @@ pub(super) fn sync_house_window_lighting(
         let wiring_is_live = materials.get(&window.glass).is_some()
             && window.lamps.iter().all(|lamp| lamps.get(*lamp).is_ok());
         if !wiring_is_live {
-            commands.entity(house).remove::<HouseWindowLighting>();
+            commands.entity(house).remove::<WindowLighting>();
             continue;
         }
-        let occupied = !household.residents.is_empty();
-        let target = house_window_target(clock, occupied);
+        let occupied = windows_occupied(household, building);
+        let target = window_light_target(clock, occupied);
         let next_glow = move_towards(
             window.strength,
             target,
@@ -397,7 +406,7 @@ pub(super) fn sync_building_night_lighting(
     let Some(clock) = world_time.iter().next() else {
         return;
     };
-    let target = house_window_target(clock, true);
+    let target = window_light_target(clock, true);
     for (root, mut lighting) in roots.iter_mut() {
         // Replacing a level's WorldAssetRoot despawns its old anchor children.
         // Drop stale wiring even if the fade target has not changed, allowing
@@ -432,7 +441,7 @@ pub(super) fn sync_building_night_lighting(
     }
 }
 
-pub(super) fn house_window_target(clock: &WorldTime, occupied: bool) -> f32 {
+pub(super) fn window_light_target(clock: &WorldTime, occupied: bool) -> f32 {
     if !occupied {
         return 0.0;
     }

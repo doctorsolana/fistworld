@@ -172,7 +172,7 @@ pub(super) fn enter_world_offline(
     // "industries" frames the authored founding production buildings closely;
     // "bakery" isolates a staffed bakery for chimney, lighting and stock-art QA;
     // "market" and "market_paved" isolate the two identically sized square levels;
-    // "storage_hall" isolates the warehouse and its production door wiring.
+    // "storage_hall" and "lumberjack" isolate their art, door wiring and night lights.
     if std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").is_ok_and(|v| {
         matches!(
             v.as_str(),
@@ -183,6 +183,7 @@ pub(super) fn enter_world_offline(
                 | "market"
                 | "market_paved"
                 | "storage_hall"
+                | "lumberjack"
         )
     }) {
         commands.queue(|world: &mut World| {
@@ -195,7 +196,7 @@ pub(super) fn enter_world_offline(
                 .and_then(|c| c.shots.first().map(|s| s.focus))
                 .unwrap_or_default();
             let mode = std::env::var("FISTFORCE_CAPTURE_SETTLEMENT").unwrap_or_default();
-            if matches!(mode.as_str(), "market" | "market_paved" | "storage_hall") {
+            if matches!(mode.as_str(), "market" | "market_paved" | "storage_hall" | "lumberjack") {
                 // Reproduce the authoritative construction earthwork in this
                 // network-free visual fixture. This makes the capture useful
                 // for spotting terrain triangles through the 12 m ground slab,
@@ -205,6 +206,8 @@ pub(super) fn enter_world_offline(
                 {
                     let kind = if mode == "storage_hall" {
                         shared::components::SettlementBuildingKind::StorageHall
+                    } else if mode == "lumberjack" {
+                        shared::components::SettlementBuildingKind::LumberjackHut
                     } else {
                         shared::components::SettlementBuildingKind::Market
                     };
@@ -227,7 +230,7 @@ pub(super) fn enter_world_offline(
                 // Centre the authored production cluster rather than its Hall.
                 // This keeps close asset-validation shots reusable as the Hall
                 // ladder grows substantially taller than founding industries.
-                "industries" | "bakery" | "market" | "market_paved" | "storage_hall" => {
+                "industries" | "bakery" | "market" | "market_paved" | "storage_hall" | "lumberjack" => {
                     focus + Vec3::new(0.0, 0.0, 140.0)
                 }
                 _ if std::env::var("FISTFORCE_CAPTURE_PERMIT_PLACEMENT").is_ok() => {
@@ -386,7 +389,7 @@ pub(super) fn enter_world_offline(
                 .is_ok_and(|v| {
                     matches!(
                         v.as_str(),
-                        "village" | "industries" | "bakery" | "market" | "market_paved" | "storage_hall"
+                        "village" | "industries" | "bakery" | "market" | "market_paved" | "storage_hall" | "lumberjack"
                     )
                 })
             {
@@ -414,6 +417,8 @@ pub(super) fn enter_world_offline(
                 }
                 let kinds: &[K] = if mode == "storage_hall" {
                     &[K::StorageHall]
+                } else if mode == "lumberjack" {
+                    &[K::LumberjackHut]
                 } else if mode == "bakery" {
                     &[K::Bakery]
                 } else if matches!(mode.as_str(), "market" | "market_paved") {
@@ -422,7 +427,7 @@ pub(super) fn enter_world_offline(
                     &[K::Farmstead, K::LumberjackHut, K::Windmill, K::Bakery]
                 };
                 for (index, kind) in kinds.iter().copied().enumerate() {
-                    let at = if matches!(mode.as_str(), "bakery" | "market" | "market_paved" | "storage_hall") {
+                    let at = if matches!(mode.as_str(), "bakery" | "market" | "market_paved" | "storage_hall" | "lumberjack") {
                         focus
                     } else if mode == "industries" {
                         // One authored comparison line: equal frontage,

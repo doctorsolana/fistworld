@@ -36,8 +36,8 @@ use construction::{
 use debug::debug_draw_settlement_planning_rings;
 use grounds::{attach_farm_field_visuals, attach_fishing_pier_visuals};
 use lighting::{
-    setup_building_night_lighting, setup_house_window_lighting, sync_building_night_lighting,
-    sync_house_window_lighting,
+    setup_building_night_lighting, setup_window_lighting, sync_building_night_lighting,
+    sync_window_lighting,
 };
 use livestock::{
     animate_pasture_animals, animate_pasture_sheep_parts, attach_livestock_pasture_visuals,
@@ -72,7 +72,7 @@ impl Plugin for SettlementPlugin {
                 sync_construction_supply_visuals,
                 claim_building_ground,
                 raise_construction_visuals,
-                (setup_house_window_lighting, sync_house_window_lighting).chain(),
+                (setup_window_lighting, sync_window_lighting).chain(),
                 (setup_building_night_lighting, sync_building_night_lighting).chain(),
                 (setup_bakery_bread_display, sync_bakery_bread_display).chain(),
                 (

@@ -61,6 +61,9 @@ authored warehouse from three angles; `storage-hall-door.ron` records one contin
 cycle. The latter uses `FISTFORCE_CAPTURE_DOORS=cycle` to alternate the ordinary building-side
 door demand every two simulated seconds, exercising the production animation consumer.
 
+`lumberjack-hut.ron` checks the timber workshop from front/rear, at midnight, and at
+gameplay/town zoom. `lumberjack-hut-door.ron` records its ordinary door-demand cycle.
+
 Other checked-in references include
 `world-survey.ron` for zoom-band scene rendering, `river-banks.ron` for the detailed-river/far-
 river handoff and inland ground paint, `forest-floor.ron` for forest accents at morning and noon,

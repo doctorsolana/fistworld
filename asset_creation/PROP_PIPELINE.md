@@ -4,13 +4,13 @@ The sibling of `CHARACTER_PIPELINE.md`. That one covers rigged, skinned, wardrob
 This one covers **static and node-animated props** — buildings, furniture, anything that is not a
 skeleton. The contracts differ enough that conflating them causes real bugs, so they are separate.
 
-Worked examples: the log cabin and the lumberjack hut, both in `asset_creation/houses/`. The hut was
-built second, deliberately from the SAME parts — squared beams one box each, interlocked projecting
-corner ends, per-course depth offset, stepped shingle roof, chinking. A settlement reads as one place
-because its buildings are built the same way; changing vocabulary between them makes an asset set look
-bought rather than made. What differs is the footprint (4.20 x 3.60 against 6.00 x 5.00) with the
-course height, log thickness and corner projection held IDENTICAL, so the two sit together at the same
-visual scale instead of one looking like a scale model of the other.
+The log cabin and older workshops demonstrate the original log construction pipeline.
+The rebuilt [lumberjack workshop](LUMBERJACK_HUT.md) and [storage hall](STORAGE_HALL.md)
+use self-contained builders that author directly in Blender +Y and export their own GLBs.
+Use each building's documented entry point: the older `export_prop_glb.py` applies a
+−90° facing correction and must not process these newer sources. Shared scale, timber,
+stonework and readable silhouettes keep the village coherent without making every
+workplace another copy of the cabin.
 
 ---
 

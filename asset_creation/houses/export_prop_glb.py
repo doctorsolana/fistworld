@@ -1,7 +1,7 @@
 """<asset>.blend -> client/assets/game_assets/buildings/village/<Name>.glb (Bevy 0.19 conventions).
 
-    blender asset_creation/houses/lumberjack_hut.blend --background --python asset_creation/houses/export_prop_glb.py
-    python3 asset_creation/houses/inspect_prop_glb.py client/assets/game_assets/buildings/village/LumberjackHut.glb
+    blender asset_creation/houses/farmstead.blend --background --python asset_creation/houses/export_prop_glb.py
+    python3 asset_creation/houses/inspect_prop_glb.py client/assets/game_assets/buildings/village/Farmstead.glb
 
 Generic where export_cabin_glb.py was written for one asset. The full reasoning lives in
 PROP_PIPELINE.md; the short version of what this does that a plain File > Export would not:
@@ -44,7 +44,6 @@ STEM = os.path.splitext(os.path.basename(bpy.data.filepath))[0]
 # The wheat field is not a building and does not live with them.
 GLB_PATH = {
     "log_cabin": "game_assets/buildings/village/LogCabin.glb",
-    "lumberjack_hut": "game_assets/buildings/village/LumberjackHut.glb",
     "farmstead": "game_assets/buildings/village/Farmstead.glb",
     "wheat_field": "game_assets/environment/crops/WheatField.glb",
     # The civic ladder. A settlement replaces the building on the same plot as it grows, so these are
@@ -66,6 +65,10 @@ GLB_PATH = {
     # (head nod, leg swing), so it ships no clips and lives with the environment art.
     "sheep": "game_assets/environment/animals/Sheep.glb",
 }
+assert STEM != "lumberjack_hut", (
+    "The lumberjack workshop is authored in +Y and exports itself; run "
+    "build_lumberjack_hut.py with --factory-startup instead of this -X exporter."
+)
 assert STEM in GLB_PATH, f"no shipped path registered for '{STEM}'; add it to GLB_PATH"
 OUT = os.path.join(REPO, "client", "assets", *GLB_PATH[STEM].split("/"))
 

@@ -1,7 +1,7 @@
 //! Settlement and building scene attachment, art selection and ground claims.
 
 use super::animation::{BuildingDoorAnimation, DoorVisualSource, WindmillMotion};
-use super::lighting::{BuildingNightLighting, HouseWindowLighting};
+use super::lighting::{BuildingNightLighting, WindowLighting};
 use super::stock::BakeryBreadDisplay;
 use bevy::prelude::*;
 use shared::building::{BuildingPosition, BuildingType, PlacedBuilding};
@@ -174,7 +174,7 @@ pub(super) fn attach_building_visuals(
             .remove::<WindmillMotion>()
             .remove::<BuildingNightLighting>()
             .remove::<BakeryBreadDisplay>()
-            .remove::<HouseWindowLighting>()
+            .remove::<WindowLighting>()
             .remove::<DoorVisualSource>();
         if let Some(scene) = art.scene_path() {
             let gltf_path = scene.split('#').next().unwrap_or(scene).to_string();

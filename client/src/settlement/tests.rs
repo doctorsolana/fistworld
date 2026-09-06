@@ -6,12 +6,14 @@ use super::animation::{
     DOOR_CLOSE_SECONDS, DOOR_OPEN_SECONDS,
 };
 use super::lighting::{
-    house_window_target, move_towards, sync_house_window_lighting, HouseWindowLamp,
-    HouseWindowLighting, MAX_ACTIVE_HOUSE_POINT_LIGHTS,
+    move_towards, sync_window_lighting, window_light_target, WindowLamp, WindowLighting,
+    MAX_LIT_WINDOW_BUILDINGS,
 };
 use super::stock::bakery_bread_level;
 use bevy::prelude::*;
-use shared::components::{Household, PlayerPosition, WorldTime};
+use shared::components::{
+    Household, PlayerPosition, SettlementBuilding, SettlementBuildingKind, WorldTime,
+};
 use shared::economy::{Good, GoodsInventory};
 
 #[test]
@@ -151,14 +153,14 @@ fn cabin_windows_require_both_darkness_and_an_occupied_household() {
     let mut clock = WorldTime::new_default();
 
     clock.set_normalized_time(0.5);
-    assert_eq!(house_window_target(&clock, true), 0.0);
+    assert_eq!(window_light_target(&clock, true), 0.0);
 
     clock.set_normalized_time(0.0);
-    assert_eq!(house_window_target(&clock, false), 0.0);
-    assert_eq!(house_window_target(&clock, true), 1.0);
+    assert_eq!(window_light_target(&clock, false), 0.0);
+    assert_eq!(window_light_target(&clock, true), 1.0);
 
     clock.set_normalized_time(WorldTime::SUNSET_NORMALIZED + 0.001);
-    assert!(house_window_target(&clock, true) < 0.1);
+    assert!(window_light_target(&clock, true) < 0.1);
 }
 
 #[test]
@@ -174,7 +176,7 @@ fn one_resident_lights_a_cabin_and_stale_scene_wiring_is_rebuilt() {
     let mut app = App::new();
     app.init_resource::<Time>();
     app.init_resource::<Assets<StandardMaterial>>();
-    app.add_systems(Update, sync_house_window_lighting);
+    app.add_systems(Update, sync_window_lighting);
     let mut clock = WorldTime::new(600.0, 300.0, 0.0);
     clock.set_normalized_time(0.0);
     app.world_mut().spawn(clock);
@@ -184,7 +186,7 @@ fn one_resident_lights_a_cabin_and_stale_scene_wiring_is_rebuilt() {
         .add(StandardMaterial::default());
     let lamp = app
         .world_mut()
-        .spawn((HouseWindowLamp, PointLight::default(), Visibility::Hidden))
+        .spawn((WindowLamp, PointLight::default(), Visibility::Hidden))
         .id();
     let house = app
         .world_mut()
@@ -193,7 +195,7 @@ fn one_resident_lights_a_cabin_and_stale_scene_wiring_is_rebuilt() {
                 residents: vec!["Alda".into()],
                 ..default()
             },
-            HouseWindowLighting {
+            WindowLighting {
                 glass: glass.clone(),
                 lamps: vec![lamp],
                 strength: 0.0,
@@ -227,7 +229,7 @@ fn one_resident_lights_a_cabin_and_stale_scene_wiring_is_rebuilt() {
     app.world_mut().despawn(lamp);
     app.update();
     assert!(
-        app.world().get::<HouseWindowLighting>(house).is_none(),
+        app.world().get::<WindowLighting>(house).is_none(),
         "despawned scene descendants must release stale wiring so setup can discover the replacement scene"
     );
 }
@@ -237,7 +239,7 @@ fn dense_neighbourhood_keeps_all_windows_emissive_but_caps_real_lights() {
     let mut app = App::new();
     app.init_resource::<Time>();
     app.init_resource::<Assets<StandardMaterial>>();
-    app.add_systems(Update, sync_house_window_lighting);
+    app.add_systems(Update, sync_window_lighting);
     let mut clock = WorldTime::new(600.0, 300.0, 0.0);
     clock.set_normalized_time(0.0);
     app.world_mut().spawn(clock);
@@ -248,7 +250,7 @@ fn dense_neighbourhood_keeps_all_windows_emissive_but_caps_real_lights() {
     });
 
     let mut lamps = Vec::new();
-    for index in 0..(MAX_ACTIVE_HOUSE_POINT_LIGHTS + 8) {
+    for index in 0..(MAX_LIT_WINDOW_BUILDINGS + 8) {
         let glass = app
             .world_mut()
             .resource_mut::<Assets<StandardMaterial>>()
@@ -256,7 +258,7 @@ fn dense_neighbourhood_keeps_all_windows_emissive_but_caps_real_lights() {
         let lamp = app
             .world_mut()
             .spawn((
-                HouseWindowLamp,
+                WindowLamp,
                 PointLight {
                     intensity: 0.0,
                     ..default()
@@ -265,19 +267,28 @@ fn dense_neighbourhood_keeps_all_windows_emissive_but_caps_real_lights() {
             ))
             .id();
         lamps.push(lamp);
-        app.world_mut().spawn((
-            Household {
+        let root = app
+            .world_mut()
+            .spawn((
+                PlayerPosition(Vec3::new(index as f32, 0.0, 0.0)),
+                WindowLighting {
+                    glass,
+                    lamps: vec![lamp],
+                    strength: 0.0,
+                    lamp_strength: 0.0,
+                },
+            ))
+            .id();
+        if index % 2 == 0 {
+            app.world_mut().entity_mut(root).insert(Household {
                 residents: vec![format!("Resident {index}")],
                 ..default()
-            },
-            PlayerPosition(Vec3::new(index as f32, 0.0, 0.0)),
-            HouseWindowLighting {
-                glass,
-                lamps: vec![lamp],
-                strength: 0.0,
-                lamp_strength: 0.0,
-            },
-        ));
+            });
+        } else {
+            app.world_mut()
+                .entity_mut(root)
+                .insert(staffed_lumberjack());
+        }
     }
     app.world_mut()
         .resource_mut::<Time>()
@@ -293,8 +304,113 @@ fn dense_neighbourhood_keeps_all_windows_emissive_but_caps_real_lights() {
                 .is_some_and(|light| light.intensity > 0.0)
         })
         .count();
-    assert_eq!(active, MAX_ACTIVE_HOUSE_POINT_LIGHTS);
+    assert_eq!(active, MAX_LIT_WINDOW_BUILDINGS);
     let world = app.world_mut();
-    let mut windows = world.query::<&HouseWindowLighting>();
+    let mut windows = world.query::<&WindowLighting>();
     assert!(windows.iter(world).all(|window| window.strength > 0.0));
+}
+
+fn staffed_lumberjack() -> SettlementBuilding {
+    SettlementBuilding {
+        kind: SettlementBuildingKind::LumberjackHut,
+        settlement: "Brackwater".into(),
+        owner: Some("Alda".into()),
+        quality: 0.8,
+        workers: vec!["Alda".into()],
+    }
+}
+
+#[test]
+fn lumberjack_panes_bind_once_and_follow_staffing_and_daylight() {
+    use super::buildings::BuildingVisual;
+    use super::lighting::setup_window_lighting;
+    use bevy::gltf::GltfMaterialName;
+
+    let mut app = App::new();
+    app.init_resource::<Time>();
+    app.init_resource::<Assets<StandardMaterial>>();
+    app.add_systems(
+        Update,
+        (setup_window_lighting, sync_window_lighting).chain(),
+    );
+    let mut clock = WorldTime::new(600.0, 300.0, 0.0);
+    clock.set_normalized_time(0.0);
+    let clock_entity = app.world_mut().spawn(clock).id();
+    let source = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial::default());
+    let root = app
+        .world_mut()
+        .spawn((
+            staffed_lumberjack(),
+            BuildingVisual {
+                building_type: shared::building::BuildingType::LumberjackHut,
+            },
+        ))
+        .id();
+    let pane = app
+        .world_mut()
+        .spawn((
+            GltfMaterialName("HutGlass".into()),
+            MeshMaterial3d(source.clone()),
+        ))
+        .id();
+    app.world_mut().entity_mut(root).add_child(pane);
+    for name in ["Light_Window.L", "Light_Window.R"] {
+        let anchor = app.world_mut().spawn(Name::new(name)).id();
+        app.world_mut().entity_mut(root).add_child(anchor);
+    }
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(std::time::Duration::from_secs(1));
+    app.update();
+    let wiring = app.world().get::<WindowLighting>(root).unwrap();
+    assert_eq!(wiring.lamps.len(), 2);
+    assert_eq!(wiring.strength, 1.0, "a staffed hut must glow after dark");
+    let clone = wiring.glass.clone();
+    assert_ne!(
+        clone, source,
+        "night glow must not mutate the shared GLB material"
+    );
+    assert_eq!(
+        app.world()
+            .resource::<Assets<StandardMaterial>>()
+            .get(&source)
+            .unwrap()
+            .emissive,
+        LinearRgba::BLACK
+    );
+    app.update();
+    assert_eq!(
+        app.world().get::<WindowLighting>(root).unwrap().glass,
+        clone
+    );
+    app.world_mut()
+        .get_mut::<WorldTime>(clock_entity)
+        .unwrap()
+        .set_normalized_time(0.5);
+    app.update();
+    assert_eq!(
+        app.world().get::<WindowLighting>(root).unwrap().strength,
+        0.0
+    );
+    app.world_mut()
+        .get_mut::<WorldTime>(clock_entity)
+        .unwrap()
+        .set_normalized_time(0.0);
+    app.world_mut()
+        .get_mut::<SettlementBuilding>(root)
+        .unwrap()
+        .workers
+        .clear();
+    app.update();
+    let wiring = app.world().get::<WindowLighting>(root).unwrap();
+    assert_eq!(
+        wiring.strength, 0.0,
+        "an unstaffed workshop should stay dark"
+    );
+    for lamp in &wiring.lamps {
+        assert_eq!(app.world().get::<PointLight>(*lamp).unwrap().intensity, 0.0);
+    }
 }

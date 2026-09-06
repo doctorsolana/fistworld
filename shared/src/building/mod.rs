@@ -43,16 +43,65 @@ mod tests {
             "preserve the old blockout's wire discriminant"
         );
         assert_eq!(kind.definition().footprint, Vec2::new(9.0, 7.0));
+        assert_animated_building_contract(
+            kind,
+            crate::components::SettlementBuildingKind::StorageHall,
+            "StorageHallDoor",
+            1,
+        );
+    }
+
+    #[test]
+    fn lumberjack_hut_preserves_its_plot_door_clearance_and_night_light_anchors() {
+        let kind = BuildingType::LumberjackHut;
+        assert_eq!(kind.definition().footprint, Vec2::new(5.16, 5.40));
+        assert_animated_building_contract(
+            kind,
+            crate::components::SettlementBuildingKind::LumberjackHut,
+            "LumberHutDoor",
+            2,
+        );
+        let document = glb_document(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../client/assets/game_assets/buildings/village/LumberjackHut.glb"),
+        );
+        let nodes = document["nodes"].as_array().unwrap();
+        for anchor in [
+            "Light_Window.L",
+            "Light_Window.R",
+            "Light_Interior",
+            "Anchor_Work",
+        ] {
+            assert!(
+                nodes.iter().any(|node| node["name"] == anchor),
+                "missing {anchor}"
+            );
+        }
+        assert!(document["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|material| material["name"] == "HutGlass"));
+        assert_eq!(document["meshes"].as_array().unwrap().len(), 3);
+    }
+
+    fn assert_animated_building_contract(
+        kind: BuildingType,
+        settlement_kind: crate::components::SettlementBuildingKind,
+        door_name: &str,
+        materials: usize,
+    ) {
         assert!(kind.has_baked_collider());
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../client/assets/game_assets/buildings/village/StorageHall.glb");
+            .join("../client/assets")
+            .join(kind.scene_path().unwrap().split('#').next().unwrap());
         let document = glb_document(&path);
         let nodes = document["nodes"].as_array().unwrap();
         let anchor = nodes
             .iter()
             .find(|node| node["name"] == "Anchor_Door")
             .unwrap();
-        let offset = crate::components::SettlementBuildingKind::StorageHall.door_offset();
+        let offset = settlement_kind.door_offset();
         let anchor_position: Vec<f32> = anchor["translation"]
             .as_array()
             .unwrap()
@@ -66,7 +115,7 @@ mod tests {
         .unwrap();
         let crate::colliders::BakedCollider::ConvexHull { points } = &colliders.entries[kind.id()]
         else {
-            panic!("Storage Hall must use one inexpensive hull");
+            panic!("{kind:?} must use one inexpensive hull");
         };
         let front = points
             .iter()
@@ -76,9 +125,20 @@ mod tests {
             offset.y + crate::physics::CHARACTER_NAV_RADIUS + 0.05 < front,
             "the baked hull must leave character clearance at the door anchor"
         );
+        if kind == BuildingType::LumberjackHut {
+            let work = nodes
+                .iter()
+                .find(|node| node["name"] == "Anchor_Work")
+                .unwrap();
+            let work_front = work["translation"][2].as_f64().unwrap() as f32;
+            assert!(
+                work_front + crate::physics::CHARACTER_NAV_RADIUS + 0.05 < front,
+                "the chopping approach must also stay outside the yard collider"
+            );
+        }
         let door = nodes
             .iter()
-            .position(|node| node["name"] == "StorageHallDoor")
+            .position(|node| node["name"] == door_name)
             .unwrap();
         let animations = document["animations"].as_array().unwrap();
         assert_eq!(animations.len(), 2);
@@ -95,7 +155,7 @@ mod tests {
                 "{name} must match runtime door timing"
             );
         }
-        assert_eq!(document["materials"].as_array().unwrap().len(), 1);
+        assert_eq!(document["materials"].as_array().unwrap().len(), materials);
         assert!(document["skins"].is_null());
         assert!(document["images"].is_null());
         assert!(document["extensionsUsed"].is_null());
@@ -111,7 +171,7 @@ mod tests {
             .sum();
         assert!(
             vertices <= 8_000,
-            "the storage hall exceeded its exported vertex budget: {vertices}"
+            "{kind:?} exceeded its exported vertex budget: {vertices}"
         );
     }
 
