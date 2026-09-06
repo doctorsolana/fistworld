@@ -35,6 +35,8 @@ workplace another copy of the cabin.
   follow terrain height through doors; a modeled raised step does not make them
   climb it. Do not infer successful NPC traversal from a door-only animation.
   Raised entries require a shared height contract and connected client/server proof.
+  Set the review floor to the actual origin/terrain grade when judging thresholds;
+  lowering it to expose buried foundations makes a flush sill look like a step.
 - On mechanisms, inspect the full independent rotation of every parent and child.
   A rotor must clear its stationary tower at every cap yaw; its shaft and bearing
   must physically join the cap, and sailcloth must stay clear of its crossbars.

@@ -560,7 +560,7 @@ def build():
     camera.data.type = "ORTHO"
     camera.data.ortho_scale = 16.6
     scene.camera = camera
-    bpy.ops.mesh.primitive_plane_add(size=200, location=(0, 0, -0.18))
+    bpy.ops.mesh.primitive_plane_add(size=200, location=(0, 0, 0))
     floor = bpy.context.object
     floor.name = "Ground"
     mat = bpy.data.materials.new("StudioGround")

@@ -79,7 +79,7 @@ for layer in cap.animation_data.action.layers:
                 for key in curve.keyframe_points:
                     key.interpolation = "LINEAR"
 
-bpy.ops.mesh.primitive_plane_add(size=80, location=(0, 0, -0.18))
+bpy.ops.mesh.primitive_plane_add(size=80, location=(0, 0, 0))
 ground = bpy.context.object
 ground.name = "Review floor"
 mat = bpy.data.materials.new("Review floor")
